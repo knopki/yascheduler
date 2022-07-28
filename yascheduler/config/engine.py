@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
-from attrs import define, field, validators, Attribute
 from configparser import SectionProxy
 from pathlib import PurePath
-from typing import Optional, Sequence, Union, Tuple
+from typing import Optional, Sequence, Tuple, Union
+
+from attrs import Attribute, define, field, validators
 
 from .utils import _make_default_field
 
@@ -16,7 +17,7 @@ def _check_spawn(instance: "Engine", _, value: str):
             "Engine {name} has unknown template placeholder "
             "`{placeholder}` in *spawn* command"
         )
-        raise ValueError(msg.format(name=instance.name, placeholder=e.args[0]))
+        raise ValueError(msg.format(name=instance.name, placeholder=e.args[0])) from e
 
 
 def _check_check_(instance: "Engine", attribute: Attribute, value: Optional[str]):
@@ -105,7 +106,7 @@ class Engine:
     ) -> "Engine":
         def gettuple(key: str) -> Tuple[str]:
             return tuple(
-                [x.strip() for x in filter(None, sec.get(key, fallback="").split())]
+                x.strip() for x in filter(None, sec.get(key, fallback="").split())
             )
 
         name = sec.name[7:]

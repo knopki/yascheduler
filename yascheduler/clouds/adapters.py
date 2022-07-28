@@ -6,15 +6,15 @@ from typing import Sequence, Tuple
 
 from attrs import define, field
 
+from .az import az_create_node, az_delete_node
+from .hetzner import hetzner_create_node, hetzner_delete_node
 from .protocols import (
+    CreateNodeCallable,
+    DeleteNodeCallable,
     PCloudAdapter,
     SupportedPlatformChecker,
     TConfigCloud,
-    CreateNodeCallable,
-    DeleteNodeCallable,
 )
-from .az import az_create_node, az_delete_node
-from .hetzner import hetzner_create_node, hetzner_delete_node
 from .upcloud import upcload_delete_node, upcloud_create_node
 
 
@@ -62,7 +62,7 @@ class CloudAdapter(PCloudAdapter[TConfigCloud]):
             op_limit=op_limit,
         )
 
-    @lru_cache()
+    @lru_cache()  # noqa: B019
     def get_op_semaphore(self) -> asyncio.Semaphore:
         return asyncio.Semaphore(self.op_limit)
 

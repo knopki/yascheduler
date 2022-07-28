@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 from configparser import SectionProxy
-from pathlib import PurePath
-from typing import Mapping, Optional, Union
+from functools import partial
+from typing import Optional, Union
 
 from attrs import define, field, validators
 from typing_extensions import Self
@@ -12,7 +12,11 @@ from .utils import _make_default_field, opt_str_val
 
 def _check_az_user(_: "ConfigCloudAzure", __, value: str):
     if value == "root":
-        raise ValueError(f"Root user is forbidden on Azure")
+        raise ValueError("Root user is forbidden on Azure")
+
+
+def _fmt_key(prefix: str, name: str):
+    return f"{prefix}_{name}"
 
 
 @define(frozen=True)
@@ -27,7 +31,7 @@ class AzureImageReference:
         parts = urn.split(":", maxsplit=4)
         if len(parts) < 4:
             raise ValueError(
-                f"`Image reference URN should be in format publisher:offer:sku:version"
+                "`Image reference URN should be in format publisher:offer:sku:version"
             )
 
         return cls(*parts)
@@ -58,7 +62,7 @@ class ConfigCloudAzure:
 
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigCloudAzure":
-        fmt = lambda x: f"{cls.prefix}_{x}"
+        fmt = partial(_fmt_key, cls.prefix)
 
         vm_image = sec.get(fmt("image"))
         image_ref = None
@@ -101,7 +105,7 @@ class ConfigCloudHetzner:
 
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigCloudHetzner":
-        fmt = lambda x: f"{cls.prefix}_{x}"
+        fmt = partial(_fmt_key, cls.prefix)
         return cls(
             token=sec.get(fmt("token")),
             max_nodes=sec.getint(fmt("max_nodes")),
@@ -129,7 +133,7 @@ class ConfigCloudUpcloud:
 
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigCloudUpcloud":
-        fmt = lambda x: f"{cls.prefix}_{x}"
+        fmt = partial(_fmt_key, cls.prefix)
         return cls(
             login=sec.get(fmt("login")),
             password=sec.get(fmt("password")),

@@ -6,12 +6,7 @@ from typing import Sequence, Union
 
 from attrs import define, field, validators
 
-from .cloud import (
-    ConfigCloud,
-    ConfigCloudAzure,
-    ConfigCloudHetzner,
-    ConfigCloudUpcloud,
-)
+from .cloud import ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud
 from .db import ConfigDb
 from .engine_repository import EngineRepository
 from .local import ConfigLocal

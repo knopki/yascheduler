@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 import json
-from configparser import ConfigParser
 from collections import UserDict
+from configparser import ConfigParser
 from itertools import chain
 from pathlib import PurePath
 from typing import Any, Callable, Mapping, Sequence
 
-from attrs import asdict, define, field, validators, Attribute
+from attrs import Attribute, asdict, define, field, validators
 from typing_extensions import Self
 
 from .engine import Engine
