@@ -1,0 +1,6 @@
+.agents/**
+.claude/**
+.codex/**
+.opencode/**
+CHANGELOG.md
+openspec/**
