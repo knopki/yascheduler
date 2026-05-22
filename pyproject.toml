@@ -1,37 +1,33 @@
-[build-system]
-requires = ["setuptools", "cython"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "yascheduler"
 # version should be changed by automation, not by hand - DON'T TOUCH
 version = "1.6.0"
 description = """Yet another computing scheduler and cloud orchestration engine"""
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "Sergei Korolev", email = "knopki@duck.com" },
   { name = "Andrey Sobolev", email = "as@tilde.pro" },
   { name = "Evgeny Blokhin", email = "eb@tilde.pro" },
   { name = "Anton Domnin", email = "a.v.daomnin@gmail.com" },
 ]
-readme = { file = "README.md", content-type = "text/markdown" }
-license = "MIT"
-license-files = ["LICENSE"]
 classifiers = [
   "Development Status :: 4 - Beta",
+  "Framework :: AiiDA",
   "Intended Audience :: Science/Research",
-  "Topic :: Scientific/Engineering :: Chemistry",
-  "Topic :: Scientific/Engineering :: Physics",
-  "Topic :: Scientific/Engineering :: Information Analysis",
-  "Topic :: Software Development :: Libraries :: Python Modules",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Framework :: AiiDA",
+  "Topic :: Scientific/Engineering :: Chemistry",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-requires-python = ">=3.9"
 dependencies = [
   "aiohttp~=3.8",
   "asyncssh~=2.11",
@@ -43,6 +39,23 @@ dependencies = [
   "typing-extensions >= 4.2.0; python_version < '3.11'",
 ]
 
+[project.urls]
+Changelog = "https://github.com/tilde-lab/yascheduler/blob/master/CHANGELOG.md"
+Home = "https://github.com/tilde-lab/yascheduler"
+Issues = "https://github.com/tilde-lab/yascheduler/issues"
+Source = "https://github.com/tilde-lab/yascheduler"
+
+[project.scripts]
+yainit = "yascheduler.utils:init"
+yanodes = "yascheduler.utils:show_nodes"
+yascheduler = "yascheduler.utils:daemonize"
+yasetnode = "yascheduler.utils:manage_node"
+yastatus = "yascheduler.utils:check_status"
+yasubmit = "yascheduler.utils:submit"
+
+[project.entry-points."aiida.schedulers"]
+yascheduler = "yascheduler.aiida_plugin:YaScheduler"
+
 [project.optional-dependencies]
 azure = [
   "azure-identity~=1.10.0",
@@ -53,24 +66,22 @@ hetzner = ["hcloud~=2.0"]
 upcloud = ["upcloud_api~=2.0"]
 
 [dependency-groups]
-dev = ["build", "commitizen", "ruff~=0.15.9", "twine", "zuban"]
+dev = [
+  "build",
+  "commitizen",
+  "pytest~=8.0",
+  "pytest-asyncio~=0.25",
+  "pytest-cov~=6.0",
+  "pytest-mock~=3.0",
+  "ruff~=0.15.9",
+  "testcontainers[postgres]~=4.0",
+  "twine",
+  "zuban",
+]
 
-[project.urls]
-Home = "https://github.com/tilde-lab/yascheduler"
-Changelog = "https://github.com/tilde-lab/yascheduler/blob/master/CHANGELOG.md"
-Issues = "https://github.com/tilde-lab/yascheduler/issues"
-Source = "https://github.com/tilde-lab/yascheduler"
-
-[project.scripts]
-yascheduler = "yascheduler.utils:daemonize"
-yasubmit = "yascheduler.utils:submit"
-yastatus = "yascheduler.utils:check_status"
-yanodes = "yascheduler.utils:show_nodes"
-yasetnode = "yascheduler.utils:manage_node"
-yainit = "yascheduler.utils:init"
-
-[project.entry-points."aiida.schedulers"]
-yascheduler = "yascheduler.aiida_plugin:YaScheduler"
+[build-system]
+requires = ["cython", "setuptools"]
+build-backend = "setuptools.build_meta"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
@@ -79,6 +90,15 @@ version_files = ["pyproject.toml:^version"]
 version_provider = "pep621"
 update_changelog_on_bump = true
 changelog_incremental = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests/unit"]
+markers = [
+  "unit: unit tests (no external services)",
+  "integration: integration tests (require services like PostgreSQL)",
+  "e2e: end-to-end tests (require full environment)",
+]
 
 [tool.ruff]
 # Target python version

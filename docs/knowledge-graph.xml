@@ -479,6 +479,43 @@
     </M-REMOTE-PROTOCOL>
 
     <!-- ═══════════════════════════════════════════════
+         Test infrastructure
+         ═══════════════════════════════════════════════ -->
+
+    <M-TEST-CONFTEST NAME="Test conftest" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Shared pytest fixtures for the yascheduler test suite.</purpose>
+      <path>tests/conftest.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-anyio_backend PURPOSE="Returns asyncio backend for pytest-anyio compatibility" />
+      </annotations>
+    </M-TEST-CONFTEST>
+
+    <M-TEST-FIXTURES-MODELS NAME="Test data helpers" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Factory functions for creating TaskModel and NodeModel instances with sensible defaults.</purpose>
+      <path>tests/fixtures/models.py</path>
+      <depends>M-DB</depends>
+      <annotations>
+        <fn-make_task PURPOSE="Create TaskModel with defaults and keyword overrides" />
+        <fn-make_node PURPOSE="Create NodeModel with defaults and keyword overrides" />
+      </annotations>
+    </M-TEST-FIXTURES-MODELS>
+
+    <M-TEST-UNIT-QUEUE NAME="Queue unit tests" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Unit tests for UniqueQueue and UMessage covering deduplication, item lifecycle, and edge cases.</purpose>
+      <path>tests/unit/test_queue.py</path>
+      <depends>M-QUEUE</depends>
+      <annotations>
+        <fn-test_put_get PURPOSE="Put then get returns original message" />
+        <fn-test_deduplication PURPOSE="Duplicate put is silently skipped" />
+        <fn-test_item_done_tracking PURPOSE="Get adds to pending, item_done removes it" />
+        <fn-test_item_done_allows_requeue PURPOSE="After item_done the same message can be re-queued" />
+        <fn-test_psize_after_get PURPOSE="Psize reflects in-flight items" />
+        <fn-test_task_done_raises PURPOSE="Task_done raises NotImplementedError" />
+      </annotations>
+    </M-TEST-UNIT-QUEUE>
+
+    <!-- ═══════════════════════════════════════════════
          Data flows
          ═══════════════════════════════════════════════ -->
 
