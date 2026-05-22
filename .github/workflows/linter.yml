@@ -19,30 +19,24 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@6b9c6063abd6010835644d4c2e1bef4cf5cd0fca
-        with:
-          enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
 
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: "pyproject.toml"
+        run: uv python install
 
       - name: Install the project
-        run: uv pip install -e .[dev,azure,hetzner,upcloud]
+        run: uv sync --locked --all-extras --dev
 
-      - name: Check formatting
-        run: |
-          ruff format --check --diff
+      - name: ruff format
+        run: uv run ruff format --check --diff
 
-      - name: Ruff check
-        run: |
-          ruff check --exit-non-zero-on-fix
+      - name: ruff check
+        run: uv run ruff check --output-format=github
 
-      - uses: jakebailey/pyright-action@b5d50e5cde6547546a5c4ac92e416a8c2c1a1dfe
+      - name: type check
+        run: uv run zuban check

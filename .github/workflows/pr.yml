@@ -22,21 +22,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@6b9c6063abd6010835644d4c2e1bef4cf5cd0fca
-        with:
-          enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
 
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: "pyproject.toml"
+        run: uv python install
 
       - name: Install the project
-        run: uv pip install -e .[dev]
+        run: uv sync --locked --all-extras --dev
 
       - name: Build
-        run: python -m build
+        run: uv build
