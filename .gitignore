@@ -142,3 +142,4 @@ yascheduler.conf
 
 #vscode
 .vscode/
+.ruff_check
