@@ -1,10 +1,10 @@
 ---
 # yamllint disable rule:line-length
-name: Lint Code Base
+name: Build
 
-on: # yamllint disable-line rule:truthy rule:comments
-  # allow this workflow to be called from other workflows
-  workflow_call:
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: read # access to check out code and install dependencies
@@ -13,8 +13,8 @@ env:
   UV_SYSTEM_PYTHON: 1
 
 jobs:
-  lint:
-    name: Lint Code Base
+  build:
+    name: Build
     runs-on: ubuntu-latest
 
     steps:
@@ -32,11 +32,5 @@ jobs:
       - name: Install the project
         run: uv sync --locked --all-extras --dev
 
-      - name: ruff format
-        run: uv run ruff format --check --diff
-
-      - name: ruff check
-        run: uv run ruff check --output-format=github
-
-      - name: type check
-        run: uv run zuban check
+      - name: Build
+        run: uv build

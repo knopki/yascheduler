@@ -1,6 +1,6 @@
 ---
 # yamllint disable rule:line-length
-name: Push action
+name: Draft release
 
 on:
   push:
