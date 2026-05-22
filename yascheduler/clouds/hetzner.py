@@ -1,3 +1,25 @@
+# FILE: yascheduler/clouds/hetzner.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Hetzner Cloud server creation and deletion via API.
+#   SCOPE: Hetzner create/delete node functions.
+#   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
+#   LINKS: M-CLOUD-HETZNER
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   get_client - Get cached Hetzner API client
+#   get_ssh_key_id - Get or create Hetzner SSH key ID
+#   hetzner_create_node - Create Hetzner server (public entry point)
+#   find_srv - Find server by IP address
+#   hetzner_delete_node - Delete Hetzner server (public entry point)
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Hetzner cloud methods"""
 
 import asyncio

@@ -1,4 +1,25 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/config/utils.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Shared config helpers: field factories, validators, warning helpers.
+#   SCOPE: attrs field factory, unknown field warning utility.
+#   DEPENDS: none
+#   LINKS: M-CONFIG-UTILS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   ConfigWarning - warning class for config issues
+#   make_default_field - attrs field factory with default, converter, and validator
+#   opt_str_val - optional string validator for attrs fields
+#   warn_unknown_fields - emit warning for unrecognized config section keys
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Config helper utilities"""
 
 import warnings

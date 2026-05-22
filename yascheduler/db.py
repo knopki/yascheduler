@@ -1,3 +1,24 @@
+# FILE: yascheduler/db.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: PostgreSQL persistence for tasks, nodes, and their statuses.
+#   SCOPE: Task and node CRUD, status transitions, schema migration.
+#   DEPENDS: M-CONFIG-DB, M-COMPAT
+#   LINKS: M-DB
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   DB: Database abstraction class with async methods for task/node CRUD and status transitions.
+#   TaskModel: Immutable task data model (task_id, label, ip, status, metadata, cloud).
+#   NodeModel: Immutable node data model (ip, ncpus, enabled, cloud, username, port).
+#   TaskStatus: IntEnum of possible task states (TO_DO, RUNNING, DONE).
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+
 """Database utils"""
 
 import asyncio
@@ -71,6 +92,13 @@ class DB:
             password=config.password,
         )
 
+    # START_CONTRACT: create
+    #   PURPOSE: Async factory to create DB instance with optional auto-migration
+    #   INPUTS: { config: ConfigDb - database configuration } { automigrate: bool - whether to run migrations on init (default True) }
+    #   OUTPUTS: { Self - initialized DB instance with live connection }
+    #   SIDE_EFFECTS: Creates DB connection; optionally runs schema migration
+    #   LINKS: [M-DB]
+    # END_CONTRACT: create
     @classmethod
     async def create(cls, config: ConfigDb, automigrate=True) -> Self:
         """Async init"""
@@ -91,8 +119,16 @@ class DB:
 
         return await self.loop.run_in_executor(self.executor, run_fn)
 
+    # START_CONTRACT: migrate
+    #   PURPOSE: Run database schema migrations (add columns if not exist)
+    #   INPUTS: { None }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Alters yascheduler_nodes table schema (adds username, port columns)
+    #   LINKS: [M-DB]
+    # END_CONTRACT: migrate
     async def migrate(self) -> None:
         """Migrate database scheme"""
+        # START_BLOCK_CREATE_TABLES
         await self.run(
             """
             ALTER TABLE yascheduler_nodes
@@ -101,6 +137,7 @@ class DB:
             ADD COLUMN IF NOT EXISTS port INTEGER DEFAULT 22;
             """
         )
+        # END_BLOCK_CREATE_TABLES
 
     async def commit(self):
         """Commit"""
@@ -180,6 +217,13 @@ class DB:
             data[bool(row[0])] = row[1]
         return data
 
+    # START_CONTRACT: add_tmp_node
+    #   PURPOSE: Add a temporary cloud-provisioned node with generated provisional IP
+    #   INPUTS: { cloud: str - cloud provider name } { username: str - SSH username for node }
+    #   OUTPUTS: { str - generated provisional IP address }
+    #   SIDE_EFFECTS: Inserts disabled node with provisional IP into yascheduler_nodes
+    #   LINKS: [M-DB]
+    # END_CONTRACT: add_tmp_node
     async def add_tmp_node(self, cloud: str, username: str) -> str:
         """Add temporary node"""
         rows = await self.run(
@@ -193,6 +237,13 @@ class DB:
         rows = cast(list[list[str]], rows)
         return rows[0][0]
 
+    # START_CONTRACT: add_node
+    #   PURPOSE: Insert a new compute node record
+    #   INPUTS: { ip_addr: str - node IP } { username: str - SSH username } { port: Optional[int] - SSH port (default 22) } { ncpus: Optional[int] - CPU count } { cloud: Optional[str] - cloud provider name } { enabled: bool - whether node is enabled (default False) }
+    #   OUTPUTS: { NodeModel - newly created node data }
+    #   SIDE_EFFECTS: Inserts row into yascheduler_nodes
+    #   LINKS: [M-DB]
+    # END_CONTRACT: add_node
     async def add_node(
         self,
         ip_addr: str,
@@ -204,6 +255,7 @@ class DB:
     ) -> NodeModel:
         """Add new node"""
         port = port or 22
+        # START_BLOCK_INSERT
         await self.run(
             """INSERT INTO yascheduler_nodes (ip, ncpus, enabled, cloud, username, port)
             VALUES (:ip, :ncpus, :enabled, :cloud, :username, :port);""",
@@ -214,6 +266,7 @@ class DB:
             enabled=enabled,
             port=port,
         )
+        # END_BLOCK_INSERT
         return NodeModel(
             ip_addr,
             ncpus,
@@ -223,6 +276,13 @@ class DB:
             port=port,
         )
 
+    # START_CONTRACT: enable_node
+    #   PURPOSE: Enable a node for task scheduling
+    #   INPUTS: { ip_addr: str - node IP to enable }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Sets enabled=TRUE on the node
+    #   LINKS: [M-DB]
+    # END_CONTRACT: enable_node
     async def enable_node(self, ip_addr: str) -> None:
         """Enable node"""
         await self.run(
@@ -230,6 +290,13 @@ class DB:
             ip=ip_addr,
         )
 
+    # START_CONTRACT: disable_node
+    #   PURPOSE: Disable a node from task scheduling
+    #   INPUTS: { ip_addr: str - node IP to disable }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Sets enabled=FALSE on the node
+    #   LINKS: [M-DB]
+    # END_CONTRACT: disable_node
     async def disable_node(self, ip_addr: str) -> None:
         """Disable node"""
         await self.run(
@@ -241,6 +308,13 @@ class DB:
         """Remove node"""
         await self.run("DELETE FROM yascheduler_nodes WHERE ip=:ip;", ip=ip_addr)
 
+    # START_CONTRACT: get_task
+    #   PURPOSE: Retrieve a single task by its ID
+    #   INPUTS: { task_id: int - unique task identifier }
+    #   OUTPUTS: { Optional[TaskModel] - task if found, None otherwise }
+    #   SIDE_EFFECTS: None
+    #   LINKS: [M-DB]
+    # END_CONTRACT: get_task
     async def get_task(self, task_id: int) -> Optional[TaskModel]:
         """Get task"""
         rows = await self.run(
@@ -275,6 +349,13 @@ class DB:
         )
         return [TaskModel(*x) for x in (rows or [])]
 
+    # START_CONTRACT: get_tasks_by_status
+    #   PURPOSE: Query tasks filtered by one or more statuses
+    #   INPUTS: { statuses: Sequence[TaskStatus] - statuses to filter by } { limit: Optional[int] - max results (None for unlimited) }
+    #   OUTPUTS: { Sequence[TaskModel] - matching tasks }
+    #   SIDE_EFFECTS: None
+    #   LINKS: [M-DB]
+    # END_CONTRACT: get_tasks_by_status
     async def get_tasks_by_status(
         self, statuses: Sequence[TaskStatus], limit: Optional[int] = None
     ) -> Sequence[TaskModel]:
@@ -315,6 +396,13 @@ class DB:
             data[TaskStatus(row[0])] = row[1]
         return data
 
+    # START_CONTRACT: add_task
+    #   PURPOSE: Insert a new task row
+    #   INPUTS: { label: Optional[str] - task label } { ip_addr: Optional[str] - node IP } { status: TaskStatus - initial status (default TO_DO) } { metadata: Optional[Mapping[str, Any]] - task metadata }
+    #   OUTPUTS: { TaskModel - newly created task with generated ID }
+    #   SIDE_EFFECTS: Inserts row into yascheduler_tasks
+    #   LINKS: [M-DB]
+    # END_CONTRACT: add_task
     async def add_task(
         self,
         label: Optional[str] = None,
@@ -342,8 +430,16 @@ class DB:
             metadata=metadata,
         )
 
+    # START_CONTRACT: set_task_running
+    #   PURPOSE: Mark task as RUNNING and bind it to a node IP
+    #   INPUTS: { task_id: int - task to update } { ip_addr: str - node IP the task runs on }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Updates task status to RUNNING and sets IP
+    #   LINKS: [M-DB]
+    # END_CONTRACT: set_task_running
     async def set_task_running(self, task_id: int, ip_addr: str):
         """Set task running"""
+        # START_BLOCK_SET_RUNNING
         await self.run(
             """UPDATE yascheduler_tasks
             SET status=:status, ip=:ip
@@ -352,9 +448,18 @@ class DB:
             status=TaskStatus.RUNNING.value,
             ip=ip_addr,
         )
+        # END_BLOCK_SET_RUNNING
 
+    # START_CONTRACT: set_task_done
+    #   PURPOSE: Set task status to DONE and update its metadata
+    #   INPUTS: { task_id: int - task to mark done } { metadata: Mapping[str, Any] - final metadata snapshot }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Updates task status to DONE and sets metadata
+    #   LINKS: [M-DB]
+    # END_CONTRACT: set_task_done
     async def set_task_done(self, task_id: int, metadata: Mapping[str, Any]):
         """Set task done"""
+        # START_BLOCK_SET_DONE
         await self.run(
             """UPDATE yascheduler_tasks
             SET status=:status, metadata=:metadata
@@ -363,7 +468,15 @@ class DB:
             metadata=metadata,
             status=TaskStatus.DONE.value,
         )
+        # END_BLOCK_SET_DONE
 
+    # START_CONTRACT: set_task_error
+    #   PURPOSE: Mark task as DONE with error metadata (embeds error in metadata if provided)
+    #   INPUTS: { task_id: int - task to mark } { metadata: Mapping[str, Any] - existing metadata } { error: Optional[str] - error message to embed in metadata }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Updates task status to DONE; appends error key to metadata
+    #   LINKS: [M-DB]
+    # END_CONTRACT: set_task_error
     async def set_task_error(
         self, task_id: int, metadata: Mapping[str, Any], error: Optional[str] = None
     ):

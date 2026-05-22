@@ -1,3 +1,30 @@
+#
+# FILE: yascheduler/remote_machine/checks.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: SSH-based platform detection check functions for each supported OS.
+#   SCOPE: Platform check functions for Debian, Linux, Darwin, Windows variants.
+#   DEPENDS: none
+#   LINKS: M-REMOTE-CHECKS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   check_is_linux - Check if remote is generic Linux via uname
+#   check_is_darwin - Check if remote is Darwin/macOS via uname
+#   check_is_debian_like - Check if remote is Debian-like via os-release
+#   check_is_debian - Check if remote is Debian via os-release
+#   check_is_debian_10 .. check_is_debian_15 - Partial functions for specific Debian versions
+#   check_is_windows - Check if remote runs Windows with PowerShell
+#   get_wmi_w32_os_caption - WMI helper to get OS caption string
+#   check_is_windows7 .. check_is_windows12 - Partial functions for specific Windows versions
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
+
 "OS checks"
 
 from functools import partial

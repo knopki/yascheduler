@@ -1,4 +1,21 @@
 #!/usr/bin/env python
+# FILE: yascheduler/daemon_sysv.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: SysV init service entry point for launching the scheduler daemon.
+#   SCOPE: SysV daemon with PID file management.
+#   DEPENDS: M-UTILS, M-VARIABLES
+#   LINKS: M-DAEMON-SYSV
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   start_daemon - launches daemonized process with PID file management
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
 """
 SystemV Daemon functions
 """

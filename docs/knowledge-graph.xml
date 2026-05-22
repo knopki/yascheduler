@@ -1,0 +1,518 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GRACE-lite Knowledge Graph
+  ==========================
+  Navigational code graph for yascheduler.
+  See .agents/skills/grace-lite/SKILL.md for full rules.
+-->
+<KnowledgeGraph>
+  <Project NAME="yascheduler" VERSION="1.6.0">
+    <keywords>scheduler, SSH, cloud, HPC, AiiDA, orchestration</keywords>
+    <annotation>Schedules scientific calculation jobs on SSH machines and cloud-created nodes.</annotation>
+
+    <!-- ═══════════════════════════════════════════════
+         Core modules
+         ═══════════════════════════════════════════════ -->
+
+    <M-SCHEDULER NAME="Scheduler" TYPE="CORE_LOGIC" STATUS="planned">
+      <purpose>Main async daemon orchestrating task allocation, execution, and completion.</purpose>
+      <path>yascheduler/scheduler.py</path>
+      <depends>M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-CONFIG, M-QUEUE, M-COMPAT, M-TIME, M-VARIABLES</depends>
+      <annotations>
+        <class-Scheduler PURPOSE="Async daemon that drives the full task lifecycle" />
+        <class-WebhookPayload PURPOSE="Webhook request data shape" />
+        <fn-get_logger PURPOSE="Configure and return the yascheduler logger" />
+        <fn-create PURPOSE="Async factory: builds Scheduler with DB, clouds, remote machines" />
+        <fn-start PURPOSE="Start all producer-consumer loops and run forever" />
+        <fn-stop PURPOSE="Graceful shutdown of all loops and connections" />
+        <fn-allocate_task PURPOSE="Pick a free node or create a cloud node for a task" />
+        <fn-consume_task PURPOSE="Upload inputs, spawn process, monitor completion" />
+        <fn-create_new_task PURPOSE="Insert a new TO_DO task into the database" />
+        <fn-upload_task_data PURPOSE="SFTP upload of task input files to remote machine" />
+        <fn-start_task_on_machine PURPOSE="Spawn calculation process on a remote node" />
+        <fn-connect_machine_producer PURPOSE="Yield enabled nodes from DB for connection" />
+        <fn-connect_machine_consumer PURPOSE="SSH-connect to a node and register it" />
+        <fn-allocator_producer PURPOSE="Yield TO_DO tasks ready for allocation" />
+        <fn-allocator_consumer PURPOSE="Allocate a machine for a task" />
+        <fn-task_consumer_producer PURPOSE="Yield RUNNING tasks for consumption check" />
+        <fn-task_consumer_consumer PURPOSE="Check task completion and download outputs" />
+        <fn-deallocator_producer PURPOSE="Yield idle cloud nodes for deallocation" />
+        <fn-deallocator_consumer PURPOSE="Delete idle cloud node and disable in DB" />
+      </annotations>
+    </M-SCHEDULER>
+
+    <M-DB NAME="Database layer" TYPE="DATA_LAYER" STATUS="planned">
+      <purpose>PostgreSQL persistence for tasks, nodes, and their statuses.</purpose>
+      <path>yascheduler/db.py</path>
+      <depends>M-CONFIG-DB, M-COMPAT</depends>
+      <annotations>
+        <class-DB PURPOSE="Async PostgreSQL wrapper for tasks and nodes" />
+        <class-TaskModel PURPOSE="Task row representation" />
+        <class-NodeModel PURPOSE="Node row representation" />
+        <class-TaskStatus PURPOSE="Task status enum" />
+        <fn-create PURPOSE="Async factory with optional auto-migration" />
+        <fn-add_task PURPOSE="Insert a new task" />
+        <fn-get_task PURPOSE="Retrieve task by ID" />
+        <fn-get_tasks_by_status PURPOSE="Query tasks filtered by statuses" />
+        <fn-set_task_running PURPOSE="Mark task RUNNING and bind to IP" />
+        <fn-set_task_done PURPOSE="Mark task DONE and update metadata" />
+        <fn-set_task_error PURPOSE="Mark task with error and optional message" />
+        <fn-add_node PURPOSE="Insert a new compute node" />
+        <fn-enable_node PURPOSE="Enable a node for scheduling" />
+        <fn-disable_node PURPOSE="Disable a node" />
+        <fn-remove_node PURPOSE="Delete a node from DB" />
+        <fn-get_enabled_nodes PURPOSE="List nodes available for scheduling" />
+        <fn-migrate PURPOSE="Run database schema migrations" />
+      </annotations>
+    </M-DB>
+
+    <M-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="planned">
+      <purpose>Public Python/CLI client for submitting and querying tasks.</purpose>
+      <path>yascheduler/client.py</path>
+      <depends>M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-SCHEDULER</depends>
+      <annotations>
+        <class-Yascheduler PURPOSE="Sync/async client wrapper for task operations" />
+        <fn-to_sync PURPOSE="Decorator converting async function to sync" />
+        <fn-queue_submit_task PURPOSE="Submit a new task (sync)" />
+        <fn-queue_submit_task_async PURPOSE="Submit a new task (async)" />
+        <fn-queue_get_tasks PURPOSE="Query tasks by jobs/status (sync)" />
+        <fn-queue_get_tasks_async PURPOSE="Query tasks by jobs/status (async)" />
+        <fn-queue_get_task PURPOSE="Get single task by ID (sync)" />
+        <fn-queue_get_task_async PURPOSE="Get single task by ID (async)" />
+      </annotations>
+    </M-CLIENT>
+
+    <M-QUEUE NAME="Unique queue" TYPE="UTILITY" STATUS="planned">
+      <purpose>Deduplicating async queue for producer-consumer scheduling loops.</purpose>
+      <path>yascheduler/queue.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-UniqueQueue PURPOSE="Async queue that skips duplicate messages by ID" />
+        <class-UMessage PURPOSE="Typed message with ID and payload" />
+      </annotations>
+    </M-QUEUE>
+
+    <M-AIIDA NAME="AiiDA plugin" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>AiiDA scheduler plugin entry point for integrating with AiiDA workflows.</purpose>
+      <path>yascheduler/aiida_plugin.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-YaschedJobResource PURPOSE="Resource class for yascheduler jobs in AiiDA" />
+        <class-YaScheduler PURPOSE="AiiDA Scheduler subclass for the yascheduler engine" />
+      </annotations>
+    </M-AIIDA>
+
+    <M-VARIABLES NAME="Project variables" TYPE="UTILITY" STATUS="planned">
+      <purpose>Global constants for config file, PID file, and log file paths.</purpose>
+      <path>yascheduler/variables.py</path>
+      <depends>none</depends>
+      <annotations>
+        <const-CONFIG_FILE PURPOSE="Default config file path" />
+        <const-PID_FILE PURPOSE="Default PID file path" />
+        <const-LOG_FILE PURPOSE="Default log file path" />
+      </annotations>
+    </M-VARIABLES>
+
+    <M-UTILS NAME="Utilities" TYPE="UTILITY" STATUS="planned">
+      <purpose>CLI entry points: submit, status, init, node management, daemonize.</purpose>
+      <path>yascheduler/utils.py</path>
+      <depends>M-CLIENT, M-CONFIG, M-DB, M-REMOTE, M-VARIABLES, M-SCHEDULER</depends>
+      <annotations>
+        <fn-submit PURPOSE="Submit task to yascheduler via AiiDA script" />
+        <fn-check_status PURPOSE="Show status of tasks" />
+        <fn-init PURPOSE="Service initialization (systemd/sysv + DB)" />
+        <fn-show_nodes PURPOSE="Show enabled nodes and running tasks" />
+        <fn-manage_node PURPOSE="Add/remove nodes from daemon" />
+        <fn-daemonize PURPOSE="Start yascheduler daemon" />
+      </annotations>
+    </M-UTILS>
+
+    <M-TIME NAME="Time utilities" TYPE="UTILITY" STATUS="planned">
+      <purpose>Sleep utilities for sync and async contexts.</purpose>
+      <path>yascheduler/time.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-sleep_until PURPOSE="Sleep until a given datetime" />
+        <fn-asleep_until PURPOSE="Async sleep until a given datetime" />
+      </annotations>
+    </M-TIME>
+
+    <M-COMPAT NAME="Compatibility" TYPE="UTILITY" STATUS="planned">
+      <purpose>Type compatibility shims: Self and ParamSpec for older Python versions.</purpose>
+      <path>yascheduler/compat.py</path>
+      <depends>none</depends>
+      <annotations>
+        <type-Self PURPOSE="Self type re-exported from typing_extensions" />
+        <type-ParamSpec PURPOSE="ParamSpec re-exported from typing_extensions" />
+      </annotations>
+    </M-COMPAT>
+
+    <M-DAEMON-SYSTEMD NAME="Systemd daemon" TYPE="ENTRY_POINT" STATUS="planned">
+      <purpose>Systemd service entry point for the scheduler daemon.</purpose>
+      <path>yascheduler/daemon_systemd.py</path>
+      <depends>M-UTILS, M-VARIABLES</depends>
+      <annotations>
+        <fn-__main__ PURPOSE="Systemd daemon entry point launching daemonize" />
+      </annotations>
+    </M-DAEMON-SYSTEMD>
+
+    <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="planned">
+      <purpose>SysV init service entry point for launching the scheduler daemon.</purpose>
+      <path>yascheduler/daemon_sysv.py</path>
+      <depends>M-UTILS, M-VARIABLES</depends>
+      <annotations>
+        <fn-start_daemon PURPOSE="SysV daemon entry point with PID file management" />
+      </annotations>
+    </M-DAEMON-SYSV>
+
+    <!-- ═══════════════════════════════════════════════
+         Configuration
+         ═══════════════════════════════════════════════ -->
+
+    <M-CONFIG NAME="Config root" TYPE="UTILITY" STATUS="planned">
+      <purpose>Top-level configuration container aggregating all sub-configs.</purpose>
+      <path>yascheduler/config/config.py</path>
+      <depends>M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE-REPO</depends>
+      <annotations>
+        <class-Config PURPOSE="Frozen config container parsed from INI file" />
+        <fn-from_config_parser PURPOSE="Parse config from file path" />
+      </annotations>
+    </M-CONFIG>
+
+    <M-CONFIG-DB NAME="DB config" TYPE="UTILITY" STATUS="planned">
+      <purpose>Database connection configuration.</purpose>
+      <path>yascheduler/config/db.py</path>
+      <depends>M-CONFIG-UTILS</depends>
+      <annotations>
+        <class-ConfigDb PURPOSE="PostgreSQL DB connection configuration" />
+      </annotations>
+    </M-CONFIG-DB>
+
+    <M-CONFIG-LOCAL NAME="Local config" TYPE="UTILITY" STATUS="planned">
+      <purpose>Local daemon settings: concurrency limits, webhook config, sleep intervals.</purpose>
+      <path>yascheduler/config/local.py</path>
+      <depends>M-CONFIG-UTILS</depends>
+      <annotations>
+        <class-ConfigLocal PURPOSE="Local daemon concurrency and timing settings" />
+      </annotations>
+    </M-CONFIG-LOCAL>
+
+    <M-CONFIG-REMOTE NAME="Remote config" TYPE="UTILITY" STATUS="planned">
+      <purpose>Remote machine defaults: data directories, SSH username, jump host.</purpose>
+      <path>yascheduler/config/remote.py</path>
+      <depends>M-CONFIG-UTILS, M-COMPAT</depends>
+      <annotations>
+        <class-ConfigRemote PURPOSE="Remote machine path and SSH defaults" />
+      </annotations>
+    </M-CONFIG-REMOTE>
+
+    <M-CONFIG-CLOUD NAME="Cloud configs" TYPE="UTILITY" STATUS="planned">
+      <purpose>Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud.</purpose>
+      <path>yascheduler/config/cloud.py</path>
+      <depends>M-CONFIG-UTILS, M-COMPAT</depends>
+      <annotations>
+        <class-ConfigCloudAzure PURPOSE="Azure cloud config" />
+        <class-ConfigCloudHetzner PURPOSE="Hetzner cloud config" />
+        <class-ConfigCloudUpcloud PURPOSE="UpCloud cloud config" />
+        <class-AzureImageReference PURPOSE="Azure VM image URN" />
+        <class-ConfigCloud PURPOSE="Union of all cloud config types" />
+      </annotations>
+    </M-CONFIG-CLOUD>
+
+    <M-CONFIG-ENGINE NAME="Engine config" TYPE="UTILITY" STATUS="planned">
+      <purpose>Calculation engine definition: spawn command, check command, deployables, platforms.</purpose>
+      <path>yascheduler/config/engine.py</path>
+      <depends>M-CONFIG-UTILS</depends>
+      <annotations>
+        <class-Engine PURPOSE="Single calculation engine configuration" />
+        <class-LocalFilesDeploy PURPOSE="Deploy local files to remote" />
+        <class-LocalArchiveDeploy PURPOSE="Deploy local archive to remote" />
+        <class-RemoteArchiveDeploy PURPOSE="Download and deploy remote archive" />
+        <type-Deploy PURPOSE="Union type of all deploy configurations" />
+      </annotations>
+    </M-CONFIG-ENGINE>
+
+    <M-CONFIG-ENGINE-REPO NAME="Engine repository" TYPE="UTILITY" STATUS="planned">
+      <purpose>Immutable collection of engines with filtering by platform.</purpose>
+      <path>yascheduler/config/engine_repository.py</path>
+      <depends>M-CONFIG-ENGINE, M-COMPAT</depends>
+      <annotations>
+        <class-EngineRepository PURPOSE="Frozen dict of engines with filtering" />
+        <fn-filter PURPOSE="Filter engines by predicate" />
+        <fn-filter_platforms PURPOSE="Filter engines by supported platforms" />
+        <fn-from_config_parser PURPOSE="Parse all engine.* sections" />
+      </annotations>
+    </M-CONFIG-ENGINE-REPO>
+
+    <M-CONFIG-UTILS NAME="Config utilities" TYPE="UTILITY" STATUS="planned">
+      <purpose>Shared config helpers: field factories, validators, warning helpers.</purpose>
+      <path>yascheduler/config/utils.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-make_default_field PURPOSE="attrs field factory with defaults and validators" />
+        <fn-warn_unknown_fields PURPOSE="Warn on unrecognized config keys" />
+        <class-ConfigWarning PURPOSE="Warning class for config issues" />
+      </annotations>
+    </M-CONFIG-UTILS>
+
+    <!-- ═══════════════════════════════════════════════
+         Cloud integration
+         ═══════════════════════════════════════════════ -->
+
+    <M-CLOUD-API NAME="Cloud API base" TYPE="CORE_LOGIC" STATUS="planned">
+      <purpose>Generic cloud provider interface: node creation, deletion, SSH key management.</purpose>
+      <path>yascheduler/clouds/cloud_api.py</path>
+      <depends>M-CLOUD-PROTOCOLS, M-CLOUD-ADAPTERS, M-CONFIG-CLOUD, M-REMOTE, M-UTILS</depends>
+      <annotations>
+        <class-CloudAPI PURPOSE="Generic cloud provider with create/delete/SSH key ops" />
+        <class-CloudCreateNodeError PURPOSE="Cloud node allocation error" />
+        <class-CloudConfig PURPOSE="Cloud-init configuration renderer" />
+        <class-CloudSetupNodeError PURPOSE="Node setup failure exception" />
+        <fn-create_node PURPOSE="Create VM, wait for SSH, setup node" />
+        <fn-delete_node PURPOSE="Delete VM by host" />
+        <fn-mk_machine PURPOSE="Connect to existing IP as RemoteMachine" />
+        <fn-get_ssh_key_sync PURPOSE="Load SSH key for cloud provider" />
+      </annotations>
+    </M-CLOUD-API>
+
+    <M-CLOUD-MANAGER NAME="Cloud manager" TYPE="CORE_LOGIC" STATUS="planned">
+      <purpose>Multi-cloud orchestrator: provider selection, allocation, deallocation, capacity.</purpose>
+      <path>yascheduler/clouds/cloud_api_manager.py</path>
+      <depends>M-CLOUD-API, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-DB, M-CONFIG</depends>
+      <annotations>
+        <class-CloudAPIManager PURPOSE="Manages multiple cloud provider instances" />
+        <export-CLOUD_ADAPTER_GETTERS PURPOSE="Registry mapping cloud prefix to adapter factory" />
+        <fn-create PURPOSE="Async factory: instantiate all configured cloud providers" />
+        <fn-allocate PURPOSE="Select provider, create node, wait for ready" />
+        <fn-deallocate PURPOSE="Delete cloud node by IP" />
+        <fn-select_best_provider PURPOSE="Pick provider with highest priority and capacity" />
+        <fn-get_capacity PURPOSE="Report current capacity across all providers" />
+      </annotations>
+    </M-CLOUD-MANAGER>
+
+    <M-CLOUD-AZ NAME="Azure provider" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>Azure VM creation and deletion using Azure SDK.</purpose>
+      <path>yascheduler/clouds/az.py</path>
+      <depends>M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS</depends>
+      <annotations>
+        <fn-az_create_node PURPOSE="Create Azure VM and return public IP" />
+        <fn-az_delete_node PURPOSE="Delete Azure VM and NIC by name" />
+      </annotations>
+    </M-CLOUD-AZ>
+
+    <M-CLOUD-HETZNER NAME="Hetzner provider" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>Hetzner Cloud server creation and deletion via API.</purpose>
+      <path>yascheduler/clouds/hetzner.py</path>
+      <depends>M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS</depends>
+      <annotations>
+        <fn-hetzner_create_node PURPOSE="Create Hetzner server and return IP" />
+        <fn-hetzner_delete_node PURPOSE="Delete Hetzner server by IP" />
+      </annotations>
+    </M-CLOUD-HETZNER>
+
+    <M-CLOUD-UPCLOUD NAME="UpCloud provider" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>UpCloud server creation and deletion via API.</purpose>
+      <path>yascheduler/clouds/upcloud.py</path>
+      <depends>M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS</depends>
+      <annotations>
+        <fn-upcloud_create_node_sync PURPOSE="Create UpCloud server (sync) and return IP" />
+        <fn-upcload_delete_node_sync PURPOSE="Delete UpCloud server (sync) by IP" />
+      </annotations>
+    </M-CLOUD-UPCLOUD>
+
+    <M-CLOUD-ADAPTERS NAME="Cloud adapters" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>Mapping of cloud config types to create/delete callables.</purpose>
+      <path>yascheduler/clouds/adapters.py</path>
+      <depends>M-CLOUD-PROTOCOLS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD</depends>
+      <annotations>
+        <class-CloudAdapter PURPOSE="Frozen attrs class wrapping create/delete callables" />
+        <fn-get_azure_adapter PURPOSE="Return Azure CloudAdapter" />
+        <fn-get_hetzner_adapter PURPOSE="Return Hetzner CloudAdapter" />
+        <fn-get_upcloud_adapter PURPOSE="Return UpCloud CloudAdapter" />
+      </annotations>
+    </M-CLOUD-ADAPTERS>
+
+    <M-CLOUD-PROTOCOLS NAME="Cloud protocols" TYPE="UTILITY" STATUS="planned">
+      <purpose>Protocol definitions for cloud config, node creation, deletion callables.</purpose>
+      <path>yascheduler/clouds/protocols.py</path>
+      <depends>M-CONFIG-CLOUD</depends>
+      <annotations>
+        <class-PCloudConfig PURPOSE="Cloud-init config protocol" />
+        <class-CreateNodeCallable PURPOSE="Async node creation protocol" />
+        <class-DeleteNodeCallable PURPOSE="Async node deletion protocol" />
+        <class-CloudCapacity PURPOSE="Provider capacity metrics" />
+      </annotations>
+    </M-CLOUD-PROTOCOLS>
+
+    <M-CLOUD-UTILS NAME="Cloud utilities" TYPE="UTILITY" STATUS="planned">
+      <purpose>Cloud helper utilities: random naming, SSH key name extraction.</purpose>
+      <path>yascheduler/clouds/utils.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-get_rnd_name PURPOSE="Create random string with prefix" />
+        <fn-get_key_name PURPOSE="Get SSHKey's name" />
+      </annotations>
+    </M-CLOUD-UTILS>
+
+    <!-- ═══════════════════════════════════════════════
+         Remote machine management
+         ═══════════════════════════════════════════════ -->
+
+    <M-REMOTE NAME="Remote machine" TYPE="CORE_LOGIC" STATUS="planned">
+      <purpose>SSH connection to a remote machine with platform detection, command execution, and SFTP.</purpose>
+      <path>yascheduler/remote_machine/remote_machine.py</path>
+      <depends>M-REMOTE-ADAPTERS, M-REMOTE-EXC, M-REMOTE-PROTOCOL, M-COMPAT</depends>
+      <annotations>
+        <class-RemoteMachine PURPOSE="SSH-connected remote compute node" />
+        <class-RemoteMachineMetadata PURPOSE="Tracks busy/free state and timing" />
+        <class-MySSHClient PURPOSE="SSH client that trusts all host keys" />
+        <fn-create PURPOSE="Async factory: connect SSH, detect platform, create instance" />
+        <fn-close PURPOSE="Cancel jobs, close SSH connection" />
+        <fn-run PURPOSE="Execute command and wait for completion" />
+        <fn-run_bg PURPOSE="Execute command in background" />
+        <fn-sftp PURPOSE="Async context manager for SFTP session" />
+        <fn-setup_node PURPOSE="Install engine dependencies on node" />
+        <fn-occupancy_check PURPOSE="Check if engine process is still running" />
+        <fn-start_occupancy_check PURPOSE="Start periodic occupancy monitoring" />
+        <fn-get_conn PURPOSE="Get or reopen SSH connection" />
+        <fn-get_cpu_cores PURPOSE="Read CPU core count" />
+        <fn-pgrep PURPOSE="List processes matching pattern" />
+      </annotations>
+    </M-REMOTE>
+
+    <M-REMOTE-REPO NAME="Remote machine repository" TYPE="UTILITY" STATUS="planned">
+      <purpose>Collection of connected remote machines with filtering and cleanup.</purpose>
+      <path>yascheduler/remote_machine/remote_machine_repository.py</path>
+      <depends>M-REMOTE, M-COMPAT</depends>
+      <annotations>
+        <class-RemoteMachineRepository PURPOSE="Mutable collection of connected machines" />
+        <fn-filter PURPOSE="Filter machines by busy/platform/free_since criteria" />
+        <fn-disconnect_all PURPOSE="Close all SSH connections" />
+        <fn-disconnect_many PURPOSE="Close specific SSH connections by IP" />
+      </annotations>
+    </M-REMOTE-REPO>
+
+    <M-REMOTE-ADAPTERS NAME="Remote adapters" TYPE="UTILITY" STATUS="planned">
+      <purpose>Platform-specific adapter registry mapping OS identifiers to adapter instances.</purpose>
+      <path>yascheduler/remote_machine/adapters.py</path>
+      <depends>M-REMOTE-PROTOCOL, M-REMOTE-CHECKS, M-REMOTE-LINUX, M-REMOTE-WINDOWS, M-REMOTE-COMMON</depends>
+      <annotations>
+        <class-RemoteMachineAdapter PURPOSE="Platform-specific command implementations" />
+      </annotations>
+    </M-REMOTE-ADAPTERS>
+
+    <M-REMOTE-CHECKS NAME="Platform checks" TYPE="UTILITY" STATUS="planned">
+      <purpose>SSH-based platform detection check functions for each supported OS.</purpose>
+      <path>yascheduler/remote_machine/checks.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-check_is_linux PURPOSE="Check if remote is generic Linux via uname" />
+        <fn-check_is_darwin PURPOSE="Check if remote is Darwin/macOS via uname" />
+        <fn-check_is_debian_like PURPOSE="Check if remote is Debian-like via os-release" />
+        <fn-check_is_windows PURPOSE="Check if remote runs Windows with PowerShell" />
+      </annotations>
+    </M-REMOTE-CHECKS>
+
+    <M-REMOTE-COMMON NAME="Remote common" TYPE="UTILITY" STATUS="planned">
+      <purpose>Shared helpers for remote machine operations: process info, command execution.</purpose>
+      <path>yascheduler/remote_machine/common.py</path>
+      <depends>M-REMOTE-PROTOCOL</depends>
+      <annotations>
+        <class-ProcessInfo PURPOSE="Attrs struct holding pid, name, command" />
+        <fn-run PURPOSE="Run process on SSH connection and wait for exit" />
+        <fn-run_bg PURPOSE="Create background process on SSH connection" />
+      </annotations>
+    </M-REMOTE-COMMON>
+
+    <M-REMOTE-EXC NAME="Remote exceptions" TYPE="UTILITY" STATUS="planned">
+      <purpose>Custom exceptions for remote machine operations.</purpose>
+      <path>yascheduler/remote_machine/exc.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-PlatformGuessFailed PURPOSE="Raised when no adapter matches detected platform" />
+      </annotations>
+    </M-REMOTE-EXC>
+
+    <M-REMOTE-LINUX NAME="Linux methods" TYPE="UTILITY" STATUS="planned">
+      <purpose>Linux-specific remote commands: package install, process listing, CPU detection.</purpose>
+      <path>yascheduler/remote_machine/linux_methods.py</path>
+      <depends>M-REMOTE-PROTOCOL, M-REMOTE-COMMON, M-CONFIG-ENGINE</depends>
+      <annotations>
+        <fn-linux_setup_node PURPOSE="Install packages and setup engines on Linux" />
+        <fn-linux_get_cpu_cores PURPOSE="Read CPU count from /proc/cpuinfo" />
+        <fn-linux_list_processes PURPOSE="Parse ps output into process info" />
+      </annotations>
+    </M-REMOTE-LINUX>
+
+    <M-REMOTE-WINDOWS NAME="Windows methods" TYPE="UTILITY" STATUS="planned">
+      <purpose>Windows-specific remote commands: engine deployment, process listing.</purpose>
+      <path>yascheduler/remote_machine/windows_methods.py</path>
+      <depends>M-REMOTE-PROTOCOL, M-REMOTE-COMMON, M-CONFIG-ENGINE</depends>
+      <annotations>
+        <fn-windows_setup_node PURPOSE="Install packages and setup engines on Windows" />
+        <fn-windows_list_processes PURPOSE="Parse tasklist output into process info" />
+      </annotations>
+    </M-REMOTE-WINDOWS>
+
+    <M-REMOTE-PROTOCOL NAME="Remote protocols" TYPE="UTILITY" STATUS="planned">
+      <purpose>Protocol definitions for engines, process info, SSH checks, and adapters.</purpose>
+      <path>yascheduler/remote_machine/protocol.py</path>
+      <depends>M-CONFIG-ENGINE</depends>
+      <annotations>
+        <class-PEngine PURPOSE="Engine protocol for remote operations" />
+        <class-PEngineRepository PURPOSE="Engine collection protocol" />
+        <class-PProcessInfo PURPOSE="Process information shape" />
+        <class-PNode PURPOSE="Node info shape" />
+        <class-SSHCheck PURPOSE="SSH check callable protocol" />
+        <class-SSHRetryExc PURPOSE="Retryable SSH exception marker" />
+        <class-SFTPRetryExc PURPOSE="Retryable SFTP exception marker" />
+        <class-AllSSHRetryExc PURPOSE="Union of all retryable SSH exceptions" />
+        <type-QuoteCallable PURPOSE="Shell quoting callable protocol" />
+        <type-RunCallable PURPOSE="Run command callable protocol" />
+        <type-RunBgCallable PURPOSE="Run background command callable protocol" />
+        <type-OuterRunCallable PURPOSE="Outer run command callable protocol" />
+        <type-GetCPUCoresCallable PURPOSE="Get CPU cores callable protocol" />
+        <type-ListProcessesCallable PURPOSE="List processes callable protocol" />
+        <type-PgrepCallable PURPOSE="Pgrep callable protocol" />
+        <type-SetupNodeCallable PURPOSE="Setup node callable protocol" />
+      </annotations>
+    </M-REMOTE-PROTOCOL>
+
+    <!-- ═══════════════════════════════════════════════
+         Data flows
+         ═══════════════════════════════════════════════ -->
+
+    <DF-SUBMIT NAME="Submit task">M-CLIENT -> M-DB -> M-SCHEDULER</DF-SUBMIT>
+    <DF-SCHEDULE NAME="Schedule task">M-SCHEDULER -> M-DB -> M-SCHEDULER -> M-CLOUD-MANAGER / M-REMOTE-REPO</DF-SCHEDULE>
+    <DF-ALLOCATE-CLOUD NAME="Allocate cloud node">M-SCHEDULER -> M-CLOUD-MANAGER -> M-CLOUD-API -> M-CLOUD-AZ / M-CLOUD-HETZNER / M-CLOUD-UPCLOUD</DF-ALLOCATE-CLOUD>
+    <DF-ALLOCATE-EXISTING NAME="Allocate existing node">M-SCHEDULER -> M-REMOTE-REPO -> M-REMOTE</DF-ALLOCATE-EXISTING>
+    <DF-EXECUTE NAME="Execute task">M-SCHEDULER -> M-REMOTE -> M-CONFIG-ENGINE</DF-EXECUTE>
+    <DF-COMPLETE NAME="Complete task">M-REMOTE -> M-SCHEDULER -> M-DB</DF-COMPLETE>
+    <DF-CLOUD-LIFECYCLE NAME="Cloud node lifecycle">M-CLOUD-MANAGER -> M-CLOUD-API; M-CLOUD-MANAGER -> M-DB</DF-CLOUD-LIFECYCLE>
+    <DF-AIIDA-INTEGRATION NAME="AiiDA integration">M-AIIDA -> M-CLIENT</DF-AIIDA-INTEGRATION>
+    <DF-DAEMON-START NAME="Daemon start">M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-UTILS</DF-DAEMON-START>
+    <DF-CONFIG-LOAD NAME="Load configuration">M-CONFIG -> M-CONFIG-DB; M-CONFIG -> M-CONFIG-LOCAL; M-CONFIG -> M-CONFIG-REMOTE; M-CONFIG -> M-CONFIG-CLOUD; M-CONFIG -> M-CONFIG-ENGINE</DF-CONFIG-LOAD>
+
+    <!-- ═══════════════════════════════════════════════
+         Cross-module links
+         ═══════════════════════════════════════════════ -->
+
+    <CrossLink from="M-SCHEDULER" to="M-DB" relation="reads/writes tasks and nodes" />
+    <CrossLink from="M-SCHEDULER" to="M-CLOUD-MANAGER" relation="delegates cloud node allocation" />
+    <CrossLink from="M-SCHEDULER" to="M-REMOTE-REPO" relation="manages connected remote machines" />
+    <CrossLink from="M-SCHEDULER" to="M-REMOTE" relation="uploads files, spawns and monitors tasks" />
+    <CrossLink from="M-CLOUD-MANAGER" to="M-CLOUD-API" relation="dispatches to provider-specific API" />
+    <CrossLink from="M-CLOUD-API" to="M-REMOTE" relation="connects to newly created cloud VMs" />
+    <CrossLink from="M-CLIENT" to="M-DB" relation="submits tasks and queries status" />
+    <CrossLink from="M-AIIDA" to="M-CLIENT" relation="delegates task submission to client" />
+    <CrossLink from="M-CONFIG" to="M-CONFIG-ENGINE-REPO" relation="provides engine collection to scheduler" />
+    <CrossLink from="M-REMOTE-ADAPTERS" to="M-REMOTE-CHECKS" relation="uses checks for platform detection" />
+    <CrossLink from="M-REMOTE-ADAPTERS" to="M-REMOTE-LINUX" relation="delegates Linux-specific operations" />
+    <CrossLink from="M-REMOTE-ADAPTERS" to="M-REMOTE-WINDOWS" relation="delegates Windows-specific operations" />
+    <CrossLink from="M-REMOTE-PROTOCOL" to="M-CONFIG-ENGINE" relation="uses engine config as protocol basis" />
+    <CrossLink from="M-CLOUD-ADAPTERS" to="M-CLOUD-AZ" relation="maps Azure config to Azure operations" />
+    <CrossLink from="M-CLOUD-ADAPTERS" to="M-CLOUD-HETZNER" relation="maps Hetzner config to Hetzner operations" />
+    <CrossLink from="M-CLOUD-ADAPTERS" to="M-CLOUD-UPCLOUD" relation="maps UpCloud config to UpCloud operations" />
+
+  </Project>
+</KnowledgeGraph>

@@ -1,3 +1,22 @@
+# FILE: yascheduler/clouds/cloud_api_manager.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Multi-cloud orchestrator: provider selection, allocation, deallocation, capacity.
+#   SCOPE: CloudAPIManager class managing multiple providers; CLOUD_ADAPTER_GETTERS registry.
+#   DEPENDS: M-CLOUD-API, M-DB, M-CONFIG, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS
+#   LINKS: M-CLOUD-MANAGER
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   CLOUD_ADAPTER_GETTERS - Registry mapping cloud prefix to adapter factory
+#   CloudAPIManager - Multi-cloud orchestrator; create, stop, allocate, deallocate, capacity
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+
 """Cloud API manager"""
 
 import asyncio
@@ -34,6 +53,13 @@ class CloudAPIManager:
     keys_dir: Path = field(factory=Path)
     allocation_lock: Lock = field(factory=Lock, init=False)
 
+    # START_CONTRACT: create
+    #   PURPOSE: Async factory that instantiates all configured cloud providers
+    #   INPUTS: { db: DB - database connection } { local_config: ConfigLocal - local settings } { remote_config: ConfigRemote - remote settings } { cloud_configs: Sequence[ConfigCloud] - list of cloud provider configs } { engines: EngineRepository - engine definitions } { log: Optional[logging.Logger] - optional parent logger }
+    #   OUTPUTS: { Self - initialized CloudAPIManager instance }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CLOUD-MANAGER, M-CLOUD-API
+    # END_CONTRACT: create
     @classmethod
     async def create(
         cls,
@@ -100,6 +126,13 @@ class CloudAPIManager:
     def mark_task_done(self, on_task: int) -> None:
         self.on_tasks.discard(on_task)
 
+    # START_CONTRACT: get_capacity
+    #   PURPOSE: Report current capacity across all providers
+    #   INPUTS: { None }
+    #   OUTPUTS: { dict[str, CloudCapacity] - mapping of provider name to capacity info }
+    #   SIDE_EFFECTS: Reads from DB
+    #   LINKS: M-CLOUD-MANAGER, M-DB
+    # END_CONTRACT: get_capacity
     async def get_capacity(self) -> dict[str, CloudCapacity]:
         data: dict[str, CloudCapacity] = {}
         for name, count in (await self.db.count_nodes_clouds()).items():
@@ -117,6 +150,13 @@ class CloudAPIManager:
                 )
         return data
 
+    # START_CONTRACT: select_best_provider
+    #   PURPOSE: Pick provider with highest priority and available capacity
+    #   INPUTS: { want_platforms: Optional[Sequence[str]] - optional platform filter }
+    #   OUTPUTS: { Optional[CloudAPI[ConfigCloud]] - best matching provider or None }
+    #   SIDE_EFFECTS: Reads from DB via get_capacity
+    #   LINKS: M-CLOUD-MANAGER
+    # END_CONTRACT: select_best_provider
     async def select_best_provider(
         self, want_platforms: Optional[Sequence[str]] = None
     ) -> Optional[CloudAPI[ConfigCloud]]:
@@ -125,6 +165,7 @@ class CloudAPIManager:
         used_providers = []
         suitable_providers = list(self.apis.keys())
 
+        # START_BLOCK_FILTER_PROVIDERS
         cap = await self.get_capacity()
 
         for name, capacity in cap.items():
@@ -141,17 +182,27 @@ class CloudAPIManager:
                 if not any(map(api.is_platform_supported, want_platforms)):
                     suitable_providers.remove(api.name)
 
+        # END_BLOCK_FILTER_PROVIDERS
         self.log.debug("Used providers: %s", used_providers)
         if not suitable_providers:
             self.log.debug("No suitable cloud providers")
             return
 
+        # START_BLOCK_SORT_SELECT
         ok_apis = filter(lambda x: x.name in suitable_providers, self.apis.values())
         ok_apis_sorted = sorted(ok_apis, key=lambda x: x.config.priority, reverse=True)
         api = ok_apis_sorted[0]
         self.log.debug("Chosen: %s", api.name)
         return api
+        # END_BLOCK_SORT_SELECT
 
+    # START_CONTRACT: allocate_node
+    #   PURPOSE: Select provider, create a cloud node, wait for ready
+    #   INPUTS: { want_platforms: Optional[Sequence[str]] - optional platform filter } { throttle: bool - whether to skip overloaded providers }
+    #   OUTPUTS: { Optional[str] - allocated node IP address or None }
+    #   SIDE_EFFECTS: Adds node to DB
+    #   LINKS: M-CLOUD-MANAGER, M-DB
+    # END_CONTRACT: allocate_node
     async def allocate_node(
         self, want_platforms: Optional[Sequence[str]] = None, throttle: bool = False
     ) -> Optional[str]:
@@ -167,12 +218,15 @@ class CloudAPIManager:
 
             tmp_ip = await self.db.add_tmp_node(api.name, api.config.username)
             await self.db.commit()
+        # START_BLOCK_CREATE_NODE
         try:
             ip_addr = await api.create_node()
         finally:
             await self.db.remove_node(tmp_ip)
             await self.db.commit()
+        # END_BLOCK_CREATE_NODE
 
+        # START_BLOCK_REGISTER_NODE
         _ = await self.db.add_node(
             ip_addr=ip_addr,
             username=api.config.username,
@@ -181,8 +235,16 @@ class CloudAPIManager:
             enabled=True,
         )
         await self.db.commit()
+        # END_BLOCK_REGISTER_NODE
         return ip_addr
 
+    # START_CONTRACT: allocate
+    #   PURPOSE: Externally-safe allocate wrapper with error handling and task tracking
+    #   INPUTS: { on_task: Optional[int] - optional task id to mark } { want_platforms: Optional[Sequence[str]] - optional platform filter } { throttle: bool - whether to skip overloaded providers }
+    #   OUTPUTS: { Optional[str] - allocated node IP address or None on error }
+    #   SIDE_EFFECTS: Tracks on_task in on_tasks set, logs allocation errors
+    #   LINKS: M-CLOUD-MANAGER, M-DB
+    # END_CONTRACT: allocate
     async def allocate(
         self,
         on_task: Optional[int] = None,
@@ -201,6 +263,13 @@ class CloudAPIManager:
                 self.mark_task_done(on_task)
         return
 
+    # START_CONTRACT: deallocate
+    #   PURPOSE: Delete cloud node by IP address
+    #   INPUTS: { ip_addr: str - IP address of node to deallocate }
+    #   OUTPUTS: { Optional[bool] - False on deletion error, None otherwise }
+    #   SIDE_EFFECTS: Disables and removes node from DB, deletes cloud VM
+    #   LINKS: M-CLOUD-MANAGER, M-DB
+    # END_CONTRACT: deallocate
     async def deallocate(self, ip_addr: str):
         node = await self.db.get_node(ip_addr)
         if not node or not node.cloud:
@@ -211,10 +280,14 @@ class CloudAPIManager:
             )
         await self.db.disable_node(ip_addr)
         await self.db.commit()
+        # START_BLOCK_DELETE_NODE
         try:
             await self.apis[node.cloud].delete_node(node.ip)
         except Exception as err:
             self.log.error(f"Can't deallocate node {node.ip}: {err}")
             return False
+        # END_BLOCK_DELETE_NODE
+        # START_BLOCK_REMOVE_NODE
         await self.db.remove_node(node.ip)
         await self.db.commit()
+        # END_BLOCK_REMOVE_NODE

@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/config/engine_repository.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Immutable collection of engines with filtering by platform.
+#   SCOPE: EngineRepository frozen dict with filter operations.
+#   DEPENDS: M-CONFIG-ENGINE, M-COMPAT
+#   LINKS: M-CONFIG-ENGINE-REPO
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   EngineRepository - Immutable repository of engines with filter and platform methods
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Repository for Engines"""
 
 import json
@@ -48,6 +66,13 @@ class EngineRepository(UserDict[str, Engine]):
             json.dumps(asdict(self, value_serializer=_value_serializer), sort_keys=True)
         )
 
+    # START_CONTRACT: filter
+    #   PURPOSE: Filter engines by predicate and return new repository
+    #   INPUTS: { filter_func: Callable[[Engine], bool] - predicate function for filtering }
+    #   OUTPUTS: { Self - new repository with matching engines only }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-ENGINE-REPO
+    # END_CONTRACT: filter
     def filter(self, filter_func: Callable[[Engine], bool]) -> Self:
         "Filter Engines by callable and return new Repository"
         new_data = dict(filter(lambda x: filter_func(x[1]), self.data.items()))
@@ -56,6 +81,13 @@ class EngineRepository(UserDict[str, Engine]):
             engines_dir=self.engines_dir,
         )
 
+    # START_CONTRACT: filter_platforms
+    #   PURPOSE: Filter engines by supported platforms and return new repository
+    #   INPUTS: { platforms: Sequence[str] - list of platform names to match against }
+    #   OUTPUTS: { Self - new repository with engines supporting at least one given platform }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-ENGINE-REPO
+    # END_CONTRACT: filter_platforms
     def filter_platforms(self, platforms: Sequence[str]) -> Self:
         "Filter Engines by platforms and return new Repository"
         return self.filter(lambda x: bool(set(x.platforms) & set(platforms)))
@@ -65,6 +97,13 @@ class EngineRepository(UserDict[str, Engine]):
         mapped = map(lambda x: x.platform_packages, self.values())
         return list(set(chain(*mapped)))
 
+    # START_CONTRACT: from_config_parser
+    #   PURPOSE: Parse all engine.* sections from an INI config into an EngineRepository
+    #   INPUTS: { cfg: ConfigParser - parsed INI config } { engines_dir: PurePath - engines directory path }
+    #   OUTPUTS: { Self - repository populated with engines from config }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-ENGINE-REPO, M-CONFIG
+    # END_CONTRACT: from_config_parser
     @classmethod
     def from_config_parser(cls, cfg: ConfigParser, engines_dir: PurePath) -> Self:
         "Create config from path or config file contents"

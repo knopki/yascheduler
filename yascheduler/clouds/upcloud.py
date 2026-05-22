@@ -1,3 +1,25 @@
+# FILE: yascheduler/clouds/upcloud.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: UpCloud server creation and deletion via API.
+#   SCOPE: UpCloud create/delete node functions.
+#   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
+#   LINKS: M-CLOUD-UPCLOUD
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   get_client - Get cached UpCloud CloudManager client
+#   upcloud_create_node_sync - Create UpCloud server (sync)
+#   upcloud_create_node - Create UpCloud server (async, public entry point)
+#   upcload_delete_node_sync - Delete UpCloud server (sync)
+#   upcload_delete_node - Delete UpCloud server (async, public entry point)
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Upcloud cloud methods"""
 
 import asyncio

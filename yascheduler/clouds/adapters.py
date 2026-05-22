@@ -1,3 +1,27 @@
+# FILE: yascheduler/clouds/adapters.py
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Mapping of cloud config types to create/delete callables.
+#   SCOPE: Adapter registry mapping provider config classes to their operations.
+#   DEPENDS: M-CLOUD-PROTOCOLS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD
+#   LINKS: M-CLOUD-ADAPTERS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   CloudAdapter                # Generic[TConfigCloud_co] - Frozen attrs class wrapping create/delete callables + platform checks
+#   can_debian_buster           # (platform: str) -> bool
+#   can_debian_bullseye         # (platform: str) -> bool
+#   can_win10                   # (platform: str) -> bool
+#   can_win11                   # (platform: str) -> bool
+#   get_azure_adapter           # (name: str) -> CloudAdapter
+#   get_hetzner_adapter         # (name: str) -> CloudAdapter
+#   get_upcloud_adapter         # (name: str) -> CloudAdapter
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+
 """Cloud adapters"""
 
 import asyncio

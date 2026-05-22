@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/config/config.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Top-level configuration container aggregating all sub-configs.
+#   SCOPE: Config frozen dataclass parsed from INI file, aggregates sub-configs.
+#   DEPENDS: M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE-REPO
+#   LINKS: M-CONFIG
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   Config - Frozen config container parsed from INI file
+#   Config.from_config_parser - Classmethod factory from INI file path or contents
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Main config module"""
 
 from collections.abc import Sequence
@@ -27,6 +46,13 @@ class Config:
         validator=[validators.instance_of(EngineRepository)]
     )
 
+    # START_CONTRACT: from_config_parser
+    #   PURPOSE: Parse config from INI file path or contents into a Config instance
+    #   INPUTS: { files: Union[str, bytes, PurePath] - path or contents of INI config file }
+    #   OUTPUTS: { Config - fully populated configuration object }
+    #   SIDE_EFFECTS: Reads from filesystem when files is a path
+    #   LINKS: M-CONFIG, M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE-REPO
+    # END_CONTRACT: from_config_parser
     @classmethod
     def from_config_parser(cls, files: Union[str, bytes, PurePath]) -> "Config":
         "Create Config from path or config file contents"

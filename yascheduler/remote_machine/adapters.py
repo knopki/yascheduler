@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+#
+# FILE: yascheduler/remote_machine/adapters.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Platform-specific adapter registry mapping OS identifiers to adapter instances.
+#   SCOPE: RemoteMachineAdapter dataclass and platform adapter instances.
+#   DEPENDS: M-REMOTE-PROTOCOL, M-REMOTE-CHECKS, M-REMOTE-LINUX, M-REMOTE-WINDOWS, M-REMOTE-COMMON
+#   LINKS: M-REMOTE-ADAPTERS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   RemoteMachineAdapter - Frozen dataclass holding platform-specific callables and check sequences
+#   linux_adapter - Generic Linux adapter instance
+#   debian_like_adapter - Debian-like variant evolved from linux_adapter
+#   debian_adapter - Generic Debian variant evolved from debian_like_adapter
+#   debian_10_adapter .. debian_15_adapter - Version-specific Debian adapters
+#   darwin_adapter - Darwin/macOS adapter instance
+#   windows_adapter - Generic Windows adapter instance
+#   windows7_adapter .. windows12_adapter - Version-specific Windows adapters
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 
 import shlex
 from collections.abc import Sequence

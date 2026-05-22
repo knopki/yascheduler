@@ -1,3 +1,22 @@
+# FILE: yascheduler/clouds/utils.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Cloud helpers: random name generation and SSH key name extraction.
+#   SCOPE: Random naming and SSH key name utilities.
+#   DEPENDS: none
+#   LINKS: M-CLOUD-UTILS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   get_rnd_name - Create random string with prefix
+#   get_key_name - Get SSHKey's name
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+
 """Clouds helper utilities"""
 
 import random

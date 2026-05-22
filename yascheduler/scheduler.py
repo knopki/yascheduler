@@ -1,4 +1,24 @@
 #!/usr/bin/env python
+# FILE: yascheduler/scheduler.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Main async daemon orchestrating task allocation, execution, and completion.
+#   SCOPE: Producer-consumer loops for machine connection, task allocation, consumption, and deallocation.
+#   DEPENDS: M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-CONFIG, M-QUEUE, M-COMPAT, M-TIME, M-VARIABLES
+#   LINKS: M-SCHEDULER
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   Scheduler - Async daemon that drives the full task lifecycle
+#   WebhookPayload - Webhook request data shape
+#   get_logger - Configure and return the yascheduler logger
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+
 
 import asyncio
 import base64
@@ -89,6 +109,13 @@ class Scheduler:
         self.consume_q = UniqueQueue("consume", maxsize=lcfg.consume_pending)
         self.deallocate_q = UniqueQueue("deallocate", maxsize=lcfg.deallocate_pending)
 
+    # START_CONTRACT: create
+    #   PURPOSE: Async factory: build Scheduler with DB, clouds, remote machines
+    #   INPUTS: { config: Optional[Config] - optional config override, log: Optional[logging.Logger] - optional logger }
+    #   OUTPUTS: { Self - fully initialized Scheduler instance }
+    #   SIDE_EFFECTS: Creates DB connection, initialises CloudAPIManager and RemoteMachineRepository
+    #   LINKS: M-DB, M-CLOUD-MANAGER, M-CONFIG, M-SCHEDULER
+    # END_CONTRACT: create
     @classmethod
     async def create(
         cls,
@@ -160,6 +187,13 @@ class Scheduler:
             except Exception as err:
                 self.log.error("Webhook for task_id=%s failed: %s", task_id, err)
 
+    # START_CONTRACT: create_new_task
+    #   PURPOSE: Insert a new TO_DO task into the database with engine metadata
+    #   INPUTS: { label: str - task label, metadata: Mapping[str, Any] - input files and parameters, engine_name: str - name of the engine, webhook_onsubmit: bool - trigger webhook on submit (default False) }
+    #   OUTPUTS: { TaskModel - the created task record }
+    #   SIDE_EFFECTS: Writes task to DB, optionally sends webhook
+    #   LINKS: M-DB, M-SCHEDULER
+    # END_CONTRACT: create_new_task
     async def create_new_task(
         self,
         label: str,
@@ -191,6 +225,13 @@ class Scheduler:
         self.log.info(f":::submitted: {label}")
         return task
 
+    # START_CONTRACT: upload_task_data
+    #   PURPOSE: Upload task input files to a remote machine via SFTP
+    #   INPUTS: { sftp: SFTPClient - SFTP connection, task: TaskModel - task with input file metadata, remote_dir: PurePath - remote directory path on the machine, input_files: Sequence[str] - list of input filenames to upload }
+    #   OUTPUTS: { bool - True on success }
+    #   SIDE_EFFECTS: Creates remote directories, writes files via SFTP, raises on error
+    #   LINKS: M-REMOTE-REPO, M-SCHEDULER
+    # END_CONTRACT: upload_task_data
     async def upload_task_data(
         self,
         sftp: SFTPClient,
@@ -212,6 +253,7 @@ class Scheduler:
                 b64_data += "=" * (4 - missing_padding)
             return base64.b64decode(b64_data)
 
+        # START_BLOCK_UPLOAD
         try:
             await sftp.makedirs(PurePosixPath(remote_dir), exist_ok=True)
         except asyncssh.misc.Error as err:
@@ -252,7 +294,15 @@ class Scheduler:
                 except Exception as e:
                     self.log.error(f"Error processing file {input_file}: {e}")
         return True
+        # END_BLOCK_UPLOAD
 
+    # START_CONTRACT: start_task_on_machine
+    #   PURPOSE: Upload inputs and spawn the calculation process on a remote node
+    #   INPUTS: { machine: RemoteMachine - target machine to run on, engine: Engine - engine config with spawn command, task: TaskModel - task to start }
+    #   OUTPUTS: { bool - True on successful spawn }
+    #   SIDE_EFFECTS: Uploads files via SFTP, marks machine as busy, executes spawn command via SSH
+    #   LINKS: M-REMOTE-REPO, M-SCHEDULER, M-DB
+    # END_CONTRACT: start_task_on_machine
     async def start_task_on_machine(
         self,
         machine: RemoteMachine,
@@ -267,6 +317,7 @@ class Scheduler:
         machine.meta.busy = True
         remote_folder = machine.path(task.metadata["remote_folder"])
 
+        # START_BLOCK_DEPLOY
         async with machine.sftp() as sftp:
             try:
                 root_dir = machine.path(await sftp.realpath("."))
@@ -286,7 +337,9 @@ class Scheduler:
             except Exception as err:
                 self.log.error(f"Can't upload task_id={task.task_id} files: {err}")
                 raise err
+        # END_BLOCK_DEPLOY
 
+        # START_BLOCK_SPAWN
         # start task
         try:
             # detect cpus
@@ -302,9 +355,17 @@ class Scheduler:
         except Exception as err:
             self.log.error(f"SSH spawn cmd error: {err}")
             raise err
+        # END_BLOCK_SPAWN
 
         return True
 
+    # START_CONTRACT: allocate_task
+    #   PURPOSE: Pick a free compatible remote node or request cloud allocation for a task
+    #   INPUTS: { task: TaskModel - the task to allocate }
+    #   OUTPUTS: { bool - True if allocated to a machine, False otherwise }
+    #   SIDE_EFFECTS: Marks task as RUNNING in DB, starts occupancy check on machine, may request cloud node allocation
+    #   LINKS: M-DB, M-SCHEDULER, M-CLOUD-MANAGER, M-REMOTE-REPO
+    # END_CONTRACT: allocate_task
     async def allocate_task(self, task: TaskModel) -> bool:
         "Allocate task to a free remote machine or ask allocation of new cloud machine"
         self.log.debug(f"Allocating task {task.task_id}")
@@ -322,6 +383,7 @@ class Scheduler:
             await self.do_task_webhook(task.task_id, task.metadata, TaskStatus.DONE)
             return False
 
+        # START_BLOCK_FIND_FREE_MACHINE
         busy_node_ips = [
             t.ip for t in await self.db.get_tasks_by_status((TaskStatus.RUNNING,))
         ]
@@ -351,7 +413,9 @@ class Scheduler:
                 )
                 self.clouds.mark_task_done(task.task_id)
                 return True
+        # END_BLOCK_FIND_FREE_MACHINE
 
+        # START_BLOCK_ALLOCATE_CLOUD
         # free machine not found - try to allocate new node
         self.log.debug(
             f"No free machine for task {task.task_id} - want to allocate new node"
@@ -360,9 +424,18 @@ class Scheduler:
             task.task_id, want_platforms=engine.platforms, throttle=True
         )
         return False
+        # END_BLOCK_ALLOCATE_CLOUD
 
+    # START_CONTRACT: consume_task
+    #   PURPOSE: Download completed task outputs from remote machine and mark task as DONE or ERROR
+    #   INPUTS: { machine: RemoteMachine - machine where task ran, task: TaskModel - the completed task }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Downloads files via SFTP, updates DB task status, triggers webhook, cleans remote task directory
+    #   LINKS: M-DB, M-REMOTE-REPO, M-SCHEDULER
+    # END_CONTRACT: consume_task
     async def consume_task(self, machine: RemoteMachine, task: TaskModel):
         "Consume done tasks"
+        # START_BLOCK_PREPARE_STORE
         meta = task.metadata
         local_folder: Union[str, None] = meta.get("local_folder")
         remote_folder: str = meta["remote_folder"]
@@ -378,7 +451,9 @@ class Scheduler:
         await asyncio.get_running_loop().run_in_executor(
             None, store_folder.mkdir, 0o777, True, True
         )
+        # END_BLOCK_PREPARE_STORE
 
+        # START_BLOCK_PREPARE_RETRY
         meta_add: list[tuple[str, Any]] = [
             ("remote_folder", remote_folder),
             ("local_folder", str(store_folder)),
@@ -386,7 +461,9 @@ class Scheduler:
 
         sftp_errors: list[tuple[Optional[str], Exception]] = []
         sftp_get_retry = backoff.on_exception(backoff.fibo, SFTPRetryExc, max_time=60)
+        # END_BLOCK_PREPARE_RETRY
 
+        # START_BLOCK_DOWNLOAD
         async def job():
             async with machine.sftp() as sftp:
                 for out_file in output_files:
@@ -411,6 +488,7 @@ class Scheduler:
         except Exception as err:
             self.log.warning(f"Cannot scp from {remote_folder}: {err}")
             sftp_errors.append((remote_folder, err))
+        # END_BLOCK_DOWNLOAD
 
         if sftp_errors:
             meta_add.append(("error", {p: str(e) for p, e in sftp_errors}))
@@ -643,6 +721,13 @@ class Scheduler:
     # Lifecycle
     #
 
+    # START_CONTRACT: start
+    #   PURPOSE: Start all producer-consumer loops for machine connection, task allocation, consumption, and deallocation
+    #   INPUTS: { None - only self }
+    #   OUTPUTS: { None - no return value, runs indefinitely until cancelled }
+    #   SIDE_EFFECTS: Creates background tasks, connects machines, starts all lifecycle loops
+    #   LINKS: M-SCHEDULER, M-QUEUE, M-DB
+    # END_CONTRACT: start
     async def start(self):
         self.log.debug(
             "Available computing engines: {}".format(
@@ -700,6 +785,13 @@ class Scheduler:
         await asyncio.gather(*self.bg_jobs, return_exceptions=True)
         await asyncio.sleep(1)  # workaround aiohttp's Unclosed client session
 
+    # START_CONTRACT: stop
+    #   PURPOSE: Graceful shutdown of all background tasks and connections
+    #   INPUTS: { None - only self }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Cancels background jobs, disconnects remote machines, stops cloud manager, closes HTTP session
+    #   LINKS: M-SCHEDULER, M-CLOUD-MANAGER, M-REMOTE-REPO
+    # END_CONTRACT: stop
     async def stop(self):
         self.log.info("Stopping...")
         self.cancellation_event.set()

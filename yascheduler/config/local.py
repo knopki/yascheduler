@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/config/local.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Local daemon settings: data paths, concurrency limits, webhook config, private key discovery.
+#   SCOPE: Data paths, concurrency limits, webhook settings, private key discovery.
+#   DEPENDS: M-CONFIG-UTILS
+#   LINKS: M-CONFIG-LOCAL
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   ConfigLocal - local daemon config with data paths, webhook, and concurrency limits
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Local configuration"""
 
 from collections.abc import Sequence

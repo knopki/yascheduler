@@ -2,6 +2,28 @@
 Console scripts for yascheduler
 """
 
+# FILE: yascheduler/utils.py
+# VERSION: 1.6.0
+# START_MODULE_CONTRACT
+#   PURPOSE: Console scripts for yascheduler: submit, status, init, node management, daemon startup.
+#   SCOPE: CLI commands for task submission, status checking, service initialization, node management, daemon startup.
+#   DEPENDS: M-CLIENT, M-CONFIG, M-DB, M-REMOTE, M-VARIABLES, M-SCHEDULER
+#   LINKS: M-UTILS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   submit - Submit task to yascheduler via AiiDA script
+#   check_status - Show status of tasks
+#   init - Service initialization (systemd/sysv + DB)
+#   show_nodes - Show enabled nodes and running tasks
+#   manage_node - Add/remove nodes from daemon
+#   daemonize - Start yascheduler daemon
+# END_MODULE_MAP
+
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+
 import argparse
 import asyncio
 import logging

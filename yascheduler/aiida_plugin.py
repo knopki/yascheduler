@@ -1,3 +1,23 @@
+# FILE: yascheduler/aiida_plugin.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: AiiDA scheduler plugin entry point for integrating with AiiDA workflows.
+#   SCOPE: AiiDA Scheduler subclass implementation.
+#   DEPENDS: none
+#   LINKS: M-AIIDA
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   YaschedJobResource - Resource class for yascheduler jobs in AiiDA.
+#   YaScheduler - AiiDA Scheduler subclass for the yascheduler engine.
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
+
 """
 Aiida plugin for yascheduler,
 with respect to the supported yascheduler engines
@@ -19,6 +39,13 @@ _CMD_PREFIX = ""  # NB under virtualenv, this should refer to virtualenv's /bin/
 
 
 class YaschedJobResource(NodeNumberJobResource):
+    # START_CONTRACT: __init__
+    #   PURPOSE: Initialize YaschedJobResource with keyword arguments for AiiDA job resource
+    #   INPUTS: { kwargs: dict - keyword arguments passed to parent NodeNumberJobResource }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Calls parent constructor with provided arguments
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: __init__
     def __init__(self, *_, **kwargs):
         super().__init__(**kwargs)
 
@@ -38,6 +65,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
     # The class to be used for the job resource.
     _job_resource_class = YaschedJobResource
 
+    # START_CONTRACT: submit_job
+    #   PURPOSE: Submit a job script to yascheduler via transport
+    #   INPUTS: { working_directory: str - remote working directory for the job } | { filename: str - job script filename }
+    #   OUTPUTS: { str - job ID parsed from submit command output }
+    #   SIDE_EFFECTS: Changes remote working directory via transport, executes submit command
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: submit_job
     def submit_job(self, working_directory, filename):
         """
         Submit a job script to yascheduler.
@@ -51,6 +85,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
         )
         return self._parse_submit_output(*result)
 
+    # START_CONTRACT: get_jobs
+    #   PURPOSE: Return list of currently active jobs from yascheduler
+    #   INPUTS: { jobs: Optional - list of job IDs to query } | { user: Optional - not supported, raises FeatureNotAvailable } | { as_dict: bool - return as dict keyed by job_id }
+    #   OUTPUTS: { list[JobInfo] - list of job info objects } | { dict - dict of job info keyed by job_id if as_dict=True }
+    #   SIDE_EFFECTS: Executes remote command via transport
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: get_jobs
     def get_jobs(self, jobs=None, user=None, as_dict=False):
         """
         Return the list of currently active jobs.
@@ -71,6 +112,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
 
         return joblist
 
+    # START_CONTRACT: kill_job
+    #   PURPOSE: Report that job cancellation is not supported by yascheduler
+    #   INPUTS: { jobid: str - ID of the job to kill }
+    #   OUTPUTS: { bool - always returns False (kill not supported) }
+    #   SIDE_EFFECTS: Logs a warning about unsupported job cancellation
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: kill_job
     def kill_job(self, jobid):
         """
         Report that job cancellation is not supported by yascheduler.

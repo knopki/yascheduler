@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/config/db.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Database connection configuration.
+#   SCOPE: PostgreSQL connection parameters.
+#   DEPENDS: M-CONFIG-UTILS
+#   LINKS: M-CONFIG-DB
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   ConfigDb - database connection config with user, password, database, host, port
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Database configuration"""
 
 from collections.abc import Sequence

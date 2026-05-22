@@ -1,4 +1,26 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/config/engine.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Calculation engine definition: spawn command, check command, deployables, platforms.
+#   SCOPE: Engine dataclass, deploy types (LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy).
+#   DEPENDS: M-CONFIG-UTILS
+#   LINKS: M-CONFIG-ENGINE
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   Engine - Calculation engine configuration dataclass
+#   LocalFilesDeploy - Deploy local files configuration
+#   LocalArchiveDeploy - Deploy local archive configuration
+#   RemoteArchiveDeploy - Deploy remote archive configuration
+#   Deploy - Union type of all deploy configurations
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Engine configuration"""
 
 from collections.abc import Sequence

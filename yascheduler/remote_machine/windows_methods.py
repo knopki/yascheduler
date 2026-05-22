@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/remote_machine/windows_methods.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Windows-specific remote commands: engine deployment, process listing.
+#   SCOPE: Windows setup_node, list_processes implementations.
+#   DEPENDS: M-CONFIG-ENGINE, M-REMOTE-PROTOCOL, M-REMOTE-COMMON
+#   LINKS: M-REMOTE-WINDOWS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   MyPureWindowsPath - Custom PureWindowsPath that handles leading slashes correctly
+#   windows_quote - Quote a string for PowerShell
+#   windows_get_cpu_cores - Get number of CPU cores via PowerShell
+#   windows_list_processes - List running processes via Get-CimInstance
+#   windows_pgrep - Find processes matching a pattern
+#   deploy_local_files - Upload local binary files via SFTP
+#   deploy_local_archive - Upload and extract local archive via Expand-Archive
+#   deploy_remote_archive - Download and extract remote archive via Invoke-WebRequest
+#   windows_deploy_engines - Deploy all engines for a node
+#   windows_setup_node - Setup Windows node
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
 
 import asyncio
 import json

@@ -1,4 +1,26 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/config/cloud.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud.
+#   SCOPE: Provider-specific config parsing, Azure image reference, cloud config union.
+#   DEPENDS: M-CONFIG-UTILS, M-COMPAT
+#   LINKS: M-CONFIG-CLOUD
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   AzureImageReference  # Azure image reference dataclass (publisher, offer, sku, version)
+#   ConfigCloudAzure     # Azure cloud configuration dataclass
+#   ConfigCloudHetzner   # Hetzner cloud configuration dataclass
+#   ConfigCloudUpcloud   # UpCloud cloud configuration dataclass
+#   ConfigCloud          # Union[ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud]
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Cloud configurations"""
 
 from collections.abc import Sequence

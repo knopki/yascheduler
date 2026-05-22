@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/remote_machine/remote_machine_repository.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Collection of connected remote machines with filtering and cleanup.
+#   SCOPE: RemoteMachineRepository class with filter, disconnect_many, and disconnect_all operations.
+#   DEPENDS: M-REMOTE, M-COMPAT
+#   LINKS: M-REMOTE-REPO
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   RemoteMachineRepository - Dictionary-based registry of connected RemoteMachine instances with filtering and batch disconnect
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 
 import asyncio
 import logging
@@ -20,6 +38,13 @@ class RemoteMachineRepository(UserDict[str, RemoteMachine]):
     data: dict[str, RemoteMachine] = field(factory=dict)
     connect_in_flight: set[str] = field(factory=set, init=False)
 
+    # START_CONTRACT: disconnect_many
+    #   PURPOSE: Close SSH connections for specific IPs and remove from registry
+    #   INPUTS: { ips: Sequence[str] - IP addresses to disconnect }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Closes SSH connections, removes machines from registry, skips busy machines
+    #   LINKS: M-REMOTE-REPO
+    # END_CONTRACT: disconnect_many
     async def disconnect_many(self, ips: Sequence[str]) -> None:
         "Disconnect from many remote machines and remove them from registry"
         if not ips:
@@ -37,10 +62,24 @@ class RemoteMachineRepository(UserDict[str, RemoteMachine]):
                 del self.data[ip]
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    # START_CONTRACT: disconnect_all
+    #   PURPOSE: Close all SSH connections and clear registry
+    #   INPUTS: { None }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Disconnects all non-busy machines from registry
+    #   LINKS: M-REMOTE-REPO
+    # END_CONTRACT: disconnect_all
     async def disconnect_all(self) -> None:
         "Disconnect from all remotes"
         await self.disconnect_many(list(self.data.keys()))
 
+    # START_CONTRACT: filter
+    #   PURPOSE: Filter machines by busy/platform/free_since criteria and sort by free_since
+    #   INPUTS: { busy: Optional[bool] - filter by busy status } | { platforms: Optional[Sequence[str]] - filter by platform } | { free_since_gt: Optional[timedelta] - filter by free duration } | { reverse_sort: bool - reverse sort order }
+    #   OUTPUTS: { Self - new RemoteMachineRepository with filtered and sorted machines }
+    #   SIDE_EFFECTS: None - returns a new evolved instance
+    #   LINKS: M-REMOTE-REPO
+    # END_CONTRACT: filter
     def filter(
         self,
         busy: Optional[bool] = None,

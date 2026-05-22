@@ -1,4 +1,36 @@
 #!/usr/bin/env python3
+# FILE: yascheduler/remote_machine/protocol.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Protocol definitions for engines, process info, SSH checks, and adapters.
+#   SCOPE: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc, PProcessInfo, PEngine, PEngineRepository, PNode, SSHCheck, QuoteCallable, RunCallable, RunBgCallable, OuterRunCallable, GetCPUCoresCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable protocols and type aliases.
+#   DEPENDS: M-CONFIG-ENGINE
+#   LINKS: M-REMOTE-PROTOCOL
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   SFTPRetryExc             - Tuple of retriable SFTP exception types.
+#   SSHRetryExc              - Tuple of retriable SSH exception types.
+#   AllSSHRetryExc           - Union of SSHRetryExc and SFTPRetryExc.
+#   PProcessInfo             - Protocol: pid, name, command fields for a process.
+#   PEngine                  - Protocol: engine metadata (name, deployable, platforms, checks).
+#   PEngineRepository        - Protocol: query interface for engine packages and platforms.
+#   PNode                    - Protocol: node identity (ip, username).
+#   SSHCheck                 - Callable alias: async SSH connection health check.
+#   QuoteCallable            - Callable alias: string quoting function.
+#   RunCallable              - Protocol: run a command via SSH and return completed process.
+#   RunBgCallable            - Protocol: run a command in background via SSH.
+#   OuterRunCallable         - Protocol: curried run callable with pre-bound conn/quote.
+#   GetCPUCoresCallable      - Callable alias: async CPU core count retrieval.
+#   ListProcessesCallable    - Protocol: async generator listing running processes.
+#   PgrepCallable            - Protocol: async generator filtering processes by pattern.
+#   SetupNodeCallable        - Protocol: async node setup (engines, dirs, logging).
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
 
 import asyncio
 import logging

@@ -1,3 +1,28 @@
+# FILE: yascheduler/clouds/protocols.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Protocol definitions for cloud config, node creation, deletion callables.
+#   SCOPE: PCloudConfig, CreateNodeCallable, DeleteNodeCallable, SupportedPlatformChecker, CloudCapacity, TypeVars.
+#   DEPENDS: M-CONFIG-CLOUD
+#   LINKS: M-CLOUD-PROTOCOLS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   PCloudConfig - Cloud config init protocol
+#   CreateNodeCallable - Create node in the cloud protocol
+#   DeleteNodeCallable - Delete node in the cloud protocol
+#   CloudCapacity - Cloud capacity dataclass
+#   SupportedPlatformChecker - platform name validator
+#   TConfigCloud_inv - contravariant cloud config TypeVar
+#   TConfigCloud_co - covariant cloud config TypeVar
+#   TConfigCloud_contra - contravariant cloud config TypeVar
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+
 """Cloud protocols"""
 
 import logging

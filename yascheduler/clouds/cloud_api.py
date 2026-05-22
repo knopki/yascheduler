@@ -1,3 +1,24 @@
+# FILE: yascheduler/clouds/cloud_api.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Generic cloud provider interface: node creation, deletion, SSH key management.
+#   SCOPE: CloudAPI generic class, CloudConfig renderer, CloudCreateNodeError, CloudSetupNodeError.
+#   DEPENDS: M-CLOUD-PROTOCOLS, M-CONFIG-CLOUD, M-REMOTE, M-UTILS, M-CLOUD-ADAPTERS
+#   LINKS: M-CLOUD-API
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   CloudCreateNodeError - Cloud node allocation error
+#   CloudSetupNodeError - Cloud node setup error
+#   CloudConfig - Cloud config data class; renders user-data (cloud-config) format
+#   CloudAPI - Generic cloud provider; creates/deletes nodes, manages SSH keys, builds cloud-config
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+
 """Cloud API module"""
 
 import asyncio
@@ -122,6 +143,13 @@ class CloudAPI(Generic[TConfigCloud_inv]):
         pkgs = engines.get_platform_packages()
         return CloudConfig(package_upgrade=True, packages=pkgs)
 
+    # START_CONTRACT: mk_machine
+    #   PURPOSE: Connect to existing IP and create a RemoteMachine instance
+    #   INPUTS: { ip_addr: str - IP address to connect to }
+    #   OUTPUTS: { RemoteMachine - connected remote machine instance }
+    #   SIDE_EFFECTS: Establishes SSH connection with retry backoff
+    #   LINKS: M-CLOUD-API, M-REMOTE
+    # END_CONTRACT: mk_machine
     async def mk_machine(self, ip_addr: str) -> RemoteMachine:
         "Create RemoteMachine"
         keys = await asyncio.get_running_loop().run_in_executor(
@@ -145,6 +173,13 @@ class CloudAPI(Generic[TConfigCloud_inv]):
             jump_username=self.config.jump_username,
         )
 
+    # START_CONTRACT: create_node
+    #   PURPOSE: Create VM via adapter, wait for SSH readiness, setup node with engines
+    #   INPUTS: { None }
+    #   OUTPUTS: { str - IP address of the created node }
+    #   SIDE_EFFECTS: Allocates cloud VM, transfers SSH keys, runs cloud-init, installs engines; cleans up on failure
+    #   LINKS: M-CLOUD-API, M-REMOTE
+    # END_CONTRACT: create_node
     async def create_node(self):
         "Create new node"
         async with self.adapter.get_op_semaphore():
@@ -178,6 +213,13 @@ class CloudAPI(Generic[TConfigCloud_inv]):
                 raise CloudSetupNodeError(f"Setup node error: {err}") from err
             return ip_addr
 
+    # START_CONTRACT: delete_node
+    #   PURPOSE: Delete VM by host address via adapter
+    #   INPUTS: { host: str - IP or hostname of VM to delete }
+    #   OUTPUTS: { None - no return value }
+    #   SIDE_EFFECTS: Terminates cloud VM, releases cloud resources
+    #   LINKS: M-CLOUD-API
+    # END_CONTRACT: delete_node
     async def delete_node(self, host: str):
         "Delete node"
         async with self.adapter.get_op_semaphore():

@@ -1,3 +1,29 @@
+# FILE: yascheduler/clouds/az.py
+# VERSION: 1.6.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Azure VM creation and deletion using Azure SDK.
+#   SCOPE: Azure create/delete node functions.
+#   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
+#   LINKS: M-CLOUD-AZ
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   ID_TAG_NAME - Tag name for IP tracking
+#   RETRY_AZURE_ERRORS - Retryable Azure error types
+#   ALL_AZURE_ERRORS - All Azure error types
+#   create_nic - Create network interface for VM
+#   create_vm_params - Build VirtualMachine parameter object
+#   create_node - Create VM with NIC (internal)
+#   az_create_node - Create Azure VM (public entry point)
+#   delete_node - Delete VM and NIC (internal)
+#   az_delete_node - Delete Azure VM and NIC (public entry point)
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+# END_CHANGE_SUMMARY
+#
 """Azure cloud methods"""
 
 import logging
