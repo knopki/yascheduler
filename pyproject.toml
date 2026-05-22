@@ -51,7 +51,7 @@ azure = [
 ]
 hetzner = ["hcloud~=2.0"]
 upcloud = ["upcloud_api~=2.0"]
-dev = ["build", "commitizen", "pyright", "ruff~=0.15.9", "twine"]
+dev = ["build", "commitizen", "ruff~=0.15.9", "twine", "zuban"]
 
 [project.urls]
 Home = "https://github.com/tilde-lab/yascheduler"
@@ -77,13 +77,6 @@ version_files = ["pyproject.toml:^version"]
 version_provider = "pep621"
 update_changelog_on_bump = true
 changelog_incremental = true
-
-[tool.pyright]
-pythonVersion = "3.9"
-executionEnvironments = [
-  { root = "yascheduler/aiida_plugin.py", reportMissingImports = "warning" },
-  { root = "yascheduler/clouds", reportMissingImports = "warning" },
-]
 
 [tool.ruff]
 # Target python version
