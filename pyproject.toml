@@ -98,3 +98,6 @@ ignore = ["E501"]
 
 [tool.setuptools.packages.find]
 include = ["yascheduler*"]
+
+[tool.uv]
+exclude-newer = "7 days"
