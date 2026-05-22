@@ -82,7 +82,8 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 - Static checks: `uv run ruff check .`, `uv run ruff format --check .`,
   `uv run zuban check`
 - Spec validation: `openspec validate --all --json` must pass after creating a
-  change proposal and after any modification to `openspec/specs/`.
+  change proposal and after any modification to `openspec/specs/` (on
+  archive/sync too).
 - Validate GRACE-lite must pass after any code modification session.
 - For behavior changes, add focused tests when feasible or document manual
   verification.
