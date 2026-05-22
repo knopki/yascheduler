@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-05-15T01:41:12.917822338Z"
+exclude-newer = "2026-05-15T14:23:55.517759782Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -2866,6 +2866,15 @@ azure = [
     { name = "azure-mgmt-compute" },
     { name = "azure-mgmt-network" },
 ]
+hetzner = [
+    { name = "hcloud", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "hcloud", version = "2.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+upcloud = [
+    { name = "upcloud-api" },
+]
+
+[package.dev-dependencies]
 dev = [
     { name = "build", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "build", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -2874,13 +2883,6 @@ dev = [
     { name = "ruff" },
     { name = "twine" },
     { name = "zuban" },
-]
-hetzner = [
-    { name = "hcloud", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "hcloud", version = "2.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-]
-upcloud = [
-    { name = "upcloud-api" },
 ]
 
 [package.metadata]
@@ -2893,18 +2895,22 @@ requires-dist = [
     { name = "azure-mgmt-compute", marker = "extra == 'azure'", specifier = "~=27.2.0" },
     { name = "azure-mgmt-network", marker = "extra == 'azure'", specifier = "~=20.0.0" },
     { name = "backoff", specifier = "~=2.1.2" },
-    { name = "build", marker = "extra == 'dev'" },
-    { name = "commitizen", marker = "extra == 'dev'" },
     { name = "hcloud", marker = "extra == 'hetzner'", specifier = "~=2.0" },
     { name = "pg8000", specifier = "~=1.19" },
     { name = "python-daemon", specifier = "~=2.3" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = "~=0.15.9" },
-    { name = "twine", marker = "extra == 'dev'" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.2.0" },
     { name = "upcloud-api", marker = "extra == 'upcloud'", specifier = "~=2.0" },
-    { name = "zuban", marker = "extra == 'dev'" },
 ]
-provides-extras = ["azure", "hetzner", "upcloud", "dev"]
+provides-extras = ["azure", "hetzner", "upcloud"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "build" },
+    { name = "commitizen" },
+    { name = "ruff", specifier = "~=0.15.9" },
+    { name = "twine" },
+    { name = "zuban" },
+]
 
 [[package]]
 name = "zipp"
