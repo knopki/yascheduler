@@ -132,6 +132,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
         )
         return False
 
+    # START_CONTRACT: _get_joblist_command
+    #   PURPOSE: Build the shell command to query job status from yascheduler
+    #   INPUTS: { jobs: Optional[list[str]] - specific job IDs to query, user: Optional[str] - not supported }
+    #   OUTPUTS: { str - the shell command string }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _get_joblist_command
     def _get_joblist_command(self, jobs=None, user=None):
         """
         The command to report full information on existing jobs.
@@ -154,6 +161,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
             command.append("--jobs {}".format(" ".join(joblist)))
         return " ".join(command)
 
+    # START_CONTRACT: _get_detailed_jobinfo_command
+    #   PURPOSE: Build shell command to get detailed info for a specific job
+    #   INPUTS: { jobid: str - the job ID }
+    #   OUTPUTS: { str - the shell command string }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _get_detailed_jobinfo_command
     def _get_detailed_jobinfo_command(self, jobid):
         """
         Return the command to run to get the detailed information on a job,
@@ -161,6 +175,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
         """
         return f"{_CMD_PREFIX}yastatus --jobs {jobid}"
 
+    # START_CONTRACT: _get_detailed_job_info_command
+    #   PURPOSE: Delegate to _get_detailed_jobinfo_command (AiiDA expected method name)
+    #   INPUTS: { job_id: str - the job ID }
+    #   OUTPUTS: { str - the shell command string }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _get_detailed_job_info_command
     def _get_detailed_job_info_command(self, job_id):
         """
         Return the command to run to get detailed information on a job.
@@ -170,6 +191,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
         """
         return self._get_detailed_jobinfo_command(job_id)
 
+    # START_CONTRACT: _get_submit_script_header
+    #   PURPOSE: Generate the submit script header with ENGINE and LABEL variables
+    #   INPUTS: { job_tmpl: JobTemplate - AiiDA job template object }
+    #   OUTPUTS: { str - the header lines (ENGINE, optional PARENT, LABEL) }
+    #   SIDE_EFFECTS: Loads AiiDA node from DB via load_node()
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _get_submit_script_header
     def _get_submit_script_header(self, job_tmpl):
         """
         Return the submit script header, using the parameters from the
@@ -192,12 +220,26 @@ class YaScheduler(aiida.schedulers.Scheduler):
         lines.append(f"LABEL={job_tmpl.job_name}")
         return "\n".join(lines)
 
+    # START_CONTRACT: _get_submit_command
+    #   PURPOSE: Build the shell command to submit a script via yasubmit
+    #   INPUTS: { submit_script: str - the script filename to submit }
+    #   OUTPUTS: { str - the shell command string }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _get_submit_command
     def _get_submit_command(self, submit_script):
         """
         Return the string to execute to submit a given script.
         """
         return f"{_CMD_PREFIX}yasubmit {submit_script}"
 
+    # START_CONTRACT: _parse_submit_output
+    #   PURPOSE: Parse the output of the yasubmit command to extract task ID
+    #   INPUTS: { retval: int - return code, stdout: str - stdout text, stderr: str - stderr text }
+    #   OUTPUTS: { str - the task ID string }
+    #   SIDE_EFFECTS: Logs warnings/errors on stderr or invalid output
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _parse_submit_output
     def _parse_submit_output(self, retval, stdout, stderr):
         """
         Parse the output of the submit command, as returned by executing the
@@ -215,6 +257,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
 
         return output
 
+    # START_CONTRACT: _parse_joblist_output
+    #   PURPOSE: Parse yastatus output into JobInfo objects
+    #   INPUTS: { retval: int - return code, stdout: str - stdout with job lines, stderr: str - stderr text }
+    #   OUTPUTS: { list[JobInfo] - parsed job info objects }
+    #   SIDE_EFFECTS: Logs warnings on stderr
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _parse_joblist_output
     def _parse_joblist_output(self, retval, stdout, stderr):
         """
         Parse the queue output string, as returned by executing the
@@ -236,12 +285,26 @@ class YaScheduler(aiida.schedulers.Scheduler):
             job_infos.append(job)
         return job_infos
 
+    # START_CONTRACT: _get_kill_command
+    #   PURPOSE: Report that job kill is not supported (raises FeatureNotAvailable)
+    #   INPUTS: { jobid: str - the job ID to kill }
+    #   OUTPUTS: { None - raises FeatureNotAvailable }
+    #   SIDE_EFFECTS: Raises FeatureNotAvailable exception
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _get_kill_command
     def _get_kill_command(self, jobid):
         """
         Return the command to kill the job with specified jobid.
         """
         raise FeatureNotAvailable("Job cancellation is not supported by Yascheduler")
 
+    # START_CONTRACT: _parse_kill_output
+    #   PURPOSE: Return False indicating kill was not performed
+    #   INPUTS: { retval: int - return code, stdout: str - stdout text, stderr: str - stderr text }
+    #   OUTPUTS: { bool - always returns False }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-AIIDA
+    # END_CONTRACT: _parse_kill_output
     def _parse_kill_output(self, retval, stdout, stderr):
         """
         Parse the output of the kill command.

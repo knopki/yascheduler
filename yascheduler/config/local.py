@@ -52,6 +52,13 @@ class ConfigLocal:
     deallocate_limit: int = make_default_field(5, extra_validators=[validators.ge(1)])
     deallocate_pending: int = make_default_field(1, extra_validators=[validators.ge(1)])
 
+    # START_CONTRACT: get_private_keys
+    #   PURPOSE: List private key file paths from the keys directory
+    #   INPUTS: { None }
+    #   OUTPUTS: { Sequence[PurePath] - list of private key file paths }
+    #   SIDE_EFFECTS: None - reads filesystem
+    #   LINKS: M-CONFIG-LOCAL
+    # END_CONTRACT: get_private_keys
     def get_private_keys(self) -> Sequence[PurePath]:
         "List private key file paths"
         filepaths = filter(lambda x: x.is_file(), Path(self.keys_dir).iterdir())
@@ -62,6 +69,13 @@ class ConfigLocal:
         "Returns a list of valid config keys"
         return [f.name for f in fields(cls)]
 
+    # START_CONTRACT: from_config_parser_section
+    #   PURPOSE: Create ConfigLocal instance from a config parser section
+    #   INPUTS: { sec: SectionProxy - config parser section with local config keys }
+    #   OUTPUTS: { ConfigLocal - local daemon configuration }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-LOCAL
+    # END_CONTRACT: from_config_parser_section
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigLocal":
         "Create config from config parser's section"

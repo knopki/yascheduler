@@ -37,6 +37,13 @@ class ProcessInfo:
     command: str
 
 
+# START_CONTRACT: run
+#   PURPOSE: Run a command on remote via SSH and wait for completion
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { quote: QuoteCallable - shell quoting function } | { command: str - command to run } | { args: object - extra args } | { cwd: Optional[str] - working directory } | { kwargs: object - extra kwargs including timeout, check }
+#   OUTPUTS: { SSHCompletedProcess - completed process result }
+#   SIDE_EFFECTS: Runs remote command, may raise asyncssh.Error
+#   LINKS: M-REMOTE-COMMON
+# END_CONTRACT: run
 async def run(
     conn: SSHClientConnection,
     quote: QuoteCallable,
@@ -63,6 +70,13 @@ async def run(
     )
 
 
+# START_CONTRACT: run_bg
+#   PURPOSE: Create a background process on remote via SSH without waiting
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { quote: QuoteCallable - shell quoting function } | { command: str - command to run } | { args: object - extra args } | { cwd: Optional[str] - working directory } | { kwargs: object - extra kwargs }
+#   OUTPUTS: { SSHClientProcess - background process handle }
+#   SIDE_EFFECTS: Starts remote process, may raise asyncssh.ChannelOpenError
+#   LINKS: M-REMOTE-COMMON
+# END_CONTRACT: run_bg
 async def run_bg(
     conn: SSHClientConnection,
     quote: QuoteCallable,

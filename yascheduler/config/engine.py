@@ -33,6 +33,13 @@ from attrs import Attribute, define, field, fields, validators
 from .utils import make_default_field, warn_unknown_fields
 
 
+# START_CONTRACT: _check_spawn
+#   PURPOSE: Validate spawn command has only supported template placeholders
+#   INPUTS: { instance: Engine - engine instance, _: Attribute - attribute being validated, value: str - spawn command string }
+#   OUTPUTS: { None - raises ValueError on invalid placeholders }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CONFIG-ENGINE
+# END_CONTRACT: _check_spawn
 def _check_spawn(instance: "Engine", _, value: str):
     try:
         value.format(task_path="", engine_path="", ncpus="")
@@ -43,6 +50,13 @@ def _check_spawn(instance: "Engine", _, value: str):
         ) from err
 
 
+# START_CONTRACT: _check_check_
+#   PURPOSE: Ensure at least one of check_cmd or check_pname is set on the engine
+#   INPUTS: { instance: Engine - engine instance, attribute: Attribute - attribute being validated, value: Optional[str] - the check command or process name }
+#   OUTPUTS: { None - raises ValueError if both check_cmd and check_pname are unset }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CONFIG-ENGINE
+# END_CONTRACT: _check_check_
 def _check_check_(instance: "Engine", attribute: Attribute, value: Optional[str]):
     no_check_cmd_curr = attribute.name == "check_cmd" and not value
     no_check_pname_curr = attribute.name == "check_pname" and not value
@@ -54,6 +68,13 @@ def _check_check_(instance: "Engine", attribute: Attribute, value: Optional[str]
         )
 
 
+# START_CONTRACT: _check_at_least_one_elem
+#   PURPOSE: Validate that a sequence attribute has at least one element
+#   INPUTS: { instance: Engine - engine instance, attribute: Attribute - attribute being validated, value: Optional[Sequence] - the sequence value to check }
+#   OUTPUTS: { None - raises ValueError if sequence is empty or None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CONFIG-ENGINE
+# END_CONTRACT: _check_at_least_one_elem
 def _check_at_least_one_elem(
     instance: "Engine", attribute: Attribute, value: Optional[Sequence]
 ):
@@ -131,6 +152,13 @@ class Engine:
     check_cmd_code: int = make_default_field(0)
     sleep_interval: int = make_default_field(10)
 
+    # START_CONTRACT: get_valid_config_parser_fields
+    #   PURPOSE: Return valid config parser field names including deploy alias fields
+    #   INPUTS: { None }
+    #   OUTPUTS: { Sequence[str] - list of valid config keys }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-ENGINE
+    # END_CONTRACT: get_valid_config_parser_fields
     @classmethod
     def get_valid_config_parser_fields(cls) -> Sequence[str]:
         "Returns a list of valid config keys"
@@ -144,6 +172,13 @@ class Engine:
             f.name for f in fields(cls) if f.name not in exclude_names
         ] + include_names
 
+    # START_CONTRACT: from_config_parser_section
+    #   PURPOSE: Create Engine instance from a config parser section
+    #   INPUTS: { sec: SectionProxy - config parser section with engine keys, engines_dir: PurePath - engines directory for resolving deploy paths }
+    #   OUTPUTS: { Engine - engine configuration }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-ENGINE
+    # END_CONTRACT: from_config_parser_section
     @classmethod
     def from_config_parser_section(
         cls, sec: SectionProxy, engines_dir: PurePath

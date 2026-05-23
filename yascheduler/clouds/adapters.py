@@ -1,5 +1,5 @@
 # FILE: yascheduler/clouds/adapters.py
-#
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Mapping of cloud config types to create/delete callables.
 #   SCOPE: Adapter registry mapping provider config classes to their operations.
@@ -58,6 +58,13 @@ def can_win11(platform: str) -> bool:
     return platform in ["windows-11", "windows"]
 
 
+# START_CONTRACT: CloudAdapter.__init__
+#   PURPOSE: Initialize cloud adapter with provider ops, platform checks, and concurrency limits
+#   INPUTS: { name: str - provider name, supported_platform_checks: tuple[SupportedPlatformChecker, ...] - platform check functions, create_node: CreateNodeCallable - create function, delete_node: DeleteNodeCallable - delete function, op_limit: int - concurrent operation limit (default 1), create_node_conn_timeout: int - SSH connect timeout in s (default 10), create_node_timeout: int - total node creation timeout in s (default 300) }
+#   OUTPUTS: { CloudAdapter - frozen adapter instance }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-ADAPTERS
+# END_CONTRACT: CloudAdapter.__init__
 @define(frozen=True)
 class CloudAdapter(Generic[TConfigCloud_co]):
     """Cloud adapter"""
@@ -80,6 +87,13 @@ class CloudAdapter(Generic[TConfigCloud_co]):
         return asyncio.Semaphore(self.op_limit)
 
 
+# START_CONTRACT: get_azure_adapter
+#   PURPOSE: Create CloudAdapter for Azure with Bullseye/Windows 11 platform support
+#   INPUTS: { name: str - cloud provider name }
+#   OUTPUTS: { CloudAdapter - configured Azure cloud adapter }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-AZ
+# END_CONTRACT: get_azure_adapter
 def get_azure_adapter(name: str):
     from .az import az_create_node, az_delete_node
 
@@ -92,6 +106,13 @@ def get_azure_adapter(name: str):
     )
 
 
+# START_CONTRACT: get_hetzner_adapter
+#   PURPOSE: Create CloudAdapter for Hetzner with Buster platform support
+#   INPUTS: { name: str - cloud provider name }
+#   OUTPUTS: { CloudAdapter - configured Hetzner cloud adapter }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-HETZNER
+# END_CONTRACT: get_hetzner_adapter
 def get_hetzner_adapter(name: str):
     from .hetzner import hetzner_create_node, hetzner_delete_node
 
@@ -104,6 +125,13 @@ def get_hetzner_adapter(name: str):
     )
 
 
+# START_CONTRACT: get_upcloud_adapter
+#   PURPOSE: Create CloudAdapter for UpCloud with Buster platform support, single op limit
+#   INPUTS: { name: str - cloud provider name }
+#   OUTPUTS: { CloudAdapter - configured UpCloud cloud adapter }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-UPCLOUD
+# END_CONTRACT: get_upcloud_adapter
 def get_upcloud_adapter(name: str):
     from .upcloud import upcload_delete_node, upcloud_create_node
 

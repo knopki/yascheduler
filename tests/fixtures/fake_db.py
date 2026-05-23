@@ -46,7 +46,7 @@ class FakeDB:
 
     # START_CONTRACT: add_node
     #   PURPOSE: Insert a new compute node record in-memory
-    #   INPUTS: { ip_addr: str - node IP } { username: str - SSH username }
+    #   INPUTS: { ip_addr: str - node IP, username: str - SSH username }
     #            { port: Optional[int] - SSH port (default 22) }
     #            { ncpus: Optional[int] - CPU count }
     #            { cloud: Optional[str] - cloud provider name }

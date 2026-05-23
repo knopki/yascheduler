@@ -39,6 +39,13 @@ from .utils import get_rnd_name
 executor = ThreadPoolExecutor(max_workers=5)
 
 
+# START_CONTRACT: get_client
+#   PURPOSE: Get cached UpCloud CloudManager client with authentication
+#   INPUTS: { cfg: ConfigCloudUpcloud - UpCloud config with login credentials }
+#   OUTPUTS: { CloudManager - authenticated UpCloud API client }
+#   SIDE_EFFECTS: Authenticates with UpCloud API on first call
+#   LINKS: M-CLOUD-UPCLOUD
+# END_CONTRACT: get_client
 @cache
 def get_client(cfg: ConfigCloudUpcloud) -> CloudManager:
     """Get Upcloud client"""
@@ -47,6 +54,13 @@ def get_client(cfg: ConfigCloudUpcloud) -> CloudManager:
     return client
 
 
+# START_CONTRACT: upcloud_create_node_sync
+#   PURPOSE: Create UpCloud server synchronously with SSH key and cloud-config
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   OUTPUTS: { str - public IP address of created server }
+#   SIDE_EFFECTS: Creates UpCloud server and storage resources
+#   LINKS: M-CLOUD-UPCLOUD
+# END_CONTRACT: upcloud_create_node_sync
 def upcloud_create_node_sync(
     log: logging.Logger,
     cfg: ConfigCloudUpcloud,
@@ -78,6 +92,13 @@ def upcloud_create_node_sync(
     return ip_addr
 
 
+# START_CONTRACT: upcloud_create_node
+#   PURPOSE: Create UpCloud server asynchronously via thread pool executor
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   OUTPUTS: { str - public IP address of created server }
+#   SIDE_EFFECTS: Creates UpCloud server via synchronous call in executor
+#   LINKS: M-CLOUD-UPCLOUD, upcloud_create_node_sync
+# END_CONTRACT: upcloud_create_node
 async def upcloud_create_node(
     log: logging.Logger,
     cfg: ConfigCloudUpcloud,
@@ -90,6 +111,13 @@ async def upcloud_create_node(
     )
 
 
+# START_CONTRACT: upcload_delete_node_sync
+#   PURPOSE: Delete UpCloud server synchronously by host IP, waiting for stop and cleanup
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, host: str - IP address of server to delete }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Stops and destroys UpCloud server and associated storage devices
+#   LINKS: M-CLOUD-UPCLOUD
+# END_CONTRACT: upcload_delete_node_sync
 def upcload_delete_node_sync(
     log: logging.Logger,
     cfg: ConfigCloudUpcloud,
@@ -117,6 +145,13 @@ def upcload_delete_node_sync(
         log.info("NODE %s NOT DELETED AS UNKNOWN", host)
 
 
+# START_CONTRACT: upcload_delete_node
+#   PURPOSE: Delete UpCloud server asynchronously via thread pool executor
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, host: str - IP address of server to delete }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Deletes UpCloud server via synchronous call in executor
+#   LINKS: M-CLOUD-UPCLOUD, upcload_delete_node_sync
+# END_CONTRACT: upcload_delete_node
 async def upcload_delete_node(
     log: logging.Logger,
     cfg: ConfigCloudUpcloud,

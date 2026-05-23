@@ -1,7 +1,3 @@
-"""
-Console scripts for yascheduler
-"""
-
 # FILE: yascheduler/utils.py
 # VERSION: 1.6.0
 # START_MODULE_CONTRACT
@@ -43,6 +39,13 @@ from .remote_machine import RemoteMachine
 from .variables import CONFIG_FILE
 
 
+# START_CONTRACT: submit
+#   PURPOSE: Parse AiiDA script file and submit a task asynchronously
+#   INPUTS: { None - reads CLI args via argparse }
+#   OUTPUTS: { None - prints task ID to stdout }
+#   SIDE_EFFECTS: Reads script file and input files from disk, creates DB task
+#   LINKS: M-UTILS, M-CLIENT, M-SCHEDULER
+# END_CONTRACT: submit
 @to_sync
 async def submit():
     parser = argparse.ArgumentParser(
@@ -106,6 +109,13 @@ async def submit():
     print(str(task_id))
 
 
+# START_CONTRACT: check_status
+#   PURPOSE: Query and display task status, optionally with remote output and convergence info
+#   INPUTS: { None - reads CLI args via argparse }
+#   OUTPUTS: { None - prints status/output to stdout }
+#   SIDE_EFFECTS: Connects to DB, optionally reads remote files via SSH/SFTP
+#   LINKS: M-UTILS, M-DB, M-REMOTE
+# END_CONTRACT: check_status
 @to_sync
 async def check_status():  # noqa: C901
     parser = argparse.ArgumentParser(description="Show status of tasks")
@@ -259,6 +269,13 @@ async def check_status():  # noqa: C901
         os.unlink(local_calc_snippet)
 
 
+# START_CONTRACT: init
+#   PURPOSE: Install systemd or sysv service and initialize the database schema
+#   INPUTS: { None - reads config from CONFIG_FILE }
+#   OUTPUTS: { None - no return value }
+#   SIDE_EFFECTS: Writes service unit files, creates DB tables
+#   LINKS: M-UTILS, M-DB
+# END_CONTRACT: init
 @to_sync
 async def init():
     # service initialization
@@ -324,6 +341,13 @@ async def _init_db(install_path: Path):
         raise
 
 
+# START_CONTRACT: show_nodes
+#   PURPOSE: Display all enabled nodes and their currently running tasks
+#   INPUTS: { None - reads config from CONFIG_FILE }
+#   OUTPUTS: { None - prints node info to stdout }
+#   SIDE_EFFECTS: Connects to DB, reads node and task records
+#   LINKS: M-UTILS, M-DB
+# END_CONTRACT: show_nodes
 @to_sync
 async def show_nodes():
     config = Config.from_config_parser(CONFIG_FILE)
@@ -351,6 +375,13 @@ async def show_nodes():
         print(msg)
 
 
+# START_CONTRACT: manage_node
+#   PURPOSE: Add, soft-remove, or hard-remove a node from the scheduler
+#   INPUTS: { None - reads CLI args via argparse }
+#   OUTPUTS: { bool | None - returns True on success, False/None on failure }
+#   SIDE_EFFECTS: Modifies DB node records, optionally runs remote node setup via SSH
+#   LINKS: M-UTILS, M-DB, M-REMOTE
+# END_CONTRACT: manage_node
 @to_sync
 async def manage_node():
     parser = argparse.ArgumentParser(description="Add nodes to yascheduler daemon")
@@ -455,6 +486,13 @@ async def manage_node():
     print(f"Added host to yascheduler: {args.host}:{port}")
 
 
+# START_CONTRACT: daemonize
+#   PURPOSE: Start the yascheduler daemon with signal handling
+#   INPUTS: { log_file: Optional[Union[str, Path]] - path to log file, or None }
+#   OUTPUTS: { None - runs the event loop until stopped }
+#   SIDE_EFFECTS: Creates Scheduler instance, sets up signal handlers, runs event loop
+#   LINKS: M-UTILS, M-SCHEDULER
+# END_CONTRACT: daemonize
 def daemonize(log_file: Optional[Union[str, Path]] = None):
     from .scheduler import Scheduler, get_logger
 

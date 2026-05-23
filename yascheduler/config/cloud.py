@@ -52,6 +52,13 @@ class AzureImageReference:
     sku: str = field(default="11-backports-gen2")
     version: str = field(default="latest")
 
+    # START_CONTRACT: from_urn
+    #   PURPOSE: Create AzureImageReference from a URN string in publisher:offer:sku:version format
+    #   INPUTS: { urn: str - URN string with colon-separated image reference components }
+    #   OUTPUTS: { Self - parsed Azure image reference }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD
+    # END_CONTRACT: from_urn
     @classmethod
     def from_urn(cls, urn: str) -> Self:
         "Create image reference from urn in forma `publisher:offer:sku:version'"
@@ -87,6 +94,13 @@ class ConfigCloudAzure:
     jump_username: Optional[str] = field(default=None, validator=opt_str_val)
     jump_host: Optional[str] = field(default=None, validator=opt_str_val)
 
+    # START_CONTRACT: get_valid_config_parser_fields
+    #   PURPOSE: Return valid config parser field names with az_ prefix for Azure cloud
+    #   INPUTS: { None }
+    #   OUTPUTS: { Sequence[str] - list of valid prefixed config keys }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD
+    # END_CONTRACT: get_valid_config_parser_fields
     @classmethod
     def get_valid_config_parser_fields(cls) -> Sequence[str]:
         "Returns a list of valid config keys"
@@ -98,6 +112,13 @@ class ConfigCloudAzure:
             + include_names
         ]
 
+    # START_CONTRACT: from_config_parser_section
+    #   PURPOSE: Create ConfigCloudAzure instance from a config parser section
+    #   INPUTS: { sec: SectionProxy - config parser section with az_ prefixed cloud keys }
+    #   OUTPUTS: { ConfigCloudAzure - Azure cloud configuration }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD
+    # END_CONTRACT: from_config_parser_section
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigCloudAzure":
         "Create config from config parser's section"
@@ -155,6 +176,13 @@ class ConfigCloudHetzner:
     jump_username: Optional[str] = field(default=None, validator=opt_str_val)
     jump_host: Optional[str] = field(default=None, validator=opt_str_val)
 
+    # START_CONTRACT: get_valid_config_parser_fields
+    #   PURPOSE: Return valid config parser field names with hetzner_ prefix
+    #   INPUTS: { None }
+    #   OUTPUTS: { Sequence[str] - list of valid prefixed config keys }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD
+    # END_CONTRACT: get_valid_config_parser_fields
     @classmethod
     def get_valid_config_parser_fields(cls) -> Sequence[str]:
         "Returns a list of valid config keys"
@@ -166,6 +194,13 @@ class ConfigCloudHetzner:
             + include_names
         ]
 
+    # START_CONTRACT: from_config_parser_section
+    #   PURPOSE: Create ConfigCloudHetzner instance from a config parser section
+    #   INPUTS: { sec: SectionProxy - config parser section with hetzner_ prefixed cloud keys }
+    #   OUTPUTS: { ConfigCloudHetzner - Hetzner cloud configuration }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD
+    # END_CONTRACT: from_config_parser_section
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigCloudHetzner":
         "Create config from config parser's section"
@@ -208,6 +243,13 @@ class ConfigCloudUpcloud:
     jump_username: Optional[str] = field(default=None, validator=opt_str_val)
     jump_host: Optional[str] = field(default=None, validator=opt_str_val)
 
+    # START_CONTRACT: get_valid_config_parser_fields
+    #   PURPOSE: Return valid config parser field names with upcloud_ prefix
+    #   INPUTS: { None }
+    #   OUTPUTS: { Sequence[str] - list of valid prefixed config keys }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD
+    # END_CONTRACT: get_valid_config_parser_fields
     @classmethod
     def get_valid_config_parser_fields(cls) -> Sequence[str]:
         "Returns a list of valid config keys"
@@ -219,6 +261,13 @@ class ConfigCloudUpcloud:
             + include_names
         ]
 
+    # START_CONTRACT: from_config_parser_section
+    #   PURPOSE: Create ConfigCloudUpcloud instance from a config parser section
+    #   INPUTS: { sec: SectionProxy - config parser section with upcloud_ prefixed cloud keys }
+    #   OUTPUTS: { ConfigCloudUpcloud - UpCloud cloud configuration }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD
+    # END_CONTRACT: from_config_parser_section
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigCloudUpcloud":
         "Create config from config parser's section"

@@ -4,7 +4,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Generic cloud provider interface: node creation, deletion, SSH key management.
 #   SCOPE: CloudAPI generic class, CloudConfig renderer, CloudCreateNodeError, CloudSetupNodeError.
-#   DEPENDS: M-CLOUD-PROTOCOLS, M-CONFIG-CLOUD, M-REMOTE, M-UTILS, M-CLOUD-ADAPTERS
+#   DEPENDS: M-CLOUD-PROTOCOLS, M-REMOTE, M-CLOUD-UTILS, M-CLOUD-ADAPTERS, M-REMOTE-PROTOCOL
 #   LINKS: M-CLOUD-API
 # END_MODULE_CONTRACT
 #
@@ -88,6 +88,13 @@ class CloudAPI(Generic[TConfigCloud_inv]):
         "Cloud name"
         return self.adapter.name
 
+    # START_CONTRACT: get_op_semaphore
+    #   PURPOSE: Return cached semaphore for limiting concurrent cloud operations
+    #   INPUTS: { None }
+    #   OUTPUTS: { asyncio.Semaphore - semaphore for operation rate limiting }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CLOUD-API
+    # END_CONTRACT: get_op_semaphore
     @cache
     def get_op_semaphore(self) -> asyncio.Semaphore:
         """
@@ -97,10 +104,24 @@ class CloudAPI(Generic[TConfigCloud_inv]):
         """
         return self.adapter.get_op_semaphore()
 
+    # START_CONTRACT: is_platform_supported
+    #   PURPOSE: Check if given platform string is supported by this cloud
+    #   INPUTS: { platform: str - platform identifier string }
+    #   OUTPUTS: { bool - True if platform is supported }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CLOUD-API
+    # END_CONTRACT: is_platform_supported
     def is_platform_supported(self, platform: str) -> bool:
         "Is platform is supported by cloud?"
         return any(map(lambda x: x(platform), self.adapter.supported_platform_checks))
 
+    # START_CONTRACT: get_ssh_key_sync
+    #   PURPOSE: Load existing or generate new SSH key for cloud node access
+    #   INPUTS: { None }
+    #   OUTPUTS: { SSHKey - loaded or newly generated SSH key }
+    #   SIDE_EFFECTS: Generates and writes new SSH key file to disk if none exists
+    #   LINKS: M-CLOUD-API, M-REMOTE
+    # END_CONTRACT: get_ssh_key_sync
     def get_ssh_key_sync(self) -> SSHKey:
         "Load or generate new SSHKey"
         prefix = "yakey"
@@ -124,6 +145,13 @@ class CloudAPI(Generic[TConfigCloud_inv]):
         self.log.info("WRITTEN KEY %s: %s", key_name, ssh_key.get_fingerprint("md5"))
         return ssh_key
 
+    # START_CONTRACT: get_ssh_key
+    #   PURPOSE: Async wrapper around get_ssh_key_sync with lock for thread safety
+    #   INPUTS: { None }
+    #   OUTPUTS: { SSHKey - loaded or generated SSH key }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CLOUD-API, get_ssh_key_sync
+    # END_CONTRACT: get_ssh_key
     async def get_ssh_key(self) -> SSHKey:
         "Load or generate ssh key (cached)"
         async with self.ssh_key_lock:
@@ -131,6 +159,13 @@ class CloudAPI(Generic[TConfigCloud_inv]):
                 None, self.get_ssh_key_sync
             )
 
+    # START_CONTRACT: get_cloud_config_data
+    #   PURPOSE: Build cloud-config with packages for engines on supported platforms
+    #   INPUTS: { None }
+    #   OUTPUTS: { PCloudConfig - cloud-config data with packages for supported engines }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CLOUD-API, M-CONFIG-CLOUD
+    # END_CONTRACT: get_cloud_config_data
     async def get_cloud_config_data(self) -> PCloudConfig:
         "Common cloud-config"
         engines = self.engines.filter(

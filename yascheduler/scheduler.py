@@ -453,7 +453,7 @@ class Scheduler:
         )
         # END_BLOCK_PREPARE_STORE
 
-        # START_BLOCK_PREPARE_RETRY
+        # START_BLOCK_RETRY_DOWNLOAD
         meta_add: list[tuple[str, Any]] = [
             ("remote_folder", remote_folder),
             ("local_folder", str(store_folder)),
@@ -461,9 +461,7 @@ class Scheduler:
 
         sftp_errors: list[tuple[Optional[str], Exception]] = []
         sftp_get_retry = backoff.on_exception(backoff.fibo, SFTPRetryExc, max_time=60)
-        # END_BLOCK_PREPARE_RETRY
 
-        # START_BLOCK_DOWNLOAD
         async def job():
             async with machine.sftp() as sftp:
                 for out_file in output_files:
@@ -488,7 +486,7 @@ class Scheduler:
         except Exception as err:
             self.log.warning(f"Cannot scp from {remote_folder}: {err}")
             sftp_errors.append((remote_folder, err))
-        # END_BLOCK_DOWNLOAD
+        # END_BLOCK_RETRY_DOWNLOAD
 
         if sftp_errors:
             meta_add.append(("error", {p: str(e) for p, e in sftp_errors}))

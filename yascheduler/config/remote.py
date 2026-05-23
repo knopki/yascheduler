@@ -46,6 +46,13 @@ class ConfigRemote:
         "Returns a list of valid config keys"
         return [f.name for f in fields(cls)]
 
+    # START_CONTRACT: from_config_parser_section
+    #   PURPOSE: Create ConfigRemote instance from a config parser section
+    #   INPUTS: { sec: SectionProxy - config parser section with remote config keys }
+    #   OUTPUTS: { Self - remote machine configuration }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-REMOTE
+    # END_CONTRACT: from_config_parser_section
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> Self:
         "Create config from config parser's section"

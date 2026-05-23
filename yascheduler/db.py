@@ -94,7 +94,7 @@ class DB:
 
     # START_CONTRACT: create
     #   PURPOSE: Async factory to create DB instance with optional auto-migration
-    #   INPUTS: { config: ConfigDb - database configuration } { automigrate: bool - whether to run migrations on init (default True) }
+    #   INPUTS: { config: ConfigDb - database configuration, automigrate: bool - whether to run migrations on init (default True) }
     #   OUTPUTS: { Self - initialized DB instance with live connection }
     #   SIDE_EFFECTS: Creates DB connection; optionally runs schema migration
     #   LINKS: [M-DB]
@@ -219,7 +219,7 @@ class DB:
 
     # START_CONTRACT: add_tmp_node
     #   PURPOSE: Add a temporary cloud-provisioned node with generated provisional IP
-    #   INPUTS: { cloud: str - cloud provider name } { username: str - SSH username for node }
+    #   INPUTS: { cloud: str - cloud provider name, username: str - SSH username for node }
     #   OUTPUTS: { str - generated provisional IP address }
     #   SIDE_EFFECTS: Inserts disabled node with provisional IP into yascheduler_nodes
     #   LINKS: [M-DB]
@@ -239,7 +239,7 @@ class DB:
 
     # START_CONTRACT: add_node
     #   PURPOSE: Insert a new compute node record
-    #   INPUTS: { ip_addr: str - node IP } { username: str - SSH username } { port: Optional[int] - SSH port (default 22) } { ncpus: Optional[int] - CPU count } { cloud: Optional[str] - cloud provider name } { enabled: bool - whether node is enabled (default False) }
+    #   INPUTS: { ip_addr: str - node IP, username: str - SSH username, port: Optional[int] - SSH port (default 22), ncpus: Optional[int] - CPU count, cloud: Optional[str] - cloud provider name, enabled: bool - whether node is enabled (default False) }
     #   OUTPUTS: { NodeModel - newly created node data }
     #   SIDE_EFFECTS: Inserts row into yascheduler_nodes
     #   LINKS: [M-DB]
@@ -351,7 +351,7 @@ class DB:
 
     # START_CONTRACT: get_tasks_by_status
     #   PURPOSE: Query tasks filtered by one or more statuses
-    #   INPUTS: { statuses: Sequence[TaskStatus] - statuses to filter by } { limit: Optional[int] - max results (None for unlimited) }
+    #   INPUTS: { statuses: Sequence[TaskStatus] - statuses to filter by, limit: Optional[int] - max results (None for unlimited) }
     #   OUTPUTS: { Sequence[TaskModel] - matching tasks }
     #   SIDE_EFFECTS: None
     #   LINKS: [M-DB]
@@ -398,7 +398,7 @@ class DB:
 
     # START_CONTRACT: add_task
     #   PURPOSE: Insert a new task row
-    #   INPUTS: { label: Optional[str] - task label } { ip_addr: Optional[str] - node IP } { status: TaskStatus - initial status (default TO_DO) } { metadata: Optional[Mapping[str, Any]] - task metadata }
+    #   INPUTS: { label: Optional[str] - task label, ip_addr: Optional[str] - node IP, status: TaskStatus - initial status (default TO_DO), metadata: Optional[Mapping[str, Any]] - task metadata }
     #   OUTPUTS: { TaskModel - newly created task with generated ID }
     #   SIDE_EFFECTS: Inserts row into yascheduler_tasks
     #   LINKS: [M-DB]
@@ -432,7 +432,7 @@ class DB:
 
     # START_CONTRACT: set_task_running
     #   PURPOSE: Mark task as RUNNING and bind it to a node IP
-    #   INPUTS: { task_id: int - task to update } { ip_addr: str - node IP the task runs on }
+    #   INPUTS: { task_id: int - task to update, ip_addr: str - node IP the task runs on }
     #   OUTPUTS: { None - no return value }
     #   SIDE_EFFECTS: Updates task status to RUNNING and sets IP
     #   LINKS: [M-DB]
@@ -452,7 +452,7 @@ class DB:
 
     # START_CONTRACT: set_task_done
     #   PURPOSE: Set task status to DONE and update its metadata
-    #   INPUTS: { task_id: int - task to mark done } { metadata: Mapping[str, Any] - final metadata snapshot }
+    #   INPUTS: { task_id: int - task to mark done, metadata: Mapping[str, Any] - final metadata snapshot }
     #   OUTPUTS: { None - no return value }
     #   SIDE_EFFECTS: Updates task status to DONE and sets metadata
     #   LINKS: [M-DB]
@@ -472,7 +472,7 @@ class DB:
 
     # START_CONTRACT: set_task_error
     #   PURPOSE: Mark task as DONE with error metadata (embeds error in metadata if provided)
-    #   INPUTS: { task_id: int - task to mark } { metadata: Mapping[str, Any] - existing metadata } { error: Optional[str] - error message to embed in metadata }
+    #   INPUTS: { task_id: int - task to mark, metadata: Mapping[str, Any] - existing metadata, error: Optional[str] - error message to embed in metadata }
     #   OUTPUTS: { None - no return value }
     #   SIDE_EFFECTS: Updates task status to DONE; appends error key to metadata
     #   LINKS: [M-DB]

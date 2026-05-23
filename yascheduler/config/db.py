@@ -42,6 +42,13 @@ class ConfigDb:
         "Returns a list of valid config keys"
         return [f.name for f in fields(cls)]
 
+    # START_CONTRACT: from_config_parser_section
+    #   PURPOSE: Create ConfigDb instance from a config parser section
+    #   INPUTS: { sec: SectionProxy - config parser section with db config keys }
+    #   OUTPUTS: { ConfigDb - database connection configuration }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-DB
+    # END_CONTRACT: from_config_parser_section
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigDb":
         "Create config from config parser's section"

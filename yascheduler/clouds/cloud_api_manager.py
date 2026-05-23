@@ -55,7 +55,7 @@ class CloudAPIManager:
 
     # START_CONTRACT: create
     #   PURPOSE: Async factory that instantiates all configured cloud providers
-    #   INPUTS: { db: DB - database connection } { local_config: ConfigLocal - local settings } { remote_config: ConfigRemote - remote settings } { cloud_configs: Sequence[ConfigCloud] - list of cloud provider configs } { engines: EngineRepository - engine definitions } { log: Optional[logging.Logger] - optional parent logger }
+    #   INPUTS: { db: DB - database connection, local_config: ConfigLocal - local settings, remote_config: ConfigRemote - remote settings, cloud_configs: Sequence[ConfigCloud] - list of cloud provider configs, engines: EngineRepository - engine definitions, log: Optional[logging.Logger] - optional parent logger }
     #   OUTPUTS: { Self - initialized CloudAPIManager instance }
     #   SIDE_EFFECTS: None
     #   LINKS: M-CLOUD-MANAGER, M-CLOUD-API
@@ -198,7 +198,7 @@ class CloudAPIManager:
 
     # START_CONTRACT: allocate_node
     #   PURPOSE: Select provider, create a cloud node, wait for ready
-    #   INPUTS: { want_platforms: Optional[Sequence[str]] - optional platform filter } { throttle: bool - whether to skip overloaded providers }
+    #   INPUTS: { want_platforms: Optional[Sequence[str]] - optional platform filter, throttle: bool - whether to skip overloaded providers }
     #   OUTPUTS: { Optional[str] - allocated node IP address or None }
     #   SIDE_EFFECTS: Adds node to DB
     #   LINKS: M-CLOUD-MANAGER, M-DB
@@ -240,7 +240,7 @@ class CloudAPIManager:
 
     # START_CONTRACT: allocate
     #   PURPOSE: Externally-safe allocate wrapper with error handling and task tracking
-    #   INPUTS: { on_task: Optional[int] - optional task id to mark } { want_platforms: Optional[Sequence[str]] - optional platform filter } { throttle: bool - whether to skip overloaded providers }
+    #   INPUTS: { on_task: Optional[int] - optional task id to mark, want_platforms: Optional[Sequence[str]] - optional platform filter, throttle: bool - whether to skip overloaded providers }
     #   OUTPUTS: { Optional[str] - allocated node IP address or None on error }
     #   SIDE_EFFECTS: Tracks on_task in on_tasks set, logs allocation errors
     #   LINKS: M-CLOUD-MANAGER, M-DB

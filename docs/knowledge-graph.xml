@@ -14,10 +14,23 @@
          Core modules
          ═══════════════════════════════════════════════ -->
 
-    <M-SCHEDULER NAME="Scheduler" TYPE="CORE_LOGIC" STATUS="planned">
+    <M-MAIN NAME="Package entry point" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Top-level package entry: re-exports Yascheduler client and path constants.</purpose>
+      <path>yascheduler/__init__.py</path>
+      <depends>M-CLIENT, M-VARIABLES</depends>
+      <annotations>
+        <export-Yascheduler PURPOSE="Public client class" />
+        <const-CONFIG_FILE PURPOSE="Default config file path" />
+        <const-PID_FILE PURPOSE="Default PID file path" />
+        <const-LOG_FILE PURPOSE="Default log file path" />
+        <const-__version__ PURPOSE="Package version from metadata" />
+      </annotations>
+    </M-MAIN>
+
+    <M-SCHEDULER NAME="Scheduler" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Main async daemon orchestrating task allocation, execution, and completion.</purpose>
       <path>yascheduler/scheduler.py</path>
-      <depends>M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-CONFIG, M-QUEUE, M-COMPAT, M-TIME, M-VARIABLES</depends>
+      <depends>M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-CONFIG, M-QUEUE, M-COMPAT, M-TIME, M-VARIABLES, M-REMOTE, M-REMOTE-PROTOCOL</depends>
       <annotations>
         <class-Scheduler PURPOSE="Async daemon that drives the full task lifecycle" />
         <class-WebhookPayload PURPOSE="Webhook request data shape" />
@@ -41,7 +54,7 @@
       </annotations>
     </M-SCHEDULER>
 
-    <M-DB NAME="Database layer" TYPE="DATA_LAYER" STATUS="planned">
+    <M-DB NAME="Database layer" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgreSQL persistence for tasks, nodes, and their statuses.</purpose>
       <path>yascheduler/db.py</path>
       <depends>M-CONFIG-DB, M-COMPAT</depends>
@@ -66,7 +79,7 @@
       </annotations>
     </M-DB>
 
-    <M-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="planned">
+    <M-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Public Python/CLI client for submitting and querying tasks.</purpose>
       <path>yascheduler/client.py</path>
       <depends>M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-SCHEDULER</depends>
@@ -82,17 +95,19 @@
       </annotations>
     </M-CLIENT>
 
-    <M-QUEUE NAME="Unique queue" TYPE="UTILITY" STATUS="planned">
+    <M-QUEUE NAME="Unique queue" TYPE="UTILITY" STATUS="implemented">
       <purpose>Deduplicating async queue for producer-consumer scheduling loops.</purpose>
       <path>yascheduler/queue.py</path>
       <depends>none</depends>
       <annotations>
         <class-UniqueQueue PURPOSE="Async queue that skips duplicate messages by ID" />
         <class-UMessage PURPOSE="Typed message with ID and payload" />
+        <type-TUMsgId PURPOSE="TypeVar for message identifier" />
+        <type-TUMsgPayload PURPOSE="TypeVar for message payload" />
       </annotations>
     </M-QUEUE>
 
-    <M-AIIDA NAME="AiiDA plugin" TYPE="INTEGRATION" STATUS="planned">
+    <M-AIIDA NAME="AiiDA plugin" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>AiiDA scheduler plugin entry point for integrating with AiiDA workflows.</purpose>
       <path>yascheduler/aiida_plugin.py</path>
       <depends>none</depends>
@@ -102,7 +117,7 @@
       </annotations>
     </M-AIIDA>
 
-    <M-VARIABLES NAME="Project variables" TYPE="UTILITY" STATUS="planned">
+    <M-VARIABLES NAME="Project variables" TYPE="UTILITY" STATUS="implemented">
       <purpose>Global constants for config file, PID file, and log file paths.</purpose>
       <path>yascheduler/variables.py</path>
       <depends>none</depends>
@@ -113,7 +128,7 @@
       </annotations>
     </M-VARIABLES>
 
-    <M-UTILS NAME="Utilities" TYPE="UTILITY" STATUS="planned">
+    <M-UTILS NAME="Utilities" TYPE="UTILITY" STATUS="implemented">
       <purpose>CLI entry points: submit, status, init, node management, daemonize.</purpose>
       <path>yascheduler/utils.py</path>
       <depends>M-CLIENT, M-CONFIG, M-DB, M-REMOTE, M-VARIABLES, M-SCHEDULER</depends>
@@ -127,7 +142,7 @@
       </annotations>
     </M-UTILS>
 
-    <M-TIME NAME="Time utilities" TYPE="UTILITY" STATUS="planned">
+    <M-TIME NAME="Time utilities" TYPE="UTILITY" STATUS="implemented">
       <purpose>Sleep utilities for sync and async contexts.</purpose>
       <path>yascheduler/time.py</path>
       <depends>none</depends>
@@ -137,7 +152,7 @@
       </annotations>
     </M-TIME>
 
-    <M-COMPAT NAME="Compatibility" TYPE="UTILITY" STATUS="planned">
+    <M-COMPAT NAME="Compatibility" TYPE="UTILITY" STATUS="implemented">
       <purpose>Type compatibility shims: Self and ParamSpec for older Python versions.</purpose>
       <path>yascheduler/compat.py</path>
       <depends>none</depends>
@@ -147,16 +162,15 @@
       </annotations>
     </M-COMPAT>
 
-    <M-DAEMON-SYSTEMD NAME="Systemd daemon" TYPE="ENTRY_POINT" STATUS="planned">
+    <M-DAEMON-SYSTEMD NAME="Systemd daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Systemd service entry point for the scheduler daemon.</purpose>
       <path>yascheduler/daemon_systemd.py</path>
       <depends>M-UTILS, M-VARIABLES</depends>
       <annotations>
-        <fn-__main__ PURPOSE="Systemd daemon entry point launching daemonize" />
       </annotations>
     </M-DAEMON-SYSTEMD>
 
-    <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="planned">
+    <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SysV init service entry point for launching the scheduler daemon.</purpose>
       <path>yascheduler/daemon_sysv.py</path>
       <depends>M-UTILS, M-VARIABLES</depends>
@@ -169,7 +183,7 @@
          Configuration
          ═══════════════════════════════════════════════ -->
 
-    <M-CONFIG NAME="Config root" TYPE="UTILITY" STATUS="planned">
+    <M-CONFIG NAME="Config root" TYPE="UTILITY" STATUS="implemented">
       <purpose>Top-level configuration container aggregating all sub-configs.</purpose>
       <path>yascheduler/config/config.py</path>
       <depends>M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE-REPO</depends>
@@ -179,7 +193,7 @@
       </annotations>
     </M-CONFIG>
 
-    <M-CONFIG-DB NAME="DB config" TYPE="UTILITY" STATUS="planned">
+    <M-CONFIG-DB NAME="DB config" TYPE="UTILITY" STATUS="implemented">
       <purpose>Database connection configuration.</purpose>
       <path>yascheduler/config/db.py</path>
       <depends>M-CONFIG-UTILS</depends>
@@ -188,7 +202,7 @@
       </annotations>
     </M-CONFIG-DB>
 
-    <M-CONFIG-LOCAL NAME="Local config" TYPE="UTILITY" STATUS="planned">
+    <M-CONFIG-LOCAL NAME="Local config" TYPE="UTILITY" STATUS="implemented">
       <purpose>Local daemon settings: concurrency limits, webhook config, sleep intervals.</purpose>
       <path>yascheduler/config/local.py</path>
       <depends>M-CONFIG-UTILS</depends>
@@ -197,7 +211,7 @@
       </annotations>
     </M-CONFIG-LOCAL>
 
-    <M-CONFIG-REMOTE NAME="Remote config" TYPE="UTILITY" STATUS="planned">
+    <M-CONFIG-REMOTE NAME="Remote config" TYPE="UTILITY" STATUS="implemented">
       <purpose>Remote machine defaults: data directories, SSH username, jump host.</purpose>
       <path>yascheduler/config/remote.py</path>
       <depends>M-CONFIG-UTILS, M-COMPAT</depends>
@@ -206,7 +220,7 @@
       </annotations>
     </M-CONFIG-REMOTE>
 
-    <M-CONFIG-CLOUD NAME="Cloud configs" TYPE="UTILITY" STATUS="planned">
+    <M-CONFIG-CLOUD NAME="Cloud configs" TYPE="UTILITY" STATUS="implemented">
       <purpose>Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud.</purpose>
       <path>yascheduler/config/cloud.py</path>
       <depends>M-CONFIG-UTILS, M-COMPAT</depends>
@@ -219,7 +233,7 @@
       </annotations>
     </M-CONFIG-CLOUD>
 
-    <M-CONFIG-ENGINE NAME="Engine config" TYPE="UTILITY" STATUS="planned">
+    <M-CONFIG-ENGINE NAME="Engine config" TYPE="UTILITY" STATUS="implemented">
       <purpose>Calculation engine definition: spawn command, check command, deployables, platforms.</purpose>
       <path>yascheduler/config/engine.py</path>
       <depends>M-CONFIG-UTILS</depends>
@@ -232,7 +246,7 @@
       </annotations>
     </M-CONFIG-ENGINE>
 
-    <M-CONFIG-ENGINE-REPO NAME="Engine repository" TYPE="UTILITY" STATUS="planned">
+    <M-CONFIG-ENGINE-REPO NAME="Engine repository" TYPE="UTILITY" STATUS="implemented">
       <purpose>Immutable collection of engines with filtering by platform.</purpose>
       <path>yascheduler/config/engine_repository.py</path>
       <depends>M-CONFIG-ENGINE, M-COMPAT</depends>
@@ -244,7 +258,7 @@
       </annotations>
     </M-CONFIG-ENGINE-REPO>
 
-    <M-CONFIG-UTILS NAME="Config utilities" TYPE="UTILITY" STATUS="planned">
+    <M-CONFIG-UTILS NAME="Config utilities" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared config helpers: field factories, validators, warning helpers.</purpose>
       <path>yascheduler/config/utils.py</path>
       <depends>none</depends>
@@ -255,14 +269,31 @@
       </annotations>
     </M-CONFIG-UTILS>
 
+    <M-CONFIG-HUB NAME="Config re-export hub" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Public re-exports from config submodules.</purpose>
+      <path>yascheduler/config/__init__.py</path>
+      <depends>M-CONFIG, M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE, M-CONFIG-ENGINE-REPO</depends>
+      <annotations>
+        <export-Config PURPOSE="Application-wide configuration container" />
+        <export-ConfigDb PURPOSE="DB connection configuration" />
+        <export-ConfigLocal PURPOSE="Local daemon settings" />
+        <export-ConfigRemote PURPOSE="Remote machine defaults" />
+        <export-ConfigCloudAzure PURPOSE="Azure cloud config" />
+        <export-ConfigCloudHetzner PURPOSE="Hetzner cloud config" />
+        <export-ConfigCloudUpcloud PURPOSE="UpCloud cloud config" />
+        <export-Engine PURPOSE="Engine configuration" />
+        <export-EngineRepository PURPOSE="Engine repository config" />
+      </annotations>
+    </M-CONFIG-HUB>
+
     <!-- ═══════════════════════════════════════════════
          Cloud integration
          ═══════════════════════════════════════════════ -->
 
-    <M-CLOUD-API NAME="Cloud API base" TYPE="CORE_LOGIC" STATUS="planned">
+    <M-CLOUD-API NAME="Cloud API base" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Generic cloud provider interface: node creation, deletion, SSH key management.</purpose>
       <path>yascheduler/clouds/cloud_api.py</path>
-      <depends>M-CLOUD-PROTOCOLS, M-CLOUD-ADAPTERS, M-CONFIG-CLOUD, M-REMOTE, M-UTILS</depends>
+      <depends>M-CLOUD-PROTOCOLS, M-CLOUD-ADAPTERS, M-CONFIG, M-REMOTE, M-CLOUD-UTILS, M-REMOTE-PROTOCOL</depends>
       <annotations>
         <class-CloudAPI PURPOSE="Generic cloud provider with create/delete/SSH key ops" />
         <class-CloudCreateNodeError PURPOSE="Cloud node allocation error" />
@@ -275,10 +306,10 @@
       </annotations>
     </M-CLOUD-API>
 
-    <M-CLOUD-MANAGER NAME="Cloud manager" TYPE="CORE_LOGIC" STATUS="planned">
+    <M-CLOUD-MANAGER NAME="Cloud manager" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Multi-cloud orchestrator: provider selection, allocation, deallocation, capacity.</purpose>
       <path>yascheduler/clouds/cloud_api_manager.py</path>
-      <depends>M-CLOUD-API, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-DB, M-CONFIG</depends>
+      <depends>M-CLOUD-API, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-DB, M-CONFIG, M-COMPAT</depends>
       <annotations>
         <class-CloudAPIManager PURPOSE="Manages multiple cloud provider instances" />
         <export-CLOUD_ADAPTER_GETTERS PURPOSE="Registry mapping cloud prefix to adapter factory" />
@@ -290,7 +321,7 @@
       </annotations>
     </M-CLOUD-MANAGER>
 
-    <M-CLOUD-AZ NAME="Azure provider" TYPE="INTEGRATION" STATUS="planned">
+    <M-CLOUD-AZ NAME="Azure provider" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Azure VM creation and deletion using Azure SDK.</purpose>
       <path>yascheduler/clouds/az.py</path>
       <depends>M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS</depends>
@@ -300,7 +331,7 @@
       </annotations>
     </M-CLOUD-AZ>
 
-    <M-CLOUD-HETZNER NAME="Hetzner provider" TYPE="INTEGRATION" STATUS="planned">
+    <M-CLOUD-HETZNER NAME="Hetzner provider" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Hetzner Cloud server creation and deletion via API.</purpose>
       <path>yascheduler/clouds/hetzner.py</path>
       <depends>M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS</depends>
@@ -310,7 +341,7 @@
       </annotations>
     </M-CLOUD-HETZNER>
 
-    <M-CLOUD-UPCLOUD NAME="UpCloud provider" TYPE="INTEGRATION" STATUS="planned">
+    <M-CLOUD-UPCLOUD NAME="UpCloud provider" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>UpCloud server creation and deletion via API.</purpose>
       <path>yascheduler/clouds/upcloud.py</path>
       <depends>M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS</depends>
@@ -320,7 +351,7 @@
       </annotations>
     </M-CLOUD-UPCLOUD>
 
-    <M-CLOUD-ADAPTERS NAME="Cloud adapters" TYPE="INTEGRATION" STATUS="planned">
+    <M-CLOUD-ADAPTERS NAME="Cloud adapters" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Mapping of cloud config types to create/delete callables.</purpose>
       <path>yascheduler/clouds/adapters.py</path>
       <depends>M-CLOUD-PROTOCOLS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD</depends>
@@ -332,7 +363,7 @@
       </annotations>
     </M-CLOUD-ADAPTERS>
 
-    <M-CLOUD-PROTOCOLS NAME="Cloud protocols" TYPE="UTILITY" STATUS="planned">
+    <M-CLOUD-PROTOCOLS NAME="Cloud protocols" TYPE="UTILITY" STATUS="implemented">
       <purpose>Protocol definitions for cloud config, node creation, deletion callables.</purpose>
       <path>yascheduler/clouds/protocols.py</path>
       <depends>M-CONFIG-CLOUD</depends>
@@ -344,7 +375,7 @@
       </annotations>
     </M-CLOUD-PROTOCOLS>
 
-    <M-CLOUD-UTILS NAME="Cloud utilities" TYPE="UTILITY" STATUS="planned">
+    <M-CLOUD-UTILS NAME="Cloud utilities" TYPE="UTILITY" STATUS="implemented">
       <purpose>Cloud helper utilities: random naming, SSH key name extraction.</purpose>
       <path>yascheduler/clouds/utils.py</path>
       <depends>none</depends>
@@ -354,11 +385,20 @@
       </annotations>
     </M-CLOUD-UTILS>
 
+    <M-CLOUDS-HUB NAME="Clouds re-export hub" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Public re-exports from clouds submodules.</purpose>
+      <path>yascheduler/clouds/__init__.py</path>
+      <depends>M-CLOUD-MANAGER</depends>
+      <annotations>
+        <export-CloudAPIManager PURPOSE="Cloud API manager class" />
+      </annotations>
+    </M-CLOUDS-HUB>
+
     <!-- ═══════════════════════════════════════════════
          Remote machine management
          ═══════════════════════════════════════════════ -->
 
-    <M-REMOTE NAME="Remote machine" TYPE="CORE_LOGIC" STATUS="planned">
+    <M-REMOTE NAME="Remote machine" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>SSH connection to a remote machine with platform detection, command execution, and SFTP.</purpose>
       <path>yascheduler/remote_machine/remote_machine.py</path>
       <depends>M-REMOTE-ADAPTERS, M-REMOTE-EXC, M-REMOTE-PROTOCOL, M-COMPAT</depends>
@@ -380,7 +420,7 @@
       </annotations>
     </M-REMOTE>
 
-    <M-REMOTE-REPO NAME="Remote machine repository" TYPE="UTILITY" STATUS="planned">
+    <M-REMOTE-REPO NAME="Remote machine repository" TYPE="UTILITY" STATUS="implemented">
       <purpose>Collection of connected remote machines with filtering and cleanup.</purpose>
       <path>yascheduler/remote_machine/remote_machine_repository.py</path>
       <depends>M-REMOTE, M-COMPAT</depends>
@@ -392,7 +432,7 @@
       </annotations>
     </M-REMOTE-REPO>
 
-    <M-REMOTE-ADAPTERS NAME="Remote adapters" TYPE="UTILITY" STATUS="planned">
+    <M-REMOTE-ADAPTERS NAME="Remote adapters" TYPE="UTILITY" STATUS="implemented">
       <purpose>Platform-specific adapter registry mapping OS identifiers to adapter instances.</purpose>
       <path>yascheduler/remote_machine/adapters.py</path>
       <depends>M-REMOTE-PROTOCOL, M-REMOTE-CHECKS, M-REMOTE-LINUX, M-REMOTE-WINDOWS, M-REMOTE-COMMON</depends>
@@ -401,7 +441,7 @@
       </annotations>
     </M-REMOTE-ADAPTERS>
 
-    <M-REMOTE-CHECKS NAME="Platform checks" TYPE="UTILITY" STATUS="planned">
+    <M-REMOTE-CHECKS NAME="Platform checks" TYPE="UTILITY" STATUS="implemented">
       <purpose>SSH-based platform detection check functions for each supported OS.</purpose>
       <path>yascheduler/remote_machine/checks.py</path>
       <depends>none</depends>
@@ -413,7 +453,7 @@
       </annotations>
     </M-REMOTE-CHECKS>
 
-    <M-REMOTE-COMMON NAME="Remote common" TYPE="UTILITY" STATUS="planned">
+    <M-REMOTE-COMMON NAME="Remote common" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared helpers for remote machine operations: process info, command execution.</purpose>
       <path>yascheduler/remote_machine/common.py</path>
       <depends>M-REMOTE-PROTOCOL</depends>
@@ -424,7 +464,7 @@
       </annotations>
     </M-REMOTE-COMMON>
 
-    <M-REMOTE-EXC NAME="Remote exceptions" TYPE="UTILITY" STATUS="planned">
+    <M-REMOTE-EXC NAME="Remote exceptions" TYPE="UTILITY" STATUS="implemented">
       <purpose>Custom exceptions for remote machine operations.</purpose>
       <path>yascheduler/remote_machine/exc.py</path>
       <depends>none</depends>
@@ -433,7 +473,7 @@
       </annotations>
     </M-REMOTE-EXC>
 
-    <M-REMOTE-LINUX NAME="Linux methods" TYPE="UTILITY" STATUS="planned">
+    <M-REMOTE-LINUX NAME="Linux methods" TYPE="UTILITY" STATUS="implemented">
       <purpose>Linux-specific remote commands: package install, process listing, CPU detection.</purpose>
       <path>yascheduler/remote_machine/linux_methods.py</path>
       <depends>M-REMOTE-PROTOCOL, M-REMOTE-COMMON, M-CONFIG-ENGINE</depends>
@@ -444,7 +484,7 @@
       </annotations>
     </M-REMOTE-LINUX>
 
-    <M-REMOTE-WINDOWS NAME="Windows methods" TYPE="UTILITY" STATUS="planned">
+    <M-REMOTE-WINDOWS NAME="Windows methods" TYPE="UTILITY" STATUS="implemented">
       <purpose>Windows-specific remote commands: engine deployment, process listing.</purpose>
       <path>yascheduler/remote_machine/windows_methods.py</path>
       <depends>M-REMOTE-PROTOCOL, M-REMOTE-COMMON, M-CONFIG-ENGINE</depends>
@@ -454,7 +494,7 @@
       </annotations>
     </M-REMOTE-WINDOWS>
 
-    <M-REMOTE-PROTOCOL NAME="Remote protocols" TYPE="UTILITY" STATUS="planned">
+    <M-REMOTE-PROTOCOL NAME="Remote protocols" TYPE="UTILITY" STATUS="implemented">
       <purpose>Protocol definitions for engines, process info, SSH checks, and adapters.</purpose>
       <path>yascheduler/remote_machine/protocol.py</path>
       <depends>M-CONFIG-ENGINE</depends>
@@ -463,10 +503,10 @@
         <class-PEngineRepository PURPOSE="Engine collection protocol" />
         <class-PProcessInfo PURPOSE="Process information shape" />
         <class-PNode PURPOSE="Node info shape" />
-        <class-SSHCheck PURPOSE="SSH check callable protocol" />
-        <class-SSHRetryExc PURPOSE="Retryable SSH exception marker" />
-        <class-SFTPRetryExc PURPOSE="Retryable SFTP exception marker" />
-        <class-AllSSHRetryExc PURPOSE="Union of all retryable SSH exceptions" />
+        <type-SSHCheck PURPOSE="SSH check callable protocol" />
+        <type-SSHRetryExc PURPOSE="Retryable SSH exception marker" />
+        <type-SFTPRetryExc PURPOSE="Retryable SFTP exception marker" />
+        <type-AllSSHRetryExc PURPOSE="Union of all retryable SSH exceptions" />
         <type-QuoteCallable PURPOSE="Shell quoting callable protocol" />
         <type-RunCallable PURPOSE="Run command callable protocol" />
         <type-RunBgCallable PURPOSE="Run background command callable protocol" />
@@ -478,134 +518,19 @@
       </annotations>
     </M-REMOTE-PROTOCOL>
 
-    <!-- ═══════════════════════════════════════════════
-         Test infrastructure
-         ═══════════════════════════════════════════════ -->
-
-    <M-TEST-CONFTEST NAME="Test conftest" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Shared pytest fixtures for the yascheduler test suite.</purpose>
-      <path>tests/conftest.py</path>
-      <depends>none</depends>
+    <M-REMOTE-HUB NAME="Remote re-export hub" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Public re-exports from remote_machine submodules.</purpose>
+      <path>yascheduler/remote_machine/__init__.py</path>
+      <depends>M-REMOTE-PROTOCOL, M-REMOTE, M-REMOTE-REPO</depends>
       <annotations>
-        <fn-anyio_backend PURPOSE="Returns asyncio backend for pytest-anyio compatibility" />
+        <export-AllSSHRetryExc PURPOSE="SSH retry exception union" />
+        <export-PProcessInfo PURPOSE="Process info protocol" />
+        <export-RemoteMachine PURPOSE="Remote machine abstraction" />
+        <export-RemoteMachineRepository PURPOSE="Collection of remote machines" />
+        <export-SFTPRetryExc PURPOSE="SFTP retry exception" />
+        <export-SSHRetryExc PURPOSE="SSH retry exception" />
       </annotations>
-    </M-TEST-CONFTEST>
-
-    <M-TEST-FIXTURES-MODELS NAME="Test data helpers" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Factory functions for creating TaskModel and NodeModel instances with sensible defaults.</purpose>
-      <path>tests/fixtures/models.py</path>
-      <depends>M-DB</depends>
-      <annotations>
-        <fn-make_task PURPOSE="Create TaskModel with defaults and keyword overrides" />
-        <fn-make_node PURPOSE="Create NodeModel with defaults and keyword overrides" />
-      </annotations>
-    </M-TEST-FIXTURES-MODELS>
-
-    <M-TEST-UNIT-QUEUE NAME="Queue unit tests" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Unit tests for UniqueQueue and UMessage covering deduplication, item lifecycle, and edge cases.</purpose>
-      <path>tests/unit/test_queue.py</path>
-      <depends>M-QUEUE</depends>
-      <annotations>
-        <fn-test_put_get PURPOSE="Put then get returns original message" />
-        <fn-test_deduplication PURPOSE="Duplicate put is silently skipped" />
-        <fn-test_item_done_tracking PURPOSE="Get adds to pending, item_done removes it" />
-        <fn-test_item_done_allows_requeue PURPOSE="After item_done the same message can be re-queued" />
-        <fn-test_psize_after_get PURPOSE="Psize reflects in-flight items" />
-        <fn-test_task_done_raises PURPOSE="Task_done raises NotImplementedError" />
-      </annotations>
-    </M-TEST-UNIT-QUEUE>
-
-    <M-TEST-UNIT-MODELS NAME="Data model unit tests" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Unit tests for TaskStatus, TaskModel, NodeModel frozen attrs dataclasses.</purpose>
-      <path>tests/unit/test_models.py</path>
-      <depends>M-DB</depends>
-      <annotations>
-        <fn-test_task_status_values PURPOSE="Verify TO_DO==0, RUNNING==1, DONE==2" />
-        <fn-test_task_status_is_int PURPOSE="Verify isinstance(TaskStatus.TO_DO, int)" />
-        <fn-test_taskmodel_construction PURPOSE="Verify all fields and TaskStatus converter" />
-        <fn-test_taskmodel_frozen_immutable PURPOSE="Verify FrozenInstanceError on mutation" />
-        <fn-test_taskmodel_hash_deterministic PURPOSE="Identical fields produce equal hashes" />
-        <fn-test_nodemodel_defaults PURPOSE="Minimal args produce expected defaults" />
-        <fn-test_nodemodel_all_args PURPOSE="Full args match constructor" />
-      </annotations>
-    </M-TEST-UNIT-MODELS>
-
-    <M-TEST-UNIT-CONFIG NAME="Config parsing unit tests" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Unit tests for INI to config parsing across all sub-modules and top-level Config.</purpose>
-      <path>tests/unit/test_config.py</path>
-      <depends>M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE, M-CONFIG-ENGINE-REPO, M-CONFIG-UTILS, M-CONFIG</depends>
-      <annotations>
-        <fn-test_config_db_full_overrides PURPOSE="Parse full DB section with overrides" />
-        <fn-test_config_db_defaults PURPOSE="Apply defaults when section empty" />
-        <fn-test_config_local_custom_data_dir PURPOSE="Resolve derived paths under custom data_dir" />
-        <fn-test_config_local_defaults PURPOSE="Apply numeric defaults for empty section" />
-        <fn-test_config_remote_with_jump_host PURPOSE="Parse jump host fields" />
-        <fn-test_config_remote_without_jump_host PURPOSE="Jump host defaults to None" />
-        <fn-test_config_cloud_hetzner_parsing PURPOSE="Parse hetzner token/username" />
-        <fn-test_config_cloud_upcloud_parsing PURPOSE="Parse upcloud login/password" />
-        <fn-test_azure_image_reference_from_urn PURPOSE="Parse colon-separated URN" />
-        <fn-test_azure_image_reference_invalid_urn PURPOSE="Raise ValueError for short URN" />
-        <fn-test_config_cloud_azure_rejects_root PURPOSE="Raise ValueError for root user" />
-        <fn-test_engine_valid_parsing PURPOSE="Parse complete valid engine section" />
-        <fn-test_engine_invalid_spawn_template PURPOSE="Raise ValueError for unknown placeholder" />
-        <fn-test_engine_missing_check_methods PURPOSE="Raise ValueError when no check method" />
-        <fn-test_engine_empty_input_files PURPOSE="Raise ValueError for empty input_files" />
-        <fn-test_engine_repository_filter PURPOSE="Filter returns matching engines" />
-        <fn-test_engine_repository_filter_platforms PURPOSE="Filter returns platform matches" />
-        <fn-test_engine_repository_immutable PURPOSE="Raise NotImplementedError on mutation" />
-        <fn-test_warn_unknown_fields PURPOSE="Emit ConfigWarning for unknown keys" />
-        <fn-test_config_top_level_full_ini PURPOSE="Assemble all sub-configs from full INI" />
-        <fn-test_config_top_level_empty_sections PURPOSE="Handle empty sections with defaults" />
-      </annotations>
-    </M-TEST-UNIT-CONFIG>
-
-    <M-TEST-UNIT-DB NAME="DB unit tests" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Unit tests for DB class with mocked pg8000.Connection, verifying SQL queries and result mapping.</purpose>
-      <path>tests/unit/test_db.py</path>
-      <depends>M-DB</depends>
-      <annotations>
-        <fn-test_add_node PURPOSE="INSERT SQL and returns NodeModel" />
-        <fn-test_get_node_found PURPOSE="SELECT returns NodeModel" />
-        <fn-test_get_node_not_found PURPOSE="Empty rows return None" />
-        <fn-test_get_all_nodes PURPOSE="All rows mapped to NodeModel list" />
-        <fn-test_enable_node PURPOSE="UPDATE enabled=TRUE" />
-        <fn-test_disable_node PURPOSE="UPDATE enabled=FALSE" />
-        <fn-test_remove_node PURPOSE="DELETE by IP" />
-        <fn-test_add_task PURPOSE="INSERT and returns TaskModel" />
-        <fn-test_get_task PURPOSE="SELECT and maps to TaskModel" />
-        <fn-test_update_task_status PURPOSE="UPDATE status value" />
-        <fn-test_set_task_running PURPOSE="UPDATE status=1 and IP" />
-        <fn-test_set_task_done PURPOSE="UPDATE status=2 and metadata" />
-        <fn-test_set_task_error_with_message PURPOSE="Embed error in metadata" />
-        <fn-test_set_task_error_without_message PURPOSE="Pass metadata unchanged" />
-      </annotations>
-    </M-TEST-UNIT-DB>
-
-    <M-TEST-FIXTURES-FAKE-DB NAME="FakeDB fixture" TYPE="UTILITY" STATUS="implemented">
-      <purpose>In-memory FakeDB implementing DB public interface for reuse in scheduler/orchestration tests.</purpose>
-      <path>tests/fixtures/fake_db.py</path>
-      <depends>M-DB</depends>
-      <annotations>
-        <class-FakeDB PURPOSE="In-memory dict-backed DB replacement with auto-incrementing task_id" />
-      </annotations>
-    </M-TEST-FIXTURES-FAKE-DB>
-
-    <M-TEST-UNIT-FAKE-DB NAME="FakeDB unit tests" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Unit tests for FakeDB covering task/node CRUD, auto-increment, and status transitions.</purpose>
-      <path>tests/unit/test_fake_db.py</path>
-      <depends>M-TEST-FIXTURES-FAKE-DB, M-DB</depends>
-      <annotations>
-        <fn-test_fake_db_add_get_task PURPOSE="add_task/get_task roundtrip with auto-increment" />
-        <fn-test_fake_db_add_task_increments_id PURPOSE="Each add_task gets incremented ID" />
-        <fn-test_fake_db_add_get_all_nodes PURPOSE="add_node/get_all_nodes roundtrip" />
-        <fn-test_fake_db_status_transitions PURPOSE="RUNNING to DONE transition" />
-        <fn-test_fake_db_get_node_none PURPOSE="get_node returns None for unknown IP" />
-        <fn-test_fake_db_get_task_none PURPOSE="get_task returns None for unknown ID" />
-        <fn-test_fake_db_enable_disable_node PURPOSE="enable/disable toggle" />
-        <fn-test_fake_db_remove_node PURPOSE="remove_node deletes" />
-        <fn-test_fake_db_set_task_error PURPOSE="Embed error in metadata" />
-      </annotations>
-    </M-TEST-UNIT-FAKE-DB>
+    </M-REMOTE-HUB>
 
     <!-- ═══════════════════════════════════════════════
          Data flows
@@ -630,8 +555,10 @@
     <CrossLink from="M-SCHEDULER" to="M-CLOUD-MANAGER" relation="delegates cloud node allocation" />
     <CrossLink from="M-SCHEDULER" to="M-REMOTE-REPO" relation="manages connected remote machines" />
     <CrossLink from="M-SCHEDULER" to="M-REMOTE" relation="uploads files, spawns and monitors tasks" />
+    <CrossLink from="M-SCHEDULER" to="M-REMOTE-PROTOCOL" relation="imports SSH/SFTP retry exceptions for backoff retry logic" />
     <CrossLink from="M-CLOUD-MANAGER" to="M-CLOUD-API" relation="dispatches to provider-specific API" />
     <CrossLink from="M-CLOUD-API" to="M-REMOTE" relation="connects to newly created cloud VMs" />
+    <CrossLink from="M-CLOUD-API" to="M-REMOTE-PROTOCOL" relation="imports SSHRetryExc for connection retry logic" />
     <CrossLink from="M-CLIENT" to="M-DB" relation="submits tasks and queries status" />
     <CrossLink from="M-AIIDA" to="M-CLIENT" relation="delegates task submission to client" />
     <CrossLink from="M-CONFIG" to="M-CONFIG-ENGINE-REPO" relation="provides engine collection to scheduler" />

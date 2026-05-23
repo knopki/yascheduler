@@ -99,7 +99,7 @@ class EngineRepository(UserDict[str, Engine]):
 
     # START_CONTRACT: from_config_parser
     #   PURPOSE: Parse all engine.* sections from an INI config into an EngineRepository
-    #   INPUTS: { cfg: ConfigParser - parsed INI config } { engines_dir: PurePath - engines directory path }
+    #   INPUTS: { cfg: ConfigParser - parsed INI config, engines_dir: PurePath - engines directory path }
     #   OUTPUTS: { Self - repository populated with engines from config }
     #   SIDE_EFFECTS: None
     #   LINKS: M-CONFIG-ENGINE-REPO, M-CONFIG

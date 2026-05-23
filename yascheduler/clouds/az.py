@@ -90,6 +90,13 @@ RETRY_AZURE_ERRORS = (
 ALL_AZURE_ERRORS = (AzureError,)
 
 
+# START_CONTRACT: create_nic
+#   PURPOSE: Create network interface for VM and tag with IP address
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client, vm_name: str - VM name }
+#   OUTPUTS: { tuple[NetworkInterface, str] - NIC and assigned IP address }
+#   SIDE_EFFECTS: Creates Azure NIC resource and tags it
+#   LINKS: M-CLOUD-AZ
+# END_CONTRACT: create_nic
 async def create_nic(
     log: logging.Logger,
     cfg: ConfigCloudAzure,
@@ -140,6 +147,13 @@ async def create_nic(
     return nic, ip_addr
 
 
+# START_CONTRACT: create_vm_params
+#   PURPOSE: Build VirtualMachine parameter object with SSH key and cloud-config
+#   INPUTS: { location: str - Azure region, vm_name: str - VM name, vm_image: AzureImageReference - image reference, vm_size: str - VM size, nic: NetworkInterface - network interface, username: str - admin username, ssh_key: SSHKey - SSH public key, tags: dict[str,str] - resource tags, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   OUTPUTS: { VirtualMachine - Azure VirtualMachine parameters }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-AZ
+# END_CONTRACT: create_vm_params
 def create_vm_params(
     location: str,
     vm_name,
@@ -194,6 +208,13 @@ def create_vm_params(
     )
 
 
+# START_CONTRACT: create_node
+#   PURPOSE: Create Azure VM with NIC, private IP, and SSH key (internal)
+#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   OUTPUTS: { str - private IP address of created VM }
+#   SIDE_EFFECTS: Creates Azure VM and NIC resources
+#   LINKS: M-CLOUD-AZ, create_nic, create_vm_params
+# END_CONTRACT: create_node
 async def create_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
@@ -228,6 +249,13 @@ async def create_node(
     return ip_addr
 
 
+# START_CONTRACT: az_create_node
+#   PURPOSE: Create Azure VM with NIC (public entry point for adapter)
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   OUTPUTS: { str - IP address of created VM }
+#   SIDE_EFFECTS: Creates Azure VM, NIC, and credentials; acquires cloud resources
+#   LINKS: M-CLOUD-AZ, create_node
+# END_CONTRACT: az_create_node
 async def az_create_node(
     log: logging.Logger,
     cfg: ConfigCloudAzure,
@@ -244,6 +272,13 @@ async def az_create_node(
                 return await create_node(nmc, cmc, log, cfg, key, cloud_config)
 
 
+# START_CONTRACT: delete_node
+#   PURPOSE: Delete Azure VM and NIC by host IP address (internal)
+#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, host: str - IP address of VM to delete }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Deletes Azure VM and NIC resources
+#   LINKS: M-CLOUD-AZ
+# END_CONTRACT: delete_node
 async def delete_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
@@ -281,6 +316,13 @@ async def delete_node(
             break
 
 
+# START_CONTRACT: az_delete_node
+#   PURPOSE: Delete Azure VM and NIC by host IP (public entry point for adapter)
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, host: str - IP address of VM to delete }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Creates Azure credentials, deletes VM and NIC resources
+#   LINKS: M-CLOUD-AZ, delete_node
+# END_CONTRACT: az_delete_node
 async def az_delete_node(
     log: logging.Logger,
     cfg: ConfigCloudAzure,

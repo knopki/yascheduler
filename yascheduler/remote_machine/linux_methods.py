@@ -41,6 +41,13 @@ from .common import ProcessInfo
 from .protocol import OuterRunCallable, PEngineRepository, PProcessInfo, QuoteCallable
 
 
+# START_CONTRACT: linux_get_cpu_cores
+#   PURPOSE: Get number of CPU cores on remote Linux via getconf
+#   INPUTS: { run: OuterRunCallable - async command runner }
+#   OUTPUTS: { int - number of CPU cores (defaults to 1 on error) }
+#   SIDE_EFFECTS: None
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: linux_get_cpu_cores
 async def linux_get_cpu_cores(run: OuterRunCallable) -> int:
     """
     Get number of CPU cores
@@ -53,6 +60,13 @@ async def linux_get_cpu_cores(run: OuterRunCallable) -> int:
         return 1
 
 
+# START_CONTRACT: linux_list_processes
+#   PURPOSE: Yield running process info from remote Linux via ps
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { query: Optional[str] - optional pgrep query prefix }
+#   OUTPUTS: { AsyncGenerator[PProcessInfo, None] - stream of process info }
+#   SIDE_EFFECTS: None
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: linux_list_processes
 async def linux_list_processes(
     conn: SSHClientConnection, query: Optional[str] = None
 ) -> AsyncGenerator[PProcessInfo, None]:
@@ -81,6 +95,13 @@ async def linux_list_processes(
             yield ProcessInfo(int(parts[0]), *parts[1:3])
 
 
+# START_CONTRACT: linux_pgrep
+#   PURPOSE: Find processes matching a pattern via pgrep and yield their info
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { quote: QuoteCallable - shell quoting function } | { pattern: Union[str, Pattern[str]] - match pattern } | { full: bool - match against full cmdline if True }
+#   OUTPUTS: { AsyncGenerator[PProcessInfo, None] - stream of matching process info }
+#   SIDE_EFFECTS: None
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: linux_pgrep
 async def linux_pgrep(
     conn: SSHClientConnection,
     quote: QuoteCallable,
@@ -100,6 +121,13 @@ async def linux_pgrep(
         yield x
 
 
+# START_CONTRACT: deploy_local_files
+#   PURPOSE: Upload local binary files to remote via SFTP
+#   INPUTS: { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { files: Sequence[PurePath] - local file paths } | { log: Optional[logging.Logger] - logger }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Uploads files to remote machine
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: deploy_local_files
 async def deploy_local_files(
     sftp: SFTPClient,
     engine_dir: PurePath,
@@ -113,6 +141,13 @@ async def deploy_local_files(
     await sftp.put(lpaths, engine_dir, preserve=True)
 
 
+# START_CONTRACT: deploy_local_archive
+#   PURPOSE: Upload local archive via SFTP and extract via tar on remote
+#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { archive: PurePath - local archive path } | { log: Optional[logging.Logger] - logger }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Uploads archive, extracts it, removes archive file on remote
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: deploy_local_archive
 async def deploy_local_archive(
     run: OuterRunCallable,
     quote: QuoteCallable,
@@ -135,6 +170,13 @@ async def deploy_local_archive(
     await sftp.remove(rpath)
 
 
+# START_CONTRACT: deploy_remote_archive
+#   PURPOSE: Download remote archive via wget and extract via tar on remote
+#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { url: str - download URL } | { log: Optional[logging.Logger] - logger }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Downloads archive from URL, extracts it, removes archive file on remote
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: deploy_remote_archive
 async def deploy_remote_archive(
     run: OuterRunCallable,
     quote: QuoteCallable,
@@ -158,6 +200,13 @@ async def deploy_remote_archive(
     await sftp.remove(rpath)
 
 
+# START_CONTRACT: linux_deploy_engines
+#   PURPOSE: Deploy all engines for a node by iterating engine repository and dispatching deploy strategies
+#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: PEngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Creates engine directories, uploads files/archives, downloads remote archives
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: linux_deploy_engines
 async def linux_deploy_engines(
     run: OuterRunCallable,
     quote: QuoteCallable,
@@ -191,12 +240,26 @@ async def linux_deploy_engines(
             log.info(f"Setup of {engine.name} engine is done...")
 
 
+# START_CONTRACT: log_mpi_version
+#   PURPOSE: Log MPI version info from remote via mpirun
+#   INPUTS: { run: OuterRunCallable - async command runner } | { log: Optional[logging.Logger] - logger }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Runs mpirun on remote, logs version string
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: log_mpi_version
 async def log_mpi_version(run: OuterRunCallable, log: Optional[logging.Logger] = None):
     r = await run("mpirun --allow-run-as-root -V", check=True)
     if not r.returncode and log:
         log.debug(str(r.stdout or "").split("\n")[0])
 
 
+# START_CONTRACT: linux_setup_node
+#   PURPOSE: Setup generic Linux node by deploying engines via SFTP
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { engines: PEngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Creates SFTP client, deploys all engines
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: linux_setup_node
 async def linux_setup_node(
     conn: SSHClientConnection,
     run: OuterRunCallable,
@@ -210,6 +273,13 @@ async def linux_setup_node(
         await linux_deploy_engines(run, quote, sftp, engines, engines_dir, log)
 
 
+# START_CONTRACT: linux_setup_deb_node
+#   PURPOSE: Setup Debian-like node with apt package installation and engine deployment
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { engines: PEngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Runs apt update/upgrade/install, logs MPI version, deploys engines via SFTP
+#   LINKS: M-REMOTE-LINUX
+# END_CONTRACT: linux_setup_deb_node
 async def linux_setup_deb_node(
     conn: SSHClientConnection,
     run: OuterRunCallable,

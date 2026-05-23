@@ -44,12 +44,26 @@ from .utils import get_key_name, get_rnd_name
 executor = ThreadPoolExecutor(max_workers=5)
 
 
+# START_CONTRACT: get_client
+#   PURPOSE: Get cached Hetzner API client for given config
+#   INPUTS: { cfg: ConfigCloudHetzner - Hetzner cloud config with API token }
+#   OUTPUTS: { HClient - Hetzner API client instance }
+#   SIDE_EFFECTS: None - uses cache
+#   LINKS: M-CLOUD-HETZNER
+# END_CONTRACT: get_client
 @cache
 def get_client(cfg: ConfigCloudHetzner) -> HClient:
     "Get Hetzner client"
     return HClient(cfg.token)
 
 
+# START_CONTRACT: get_ssh_key_id
+#   PURPOSE: Get or create Hetzner SSH key ID from local SSH key
+#   INPUTS: { client: HClient - Hetzner API client, key: ASSHKey - local SSH key }
+#   OUTPUTS: { int - Hetzner SSH key ID }
+#   SIDE_EFFECTS: Creates new SSH key in Hetzner project if not exists
+#   LINKS: M-CLOUD-HETZNER
+# END_CONTRACT: get_ssh_key_id
 @cache
 def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
     "Get Hetzner ssh id"
@@ -77,6 +91,13 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
         raise err
 
 
+# START_CONTRACT: hetzner_create_node
+#   PURPOSE: Create Hetzner server with SSH key and cloud-config
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudHetzner - Hetzner config, key: ASSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   OUTPUTS: { str - IP address of created server }
+#   SIDE_EFFECTS: Creates Hetzner Cloud server with associated resources
+#   LINKS: M-CLOUD-HETZNER
+# END_CONTRACT: hetzner_create_node
 async def hetzner_create_node(
     log: logging.Logger,
     cfg: ConfigCloudHetzner,
@@ -105,6 +126,13 @@ async def hetzner_create_node(
     return ip_addr
 
 
+# START_CONTRACT: find_srv
+#   PURPOSE: Find Hetzner BoundServer by public IP address
+#   INPUTS: { client: HClient - Hetzner API client, host: str - IP address to search for }
+#   OUTPUTS: { Optional[BoundServer] - server if found, None otherwise }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-HETZNER
+# END_CONTRACT: find_srv
 def find_srv(client: HClient, host: str) -> Optional[BoundServer]:
     """Find BoundServer by IP addr"""
     for server in client.servers.get_all():
@@ -115,6 +143,13 @@ def find_srv(client: HClient, host: str) -> Optional[BoundServer]:
     return None
 
 
+# START_CONTRACT: hetzner_delete_node
+#   PURPOSE: Delete Hetzner server by host IP address
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudHetzner - Hetzner config, host: str - IP address of server to delete }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Deletes Hetzner Cloud server
+#   LINKS: M-CLOUD-HETZNER, find_srv
+# END_CONTRACT: hetzner_delete_node
 async def hetzner_delete_node(
     log: logging.Logger,
     cfg: ConfigCloudHetzner,

@@ -21,6 +21,13 @@ from typing import Any
 from yascheduler.db import NodeModel, TaskModel, TaskStatus
 
 
+# START_CONTRACT: make_task
+#   PURPOSE: Create a TaskModel with sensible defaults and keyword overrides.
+#   INPUTS: { overrides: Any - keyword overrides for task_id, label, ip, status, metadata, cloud }
+#   OUTPUTS: { TaskModel - constructed task instance }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: make_task
 def make_task(**overrides: Any) -> TaskModel:
     task_id: int = overrides.get("task_id", 1)
     label: str = overrides.get("label", "test-task")
@@ -36,6 +43,13 @@ def make_task(**overrides: Any) -> TaskModel:
     )
 
 
+# START_CONTRACT: make_node
+#   PURPOSE: Create a NodeModel with sensible defaults and keyword overrides.
+#   INPUTS: { overrides: Any - keyword overrides for ip, ncpus, enabled, cloud, username, port }
+#   OUTPUTS: { NodeModel - constructed node instance }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: make_node
 def make_node(**overrides: Any) -> NodeModel:
     ip: str = overrides.get("ip", "192.168.1.1")
     ncpus: int | None = overrides.get("ncpus", 4)

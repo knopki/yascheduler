@@ -28,18 +28,39 @@ import attrs
 from yascheduler.db import NodeModel, TaskModel, TaskStatus
 
 
+# START_CONTRACT: test_task_status_values
+#   PURPOSE: Verify TaskStatus enum values: TO_DO==0, RUNNING==1, DONE==2.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: test_task_status_values
 def test_task_status_values():
     assert TaskStatus.TO_DO == 0
     assert TaskStatus.RUNNING == 1
     assert TaskStatus.DONE == 2
 
 
+# START_CONTRACT: test_task_status_is_int
+#   PURPOSE: Verify TaskStatus values are instances of int (int subclass).
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: test_task_status_is_int
 def test_task_status_is_int():
     assert isinstance(TaskStatus.TO_DO, int)
     assert isinstance(TaskStatus.RUNNING, int)
     assert isinstance(TaskStatus.DONE, int)
 
 
+# START_CONTRACT: test_taskmodel_construction
+#   PURPOSE: Verify TaskModel construction with all fields and TaskStatus converter.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: test_taskmodel_construction
 def test_taskmodel_construction():
     task = TaskModel(
         task_id=1,
@@ -57,18 +78,39 @@ def test_taskmodel_construction():
     assert task.cloud == "az"
 
 
+# START_CONTRACT: test_taskmodel_frozen_immutable
+#   PURPOSE: Verify TaskModel is frozen and raises FrozenInstanceError on mutation.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: test_taskmodel_frozen_immutable
 def test_taskmodel_frozen_immutable():
     task = TaskModel(task_id=1, label="test", ip="10.0.0.1", status=TaskStatus.TO_DO)
     with pytest.raises(attrs.exceptions.FrozenInstanceError):
         task.label = "new"  # type: ignore[misc]
 
 
+# START_CONTRACT: test_taskmodel_hash_deterministic
+#   PURPOSE: Verify identical TaskModel fields produce equal hashes.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: test_taskmodel_hash_deterministic
 def test_taskmodel_hash_deterministic():
     t1 = TaskModel(task_id=1, label="test", ip="10.0.0.1", status=TaskStatus.TO_DO)
     t2 = TaskModel(task_id=1, label="test", ip="10.0.0.1", status=TaskStatus.TO_DO)
     assert hash(t1) == hash(t2)
 
 
+# START_CONTRACT: test_nodemodel_defaults
+#   PURPOSE: Verify NodeModel construction with minimal args produces expected defaults.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: test_nodemodel_defaults
 def test_nodemodel_defaults():
     node = NodeModel(ip="10.0.0.1", ncpus=4)
     assert node.ip == "10.0.0.1"
@@ -79,6 +121,13 @@ def test_nodemodel_defaults():
     assert node.port == 22
 
 
+# START_CONTRACT: test_nodemodel_all_args
+#   PURPOSE: Verify NodeModel construction with all args produces matching field values.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DB
+# END_CONTRACT: test_nodemodel_all_args
 def test_nodemodel_all_args():
     node = NodeModel(
         ip="10.0.0.1",
