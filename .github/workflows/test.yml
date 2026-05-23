@@ -29,5 +29,11 @@ jobs:
       - name: Install the project
         run: uv sync --locked --all-extras --dev
 
-      - name: Run tests
-        run: uv run pytest
+      - name: Run unit tests
+        run: uv run pytest tests/unit
+
+      - name: Run integration tests
+        run: uv run pytest tests/integration
+
+      - name: Run e2e tests
+        run: uv run pytest tests/e2e
