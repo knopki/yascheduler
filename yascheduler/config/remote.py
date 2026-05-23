@@ -44,7 +44,11 @@ class ConfigRemote:
     @classmethod
     def get_valid_config_parser_fields(cls) -> Sequence[str]:
         "Returns a list of valid config keys"
-        return [f.name for f in fields(cls)]
+        exclude_names = ["username", "jump_username"]
+        include_names = ["user", "jump_user"]
+        return [
+            f.name for f in fields(cls) if f.name not in exclude_names
+        ] + include_names
 
     # START_CONTRACT: from_config_parser_section
     #   PURPOSE: Create ConfigRemote instance from a config parser section

@@ -28,6 +28,8 @@
 #   test_engine_repository_filter_platforms - filter_platforms returns platform matches
 #   test_engine_repository_immutable - raises NotImplementedError on mutation
 #   test_warn_unknown_fields - emits ConfigWarning for unknown keys
+#   test_config_remote_no_warnings_known_keys - no warnings for known INI keys
+#   test_config_remote_warns_unknown_keys - warns for truly unknown keys
 #   test_config_top_level_full_ini - assembles all sub-configs from full INI
 #   test_config_top_level_empty_sections - handles empty sections with defaults
 # END_MODULE_MAP
@@ -437,6 +439,38 @@ def test_warn_unknown_fields():
     cfg.read_string("[db]\nuser=root\nunknown_key=value\n")
     with pytest.warns(ConfigWarning, match="unknown fields"):
         warn_unknown_fields(["user", "password", "database", "host", "port"], cfg["db"])
+
+
+# START_CONTRACT: test_config_remote_no_warnings_known_keys
+#   PURPOSE: Verify ConfigRemote does not warn for valid INI key names (user, jump_user)
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-CONFIG-REMOTE]
+# END_CONTRACT: test_config_remote_no_warnings_known_keys
+@pytest.mark.filterwarnings("error::yascheduler.config.utils.ConfigWarning")
+def test_config_remote_no_warnings_known_keys():
+    """no warnings for known INI keys user and jump_user"""
+    cfg = ConfigParser()
+    cfg.read_string("[remote]\nuser=admin\njump_user=jumper\njump_host=bastion\n")
+    remote = ConfigRemote.from_config_parser_section(cfg["remote"])
+    assert remote.username == "admin"
+    assert remote.jump_username == "jumper"
+
+
+# START_CONTRACT: test_config_remote_warns_unknown_keys
+#   PURPOSE: Verify ConfigRemote warns for truly unknown INI keys
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-CONFIG-REMOTE]
+# END_CONTRACT: test_config_remote_warns_unknown_keys
+def test_config_remote_warns_unknown_keys():
+    """emits ConfigWarning for unknown keys in remote section"""
+    cfg = ConfigParser()
+    cfg.read_string("[remote]\nuser=root\nbogus=yes\n")
+    with pytest.warns(ConfigWarning, match="unknown fields"):
+        ConfigRemote.from_config_parser_section(cfg["remote"])
 
 
 # START_CONTRACT: test_config_top_level_full_ini
