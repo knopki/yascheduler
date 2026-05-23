@@ -17,10 +17,18 @@ AiiDA scheduler plugin.
 
 ## Development Rules
 
-- Follow the methodology of GRACE-lite and OpenSpec
-- Keep public CLI names and AiiDA entrypoint behavior stable unless the change
-  is intentionally user-facing.
+- Follow the methodology of GRACE-lite and OpenSpec.
+- Public interface stability: CLI commands (`yasubmit`, `yastatus`, `yanodes`,
+  `yasetnode`, `yainit`, `yascheduler`), `class Yascheduler` public API, INI
+  config format (including `[engine.*]` sections and `%(key)s` interpolation),
+  DB schema (`schema.sql` — schema changes MUST include migrations), AiiDA
+  scheduler entrypoint.
 - Do not hand-edit `pyproject.toml` version; release automation owns it.
+- Python minimum is `>=3.9` in `pyproject.toml`.
+- Do not add new dependencies without declaring them in a change proposal with
+  rationale.
+- Maintain compatibility with both `pip` and `uv`. Use only PEP 621 standard
+  fields in `pyproject.toml`.
 - Prefer minimal changes over broad refactors.
 - Do not add compatibility layers without a concrete need.
 - Use Conventional Commits if asked to commit.
@@ -51,13 +59,6 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
   verification.
 - Avoid real cloud, SSH, system service, or DB mutations unless explicitly
   requested and configured.
-
-## Reference Specs
-
-- `docs/knowledge-graph.xml`: GRACE-lite navigational code graph with detailed
-  architecture.
-- `openspec/specs/development-conventions/spec.md`: project contracts and
-  extension rules.
 
 <!-- START_GRACE-lite -->
 
