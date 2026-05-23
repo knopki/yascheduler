@@ -49,8 +49,8 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 
 - New code should include focused unit tests for core logic and pure behavior;
   test happy paths first, then meaningful edge cases.
-- Static checks: `uv run ruff check .`, `uv run ruff format --check .`,
-  `uv run zuban check`
+- Static checks: `uv run zuban check`, `uv run ruff check .`,
+  `uv run ruff format --check .`
 - Spec validation: `openspec validate --all --json` must pass after creating a
   change proposal and after any modification to `openspec/specs/` (on
   archive/sync too).
