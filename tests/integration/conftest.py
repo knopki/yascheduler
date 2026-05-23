@@ -14,6 +14,7 @@
 #   _init_schema - session-scoped fixture: applies schema.sql and migrate() once
 #   db - function-scoped fixture: fresh DB connection per test
 #   clean_tables - autouse function-scoped fixture: per-test TRUNCATE
+#   pytest_collection_modifyitems - auto-mark all tests as "integration"
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
@@ -30,6 +31,11 @@ from testcontainers.postgres import PostgresContainer
 
 from yascheduler.config.db import ConfigDb
 from yascheduler.db import DB
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        item.add_marker("integration")
 
 
 # START_CONTRACT: postgres_container
