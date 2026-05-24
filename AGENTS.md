@@ -45,6 +45,13 @@ implementation.
 If the user requests changes outside the OpenSpec workflow, offer to use
 OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 
+- [testing-unit](openspec/specs/testing-unit) — unit tests: config parsing, data
+  models, DB (mocked), remote machine management, scheduler orchestration
+- [test-db-integration](openspec/specs/test-db-integration) — integration tests
+  for DB against real PostgreSQL via testcontainers
+- [testing-infrastructure](openspec/specs/testing-infrastructure) — pytest
+  config, directory structure, shared fixtures, CI workflow
+
 ## Verification
 
 - New code should include focused unit tests for core logic and pure behavior;
