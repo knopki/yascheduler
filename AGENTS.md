@@ -111,7 +111,7 @@ Anchor-based path exists → use it. No linear reads.
 
 - `M-<ID>` — module record in `docs/knowledge-graph.xml`
 - `CrossLink` — cross-module graph edges
-- `LINKS:` + module ID — implementation files in `src/` and `tests/`
+- `LINKS:` + module ID — implementation files in `yascheduler/` and `tests/`
 - `START_MODULE_CONTRACT` / `START_CONTRACT:` — file-local contracts
 - `START_BLOCK_` — logic slices within functions
 - `START_CHANGE_SUMMARY` — recent local rationale
