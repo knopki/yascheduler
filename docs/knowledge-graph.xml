@@ -180,6 +180,74 @@
     </M-DAEMON-SYSV>
 
     <!-- ═══════════════════════════════════════════════
+         Domain layer
+         ═══════════════════════════════════════════════ -->
+
+    <M-DOMAIN NAME="Domain layer entry point" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Domain layer entry point</purpose>
+      <path>yascheduler/domain/__init__.py</path>
+      <depends>none</depends>
+      <annotations>
+      </annotations>
+    </M-DOMAIN>
+
+    <M-DOMAIN-EXCEPTIONS NAME="Domain exceptions" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Domain exception hierarchy for business-level error handling.</purpose>
+      <path>yascheduler/domain/exceptions.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-DomainError PURPOSE="Base class for all domain exceptions" />
+        <class-ValidationError PURPOSE="Input validation errors" />
+        <class-UnsupportedEngineError PURPOSE="Unknown calculation engine requested" />
+        <class-MissingInputFileError PURPOSE="Required engine input file not provided" />
+        <class-TaskError PURPOSE="Task lifecycle errors" />
+        <class-TaskAlreadyAllocatedError PURPOSE="Task already bound to a node" />
+        <class-TaskNotAllocatedError PURPOSE="Task not yet allocated to a node" />
+        <class-MachineBusyError PURPOSE="Operation attempted on a busy machine" />
+        <class-SchedulingError PURPOSE="Scheduling/allocation errors" />
+        <class-NoCompatibleNodeError PURPOSE="No matching node found for task" />
+        <class-CloudCapacityExhaustedError PURPOSE="Cloud provider at capacity" />
+      </annotations>
+    </M-DOMAIN-EXCEPTIONS>
+
+    <M-DOMAIN-MODEL NAME="Domain entities" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Domain entities.</purpose>
+      <path>yascheduler/domain/model.py</path>
+      <depends>M-DOMAIN-EXCEPTIONS</depends>
+      <annotations>
+        <class-TaskStatus PURPOSE="IntEnum: TO_DO=0, RUNNING=1, DONE=2" />
+        <class-MachineState PURPOSE="Enum: FREE, BUSY" />
+        <class-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
+        <class-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
+        <class-Engine PURPOSE="Calculation engine specification with validate_inputs()" />
+        <class-Task PURPOSE="Task entity with allocate_to, mark_running, complete, fail lifecycle" />
+        <class-Node PURPOSE="Persistent compute node record" />
+        <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
+      </annotations>
+    </M-DOMAIN-MODEL>
+
+    <M-DOMAIN-PORTS NAME="Domain ports" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Domain port interfaces: abstract contracts for persistence, machine operations, and cloud provisioning.</purpose>
+      <path>yascheduler/domain/ports.py</path>
+      <depends>M-DOMAIN-MODEL</depends>
+      <annotations>
+        <class-TaskRepository PURPOSE="Async port for task persistence" />
+        <class-NodeRepository PURPOSE="Async port for node persistence (full CRUD lifecycle)" />
+        <class-MachineGateway PURPOSE="Async port for remote machine operations" />
+        <class-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
+      </annotations>
+    </M-DOMAIN-PORTS>
+
+    <M-DOMAIN-SERVICES NAME="Domain services" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Domain services: cross-entity business logic.</purpose>
+      <path>yascheduler/domain/services.py</path>
+      <depends>M-DOMAIN-MODEL</depends>
+      <annotations>
+        <fn-match_task_to_node PURPOSE="Select first compatible free machine for a task, or None" />
+      </annotations>
+    </M-DOMAIN-SERVICES>
+
+    <!-- ═══════════════════════════════════════════════
          Configuration
          ═══════════════════════════════════════════════ -->
 
@@ -569,6 +637,11 @@
     <CrossLink from="M-CLOUD-ADAPTERS" to="M-CLOUD-AZ" relation="maps Azure config to Azure operations" />
     <CrossLink from="M-CLOUD-ADAPTERS" to="M-CLOUD-HETZNER" relation="maps Hetzner config to Hetzner operations" />
     <CrossLink from="M-CLOUD-ADAPTERS" to="M-CLOUD-UPCLOUD" relation="maps UpCloud config to UpCloud operations" />
+
+    <!-- Domain layer internal links -->
+    <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EXCEPTIONS" relation="raises domain exceptions from entity methods" />
+    <CrossLink from="M-DOMAIN-PORTS" to="M-DOMAIN-MODEL" relation="uses domain entities in port signatures" />
+    <CrossLink from="M-DOMAIN-SERVICES" to="M-DOMAIN-MODEL" relation="operates on Task, Engine, ConnectedMachine entities" />
 
   </Project>
 </KnowledgeGraph>
