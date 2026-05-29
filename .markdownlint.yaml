@@ -2,4 +2,5 @@
 default: true
 MD013:
   code_block_line_length: 120
+  tables: false
 no-inline-html: false
