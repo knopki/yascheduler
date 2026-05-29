@@ -35,7 +35,8 @@ from yascheduler.db import DB
 
 def pytest_collection_modifyitems(items):
     for item in items:
-        item.add_marker("integration")
+        if "/tests/integration/" in str(item.path):
+            item.add_marker("integration")
 
 
 # START_CONTRACT: postgres_container

@@ -18,4 +18,5 @@
 
 def pytest_collection_modifyitems(items):
     for item in items:
-        item.add_marker("unit")
+        if "/tests/unit/" in str(item.path):
+            item.add_marker("unit")

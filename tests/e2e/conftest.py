@@ -18,4 +18,5 @@
 
 def pytest_collection_modifyitems(items):
     for item in items:
-        item.add_marker("e2e")
+        if "/tests/e2e/" in str(item.path):
+            item.add_marker("e2e")
