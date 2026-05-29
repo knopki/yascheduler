@@ -93,7 +93,8 @@ changelog_incremental = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests/unit"]
+addopts = ["-m", "unit"]
+testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
 markers = [
   "unit: unit tests (no external services)",
   "integration: integration tests (require services like PostgreSQL)",
