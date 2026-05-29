@@ -6,7 +6,7 @@
 #   PURPOSE: Collection of connected remote machines with filtering and cleanup.
 #   SCOPE: RemoteMachineRepository class with filter, disconnect_many, and disconnect_all operations.
 #   DEPENDS: M-REMOTE, M-COMPAT
-#   LINKS: M-REMOTE-REPO
+#   LINKS: M-SCHEDULER, M-REMOTE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

@@ -6,7 +6,7 @@
 #   PURPOSE: SysV init service entry point for launching the scheduler daemon.
 #   SCOPE: SysV daemon with PID file management.
 #   DEPENDS: M-UTILS, M-VARIABLES
-#   LINKS: M-DAEMON-SYSV
+#   LINKS: M-UTILS, M-VARIABLES
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

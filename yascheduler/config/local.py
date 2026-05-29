@@ -6,7 +6,7 @@
 #   PURPOSE: Local daemon settings: data paths, concurrency limits, webhook config, private key discovery.
 #   SCOPE: Data paths, concurrency limits, webhook settings, private key discovery.
 #   DEPENDS: M-CONFIG-UTILS
-#   LINKS: M-CONFIG-LOCAL
+#   LINKS: M-SCHEDULER, M-CLOUD-API
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

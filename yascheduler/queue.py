@@ -5,7 +5,7 @@
 #   PURPOSE: Deduplicating async queue for producer-consumer scheduling loops.
 #   SCOPE: UniqueQueue class, UMessage dataclass.
 #   DEPENDS: none
-#   LINKS: M-QUEUE
+#   LINKS: M-SCHEDULER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

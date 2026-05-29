@@ -6,7 +6,7 @@
 #   PURPOSE: SSH-based platform detection check functions for each supported OS.
 #   SCOPE: Platform check functions for Debian, Linux, Darwin, Windows variants.
 #   DEPENDS: none
-#   LINKS: M-REMOTE-CHECKS
+#   LINKS: M-REMOTE-ADAPTERS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

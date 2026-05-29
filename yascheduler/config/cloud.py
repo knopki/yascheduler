@@ -6,7 +6,7 @@
 #   PURPOSE: Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud.
 #   SCOPE: Provider-specific config parsing, Azure image reference, cloud config union.
 #   DEPENDS: M-CONFIG-UTILS, M-COMPAT
-#   LINKS: M-CONFIG-CLOUD
+#   LINKS: M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

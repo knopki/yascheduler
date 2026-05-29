@@ -57,7 +57,7 @@
     <M-DB NAME="Database layer" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgreSQL persistence for tasks, nodes, and their statuses.</purpose>
       <path>yascheduler/db.py</path>
-      <depends>M-CONFIG-DB, M-COMPAT</depends>
+      <depends>M-CONFIG-DB, M-COMPAT, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL</depends>
       <annotations>
         <class-DB PURPOSE="Async PostgreSQL wrapper for tasks and nodes" />
         <class-TaskModel PURPOSE="Task row representation" />
@@ -248,6 +248,48 @@
     </M-DOMAIN-SERVICES>
 
     <!-- ═══════════════════════════════════════════════
+         Persistence adapters
+         ═══════════════════════════════════════════════ -->
+
+    <M-PERSISTENCE NAME="Persistence adapter entry point" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Persistence adapter package — re-exports from sql_loader, postgres, postgres_uow.</purpose>
+      <path>yascheduler/adapters/persistence/__init__.py</path>
+      <depends>M-PERSISTENCE-SQLLOADER</depends>
+      <annotations>
+        <export-load_query PURPOSE="Re-exported from sql_loader" />
+      </annotations>
+    </M-PERSISTENCE>
+
+    <M-PERSISTENCE-SQLLOADER NAME="SQL query loader" TYPE="UTILITY" STATUS="implemented">
+      <purpose>SQL query file loader — reads .sql files with @functools.cache for pg8000 repositories.</purpose>
+      <path>yascheduler/adapters/persistence/sql_loader.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-load_query PURPOSE="Load SQL file contents by name with lru_cache" />
+        <const-_SQL_DIR PURPOSE="Path to the sql/ query directory" />
+      </annotations>
+    </M-PERSISTENCE-SQLLOADER>
+
+    <M-PERSISTENCE-POSTGRES NAME="PostgreSQL repositories" TYPE="DATA_LAYER" STATUS="implemented">
+      <purpose>PostgresTaskRepository and PostgresNodeRepository implementing domain repository ports via pg8000.</purpose>
+      <path>yascheduler/adapters/persistence/postgres.py</path>
+      <depends>M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL, M-DOMAIN-PORTS</depends>
+      <annotations>
+        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, list_by_status, list_by_jobs, count_by_status)" />
+        <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port (full CRUD lifecycle)" />
+      </annotations>
+    </M-PERSISTENCE-POSTGRES>
+
+    <M-PERSISTENCE-UOW NAME="PostgreSQL Unit of Work" TYPE="DATA_LAYER" STATUS="implemented">
+      <purpose>PostgresUnitOfWork managing shared pg8000 Connection across repositories with commit/rollback.</purpose>
+      <path>yascheduler/adapters/persistence/postgres_uow.py</path>
+      <depends>M-PERSISTENCE-POSTGRES, M-CONFIG-DB</depends>
+      <annotations>
+        <class-PostgresUnitOfWork PURPOSE="Async context manager for transactional boundaries with shared connection" />
+      </annotations>
+    </M-PERSISTENCE-UOW>
+
+    <!-- ═══════════════════════════════════════════════
          Configuration
          ═══════════════════════════════════════════════ -->
 
@@ -422,7 +464,7 @@
     <M-CLOUD-ADAPTERS NAME="Cloud adapters" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Mapping of cloud config types to create/delete callables.</purpose>
       <path>yascheduler/clouds/adapters.py</path>
-      <depends>M-CLOUD-PROTOCOLS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD</depends>
+      <depends>M-CLOUD-PROTOCOLS, M-CLOUD-AZ (lazy), M-CLOUD-HETZNER (lazy), M-CLOUD-UPCLOUD (lazy)</depends>
       <annotations>
         <class-CloudAdapter PURPOSE="Frozen attrs class wrapping create/delete callables" />
         <fn-get_azure_adapter PURPOSE="Return Azure CloudAdapter" />
@@ -614,6 +656,7 @@
     <DF-AIIDA-INTEGRATION NAME="AiiDA integration">M-AIIDA -> M-CLIENT</DF-AIIDA-INTEGRATION>
     <DF-DAEMON-START NAME="Daemon start">M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-UTILS</DF-DAEMON-START>
     <DF-CONFIG-LOAD NAME="Load configuration">M-CONFIG -> M-CONFIG-DB; M-CONFIG -> M-CONFIG-LOCAL; M-CONFIG -> M-CONFIG-REMOTE; M-CONFIG -> M-CONFIG-CLOUD; M-CONFIG -> M-CONFIG-ENGINE</DF-CONFIG-LOAD>
+    <DF-PERSISTENCE NAME="Persistence layer">M-DB -> M-PERSISTENCE-POSTGRES -> M-PERSISTENCE</DF-PERSISTENCE>
 
     <!-- ═══════════════════════════════════════════════
          Cross-module links
@@ -642,6 +685,13 @@
     <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EXCEPTIONS" relation="raises domain exceptions from entity methods" />
     <CrossLink from="M-DOMAIN-PORTS" to="M-DOMAIN-MODEL" relation="uses domain entities in port signatures" />
     <CrossLink from="M-DOMAIN-SERVICES" to="M-DOMAIN-MODEL" relation="operates on Task, Engine, ConnectedMachine entities" />
+
+    <!-- Persistence adapter links -->
+    <CrossLink from="M-DB" to="M-PERSISTENCE-POSTGRES" relation="delegates task and node persistence to repositories" />
+    <CrossLink from="M-PERSISTENCE-POSTGRES" to="M-PERSISTENCE-SQLLOADER" relation="uses load_query for SQL file loading" />
+    <CrossLink from="M-PERSISTENCE" to="M-PERSISTENCE-SQLLOADER" relation="re-exports load_query" />
+    <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-POSTGRES" relation="instantiates and wires repositories" />
+    <CrossLink from="M-PERSISTENCE-POSTGRES" to="M-DOMAIN-MODEL" relation="maps DB rows to domain entities" />
 
   </Project>
 </KnowledgeGraph>

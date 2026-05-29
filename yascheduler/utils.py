@@ -4,7 +4,7 @@
 #   PURPOSE: Console scripts for yascheduler: submit, status, init, node management, daemon startup.
 #   SCOPE: CLI commands for task submission, status checking, service initialization, node management, daemon startup.
 #   DEPENDS: M-CLIENT, M-CONFIG, M-DB, M-REMOTE, M-VARIABLES, M-SCHEDULER
-#   LINKS: M-UTILS
+#   LINKS: M-CLIENT, M-SCHEDULER, M-DB
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

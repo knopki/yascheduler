@@ -42,6 +42,11 @@ from yascheduler.remote_machine.checks import (
 )
 
 
+# START_CONTRACT: test_check_is_linux_true
+#   PURPOSE: Verifies check_is_linux returns True when uname returns Linux
+#   INPUTS: { None - mock SSH connection }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_linux_true
 @pytest.mark.asyncio
 async def test_check_is_linux_true():
     """check_is_linux returns True when uname returns Linux"""
@@ -50,6 +55,11 @@ async def test_check_is_linux_true():
     assert await check_is_linux(mock_conn) is True
 
 
+# START_CONTRACT: test_check_is_linux_darwin
+#   PURPOSE: Verifies check_is_linux returns False when uname returns Darwin
+#   INPUTS: { None - mock SSH connection }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_linux_darwin
 @pytest.mark.asyncio
 async def test_check_is_linux_darwin():
     """check_is_linux returns False when uname returns Darwin"""
@@ -58,6 +68,11 @@ async def test_check_is_linux_darwin():
     assert await check_is_linux(mock_conn) is False
 
 
+# START_CONTRACT: test_check_is_linux_nonzero_returncode
+#   PURPOSE: Verifies check_is_linux returns False on non-zero returncode
+#   INPUTS: { None - mock SSH connection }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_linux_nonzero_returncode
 @pytest.mark.asyncio
 async def test_check_is_linux_nonzero_returncode():
     """check_is_linux returns False when returncode is non-zero"""
@@ -66,6 +81,11 @@ async def test_check_is_linux_nonzero_returncode():
     assert await check_is_linux(mock_conn) is False
 
 
+# START_CONTRACT: test_check_is_debian_like_true
+#   PURPOSE: Verifies check_is_debian_like returns True when ID_LIKE contains debian
+#   INPUTS: { None - mock _get_os_release }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_debian_like_true
 @pytest.mark.asyncio
 async def test_check_is_debian_like_true():
     """check_is_debian_like returns True when ID_LIKE contains debian"""
@@ -77,6 +97,11 @@ async def test_check_is_debian_like_true():
         assert await check_is_debian_like(mock_conn) is True
 
 
+# START_CONTRACT: test_check_is_debian_true
+#   PURPOSE: Verifies check_is_debian returns True when ID is debian
+#   INPUTS: { None - mock _get_os_release }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_debian_true
 @pytest.mark.asyncio
 async def test_check_is_debian_true():
     """check_is_debian returns True when ID is debian"""
@@ -88,6 +113,11 @@ async def test_check_is_debian_true():
         assert await check_is_debian(mock_conn) is True
 
 
+# START_CONTRACT: test_check_is_debian_false_for_ubuntu
+#   PURPOSE: Verifies check_is_debian returns False when ID is ubuntu
+#   INPUTS: { None - mock _get_os_release }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_debian_false_for_ubuntu
 @pytest.mark.asyncio
 async def test_check_is_debian_false_for_ubuntu():
     """check_is_debian returns False when ID is ubuntu"""
@@ -99,6 +129,11 @@ async def test_check_is_debian_false_for_ubuntu():
         assert await check_is_debian(mock_conn) is False
 
 
+# START_CONTRACT: test_check_is_debian_version_match
+#   PURPOSE: Verifies check_is_debian_11 returns True when version matches
+#   INPUTS: { None - mock _get_os_release }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_debian_version_match
 @pytest.mark.asyncio
 async def test_check_is_debian_version_match():
     """check_is_debian_11 returns True when version matches"""
@@ -110,6 +145,11 @@ async def test_check_is_debian_version_match():
         assert await check_is_debian_11(mock_conn) is True
 
 
+# START_CONTRACT: test_check_is_debian_version_mismatch
+#   PURPOSE: Verifies check_is_debian_11 returns False when version differs
+#   INPUTS: { None - mock _get_os_release }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_debian_version_mismatch
 @pytest.mark.asyncio
 async def test_check_is_debian_version_mismatch():
     """check_is_debian_11 returns False when version differs"""
@@ -121,6 +161,11 @@ async def test_check_is_debian_version_mismatch():
         assert await check_is_debian_11(mock_conn) is False
 
 
+# START_CONTRACT: test_check_is_windows_true
+#   PURPOSE: Verifies check_is_windows returns True when PowerShell succeeds
+#   INPUTS: { None - mock SSH connection }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_windows_true
 @pytest.mark.asyncio
 async def test_check_is_windows_true():
     """check_is_windows returns True when PowerShell OSVersion succeeds"""
@@ -129,6 +174,11 @@ async def test_check_is_windows_true():
     assert await check_is_windows(mock_conn) is True
 
 
+# START_CONTRACT: test_check_is_windows_false
+#   PURPOSE: Verifies check_is_windows returns False when PowerShell fails
+#   INPUTS: { None - mock SSH connection }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_windows_false
 @pytest.mark.asyncio
 async def test_check_is_windows_false():
     """check_is_windows returns False when PowerShell OSVersion fails"""
@@ -137,6 +187,11 @@ async def test_check_is_windows_false():
     assert await check_is_windows(mock_conn) is False
 
 
+# START_CONTRACT: test_check_is_windows_version_match
+#   PURPOSE: Verifies check_is_windows10 returns True when caption contains version
+#   INPUTS: { None - mock get_wmi_w32_os_caption }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_windows_version_match
 @pytest.mark.asyncio
 async def test_check_is_windows_version_match():
     """check_is_windows10 returns True when caption contains version"""
@@ -149,6 +204,11 @@ async def test_check_is_windows_version_match():
         assert await check_is_windows10(mock_conn) is True
 
 
+# START_CONTRACT: test_check_is_windows_version_mismatch
+#   PURPOSE: Verifies check_is_windows10 returns False when caption lacks version
+#   INPUTS: { None - mock get_wmi_w32_os_caption }
+#   OUTPUTS: { None - assertion on bool result }
+# END_CONTRACT: test_check_is_windows_version_mismatch
 @pytest.mark.asyncio
 async def test_check_is_windows_version_mismatch():
     """check_is_windows10 returns False when caption lacks version"""

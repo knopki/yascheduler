@@ -5,7 +5,7 @@
 #   PURPOSE: Sleep utilities for sync and async contexts.
 #   SCOPE: Timestamp utility functions.
 #   DEPENDS: none
-#   LINKS: M-TIME
+#   LINKS: M-SCHEDULER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

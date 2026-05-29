@@ -59,11 +59,21 @@ platforms = linux
 """
 
 
+# START_CONTRACT: test_config
+#   PURPOSE: Create test config from TEST_INI string
+#   INPUTS: { None }
+#   OUTPUTS: { SchedulerConfig - parsed test configuration }
+# END_CONTRACT: test_config
 @pytest.fixture
 def test_config():
     return create_test_config(TEST_INI)
 
 
+# START_CONTRACT: mock_db
+#   PURPOSE: Create a MagicMock DB with AsyncMock methods for Scheduler
+#   INPUTS: { None }
+#   OUTPUTS: { MagicMock - mock database with add_task, update_task_meta, commit, get_tasks_by_status, set_task_running, set_task_error as AsyncMock methods }
+# END_CONTRACT: mock_db
 @pytest.fixture
 def mock_db():
     """Create a mock DB with all methods needed by Scheduler"""
@@ -77,16 +87,31 @@ def mock_db():
     return db
 
 
+# START_CONTRACT: mock_clouds
+#   PURPOSE: Create mock clouds provider with default max_nodes=10, current_nodes=5
+#   INPUTS: { None }
+#   OUTPUTS: { MockCloudProvider - mock cloud provider with allocate, mark_task_done, get_capacity methods }
+# END_CONTRACT: mock_clouds
 @pytest.fixture
 def mock_clouds():
     return make_mock_clouds()
 
 
+# START_CONTRACT: empty_remote_machines
+#   PURPOSE: Create empty RemoteMachineRepository with no machines
+#   INPUTS: { None }
+#   OUTPUTS: { RemoteMachineRepository - empty repository with MagicMock log }
+# END_CONTRACT: empty_remote_machines
 @pytest.fixture
 def empty_remote_machines():
     return RemoteMachineRepository(log=MagicMock())
 
 
+# START_CONTRACT: mock_remote_machines
+#   PURPOSE: Create RemoteMachineRepository with one free linux machine at 10.0.0.1
+#   INPUTS: { None }
+#   OUTPUTS: { RemoteMachineRepository - repository containing one free linux machine }
+# END_CONTRACT: mock_remote_machines
 @pytest.fixture
 def mock_remote_machines():
     """RemoteMachineRepository with one free linux machine"""
@@ -96,6 +121,11 @@ def mock_remote_machines():
     return repo
 
 
+# START_CONTRACT: test_scheduler_queues_configured
+#   PURPOSE: Verify Scheduler.__attrs_post_init__ creates queues with correct names and maxsizes from config
+#   INPUTS: { test_config, mock_db, mock_clouds, empty_remote_machines - pytest fixtures }
+#   OUTPUTS: { None - test assertions on queue names and maxsizes }
+# END_CONTRACT: test_scheduler_queues_configured
 @pytest.mark.asyncio
 async def test_scheduler_queues_configured(
     test_config, mock_db, mock_clouds, empty_remote_machines
@@ -117,6 +147,11 @@ async def test_scheduler_queues_configured(
     assert scheduler.deallocate_q.maxsize == 2
 
 
+# START_CONTRACT: test_create_new_task_unknown_engine
+#   PURPOSE: Verify RuntimeError is raised when engine_name does not exist in config
+#   INPUTS: { test_config, mock_db, mock_clouds, empty_remote_machines - pytest fixtures }
+#   OUTPUTS: { None - test assertions via pytest.raises }
+# END_CONTRACT: test_create_new_task_unknown_engine
 @pytest.mark.asyncio
 async def test_create_new_task_unknown_engine(
     test_config, mock_db, mock_clouds, empty_remote_machines
@@ -136,6 +171,11 @@ async def test_create_new_task_unknown_engine(
         )
 
 
+# START_CONTRACT: test_create_new_task_missing_input_file
+#   PURPOSE: Verify RuntimeError is raised when required input file is missing from metadata
+#   INPUTS: { test_config, mock_db, mock_clouds, empty_remote_machines - pytest fixtures }
+#   OUTPUTS: { None - test assertions via pytest.raises }
+# END_CONTRACT: test_create_new_task_missing_input_file
 @pytest.mark.asyncio
 async def test_create_new_task_missing_input_file(
     test_config, mock_db, mock_clouds, empty_remote_machines
@@ -155,6 +195,11 @@ async def test_create_new_task_missing_input_file(
         )
 
 
+# START_CONTRACT: test_create_new_task_success
+#   PURPOSE: Verify full success path: db.add_task, db.update_task_meta, db.commit called and TaskModel returned
+#   INPUTS: { test_config, mock_db, mock_clouds, empty_remote_machines - pytest fixtures }
+#   OUTPUTS: { None - test assertions on mock calls and returned TaskModel }
+# END_CONTRACT: test_create_new_task_success
 @pytest.mark.asyncio
 async def test_create_new_task_success(
     test_config, mock_db, mock_clouds, empty_remote_machines
@@ -200,6 +245,11 @@ async def test_create_new_task_success(
     assert result == expected_task
 
 
+# START_CONTRACT: test_allocate_task_free_machine
+#   PURPOSE: Verify allocate_task finds free machine, calls set_task_running and mark_task_done
+#   INPUTS: { test_config, mock_db, mock_clouds, mock_remote_machines - pytest fixtures; monkeypatch }
+#   OUTPUTS: { None - test assertions on True result and mock calls }
+# END_CONTRACT: test_allocate_task_free_machine
 @pytest.mark.asyncio
 @patch.object(Scheduler, "start_task_on_machine", new=AsyncMock(return_value=True))
 @patch.object(Scheduler, "do_task_webhook", new=AsyncMock())
@@ -236,6 +286,11 @@ async def test_allocate_task_free_machine(
     mock_clouds.mark_task_done.assert_called_once_with(1)
 
 
+# START_CONTRACT: test_allocate_task_no_free_machine
+#   PURPOSE: Verify allocate_task calls clouds.allocate when no free machine, returns False
+#   INPUTS: { test_config, mock_db, mock_clouds, empty_remote_machines - pytest fixtures }
+#   OUTPUTS: { None - test assertions on False result and clouds.allocate call }
+# END_CONTRACT: test_allocate_task_no_free_machine
 @pytest.mark.asyncio
 @patch.object(Scheduler, "do_task_webhook", new=AsyncMock())
 async def test_allocate_task_no_free_machine(
@@ -265,6 +320,11 @@ async def test_allocate_task_no_free_machine(
     assert call_args[1]["want_platforms"] == ("linux",)
 
 
+# START_CONTRACT: test_allocate_task_unsupported_engine
+#   PURPOSE: Verify allocate_task sets task error when engine not in config
+#   INPUTS: { test_config, mock_db, mock_clouds, empty_remote_machines - pytest fixtures }
+#   OUTPUTS: { None - test assertions on False result and db.set_task_error call }
+# END_CONTRACT: test_allocate_task_unsupported_engine
 @pytest.mark.asyncio
 @patch.object(Scheduler, "do_task_webhook", new=AsyncMock())
 async def test_allocate_task_unsupported_engine(
@@ -294,6 +354,11 @@ async def test_allocate_task_unsupported_engine(
     assert "unsupported engine" in str(call_args[1]["error"]).lower()
 
 
+# START_CONTRACT: test_clouds_get_capacity_available
+#   PURPOSE: Verify clouds_get_capacity returns positive capacity when max_nodes > current_nodes
+#   INPUTS: { test_config, mock_db, mock_clouds, empty_remote_machines - pytest fixtures }
+#   OUTPUTS: { None - test assertion on returned capacity value }
+# END_CONTRACT: test_clouds_get_capacity_available
 @pytest.mark.asyncio
 async def test_clouds_get_capacity_available(
     test_config, mock_db, mock_clouds, empty_remote_machines
@@ -310,6 +375,11 @@ async def test_clouds_get_capacity_available(
     assert result == 5  # 10 - 5
 
 
+# START_CONTRACT: test_clouds_get_capacity_over_capacity
+#   PURPOSE: Verify clouds_get_capacity returns 0 when current_nodes exceeds max_nodes
+#   INPUTS: { test_config, mock_db, empty_remote_machines - pytest fixtures }
+#   OUTPUTS: { None - test assertion on returned zero capacity }
+# END_CONTRACT: test_clouds_get_capacity_over_capacity
 @pytest.mark.asyncio
 async def test_clouds_get_capacity_over_capacity(
     test_config, mock_db, empty_remote_machines
@@ -329,11 +399,23 @@ async def test_clouds_get_capacity_over_capacity(
 class TestWebhookPayload:
     """Tests for WebhookPayload dataclass"""
 
+    # START_CONTRACT: test_construction
+    #   PURPOSE: Verify WebhookPayload construction with explicit custom_params
+    #   INPUTS: { None }
+    #   OUTPUTS: { None - assertions on task_id, status, custom_params fields }
+    # END_CONTRACT: test_construction
+
     def test_construction(self):
         payload = WebhookPayload(task_id=1, status=0, custom_params={"k": "v"})
         assert payload.task_id == 1
         assert payload.status == 0
         assert payload.custom_params == {"k": "v"}
+
+    # START_CONTRACT: test_default_custom_params
+    #   PURPOSE: Verify WebhookPayload default custom_params is empty dict when not provided
+    #   INPUTS: { None }
+    #   OUTPUTS: { None - assertion on default custom_params value }
+    # END_CONTRACT: test_default_custom_params
 
     def test_default_custom_params(self):
         payload = WebhookPayload(task_id=42, status=1)

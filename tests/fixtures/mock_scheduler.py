@@ -4,8 +4,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Scheduler constructor helper and inline-INI config parser for scheduler unit tests.
 #   SCOPE: make_scheduler function constructing Scheduler with injected mocks; create_test_config parsing INI string into Config.
-#   DEPENDS: M-SCHEDULER, M-CONFIG-ALL
-#   LINKS: M-SCHEDULER, M-CONFIG-ALL
+#   DEPENDS: M-SCHEDULER, M-CONFIG-HUB
+#   LINKS: M-SCHEDULER, M-CONFIG-HUB
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

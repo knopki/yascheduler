@@ -6,7 +6,7 @@
 #   PURPOSE: Shared helpers for remote machine operations: process info, command execution.
 #   SCOPE: ProcessInfo data class, run and run_bg command execution helpers.
 #   DEPENDS: M-REMOTE-PROTOCOL
-#   LINKS: M-REMOTE-COMMON
+#   LINKS: M-REMOTE-LINUX, M-REMOTE-WINDOWS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

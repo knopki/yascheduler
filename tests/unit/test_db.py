@@ -33,12 +33,25 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pg8000.native import Connection
 
 from yascheduler.db import DB, NodeModel, TaskModel, TaskStatus
+from yascheduler.domain.model import Task, TaskContext
+from yascheduler.domain.model import TaskStatus as DomainTaskStatus
+
+
+class _MockColumn:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __getitem__(self, key: str) -> str:
+        if key == "name":
+            return self.name
+        raise KeyError(key)
+
 
 # mypy: disable-error-code="attr-defined"
 
@@ -108,12 +121,22 @@ async def test_add_node(db, mock_conn):
 async def test_get_node_found(db, mock_conn):
     """returns NodeModel when row found"""
     mock_conn.run.return_value = [("10.0.0.1", 4, True, "az", "root", 22)]
+    mock_conn.columns = [
+        _MockColumn("ip"),
+        _MockColumn("ncpus"),
+        _MockColumn("enabled"),
+        _MockColumn("cloud"),
+        _MockColumn("username"),
+        _MockColumn("port"),
+    ]
     node = await db.get_node("10.0.0.1")
     assert node is not None
     assert node.ip == "10.0.0.1"
     assert node.ncpus == 4
     call_args = mock_conn.run.call_args
-    assert "SELECT ip, ncpus" in call_args[0][0]
+    assert "SELECT" in call_args[0][0]
+    assert "ip" in call_args[0][0]
+    assert "ncpus" in call_args[0][0]
     assert call_args[1]["ip"] == "10.0.0.1"
 
 
@@ -144,6 +167,14 @@ async def test_get_all_nodes(db, mock_conn):
         ("10.0.0.1", 4, True, None, "root", 22),
         ("10.0.0.2", 8, False, "hetzner", "admin", 2222),
     ]
+    mock_conn.columns = [
+        _MockColumn("ip"),
+        _MockColumn("ncpus"),
+        _MockColumn("enabled"),
+        _MockColumn("cloud"),
+        _MockColumn("username"),
+        _MockColumn("port"),
+    ]
     nodes = await db.get_all_nodes()
     assert len(nodes) == 2
     assert nodes[0].ip == "10.0.0.1"
@@ -162,7 +193,7 @@ async def test_enable_node(db, mock_conn):
     await db.enable_node("10.0.0.1")
     call_args = mock_conn.run.call_args
     assert "UPDATE yascheduler_nodes" in call_args[0][0]
-    assert "enabled=TRUE" in call_args[0][0]
+    assert "enabled = TRUE" in call_args[0][0]
     assert call_args[1]["ip"] == "10.0.0.1"
 
 
@@ -178,7 +209,7 @@ async def test_disable_node(db, mock_conn):
     await db.disable_node("10.0.0.1")
     call_args = mock_conn.run.call_args
     assert "UPDATE yascheduler_nodes" in call_args[0][0]
-    assert "enabled=FALSE" in call_args[0][0]
+    assert "enabled = FALSE" in call_args[0][0]
     assert call_args[1]["ip"] == "10.0.0.1"
 
 
@@ -212,6 +243,13 @@ async def test_remove_node(db, mock_conn):
 async def test_add_task(db, mock_conn):
     """executes INSERT and returns TaskModel"""
     mock_conn.run.return_value = [(1, "calc", "10.0.0.1", 0, {})]
+    mock_conn.columns = [
+        _MockColumn("task_id"),
+        _MockColumn("label"),
+        _MockColumn("ip"),
+        _MockColumn("status"),
+        _MockColumn("metadata"),
+    ]
     task = await db.add_task(label="calc", ip_addr="10.0.0.1")
     call_args = mock_conn.run.call_args
     assert "INSERT INTO yascheduler_tasks" in call_args[0][0]
@@ -232,29 +270,43 @@ async def test_add_task(db, mock_conn):
 async def test_get_task(db, mock_conn):
     """executes SELECT and returns TaskModel"""
     mock_conn.run.return_value = [(42, "job", "10.0.0.1", 1, {"k": "v"})]
+    mock_conn.columns = [
+        _MockColumn("task_id"),
+        _MockColumn("label"),
+        _MockColumn("ip"),
+        _MockColumn("status"),
+        _MockColumn("metadata"),
+    ]
     task = await db.get_task(42)
     assert task is not None
     assert task.task_id == 42
     assert task.status == TaskStatus.RUNNING
     call_args = mock_conn.run.call_args
-    assert "SELECT task_id" in call_args[0][0]
+    assert "SELECT" in call_args[0][0]
+    assert "task_id" in call_args[0][0]
     assert call_args[1]["task_id"] == 42
 
 
 # START_CONTRACT: test_update_task_status
-#   PURPOSE: Verify update_task_status executes UPDATE with correct status value
+#   PURPOSE: Verify update_task_status delegates to repo.update_status with correct parameters
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_update_task_status
 async def test_update_task_status(db, mock_conn):
-    """executes UPDATE with correct status value"""
+    """delegates to repo.update_status with correct status"""
+    from unittest.mock import AsyncMock
+
+    mock_repo = AsyncMock()
+    object.__setattr__(db, "_task_repo", mock_repo)
+
     await db.update_task_status(5, TaskStatus.RUNNING)
-    call_args = mock_conn.run.call_args
-    assert "UPDATE yascheduler_tasks" in call_args[0][0]
-    assert call_args[1]["task_id"] == 5
-    assert call_args[1]["status"] == 1  # TaskStatus.RUNNING.value
+
+    mock_repo.update_status.assert_called_once()
+    call_args = mock_repo.update_status.call_args
+    assert call_args[0][0] == 5  # task_id
+    assert call_args[0][1].value == 1  # TaskStatus.RUNNING
 
 
 # START_CONTRACT: test_set_task_running
@@ -266,13 +318,21 @@ async def test_update_task_status(db, mock_conn):
 # END_CONTRACT: test_set_task_running
 async def test_set_task_running(db, mock_conn):
     """updates status to RUNNING and sets IP"""
+    mock_task = Task(
+        task_id=42,
+        label="test",
+        context=TaskContext(engine="fleur"),
+        status=DomainTaskStatus.TO_DO,
+    )
+    object.__setattr__(db, "_task_repo", AsyncMock())
+    db._task_repo.get.return_value = mock_task
+
     await db.set_task_running(42, "10.0.0.1")
-    call_args = mock_conn.run.call_args
-    assert "status=:status" in call_args[0][0]
-    assert "ip=:ip" in call_args[0][0]
-    assert call_args[1]["status"] == 1  # RUNNING
-    assert call_args[1]["ip"] == "10.0.0.1"
-    assert call_args[1]["task_id"] == 42
+
+    db._task_repo.get.assert_called_once_with(42)
+    saved_task = db._task_repo.save.call_args[0][0]
+    assert saved_task.status == DomainTaskStatus.RUNNING
+    assert saved_task.allocated_ip == "10.0.0.1"
 
 
 # START_CONTRACT: test_set_task_done
@@ -285,11 +345,21 @@ async def test_set_task_running(db, mock_conn):
 async def test_set_task_done(db, mock_conn):
     """updates status to DONE and sets metadata"""
     meta = {"result": "ok"}
+    mock_task = Task(
+        task_id=42,
+        label="test",
+        context=TaskContext(engine="fleur"),
+        status=DomainTaskStatus.RUNNING,
+    )
+    object.__setattr__(db, "_task_repo", AsyncMock())
+    db._task_repo.get.return_value = mock_task
+
     await db.set_task_done(42, meta)
-    call_args = mock_conn.run.call_args
-    assert call_args[1]["status"] == 2  # DONE
-    assert call_args[1]["metadata"] == meta
-    assert call_args[1]["task_id"] == 42
+
+    db._task_repo.get.assert_called_once_with(42)
+    saved_task = db._task_repo.save.call_args[0][0]
+    assert saved_task.status == DomainTaskStatus.DONE
+    assert saved_task.context.extra["result"] == "ok"
 
 
 # START_CONTRACT: test_set_task_error_with_message
@@ -302,11 +372,22 @@ async def test_set_task_done(db, mock_conn):
 async def test_set_task_error_with_message(db, mock_conn):
     """embeds error in metadata when message provided"""
     meta = {"key": "val"}
+    mock_task = Task(
+        task_id=42,
+        label="test",
+        context=TaskContext(engine="fleur"),
+        status=DomainTaskStatus.RUNNING,
+    )
+    object.__setattr__(db, "_task_repo", AsyncMock())
+    db._task_repo.get.return_value = mock_task
+
     await db.set_task_error(42, meta, "crash")
-    call_args = mock_conn.run.call_args
-    assert call_args[1]["status"] == 2  # DONE
-    assert call_args[1]["metadata"] == {"key": "val", "error": "crash"}
-    assert call_args[1]["task_id"] == 42
+
+    db._task_repo.get.assert_called_once_with(42)
+    saved_task = db._task_repo.save.call_args[0][0]
+    assert saved_task.status == DomainTaskStatus.DONE
+    assert saved_task.context.extra["key"] == "val"
+    assert saved_task.context.error == "crash"
 
 
 # START_CONTRACT: test_set_task_error_without_message
@@ -319,7 +400,19 @@ async def test_set_task_error_with_message(db, mock_conn):
 async def test_set_task_error_without_message(db, mock_conn):
     """passes metadata unchanged when no error message"""
     meta = {"key": "val"}
+    mock_task = Task(
+        task_id=42,
+        label="test",
+        context=TaskContext(engine="fleur"),
+        status=DomainTaskStatus.RUNNING,
+    )
+    object.__setattr__(db, "_task_repo", AsyncMock())
+    db._task_repo.get.return_value = mock_task
+
     await db.set_task_error(42, meta)
-    call_args = mock_conn.run.call_args
-    assert call_args[1]["metadata"] == meta
-    assert "error" not in call_args[1]["metadata"]
+
+    db._task_repo.get.assert_called_once_with(42)
+    saved_task = db._task_repo.save.call_args[0][0]
+    assert saved_task.status == DomainTaskStatus.DONE
+    assert saved_task.context.extra["key"] == "val"
+    assert saved_task.context.error is None

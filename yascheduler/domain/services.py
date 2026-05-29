@@ -4,7 +4,7 @@
 #   PURPOSE: Domain services: cross-entity business logic for the scheduler domain.
 #   SCOPE: match_task_to_node pure function for allocating tasks to compatible free machines.
 #   DEPENDS: M-DOMAIN-MODEL
-#   LINKS:
+#   LINKS: M-DOMAIN-MODEL, M-SCHEDULER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

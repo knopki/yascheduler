@@ -5,7 +5,7 @@
 #   PURPOSE: Multi-cloud orchestrator: provider selection, allocation, deallocation, capacity.
 #   SCOPE: CloudAPIManager class managing multiple providers; CLOUD_ADAPTER_GETTERS registry.
 #   DEPENDS: M-CLOUD-API, M-DB, M-CONFIG, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS
-#   LINKS: M-CLOUD-MANAGER
+#   LINKS: M-SCHEDULER, M-CLOUD-API, M-DB
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

@@ -5,7 +5,7 @@
 #   PURPOSE: Protocol definitions for cloud config, node creation, deletion callables.
 #   SCOPE: PCloudConfig, CreateNodeCallable, DeleteNodeCallable, SupportedPlatformChecker, CloudCapacity, TypeVars.
 #   DEPENDS: M-CONFIG-CLOUD
-#   LINKS: M-CLOUD-PROTOCOLS
+#   LINKS: M-CLOUD-API, M-CLOUD-ADAPTERS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

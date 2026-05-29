@@ -4,7 +4,7 @@
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
 #   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling.
 #   DEPENDS: none
-#   LINKS:
+#   LINKS: M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -69,6 +69,22 @@ class TaskNotAllocatedError(TaskError):
     def __init__(self, task_id: int) -> None:
         self.task_id = task_id
         super().__init__(f"task {task_id} is not allocated to any node")
+
+
+class TaskNotTodoError(TaskError):
+    """Task not in TODO status."""
+
+    def __init__(self, task_id: int) -> None:
+        self.task_id = task_id
+        super().__init__(f"task {task_id} is not in TODO status")
+
+
+class TaskNotRunningError(TaskError):
+    """Task not running."""
+
+    def __init__(self, task_id: int) -> None:
+        self.task_id = task_id
+        super().__init__(f"task {task_id} is not in running status")
 
 
 class MachineBusyError(DomainError):

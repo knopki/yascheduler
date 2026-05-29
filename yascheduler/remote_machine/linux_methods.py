@@ -6,7 +6,7 @@
 #   PURPOSE: Linux-specific remote commands: package install, process listing, CPU detection.
 #   SCOPE: Linux setup_node, get_cpu_cores, list_processes, pgrep implementations.
 #   DEPENDS: M-CONFIG-ENGINE, M-REMOTE-PROTOCOL, M-REMOTE-COMMON
-#   LINKS: M-REMOTE-LINUX
+#   LINKS: M-REMOTE-ADAPTERS, M-CONFIG-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

@@ -6,7 +6,7 @@
 #   PURPOSE: Systemd service entry point for the scheduler daemon.
 #   SCOPE: Systemd daemon main function.
 #   DEPENDS: M-UTILS, M-VARIABLES
-#   LINKS: M-DAEMON-SYSTEMD
+#   LINKS: M-UTILS, M-VARIABLES
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

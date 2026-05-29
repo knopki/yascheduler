@@ -5,7 +5,7 @@
 #   PURPOSE: Azure VM creation and deletion using Azure SDK.
 #   SCOPE: Azure create/delete node functions.
 #   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
-#   LINKS: M-CLOUD-AZ
+#   LINKS: M-CLOUD-ADAPTERS, M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

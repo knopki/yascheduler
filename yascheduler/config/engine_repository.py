@@ -6,7 +6,7 @@
 #   PURPOSE: Immutable collection of engines with filtering by platform.
 #   SCOPE: EngineRepository frozen dict with filter operations.
 #   DEPENDS: M-CONFIG-ENGINE, M-COMPAT
-#   LINKS: M-CONFIG-ENGINE-REPO
+#   LINKS: M-CONFIG-ENGINE, M-SCHEDULER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

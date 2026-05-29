@@ -37,7 +37,7 @@ from yascheduler.domain.ports import (
 
 
 class StubTaskRepository:
-    async def get(self, task_id: int) -> Task:
+    async def get(self, task_id: int) -> Task | None:
         raise NotImplementedError
 
     async def save(self, task: Task) -> None:
@@ -48,7 +48,7 @@ class StubTaskRepository:
 
 
 class StubNodeRepository:
-    async def get(self, ip: str) -> Node:
+    async def get(self, ip: str) -> Node | None:
         raise NotImplementedError
 
     async def list_enabled(self) -> list[Node]:
@@ -60,8 +60,8 @@ class StubNodeRepository:
     async def add(self, node: Node) -> None:
         pass
 
-    async def add_tmp(self, ip: str, cloud: str) -> None:
-        pass
+    async def add_tmp(self, cloud: str, username: str = "root") -> str:
+        return "prov-tmp"
 
     async def update(self, node: Node) -> None:
         pass

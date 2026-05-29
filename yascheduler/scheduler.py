@@ -5,8 +5,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Main async daemon orchestrating task allocation, execution, and completion.
 #   SCOPE: Producer-consumer loops for machine connection, task allocation, consumption, and deallocation.
-#   DEPENDS: M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-CONFIG, M-QUEUE, M-COMPAT, M-TIME, M-VARIABLES
-#   LINKS: M-SCHEDULER
+#   DEPENDS: M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-CONFIG, M-QUEUE, M-COMPAT, M-TIME, M-VARIABLES, M-REMOTE, M-REMOTE-PROTOCOL
+#   LINKS: M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-QUEUE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

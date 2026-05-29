@@ -6,7 +6,7 @@
 #   PURPOSE: Protocol definitions for engines, process info, SSH checks, and adapters.
 #   SCOPE: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc, PProcessInfo, PEngine, PEngineRepository, PNode, SSHCheck, QuoteCallable, RunCallable, RunBgCallable, OuterRunCallable, GetCPUCoresCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable protocols and type aliases.
 #   DEPENDS: M-CONFIG-ENGINE
-#   LINKS: M-REMOTE-PROTOCOL
+#   LINKS: M-REMOTE, M-REMOTE-ADAPTERS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

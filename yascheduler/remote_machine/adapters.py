@@ -7,7 +7,7 @@
 #   PURPOSE: Platform-specific adapter registry mapping OS identifiers to adapter instances.
 #   SCOPE: RemoteMachineAdapter dataclass and platform adapter instances.
 #   DEPENDS: M-REMOTE-PROTOCOL, M-REMOTE-CHECKS, M-REMOTE-LINUX, M-REMOTE-WINDOWS, M-REMOTE-COMMON
-#   LINKS: M-REMOTE-ADAPTERS
+#   LINKS: M-REMOTE, M-REMOTE-CHECKS, M-REMOTE-LINUX, M-REMOTE-WINDOWS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

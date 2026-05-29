@@ -5,7 +5,7 @@
 #   PURPOSE: SSH connection to a remote machine with platform detection, command execution, and SFTP.
 #   SCOPE: RemoteMachine, RemoteMachineMetadata, MySSHClient, connection management, command execution, platform detection, SFTP file transfer, occupancy checking.
 #   DEPENDS: M-REMOTE-ADAPTERS, M-REMOTE-EXC, M-REMOTE-PROTOCOL, M-COMPAT
-#   LINKS: M-REMOTE
+#   LINKS: M-SCHEDULER, M-REMOTE-REPO, M-CLOUD-API, M-REMOTE-ADAPTERS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

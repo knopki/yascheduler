@@ -45,6 +45,7 @@ from yascheduler.domain.exceptions import (
     MissingInputFileError,
     TaskAlreadyAllocatedError,
     TaskNotAllocatedError,
+    TaskNotRunningError,
 )
 from yascheduler.domain.model import (
     ConnectedMachine,
@@ -143,6 +144,92 @@ class TestTaskContext:
         assert ctx.extra["input_xyz"] == "mol.xyz"
         assert ctx.extra["nproc"] == 4
 
+    def test_to_metadata_roundtrip(self):
+        ctx = TaskContext(
+            engine="cp2k",
+            remote_folder="/remote",
+            local_folder="/local",
+            webhook_url="https://hook.example.com",
+            webhook_custom_params={"key": "val"},
+            extra={"input_xyz": "mol.xyz", "nproc": 4},
+        )
+        metadata = ctx.to_metadata()
+        restored = TaskContext.from_metadata(metadata)
+        assert restored == ctx
+
+    def test_to_metadata_known_fields(self):
+        ctx = TaskContext(
+            engine="cp2k",
+            remote_folder="/r",
+            local_folder="/l",
+            webhook_url="https://hook.example.com",
+            webhook_custom_params={"p1": "v1", "p2": "v2"},
+            error="something went wrong",
+        )
+        metadata = ctx.to_metadata()
+        restored = TaskContext.from_metadata(metadata)
+        assert restored.engine == "cp2k"
+        assert restored.remote_folder == "/r"
+        assert restored.local_folder == "/l"
+        assert restored.webhook_url == "https://hook.example.com"
+        assert restored.webhook_custom_params == {"p1": "v1", "p2": "v2"}
+        assert restored.error == "something went wrong"
+
+    def test_from_metadata_extra_keys(self):
+        metadata: dict[str, object] = {
+            "engine": "cp2k",
+            "input_xyz": "mol.xyz",
+            "nproc": 4,
+            "some_unknown": "value",
+        }
+        ctx = TaskContext.from_metadata(metadata)
+        assert ctx.engine == "cp2k"
+        assert ctx.extra == {
+            "input_xyz": "mol.xyz",
+            "nproc": 4,
+            "some_unknown": "value",
+        }
+
+    def test_to_metadata_omits_none_values(self):
+        ctx = TaskContext(engine="cp2k")
+        metadata = ctx.to_metadata()
+        assert "remote_folder" not in metadata
+        assert "local_folder" not in metadata
+        assert "webhook_url" not in metadata
+        assert "error" not in metadata
+        assert metadata.get("webhook_custom_params") == {}
+        assert metadata["engine"] == "cp2k"
+
+    # START_CONTRACT: test_to_metadata_preserves_webhook_custom_params
+    #   PURPOSE: Verify webhook_custom_params survives roundtrip even when empty.
+    #   INPUTS: { None }
+    #   OUTPUTS: { None - assertion-based test }
+    #   SIDE_EFFECTS: None
+    #   LINKS:
+    # END_CONTRACT: test_to_metadata_preserves_webhook_custom_params
+    def test_to_metadata_preserves_webhook_custom_params(self):
+        """webhook_custom_params empty and non-empty survive serialization roundtrip."""
+        ctx = TaskContext(engine="fleur", webhook_custom_params={"key": "val"})
+        meta = ctx.to_metadata()
+        assert meta["webhook_custom_params"] == {"key": "val"}
+        roundtripped = TaskContext.from_metadata(meta)
+        assert roundtripped.webhook_custom_params == {"key": "val"}
+
+    # START_CONTRACT: test_to_metadata_preserves_empty_webhook_custom_params
+    #   PURPOSE: Verify empty dict webhook_custom_params survives roundtrip.
+    #   INPUTS: { None }
+    #   OUTPUTS: { None - assertion-based test }
+    #   SIDE_EFFECTS: None
+    #   LINKS:
+    # END_CONTRACT: test_to_metadata_preserves_empty_webhook_custom_params
+    def test_to_metadata_preserves_empty_webhook_custom_params(self):
+        """Empty webhook_custom_params is not dropped."""
+        ctx = TaskContext(engine="fleur")
+        meta = ctx.to_metadata()
+        assert meta["webhook_custom_params"] == {}
+        roundtripped = TaskContext.from_metadata(meta)
+        assert roundtripped.webhook_custom_params == {}
+
 
 # START_CONTRACT: test_engine_validate_inputs
 #   PURPOSE: Verify Engine.validate_inputs passes when files present, fails with MissingInputFileError when missing
@@ -215,26 +302,26 @@ class TestTask:
 
     def test_mark_running(self):
         task = self.make_task()
-        running = task.mark_running()
+        running = task.allocate_to("1.2.3.4").mark_running()
         assert running.status == TaskStatus.RUNNING
         assert running.task_id == task.task_id
 
     def test_complete_on_running(self):
         task = self.make_task()
-        running = task.mark_running()
+        running = task.allocate_to("1.2.3.4").mark_running()
         done = running.complete()
         assert done.status == TaskStatus.DONE
         assert done.context.error is None
 
     def test_complete_on_todo_raises(self):
         task = self.make_task()
-        with pytest.raises(TaskNotAllocatedError) as exc_info:
+        with pytest.raises(TaskNotRunningError) as exc_info:
             task.complete()
         assert "1" in str(exc_info.value)
 
     def test_fail_on_running(self):
         task = self.make_task()
-        running = task.mark_running()
+        running = task.allocate_to("1.2.3.4").mark_running()
         failed = running.fail("out of memory")
         assert failed.status == TaskStatus.DONE
         assert failed.context.error == "out of memory"

@@ -5,7 +5,7 @@
 #   PURPOSE: Cloud helpers: random name generation and SSH key name extraction.
 #   SCOPE: Random naming and SSH key name utilities.
 #   DEPENDS: none
-#   LINKS: M-CLOUD-UTILS
+#   LINKS: M-CLOUD-API
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

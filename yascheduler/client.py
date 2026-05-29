@@ -5,7 +5,7 @@
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
 #   SCOPE: Task submission and status query via sync and async interfaces.
 #   DEPENDS: M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-SCHEDULER
-#   LINKS: M-CLIENT
+#   LINKS: M-DB, M-SCHEDULER, M-AIIDA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

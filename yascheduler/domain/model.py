@@ -19,23 +19,28 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Create domain entities for Hexagonal + DDD migration.
+#   LAST_CHANGE: v1.7.0 - TaskContext.to_metadata/from_metadata for JSONB serialization
+#   PREVIOUS_CHANGE: v1.6.0 - Create domain entities for Hexagonal + DDD migration.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field, replace
-from enum import Enum, IntEnum
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, fields, replace
+from enum import Enum, IntEnum, unique
 
 from .exceptions import (
     MachineBusyError,
     MissingInputFileError,
     TaskAlreadyAllocatedError,
     TaskNotAllocatedError,
+    TaskNotRunningError,
+    TaskNotTodoError,
 )
 
 
+@unique
 class TaskStatus(IntEnum):
     """Task lifecycle states: TO_DO, RUNNING, DONE."""
 
@@ -44,6 +49,7 @@ class TaskStatus(IntEnum):
     DONE = 2
 
 
+@unique
 class MachineState(Enum):
     """Machine occupancy states: FREE, BUSY."""
 
@@ -71,6 +77,40 @@ class TaskContext:
     webhook_custom_params: dict[str, object] = field(default_factory=dict)
     error: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
+
+    def to_metadata(self) -> dict[str, object]:
+        """Serialize to flat dict for JSONB storage."""
+
+        def factory(items):
+            return {k: v for k, v in items if v is not None and k != "extra"}
+
+        result = asdict(self, dict_factory=factory)
+        # Domain fields take precedence — merge extra only for non-colliding keys
+        for k, v in self.extra.items():
+            if k not in result:
+                result[k] = v
+        return result
+
+    @classmethod
+    def from_metadata(cls, metadata: Mapping[str, object]) -> TaskContext:
+        """Deserialize from a flat dict produced by to_metadata()."""
+        extra: dict[str, object] = {}
+        keys = [field.name for field in fields(cls) if field.name != "extra"]
+        for key, value in metadata.items():
+            if key not in keys:
+                extra[key] = value
+
+        wcp = metadata.get("webhook_custom_params")
+        webhook_custom_params = wcp if isinstance(wcp, dict) else {}
+        return cls(
+            engine=str(metadata.get("engine", "")),
+            remote_folder=metadata.get("remote_folder"),  # type: ignore[arg-type]
+            local_folder=metadata.get("local_folder"),  # type: ignore[arg-type]
+            webhook_url=metadata.get("webhook_url"),  # type: ignore[arg-type]
+            webhook_custom_params=webhook_custom_params,  # type: ignore[arg-type]
+            error=metadata.get("error"),  # type: ignore[arg-type]
+            extra=extra,
+        )
 
 
 @dataclass(frozen=True)
@@ -133,10 +173,17 @@ class Task:
     #   INPUTS: { None }
     #   OUTPUTS: { Task - New Task instance with status=RUNNING }
     #   SIDE_EFFECTS: None
+    #   RAISES: TaskNotAllocatedError - if not RUNNING
     #   LINKS:
     # END_CONTRACT: Task.mark_running
     def mark_running(self) -> Task:
         """Transition task status to RUNNING."""
+        # START_BLOCK_VALIDATE_STATE
+        if self.allocated_ip is None:
+            raise TaskNotAllocatedError(self.task_id)
+        if self.status != TaskStatus.TO_DO:
+            raise TaskNotTodoError(self.task_id)
+        # END_BLOCK_VALIDATE_STATE
         return replace(self, status=TaskStatus.RUNNING)
 
     # START_CONTRACT: Task.complete
@@ -144,18 +191,15 @@ class Task:
     #   INPUTS: { None }
     #   OUTPUTS: { Task - New Task instance with status=DONE }
     #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotAllocatedError - if not RUNNING
     #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotAllocatedError
     # END_CONTRACT: Task.complete
     def complete(self) -> Task:
         """Mark task as DONE if currently RUNNING."""
         # START_BLOCK_VALIDATE_RUNNING
         if self.status != TaskStatus.RUNNING:
-            raise TaskNotAllocatedError(self.task_id)
+            raise TaskNotRunningError(self.task_id)
         # END_BLOCK_VALIDATE_RUNNING
-        # START_BLOCK_MARK_DONE
         return replace(self, status=TaskStatus.DONE)
-        # END_BLOCK_MARK_DONE
 
     # START_CONTRACT: Task.fail
     #   PURPOSE: Mark task as DONE with error reason if currently RUNNING.

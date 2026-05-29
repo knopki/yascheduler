@@ -74,6 +74,7 @@ dev = [
   "pytest-cov~=6.0",
   "pytest-mock~=3.0",
   "ruff~=0.15.9",
+  "sqlfluff>=4.1.0",
   "testcontainers[postgres]~=4.0",
   "twine",
   "zuban",
@@ -112,6 +113,7 @@ select = ["E", "F", "UP"]
 ignore = ["E501"]
 
 [tool.setuptools.package-data]
+"yascheduler.adapters.persistence.sql" = ["**/*.sql"]
 "yascheduler.data" = [
   "schema.sql",
   "yascheduler.conf",
@@ -121,6 +123,13 @@ ignore = ["E501"]
 
 [tool.setuptools.packages.find]
 include = ["yascheduler*"]
+
+[tool.sqlfluff.core]
+templater = "placeholder"
+
+[tool.sqlfluff.templater.placeholder]
+param_style = "colon"
+
 
 [tool.uv]
 exclude-newer = "7 days"

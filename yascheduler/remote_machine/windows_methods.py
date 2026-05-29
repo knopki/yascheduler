@@ -6,7 +6,7 @@
 #   PURPOSE: Windows-specific remote commands: engine deployment, process listing.
 #   SCOPE: Windows setup_node, list_processes implementations.
 #   DEPENDS: M-CONFIG-ENGINE, M-REMOTE-PROTOCOL, M-REMOTE-COMMON
-#   LINKS: M-REMOTE-WINDOWS
+#   LINKS: M-REMOTE-ADAPTERS, M-CONFIG-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

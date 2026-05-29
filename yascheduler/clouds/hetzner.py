@@ -5,7 +5,7 @@
 #   PURPOSE: Hetzner Cloud server creation and deletion via API.
 #   SCOPE: Hetzner create/delete node functions.
 #   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
-#   LINKS: M-CLOUD-HETZNER
+#   LINKS: M-CLOUD-ADAPTERS, M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

@@ -6,7 +6,7 @@
 #   PURPOSE: Shared config helpers: field factories, validators, warning helpers.
 #   SCOPE: attrs field factory, unknown field warning utility.
 #   DEPENDS: none
-#   LINKS: M-CONFIG-UTILS
+#   LINKS: M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

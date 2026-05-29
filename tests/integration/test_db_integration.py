@@ -34,7 +34,6 @@
 
 from yascheduler.db import DB, TaskStatus
 
-
 # ---------------------------------------------------------------------------
 # Node CRUD
 # ---------------------------------------------------------------------------
@@ -182,12 +181,15 @@ async def test_count_aggregations(db: DB):
 # END_CONTRACT: test_add_and_get_task
 async def test_add_and_get_task(db: DB):
     """Add a task and retrieve it; verify all fields including metadata."""
-    task = await db.add_task(label="calc", ip_addr="10.0.0.1", metadata={"param": 42})
+    meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
+    task = await db.add_task(
+        label="calc", ip_addr="10.0.0.1", metadata={**meta, "param": 42}
+    )
     assert task.task_id >= 1
     assert task.label == "calc"
     assert task.ip == "10.0.0.1"
     assert task.status == TaskStatus.TO_DO
-    assert task.metadata == {"param": 42}
+    assert task.metadata == {**meta, "param": 42}
 
     retrieved = await db.get_task(task.task_id)
     assert retrieved is not None
@@ -195,7 +197,7 @@ async def test_add_and_get_task(db: DB):
     assert retrieved.label == "calc"
     assert retrieved.ip == "10.0.0.1"
     assert retrieved.status == TaskStatus.TO_DO
-    assert retrieved.metadata == {"param": 42}
+    assert retrieved.metadata == {**meta, "param": 42}
 
 
 # START_CONTRACT: test_task_lifecycle
@@ -207,7 +209,8 @@ async def test_add_and_get_task(db: DB):
 # END_CONTRACT: test_task_lifecycle
 async def test_task_lifecycle(db: DB):
     """Walk a task through TO_DO → RUNNING → DONE and verify each step."""
-    task = await db.add_task(label="sim", ip_addr="10.0.0.1")
+    meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
+    task = await db.add_task(label="sim", metadata=meta)
     assert task.status == TaskStatus.TO_DO
 
     await db.set_task_running(task.task_id, "10.0.0.5")
@@ -220,7 +223,7 @@ async def test_task_lifecycle(db: DB):
     done = await db.get_task(task.task_id)
     assert done is not None
     assert done.status == TaskStatus.DONE
-    assert done.metadata == {"result": "ok"}
+    assert done.metadata == {**meta, "result": "ok"}
 
 
 # START_CONTRACT: test_set_task_error
@@ -232,22 +235,23 @@ async def test_task_lifecycle(db: DB):
 # END_CONTRACT: test_set_task_error
 async def test_set_task_error(db: DB):
     """set_task_error embeds error in metadata; without error passes metadata unchanged."""
-    task = await db.add_task(label="fail-job")
+    meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
+    task = await db.add_task(label="fail-job", metadata=meta)
 
     # With error message
     await db.set_task_error(task.task_id, {"key": "val"}, "crash")
     t = await db.get_task(task.task_id)
     assert t is not None
     assert t.status == TaskStatus.DONE
-    assert t.metadata == {"key": "val", "error": "crash"}
+    assert t.metadata == {**meta, "key": "val", "error": "crash"}
 
     # Without error message (use a new task for clarity)
-    task2 = await db.add_task(label="fail-job2")
+    task2 = await db.add_task(label="fail-job2", metadata=meta)
     await db.set_task_error(task2.task_id, {"only": "meta"})
     t2 = await db.get_task(task2.task_id)
     assert t2 is not None
     assert t2.status == TaskStatus.DONE
-    assert t2.metadata == {"only": "meta"}
+    assert t2.metadata == {**meta, "only": "meta"}
 
 
 # START_CONTRACT: test_get_tasks_by_status

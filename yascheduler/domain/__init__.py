@@ -4,7 +4,7 @@
 #   PURPOSE: Domain layer entry point for the yascheduler.
 #   SCOPE: Exposes domain entities, ports (interfaces), exceptions, and domain services.
 #   DEPENDS: none
-#   LINKS:
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS, M-DOMAIN-SERVICES
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

@@ -4,7 +4,7 @@
 #   PURPOSE: Mapping of cloud config types to create/delete callables.
 #   SCOPE: Adapter registry mapping provider config classes to their operations.
 #   DEPENDS: M-CLOUD-PROTOCOLS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD
-#   LINKS: M-CLOUD-ADAPTERS
+#   LINKS: M-CLOUD-API, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

@@ -6,7 +6,7 @@
 #   PURPOSE: Public re-exports from remote_machine submodules.
 #   SCOPE: Re-exports of key types from submodules (protocol, remote_machine, remote_machine_repository).
 #   DEPENDS: M-REMOTE-PROTOCOL, M-REMOTE, M-REMOTE-REPO
-#   LINKS: M-REMOTE
+#   LINKS: M-REMOTE, M-REMOTE-REPO, M-REMOTE-PROTOCOL
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

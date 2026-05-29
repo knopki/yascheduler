@@ -6,7 +6,7 @@
 #   PURPOSE: Database connection configuration.
 #   SCOPE: PostgreSQL connection parameters.
 #   DEPENDS: M-CONFIG-UTILS
-#   LINKS: M-CONFIG-DB
+#   LINKS: M-DB, M-PERSISTENCE-UOW
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

@@ -6,7 +6,7 @@
 #   PURPOSE: Custom exceptions for remote machine operations.
 #   SCOPE: PlatformGuessFailed exception.
 #   DEPENDS: none
-#   LINKS: M-REMOTE-EXC
+#   LINKS: M-REMOTE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

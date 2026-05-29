@@ -4,7 +4,7 @@
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineGateway, CloudProvisioner Protocol classes.
 #   DEPENDS: M-DOMAIN-MODEL
-#   LINKS:
+#   LINKS: M-DOMAIN-MODEL, M-PERSISTENCE-POSTGRES
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -36,7 +36,7 @@ from .model import (
 class TaskRepository(Protocol):
     """Async port for task persistence: get, save, list_by_status."""
 
-    async def get(self, task_id: int) -> Task: ...
+    async def get(self, task_id: int) -> Task | None: ...
 
     async def save(self, task: Task) -> None: ...
 
@@ -47,7 +47,7 @@ class TaskRepository(Protocol):
 class NodeRepository(Protocol):
     """Async port for node persistence: full CRUD lifecycle."""
 
-    async def get(self, ip: str) -> Node: ...
+    async def get(self, ip: str) -> Node | None: ...
 
     async def list_enabled(self) -> list[Node]: ...
 
@@ -55,7 +55,7 @@ class NodeRepository(Protocol):
 
     async def add(self, node: Node) -> None: ...
 
-    async def add_tmp(self, ip: str, cloud: str) -> None: ...
+    async def add_tmp(self, cloud: str, username: str = "root") -> str: ...
 
     async def update(self, node: Node) -> None: ...
 

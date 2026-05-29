@@ -4,8 +4,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL persistence for tasks, nodes, and their statuses.
 #   SCOPE: Task and node CRUD, status transitions, schema migration.
-#   DEPENDS: M-CONFIG-DB, M-COMPAT
-#   LINKS: M-DB
+#   DEPENDS: M-CONFIG-DB, M-COMPAT, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
+#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL, M-SCHEDULER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,32 +13,52 @@
 #   TaskModel: Immutable task data model (task_id, label, ip, status, metadata, cloud).
 #   NodeModel: Immutable node data model (ip, ncpus, enabled, cloud, username, port).
 #   TaskStatus: IntEnum of possible task states (TO_DO, RUNNING, DONE).
+#   DB._task_repo: PostgresTaskRepository field (initialized in __attrs_post_init__).
+#   DB._node_repo: PostgresNodeRepository field (initialized in __attrs_post_init__).
+#   DB._task_to_model: Convert domain Task to DB TaskModel.
+#   DB._model_to_task: Convert DB TaskModel to domain Task.
+#   DB._node_to_model: Convert domain Node to DB NodeModel.
+#   DB._model_to_node: Convert DB NodeModel to domain Node.
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - Delegate to PostgresTaskRepository/PostgresNodeRepository.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 
 """Database utils"""
 
 import asyncio
 import json
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum, unique
-from typing import Any, Optional, cast
+from enum import IntEnum, unique
+from typing import Any, Optional
 
 import backoff
 from attrs import asdict, define, field
 from pg8000.native import Connection, InterfaceError
 
+from .adapters.persistence.postgres import (
+    PostgresNodeRepository,
+    PostgresTaskRepository,
+)
 from .compat import Self
 from .config import ConfigDb
+from .domain.model import (
+    Node,
+    Task,
+)
+from .domain.model import (
+    TaskContext as DomainTaskContext,
+)
+from .domain.model import (
+    TaskStatus as DomainTaskStatus,
+)
 
 
 @unique
-class TaskStatus(int, Enum):
+class TaskStatus(IntEnum):
     """Task possible states enum"""
 
     TO_DO = 0
@@ -80,6 +100,88 @@ class DB:
     loop: asyncio.AbstractEventLoop = field()
     executor: ThreadPoolExecutor = field()
     conn: Connection = field()
+    _task_repo: PostgresTaskRepository = field(init=False)
+    _node_repo: PostgresNodeRepository = field(init=False)
+
+    def __attrs_post_init__(self) -> None:
+        """Initialize repository wrappers after attrs init."""
+        object.__setattr__(
+            self, "_task_repo", PostgresTaskRepository(self.conn, self.executor)
+        )
+        object.__setattr__(
+            self, "_node_repo", PostgresNodeRepository(self.conn, self.executor)
+        )
+
+    # START_CONTRACT: _task_to_model
+    #   PURPOSE: Convert domain Task to DB TaskModel.
+    #   INPUTS: { task: Task - domain task }
+    #   OUTPUTS: { TaskModel }
+    #   SIDE_EFFECTS: None
+    #   LINKS: Task, TaskModel, TaskContext
+    # END_CONTRACT: _task_to_model
+    def _task_to_model(self, task: Task) -> TaskModel:
+        """Convert domain Task to DB TaskModel."""
+        return TaskModel(
+            task_id=task.task_id,
+            label=task.label,
+            ip=task.allocated_ip or "",
+            status=TaskStatus(task.status.value),
+            metadata={**task.context.to_metadata()},
+        )
+
+    # START_CONTRACT: _model_to_task
+    #   PURPOSE: Convert DB TaskModel to domain Task.
+    #   INPUTS: { model: TaskModel - DB task model }
+    #   OUTPUTS: { Task }
+    #   SIDE_EFFECTS: None
+    #   LINKS: TaskModel, Task, TaskContext
+    # END_CONTRACT: _model_to_task
+    def _model_to_task(self, model: TaskModel) -> Task:
+        """Convert DB TaskModel to domain Task."""
+        ctx = DomainTaskContext.from_metadata(dict(model.metadata))
+        return Task(
+            task_id=model.task_id,
+            label=model.label,
+            context=ctx,
+            status=DomainTaskStatus(model.status.value),
+            allocated_ip=model.ip or None,
+        )
+
+    # START_CONTRACT: _node_to_model
+    #   PURPOSE: Convert domain Node to DB NodeModel.
+    #   INPUTS: { node: Node - domain node }
+    #   OUTPUTS: { NodeModel }
+    #   SIDE_EFFECTS: None
+    #   LINKS: Node, NodeModel
+    # END_CONTRACT: _node_to_model
+    def _node_to_model(self, node: Node) -> NodeModel:
+        """Convert domain Node to DB NodeModel."""
+        return NodeModel(
+            ip=node.ip,
+            ncpus=node.ncpus or None,
+            enabled=node.enabled,
+            cloud=node.cloud,
+            username=node.username,
+            port=node.port,
+        )
+
+    # START_CONTRACT: _model_to_node
+    #   PURPOSE: Convert DB NodeModel to domain Node.
+    #   INPUTS: { model: NodeModel - DB node model }
+    #   OUTPUTS: { Node }
+    #   SIDE_EFFECTS: None
+    #   LINKS: NodeModel, Node
+    # END_CONTRACT: _model_to_node
+    def _model_to_node(self, model: NodeModel) -> Node:
+        """Convert DB NodeModel to domain Node."""
+        return Node(
+            ip=model.ip,
+            ncpus=model.ncpus or 0,
+            enabled=model.enabled,
+            cloud=model.cloud,
+            username=model.username,
+            port=model.port,
+        )
 
     @staticmethod
     def create_connection(config: ConfigDb) -> Connection:
@@ -150,72 +252,42 @@ class DB:
 
     async def has_node(self, ip_addr: str) -> bool:
         """Check if node exist"""
-        await self.run("SELECT ip FROM yascheduler_nodes WHERE ip=:ip;", ip=ip_addr)
-        return bool(self.conn.row_count)
+        node = await self._node_repo.get(ip_addr)
+        return bool(node)
 
     async def update_task_status(self, task_id: int, status: TaskStatus) -> None:
         """Update task status"""
-        await self.run(
-            "UPDATE yascheduler_tasks SET status=:status WHERE task_id=:task_id;",
-            task_id=task_id,
-            status=status.value,
-        )
+        await self._task_repo.update_status(task_id, DomainTaskStatus(status.value))
 
     async def get_all_nodes(self) -> Sequence[NodeModel]:
         """Get all nodes"""
-        rows = await self.run(
-            """SELECT ip, ncpus, enabled, cloud, username, port FROM yascheduler_nodes;"""
-        )
-        return [NodeModel(*x) for x in (rows or [])]
+        nodes = await self._node_repo.list_all()
+        return [self._node_to_model(n) for n in nodes]
 
     async def get_enabled_nodes(self) -> Sequence[NodeModel]:
         """Get all enabled nodes"""
-        rows = await self.run(
-            """SELECT ip, ncpus, enabled, cloud, username, port
-            FROM yascheduler_nodes WHERE enabled=TRUE;"""
-        )
-        return [y for y in [NodeModel(*x) for x in (rows or [])] if "." in y.ip]
+        nodes = await self._node_repo.list_enabled()
+        return [self._node_to_model(n) for n in nodes]
 
     async def get_disabled_nodes(self) -> Sequence[NodeModel]:
         """Get all disabled nodes"""
-        rows = await self.run(
-            """SELECT ip, ncpus, enabled, cloud, username, port
-            FROM yascheduler_nodes WHERE enabled=FALSE;"""
-        )
-        return [y for y in [NodeModel(*x) for x in (rows or [])] if "." in y.ip]
+        nodes = await self._node_repo.list_disabled()
+        return [self._node_to_model(n) for n in nodes]
 
     async def get_node(self, ip_addr: str) -> Optional[NodeModel]:
         """Get node by ip"""
-        rows = await self.run(
-            """SELECT ip, ncpus, enabled, cloud, username, port
-            FROM yascheduler_nodes
-            WHERE ip=:ip;""",
-            ip=ip_addr,
-        )
-        for row in rows or []:
-            return NodeModel(*row)
+        node = await self._node_repo.get(ip_addr)
+        if node is None:
+            return None
+        return self._node_to_model(node)
 
     async def count_nodes_clouds(self) -> Mapping[str, int]:
         """Count nodes in clouds"""
-        rows = await self.run(
-            """SELECT cloud, COUNT(cloud) FROM yascheduler_nodes
-            WHERE cloud IS NOT NULL GROUP BY cloud;"""
-        )
-        data = {}
-        for row in rows or []:
-            data[row[0]] = row[1]
-        return data
+        return await self._node_repo.count_by_cloud()
 
     async def count_nodes_by_status(self) -> Mapping[bool, int]:
         """Count nodes by status"""
-        rows = await self.run(
-            """SELECT enabled, COUNT(ip) FROM yascheduler_nodes
-            GROUP BY enabled ORDER BY enabled;"""
-        )
-        data = defaultdict(int)
-        for row in rows or []:
-            data[bool(row[0])] = row[1]
-        return data
+        return await self._node_repo.count_by_status()
 
     # START_CONTRACT: add_tmp_node
     #   PURPOSE: Add a temporary cloud-provisioned node with generated provisional IP
@@ -226,16 +298,7 @@ class DB:
     # END_CONTRACT: add_tmp_node
     async def add_tmp_node(self, cloud: str, username: str) -> str:
         """Add temporary node"""
-        rows = await self.run(
-            """INSERT INTO yascheduler_nodes (ip, enabled, cloud, username)
-            VALUES ('prov' || SUBSTR(MD5(RANDOM()::TEXT), 0, 11),
-              FALSE, :cloud, :username)
-            RETURNING ip;""",
-            cloud=cloud,
-            username=username,
-        )
-        rows = cast(list[list[str]], rows)
-        return rows[0][0]
+        return await self._node_repo.add_tmp(cloud, username=username)
 
     # START_CONTRACT: add_node
     #   PURPOSE: Insert a new compute node record
@@ -254,27 +317,17 @@ class DB:
         enabled: bool = False,
     ) -> NodeModel:
         """Add new node"""
-        port = port or 22
-        # START_BLOCK_INSERT
-        await self.run(
-            """INSERT INTO yascheduler_nodes (ip, ncpus, enabled, cloud, username, port)
-            VALUES (:ip, :ncpus, :enabled, :cloud, :username, :port);""",
+        port_val = port or 22
+        node = Node(
             ip=ip_addr,
-            ncpus=ncpus,
-            cloud=cloud,
-            username=username,
-            enabled=enabled,
-            port=port,
-        )
-        # END_BLOCK_INSERT
-        return NodeModel(
-            ip_addr,
-            ncpus,
+            ncpus=ncpus or 0,
             enabled=enabled,
             cloud=cloud,
             username=username,
-            port=port,
+            port=port_val,
         )
+        await self._node_repo.add(node)
+        return self._node_to_model(node)
 
     # START_CONTRACT: enable_node
     #   PURPOSE: Enable a node for task scheduling
@@ -285,10 +338,7 @@ class DB:
     # END_CONTRACT: enable_node
     async def enable_node(self, ip_addr: str) -> None:
         """Enable node"""
-        await self.run(
-            "UPDATE yascheduler_nodes SET enabled=TRUE WHERE ip=:ip;",
-            ip=ip_addr,
-        )
+        await self._node_repo.enable(ip_addr)
 
     # START_CONTRACT: disable_node
     #   PURPOSE: Disable a node from task scheduling
@@ -299,14 +349,11 @@ class DB:
     # END_CONTRACT: disable_node
     async def disable_node(self, ip_addr: str) -> None:
         """Disable node"""
-        await self.run(
-            "UPDATE yascheduler_nodes SET enabled=FALSE WHERE ip=:ip;",
-            ip=ip_addr,
-        )
+        await self._node_repo.disable(ip_addr)
 
     async def remove_node(self, ip_addr: str) -> None:
         """Remove node"""
-        await self.run("DELETE FROM yascheduler_nodes WHERE ip=:ip;", ip=ip_addr)
+        await self._node_repo.remove(ip_addr)
 
     # START_CONTRACT: get_task
     #   PURPOSE: Retrieve a single task by its ID
@@ -317,37 +364,23 @@ class DB:
     # END_CONTRACT: get_task
     async def get_task(self, task_id: int) -> Optional[TaskModel]:
         """Get task"""
-        rows = await self.run(
-            """SELECT task_id, label, ip, status, metadata
-                FROM yascheduler_tasks
-                WHERE task_id=:task_id;""",
-            task_id=task_id,
-        )
-        for row in rows or []:
-            return TaskModel(*row)
+        task = await self._task_repo.get(task_id)
+        if task is None:
+            return None
+        return self._task_to_model(task)
 
     async def get_task_ids_by_ip_and_status(
         self, ip_addr: str, status: TaskStatus
     ) -> Sequence[int]:
         """Get task ids by ip and status"""
-        rows = await self.run(
-            """SELECT task_id FROM yascheduler_tasks
-            WHERE ip=:ip AND status=:status
-            ORDER BY task_id;""",
-            ip=ip_addr,
-            status=status.value,
+        return await self._task_repo.list_ids_by_ip_and_status(
+            ip_addr, DomainTaskStatus(status.value)
         )
-        return [cast(int, x[0]) for x in (rows or [])]
 
     async def get_tasks_by_jobs(self, jobs: Sequence[int]) -> Sequence[TaskModel]:
         """Get tasks by ids"""
-        rows = await self.run(
-            """SELECT task_id, label, ip, status, metadata
-            FROM yascheduler_tasks
-            WHERE task_id IN (SELECT unnest(CAST (:task_ids AS int[]))) ORDER BY task_id;""",
-            task_ids=jobs,
-        )
-        return [TaskModel(*x) for x in (rows or [])]
+        tasks = await self._task_repo.list_by_jobs(list(jobs))
+        return [self._task_to_model(t) for t in tasks]
 
     # START_CONTRACT: get_tasks_by_status
     #   PURPOSE: Query tasks filtered by one or more statuses
@@ -360,41 +393,45 @@ class DB:
         self, statuses: Sequence[TaskStatus], limit: Optional[int] = None
     ) -> Sequence[TaskModel]:
         """Get tasks by status"""
-        rows = await self.run(
-            """SELECT task_id, label, ip, status, metadata
-            FROM yascheduler_tasks
-            WHERE status IN (SELECT unnest(CAST (:statuses AS int[]))) ORDER BY task_id
-            LIMIT :lim;""",
-            statuses=[x.value for x in statuses],
-            lim=limit,
-        )
-        return [TaskModel(*x) for x in (rows or [])]
+        status_set = set(DomainTaskStatus(s.value) for s in statuses)
+        tasks = await self._task_repo.list_by_status(status_set, limit=limit)
+        return [self._task_to_model(t) for t in tasks]
 
     async def get_tasks_with_cloud_by_id_status(
         self, ids: Sequence[int], status: TaskStatus
     ) -> Sequence[TaskModel]:
         """Get tasks with cloud by id and status"""
-        rows = await self.run(
-            """SELECT t.task_id, t.label, t.ip, t.status, t.metadata, n.cloud
-            FROM yascheduler_tasks AS t
-            JOIN yascheduler_nodes AS n ON n.ip=t.ip
-            WHERE status=:status AND
-            task_id IN (SELECT unnest(CAST (:ids AS int[]))) ORDER BY task_id;""",
-            ids=ids,
-            status=status.value,
-        )
-        return [TaskModel(*x) for x in (rows or [])]
+        tasks = await self._task_repo.list_by_jobs(list(ids))
+        domain_status = DomainTaskStatus(status.value)
+        matching = [t for t in tasks if t.status == domain_status]
+
+        ips = [t.allocated_ip for t in matching if t.allocated_ip]
+        nodes_by_ip = await self._node_repo.get_by_ips(ips) if ips else {}
+
+        result: list[TaskModel] = []
+        for t in matching:
+            cloud: Optional[str] = None
+            if t.allocated_ip:
+                node = nodes_by_ip.get(t.allocated_ip)
+                if node is not None:
+                    cloud = node.cloud
+            model = self._task_to_model(t)
+            result.append(
+                TaskModel(
+                    task_id=model.task_id,
+                    label=model.label,
+                    ip=model.ip,
+                    status=model.status,
+                    metadata=model.metadata,
+                    cloud=cloud,
+                )
+            )
+        return result
 
     async def count_tasks_by_status(self) -> Mapping[TaskStatus, int]:
         """Count tasks by status"""
-        rows = await self.run(
-            """SELECT status, COUNT(task_id) FROM yascheduler_tasks
-            GROUP BY status ORDER BY status;"""
-        )
-        data = defaultdict(int)
-        for row in rows or []:
-            data[TaskStatus(row[0])] = row[1]
-        return data
+        raw = await self._task_repo.count_by_status()
+        return {TaskStatus(k.value): int(v) for k, v in raw.items()}
 
     # START_CONTRACT: add_task
     #   PURPOSE: Insert a new task row
@@ -411,24 +448,30 @@ class DB:
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> TaskModel:
         """Add new task"""
-        rows = await self.run(
-            """INSERT INTO yascheduler_tasks (label, metadata, ip, status)
-            VALUES (:label, :metadata, :ip, :status)
-            RETURNING task_id, label, ip, status, metadata;""",
+        ctx = DomainTaskContext.from_metadata(dict(metadata or {}))
+        domain_task = Task(
+            task_id=0,
             label=label or "",
-            metadata=metadata,
-            ip=ip_addr,
-            status=status.value,
+            context=ctx,
+            status=DomainTaskStatus(status.value),
+            allocated_ip=ip_addr,
         )
-        return TaskModel(*cast(list, rows)[0])
+        inserted = await self._task_repo.insert(domain_task)
+        return self._task_to_model(inserted)
 
     async def update_task_meta(self, task_id: int, metadata: Mapping[str, Any]):
         """Update task metadata"""
-        await self.run(
-            "UPDATE yascheduler_tasks SET metadata=:metadata WHERE task_id=:task_id;",
-            task_id=task_id,
-            metadata=metadata,
-        )
+        task = await self._task_repo.get(task_id)
+        if task is not None:
+            new_ctx = DomainTaskContext.from_metadata(dict(metadata))
+            updated = Task(
+                task_id=task.task_id,
+                label=task.label,
+                context=new_ctx,
+                status=task.status,
+                allocated_ip=task.allocated_ip,
+            )
+            await self._task_repo.save(updated)
 
     # START_CONTRACT: set_task_running
     #   PURPOSE: Mark task as RUNNING and bind it to a node IP
@@ -439,16 +482,9 @@ class DB:
     # END_CONTRACT: set_task_running
     async def set_task_running(self, task_id: int, ip_addr: str):
         """Set task running"""
-        # START_BLOCK_SET_RUNNING
-        await self.run(
-            """UPDATE yascheduler_tasks
-            SET status=:status, ip=:ip
-            WHERE task_id=:task_id;""",
-            task_id=task_id,
-            status=TaskStatus.RUNNING.value,
-            ip=ip_addr,
-        )
-        # END_BLOCK_SET_RUNNING
+        task = await self._task_repo.get(task_id)
+        if task is not None:
+            await self._task_repo.save(task.allocate_to(ip_addr).mark_running())
 
     # START_CONTRACT: set_task_done
     #   PURPOSE: Set task status to DONE and update its metadata
@@ -459,16 +495,18 @@ class DB:
     # END_CONTRACT: set_task_done
     async def set_task_done(self, task_id: int, metadata: Mapping[str, Any]):
         """Set task done"""
-        # START_BLOCK_SET_DONE
-        await self.run(
-            """UPDATE yascheduler_tasks
-            SET status=:status, metadata=:metadata
-            WHERE task_id=:task_id;""",
-            task_id=task_id,
-            metadata=metadata,
-            status=TaskStatus.DONE.value,
-        )
-        # END_BLOCK_SET_DONE
+        task = await self._task_repo.get(task_id)
+        if task is not None:
+            meta = task.context.to_metadata()
+            meta.update(metadata)
+            updated = Task(
+                task_id=task.task_id,
+                label=task.label,
+                context=DomainTaskContext.from_metadata(meta),
+                status=DomainTaskStatus.DONE,
+                allocated_ip=task.allocated_ip,
+            )
+            await self._task_repo.save(updated)
 
     # START_CONTRACT: set_task_error
     #   PURPOSE: Mark task as DONE with error metadata (embeds error in metadata if provided)
@@ -481,14 +519,17 @@ class DB:
         self, task_id: int, metadata: Mapping[str, Any], error: Optional[str] = None
     ):
         """Set task error"""
-        new_meta = (
-            dict(list(metadata.items()) + [("error", error)]) if error else metadata
-        )
-        await self.run(
-            """UPDATE yascheduler_tasks
-            SET status=:status, metadata=:metadata
-            WHERE task_id=:task_id;""",
-            task_id=task_id,
-            metadata=new_meta,
-            status=TaskStatus.DONE.value,
-        )
+        task = await self._task_repo.get(task_id)
+        if task is not None:
+            new_meta = task.context.to_metadata()
+            new_meta.update(metadata)
+            if error:
+                new_meta["error"] = error
+            updated = Task(
+                task_id=task.task_id,
+                label=task.label,
+                context=DomainTaskContext.from_metadata(new_meta),
+                status=DomainTaskStatus.DONE,
+                allocated_ip=task.allocated_ip,
+            )
+            await self._task_repo.save(updated)
