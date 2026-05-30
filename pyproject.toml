@@ -92,6 +92,9 @@ version_provider = "pep621"
 update_changelog_on_bump = true
 changelog_incremental = true
 
+[tool.mypy]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = ["-m", "unit"]
@@ -129,7 +132,6 @@ templater = "placeholder"
 
 [tool.sqlfluff.templater.placeholder]
 param_style = "colon"
-
 
 [tool.uv]
 exclude-newer = "7 days"
