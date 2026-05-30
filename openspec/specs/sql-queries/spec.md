@@ -41,12 +41,3 @@ parameter binding.
 #### Scenario: Parameterized query
 - **WHEN** a query file contains `WHERE task_id = :task_id`
 - **THEN** the repository passes `task_id=42` and pg8000 binds the value
-
-### Requirement: schema.sql as authoritative DDL
-
-The system SHALL copy the DDL from `data/schema.sql` to
-`adapters/persistence/sql/schema.sql` as the authoritative schema source.
-
-#### Scenario: Schema file location
-- **WHEN** a developer needs the current database schema
-- **THEN** it is at `adapters/persistence/sql/schema.sql`

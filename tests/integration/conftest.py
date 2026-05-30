@@ -85,7 +85,9 @@ async def _init_schema(
     schema_path = (
         Path(__file__).resolve().parent.parent.parent
         / "yascheduler"
-        / "data"
+        / "adapters"
+        / "persistence"
+        / "sql"
         / "schema.sql"
     )
     await instance.run(schema_path.read_text())

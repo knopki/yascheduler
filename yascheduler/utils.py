@@ -22,13 +22,13 @@
 
 import argparse
 import asyncio
+import base64
 import logging
 import os
 import signal
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Optional, Union
-import base64
 
 from pg8000 import ProgrammingError
 
@@ -330,7 +330,9 @@ async def _init_db(install_path: Path):
     # database initialization
     config = Config.from_config_parser(CONFIG_FILE)
     db = await DB.create(config.db, automigrate=False)
-    schema = (install_path / "data" / "schema.sql").read_text()
+    schema = (
+        install_path / "adapters" / "persistence" / "sql" / "schema.sql"
+    ).read_text()
     try:
         await db.run(schema)
         await db.commit()

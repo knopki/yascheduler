@@ -118,7 +118,6 @@ ignore = ["E501"]
 [tool.setuptools.package-data]
 "yascheduler.adapters.persistence.sql" = ["**/*.sql"]
 "yascheduler.data" = [
-  "schema.sql",
   "yascheduler.conf",
   "yascheduler.service",
   "yascheduler.sh",
