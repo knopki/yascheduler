@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.3 - Move aiohttp.ClientSession creation from __init__ to start() to avoid orphaned sessions.
-#   PREVIOUS_CHANGE: v2.1.2 - Remove duplicate WebhookPayload; import from webhook module; drop attrs dependency in this module.
+#   LAST_CHANGE: v2.1.4 - Fix KeyError in _print_stats when DB has no tasks for a status; fix unclosed aiohttp session by moving close into start() finally block so it runs inside the main coroutine.
+#   PREVIOUS_CHANGE: v2.1.3 - Move aiohttp.ClientSession creation from __init__ to start() to avoid orphaned sessions.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,11 +29,11 @@ import logging
 from asyncio.locks import Event, Semaphore
 from collections import Counter
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Any
-from dataclasses import asdict
 
 import aiohttp
 import asyncssh
@@ -354,9 +354,9 @@ class Orchestrator:
                 n_busy=len(self._remote_machines.filter(busy=True).keys()),
                 n_enabled=ncounters[True],
                 n_total=sum(ncounters.values()),
-                t_run=tcounters[TaskStatus.RUNNING],
-                t_todo=tcounters[TaskStatus.TO_DO],
-                t_done=tcounters[TaskStatus.DONE],
+                t_run=tcounters.get(TaskStatus.RUNNING, 0),
+                t_todo=tcounters.get(TaskStatus.TO_DO, 0),
+                t_done=tcounters.get(TaskStatus.DONE, 0),
             )
             self._log.info(msg)
 
@@ -603,21 +603,20 @@ class Orchestrator:
         # END_BLOCK_WAIT_MACHINES
 
     # START_CONTRACT: Orchestrator._shutdown_barrier
-    #   PURPOSE: Wait for background jobs and work around aiohttp session close race.
+    #   PURPOSE: Wait for background jobs to complete.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Sleeps 1s to avoid Unclosed client session warning.
+    #   SIDE_EFFECTS: None
     #   LINKS:
     # END_CONTRACT: Orchestrator._shutdown_barrier
     async def _shutdown_barrier(self) -> None:
         await asyncio.gather(*self._bg_jobs, return_exceptions=True)
-        await asyncio.sleep(1)  # workaround aiohttp's Unclosed client session
 
     # START_CONTRACT: Orchestrator.start
     #   PURPOSE: Start all producer-consumer loops for the daemon.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Creates aiohttp session, background tasks, connects machines, starts all producer-consumer loops (allocate/consume/deallocate) with config-limited concurrency.
+    #   SIDE_EFFECTS: Creates and owns aiohttp session (closed in finally block), starts background tasks, connects machines, runs producer-consumer loops with config-limited concurrency.
     #   LINKS: M-QUEUE, M-DB
     # END_CONTRACT: Orchestrator.start
     async def start(self) -> None:
@@ -626,54 +625,59 @@ class Orchestrator:
             ", ".join(self._engines.keys()),
         )
 
-        self._http = aiohttp.ClientSession()
-        self._bg_jobs.add(asyncio.create_task(self._print_stats()))
+        try:
+            self._http = aiohttp.ClientSession()
+            self._bg_jobs.add(asyncio.create_task(self._print_stats()))
 
-        conn_machine_co = self._create_producer_consumers(
-            queue=self._conn_machine_q,
-            producer=self._connect_machine_producer,
-            consumer=self._connect_machine_consumer,
-            workers_num=self._config.local.conn_machine_limit,
-        )
-        self._bg_jobs.add(asyncio.create_task(conn_machine_co))
+            conn_machine_co = self._create_producer_consumers(
+                queue=self._conn_machine_q,
+                producer=self._connect_machine_producer,
+                consumer=self._connect_machine_consumer,
+                workers_num=self._config.local.conn_machine_limit,
+            )
+            self._bg_jobs.add(asyncio.create_task(conn_machine_co))
 
-        await self._await_first_machine()
+            await self._await_first_machine()
 
-        allocate_co = self._create_producer_consumers(
-            queue=self._allocate_q,
-            producer=self._allocator_producer,
-            consumer=self._allocator_consumer,
-            workers_num=self._config.local.allocate_limit,
-        )
-        self._bg_jobs.add(asyncio.create_task(allocate_co))
+            allocate_co = self._create_producer_consumers(
+                queue=self._allocate_q,
+                producer=self._allocator_producer,
+                consumer=self._allocator_consumer,
+                workers_num=self._config.local.allocate_limit,
+            )
+            self._bg_jobs.add(asyncio.create_task(allocate_co))
 
-        machine_not_found: Counter[str] = Counter()
-        consume_co = self._create_producer_consumers(
-            queue=self._consume_q,
-            producer=self._task_consumer_producer,
-            consumer=partial(
-                self._task_consumer_consumer,
-                machine_not_found=machine_not_found,
-            ),
-            workers_num=self._config.local.consume_limit,
-        )
-        self._bg_jobs.add(asyncio.create_task(consume_co))
+            machine_not_found: Counter[str] = Counter()
+            consume_co = self._create_producer_consumers(
+                queue=self._consume_q,
+                producer=self._task_consumer_producer,
+                consumer=partial(
+                    self._task_consumer_consumer,
+                    machine_not_found=machine_not_found,
+                ),
+                workers_num=self._config.local.consume_limit,
+            )
+            self._bg_jobs.add(asyncio.create_task(consume_co))
 
-        deallocate_co = self._create_producer_consumers(
-            queue=self._deallocate_q,
-            producer=self._deallocator_producer,
-            consumer=self._deallocator_consumer,
-            workers_num=self._config.local.deallocate_limit,
-        )
-        self._bg_jobs.add(asyncio.create_task(deallocate_co))
+            deallocate_co = self._create_producer_consumers(
+                queue=self._deallocate_q,
+                producer=self._deallocator_producer,
+                consumer=self._deallocator_consumer,
+                workers_num=self._config.local.deallocate_limit,
+            )
+            self._bg_jobs.add(asyncio.create_task(deallocate_co))
 
-        await self._shutdown_barrier()
+            await self._shutdown_barrier()
+        finally:
+            if self._http is not None:
+                await self._http.close()
+                self._http = None
 
     # START_CONTRACT: Orchestrator.stop
-    #   PURPOSE: Graceful shutdown of all background tasks and connections.
+    #   PURPOSE: Signal the daemon to stop and clean up non-session resources.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Cancels jobs, disconnects machines, stops clouds, closes HTTP.
+    #   SIDE_EFFECTS: Cancels jobs, disconnects machines, stops clouds. Session is closed by start() when barrier lifts.
     #   LINKS: M-CLOUD-MANAGER, M-REMOTE-REPO
     # END_CONTRACT: Orchestrator.stop
     async def stop(self) -> None:
@@ -689,5 +693,3 @@ class Orchestrator:
 
         await self._clouds.stop()
         await self._remote_machines.disconnect_all()
-        if self._http is not None:
-            await self._http.close()
