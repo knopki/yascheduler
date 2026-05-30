@@ -1,12 +1,12 @@
 ## Purpose
 
-Defines the domain entity model for yascheduler: Task lifecycle, Node records, ConnectedMachine state, Engine specifications, and related value objects — all as frozen dataclasses with encapsulated business rules.
+Defines the domain entity model for yascheduler: Task lifecycle, Node records, ConnectedMachine state, Engine specifications, and related value objects — all immutable with encapsulated business rules.
 
 ## Requirements
 
 ### Requirement: Task entity with status lifecycle
 
-The system SHALL provide a `Task` domain entity as a frozen dataclass with
+The system SHALL provide a `Task` domain entity as an immutable object with
 fields: `task_id: int`, `label: str`, `status: TaskStatus`, `context: TaskContext`,
 `allocated_ip: str | None`.
 
@@ -19,28 +19,40 @@ fields: `task_id: int`, `label: str`, `status: TaskStatus`, `context: TaskContex
 - **THEN** a new Task is returned with `allocated_ip="10.0.0.1"` and original status preserved
 
 #### Scenario: Allocate already-allocated task
-- **WHEN** `task.allocate_to("10.0.0.2")` is called on a task with status RUNNING
+- **WHEN** `task.allocate_to("10.0.0.2")` is called on a task with `allocated_ip` already set
 - **THEN** `TaskAlreadyAllocatedError` is raised
 
-#### Scenario: Transition to RUNNING
-- **WHEN** `task.mark_running()` is called on a TO_DO task
+#### Scenario: Transition to RUNNING — success
+- **WHEN** `task.mark_running()` is called on a TO_DO task with `allocated_ip` set
 - **THEN** a new Task is returned with `status=RUNNING`
+
+#### Scenario: mark_running on unallocated task
+- **WHEN** `task.mark_running()` is called on a task with `allocated_ip=None`
+- **THEN** `TaskNotAllocatedError` is raised
+
+#### Scenario: mark_running on non-TO_DO task
+- **WHEN** `task.mark_running()` is called on a task with status other than TO_DO
+- **THEN** `TaskNotTodoError` is raised
 
 #### Scenario: Transition to DONE
 - **WHEN** `task.complete()` is called on a RUNNING task
 - **THEN** a new Task is returned with `status=DONE`
 
 #### Scenario: Complete non-running task
-- **WHEN** `task.complete()` is called on a TO_DO task
-- **THEN** `TaskNotAllocatedError` is raised
+- **WHEN** `task.complete()` is called on a non-RUNNING task
+- **THEN** `TaskNotRunningError` is raised
 
 #### Scenario: Fail task with reason
 - **WHEN** `task.fail("disk full")` is called on a RUNNING task
 - **THEN** a new Task is returned with `status=DONE` and `context.error="disk full"`
 
+#### Scenario: Fail non-running task
+- **WHEN** `task.fail("disk full")` is called on a non-RUNNING task
+- **THEN** `TaskNotAllocatedError` is raised
+
 ### Requirement: Node persistent record
 
-The system SHALL provide a `Node` domain entity as a frozen dataclass with
+The system SHALL provide a `Node` domain entity as an immutable object with
 fields: `ip: str`, `ncpus: int`, `enabled: bool`, `cloud: str | None`,
 `username: str`, `port: int`.
 
@@ -50,8 +62,8 @@ fields: `ip: str`, `ncpus: int`, `enabled: bool`, `cloud: str | None`,
 
 ### Requirement: ConnectedMachine runtime entity
 
-The system SHALL provide a `ConnectedMachine` domain entity as a frozen
-dataclass with fields: `ip: str`, `platform: str`, `ncpus: int`,
+The system SHALL provide a `ConnectedMachine` domain entity as an immutable
+object with fields: `ip: str`, `platform: str`, `ncpus: int`,
 `state: MachineState`, `free_since: float | None`.
 
 #### Scenario: Machine is compatible with platform list
@@ -72,11 +84,11 @@ dataclass with fields: `ip: str`, `platform: str`, `ncpus: int`,
 
 #### Scenario: Release machine
 - **WHEN** `machine.release()` is called
-- **THEN** a new ConnectedMachine is returned with `state=FREE` and `free_since` set to current monotonic time
+- **THEN** a new ConnectedMachine is returned with `state=FREE` and `free_since` set to current timestamp
 
 ### Requirement: Engine value object
 
-The system SHALL provide an `Engine` value object as a frozen dataclass with
+The system SHALL provide an `Engine` value object as an immutable object with
 fields: `name: str`, `spawn: str`, `input_files: tuple[str, ...]`,
 `output_files: tuple[str, ...]`, `platforms: tuple[str, ...]`,
 `check_cmd: str | None`, `check_pname: str | None`.
@@ -91,7 +103,7 @@ fields: `name: str`, `spawn: str`, `input_files: tuple[str, ...]`,
 
 ### Requirement: TaskContext typed metadata
 
-The system SHALL provide a `TaskContext` value object as a frozen dataclass
+The system SHALL provide a `TaskContext` value object as an immutable object
 with fields: `engine: str`, `remote_folder: str | None`, `local_folder: str | None`,
 `webhook_url: str | None`, `webhook_custom_params: dict[str, object]`,
 `error: str | None`, `extra: dict[str, object]`.
@@ -106,7 +118,7 @@ with fields: `engine: str`, `remote_folder: str | None`, `local_folder: str | No
 
 ### Requirement: ProcessResult value object
 
-The system SHALL provide a `ProcessResult` value object as a frozen dataclass
+The system SHALL provide a `ProcessResult` value object as an immutable object
 with fields: `exit_code: int`, `stdout: str`, `stderr: str`.
 
 #### Scenario: ProcessResult with defaults
@@ -116,7 +128,3 @@ with fields: `exit_code: int`, `stdout: str`, `stderr: str`.
 ### Requirement: MachineState enum
 
 The system SHALL provide a `MachineState` enum with values `FREE` and `BUSY`.
-
-#### Scenario: MachineState values
-- **WHEN** `MachineState.FREE` is compared to `MachineState.BUSY`
-- **THEN** they are not equal

@@ -21,7 +21,7 @@ All methods are `async def`.
 The system SHALL define a `NodeRepository` Protocol with methods:
 `get(ip: str) -> Node`, `list_enabled() -> list[Node]`,
 `list_disabled() -> list[Node]`, `add(node: Node) -> None`,
-`add_tmp(ip: str, cloud: str) -> None`, `update(node: Node) -> None`,
+`add_tmp(cloud: str, username: str) -> str`, `update(node: Node) -> None`,
 `enable(ip: str) -> None`, `disable(ip: str) -> None`, `remove(ip: str) -> None`.
 
 All methods are async.

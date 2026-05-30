@@ -29,7 +29,8 @@ The system SHALL provide `ValidationError(DomainError)` with subclasses:
 ### Requirement: TaskError hierarchy
 
 The system SHALL provide `TaskError(DomainError)` with subclasses:
-`TaskAlreadyAllocatedError` and `TaskNotAllocatedError`.
+`TaskAlreadyAllocatedError`, `TaskNotAllocatedError`, `TaskNotTodoError`,
+`TaskNotRunningError`.
 
 #### Scenario: TaskAlreadyAllocatedError carries task_id
 - **WHEN** `TaskAlreadyAllocatedError(42)` is raised
@@ -37,6 +38,14 @@ The system SHALL provide `TaskError(DomainError)` with subclasses:
 
 #### Scenario: TaskNotAllocatedError carries task_id
 - **WHEN** `TaskNotAllocatedError(42)` is raised
+- **THEN** `e.task_id == 42`
+
+#### Scenario: TaskNotTodoError carries task_id
+- **WHEN** `TaskNotTodoError(42)` is raised
+- **THEN** `e.task_id == 42`
+
+#### Scenario: TaskNotRunningError carries task_id
+- **WHEN** `TaskNotRunningError(42)` is raised
 - **THEN** `e.task_id == 42`
 
 ### Requirement: MachineBusyError

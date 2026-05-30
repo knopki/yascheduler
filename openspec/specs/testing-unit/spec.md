@@ -68,7 +68,9 @@ Tests SHALL verify `DB` methods for node and task operations construct correct S
 - **THEN** metadata is passed without adding an error key
 
 ### Requirement: FakeDB protocol-compatible class
-A `FakeDB` class SHALL exist in `tests/fixtures/fake_db.py` implementing the same public methods as `DB` on in-memory dicts, returning real `TaskModel`/`NodeModel` objects with auto-incrementing `task_id`.
+The project SHALL provide a `FakeDB` class implementing the same public methods
+as `DB` on in-memory data structures, returning real `TaskModel`/`NodeModel`
+objects with auto-incrementing `task_id`.
 
 #### Scenario: FakeDB mirrors DB public methods
 - **WHEN** `FakeDB` is used in place of `DB`
@@ -96,10 +98,12 @@ Tests SHALL verify filtering by `busy` (True/False), `platforms` (intersection m
 - **THEN** filtered result has 1 machine and original still has 2
 
 ### Requirement: OS check functions with mocked SSH
-Tests SHALL verify `check_is_linux`, `check_is_debian`, `check_is_debian_like`, `check_is_windows` return correct booleans based on mocked SSH command output. Notably, `check_is_debian` returns False when OS ID is "ubuntu" (not "debian"), even though it's debian-like.
+Tests SHALL verify platform detection functions return correct booleans based
+on mocked SSH command output. Notably, `check_is_debian` returns False when
+OS ID is "ubuntu" (not "debian"), even though it's debian-like.
 
 #### Scenario: check_is_debian distinguishes ubuntu from debian
-- **WHEN** `_get_os_release(conn)` returns `("ubuntu", "debian", "22.04")`
+- **WHEN** OS release data returns ID="ubuntu", ID_LIKE="debian"
 - **THEN** `check_is_debian(conn)` returns False (ID is "ubuntu", not "debian")
 
 ### Requirement: RemoteMachineAdapter structure
@@ -110,7 +114,7 @@ Tests SHALL verify that adapter instances (`linux_adapter`, `debian_adapter`, et
 - **THEN** `debian_adapter.checks` is a superset of `debian_like_adapter.checks`
 
 ### Requirement: Scheduler constructor and queues
-Tests SHALL verify that `Scheduler.__attrs_post_init__` creates 4 `UniqueQueue` instances with correct names and maxsizes derived from `Config.local`.
+Tests SHALL verify that `Scheduler` initialization creates 4 `UniqueQueue` instances with correct names and maxsizes derived from `Config.local`.
 
 #### Scenario: Queue configuration
 - **WHEN** `Scheduler` is constructed with a Config containing specific limit values
@@ -147,7 +151,7 @@ Tests SHALL verify that `clouds_get_capacity` returns `max_nodes - busy_nodes`, 
 - **THEN** all fields are accessible and match
 
 ### Requirement: Scheduler mock fixtures
-The project SHALL provide mock fixtures for `RemoteMachine` (configurable meta, platforms, hostname) and `CloudAPIManager` (stubbed allocate/deallocate/get_capacity/mark_task_done) in `tests/fixtures/`.
+The project SHALL provide mock fixtures for `RemoteMachine` (configurable meta, platforms, hostname) and `CloudAPIManager` (stubbed allocate/deallocate/get_capacity/mark_task_done).
 
 #### Scenario: Mock RemoteMachine and CloudAPIManager
 - **WHEN** `make_mock_remote_machine` and `make_mock_clouds` are called
