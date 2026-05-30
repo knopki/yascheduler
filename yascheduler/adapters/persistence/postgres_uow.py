@@ -1,5 +1,5 @@
 # FILE: yascheduler/adapters/persistence/postgres_uow.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit of Work implementation for PostgreSQL using pg8000.
 #   SCOPE: PostgresUnitOfWork managing transactions, repositories, and connection lifecycle.
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add docstrings; use conn.run('COMMIT'/'ROLLBACK') to avoid stub gaps.
-#   PREVIOUS_CHANGE: v1.0.1 - Replace asserts with _require_conn() for proper runtime errors and type narrowing.
+#   LAST_CHANGE: v1.2.0 - Convert tasks/nodes to properties for structural Protocol compatibility.
+#   PREVIOUS_CHANGE: v1.1.0 - Add docstrings; use conn.run('COMMIT'/'ROLLBACK') to avoid stub gaps.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -55,8 +55,24 @@ class PostgresUnitOfWork:
         self._config = config
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._conn: Connection | None = None
-        self.tasks: PostgresTaskRepository | None = None
-        self.nodes: PostgresNodeRepository | None = None
+        self._tasks: PostgresTaskRepository | None = None
+        self._nodes: PostgresNodeRepository | None = None
+
+    @property
+    def tasks(self) -> PostgresTaskRepository:
+        if self._tasks is None:
+            raise RuntimeError(
+                "UoW not entered; use 'async with' to access repositories"
+            )
+        return self._tasks
+
+    @property
+    def nodes(self) -> PostgresNodeRepository:
+        if self._nodes is None:
+            raise RuntimeError(
+                "UoW not entered; use 'async with' to access repositories"
+            )
+        return self._nodes
 
     # START_CONTRACT: PostgresUnitOfWork.__aenter__
     #   PURPOSE: Create a pg8000 connection and instantiate repositories.
@@ -73,8 +89,8 @@ class PostgresUnitOfWork:
                 self._executor, self._create_connection
             )
             await loop.run_in_executor(self._executor, lambda: self._conn.run("BEGIN"))
-            self.tasks = PostgresTaskRepository(self._conn, self._executor)
-            self.nodes = PostgresNodeRepository(self._conn, self._executor)
+            self._tasks = PostgresTaskRepository(self._conn, self._executor)
+            self._nodes = PostgresNodeRepository(self._conn, self._executor)
         except BaseException:
             if self._conn is not None:
                 try:

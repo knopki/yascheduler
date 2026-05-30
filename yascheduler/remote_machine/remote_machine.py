@@ -16,10 +16,14 @@
 #   ADAPTERS - Ordered list of platform adapters for remote machine detection
 #   MAX_SESSIONS - Default maximum concurrent SSH sessions (10)
 #   my_backoff_exc - Partially applied backoff decorator for SSH retry exceptions
+#   _resolve_tunnel - Build SSH tunnel string from jump host parameters
+#   _detect_platform - Run adapter checks on connected host, return first match and all matched platforms
+#   _init_paths - Normalize remote data/engines/tasks directory paths using adapter path type
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - Extracted create classmethod blocks into _resolve_tunnel, _detect_platform, _init_paths private helpers.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
 "Remote machine"
@@ -126,6 +130,73 @@ DEFAULT_CONN_OPTS = SSHClientConnectionOptions(
 )
 
 
+def _resolve_tunnel(
+    jump_host: Optional[str], jump_username: Optional[str]
+) -> Optional[str]:
+    """Build SSH tunnel string from jump host parameters"""
+    return jump_host and jump_username and f"{jump_username}@{jump_host}"
+
+
+# START_CONTRACT: _detect_platform
+#   PURPOSE: Iterate platform adapters in order, run check commands, return first matching adapter and all matching platform names
+#   INPUTS: { conn: SSHClientConnection, adapters: Sequence[RemoteMachineAdapter] }
+#   OUTPUTS: { tuple[RemoteMachineAdapter, Sequence[str]] }
+#   SIDE_EFFECTS: Runs check commands on remote host
+#   LINKS: M-REMOTE-ADAPTERS
+# END_CONTRACT: _detect_platform
+async def _detect_platform(
+    conn: SSHClientConnection, adapters: Sequence[RemoteMachineAdapter]
+) -> tuple[RemoteMachineAdapter, Sequence[str]]:
+    # START_BLOCK_DETECT_PLATFORM
+    sess_lim = Semaphore(MAX_SESSIONS)
+
+    async def with_limit(conn: SSHClientConnection, fn: SSHCheck):
+        async with sess_lim:
+            return await fn(conn)
+
+    adapter = None
+    platforms: list[str] = []
+    checks: Sequence[bool] = [
+        await aall(amap(lambda y: with_limit(conn, y), x.checks)) for x in adapters
+    ]
+
+    for candidate, check in zip(adapters, checks):  # noqa: B905
+        if check:
+            platforms.append(candidate.platform)
+        if check and not adapter:
+            adapter = candidate
+
+    if not adapter:
+        raise PlatformGuessFailed()
+    # END_BLOCK_DETECT_PLATFORM
+
+    return adapter, platforms
+
+
+# START_CONTRACT: _init_paths
+#   PURPOSE: Resolve remote data/engines/tasks directory paths using adapter's platform-aware PurePath subclass
+#   INPUTS: { adapter: RemoteMachineAdapter, data_dir: Optional[PurePath], engines_dir: Optional[PurePath], tasks_dir: Optional[PurePath] }
+#   OUTPUTS: { tuple[PurePath, PurePath, PurePath] }
+#   LINKS: none
+# END_CONTRACT: _init_paths
+def _init_paths(
+    adapter: RemoteMachineAdapter,
+    data_dir: Optional[PurePath],
+    engines_dir: Optional[PurePath],
+    tasks_dir: Optional[PurePath],
+) -> tuple[PurePath, PurePath, PurePath]:
+    # START_BLOCK_INIT_PATHS
+    Path = adapter.path
+    if not isinstance(data_dir, Path):
+        data_dir = Path(str(data_dir)) if data_dir else Path("./data")
+    if not isinstance(engines_dir, Path):
+        engines_dir = Path(str(engines_dir)) if engines_dir else data_dir / "engines"
+    if not isinstance(tasks_dir, Path):
+        tasks_dir = Path(str(tasks_dir)) if tasks_dir else data_dir / "tasks"
+    # END_BLOCK_INIT_PATHS
+    return data_dir, engines_dir, tasks_dir
+
+
 @define
 class RemoteMachineMetadata:
     _busy: Optional[bool]
@@ -217,28 +288,19 @@ class RemoteMachine:
         jump_username: Optional[str] = None,
     ) -> Self:
         logger_name = f"{cls.__name__}:{username}@{host}:{port}"
-        if logger:
-            log = logger.getChild(logger_name)
-        else:
-            log = logging.getLogger(logger_name)
-        # If our logging level is not set then asyncssh is too noisy
+        log = logger.getChild(logger_name) if logger else logging.getLogger(logger_name)
         asyncssh.logging.set_log_level(logging.WARNING if log.level == 0 else log.level)
-        # asyncssh.logging.set_log_level("DEBUG")
-        # asyncssh.logging.set_debug_level(2)
-
         # START_BLOCK_CONNECT
-        # connection
         conn_opts = SSHClientConnectionOptions(
             options=DEFAULT_CONN_OPTS,
             host=host,
             port=port,
             username=username,
-            tunnel=jump_host and jump_username and f"{jump_username}@{jump_host}",
+            tunnel=_resolve_tunnel(jump_host, jump_username),
             client_keys=client_keys or (),
             ignore_encrypted=True,
             connect_timeout=connect_timeout,
         )
-
         log.debug("Open connection")
         conn = await asyncssh.connection.connect(
             options=conn_opts,
@@ -247,45 +309,15 @@ class RemoteMachine:
             tunnel=conn_opts.tunnel,
         )
         # END_BLOCK_CONNECT
-
         # START_BLOCK_DETECT_PLATFORM
-        # guess platform
-        sess_lim = Semaphore(MAX_SESSIONS)
-
-        async def with_limit(conn: SSHClientConnection, fn: SSHCheck):
-            async with sess_lim:
-                return await fn(conn)
-
-        adapter = None
-        platforms: Sequence[str] = []
-        checks: Sequence[bool] = [
-            await aall(amap(lambda y: with_limit(conn, y), x.checks)) for x in ADAPTERS
-        ]
-
-        for candidate, check in zip(ADAPTERS, checks):  # noqa: B905
-            if check:
-                platforms.append(candidate.platform)
-            if check and not adapter:
-                adapter = candidate
-
-        if not adapter:
-            raise PlatformGuessFailed()
-
+        adapter, platforms = await _detect_platform(conn, ADAPTERS)
         log.debug(f"Detected platform: {adapter.platform}")
         # END_BLOCK_DETECT_PLATFORM
-
         # START_BLOCK_INIT_PATHS
-        Path = adapter.path
-        if not isinstance(data_dir, Path):
-            data_dir = Path(str(data_dir)) if data_dir else Path("./data")
-        if not isinstance(engines_dir, Path):
-            engines_dir = (
-                Path(str(engines_dir)) if engines_dir else data_dir / "engines"
-            )
-        if not isinstance(tasks_dir, Path):
-            tasks_dir = Path(str(tasks_dir)) if tasks_dir else data_dir / "tasks"
+        data_dir, engines_dir, tasks_dir = _init_paths(
+            adapter, data_dir, engines_dir, tasks_dir
+        )
         # END_BLOCK_INIT_PATHS
-
         return cls(
             conn=conn,
             conn_opts=conn_opts,

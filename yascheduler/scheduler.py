@@ -1,55 +1,42 @@
 #!/usr/bin/env python
 # FILE: yascheduler/scheduler.py
-# VERSION: 1.6.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Main async daemon orchestrating task allocation, execution, and completion.
-#   SCOPE: Producer-consumer loops for machine connection, task allocation, consumption, and deallocation.
-#   DEPENDS: M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-CONFIG, M-QUEUE, M-COMPAT, M-TIME, M-VARIABLES, M-REMOTE, M-REMOTE-PROTOCOL
-#   LINKS: M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-QUEUE
+#   PURPOSE: Backward-compatible Scheduler wrapper delegating to Orchestrator and use cases.
+#   SCOPE: Scheduler class (thin wrapper), get_logger, WebhookPayload.
+#   DEPENDS: M-DB, M-CLOUD-MANAGER, M-CONFIG, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK
+#   LINKS: M-DB, M-APPLICATION-ORCHESTRATOR, M-DI
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   Scheduler - Async daemon that drives the full task lifecycle
-#   WebhookPayload - Webhook request data shape
+#   Scheduler - Backward-compatible async daemon wrapper (delegates to Orchestrator)
+#   WebhookPayload - Re-exported from webhook module
 #   get_logger - Configure and return the yascheduler logger
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v2.1.2 - Extract WebhookPayload to webhook.py; replace attrs with dataclasses.
+#   PREVIOUS_CHANGE: v2.0.0 - Refactor: delegate all loop infrastructure to Orchestrator, submit to use case.
 # END_CHANGE_SUMMARY
 
 
-import asyncio
-import base64
 import logging
-from asyncio.locks import Event, Semaphore
-from collections import Counter
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
-from datetime import datetime, timedelta
-from functools import partial
-from pathlib import Path, PurePath, PurePosixPath
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Optional, Union
 
-import aiohttp
-import asyncssh
-import backoff
-from asyncssh.sftp import SFTPClient, SFTPError
-from attrs import asdict, define, evolve, field
+from attrs import define, field
 
 from .clouds import CloudAPIManager
 from .compat import Self
-from .config import Config, Engine
-from .db import DB, NodeModel, TaskModel, TaskStatus
-from .queue import TUMsgId, TUMsgPayload, UMessage, UniqueQueue
-from .remote_machine import (
-    AllSSHRetryExc,
-    RemoteMachine,
-    RemoteMachineRepository,
-    SFTPRetryExc,
-)
-from .time import asleep_until
+from .config import Config
+from .db import DB, TaskModel
+from .di import make_cli_deps, make_daemon
+from .application.orchestrator import Orchestrator
+from .application.submit_task import submit_task
 from .variables import CONFIG_FILE
+from .webhook import WebhookPayload as WebhookPayload  # noqa: F401 — re-export
 
 logging.basicConfig(level=logging.INFO)
 
@@ -75,46 +62,20 @@ def get_logger(log_file: Optional[Union[str, Path]] = None, level: int = logging
     return logger
 
 
-@define(frozen=True)
-class WebhookPayload:
-    task_id: int = field()
-    status: int = field()
-    custom_params: Mapping[str, Any] = field(factory=dict)
-
-
 @define
 class Scheduler:
     config: Config = field()
     db: DB = field()
     clouds: CloudAPIManager = field()
     log: logging.Logger = field()
-    bg_jobs: set[asyncio.Task[None]] = field(factory=set, init=False)
-    conn_machine_q: UniqueQueue[str, NodeModel] = field(init=False)
-    allocate_q: UniqueQueue[int, TaskModel] = field(init=False)
-    consume_q: UniqueQueue[int, TaskModel] = field(init=False)
-    deallocate_q: UniqueQueue[str, NodeModel] = field(init=False)
-    cancellation_event: Event = field(factory=Event, init=False)
-    remote_machines: RemoteMachineRepository = field()
-    sleep_interval: int = field(default=1)
-    http: aiohttp.ClientSession = field(factory=aiohttp.ClientSession, init=False)
-    webhook_sem: Semaphore = field(init=False)
-
-    def __attrs_post_init__(self):
-        lcfg = self.config.local
-        self.webhook_sem = Semaphore(lcfg.webhook_reqs_limit)
-        self.conn_machine_q = UniqueQueue(
-            "conn_machine", maxsize=lcfg.conn_machine_pending
-        )
-        self.allocate_q = UniqueQueue("allocate", maxsize=lcfg.allocate_pending)
-        self.consume_q = UniqueQueue("consume", maxsize=lcfg.consume_pending)
-        self.deallocate_q = UniqueQueue("deallocate", maxsize=lcfg.deallocate_pending)
+    _orchestrator: Orchestrator | None = field(default=None, init=False)
 
     # START_CONTRACT: create
-    #   PURPOSE: Async factory: build Scheduler with DB, clouds, remote machines
-    #   INPUTS: { config: Optional[Config] - optional config override, log: Optional[logging.Logger] - optional logger }
+    #   PURPOSE: Async factory: build Scheduler with DB, clouds, and Orchestrator.
+    #   INPUTS: { config: Optional[Config], log: Optional[logging.Logger] }
     #   OUTPUTS: { Self - fully initialized Scheduler instance }
-    #   SIDE_EFFECTS: Creates DB connection, initialises CloudAPIManager and RemoteMachineRepository
-    #   LINKS: M-DB, M-CLOUD-MANAGER, M-CONFIG, M-SCHEDULER
+    #   SIDE_EFFECTS: Creates DB connection, initialises CloudAPIManager.
+    #   LINKS: M-DB, M-CLOUD-MANAGER, M-CONFIG, M-DI
     # END_CONTRACT: create
     @classmethod
     async def create(
@@ -122,7 +83,6 @@ class Scheduler:
         config: Optional[Config] = None,
         log: Optional[logging.Logger] = None,
     ) -> Self:
-        "Async object initialization"
         if log:
             log = log.getChild(cls.__name__)
         else:
@@ -137,62 +97,19 @@ class Scheduler:
             engines=cfg.engines,
             log=log,
         )
-
         return cls(
             config=cfg,
             db=db,
             clouds=clouds,
             log=log,
-            remote_machines=RemoteMachineRepository(log=log),
-            sleep_interval=min(x.sleep_interval for x in cfg.engines.values()),
         )
 
-    async def clouds_get_capacity(self) -> int:
-        "Get capacity of all clouds"
-        ccap = await self.clouds.get_capacity()
-        n_busy_cloud_nodes = sum(x.current for x in ccap.values())
-        max_nodes = sum(x.config.max_nodes for x in self.clouds.apis.values())
-        diff = max_nodes - n_busy_cloud_nodes
-        return max(0, diff)
-
-    async def do_task_webhook(
-        self, task_id: int, metadata: Mapping[str, Any], status: TaskStatus
-    ):
-        "Send webhook with task status"
-        retry = backoff.on_exception(backoff.fibo, aiohttp.ClientError, max_time=60)
-        url = metadata.get("webhook_url")
-        if not url:
-            return
-        async with self.webhook_sem:
-            self.log.info(f"Executing webhook of type {status.value} to {url}")
-            payload = WebhookPayload(
-                task_id, status.value, metadata.get("webhook_custom_params", {})
-            )
-            try:
-                async with retry(self.http.post)(url, data=asdict(payload)) as resp:
-                    if resp.ok:
-                        return
-                    self.log.warn(
-                        "Webhook for task_id=%s bad response: %s %s",
-                        task_id,
-                        resp.status,
-                        resp.reason,
-                    )
-                    if self.log.isEnabledFor(logging.DEBUG):
-                        self.log.debug(
-                            "Webhook for task_id=%s response: %s",
-                            task_id,
-                            (await resp.text("utf-8")),
-                        )
-            except Exception as err:
-                self.log.error("Webhook for task_id=%s failed: %s", task_id, err)
-
     # START_CONTRACT: create_new_task
-    #   PURPOSE: Insert a new TO_DO task into the database with engine metadata
-    #   INPUTS: { label: str - task label, metadata: Mapping[str, Any] - input files and parameters, engine_name: str - name of the engine, webhook_onsubmit: bool - trigger webhook on submit (default False) }
+    #   PURPOSE: Insert a new TO_DO task via the submit_task use case.
+    #   INPUTS: { label, metadata, engine_name, webhook_onsubmit }
     #   OUTPUTS: { TaskModel - the created task record }
-    #   SIDE_EFFECTS: Writes task to DB, optionally sends webhook
-    #   LINKS: M-DB, M-SCHEDULER
+    #   SIDE_EFFECTS: Creates task in database via use case.
+    #   LINKS: M-APPLICATION-SUBMIT
     # END_CONTRACT: create_new_task
     async def create_new_task(
         self,
@@ -201,606 +118,46 @@ class Scheduler:
         engine_name: str,
         webhook_onsubmit: bool = False,
     ) -> TaskModel:
-        "Create new task in DB"
-        if engine_name not in self.config.engines:
-            raise RuntimeError(f"Engine {engine_name} requested, but not supported")
 
-        for input_file in self.config.engines[engine_name].input_files:
-            if input_file not in metadata:
-                raise RuntimeError(f"Input file {input_file} was not provided")
-
-        meta_add = [("engine", engine_name)]
-        new_meta = dict(list(metadata.items()) + meta_add)
-
-        task = await self.db.add_task(
-            label, ip_addr=None, status=TaskStatus.TO_DO, metadata=new_meta
+        # Use submit_task use case via DI
+        cli_deps = make_cli_deps(self.config)
+        task_id = await submit_task(
+            label=label,
+            metadata=metadata,
+            engine_name=engine_name,
+            engines=cli_deps.engines,
+            uow_factory=cli_deps.uow_factory,
+            remote_tasks_dir=cli_deps.remote_tasks_dir,
         )
-        dt_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        remote_folder = self.config.remote.tasks_dir / f"{dt_str}_{task.task_id}"
-        new_meta.update({"remote_folder": str(remote_folder)})
-        await self.db.update_task_meta(task.task_id, new_meta)
-        await self.db.commit()
-        if webhook_onsubmit:
-            await self.do_task_webhook(task.task_id, new_meta, TaskStatus.TO_DO)
-        self.log.info(f":::submitted: {label}")
+
+        # Backward compat: return TaskModel from legacy DB
+        task = await self.db.get_task(task_id)
+        assert task is not None
         return task
 
-    # START_CONTRACT: upload_task_data
-    #   PURPOSE: Upload task input files to a remote machine via SFTP
-    #   INPUTS: { sftp: SFTPClient - SFTP connection, task: TaskModel - task with input file metadata, remote_dir: PurePath - remote directory path on the machine, input_files: Sequence[str] - list of input filenames to upload }
-    #   OUTPUTS: { bool - True on success }
-    #   SIDE_EFFECTS: Creates remote directories, writes files via SFTP, raises on error
-    #   LINKS: M-REMOTE-REPO, M-SCHEDULER
-    # END_CONTRACT: upload_task_data
-    async def upload_task_data(
-        self,
-        sftp: SFTPClient,
-        task: TaskModel,
-        remote_dir: PurePath,
-        input_files: Sequence[str],
-    ) -> bool:
-        "Upload task data to remote machine"
-
-        def safe_b64decode(b64_data: Union[str, bytes]) -> bytes:
-            """Decodes base64 data, adding padding if necessary and stripping whitespace"""
-            if isinstance(b64_data, bytes):
-                # bytes to str
-                b64_data = b64_data.decode()
-            b64_data = b64_data.strip().replace("\n", "").replace(" ", "")
-            # if len(b64_data) % 4 != 0
-            missing_padding = len(b64_data) % 4
-            if missing_padding:
-                b64_data += "=" * (4 - missing_padding)
-            return base64.b64decode(b64_data)
-
-        # START_BLOCK_UPLOAD
-        try:
-            await sftp.makedirs(PurePosixPath(remote_dir), exist_ok=True)
-        except asyncssh.misc.Error as err:
-            self.log.error(
-                f"Create {str(remote_dir)} - SFTPError: {err.reason} ({err.code}) (task_id={task.task_id})"
-            )
-            raise err
-
-        for input_file in input_files:
-            r_input_file = remote_dir / input_file
-            if input_file == "fort.9":
-                try:
-                    b64_data = task.metadata[input_file]
-
-                    binary_data = safe_b64decode(b64_data)
-
-                    async with sftp.open(r_input_file.as_posix(), "wb") as f:
-                        await f.write(binary_data)
-
-                except asyncssh.misc.Error as err:
-                    self.log.error(
-                        f"Write {str(r_input_file)} - SFTPError: {err.reason} ({err.code})"
-                    )
-                    raise err
-                except Exception as e:
-                    self.log.error(f"Error processing file {input_file}: {e}")
-            # if not binary
-            else:
-                try:
-                    async with sftp.open(
-                        r_input_file.as_posix(), pflags_or_mode="w"
-                    ) as f:
-                        await f.write(task.metadata[input_file])
-                except asyncssh.misc.Error as err:
-                    self.log.error(
-                        f"Write {str(r_input_file)} - SFTPError: {err.reason} ({err.code})"
-                    )
-                except Exception as e:
-                    self.log.error(f"Error processing file {input_file}: {e}")
-        return True
-        # END_BLOCK_UPLOAD
-
-    # START_CONTRACT: start_task_on_machine
-    #   PURPOSE: Upload inputs and spawn the calculation process on a remote node
-    #   INPUTS: { machine: RemoteMachine - target machine to run on, engine: Engine - engine config with spawn command, task: TaskModel - task to start }
-    #   OUTPUTS: { bool - True on successful spawn }
-    #   SIDE_EFFECTS: Uploads files via SFTP, marks machine as busy, executes spawn command via SSH
-    #   LINKS: M-REMOTE-REPO, M-SCHEDULER, M-DB
-    # END_CONTRACT: start_task_on_machine
-    async def start_task_on_machine(
-        self,
-        machine: RemoteMachine,
-        engine: Engine,
-        task: TaskModel,
-    ) -> bool:
-        "Run task on remote machine"
-        self.log.info(
-            f"Submitting task_id={task.task_id} {task.label} with {engine.name} to {machine.hostname}"
-        )
-        assert task.metadata.get("remote_folder")
-        machine.meta.busy = True
-        remote_folder = machine.path(task.metadata["remote_folder"])
-
-        # START_BLOCK_DEPLOY
-        async with machine.sftp() as sftp:
-            try:
-                root_dir = machine.path(await sftp.realpath("."))
-                task_dir = (
-                    remote_folder
-                    if remote_folder.is_absolute()
-                    else root_dir / remote_folder
-                )
-                if self.config.remote.engines_dir.is_absolute():
-                    engine_path = self.config.remote.engines_dir / engine.name
-                else:
-                    engine_path = (
-                        root_dir / self.config.remote.engines_dir / engine.name
-                    )
-                # upload files
-                await self.upload_task_data(sftp, task, task_dir, engine.input_files)
-            except Exception as err:
-                self.log.error(f"Can't upload task_id={task.task_id} files: {err}")
-                raise err
-        # END_BLOCK_DEPLOY
-
-        # START_BLOCK_SPAWN
-        # start task
-        try:
-            # detect cpus
-            node = await self.db.get_node(task.ip)
-            ncpus = node and node.ncpus or await machine.get_cpu_cores()
-            # placeholders {task_path}, {engine_path} and {ncpus} are supported
-            run_cmd = engine.spawn.format(
-                engine_path=str(engine_path),
-                task_path=machine.quote(str(task_dir)),
-                ncpus=ncpus,
-            )
-            await machine.run_bg(run_cmd, cwd=str(task_dir))
-        except Exception as err:
-            self.log.error(f"SSH spawn cmd error: {err}")
-            raise err
-        # END_BLOCK_SPAWN
-
-        return True
-
-    # START_CONTRACT: allocate_task
-    #   PURPOSE: Pick a free compatible remote node or request cloud allocation for a task
-    #   INPUTS: { task: TaskModel - the task to allocate }
-    #   OUTPUTS: { bool - True if allocated to a machine, False otherwise }
-    #   SIDE_EFFECTS: Marks task as RUNNING in DB, starts occupancy check on machine, may request cloud node allocation
-    #   LINKS: M-DB, M-SCHEDULER, M-CLOUD-MANAGER, M-REMOTE-REPO
-    # END_CONTRACT: allocate_task
-    async def allocate_task(self, task: TaskModel) -> bool:
-        "Allocate task to a free remote machine or ask allocation of new cloud machine"
-        self.log.debug(f"Allocating task {task.task_id}")
-        engine_name: Optional[str] = task.metadata.get("engine", None)
-        engine: Optional[Engine] = (
-            self.config.engines.get(engine_name) if engine_name else None
-        )
-        if engine is None:
-            self.log.warning(
-                f"Unsupported engine '{engine_name}' for task_id={task.task_id}"
-            )
-            await self.db.set_task_error(
-                task.task_id, metadata=task.metadata, error="unsupported engine"
-            )
-            await self.do_task_webhook(task.task_id, task.metadata, TaskStatus.DONE)
-            return False
-
-        # START_BLOCK_FIND_FREE_MACHINE
-        busy_node_ips = [
-            t.ip for t in await self.db.get_tasks_by_status((TaskStatus.RUNNING,))
-        ]
-        free_machines = {
-            ip: m
-            for ip, m in self.remote_machines.filter(
-                busy=False, platforms=engine.platforms, reverse_sort=True
-            ).items()
-            if ip not in busy_node_ips
-        }
-        if free_machines:
-            self.log.debug(
-                "Free machines with platform match: {}".format(
-                    ", ".join(free_machines.keys())
-                )
-            )
-        for ip, machine in free_machines.items():
-            task_m = evolve(task, ip=ip)
-            self.log.debug(f"Allocate task {task.task_id} to machine {ip}")
-            if await self.start_task_on_machine(machine, engine, task_m):
-                self.log.debug(f"Task {task.task_id} allocated to machine {ip}")
-                await machine.start_occupancy_check(engine)
-                await self.db.set_task_running(task.task_id, task_m.ip)
-                await self.db.commit()
-                await self.do_task_webhook(
-                    task.task_id, task_m.metadata, TaskStatus.RUNNING
-                )
-                self.clouds.mark_task_done(task.task_id)
-                return True
-        # END_BLOCK_FIND_FREE_MACHINE
-
-        # START_BLOCK_ALLOCATE_CLOUD
-        # free machine not found - try to allocate new node
-        self.log.debug(
-            f"No free machine for task {task.task_id} - want to allocate new node"
-        )
-        await self.clouds.allocate(
-            task.task_id, want_platforms=engine.platforms, throttle=True
-        )
-        return False
-        # END_BLOCK_ALLOCATE_CLOUD
-
-    # START_CONTRACT: consume_task
-    #   PURPOSE: Download completed task outputs from remote machine and mark task as DONE or ERROR
-    #   INPUTS: { machine: RemoteMachine - machine where task ran, task: TaskModel - the completed task }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Downloads files via SFTP, updates DB task status, triggers webhook, cleans remote task directory
-    #   LINKS: M-DB, M-REMOTE-REPO, M-SCHEDULER
-    # END_CONTRACT: consume_task
-    async def consume_task(self, machine: RemoteMachine, task: TaskModel):
-        "Consume done tasks"
-        # START_BLOCK_PREPARE_STORE
-        meta = task.metadata
-        local_folder: Union[str, None] = meta.get("local_folder")
-        remote_folder: str = meta["remote_folder"]
-        engine: Engine = self.config.engines[meta["engine"]]
-        # NOTE: PureWindowsPath is not supported but posix is fine
-        output_files = [
-            str(PurePosixPath(remote_folder) / x) for x in engine.output_files
-        ]
-        if local_folder:
-            store_folder = Path(local_folder)
-        else:
-            store_folder = self.config.local.tasks_dir / Path(remote_folder).name
-        await asyncio.get_running_loop().run_in_executor(
-            None, store_folder.mkdir, 0o777, True, True
-        )
-        # END_BLOCK_PREPARE_STORE
-
-        # START_BLOCK_RETRY_DOWNLOAD
-        meta_add: list[tuple[str, Any]] = [
-            ("remote_folder", remote_folder),
-            ("local_folder", str(store_folder)),
-        ]
-
-        sftp_errors: list[tuple[Optional[str], Exception]] = []
-        sftp_get_retry = backoff.on_exception(backoff.fibo, SFTPRetryExc, max_time=60)
-
-        async def job():
-            async with machine.sftp() as sftp:
-                for out_file in output_files:
-                    try:
-                        await sftp_get_retry(sftp.get)(
-                            out_file, store_folder, preserve=True
-                        )
-                    except (OSError, SFTPError) as err:
-                        sftp_errors.append((out_file, err))
-                        self.log.warning(
-                            "Cannot download file for task_id=%s from %s: %s",
-                            task.task_id,
-                            out_file,
-                            err,
-                        )
-                await sftp.rmtree(
-                    machine.path(remote_folder)
-                )  # comment to keep the raw files at the working node (not recommended)
-
-        try:
-            await sftp_get_retry(job)()
-        except Exception as err:
-            self.log.warning(f"Cannot scp from {remote_folder}: {err}")
-            sftp_errors.append((remote_folder, err))
-        # END_BLOCK_RETRY_DOWNLOAD
-
-        if sftp_errors:
-            meta_add.append(("error", {p: str(e) for p, e in sftp_errors}))
-
-        new_meta = dict(list(task.metadata.items()) + meta_add)
-        if "error" in new_meta:
-            await self.db.set_task_error(task.task_id, new_meta)
-            await self.do_task_webhook(task.task_id, new_meta, TaskStatus.DONE)
-        else:
-            await self.db.set_task_done(task.task_id, new_meta)
-            await self.do_task_webhook(task.task_id, new_meta, TaskStatus.DONE)
-        await self.db.commit()
-        self.log.info(
-            f"task_id={task.task_id} {task.label} done and saved in {store_folder}"
-        )
-        self.clouds.mark_task_done(task.task_id)
-
-    #
-    # Background workers
-    #
-
-    async def print_stats(self):
-        "Print usage statistics to the log"
-        while not self.cancellation_event.is_set():
-            end_time = datetime.now() + timedelta(seconds=10)
-            ncounters = await self.db.count_nodes_by_status()
-            tcounters = await self.db.count_tasks_by_status()
-            tmpl = (
-                "THREADS: {tasks} "
-                "NODES: busy:{n_busy}/enabled:{n_enabled}/total:{n_total} "
-                "TASKS: run:{t_run}/todo:{t_todo}/done:{t_done}"
-            )
-            msg = tmpl.format(
-                tasks=len(asyncio.all_tasks()),
-                n_busy=len(self.remote_machines.filter(busy=True).keys()),
-                n_enabled=ncounters[True],
-                n_total=sum(ncounters.values()),
-                t_run=tcounters[TaskStatus.RUNNING],
-                t_todo=tcounters[TaskStatus.TO_DO],
-                t_done=tcounters[TaskStatus.DONE],
-            )
-            self.log.info(msg)
-
-            queues = [
-                self.conn_machine_q,
-                self.allocate_q,
-                self.deallocate_q,
-                self.consume_q,
-            ]
-            qmsgs = [f"{q.name}: {q.psize()}/{q.qsize()}" for q in queues]
-            self.log.info("QUEUES: {}".format(" ".join(qmsgs)))
-            await asleep_until(end_time)
-
-    async def connect_machine_producer(
-        self,
-    ) -> AsyncGenerator[UMessage[str, NodeModel], None]:
-        """Produce messages with new machines for connecting"""
-        enabled_nodes = await self.db.get_enabled_nodes()
-        new_nodes = [
-            n for n in enabled_nodes if n.ip not in self.remote_machines.keys()
-        ]
-        for node in new_nodes:
-            yield UMessage(node.ip, node)
-
-    async def connect_machine_consumer(self, msg: UMessage[str, NodeModel]):
-        """Connect to machines"""
-        node = msg.payload
-        keys = await asyncio.get_running_loop().run_in_executor(
-            None, self.config.local.get_private_keys
-        )
-
-        jump_host = self.config.remote.jump_host
-        jump_username = self.config.remote.jump_username
-        for cloud in self.config.clouds:
-            if cloud.prefix == node.cloud:
-                if cloud.jump_host and cloud.jump_username:
-                    jump_host, jump_username = cloud.jump_host, cloud.jump_username
-
-        try:
-            self.remote_machines[node.ip] = await RemoteMachine.create(
-                host=node.ip,
-                username=node.username,
-                client_keys=keys,
-                logger=self.log,
-                data_dir=self.config.remote.data_dir,
-                engines_dir=self.config.remote.engines_dir,
-                tasks_dir=self.config.remote.tasks_dir,
-                connect_timeout=10,
-                jump_username=jump_username,
-                jump_host=jump_host,
-                port=node.port,
-            )
-        except asyncssh.misc.Error as err:
-            self.log.error(f"Can't connect to machine with error: {err}")
-        except Exception as err:
-            self.log.error(f"An error occuried on remote machine creation: {err}")
-
-    async def allocator_producer(
-        self,
-    ) -> AsyncGenerator[UMessage[int, TaskModel], None]:
-        """Produce messages with todo tasks to run"""
-        ccap = await self.clouds_get_capacity()
-        tlim = max(ccap, len(self.remote_machines.filter(busy=False)), 10)
-        tasks = await self.db.get_tasks_by_status((TaskStatus.TO_DO,), tlim)
-        if tasks:
-            ids = [str(t.task_id) for t in tasks]
-            self.log.debug("Want to allocate tasks: {}".format(", ".join(ids)))
-        for task in tasks:
-            yield UMessage(task.task_id, task)
-
-    @backoff.on_exception(backoff.fibo, AllSSHRetryExc, max_time=60)
-    async def allocator_consumer(self, msg: UMessage[int, TaskModel]):
-        """Allocate task to node or allocate new node"""
-        await self.allocate_task(msg.payload)
-
-    async def task_consumer_producer(
-        self,
-    ) -> AsyncGenerator[UMessage[int, TaskModel], None]:
-        """Produce messages with running tasks for consuming"""
-        tasks = await self.db.get_tasks_by_status((TaskStatus.RUNNING,))
-        for task in tasks:
-            yield UMessage(task.task_id, task)
-
-    async def task_consumer_consumer(
-        self, msg: UMessage[int, TaskModel], machine_not_found: Counter
-    ):
-        """Consume running task if done, mark failed if machine is gone"""
-        broken_tasks_passes = 20
-        task_id, task = msg.id, msg.payload
-        machine = self.remote_machines.get(task.ip)
-        if machine is None:
-            self.log.warning(f"Task {task_id} - machine {task.ip} is gone")
-            machine_not_found.update([task_id])
-            if machine_not_found[task_id] > broken_tasks_passes:
-                await self.db.set_task_error(
-                    task_id, metadata=task.metadata, error="node is gone"
-                )
-                await self.do_task_webhook(task_id, task.metadata, TaskStatus.DONE)
-            return
-        # if machine state is unknown
-        if machine.meta.busy is None:
-            engine = self.config.engines.get(task.metadata["engine"])
-            if engine:
-                await machine.start_occupancy_check(engine)
-        # consume
-        if machine.meta.busy is False:
-            self.log.debug(f"machine {machine.hostname} is free of task {task_id}")
-            await self.consume_task(machine, task)
-
-    async def deallocator_producer(
-        self,
-    ) -> AsyncGenerator[UMessage[str, NodeModel], None]:
-        """Produce messages with nodes for deallocation"""
-
-        # (I) disable idle nodes without linked running tasks
-        tasks = await self.db.get_tasks_by_status((TaskStatus.RUNNING,))
-        busy_ips = [t.ip for t in tasks]
-        all_enabled_nodes = {
-            n.ip: n for n in await self.db.get_enabled_nodes() if n.ip not in busy_ips
-        }
-        for ccfg in self.config.clouds:
-            tdlim = timedelta(seconds=ccfg.idle_tolerance)
-            idlers = self.remote_machines.filter(
-                busy=False, reverse_sort=False, free_since_gt=tdlim
-            )
-            nodes_to_disable = [
-                ip
-                for ip, node in all_enabled_nodes.items()
-                if node.cloud == ccfg.prefix and ip in idlers.keys()
-            ]
-            for ip in nodes_to_disable:
-                await self.db.disable_node(ip)
-                await self.db.commit()
-
-        # (II) deallocate all disabled nodes without linked running tasks
-        free_disabled_nodes = [
-            node
-            for node in await self.db.get_disabled_nodes()
-            if node.ip not in busy_ips and "." in node.ip
-        ]
-        to_disconnect = [
-            n.ip for n in free_disabled_nodes if n.ip in self.remote_machines.keys()
-        ]
-        await self.remote_machines.disconnect_many(to_disconnect)
-        for node in free_disabled_nodes:
-            yield UMessage(node.ip, node)
-
-    async def deallocator_consumer(self, msg: UMessage[str, NodeModel]):
-        """Consume running task if done, mark failed if machine is gone"""
-        node = msg.payload
-        if not node.cloud:
-            return
-        await self.clouds.deallocate(node.ip)
-
-    async def create_producer_consumers(
-        self,
-        queue: UniqueQueue[TUMsgId, TUMsgPayload],
-        producer: Callable[[], AsyncGenerator[UMessage[TUMsgId, TUMsgPayload], None]],
-        consumer: Callable[[UMessage[TUMsgId, TUMsgPayload]], Awaitable],
-        workers_num: int = 1,
-    ) -> None:
-        async def worker():
-            while not self.cancellation_event.is_set():
-                msg = await queue.get()
-                try:
-                    await consumer(msg)
-                finally:
-                    queue.item_done(msg)
-
-        workers: set[asyncio.Task] = set()
-        [workers.add(asyncio.create_task(worker())) for _ in range(0, workers_num)]
-
-        try:
-            while not self.cancellation_event.is_set():
-                end_time = datetime.now() + timedelta(seconds=self.sleep_interval)
-                try:
-                    async for msg in producer():
-                        await queue.put(msg)
-                finally:
-                    await asleep_until(end_time)
-
-        except asyncio.CancelledError:
-            if not queue.empty():
-                self.log.info(f"Queue {queue.name} has {queue.qsize()} items - waiting")
-                await queue.join()
-            [task.cancel() for task in workers]
-            await asyncio.gather(*workers, return_exceptions=True)
-
-    #
-    # Lifecycle
-    #
-
     # START_CONTRACT: start
-    #   PURPOSE: Start all producer-consumer loops for machine connection, task allocation, consumption, and deallocation
-    #   INPUTS: { None - only self }
-    #   OUTPUTS: { None - no return value, runs indefinitely until cancelled }
-    #   SIDE_EFFECTS: Creates background tasks, connects machines, starts all lifecycle loops
-    #   LINKS: M-SCHEDULER, M-QUEUE, M-DB
+    #   PURPOSE: Start the daemon via Orchestrator.
+    #   INPUTS: { None }
+    #   OUTPUTS: { None }
+    #   SIDE_EFFECTS: Creates and starts Orchestrator with all producer-consumer loops.
+    #   LINKS: M-APPLICATION-ORCHESTRATOR, M-DI
     # END_CONTRACT: start
     async def start(self):
-        self.log.debug(
-            "Available computing engines: {}".format(
-                ", ".join(self.config.engines.keys())
-            )
+        self._orchestrator = await make_daemon(
+            self.config, self.log, db=self.db, clouds=self.clouds
         )
-
-        self.bg_jobs.add(asyncio.create_task(self.print_stats()))
-
-        conn_machine_co = self.create_producer_consumers(
-            queue=self.conn_machine_q,
-            producer=self.connect_machine_producer,
-            consumer=self.connect_machine_consumer,
-            workers_num=self.config.local.conn_machine_limit,
-        )
-        self.bg_jobs.add(asyncio.create_task(conn_machine_co))
-
-        # wait some connected machines before allocation
-        async def wait_some_machines():
-            while not len(self.remote_machines):
-                await asyncio.sleep(1)
-
-        await asyncio.wait(
-            [asyncio.create_task(x) for x in [wait_some_machines(), asyncio.sleep(30)]],
-            return_when="FIRST_COMPLETED",
-        )
-
-        allocate_co = self.create_producer_consumers(
-            queue=self.allocate_q,
-            producer=self.allocator_producer,
-            consumer=self.allocator_consumer,
-            workers_num=self.config.local.allocate_limit,
-        )
-        self.bg_jobs.add(asyncio.create_task(allocate_co))
-
-        machine_not_found = Counter()
-        consume_co = self.create_producer_consumers(
-            queue=self.consume_q,
-            producer=self.task_consumer_producer,
-            consumer=partial(
-                self.task_consumer_consumer, machine_not_found=machine_not_found
-            ),
-            workers_num=self.config.local.consume_limit,
-        )
-        self.bg_jobs.add(asyncio.create_task(consume_co))
-
-        deallocate_co = self.create_producer_consumers(
-            queue=self.deallocate_q,
-            producer=self.deallocator_producer,
-            consumer=self.deallocator_consumer,
-            workers_num=self.config.local.deallocate_limit,
-        )
-        self.bg_jobs.add(asyncio.create_task(deallocate_co))
-
-        await asyncio.gather(*self.bg_jobs, return_exceptions=True)
-        await asyncio.sleep(1)  # workaround aiohttp's Unclosed client session
+        await self._orchestrator.start()
 
     # START_CONTRACT: stop
-    #   PURPOSE: Graceful shutdown of all background tasks and connections
-    #   INPUTS: { None - only self }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Cancels background jobs, disconnects remote machines, stops cloud manager, closes HTTP session
-    #   LINKS: M-SCHEDULER, M-CLOUD-MANAGER, M-REMOTE-REPO
+    #   PURPOSE: Graceful shutdown via Orchestrator.
+    #   INPUTS: { None }
+    #   OUTPUTS: { None }
+    #   SIDE_EFFECTS: Cancels all loops, disconnects machines, stops clouds.
+    #   LINKS: M-APPLICATION-ORCHESTRATOR
     # END_CONTRACT: stop
     async def stop(self):
-        self.log.info("Stopping...")
-        self.cancellation_event.set()
-
-        for task in self.bg_jobs:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-        await self.clouds.stop()
-        await self.remote_machines.disconnect_all()
-        await self.http.close()
+        if self._orchestrator:
+            await self._orchestrator.stop()
+        else:
+            await self.clouds.stop()
+            await self.db.close()

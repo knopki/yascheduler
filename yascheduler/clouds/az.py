@@ -18,10 +18,13 @@
 #   az_create_node - Create Azure VM (public entry point)
 #   delete_node - Delete VM and NIC (internal)
 #   az_delete_node - Delete Azure VM and NIC (public entry point)
+#   _fetch_network_resources - Fetch subnet and NSG for NIC creation
+#   _render_custom_data - Render custom_data from cloud_config with boot commands
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.6.1 - Extract _fetch_network_resources from create_nic and _render_custom_data from create_vm_params to reduce line counts below 60.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
 """Azure cloud methods"""
@@ -90,6 +93,32 @@ RETRY_AZURE_ERRORS = (
 ALL_AZURE_ERRORS = (AzureError,)
 
 
+# START_CONTRACT: _fetch_network_resources
+#   PURPOSE: Fetch subnet and NSG for NIC creation
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client }
+#   OUTPUTS: { tuple - subnet and NSG }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-AZ
+# END_CONTRACT: _fetch_network_resources
+async def _fetch_network_resources(
+    log: logging.Logger,
+    cfg: ConfigCloudAzure,
+    client: NetworkManagementClient,
+) -> tuple:
+    """Fetch subnet and network security group for NIC creation"""
+    # START_BLOCK_FETCH_RESOURCES
+    subnet = await client.subnets.get(
+        resource_group_name=cfg.resource_group,
+        virtual_network_name=cfg.vnet,
+        subnet_name=cfg.subnet,
+    )
+    log.debug(f"Subnet {subnet.name} found")
+    nsg = await client.network_security_groups.get(cfg.resource_group, cfg.nsg)
+    log.debug(f"Network security group {nsg.name} found")
+    # END_BLOCK_FETCH_RESOURCES
+    return subnet, nsg
+
+
 # START_CONTRACT: create_nic
 #   PURPOSE: Create network interface for VM and tag with IP address
 #   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client, vm_name: str - VM name }
@@ -106,14 +135,7 @@ async def create_nic(
     "Create network interface"
     nic_name = f"{vm_name}-nic"
     ip_config_name = f"{nic_name}-ip-config"
-    subnet = await client.subnets.get(
-        resource_group_name=cfg.resource_group,
-        virtual_network_name=cfg.vnet,
-        subnet_name=cfg.subnet,
-    )
-    log.debug(f"Subnet {subnet.name} found")
-    nsg = await client.network_security_groups.get(cfg.resource_group, cfg.nsg)
-    log.debug(f"Network security group {nsg.name} found")
+    subnet, nsg = await _fetch_network_resources(log, cfg, client)
     nic_ip_config_params = NetworkInterfaceIPConfiguration(
         name=ip_config_name,
         subnet=subnet,
@@ -147,6 +169,31 @@ async def create_nic(
     return nic, ip_addr
 
 
+# START_CONTRACT: _render_custom_data
+#   PURPOSE: Render custom_data from cloud_config with boot commands
+#   INPUTS: { cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   OUTPUTS: { Optional[str] - base64-encoded cloud-config or None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-AZ
+# END_CONTRACT: _render_custom_data
+def _render_custom_data(
+    cloud_config: Optional[PCloudConfig] = None,
+) -> Optional[str]:
+    """Render cloud-config custom data with Azure-specific boot commands"""
+    # START_BLOCK_RENDER_CUSTOM_DATA
+    custom_data = None
+    if cloud_config:
+        my_boot_cmds = [
+            # see https://github.com/MicrosoftDocs/azure-docs/issues/82500
+            "systemctl mask waagent-apt.service",
+        ]
+        custom_data = evolve(
+            cloud_config, bootcmd=[*my_boot_cmds, *cloud_config.bootcmd]
+        ).render_base64()
+    # END_BLOCK_RENDER_CUSTOM_DATA
+    return custom_data
+
+
 # START_CONTRACT: create_vm_params
 #   PURPOSE: Build VirtualMachine parameter object with SSH key and cloud-config
 #   INPUTS: { location: str - Azure region, vm_name: str - VM name, vm_image: AzureImageReference - image reference, vm_size: str - VM size, nic: NetworkInterface - network interface, username: str - admin username, ssh_key: SSHKey - SSH public key, tags: dict[str,str] - resource tags, cloud_config: Optional[PCloudConfig] - optional cloud-config }
@@ -166,20 +213,12 @@ def create_vm_params(
     cloud_config: Optional[PCloudConfig] = None,
 ) -> VirtualMachine:
     """Create VirtualMachine params"""
-    img_ref = ImageReference.from_dict(asdict(vm_image))
+    img_ref = ImageReference.from_dict(asdict(vm_image))  # type: ignore[arg-type]
     pub_key = SshPublicKey(
         path=str(PurePosixPath("/home", username, ".ssh/authorized_keys")),
         key_data=ssh_key.export_public_key("openssh").decode("utf-8"),
     )
-    custom_data = None
-    if cloud_config:
-        my_boot_cmds = [
-            # see https://github.com/MicrosoftDocs/azure-docs/issues/82500
-            "systemctl mask waagent-apt.service",
-        ]
-        custom_data = evolve(
-            cloud_config, bootcmd=[*my_boot_cmds, *cloud_config.bootcmd]
-        ).render_base64()
+    custom_data = _render_custom_data(cloud_config)
 
     return VirtualMachine(
         location=location,

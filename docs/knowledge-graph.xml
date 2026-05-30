@@ -6,7 +6,7 @@
   See .agents/skills/grace-lite/SKILL.md for full rules.
 -->
 <KnowledgeGraph>
-  <Project NAME="yascheduler" VERSION="1.6.0">
+  <Project NAME="yascheduler" VERSION="2.0.0">
     <keywords>scheduler, SSH, cloud, HPC, AiiDA, orchestration</keywords>
     <annotation>Schedules scientific calculation jobs on SSH machines and cloud-created nodes.</annotation>
 
@@ -27,30 +27,27 @@
       </annotations>
     </M-MAIN>
 
-    <M-SCHEDULER NAME="Scheduler" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Main async daemon orchestrating task allocation, execution, and completion.</purpose>
-      <path>yascheduler/scheduler.py</path>
-      <depends>M-DB, M-CLOUD-MANAGER, M-REMOTE-REPO, M-CONFIG, M-QUEUE, M-COMPAT, M-TIME, M-VARIABLES, M-REMOTE, M-REMOTE-PROTOCOL</depends>
+    <M-WEBHOOK NAME="Webhook payload" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Webhook payload frozen dataclass for webhook request serialization.</purpose>
+      <path>yascheduler/webhook.py</path>
+      <depends>none</depends>
       <annotations>
-        <class-Scheduler PURPOSE="Async daemon that drives the full task lifecycle" />
         <class-WebhookPayload PURPOSE="Webhook request data shape" />
+      </annotations>
+    </M-WEBHOOK>
+
+    <M-SCHEDULER NAME="Scheduler" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Backward-compatible thin wrapper: delegates to Orchestrator and use cases.</purpose>
+      <path>yascheduler/scheduler.py</path>
+      <depends>M-DB, M-CLOUD-MANAGER, M-CONFIG, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK</depends>
+      <annotations>
+        <class-Scheduler PURPOSE="Backward-compatible async daemon wrapper (delegates to Orchestrator)" />
+        <class-WebhookPayload PURPOSE="Re-exported from webhook module" />
         <fn-get_logger PURPOSE="Configure and return the yascheduler logger" />
-        <fn-create PURPOSE="Async factory: builds Scheduler with DB, clouds, remote machines" />
-        <fn-start PURPOSE="Start all producer-consumer loops and run forever" />
-        <fn-stop PURPOSE="Graceful shutdown of all loops and connections" />
-        <fn-allocate_task PURPOSE="Pick a free node or create a cloud node for a task" />
-        <fn-consume_task PURPOSE="Upload inputs, spawn process, monitor completion" />
-        <fn-create_new_task PURPOSE="Insert a new TO_DO task into the database" />
-        <fn-upload_task_data PURPOSE="SFTP upload of task input files to remote machine" />
-        <fn-start_task_on_machine PURPOSE="Spawn calculation process on a remote node" />
-        <fn-connect_machine_producer PURPOSE="Yield enabled nodes from DB for connection" />
-        <fn-connect_machine_consumer PURPOSE="SSH-connect to a node and register it" />
-        <fn-allocator_producer PURPOSE="Yield TO_DO tasks ready for allocation" />
-        <fn-allocator_consumer PURPOSE="Allocate a machine for a task" />
-        <fn-task_consumer_producer PURPOSE="Yield RUNNING tasks for consumption check" />
-        <fn-task_consumer_consumer PURPOSE="Check task completion and download outputs" />
-        <fn-deallocator_producer PURPOSE="Yield idle cloud nodes for deallocation" />
-        <fn-deallocator_consumer PURPOSE="Delete idle cloud node and disable in DB" />
+        <fn-create PURPOSE="Async factory: builds Scheduler with DB and clouds" />
+        <fn-start PURPOSE="Delegates to Orchestrator.start()" />
+        <fn-stop PURPOSE="Delegates to Orchestrator.stop()" />
+        <fn-create_new_task PURPOSE="Delegates to submit_task use case via DI" />
       </annotations>
     </M-SCHEDULER>
 
@@ -82,7 +79,7 @@
     <M-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Public Python/CLI client for submitting and querying tasks.</purpose>
       <path>yascheduler/client.py</path>
-      <depends>M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-SCHEDULER</depends>
+      <depends>M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-DI</depends>
       <annotations>
         <class-Yascheduler PURPOSE="Sync/async client wrapper for task operations" />
         <fn-to_sync PURPOSE="Decorator converting async function to sync" />
@@ -131,7 +128,7 @@
     <M-UTILS NAME="Utilities" TYPE="UTILITY" STATUS="implemented">
       <purpose>CLI entry points: submit, status, init, node management, daemonize.</purpose>
       <path>yascheduler/utils.py</path>
-      <depends>M-CLIENT, M-CONFIG, M-DB, M-REMOTE, M-VARIABLES, M-SCHEDULER</depends>
+      <depends>M-CLIENT, M-CONFIG, M-DB, M-REMOTE, M-VARIABLES, M-DI, M-DOMAIN-MODEL</depends>
       <annotations>
         <fn-submit PURPOSE="Submit task to yascheduler via AiiDA script" />
         <fn-check_status PURPOSE="Show status of tasks" />
@@ -246,6 +243,79 @@
         <fn-match_task_to_node PURPOSE="Select first compatible free machine for a task, or None" />
       </annotations>
     </M-DOMAIN-SERVICES>
+
+    <!-- ═══════════════════════════════════════════════
+         Application layer (v2.0.0)
+         ═══════════════════════════════════════════════ -->
+
+    <M-APPLICATION-UOW NAME="Abstract Unit of Work Protocol" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Protocol defining transactional boundary: tasks, nodes, commit, rollback.</purpose>
+      <path>yascheduler/application/uow.py</path>
+      <depends>M-DOMAIN-PORTS</depends>
+      <annotations>
+        <class-AbstractUnitOfWork PURPOSE="Async context manager Protocol with task and node repositories" />
+      </annotations>
+    </M-APPLICATION-UOW>
+
+    <M-APPLICATION-SUBMIT NAME="Submit task use case" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Validate engine/inputs, create domain Task, persist via UoW.</purpose>
+      <path>yascheduler/application/submit_task.py</path>
+      <depends>M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-CONFIG, M-APPLICATION-UOW</depends>
+      <annotations>
+        <fn-submit_task PURPOSE="Create a new TO_DO task after validating engine and inputs" />
+      </annotations>
+    </M-APPLICATION-SUBMIT>
+
+    <M-APPLICATION-ALLOCATE NAME="Allocate task use case" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Match a TO_DO task to a free machine or request cloud provisioning.</purpose>
+      <path>yascheduler/application/allocate_task.py</path>
+      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG</depends>
+      <annotations>
+        <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or request cloud node" />
+      </annotations>
+    </M-APPLICATION-ALLOCATE>
+
+    <M-APPLICATION-CONSUME NAME="Consume task use case" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Download outputs from remote machine and mark task DONE.</purpose>
+      <path>yascheduler/application/consume_task.py</path>
+      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG</depends>
+      <annotations>
+        <fn-consume_task PURPOSE="Download task outputs and mark DONE or ERROR" />
+      </annotations>
+    </M-APPLICATION-CONSUME>
+
+    <M-APPLICATION-DEALLOCATE NAME="Deallocate idle nodes use case" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Disable idle cloud nodes and trigger VM deletion.</purpose>
+      <path>yascheduler/application/deallocate_nodes.py</path>
+      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG-CLOUD</depends>
+      <annotations>
+        <fn-deallocate_node PURPOSE="Disconnect and cloud-deallocate a single node" />
+        <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and delete their VMs" />
+      </annotations>
+    </M-APPLICATION-DEALLOCATE>
+
+    <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Manages producer-consumer loops calling use cases and SSH helpers.</purpose>
+      <path>yascheduler/application/orchestrator.py</path>
+      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-WEBHOOK</depends>
+      <annotations>
+        <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
+        <fn-start PURPOSE="Start all producer-consumer loops" />
+        <fn-stop PURPOSE="Graceful shutdown" />
+      </annotations>
+    </M-APPLICATION-ORCHESTRATOR>
+
+    <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Composition root with factories per entry point: daemon, CLI, AiiDA.</purpose>
+      <path>yascheduler/di.py</path>
+      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB</depends>
+      <annotations>
+        <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit and query" />
+        <fn-make_daemon PURPOSE="Async factory creating Orchestrator with all daemon dependencies" />
+        <fn-make_cli_deps PURPOSE="Sync factory creating lightweight CLIDeps" />
+        <fn-make_aiida PURPOSE="Stub for future AiiDA integration" />
+      </annotations>
+    </M-DI>
 
     <!-- ═══════════════════════════════════════════════
          Persistence adapters
@@ -646,8 +716,8 @@
          Data flows
          ═══════════════════════════════════════════════ -->
 
-    <DF-SUBMIT NAME="Submit task">M-CLIENT -> M-DB -> M-SCHEDULER</DF-SUBMIT>
-    <DF-SCHEDULE NAME="Schedule task">M-SCHEDULER -> M-DB -> M-SCHEDULER -> M-CLOUD-MANAGER / M-REMOTE-REPO</DF-SCHEDULE>
+    <DF-SUBMIT NAME="Submit task">M-CLIENT -> M-DI -> M-APPLICATION-SUBMIT -> M-APPLICATION-UOW -> M-DOMAIN-PORTS</DF-SUBMIT>
+    <DF-SCHEDULE NAME="Schedule task (v2.0)">M-APPLICATION-ORCHESTRATOR -> M-APPLICATION-ALLOCATE / M-APPLICATION-CONSUME -> M-REMOTE-REPO -> M-DB</DF-SCHEDULE>
     <DF-ALLOCATE-CLOUD NAME="Allocate cloud node">M-SCHEDULER -> M-CLOUD-MANAGER -> M-CLOUD-API -> M-CLOUD-AZ / M-CLOUD-HETZNER / M-CLOUD-UPCLOUD</DF-ALLOCATE-CLOUD>
     <DF-ALLOCATE-EXISTING NAME="Allocate existing node">M-SCHEDULER -> M-REMOTE-REPO -> M-REMOTE</DF-ALLOCATE-EXISTING>
     <DF-EXECUTE NAME="Execute task">M-SCHEDULER -> M-REMOTE -> M-CONFIG-ENGINE</DF-EXECUTE>
@@ -692,6 +762,22 @@
     <CrossLink from="M-PERSISTENCE" to="M-PERSISTENCE-SQLLOADER" relation="re-exports load_query" />
     <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-POSTGRES" relation="instantiates and wires repositories" />
     <CrossLink from="M-PERSISTENCE-POSTGRES" to="M-DOMAIN-MODEL" relation="maps DB rows to domain entities" />
+
+    <!-- Application layer cross-links (v2.0.0) -->
+    <CrossLink from="M-SCHEDULER" to="M-DI" relation="delegates daemon creation to make_daemon" />
+    <CrossLink from="M-SCHEDULER" to="M-APPLICATION-SUBMIT" relation="delegates task submission to submit_task use case" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ALLOCATE" relation="calls allocate_task use case in consumer loop" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-CONSUME" relation="calls consume_task use case in consumer loop" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-DEALLOCATE" relation="calls deallocate_node per node in producer-consumer loop with deallocate_limit concurrency" />
+    <CrossLink from="M-DI" to="M-APPLICATION-ORCHESTRATOR" relation="creates Orchestrator with wired dependencies" />
+    <CrossLink from="M-DI" to="M-PERSISTENCE-UOW" relation="creates UoW factory from PostgresUnitOfWork" />
+    <CrossLink from="M-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
+    <CrossLink from="M-UTILS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
+    <CrossLink from="M-UTILS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
+    <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
+    <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
+    <CrossLink from="M-SCHEDULER" to="M-WEBHOOK" relation="re-exports WebhookPayload for backward compatibility" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-WEBHOOK" relation="uses WebhookPayload for webhook serialization" />
 
   </Project>
 </KnowledgeGraph>

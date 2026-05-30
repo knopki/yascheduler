@@ -1,26 +1,21 @@
 # FILE: yascheduler/client.py
-# VERSION: 1.6.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
-#   SCOPE: Task submission and status query via sync and async interfaces.
-#   DEPENDS: M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-SCHEDULER
-#   LINKS: M-DB, M-SCHEDULER, M-AIIDA
+#   SCOPE: Task submission (via DI/CLIDeps) and status query (via DB).
+#   DEPENDS: M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-DI
+#   LINKS: M-DB, M-DI, M-AIIDA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   Yascheduler - Sync/async client wrapper for task operations
 #   to_sync - Decorator wrapping async functions for sync execution
-#   queue_submit_task_async - Async task submission
-#   queue_submit_task - Sync task submission
-#   queue_get_tasks_async - Async task query by IDs/statuses
-#   queue_get_tasks - Sync task query by IDs/statuses
-#   queue_get_task_async - Async single task query
-#   queue_get_task - Sync single task query
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v2.0.0 - Replace Scheduler import with make_cli_deps for submit; query methods unchanged.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -81,8 +76,8 @@ class Yascheduler:
 
     # START_CONTRACT: __init__
     #   PURPOSE: Initialize the Yascheduler client with config path
-    #   INPUTS: { config_path: Union[PurePath, str] - path to config file, logger: Optional[logging.Logger] - optional logger }
-    #   OUTPUTS: { None - no return value }
+    #   INPUTS: { config_path: Union[PurePath, str], logger: Optional[logging.Logger] }
+    #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Loads configuration from disk
     #   LINKS: M-CLIENT, M-CONFIG
     # END_CONTRACT: __init__
@@ -95,11 +90,11 @@ class Yascheduler:
         self._logger = logger
 
     # START_CONTRACT: queue_submit_task_async
-    #   PURPOSE: Submit a new task asynchronously
-    #   INPUTS: { label: str - task label, metadata: Mapping[str, Any] - task metadata, engine_name: str - engine to use, webhook_onsubmit: bool - whether to trigger webhook on submit }
-    #   OUTPUTS: { int - task_id of the created task }
-    #   SIDE_EFFECTS: Creates a new task in the database
-    #   LINKS: M-CLIENT, M-SCHEDULER
+    #   PURPOSE: Submit a new task asynchronously via CLIDeps (no Scheduler import).
+    #   INPUTS: { label: str, metadata: Mapping[str, Any], engine_name: str, webhook_onsubmit: bool }
+    #   OUTPUTS: { int - task_id }
+    #   SIDE_EFFECTS: Creates a new task in the database via submit_task use case.
+    #   LINKS: M-CLIENT, M-DI
     # END_CONTRACT: queue_submit_task_async
     async def queue_submit_task_async(
         self,
@@ -109,24 +104,17 @@ class Yascheduler:
         webhook_onsubmit=False,
     ) -> int:
         """Submit new task"""
-        from .scheduler import Scheduler
+        from .di import make_cli_deps
 
-        yac = await Scheduler.create(config=self.config, log=self._logger)
-        task = await yac.create_new_task(
-            label=label,
-            metadata=metadata,
-            engine_name=engine_name,
-            webhook_onsubmit=webhook_onsubmit,
-        )
-        await yac.stop()
-        return task.task_id
+        deps = make_cli_deps(self.config)
+        return await deps.submit(label, dict(metadata), engine_name)
 
     # START_CONTRACT: queue_submit_task
     #   PURPOSE: Submit a new task synchronously
-    #   INPUTS: { label: str - task label, metadata: Mapping[str, Any] - task metadata, engine_name: str - engine to use, webhook_onsubmit: bool - whether to trigger webhook on submit }
-    #   OUTPUTS: { int - task_id of the created task }
+    #   INPUTS: { label: str, metadata: Mapping[str, Any], engine_name: str, webhook_onsubmit: bool }
+    #   OUTPUTS: { int - task_id }
     #   SIDE_EFFECTS: Creates a new task in the database
-    #   LINKS: M-CLIENT, M-SCHEDULER
+    #   LINKS: M-CLIENT
     # END_CONTRACT: queue_submit_task
     def queue_submit_task(
         self,
@@ -141,7 +129,7 @@ class Yascheduler:
 
     # START_CONTRACT: queue_get_tasks_async
     #   PURPOSE: Query tasks asynchronously by job IDs or statuses
-    #   INPUTS: { jobs: Optional[Sequence[int]] - filter by task IDs, status: Optional[Sequence[int]] - filter by status codes }
+    #   INPUTS: { jobs: Optional[Sequence[int]], status: Optional[Sequence[int]] }
     #   OUTPUTS: { Sequence[Mapping[str, Any]] - list of task dicts }
     #   SIDE_EFFECTS: Creates a DB connection; reads task records
     #   LINKS: M-CLIENT, M-DB
@@ -155,20 +143,22 @@ class Yascheduler:
         if jobs is not None and status is not None:
             raise ValueError("jobs can be selected only by status or by task ids")
         # raise ValueError if unknown task status
-        status = [TaskStatus(x) for x in status] if status else None
+        statuses: Optional[list[TaskStatus]] = (
+            [TaskStatus(x) for x in status] if status else None
+        )
         db = await DB.create(self.config.db)
-        if status:
-            tasks = await db.get_tasks_by_status(status)
+        if statuses:
+            tasks = await db.get_tasks_by_status(statuses)
         elif jobs:
             tasks = await db.get_tasks_by_jobs(jobs)
         else:
             return []
-        return [asdict(t) for t in tasks]
+        return [asdict(t) for t in tasks]  # type: ignore[arg-type]
 
     # START_CONTRACT: queue_get_tasks
     #   PURPOSE: Query tasks synchronously by job IDs or statuses
-    #   INPUTS: { jobs: Optional[Sequence[int]] - filter by task IDs, status: Optional[Sequence[int]] - filter by status codes }
-    #   OUTPUTS: { Sequence[Mapping[str, Any]] - list of task dicts }
+    #   INPUTS: { jobs: Optional[Sequence[int]], status: Optional[Sequence[int]] }
+    #   OUTPUTS: { Sequence[Mapping[str, Any]] }
     #   SIDE_EFFECTS: Creates a DB connection via async delegate
     #   LINKS: M-CLIENT, M-DB
     # END_CONTRACT: queue_get_tasks
@@ -182,8 +172,8 @@ class Yascheduler:
 
     # START_CONTRACT: queue_get_task_async
     #   PURPOSE: Get a single task by ID asynchronously
-    #   INPUTS: { task_id: int - the task ID }
-    #   OUTPUTS: { Optional[Mapping[str, Any]] - task dict or None if not found }
+    #   INPUTS: { task_id: int }
+    #   OUTPUTS: { Optional[Mapping[str, Any]] }
     #   SIDE_EFFECTS: Creates a DB connection via queue_get_tasks_async
     #   LINKS: M-CLIENT, M-DB
     # END_CONTRACT: queue_get_task_async
@@ -194,8 +184,8 @@ class Yascheduler:
 
     # START_CONTRACT: queue_get_task
     #   PURPOSE: Get a single task by ID synchronously
-    #   INPUTS: { task_id: int - the task ID }
-    #   OUTPUTS: { Optional[Mapping[str, Any]] - task dict or None if not found }
+    #   INPUTS: { task_id: int }
+    #   OUTPUTS: { Optional[Mapping[str, Any]] }
     #   SIDE_EFFECTS: Creates a DB connection via queue_get_tasks
     #   LINKS: M-CLIENT, M-DB
     # END_CONTRACT: queue_get_task

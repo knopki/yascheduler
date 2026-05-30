@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
@@ -16,7 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial Protocol structural conformance tests
+#   LAST_CHANGE: v1.1.0 - Add stubs for update_status, list_ids_by_ip_and_status, list_all, get_by_ips port methods.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial Protocol structural conformance tests
 # END_CHANGE_SUMMARY
 
 from pathlib import Path
@@ -44,6 +45,18 @@ class StubTaskRepository:
         pass
 
     async def list_by_status(self, statuses: set[TaskStatus]) -> list[Task]:
+        return []
+
+    async def insert(self, task: Task) -> Task:
+        raise NotImplementedError
+
+    async def list_by_jobs(self, job_ids: list[int]) -> list[Task]:
+        return []
+
+    async def update_status(self, task_id: int, status: TaskStatus) -> None:
+        pass
+
+    async def list_ids_by_ip_and_status(self, ip: str, status: TaskStatus) -> list[int]:
         return []
 
 
@@ -74,6 +87,12 @@ class StubNodeRepository:
 
     async def remove(self, ip: str) -> None:
         pass
+
+    async def list_all(self) -> list[Node]:
+        return []
+
+    async def get_by_ips(self, ips: list[str]) -> dict[str, Node]:
+        return {}
 
 
 class StubMachineGateway:

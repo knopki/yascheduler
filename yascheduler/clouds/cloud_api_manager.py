@@ -4,17 +4,19 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Multi-cloud orchestrator: provider selection, allocation, deallocation, capacity.
 #   SCOPE: CloudAPIManager class managing multiple providers; CLOUD_ADAPTER_GETTERS registry.
-#   DEPENDS: M-CLOUD-API, M-DB, M-CONFIG, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS
+#   DEPENDS: M-CLOUD-API, M-DB, M-CONFIG, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-COMPAT
 #   LINKS: M-SCHEDULER, M-CLOUD-API, M-DB
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   CLOUD_ADAPTER_GETTERS - Registry mapping cloud prefix to adapter factory
+#   _resolve_adapter - Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry
 #   CloudAPIManager - Multi-cloud orchestrator; create, stop, allocate, deallocate, capacity
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.6.1 - Extracted _resolve_adapter from create to stay under 60-line limit.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 
 """Cloud API manager"""
@@ -40,6 +42,29 @@ CLOUD_ADAPTER_GETTERS = {
     "hetzner": get_hetzner_adapter,
     "upcloud": get_upcloud_adapter,
 }
+
+
+# START_CONTRACT: _resolve_adapter
+#   PURPOSE: Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry
+#   INPUTS: { cfg: ConfigCloud - cloud provider config with prefix, log: logging.Logger - logger instance }
+#   OUTPUTS: { Optional[CloudAdapter] - resolved adapter or None if prefix unknown or deps missing }
+#   SIDE_EFFECTS: Logs error on ImportError
+#   LINKS: M-CLOUD-MANAGER, M-CLOUD-ADAPTERS
+# END_CONTRACT: _resolve_adapter
+def _resolve_adapter(cfg, log):
+    # START_BLOCK_RESOLVE_ADAPTER
+    try:
+        getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]
+        return getter(cfg.prefix)
+    except KeyError:
+        return None
+    except ImportError:
+        log.error(
+            "The cloud %s is skipped because the dependencies are not installed",
+            cfg.prefix,
+        )
+        return None
+    # END_BLOCK_RESOLVE_ADAPTER
 
 
 @define(frozen=True)
@@ -86,16 +111,8 @@ class CloudAPIManager:
                 )
                 continue
 
-            try:
-                getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]
-                adapter = getter(cfg.prefix)
-            except KeyError:
-                continue
-            except ImportError:
-                log.error(
-                    "The cloud %s is skipped because the dependencies are not installed",
-                    cfg.prefix,
-                )
+            adapter = _resolve_adapter(cfg, log)
+            if adapter is None:
                 continue
 
             apis[adapter.name] = CloudAPI(

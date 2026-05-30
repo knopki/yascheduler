@@ -32,21 +32,21 @@ from yascheduler.config import (
     ConfigRemote,
     EngineRepository,
 )
-from yascheduler.remote_machine.remote_machine_repository import RemoteMachineRepository
 from yascheduler.scheduler import Scheduler
 
 
 def make_scheduler(db, config, clouds=None, remote_machines=None):
-    """Construct a Scheduler with injected mocks."""
-    if remote_machines is None:
-        remote_machines = RemoteMachineRepository(log=None)
+    """Construct a refactored Scheduler with injected mocks.
+
+    After refactoring, Scheduler no longer accepts remote_machines
+    or manages queues directly. The orchestrator handles loop infrastructure.
+    """
     log = logging.getLogger("test_scheduler")
     return Scheduler(
         config=config,
         db=db,
         clouds=clouds,
         log=log,
-        remote_machines=remote_machines,
     )
 
 
