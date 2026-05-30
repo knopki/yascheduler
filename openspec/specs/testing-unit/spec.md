@@ -1,158 +1,260 @@
 ## Purpose
 
-Requirements for unit tests covering config parsing, data models, database operations (mocked), remote machine management, and scheduler orchestration. Tests validate behavioral contracts without external dependencies (no real DB, SSH, or filesystem).
+Unit tests for yascheduler: domain entities, domain exceptions, domain ports,
+domain services, config parsing, legacy DB models, persistence adapters (mocked),
+application use cases, orchestrator lifecycle, dependency injection, CLI behavior,
+remote machine management, and shared test infrastructure. All tests run without
+external dependencies (no real DB, SSH, or filesystem).
 
 ## Requirements
 
-### Requirement: Config sub-module parsing
-Tests SHALL verify that each config sub-module (`ConfigDb`, `ConfigLocal`, `ConfigRemote`, cloud configs, `Engine`, `EngineRepository`) correctly parses from INI sections, applies documented defaults when keys are absent, and applies explicit overrides.
+### Requirement: Domain entities lifecycle
 
-#### Scenario: Defaults and overrides
-- **WHEN** a config sub-module is parsed from an empty section then from a section with explicit keys
-- **THEN** defaults are applied first, then overridden by the explicit values
+Tests SHALL verify `Task`, `Node`, `ConnectedMachine`, `TaskContext`, `Engine`,
+`ProcessResult`, `TaskStatus`, `MachineState` from `yascheduler.domain.model`:
+- `Task` immutability, `allocate_to`/`mark_running`/`complete`/`fail` transitions
+  and guard errors (`TaskAlreadyAllocatedError`, `TaskNotAllocatedError`,
+  `TaskNotTodoError`, `TaskNotRunningError`)
+- `TaskContext` known fields, extra dict, `to_metadata`/`from_metadata` round-trip
+  (None omission, extra key merge, webhook_custom_params preservation)
+- `Engine.validate_inputs` passes with all files, raises `MissingInputFileError`
+  when a file is missing
+- `ConnectedMachine.is_compatible`, `occupy`, `release` with state guards
+- `Node` defaults (username="root", port=22, cloud=None, enabled=True)
 
-### Requirement: Config validation rules
-Tests SHALL verify that config parsing enforces validation rules:
+#### Scenario: Task fail on non-running raises TaskNotRunningError
+- **WHEN** `task.fail("reason")` is called on a TO_DO task
+- **THEN** `TaskNotRunningError` is raised
+
+#### Scenario: TaskContext round-trip preserves extra
+- **WHEN** `TaskContext(engine="fleur", extra={"fort.9": "data"})` is serialized and deserialized
+- **THEN** extra keys are preserved
+
+### Requirement: Domain exception hierarchy
+
+Tests SHALL verify all exception classes from `yascheduler.domain.exceptions`:
+- `DomainError` catchable as `Exception`
+- `ValidationError` hierarchy: `UnsupportedEngineError` (carries `engine_name`),
+  `MissingInputFileError` (carries `engine_name`, `filename`)
+- `TaskError` hierarchy: `TaskAlreadyAllocatedError`, `TaskNotAllocatedError`,
+  `TaskNotTodoError`, `TaskNotRunningError` (each carries `task_id`)
+- `MachineBusyError` (carries `ip`)
+- `SchedulingError` hierarchy: `NoCompatibleNodeError` (carries `task_id`, `platforms`),
+  `CloudCapacityExhaustedError` (carries `task_id`)
+- All classes importable from `yascheduler.domain.exceptions`
+
+#### Scenario: Exception hierarchy and field carrying
+- **WHEN** `UnsupportedEngineError("gaussian")`, `TaskAlreadyAllocatedError(42)`, `NoCompatibleNodeError(1, ["linux"])` are raised and caught
+- **THEN** each stores its documented attribute (`engine_name`, `task_id`, `platforms`) and is catchable via its parent class
+
+### Requirement: Domain port Protocol conformance
+
+Tests SHALL verify that stub implementations satisfy `@runtime_checkable`
+Protocol checks for `TaskRepository`, `NodeRepository`, `MachineGateway`,
+`CloudProvisioner` from `yascheduler.domain.ports`.
+
+#### Scenario: Stub implementations satisfy Protocol checks
+- **WHEN** stub classes with matching async method signatures are checked against `TaskRepository`, `NodeRepository`, `MachineGateway`, `CloudProvisioner`
+- **THEN** `isinstance` returns `True` for each
+
+### Requirement: Domain services
+
+Tests SHALL verify `match_task_to_node` from `yascheduler.domain.services`:
+returns first compatible free machine, returns `None` for no match, busy-only,
+or empty lists.
+
+#### Scenario: match_task_to_node returns first compatible free machine
+- **WHEN** `match_task_to_node(task, engine, [busy_machine, free_compatible, free_other])` is called
+- **THEN** it returns the `free_compatible` machine
+
+### Requirement: Config parsing and validation
+
+Tests SHALL verify INI config parsing:
+- `ConfigDb`, `ConfigLocal`, `ConfigRemote` defaults and overrides
+- Cloud config parsing (Hetzner, UpCloud, Azure)
+- `AzureImageReference.from_urn` rejects malformed URN with `ValueError`
 - `ConfigCloudAzure` rejects `username="root"` with `ValueError`
-- `AzureImageReference.from_urn` rejects malformed URN (fewer than 4 colon-separated parts) with `ValueError`
-- `Engine` rejects unrecognized spawn placeholders with `ValueError` mentioning the placeholder name
-- `Engine` rejects construction with both `check_cmd` and `check_pname` as None (`ValueError`)
-- `Engine` rejects construction with `input_files=()` (`ValueError`)
+- `Engine` rejects unknown spawn placeholders, missing check methods, empty input_files
+- `EngineRepository.filter`, `filter_platforms`, immutability
+- `Config.from_config_parser` full assembly and empty section defaults
+- `warn_unknown_fields` emits `ConfigWarning` for unknown keys
 
-#### Scenario: Azure rejects root username
-- **WHEN** `ConfigCloudAzure` is constructed with `username="root"`
+#### Scenario: AzureImageReference.from_urn rejects malformed URN
+- **WHEN** `AzureImageReference.from_urn("bad-urn")` is called
 - **THEN** `ValueError` is raised
 
-### Requirement: EngineRepository filtering and immutability
-Tests SHALL verify that `EngineRepository.filter` and `filter_platforms` return new repositories with correct subsets. Repository SHALL be immutable (`__setitem__`/`__delitem__` raise `NotImplementedError`).
+### Requirement: Legacy DB models (TaskModel, NodeModel, TaskStatus)
 
-#### Scenario: Filter and immutability
-- **WHEN** repository is filtered by platform list and mutation is attempted
-- **THEN** only matching engines remain in the filtered result, and mutation raises `NotImplementedError`
+Tests SHALL verify legacy attrs-based models from `yascheduler.db`:
+- `TaskStatus` values: TO_DO=0, RUNNING=1, DONE=2, subclass of `int`
+- `TaskModel` frozen, `TaskStatus` converter, deterministic hash
+- `NodeModel` defaults and frozen
 
-### Requirement: Config top-level assembly
-Tests SHALL verify that `Config.from_config_parser` assembles all sub-configs from a complete INI file and remains valid with empty sections.
+#### Scenario: TaskModel is frozen and hashable
+- **WHEN** a `TaskModel` instance is created
+- **THEN** it is frozen (cannot mutate attributes) and has a deterministic hash
 
-#### Scenario: Full assembly from complete INI
-- **WHEN** parsed from a valid INI with all required sections
-- **THEN** `Config` contains correct sub-configs for db, local, remote, clouds, and engines
+### Requirement: DB facade with mocked connection
 
-### Requirement: warn_unknown_fields detection
-Tests SHALL verify that `warn_unknown_fields` emits `ConfigWarning` for keys not in the known list.
+Tests SHALL verify `DB` methods from `yascheduler.db` using a mocked pg8000
+connection: node CRUD (`add_node`, `get_node`, `enable_node`, `disable_node`,
+`remove_node`), task CRUD (`add_task`, `get_task`, `set_task_running`,
+`set_task_done`), and `set_task_error` with/without error message.
 
-#### Scenario: Unknown key triggers warning
-- **WHEN** a section contains a key not in the known list
-- **THEN** `ConfigWarning` is emitted mentioning the unknown field
+#### Scenario: DB set_task_error with and without message
+- **WHEN** `db.set_task_error(task_id, metadata, error="crash")` then `db.set_task_error(task_id, metadata)` are called with a mocked connection
+- **THEN** the first call embeds `"error": "crash"` in metadata; the second passes metadata without adding an error key
 
-### Requirement: TaskStatus and TaskModel
-Tests SHALL verify that `TaskStatus` enum members have correct integer values (`TO_DO=0`, `RUNNING=1`, `DONE=2`) and are `int` subclasses. `TaskModel` SHALL convert `status` via `TaskStatus` converter, be frozen (raises on attribute assignment), and produce deterministic hashes.
+### Requirement: Persistence adapter with mocked pg8000
 
-#### Scenario: Enum values and model immutability
-- **WHEN** `TaskStatus` values are compared to 0, 1, 2 and attribute assignment is attempted on `TaskModel`
-- **THEN** equality holds, they are `int` instances, and `TaskModel` raises on mutation
+Tests SHALL verify `PostgresTaskRepository`, `PostgresNodeRepository`, and
+`PostgresUnitOfWork` from `yascheduler.adapters.persistence` using mocked
+pg8000 connections:
+- `load_query` reads file on first call, returns cache on subsequent calls
+- UoW: enter creates repos, commit calls `conn.run("COMMIT")`, exception
+  triggers rollback, normal exit closes connection, commit after exit raises
+- Task repo: `get`, `insert` (returns generated ID), `save` (upsert),
+  `list_by_status`, `list_by_jobs`, `count_by_status`, `update_status`
+- Node repo: `get`, `list_enabled` (filters invalid IPs), `list_disabled`,
+  `add`, `enable`, `disable`, `remove`, `get_by_ips`
 
-### Requirement: NodeModel defaults
-Tests SHALL verify that `NodeModel` provides defaults for `enabled`, `cloud`, `username`, `port`, and is frozen.
+#### Scenario: PostgresUnitOfWork commit calls COMMIT
+- **WHEN** `uow.commit()` is called with a mocked connection
+- **THEN** `conn.run("COMMIT")` is executed
 
-#### Scenario: Minimal construction
-- **WHEN** `NodeModel` is constructed with only required fields
-- **THEN** optional fields have documented default values
+### Requirement: Application use cases
 
-### Requirement: DB node and task CRUD (mocked)
-Tests SHALL verify `DB` methods for node and task operations construct correct SQL and map results to `NodeModel`/`TaskModel`, using a mocked connection.
+Tests SHALL verify use cases with mocked dependencies:
+- `submit_task`: raises `UnsupportedEngineError`/`MissingInputFileError`,
+  happy path inserts task and returns task_id
+- `allocate_task`: unsupported engine → `set_task_error` + return False;
+  free machine found → allocated + return True; no free machine →
+  `clouds.allocate` called + return False
+- `consume_task`: successful download → `set_task_done`; download failure →
+  `set_task_error`
+- `deallocate_nodes`: idle cloud node disabled; non-cloud node skipped
 
-#### Scenario: set_task_error with and without message
-- **WHEN** `set_task_error` is called with an error message
-- **THEN** metadata includes the error key
-- **WHEN** `set_task_error` is called without an error message
-- **THEN** metadata is passed without adding an error key
+#### Scenario: submit_task happy path returns task_id
+- **WHEN** `submit_task` is called with a supported engine and all inputs present
+- **THEN** a task is inserted and a positive integer `task_id` is returned
 
-### Requirement: FakeDB protocol-compatible class
+### Requirement: Orchestrator lifecycle
+
+Tests SHALL verify `Orchestrator` initialization creates 4 `UniqueQueue`
+instances with correct names and config-derived maxsizes, `start()` creates
+background tasks, `stop()` cancels tasks and cleans up, cancellation propagates
+to producer-consumer loops, and concurrency limits are passed as `workers_num`.
+
+#### Scenario: Orchestrator start creates background tasks
+- **WHEN** `orchestrator.start()` is called
+- **THEN** background asyncio tasks are created for producers and consumers
+
+### Requirement: Dependency injection factories
+
+Tests SHALL verify:
+- `CLIDeps` stores fields and delegates `submit`/`query`
+- `make_cli_deps` returns `CLIDeps` with `PostgresUnitOfWork` factory
+- `make_daemon` creates all dependencies and accepts optional `db`/`clouds`
+- `make_aiida` raises `NotImplementedError`
+
+#### Scenario: make_cli_deps returns CLIDeps with PostgresUnitOfWork factory
+- **WHEN** `make_cli_deps(config)` is called
+- **THEN** the returned `CLIDeps.engines` matches `config.engines` and `uow_factory()` returns a `PostgresUnitOfWork`
+
+### Requirement: CLI behavioral tests
+
+Tests SHALL verify CLI commands (`yasubmit`, `yastatus`, `yanodes`, `yasetnode`)
+with mocked DI dependencies: submit happy path and validation errors, status
+listing and info mode, node listing with task info, node add/remove/enable/disable.
+
+#### Scenario: yasubmit happy path returns task ID
+- **WHEN** `yasubmit` is invoked with valid arguments and mocked dependencies
+- **THEN** it prints the created task ID
+
+### Requirement: CLI smoke tests
+
+Tests SHALL verify CLI entry point functions exist, are decorated with `@to_sync`
+where applicable, and `daemonize` references `make_daemon`.
+
+#### Scenario: CLI entry points are importable
+- **WHEN** each CLI entry point module is imported
+- **THEN** the expected function symbols are present
+
+### Requirement: Scheduler characterization tests
+
+Tests SHALL verify `Scheduler` delegates `create_new_task` to `submit_task`,
+`start()` to `make_daemon`/Orchestrator, and `stop()` to orchestrator or falls
+back to clouds/db cleanup. `Yascheduler.queue_submit_task_async` uses `make_cli_deps`.
+
+#### Scenario: Scheduler.create_new_task delegates to submit_task
+- **WHEN** `scheduler.create_new_task(...)` is called
+- **THEN** it calls the `submit_task` use case
+
+### Requirement: UniqueQueue
+
+Tests SHALL verify `UniqueQueue` and `UMessage`: put/get, deduplication,
+`item_done` tracking, re-queueing after done, `psize` reflects in-flight,
+`task_done` raises `NotImplementedError`.
+
+#### Scenario: UniqueQueue deduplicates identical items
+- **WHEN** the same item is put twice before being consumed
+- **THEN** the second put is ignored and queue size does not increase
+
+### Requirement: Remote machine management
+
+Tests SHALL verify `RemoteMachineMetadata` state transitions (`busy` toggles
+`free_since`), `is_free_longer_than` evaluation, `RemoteMachineRepository.filter`
+(busy, platforms, free_since_gt, reverse_sort, original unchanged).
+
+#### Scenario: RemoteMachineMetadata busy=True sets free_since to None
+- **WHEN** `metadata.busy = True` is set on a free machine
+- **THEN** `free_since` becomes `None`
+
+### Requirement: OS check functions
+
+Tests SHALL verify platform detection (`check_is_linux`, `check_is_debian`,
+`check_is_debian_like`, `check_is_windows`) with mocked SSH output, including
+`check_is_debian` returning False for ubuntu.
+
+#### Scenario: check_is_debian returns False for ubuntu
+- **WHEN** mocked SSH returns os-release with `ID=ubuntu` and `ID_LIKE=debian`
+- **THEN** `check_is_debian(conn)` returns `False`
+
+### Requirement: RemoteMachineAdapter structure
+
+Tests SHALL verify adapter instances have correct platform names, non-None
+callables, and `debian_adapter.checks` is a superset of `debian_like_adapter.checks`.
+
+#### Scenario: debian_adapter checks includes debian_like_adapter checks
+- **WHEN** comparing `debian_adapter.checks` and `debian_like_adapter.checks`
+- **THEN** the debian set is a superset of the debian-like set
+
+### Requirement: FakeDB test double
+
 The project SHALL provide a `FakeDB` class implementing the same public methods
-as `DB` on in-memory data structures, returning real `TaskModel`/`NodeModel`
-objects with auto-incrementing `task_id`.
+as `DB` on in-memory data structures, returning `TaskModel`/`NodeModel` with
+auto-incrementing `task_id`.
 
 #### Scenario: FakeDB mirrors DB public methods
 - **WHEN** `FakeDB` is used in place of `DB`
-- **THEN** `add_task`, `get_task`, `add_node`, `get_all_nodes`, status transition methods all behave equivalently to `DB`
+- **THEN** `add_task`, `get_task`, `add_node`, `get_all_nodes`, status transitions
+  all behave equivalently to `DB`
 
-### Requirement: RemoteMachineMetadata state transitions
-Tests SHALL verify that setting `busy=True` sets `free_since=None`, setting `busy=False` sets `free_since` to current time, and initial state has `busy=None` and `free_since` set.
+### Requirement: Shared test fixtures
 
-#### Scenario: Busy toggles free_since
-- **WHEN** `meta.busy = True` then `meta.busy = False`
-- **THEN** after busy=True `free_since` is None; after busy=False `free_since` is a recent datetime
+`tests/fixtures/models.py` SHALL provide `make_task` and `make_node` helpers
+with sensible defaults. `tests/fixtures/mock_remote_machine.py` and
+`tests/fixtures/mock_clouds.py` SHALL provide spec-compliant mock factories.
 
-### Requirement: RemoteMachineMetadata.is_free_longer_than
-Tests SHALL verify that `is_free_longer_than(delta)` returns True only when machine is not busy AND has been free longer than the given delta. Returns False when busy regardless of delta.
-
-#### Scenario: Free vs busy evaluation
-- **WHEN** machine is busy and `is_free_longer_than(timedelta(seconds=0))` is called
-- **THEN** result is False even with zero delta
-
-### Requirement: RemoteMachineRepository.filter
-Tests SHALL verify filtering by `busy` (True/False), `platforms` (intersection match), `free_since_gt` (duration threshold), and `reverse_sort` (descending by `free_since`). Filter SHALL return a new `RemoteMachineRepository` without modifying the original.
-
-#### Scenario: Filter returns new repository, original unchanged
-- **WHEN** `filter(busy=False)` is called on a repository with 2 machines (1 busy, 1 free)
-- **THEN** filtered result has 1 machine and original still has 2
-
-### Requirement: OS check functions with mocked SSH
-Tests SHALL verify platform detection functions return correct booleans based
-on mocked SSH command output. Notably, `check_is_debian` returns False when
-OS ID is "ubuntu" (not "debian"), even though it's debian-like.
-
-#### Scenario: check_is_debian distinguishes ubuntu from debian
-- **WHEN** OS release data returns ID="ubuntu", ID_LIKE="debian"
-- **THEN** `check_is_debian(conn)` returns False (ID is "ubuntu", not "debian")
-
-### Requirement: RemoteMachineAdapter structure
-Tests SHALL verify that adapter instances (`linux_adapter`, `debian_adapter`, etc.) have correct platform names and non-None callables for all required fields. `debian_adapter.checks` SHALL be a superset of `debian_like_adapter.checks`.
-
-#### Scenario: Adapter chain inheritance
-- **WHEN** `debian_adapter` is compared to `debian_like_adapter`
-- **THEN** `debian_adapter.checks` is a superset of `debian_like_adapter.checks`
-
-### Requirement: Scheduler constructor and queues
-Tests SHALL verify that `Scheduler` initialization creates 4 `UniqueQueue` instances with correct names and maxsizes derived from `Config.local`.
-
-#### Scenario: Queue configuration
-- **WHEN** `Scheduler` is constructed with a Config containing specific limit values
-- **THEN** queue maxsizes match the corresponding config fields
-
-### Requirement: create_new_task validation and creation
-Tests SHALL verify that `create_new_task` raises `RuntimeError` for unknown engine names and missing input files. On success, it SHALL call `db.add_task` with status `TO_DO`, include engine name in metadata, call `db.update_task_meta` with `remote_folder`, commit, and return a `TaskModel`.
-
-#### Scenario: Successful task creation
-- **WHEN** `create_new_task` is called with valid label, metadata containing all input files, and a known engine
-- **THEN** `db.add_task` is called with status `TO_DO`, metadata contains `"engine"` key, `db.update_task_meta` is called with `remote_folder`, and a `TaskModel` is returned
-
-### Requirement: allocate_task
-Tests SHALL verify that `allocate_task` picks the first free machine with matching platform, sets task RUNNING in DB. Edge cases:
-- No free matching machine → `clouds.allocate` is called, returns False
-- Unknown engine in task metadata → `db.set_task_error` called with error about unsupported engine
-
-#### Scenario: No free machine triggers cloud allocation
-- **WHEN** no free machine matches the engine's platform requirements
-- **THEN** `clouds.allocate` is called with the task_id and engine platforms, and method returns False
-
-### Requirement: clouds_get_capacity calculation
-Tests SHALL verify that `clouds_get_capacity` returns `max_nodes - busy_nodes`, floored at 0 (never negative).
-
-#### Scenario: Over capacity floors to zero
-- **WHEN** total max_nodes=10, current busy=12
-- **THEN** `clouds_get_capacity()` returns 0
+#### Scenario: make_task returns TaskModel with defaults
+- **WHEN** `make_task()` is called without arguments
+- **THEN** it returns a `TaskModel` with `status=TaskStatus.TO_DO`
 
 ### Requirement: WebhookPayload
+
 `WebhookPayload` SHALL hold `task_id`, `status`, and `custom_params` fields.
+Default `custom_params` is empty dict.
 
-#### Scenario: Construction
-- **WHEN** `WebhookPayload(task_id=1, status=0, custom_params={"k": "v"})`
-- **THEN** all fields are accessible and match
-
-### Requirement: Scheduler mock fixtures
-The project SHALL provide mock fixtures for `RemoteMachine` (configurable meta, platforms, hostname) and `CloudAPIManager` (stubbed allocate/deallocate/get_capacity/mark_task_done).
-
-#### Scenario: Mock RemoteMachine and CloudAPIManager
-- **WHEN** `make_mock_remote_machine` and `make_mock_clouds` are called
-- **THEN** spec-compliant mocks with configurable behavior are returned
+#### Scenario: WebhookPayload defaults custom_params to empty dict
+- **WHEN** `WebhookPayload(task_id=1, status=0)` is created
+- **THEN** `custom_params` is `{}`

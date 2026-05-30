@@ -48,7 +48,7 @@ fields: `task_id: int`, `label: str`, `status: TaskStatus`, `context: TaskContex
 
 #### Scenario: Fail non-running task
 - **WHEN** `task.fail("disk full")` is called on a non-RUNNING task
-- **THEN** `TaskNotAllocatedError` is raised
+- **THEN** `TaskNotRunningError` is raised
 
 ### Requirement: Node persistent record
 
@@ -116,6 +116,30 @@ with fields: `engine: str`, `remote_folder: str | None`, `local_folder: str | No
 - **WHEN** a TaskContext is created with `extra={"fort.9": "base64data", "custom_param": 42}`
 - **THEN** those values are accessible via `ctx.extra["fort.9"]` and `ctx.extra["custom_param"]`
 
+### Requirement: TaskContext JSONB serialization
+
+The system SHALL provide `TaskContext.to_metadata() -> dict` and
+`TaskContext.from_metadata(mapping) -> TaskContext` for JSONB round-trip
+persistence.
+
+Known fields (`engine`, `remote_folder`, `local_folder`, `webhook_url`,
+`webhook_custom_params`, `error`) are serialized as top-level keys with
+`None` values omitted. Unknown keys are preserved in `extra` and merged
+into the flat dict on serialization. On deserialization, keys not matching
+known fields populate `extra`.
+
+#### Scenario: Round-trip preserves all data
+- **WHEN** `TaskContext(engine="fleur", webhook_url="https://...", extra={"fort.9": "data"})` is serialized then deserialized
+- **THEN** all known fields and extra keys are preserved
+
+#### Scenario: None values omitted from serialized dict
+- **WHEN** `TaskContext(engine="fleur")` is serialized via `to_metadata()`
+- **THEN** only `engine` appears as a key; `remote_folder`, `local_folder`, etc. are absent
+
+#### Scenario: Extra keys merged into flat dict
+- **WHEN** `to_metadata()` is called on a TaskContext with `extra={"fort.9": "base64data"}`
+- **THEN** the returned dict contains `"fort.9": "base64data"` as a top-level key
+
 ### Requirement: ProcessResult value object
 
 The system SHALL provide a `ProcessResult` value object as an immutable object
@@ -128,3 +152,15 @@ with fields: `exit_code: int`, `stdout: str`, `stderr: str`.
 ### Requirement: MachineState enum
 
 The system SHALL provide a `MachineState` enum with values `FREE` and `BUSY`.
+
+#### Scenario: MachineState members
+- **WHEN** `MachineState.FREE` and `MachineState.BUSY` are accessed
+- **THEN** they are distinct enum members
+
+### Requirement: Domain entities are importable from yascheduler.domain.model
+
+The system SHALL expose all domain entities from `yascheduler.domain.model`.
+
+#### Scenario: Import entities
+- **WHEN** `from yascheduler.domain.model import Task, Node, ConnectedMachine, TaskContext, Engine, TaskStatus, MachineState, ProcessResult`
+- **THEN** all symbols are available

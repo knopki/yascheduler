@@ -6,11 +6,13 @@ Defines abstract port interfaces (typing.Protocol) for the domain layer: TaskRep
 
 ### Requirement: TaskRepository port
 
-The system SHALL define a `TaskRepository` Protocol with methods:
-`get(task_id: int) -> Task`, `save(task: Task) -> None`,
-`list_by_status(statuses: set[TaskStatus]) -> list[Task]`.
-
-All methods are `async def`.
+The system SHALL define a `TaskRepository` Protocol with async methods:
+`get(task_id: int) -> Task | None`, `save(task: Task) -> None`,
+`insert(task: Task) -> Task`,
+`list_by_status(statuses: set[TaskStatus], limit: int | None) -> list[Task]`,
+`list_by_jobs(job_ids: list[int]) -> list[Task]`,
+`update_status(task_id: int, status: TaskStatus) -> None`,
+`list_ids_by_ip_and_status(ip: str, status: TaskStatus) -> list[int]`.
 
 #### Scenario: Repository method signatures are async
 - **WHEN** a class implements `TaskRepository` with matching async method signatures
@@ -18,16 +20,16 @@ All methods are `async def`.
 
 ### Requirement: NodeRepository port
 
-The system SHALL define a `NodeRepository` Protocol with methods:
-`get(ip: str) -> Node`, `list_enabled() -> list[Node]`,
-`list_disabled() -> list[Node]`, `add(node: Node) -> None`,
-`add_tmp(cloud: str, username: str) -> str`, `update(node: Node) -> None`,
-`enable(ip: str) -> None`, `disable(ip: str) -> None`, `remove(ip: str) -> None`.
-
-All methods are async.
+The system SHALL define a `NodeRepository` Protocol with async methods:
+`get(ip: str) -> Node | None`, `list_enabled() -> list[Node]`,
+`list_disabled() -> list[Node]`, `list_all() -> list[Node]`,
+`add(node: Node) -> None`, `add_tmp(cloud: str, username: str) -> str`,
+`update(node: Node) -> None`, `enable(ip: str) -> None`,
+`disable(ip: str) -> None`, `remove(ip: str) -> None`,
+`get_by_ips(ips: list[str]) -> dict[str, Node]`.
 
 #### Scenario: Full node lifecycle through port
-- **WHEN** a consumer calls `add`, `get`, `enable`, `disable`, `list_enabled`, `list_disabled`, `remove` through the port
+- **WHEN** a consumer calls `add`, `get`, `update`, `enable`, `disable`, `list_enabled`, `list_disabled`, `list_all`, `get_by_ips`, `remove` through the port
 - **THEN** the Protocol defines all these operations with async signatures
 
 ### Requirement: MachineGateway port
