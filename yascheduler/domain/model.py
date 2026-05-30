@@ -191,7 +191,7 @@ class Task:
     #   INPUTS: { None }
     #   OUTPUTS: { Task - New Task instance with status=DONE }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotAllocatedError
+    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotRunningError
     # END_CONTRACT: Task.complete
     def complete(self) -> Task:
         """Mark task as DONE if currently RUNNING."""
@@ -206,14 +206,14 @@ class Task:
     #   INPUTS: { reason: str - Failure description }
     #   OUTPUTS: { Task - New Task instance with status=DONE and context.error set }
     #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotAllocatedError - if not RUNNING
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotAllocatedError
+    #   RAISES: TaskNotRunningError - if not RUNNING
+    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotRunningError
     # END_CONTRACT: Task.fail
     def fail(self, reason: str) -> Task:
         """Mark task as DONE with error reason if currently RUNNING."""
         # START_BLOCK_VALIDATE_RUNNING
         if self.status != TaskStatus.RUNNING:
-            raise TaskNotAllocatedError(self.task_id)
+            raise TaskNotRunningError(self.task_id)
         # END_BLOCK_VALIDATE_RUNNING
         # START_BLOCK_MARK_FAILED
         return replace(
