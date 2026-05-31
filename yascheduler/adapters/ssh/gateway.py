@@ -123,7 +123,7 @@ class SSHMachineGateway:
         )
         # END_BLOCK_BUILD_OPTS
         # START_BLOCK_CONNECT
-        self._log.debug("Open connection to %s", ip)
+        self._log.debug("[SSHGateway][_open_connection][CONNECT] ip=%s", ip)
         conn = await asyncssh.connection.connect(
             options=conn_opts,
             host=conn_opts.host,
@@ -167,7 +167,9 @@ class SSHMachineGateway:
         )
         # START_BLOCK_DETECT
         adapter, platforms = await _detect_platform(conn, ADAPTERS)
-        self._log.debug("Detected platform %s on %s", adapter.platform, ip)
+        self._log.debug(
+            "[SSHGateway][connect][DETECT] platform=%s ip=%s", adapter.platform, ip
+        )
         # END_BLOCK_DETECT
         # START_BLOCK_PATHS
         rd, re, rt = _init_paths(adapter, data_dir, engines_dir, tasks_dir)
@@ -210,7 +212,7 @@ class SSHMachineGateway:
             except asyncio.CancelledError:
                 pass
         if state.conn._transport:
-            self._log.debug("Close connection to %s", ip)
+            self._log.debug("[SSHGateway][disconnect] ip=%s", ip)
             state.conn.close()
             await state.conn.wait_closed()
 
@@ -343,7 +345,7 @@ class SSHMachineGateway:
                 async for proc in self.pgrep(ip, engine.check_pname):
                     count += 1
                     self._log.debug(
-                        "[occupancy][%s] pgrep found: pid=%s name=%s cmd=%s",
+                        "[SSHGateway][occupancy_check][PGREP] ip=%s pid=%s name=%s cmd=%s",
                         ip,
                         proc.pid,
                         proc.name,
@@ -351,7 +353,7 @@ class SSHMachineGateway:
                     )
                     return True
                 self._log.debug(
-                    "[occupancy][%s] pgrep '%s' found %d processes -> free",
+                    "[SSHGateway][occupancy_check][PGREP_FREE] ip=%s pattern=%s count=%d",
                     ip,
                     engine.check_pname,
                     count,
@@ -365,7 +367,7 @@ class SSHMachineGateway:
                 state = self._machines[ip]
                 proc = await self.run_full(state.machine, engine.check_cmd)
                 self._log.debug(
-                    "[occupancy][%s] check_cmd '%s' exit=%d (expected=%d)",
+                    "[SSHGateway][occupancy_check][CHECK_CMD] ip=%s cmd=%s exit=%d expected=%d",
                     ip,
                     engine.check_cmd,
                     proc.returncode,
@@ -379,7 +381,7 @@ class SSHMachineGateway:
                     "Machine %s check_cmd failed, assuming busy: %s", ip, exc
                 )
                 return True
-        self._log.debug("[occupancy][%s] no check configured -> free", ip)
+        self._log.debug("[SSHGateway][occupancy_check][NO_CHECK] ip=%s", ip)
         return False
 
     # START_CONTRACT: SSHMachineGateway.start_occupancy_check
@@ -501,7 +503,7 @@ class SSHMachineGateway:
         state = self._machines[ip]
         if state.conn._transport and not state.conn._transport.is_closing():
             return state.conn
-        self._log.debug("Connection %s is closed - reopening", ip)
+        self._log.debug("[SSHGateway][get_conn][REOPEN] ip=%s", ip)
         conn = await asyncssh.connection.connect(
             options=state.conn_opts,
             host=state.conn_opts.host,

@@ -132,7 +132,9 @@ class CloudAPI(Generic[TConfigCloud_inv]):
             ssh_key = read_private_key(filepath)
             ssh_key.set_comment(filepath.name)
             self.log.debug(
-                "LOADED KEY %s: %s", filepath.name, ssh_key.get_fingerprint("md5")
+                "[CloudAPI][get_ssh_key_sync] key=%s fingerprint=%s",
+                filepath.name,
+                ssh_key.get_fingerprint("md5"),
             )
             return ssh_key
 

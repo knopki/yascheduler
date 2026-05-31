@@ -112,9 +112,9 @@ async def _fetch_network_resources(
         virtual_network_name=cfg.vnet,
         subnet_name=cfg.subnet,
     )
-    log.debug(f"Subnet {subnet.name} found")
+    log.debug("[Azure][_fetch_network_resources] subnet=%s", subnet.name)
     nsg = await client.network_security_groups.get(cfg.resource_group, cfg.nsg)
-    log.debug(f"Network security group {nsg.name} found")
+    log.debug("[Azure][_fetch_network_resources] nsg=%s", nsg.name)
     # END_BLOCK_FETCH_RESOURCES
     return subnet, nsg
 
@@ -154,7 +154,7 @@ async def create_nic(
     )
     await poller.wait()
     nic = await poller.result()
-    log.debug(f"Network interface {nic.name} created")
+    log.debug("[Azure][create_nic] nic=%s", nic.name)
     ip_addr = None
     if nic.ip_configurations:
         for ip_conf in nic.ip_configurations:
@@ -284,7 +284,7 @@ async def create_node(
     )
     await poller.wait()
     vm_res = await poller.result()
-    log.debug(f"VM {vm_res.name} created")
+    log.debug("[Azure][az_create_node] vm=%s", vm_res.name)
     return ip_addr
 
 
@@ -339,7 +339,7 @@ async def delete_node(
                 cfg.resource_group, cast(str, vm_res.name)
             )
             await poller.wait()
-            log.debug(f"VM {vm_res.name} deleted")
+            log.debug("[Azure][az_delete_node] vm=%s deleted", vm_res.name)
             break
 
     nic = None
@@ -351,7 +351,7 @@ async def delete_node(
                 cfg.resource_group, cast(str, nic.name)
             )
             await poller.wait()
-            log.debug(f"Network interface {nic.name} deleted")
+            log.debug("[Azure][az_delete_node] nic=%s deleted", nic.name)
             break
 
 

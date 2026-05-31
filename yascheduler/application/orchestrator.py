@@ -326,7 +326,7 @@ class Orchestrator:
                     )
                     if self._log.isEnabledFor(logging.DEBUG):
                         self._log.debug(
-                            "Webhook for task_id=%s response: %s",
+                            "[Orchestrator][_do_task_webhook] task_id=%s response=%s",
                             task_id,
                             (await resp.text("utf-8")),
                         )
@@ -425,7 +425,9 @@ class Orchestrator:
         tasks = await self._db.get_tasks_by_status((TaskStatus.TO_DO,), tlim)
         if tasks:
             ids = [str(t.task_id) for t in tasks]
-            self._log.debug("Want to allocate tasks: %s", ", ".join(ids))
+            self._log.debug(
+                "[Orchestrator][_allocator_producer] task_ids=%s", ", ".join(ids)
+            )
         for task in tasks:
             yield UMessage(task.task_id, task)
 
@@ -471,7 +473,11 @@ class Orchestrator:
                 await machine.start_occupancy_check(engine)
         # START_BLOCK_CONSUME
         if machine.meta.busy is False:
-            self._log.debug("machine %s is free of task %s", machine.hostname, task_id)
+            self._log.debug(
+                "[Orchestrator][_task_consumer][CONSUME] machine=%s task_id=%s",
+                machine.hostname,
+                task_id,
+            )
             await consume_task(
                 machine=machine,
                 task=task,
@@ -625,7 +631,7 @@ class Orchestrator:
     # END_CONTRACT: Orchestrator.start
     async def start(self) -> None:
         self._log.debug(
-            "Available computing engines: %s",
+            "[Orchestrator][start] engines=%s",
             ", ".join(self._engines.keys()),
         )
 

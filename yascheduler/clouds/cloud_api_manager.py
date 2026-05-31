@@ -178,7 +178,10 @@ class CloudAPIManager:
         self, want_platforms: Optional[Sequence[str]] = None
     ) -> Optional[CloudAPI[ConfigCloud]]:
         """Select best cloud API"""
-        self.log.debug("Enabled providers: %s", ", ".join(self.apis.keys()))
+        self.log.debug(
+            "[CloudManager][select_best_provider] providers=%s",
+            ", ".join(self.apis.keys()),
+        )
         used_providers = []
         suitable_providers = list(self.apis.keys())
 
@@ -200,16 +203,18 @@ class CloudAPIManager:
                     suitable_providers.remove(api.name)
 
         # END_BLOCK_FILTER_PROVIDERS
-        self.log.debug("Used providers: %s", used_providers)
+        self.log.debug("[CloudManager][select_best_provider] used=%s", used_providers)
         if not suitable_providers:
-            self.log.debug("No suitable cloud providers")
+            self.log.debug("[CloudManager][select_best_provider] no suitable providers")
             return
 
         # START_BLOCK_SORT_SELECT
         ok_apis = filter(lambda x: x.name in suitable_providers, self.apis.values())
         ok_apis_sorted = sorted(ok_apis, key=lambda x: x.config.priority, reverse=True)
         api = ok_apis_sorted[0]
-        self.log.debug("Chosen: %s", api.name)
+        self.log.debug(
+            "[CloudManager][select_best_provider][CHOSEN] provider=%s", api.name
+        )
         return api
         # END_BLOCK_SORT_SELECT
 
@@ -229,7 +234,9 @@ class CloudAPIManager:
             if not api:
                 return
             if throttle and api.get_op_semaphore().locked():
-                self.log.debug(f"Cloud {api.name} is overloaded by requests")
+                self.log.debug(
+                    "[CloudManager][allocate_node][OVERLOADED] provider=%s", api.name
+                )
                 await asyncio.sleep(1)
                 return
 

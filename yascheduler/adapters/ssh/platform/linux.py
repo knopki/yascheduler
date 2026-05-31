@@ -83,7 +83,7 @@ async def linux_list_processes(
         ps_cmd = " ".join([query, "| xargs --no-run-if-empty ps -o", columns_part])
     else:
         ps_cmd = f"ps -eo {columns_part}"
-    _log.debug("[linux_list_processes] cmd: %s", ps_cmd)
+    _log.debug("[Linux][linux_list_processes] cmd=%s", ps_cmd)
     async with conn.create_process(ps_cmd) as proc:
         await proc.stdout.readline()  # skip headers
         line_count = 0
@@ -97,7 +97,7 @@ async def linux_list_processes(
             if len(parts) < 3:
                 skipped_broken += 1
                 _log.debug(
-                    "[linux_list_processes] broken line %d: parts=%d raw=%r",
+                    "[Linux][linux_list_processes] broken line=%d parts=%d raw=%r",
                     line_count,
                     len(parts),
                     line,
@@ -107,14 +107,14 @@ async def linux_list_processes(
                 skipped_self += 1
                 continue
             _log.debug(
-                "[linux_list_processes] yield: pid=%s comm=%s args=%s",
+                "[Linux][linux_list_processes][YIELD] pid=%s comm=%s args=%s",
                 parts[0],
                 parts[1],
                 parts[2][:80],
             )
             yield ProcessInfo(int(parts[0]), *parts[1:3])
         _log.debug(
-            "[linux_list_processes] done: lines=%d broken=%d self=%d",
+            "[Linux][linux_list_processes][DONE] lines=%d broken=%d self=%d",
             line_count,
             skipped_broken,
             skipped_self,
@@ -163,7 +163,9 @@ async def deploy_local_files(
     "Uploading binary from local; requires broadband connection"
     lpaths = list(map(str, files))
     if log:
-        log.debug(f"Uploading files ({', '.join(lpaths)}) to {engine_dir}")
+        log.debug(
+            "[Linux][deploy_local_files] dir=%s files=%s", engine_dir, ", ".join(lpaths)
+        )
     await sftp.put(lpaths, engine_dir, preserve=True)
 
 
@@ -188,10 +190,14 @@ async def deploy_local_archive(
     """
     rpath = engine_dir / archive.name
     if log:
-        log.debug(f"Uploading {archive.name} to {str(rpath)}...")
+        log.debug(
+            "[Linux][deploy_local_archive][UPLOAD] name=%s path=%s",
+            archive.name,
+            str(rpath),
+        )
     await sftp.put([str(archive)], engine_dir)
     if log:
-        log.debug(f"Unarchiving {archive.name}...")
+        log.debug("[Linux][deploy_local_archive][EXTRACT] name=%s", archive.name)
     await run(f"tar xfv {quote(str(archive.name))}", cwd=str(engine_dir), check=True)
     await sftp.remove(rpath)
 
@@ -218,10 +224,12 @@ async def deploy_remote_archive(
     name = "archive.tar.gz"
     rpath = engine_dir / name
     if log:
-        log.debug(f"Downloading {url} to {str(rpath)}...")
+        log.debug(
+            "[Linux][deploy_remote_archive][DOWNLOAD] url=%s path=%s", url, str(rpath)
+        )
     await run(f"wget {quote(url)} -O {quote(name)}", cwd=str(engine_dir), check=True)
     if log:
-        log.debug(f"Unarchiving {name}...")
+        log.debug("[Linux][deploy_remote_archive][EXTRACT] name=%s", name)
     await run(f"tar xfv {quote(str(name))}", cwd=str(engine_dir), check=True)
     await sftp.remove(rpath)
 
@@ -276,7 +284,9 @@ async def linux_deploy_engines(
 async def log_mpi_version(run: OuterRunCallable, log: Optional[logging.Logger] = None):
     r = await run("mpirun --allow-run-as-root -V", check=True)
     if not r.returncode and log:
-        log.debug(str(r.stdout or "").split("\n")[0])
+        log.debug(
+            "[Linux][log_mpi_version] version=%s", str(r.stdout or "").split("\n")[0]
+        )
 
 
 # START_CONTRACT: linux_setup_node
@@ -322,12 +332,14 @@ async def linux_setup_deb_node(
     pkgs = engines.get_platform_packages()
 
     if log:
-        log.debug("Upgrade packages...")
+        log.debug("[Linux][linux_setup_deb_node][UPGRADE]")
     await run(f"{apt_cmd} update", check=True)
     await run(f"{apt_cmd} upgrade", check=True)
     if pkgs:
         if log:
-            log.debug("Install packages: {} ...".format(" ".join(pkgs)))
+            log.debug(
+                "[Linux][linux_setup_deb_node][INSTALL] packages=%s", " ".join(pkgs)
+            )
         await run(f"{apt_cmd} install {' '.join(pkgs)}", check=True)
     if [x for x in pkgs if "mpi" in x]:
         await log_mpi_version(run, log)

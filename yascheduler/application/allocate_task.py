@@ -99,10 +99,16 @@ async def _try_start_on_machine(
     clouds: CloudAPIManager,
 ) -> bool:
     task_m = evolve(task, ip=ip)
-    logger.debug("Allocate task %s to machine %s", task.task_id, ip)
+    logger.debug(
+        "[AllocateTask][_try_allocate_to_machine] task_id=%s ip=%s", task.task_id, ip
+    )
     if not await start_task_on_machine(machine, engine, task_m):
         return False
-    logger.debug("Task %s allocated to machine %s", task.task_id, ip)
+    logger.debug(
+        "[AllocateTask][_try_allocate_to_machine][ALLOCATED] task_id=%s ip=%s",
+        task.task_id,
+        ip,
+    )
     await machine.start_occupancy_check(engine)
     await db.set_task_running(task.task_id, task_m.ip)
     await db.commit()
@@ -205,7 +211,7 @@ async def allocate_task(
     ],
     do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
 ) -> bool:
-    logger.debug("Allocating task %s", task.task_id)
+    logger.debug("[AllocateTask][allocate_task] task_id=%s", task.task_id)
 
     engine = await _validate_engine(task, engines, db, do_task_webhook)
     if engine is None:
@@ -223,9 +229,7 @@ async def allocate_task(
         return True
 
     # START_BLOCK_ALLOCATE_CLOUD
-    logger.debug(
-        "No free machine for task %s - requesting cloud allocation", task.task_id
-    )
+    logger.debug("[AllocateTask][allocate_task][CLOUD] task_id=%s", task.task_id)
     await clouds.allocate(task.task_id, want_platforms=engine.platforms, throttle=True)
     return False
     # END_BLOCK_ALLOCATE_CLOUD
