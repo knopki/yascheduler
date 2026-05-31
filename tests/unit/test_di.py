@@ -184,6 +184,7 @@ class TestMakeDaemon:
             patch(
                 "yascheduler.di.CloudAPIManager.create", new=AsyncMock()
             ) as mock_clouds_create,
+            patch("yascheduler.di.SSHMachineGateway") as mock_gateway,
             patch("yascheduler.di.RemoteMachineRepository") as mock_rm_repo,
             patch(
                 "yascheduler.di.Orchestrator", return_value=mock_orch_instance
@@ -194,6 +195,8 @@ class TestMakeDaemon:
             mock_db_create.return_value = mock_db
             mock_clouds = AsyncMock()
             mock_clouds_create.return_value = mock_clouds
+            mock_gw = MagicMock()
+            mock_gateway.return_value = mock_gw
             mock_rm = MagicMock()
             mock_rm_repo.return_value = mock_rm
             resolved_log = MagicMock()
@@ -213,12 +216,14 @@ class TestMakeDaemon:
             engines=config.engines,
             log=resolved_log,
         )
+        mock_gateway.assert_called_once_with(log=resolved_log)
         mock_rm_repo.assert_called_once_with(log=resolved_log)
         mock_orch.assert_called_once_with(
             config=config,
             db=mock_db,
             clouds=mock_clouds,
             remote_machines=mock_rm,
+            gateway=mock_gw,
             engines=config.engines,
             log=resolved_log,
             config_clouds=config.clouds,

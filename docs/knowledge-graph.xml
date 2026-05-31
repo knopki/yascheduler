@@ -297,7 +297,7 @@
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Manages producer-consumer loops calling use cases and SSH helpers.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-WEBHOOK</depends>
+      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-WEBHOOK, M-SSH-GATEWAY</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
@@ -308,7 +308,7 @@
     <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Composition root with factories per entry point: daemon, CLI, AiiDA.</purpose>
       <path>yascheduler/di.py</path>
-      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB</depends>
+      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit and query" />
         <fn-make_daemon PURPOSE="Async factory creating Orchestrator with all daemon dependencies" />
@@ -366,6 +366,7 @@
       <depends>M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-PERSISTENCE-EXCEPTIONS</depends>
       <annotations>
         <class-PostgresUnitOfWork PURPOSE="Async context manager for transactional boundaries with shared connection" />
+        <fn-_require_conn PURPOSE="Guard returning Connection or raising UnitOfWorkNotInitializedError" />
       </annotations>
     </M-PERSISTENCE-UOW>
 
@@ -589,9 +590,9 @@
          ═══════════════════════════════════════════════ -->
 
     <M-REMOTE NAME="Remote machine" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>SSH connection to a remote machine with platform detection, command execution, and SFTP.</purpose>
+      <purpose>Compatibility wrapper — delegates SSH operations to SSHMachineGateway.</purpose>
       <path>yascheduler/remote_machine/remote_machine.py</path>
-      <depends>M-REMOTE-ADAPTERS, M-REMOTE-EXC, M-REMOTE-PROTOCOL, M-COMPAT</depends>
+      <depends>M-REMOTE-ADAPTERS, M-REMOTE-EXC, M-REMOTE-PROTOCOL, M-COMPAT, M-SSH-GATEWAY</depends>
       <annotations>
         <class-RemoteMachine PURPOSE="SSH-connected remote compute node" />
         <class-RemoteMachineMetadata PURPOSE="Tracks busy/free state and timing" />
@@ -611,9 +612,9 @@
     </M-REMOTE>
 
     <M-REMOTE-REPO NAME="Remote machine repository" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Collection of connected remote machines with filtering and cleanup.</purpose>
+      <purpose>Compatibility registry of RemoteMachine wrappers.</purpose>
       <path>yascheduler/remote_machine/remote_machine_repository.py</path>
-      <depends>M-REMOTE, M-COMPAT</depends>
+      <depends>M-REMOTE, M-COMPAT, M-SSH-GATEWAY</depends>
       <annotations>
         <class-RemoteMachineRepository PURPOSE="Mutable collection of connected machines" />
         <fn-filter PURPOSE="Filter machines by busy/platform/free_since criteria" />
@@ -683,6 +684,111 @@
         <fn-windows_list_processes PURPOSE="Parse tasklist output into process info" />
       </annotations>
     </M-REMOTE-WINDOWS>
+
+    <!-- ═══════════════════════════════════════════════
+         SSH Adapter
+         ═══════════════════════════════════════════════ -->
+
+    <M-SSH-GATEWAY NAME="SSH machine gateway" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>SSH machine gateway implementing MachineGateway protocol via asyncssh.</purpose>
+      <path>yascheduler/adapters/ssh/gateway.py</path>
+      <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL, M-REMOTE</depends>
+      <annotations>
+        <class-SSHMachineGateway PURPOSE="SSH implementation of MachineGateway protocol" />
+        <fn-connect PURPOSE="Open SSH connection, detect platform, register machine" />
+        <fn-disconnect PURPOSE="Close SSH, cancel bg tasks, remove from registry" />
+        <fn-disconnect_all PURPOSE="Close all SSH connections" />
+        <fn-list_free PURPOSE="Return FREE machines filtered by platform" />
+        <fn-run PURPOSE="Run command, return ProcessResult" />
+        <fn-run_full PURPOSE="Run command, return raw SSHCompletedProcess" />
+        <fn-run_bg PURPOSE="Start background process via SSH" />
+        <fn-upload PURPOSE="Upload file via SFTP" />
+        <fn-download PURPOSE="Download file via SFTP" />
+        <fn-setup_node PURPOSE="Install engine dependencies on node" />
+        <fn-occupancy_check PURPOSE="Check if engine process is still running" />
+        <fn-start_occupancy_check PURPOSE="Start background occupancy monitoring; occupies ConnectedMachine at gateway level" />
+        <fn-update_machine PURPOSE="Replace ConnectedMachine in state for occupy/release transitions" />
+        <fn-get_machine_state PURPOSE="Return internal _MachineState for an IP" />
+      </annotations>
+    </M-SSH-GATEWAY>
+
+    <M-PLATFORM-ADAPTERS NAME="Platform adapters" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Platform-specific adapter registry mapping OS identifiers to adapter instances.</purpose>
+      <path>yascheduler/adapters/ssh/platform/adapters.py</path>
+      <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-CHECKS, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS, M-PLATFORM-COMMON</depends>
+      <annotations>
+        <class-RemoteMachineAdapter PURPOSE="Platform-specific command implementations" />
+      </annotations>
+    </M-PLATFORM-ADAPTERS>
+
+    <M-PLATFORM-CHECKS NAME="Platform checks" TYPE="UTILITY" STATUS="implemented">
+      <purpose>SSH-based platform detection check functions for each supported OS.</purpose>
+      <path>yascheduler/adapters/ssh/platform/checks.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-check_is_linux PURPOSE="Check if remote is generic Linux via uname" />
+        <fn-check_is_darwin PURPOSE="Check if remote is Darwin/macOS via uname" />
+        <fn-check_is_debian_like PURPOSE="Check if remote is Debian-like via os-release" />
+        <fn-check_is_windows PURPOSE="Check if remote runs Windows with PowerShell" />
+      </annotations>
+    </M-PLATFORM-CHECKS>
+
+    <M-PLATFORM-COMMON NAME="Platform common" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Shared helpers for remote machine operations: process info, command execution.</purpose>
+      <path>yascheduler/adapters/ssh/platform/common.py</path>
+      <depends>M-PLATFORM-PROTOCOL</depends>
+      <annotations>
+        <class-ProcessInfo PURPOSE="Attrs struct holding pid, name, command" />
+        <fn-run PURPOSE="Run process on SSH connection and wait for exit" />
+        <fn-run_bg PURPOSE="Create background process on SSH connection" />
+      </annotations>
+    </M-PLATFORM-COMMON>
+
+    <M-PLATFORM-EXC NAME="Platform exceptions" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Custom exceptions for remote machine operations.</purpose>
+      <path>yascheduler/adapters/ssh/platform/exceptions.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-PlatformGuessFailed PURPOSE="Raised when no adapter matches detected platform" />
+      </annotations>
+    </M-PLATFORM-EXC>
+
+    <M-PLATFORM-LINUX NAME="Linux methods" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Linux-specific remote commands: package install, process listing, CPU detection.</purpose>
+      <path>yascheduler/adapters/ssh/platform/linux.py</path>
+      <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON, M-CONFIG-ENGINE</depends>
+      <annotations>
+        <fn-linux_setup_node PURPOSE="Install packages and setup engines on Linux" />
+        <fn-linux_get_cpu_cores PURPOSE="Read CPU count from getconf" />
+        <fn-linux_list_processes PURPOSE="Parse ps output into process info" />
+      </annotations>
+    </M-PLATFORM-LINUX>
+
+    <M-PLATFORM-WINDOWS NAME="Windows methods" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Windows-specific remote commands: engine deployment, process listing.</purpose>
+      <path>yascheduler/adapters/ssh/platform/windows.py</path>
+      <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON, M-CONFIG-ENGINE</depends>
+      <annotations>
+        <fn-windows_setup_node PURPOSE="Install packages and setup engines on Windows" />
+        <fn-windows_list_processes PURPOSE="Parse Get-CimInstance output into process info" />
+      </annotations>
+    </M-PLATFORM-WINDOWS>
+
+    <M-PLATFORM-PROTOCOL NAME="Platform protocols" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Protocol definitions for engines, process info, SSH checks, and adapters.</purpose>
+      <path>yascheduler/adapters/ssh/platform/protocol.py</path>
+      <depends>M-CONFIG-ENGINE</depends>
+      <annotations>
+        <class-PEngine PURPOSE="Engine protocol for remote operations" />
+        <class-PEngineRepository PURPOSE="Engine collection protocol" />
+        <class-PProcessInfo PURPOSE="Process information shape" />
+        <class-PNode PURPOSE="Node info shape" />
+        <type-SSHCheck PURPOSE="SSH check callable protocol" />
+        <type-SSHRetryExc PURPOSE="Retryable SSH exception marker" />
+        <type-SFTPRetryExc PURPOSE="Retryable SFTP exception marker" />
+        <type-AllSSHRetryExc PURPOSE="Union of all retryable SSH exceptions" />
+      </annotations>
+    </M-PLATFORM-PROTOCOL>
 
     <M-REMOTE-PROTOCOL NAME="Remote protocols" TYPE="UTILITY" STATUS="implemented">
       <purpose>Protocol definitions for engines, process info, SSH checks, and adapters.</purpose>
@@ -789,6 +895,13 @@
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
     <CrossLink from="M-SCHEDULER" to="M-WEBHOOK" relation="re-exports WebhookPayload for backward compatibility" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-WEBHOOK" relation="uses WebhookPayload for webhook serialization" />
+
+    <!-- SSH adapter cross-links -->
+    <CrossLink from="M-SSH-GATEWAY" to="M-PLATFORM-ADAPTERS" relation="uses platform detection and adapters" />
+    <CrossLink from="M-SSH-GATEWAY" to="M-REMOTE" relation="shares SSH helpers (MySSHClient, ADAPTERS, _detect_platform)" />
+    <CrossLink from="M-REMOTE" to="M-SSH-GATEWAY" relation="delegates SSH operations to gateway" />
+    <CrossLink from="M-REMOTE-REPO" to="M-SSH-GATEWAY" relation="disconnect delegates via RemoteMachine wrapper" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-GATEWAY" relation="creates and passes gateway to RemoteMachine.create()" />
 
   </Project>
 </KnowledgeGraph>

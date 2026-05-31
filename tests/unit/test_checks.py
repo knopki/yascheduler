@@ -4,8 +4,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for OS check functions in yascheduler.remote_machine.checks.
 #   SCOPE: check_is_linux, check_is_debian_like, check_is_debian, check_is_debian_11, check_is_windows, check_is_windows10.
-#   DEPENDS: M-REMOTE-CHECKS
-#   LINKS: M-REMOTE-CHECKS
+#   DEPENDS: M-REMOTE-CHECKS, M-PLATFORM-CHECKS
+#   LINKS: M-REMOTE-CHECKS, M-PLATFORM-CHECKS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -91,7 +91,8 @@ async def test_check_is_debian_like_true():
     """check_is_debian_like returns True when ID_LIKE contains debian"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.remote_machine.checks._get_os_release", new_callable=AsyncMock
+        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("debian", "debian-like", "11")
         assert await check_is_debian_like(mock_conn) is True
@@ -107,7 +108,8 @@ async def test_check_is_debian_true():
     """check_is_debian returns True when ID is debian"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.remote_machine.checks._get_os_release", new_callable=AsyncMock
+        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("debian", "debian-like", "11")
         assert await check_is_debian(mock_conn) is True
@@ -123,7 +125,8 @@ async def test_check_is_debian_false_for_ubuntu():
     """check_is_debian returns False when ID is ubuntu"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.remote_machine.checks._get_os_release", new_callable=AsyncMock
+        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("ubuntu", "debian", "22.04")
         assert await check_is_debian(mock_conn) is False
@@ -139,7 +142,8 @@ async def test_check_is_debian_version_match():
     """check_is_debian_11 returns True when version matches"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.remote_machine.checks._get_os_release", new_callable=AsyncMock
+        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("debian", "debian-like", "11")
         assert await check_is_debian_11(mock_conn) is True
@@ -155,7 +159,8 @@ async def test_check_is_debian_version_mismatch():
     """check_is_debian_11 returns False when version differs"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.remote_machine.checks._get_os_release", new_callable=AsyncMock
+        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("debian", "debian-like", "12")
         assert await check_is_debian_11(mock_conn) is False
@@ -197,7 +202,7 @@ async def test_check_is_windows_version_match():
     """check_is_windows10 returns True when caption contains version"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.remote_machine.checks.get_wmi_w32_os_caption",
+        "yascheduler.adapters.ssh.platform.checks.get_wmi_w32_os_caption",
         new_callable=AsyncMock,
     ) as mock_caption:
         mock_caption.return_value = "Microsoft Windows 10 Pro"
@@ -214,7 +219,7 @@ async def test_check_is_windows_version_mismatch():
     """check_is_windows10 returns False when caption lacks version"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.remote_machine.checks.get_wmi_w32_os_caption",
+        "yascheduler.adapters.ssh.platform.checks.get_wmi_w32_os_caption",
         new_callable=AsyncMock,
     ) as mock_caption:
         mock_caption.return_value = "Microsoft Windows 11 Pro"

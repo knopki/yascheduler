@@ -106,6 +106,7 @@ def make_orchestrator(
     clouds = AsyncMock()
     remote_machines = MagicMock()
     remote_machines.disconnect_all = AsyncMock()
+    gateway = MagicMock()
 
     # EngineRepository.values() must yield at least one Engine so
     # Orchestrator.__init__ can compute min(sleep_interval).
@@ -124,6 +125,7 @@ def make_orchestrator(
             db=db,
             clouds=clouds,
             remote_machines=remote_machines,
+            gateway=gateway,
             engines=engines,
             log=log,
             config_clouds=[],
@@ -208,7 +210,7 @@ class TestOrchestratorLifecycle:
         # Cleanup methods called
         orch._clouds.stop.assert_called_once()  # type: ignore[attr-defined]
         orch._remote_machines.disconnect_all.assert_called_once()  # type: ignore[attr-defined]
-        orch._http.close.assert_called_once()  # type: ignore[attr-defined]
+        # _http lifecycle owned by start()'s finally block, not stop()
 
     # ------------------------------------------------------------------ #
     # Test 4: cancellation propagates to the producer-consumer loop

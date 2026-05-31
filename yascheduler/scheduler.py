@@ -46,8 +46,13 @@ def get_logger(log_file: Optional[Union[str, Path]] = None, level: int = logging
     logger = logging.getLogger("yascheduler")
     logger.setLevel(level)
 
+    third_party_level = logging.ERROR if level >= logging.INFO else logging.DEBUG
+
     backoff_logger = logging.getLogger("backoff")
-    backoff_logger.setLevel(logging.ERROR if level >= logging.INFO else logging.DEBUG)
+    backoff_logger.setLevel(third_party_level)
+
+    asyncssh_logger = logging.getLogger("asyncssh")
+    asyncssh_logger.setLevel(third_party_level)
 
     if log_file:
         fh = logging.FileHandler(log_file)
@@ -58,6 +63,7 @@ def get_logger(log_file: Optional[Union[str, Path]] = None, level: int = logging
         fh.setFormatter(formatter)
         logger.addHandler(fh)
         backoff_logger.addHandler(fh)
+        asyncssh_logger.addHandler(fh)
 
     return logger
 

@@ -22,7 +22,7 @@
 #   test_task_complete - transitions RUNNING->DONE
 #   test_task_complete_not_running - raises TaskNotAllocatedError
 #   test_task_fail - transitions to DONE with context.error set
-#   test_task_fail_not_running - raises TaskNotAllocatedError
+#   test_task_fail_not_running - raises TaskNotRunningError
 #   test_node_defaults - username, port, cloud, enabled defaults
 #   test_node_full_construction - all positional args
 #   test_connected_machine_is_compatible - FREE+match, BUSY regardless, no match
@@ -328,7 +328,7 @@ class TestTask:
 
     def test_fail_on_todo_raises(self):
         task = self.make_task()
-        with pytest.raises(TaskNotAllocatedError) as exc_info:
+        with pytest.raises(TaskNotRunningError) as exc_info:
             task.fail("reason")
         assert "1" in str(exc_info.value)
 

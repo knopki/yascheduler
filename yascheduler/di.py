@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
 #   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB
+#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLIENT, M-UTILS
 # END_MODULE_CONTRACT
 #
@@ -15,7 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Create DI composition root with daemon and CLI factories.
+#   LAST_CHANGE: v1.1.0 - Add SSHMachineGateway creation and injection into Orchestrator.
+#   PREVIOUS_CHANGE: v1.0.0 - Create DI composition root with daemon and CLI factories.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import PurePath
 
 from .adapters.persistence.postgres_uow import PostgresUnitOfWork
+from .adapters.ssh.gateway import SSHMachineGateway
 from .application.orchestrator import Orchestrator
 from .application.submit_task import submit_task
 from .application.uow import AbstractUnitOfWork
@@ -87,8 +89,8 @@ class CLIDeps:
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
 #   INPUTS: { config: Config, log: Optional[Logger] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates DB connection, CloudAPIManager, RemoteMachineRepository.
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-DB, M-CLOUD-MANAGER
+#   SIDE_EFFECTS: Creates DB connection, CloudAPIManager, SSHMachineGateway, RemoteMachineRepository.
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-DB, M-CLOUD-MANAGER, M-SSH-GATEWAY
 # END_CONTRACT: make_daemon
 async def make_daemon(
     config: Config,
@@ -111,6 +113,7 @@ async def make_daemon(
             engines=config.engines,
             log=log,
         )
+    gateway = SSHMachineGateway(log=log)
     remote_machines = RemoteMachineRepository(log=log)
 
     return Orchestrator(
@@ -118,6 +121,7 @@ async def make_daemon(
         db=db,
         clouds=clouds,
         remote_machines=remote_machines,
+        gateway=gateway,
         engines=config.engines,
         log=log,
         config_clouds=config.clouds,

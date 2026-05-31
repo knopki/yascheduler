@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, webhook, and SSH helpers.
-#   DEPENDS: M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME
+#   DEPENDS: M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-SSH-GATEWAY
 #   LINKS: M-DB, M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
 # END_MODULE_CONTRACT
 #
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.4 - Fix KeyError in _print_stats when DB has no tasks for a status; fix unclosed aiohttp session by moving close into start() finally block so it runs inside the main coroutine.
-#   PREVIOUS_CHANGE: v2.1.3 - Move aiohttp.ClientSession creation from __init__ to start() to avoid orphaned sessions.
+#   LAST_CHANGE: v2.2.0 - Accept shared SSHMachineGateway, pass to RemoteMachine.create().
+#   PREVIOUS_CHANGE: v2.1.4 - Fix KeyError in _print_stats when DB has no tasks for a status; fix unclosed aiohttp session by moving close into start() finally block so it runs inside the main coroutine.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ import asyncssh
 import backoff
 from asyncssh.sftp import SFTPClient
 
+from yascheduler.adapters.ssh.gateway import SSHMachineGateway
 from yascheduler.clouds import CloudAPIManager
 from yascheduler.config import Config, ConfigCloud, Engine, EngineRepository
 from yascheduler.db import DB, NodeModel, TaskModel, TaskStatus
@@ -107,7 +108,7 @@ async def _write_remote_file(
 
 # START_CONTRACT: Orchestrator
 #   PURPOSE: Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases.
-#   INPUTS: { config, db, clouds, remote_machines, engines, log, config_clouds, local_tasks_dir }
+#   INPUTS: { config, db, clouds, remote_machines, gateway, engines, log, config_clouds, local_tasks_dir }
 #   OUTPUTS: { Orchestrator instance }
 #   SIDE_EFFECTS: Creates queues, HTTP session, cancellation event.
 #   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
@@ -115,10 +116,10 @@ async def _write_remote_file(
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { config: Config, db: DB, clouds: CloudAPIManager, remote_machines: RemoteMachineRepository, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
+    #   INPUTS: { config: Config, db: DB, clouds: CloudAPIManager, remote_machines: RemoteMachineRepository, gateway: SSHMachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues, Semaphore. HTTP session deferred to start().
-    #   LINKS: M-CONFIG, M-DB, M-QUEUE
+    #   LINKS: M-CONFIG, M-DB, M-QUEUE, M-SSH-GATEWAY
     # END_CONTRACT: Orchestrator.__init__
     def __init__(
         self,
@@ -126,6 +127,7 @@ class Orchestrator:
         db: DB,
         clouds: CloudAPIManager,
         remote_machines: RemoteMachineRepository,
+        gateway: SSHMachineGateway,
         engines: EngineRepository,
         log: logging.Logger,
         config_clouds: Sequence[ConfigCloud],
@@ -135,6 +137,7 @@ class Orchestrator:
         self._db = db
         self._clouds = clouds
         self._remote_machines = remote_machines
+        self._gateway = gateway
         self._engines = engines
         self._log = log
         self._config_clouds = config_clouds
@@ -407,6 +410,7 @@ class Orchestrator:
                 jump_username=jump_username,
                 jump_host=jump_host,
                 port=node.port,
+                gateway=self._gateway,
             )
         except asyncssh.misc.Error as err:
             self._log.error("Can't connect to machine with error: %s", err)

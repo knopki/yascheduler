@@ -34,6 +34,7 @@ def make_mock_remote_machine(ip, platforms, busy=None, hostname=None):
 
     mock = MagicMock(spec=RemoteMachine)
     mock.meta = meta
+    mock.ip = ip
     mock.platforms = platforms
     mock.hostname = hostname if hostname is not None else ip
     return mock

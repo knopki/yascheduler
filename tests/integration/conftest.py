@@ -1,5 +1,5 @@
 # FILE: tests/integration/conftest.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Pytest fixtures for PostgreSQL integration tests via testcontainers.
@@ -12,13 +12,13 @@
 #   postgres_container - session-scoped fixture: starts postgres:16-alpine container
 #   _db_config - session-scoped fixture: parses container URL into ConfigDb
 #   _init_schema - session-scoped fixture: applies schema.sql and migrate() once
-#   db - function-scoped fixture: fresh DB connection per test
-#   clean_tables - autouse function-scoped fixture: per-test TRUNCATE
+#   db - function-scoped fixture: fresh DB connection per test, TRUNCATE on teardown
 #   pytest_collection_modifyitems - auto-mark all tests as "integration"
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial integration test infrastructure with testcontainers-postgres.
+#   LAST_CHANGE: v1.1.0 - Move TRUNCATE into db fixture teardown; remove autouse clean_tables.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial integration test infrastructure with testcontainers-postgres.
 # END_CHANGE_SUMMARY
 
 """Integration test fixtures."""
@@ -99,7 +99,7 @@ async def _init_schema(
 #   PURPOSE: Provide a function-scoped DB connection to the session-scoped PostgreSQL container.
 #   INPUTS: { _db_config: ConfigDb, _init_schema: None }
 #   OUTPUTS: { AsyncGenerator[DB] - live database instance }
-#   SIDE_EFFECTS: Opens per-test DB connection, closes on teardown
+#   SIDE_EFFECTS: Opens per-test DB connection, TRUNCATEs tables, closes on teardown
 #   LINKS: M-DB, M-CONFIG-DB
 # END_CONTRACT: db
 @pytest.fixture
@@ -110,18 +110,5 @@ async def db(
     """Per-test DB connection to testcontainer PostgreSQL."""
     instance = await DB.create(_db_config, automigrate=False)
     yield instance
+    await instance.run("TRUNCATE yascheduler_tasks, yascheduler_nodes CASCADE")
     await instance.close()
-
-
-# START_CONTRACT: clean_tables
-#   PURPOSE: Ensure each test starts with empty yascheduler_nodes and yascheduler_tasks tables.
-#   INPUTS: { db: DB - database instance }
-#   OUTPUTS: { AsyncGenerator[None] }
-#   SIDE_EFFECTS: TRUNCATE both tables after each test
-#   LINKS: M-DB
-# END_CONTRACT: clean_tables
-@pytest.fixture(autouse=True)
-async def clean_tables(db: DB) -> AsyncGenerator[None, None]:
-    """TRUNCATE both tables after each test for isolation."""
-    yield
-    await db.run("TRUNCATE yascheduler_tasks, yascheduler_nodes CASCADE")
