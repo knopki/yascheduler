@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_persistence_adapter.py
-# VERSION: 1.1.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yascheduler.adapters.persistence.
@@ -21,10 +21,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Convert all mock _run return values from tuples to dicts to match
+#   LAST_CHANGE: v1.4.0 - Update test_uow_commit_after_exit_raises to catch UnitOfWorkNotInitializedError.
+#   PREVIOUS_CHANGE: v1.3.0 - Convert all mock _run return values from tuples to dicts to match
 #                         dict-based row mapping refactor in PostgresRepository.
-#   PREVIOUS_CHANGE: v1.2.0 - Update commit/rollback assertions to use conn.run("COMMIT"/"ROLLBACK")
-#                         matching the pg8000 native API.
 # END_CHANGE_SUMMARY
 
 import json
@@ -37,6 +36,7 @@ from yascheduler.adapters.persistence.postgres import (
     PostgresTaskRepository,
 )
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
+from yascheduler.adapters.persistence.exceptions import UnitOfWorkNotInitializedError
 from yascheduler.domain.model import (
     Node,
     Task,
@@ -200,14 +200,14 @@ async def test_uow_closes_connection(mocker):
 
 
 # START_CONTRACT: test_uow_commit_after_exit_raises
-#   PURPOSE: commit() raises RuntimeError when called outside 'async with' block.
+#   PURPOSE: commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block.
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based }
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.commit, PostgresUnitOfWork._require_conn
 # END_CONTRACT: test_uow_commit_after_exit_raises
 async def test_uow_commit_after_exit_raises(mocker):
-    """commit() raises RuntimeError when called outside 'async with' block."""
+    """commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
         "yascheduler.adapters.persistence.postgres_uow.Connection",
@@ -219,7 +219,9 @@ async def test_uow_commit_after_exit_raises(mocker):
     async with uow:
         pass  # connection now closed by __aexit__
 
-    with pytest.raises(RuntimeError, match="Connection not initialized"):
+    with pytest.raises(
+        UnitOfWorkNotInitializedError, match="Connection not initialized"
+    ):
         await uow.commit()
 
 

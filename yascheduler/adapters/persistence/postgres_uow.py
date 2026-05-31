@@ -1,5 +1,5 @@
 # FILE: yascheduler/adapters/persistence/postgres_uow.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit of Work implementation for PostgreSQL using pg8000.
 #   SCOPE: PostgresUnitOfWork managing transactions, repositories, and connection lifecycle.
@@ -9,12 +9,12 @@
 #
 # START_MODULE_MAP
 #   PostgresUnitOfWork - async context manager providing tasks and node repositories
-#   _require_conn - guard returning Connection or raising RuntimeError
+#   _require_conn - guard returning Connection or raising UnitOfWorkNotInitializedError
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Convert tasks/nodes to properties for structural Protocol compatibility.
-#   PREVIOUS_CHANGE: v1.1.0 - Add docstrings; use conn.run('COMMIT'/'ROLLBACK') to avoid stub gaps.
+#   LAST_CHANGE: v1.3.0 - Replace RuntimeError with UnitOfWorkNotInitializedError in tasks, nodes, and _require_conn.
+#   PREVIOUS_CHANGE: v1.2.0 - Convert tasks/nodes to properties for structural Protocol compatibility.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ from typing import Any, TypeVar
 from pg8000.native import Connection
 
 from yascheduler.config import ConfigDb
+
+from .exceptions import UnitOfWorkNotInitializedError
 
 from .postgres import PostgresNodeRepository, PostgresTaskRepository
 
@@ -61,7 +63,7 @@ class PostgresUnitOfWork:
     @property
     def tasks(self) -> PostgresTaskRepository:
         if self._tasks is None:
-            raise RuntimeError(
+            raise UnitOfWorkNotInitializedError(
                 "UoW not entered; use 'async with' to access repositories"
             )
         return self._tasks
@@ -69,7 +71,7 @@ class PostgresUnitOfWork:
     @property
     def nodes(self) -> PostgresNodeRepository:
         if self._nodes is None:
-            raise RuntimeError(
+            raise UnitOfWorkNotInitializedError(
                 "UoW not entered; use 'async with' to access repositories"
             )
         return self._nodes
@@ -154,7 +156,7 @@ class PostgresUnitOfWork:
         await self._run_sync(lambda: conn.run("ROLLBACK"))
 
     # START_CONTRACT: _require_conn
-    #   PURPOSE: Return the active connection or raise if UoW was not entered.
+    #   PURPOSE: Return the active connection or raise UnitOfWorkNotInitializedError if UoW was not entered.
     #   INPUTS: { None }
     #   OUTPUTS: { Connection - the active pg8000 connection }
     #   SIDE_EFFECTS: None
@@ -163,7 +165,7 @@ class PostgresUnitOfWork:
     def _require_conn(self) -> Connection:
         """Return active connection, or raise if not yet entered."""
         if self._conn is None:
-            raise RuntimeError(
+            raise UnitOfWorkNotInitializedError(
                 "Connection not initialized; use 'async with' to enter the UoW"
             )
         return self._conn

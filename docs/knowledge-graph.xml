@@ -324,9 +324,10 @@
     <M-PERSISTENCE NAME="Persistence adapter entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Persistence adapter package — re-exports from sql_loader, postgres, postgres_uow.</purpose>
       <path>yascheduler/adapters/persistence/__init__.py</path>
-      <depends>M-PERSISTENCE-SQLLOADER</depends>
+      <depends>M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS</depends>
       <annotations>
         <export-load_query PURPOSE="Re-exported from sql_loader" />
+        <export-UnitOfWorkNotInitializedError PURPOSE="Re-exported from exceptions" />
       </annotations>
     </M-PERSISTENCE>
 
@@ -339,6 +340,15 @@
         <const-_SQL_DIR PURPOSE="Path to the sql/ query directory" />
       </annotations>
     </M-PERSISTENCE-SQLLOADER>
+
+    <M-PERSISTENCE-EXCEPTIONS NAME="Persistence exceptions" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Adapter-layer exceptions for persistence UoW state-contract violations.</purpose>
+      <path>yascheduler/adapters/persistence/exceptions.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-UnitOfWorkNotInitializedError PURPOSE="Raised when UoW methods called without entering context" />
+      </annotations>
+    </M-PERSISTENCE-EXCEPTIONS>
 
     <M-PERSISTENCE-POSTGRES NAME="PostgreSQL repositories" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgresTaskRepository and PostgresNodeRepository implementing domain repository ports via pg8000.</purpose>
@@ -353,7 +363,7 @@
     <M-PERSISTENCE-UOW NAME="PostgreSQL Unit of Work" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgresUnitOfWork managing shared pg8000 Connection across repositories with commit/rollback.</purpose>
       <path>yascheduler/adapters/persistence/postgres_uow.py</path>
-      <depends>M-PERSISTENCE-POSTGRES, M-CONFIG-DB</depends>
+      <depends>M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-PERSISTENCE-EXCEPTIONS</depends>
       <annotations>
         <class-PostgresUnitOfWork PURPOSE="Async context manager for transactional boundaries with shared connection" />
       </annotations>
@@ -762,6 +772,7 @@
     <CrossLink from="M-PERSISTENCE" to="M-PERSISTENCE-SQLLOADER" relation="re-exports load_query" />
     <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-POSTGRES" relation="instantiates and wires repositories" />
     <CrossLink from="M-PERSISTENCE-POSTGRES" to="M-DOMAIN-MODEL" relation="maps DB rows to domain entities" />
+    <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-EXCEPTIONS" relation="raises UnitOfWorkNotInitializedError for state-contract violations" />
 
     <!-- Application layer cross-links (v2.0.0) -->
     <CrossLink from="M-SCHEDULER" to="M-DI" relation="delegates daemon creation to make_daemon" />
