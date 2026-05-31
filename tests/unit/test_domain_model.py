@@ -44,7 +44,6 @@ from yascheduler.domain.exceptions import (
     MachineBusyError,
     MissingInputFileError,
     TaskAlreadyAllocatedError,
-    TaskNotAllocatedError,
     TaskNotRunningError,
 )
 from yascheduler.domain.model import (

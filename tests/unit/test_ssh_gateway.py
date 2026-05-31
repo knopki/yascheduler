@@ -329,8 +329,8 @@ class TestConnectionLifecycle:
         state = _make_state()
         gateway._machines["10.0.0.1"] = state
         await gateway.disconnect("10.0.0.1")
-        state.conn.close.assert_called_once()
-        state.conn.wait_closed.assert_awaited_once()
+        state.conn.close.assert_called_once()  # type: ignore[attr-defined]
+        state.conn.wait_closed.assert_awaited_once()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_disconnect_all_removes_all(self, gateway: SSHMachineGateway) -> None:
@@ -534,7 +534,7 @@ class TestFileTransfer:
 
         # Enter the sftp context to access the same singleton sftp mock
         async with state.conn.start_sftp_client() as sf:
-            sf.put.assert_awaited_once_with(str(local), remote)
+            sf.put.assert_awaited_once_with(str(local), remote)  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_download_uses_sftp(self, gateway: SSHMachineGateway) -> None:
@@ -547,7 +547,7 @@ class TestFileTransfer:
         await gateway.download(state.machine, remote, local)
 
         async with state.conn.start_sftp_client() as sf:
-            sf.get.assert_awaited_once_with(remote, str(local))
+            sf.get.assert_awaited_once_with(remote, str(local))  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_get_sftp_context_manager(self, gateway: SSHMachineGateway) -> None:
@@ -723,7 +723,7 @@ class TestOccupancy:
         mock_pengine.check_pname = "nonexistent"
 
         # Override adapter.pgrep to yield nothing
-        state.adapter.pgrep = lambda *a, **kw: _AsyncIter([])
+        state.adapter.pgrep = lambda *a, **kw: _AsyncIter([])  # type: ignore[assignment,misc]
 
         result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
         assert result is False
@@ -747,7 +747,7 @@ class TestOccupancy:
             result.stderr = ""
             return result
 
-        state.adapter.run = _run_match
+        state.adapter.run = _run_match  # type: ignore[assignment,misc]
 
         result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
         assert result is True
@@ -770,7 +770,7 @@ class TestOccupancy:
             result.stderr = ""
             return result
 
-        state.adapter.run = _run_mismatch
+        state.adapter.run = _run_mismatch  # type: ignore[assignment,misc]
 
         result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
         assert result is False
@@ -817,7 +817,7 @@ class TestOccupancy:
             raise ChannelOpenError(1, "SSH connection lost")
             yield  # makes this an async generator
 
-        state.adapter.pgrep = _pgrep_ssh_fail
+        state.adapter.pgrep = _pgrep_ssh_fail  # type: ignore[assignment,misc]
 
         result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
         assert result is True
@@ -916,7 +916,7 @@ class TestAdvancedOperations:
         await gateway.setup_node("10.0.0.1", engine_repo)
 
         engine_repo.filter_platforms.assert_called_once_with(state.platforms)
-        state.adapter.setup_node.assert_awaited_once()
+        state.adapter.setup_node.assert_awaited_once()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_get_cpu_cores(self, gateway: SSHMachineGateway) -> None:

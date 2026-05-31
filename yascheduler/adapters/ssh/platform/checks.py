@@ -28,7 +28,7 @@
 "OS checks"
 
 from functools import partial
-from typing import Optional
+from typing import Optional, cast
 
 from asyncssh.connection import SSHClientConnection
 from asyncstdlib import lru_cache
@@ -98,7 +98,10 @@ async def _get_os_release(conn: SSHClientConnection) -> Optional[tuple[str, ...]
 async def check_is_debian_like(conn: SSHClientConnection) -> bool:
     "Check for any Debian-like"
     os_release = await _get_os_release(conn)
-    return "debian" in os_release[0:2] if os_release else False
+    if not os_release:
+        return False
+    parts = cast(tuple[str, str, str], os_release)
+    return "debian" in parts[0:2]
 
 
 # START_CONTRACT: check_is_debian
@@ -124,7 +127,10 @@ async def check_is_debian(conn: SSHClientConnection) -> bool:
 async def _check_debian_version(version: str, conn: SSHClientConnection) -> bool:
     "Check for Debian version"
     os_release = await _get_os_release(conn)
-    return len(os_release) >= 2 and os_release[2] == version if os_release else False
+    if not os_release:
+        return False
+    parts = cast(tuple[str, str, str], os_release)
+    return len(parts) >= 3 and parts[2] == version
 
 
 check_is_debian_10 = partial(_check_debian_version, "10")

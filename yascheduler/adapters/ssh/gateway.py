@@ -250,9 +250,13 @@ class SSHMachineGateway:
         """Run command and return structured result."""
         proc = await self.run_full(machine, cmd)
         return ProcessResult(
-            exit_code=proc.returncode,
-            stdout=proc.stdout or "",
-            stderr=proc.stderr or "",
+            exit_code=proc.returncode if proc.returncode is not None else -1,
+            stdout=proc.stdout
+            if isinstance(proc.stdout, str)
+            else str(proc.stdout or ""),
+            stderr=proc.stderr
+            if isinstance(proc.stderr, str)
+            else str(proc.stderr or ""),
         )
 
     # START_CONTRACT: SSHMachineGateway.run_full
@@ -543,6 +547,13 @@ class SSHMachineGateway:
             cwd: str | None = None,
             **kwargs: Any,
         ) -> SSHCompletedProcess:
-            return await adapter.run(conn, adapter.quote, *args, cwd=cwd, **kwargs)
+            return await adapter.run(
+                conn,
+                adapter.quote,
+                str(args[0]) if args else "",
+                *args[1:],
+                cwd=cwd,
+                **kwargs,
+            )
 
         return _run_fn

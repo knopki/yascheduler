@@ -601,7 +601,7 @@ class TestOccupancyRaceCondition:
             for _ in range(4):
                 await asyncio.sleep(0.5)
                 gw_state = gateway.get_machine_state(ip)
-                assert gw_state.machine.state == MachineState.BUSY, (
+                assert gw_state.machine.state == MachineState.BUSY, (  # type: ignore[union-attr]
                     "_meta_sync must consistently see BUSY while process is running"
                 )
         finally:
