@@ -42,7 +42,8 @@ from yascheduler.application.submit_task import submit_task
 from yascheduler.clouds import CloudAPIManager
 from yascheduler.config import Engine, EngineRepository
 from yascheduler.config.cloud import ConfigCloudAzure
-from yascheduler.db import DB, TaskModel, TaskStatus as DbTaskStatus
+from yascheduler.db import DB, TaskModel
+from yascheduler.db import TaskStatus as DbTaskStatus
 from yascheduler.domain.exceptions import MissingInputFileError, UnsupportedEngineError
 from yascheduler.domain.model import Task, TaskStatus
 from yascheduler.remote_machine import RemoteMachine, RemoteMachineRepository

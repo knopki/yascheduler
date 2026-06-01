@@ -27,10 +27,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -44,6 +43,8 @@ from yascheduler.adapters.ssh.platform.protocol import (
 )
 from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 # =============================================================================
 # Helpers

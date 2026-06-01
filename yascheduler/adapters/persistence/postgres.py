@@ -22,14 +22,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any
-
-from pg8000.native import Connection
+from typing import TYPE_CHECKING, Any
 
 from ...domain.model import Node, Task, TaskContext, TaskStatus
 from . import load_query
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from concurrent.futures import ThreadPoolExecutor
+
+    from pg8000.native import Connection
 
 
 class _PgRepository:

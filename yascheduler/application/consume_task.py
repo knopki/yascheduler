@@ -25,17 +25,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import backoff
 from asyncssh.sftp import SFTPError
 
-from yascheduler.clouds import CloudAPIManager
-from yascheduler.config import EngineRepository
 from yascheduler.db import DB, TaskModel, TaskStatus
 from yascheduler.remote_machine import RemoteMachine, SFTPRetryExc
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Mapping
+
+    from yascheduler.clouds import CloudAPIManager
+    from yascheduler.config import EngineRepository
 
 logger = logging.getLogger(__name__)
 

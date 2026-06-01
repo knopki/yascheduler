@@ -16,7 +16,7 @@
 # END_CHANGE_SUMMARY
 
 
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(items) -> None:
     for item in items:
         if "/tests/unit/" in str(item.path):
             item.add_marker("unit")

@@ -31,11 +31,10 @@
 
 import logging
 from pathlib import PurePosixPath
-from typing import Optional, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 from asyncssh.public_key import SSHKey
 from attrs import asdict, evolve
-from azure.core.credentials_async import AsyncTokenCredential
 from azure.core.exceptions import (
     AzureError,
     IncompleteReadError,
@@ -72,6 +71,9 @@ from azure.mgmt.network.v2020_06_01.models import (
 from ..config.cloud import AzureImageReference, ConfigCloudAzure
 from .protocols import PCloudConfig
 from .utils import get_rnd_name
+
+if TYPE_CHECKING:
+    from azure.core.credentials_async import AsyncTokenCredential
 
 # Azure SDK is too noisy
 for logger_name in [
@@ -163,7 +165,7 @@ async def create_nic(
         raise RuntimeError("Azure VM created but no IP is assigned")
     await client.network_interfaces.update_tags(
         cfg.resource_group,
-        cast(str, nic.name),
+        cast("str", nic.name),
         parameters=TagsObject(tags={ID_TAG_NAME: ip_addr}),
     )
     return nic, ip_addr
@@ -305,7 +307,7 @@ async def az_create_node(
     async with ClientSecretCredential(
         cfg.tenant_id, cfg.client_id, cfg.client_secret
     ) as cred:
-        cred = cast(AsyncTokenCredential, cred)  # fix library type errors
+        cred = cast("AsyncTokenCredential", cred)  # fix library type errors
         async with NetworkManagementClient(cred, cfg.subscription_id) as nmc:
             async with ComputeManagementClient(cred, cfg.subscription_id) as cmc:
                 return await create_node(nmc, cmc, log, cfg, key, cloud_config)
@@ -324,19 +326,19 @@ async def delete_node(
     log: logging.Logger,
     cfg: ConfigCloudAzure,
     host: str,
-):
+) -> None:
     """Delete virtual machine with network interface"""
     async for result in cmc.virtual_machines.list(cfg.resource_group):
-        vm_res = cast(VirtualMachine, result)
+        vm_res = cast("VirtualMachine", result)
         tag_ip = (vm_res.tags or {}).get(ID_TAG_NAME)
         if tag_ip == host:
             poller = await cmc.virtual_machines.begin_power_off(
-                cfg.resource_group, cast(str, vm_res.name)
+                cfg.resource_group, cast("str", vm_res.name)
             )
             await poller.wait()
 
             poller = await cmc.virtual_machines.begin_delete(
-                cfg.resource_group, cast(str, vm_res.name)
+                cfg.resource_group, cast("str", vm_res.name)
             )
             await poller.wait()
             log.debug("[Azure][az_delete_node] vm=%s deleted", vm_res.name)
@@ -344,11 +346,11 @@ async def delete_node(
 
     nic = None
     async for result in nmc.network_interfaces.list(cfg.resource_group):
-        nic = cast(NetworkInterface, result)
+        nic = cast("NetworkInterface", result)
         tag_ip = (nic.tags or {}).get(ID_TAG_NAME)
         if tag_ip == host:
             poller = await nmc.network_interfaces.begin_delete(
-                cfg.resource_group, cast(str, nic.name)
+                cfg.resource_group, cast("str", nic.name)
             )
             await poller.wait()
             log.debug("[Azure][az_delete_node] nic=%s deleted", nic.name)
@@ -371,7 +373,7 @@ async def az_delete_node(
     async with ClientSecretCredential(
         cfg.tenant_id, cfg.client_id, cfg.client_secret
     ) as cred:
-        cred = cast(AsyncTokenCredential, cred)  # fix library type errors
+        cred = cast("AsyncTokenCredential", cred)  # fix library type errors
         async with NetworkManagementClient(cred, cfg.subscription_id) as nmc:
             async with ComputeManagementClient(cred, cfg.subscription_id) as cmc:
                 return await delete_node(nmc, cmc, log, cfg, host)

@@ -34,7 +34,6 @@ from yascheduler.config import (
 )
 from yascheduler.di import CLIDeps, make_aiida, make_cli_deps, make_daemon
 
-
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -66,7 +65,7 @@ def create_mock_config():
 class TestCLIDeps:
     """CLIDeps dataclass: constructor, submit, query."""
 
-    def test_constructor_stores_fields(self):
+    def test_constructor_stores_fields(self) -> None:
         """CLIDeps stores engines, uow_factory, remote_tasks_dir."""
         engines = MagicMock(spec=EngineRepository)
         uow_factory = MagicMock()
@@ -83,7 +82,7 @@ class TestCLIDeps:
         assert deps.remote_tasks_dir is remote_tasks_dir
 
     @pytest.mark.asyncio
-    async def test_submit_delegates_to_submit_task(self):
+    async def test_submit_delegates_to_submit_task(self) -> None:
         """submit() delegates to submit_task with all positional args."""
         engines = MagicMock(spec=EngineRepository)
         uow_factory = MagicMock()
@@ -110,7 +109,7 @@ class TestCLIDeps:
         )
 
     @pytest.mark.asyncio
-    async def test_query_uses_uow_factory(self):
+    async def test_query_uses_uow_factory(self) -> None:
         """query() enters a UoW via uow_factory and calls tasks.get(task_id)."""
         mock_task = MagicMock()
         mock_uow = AsyncMock()
@@ -135,7 +134,7 @@ class TestCLIDeps:
 class TestMakeCliDeps:
     """make_cli_deps factory for lightweight CLI dependencies."""
 
-    def test_returns_cli_deps_with_correct_fields(self):
+    def test_returns_cli_deps_with_correct_fields(self) -> None:
         """make_cli_deps returns CLIDeps with config-derived engines and remote_tasks_dir."""
         config = create_mock_config()
 
@@ -145,7 +144,7 @@ class TestMakeCliDeps:
         assert deps.engines is config.engines
         assert deps.remote_tasks_dir is config.remote.tasks_dir
 
-    def test_uow_factory_creates_postgres_unit_of_work(self):
+    def test_uow_factory_creates_postgres_unit_of_work(self) -> None:
         """uow_factory callable returns a PostgresUnitOfWork initialized with config.db."""
         config = create_mock_config()
 
@@ -159,7 +158,7 @@ class TestMakeCliDeps:
 class TestMakeAiida:
     """make_aiida stub — raises NotImplementedError."""
 
-    def test_raises_not_implemented_error(self):
+    def test_raises_not_implemented_error(self) -> None:
         """make_aiida raises NotImplementedError with expected message."""
         config = create_mock_config()
 
@@ -174,7 +173,7 @@ class TestMakeDaemon:
     """make_daemon async factory — creates full daemon dependency graph."""
 
     @pytest.mark.asyncio
-    async def test_creates_all_dependencies_and_returns_orchestrator(self):
+    async def test_creates_all_dependencies_and_returns_orchestrator(self) -> None:
         """make_daemon calls DB.create, CloudAPIManager.create, RemoteMachineRepository, and returns Orchestrator."""
         config = create_mock_config()
         mock_orch_instance = MagicMock()
@@ -231,7 +230,7 @@ class TestMakeDaemon:
         )
 
     @pytest.mark.asyncio
-    async def test_uses_provided_db(self):
+    async def test_uses_provided_db(self) -> None:
         """When db= keyword is passed, DB.create is not called."""
         config = create_mock_config()
         custom_db = AsyncMock()
@@ -253,7 +252,7 @@ class TestMakeDaemon:
         mock_clouds_create.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_uses_provided_clouds(self):
+    async def test_uses_provided_clouds(self) -> None:
         """When clouds= keyword is passed, CloudAPIManager.create is not called."""
         config = create_mock_config()
         custom_clouds = AsyncMock()
@@ -275,7 +274,7 @@ class TestMakeDaemon:
         mock_db_create.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_default_logger(self):
+    async def test_default_logger(self) -> None:
         """When log=None, logging.getLogger('Orchestrator') is called."""
         config = create_mock_config()
 
@@ -291,7 +290,7 @@ class TestMakeDaemon:
         mock_get_logger.assert_called_once_with("Orchestrator")
 
     @pytest.mark.asyncio
-    async def test_custom_logger_skips_get_logger(self):
+    async def test_custom_logger_skips_get_logger(self) -> None:
         """When log= is passed, logging.getLogger is not called and the custom logger is used."""
         config = create_mock_config()
         custom_log = MagicMock()

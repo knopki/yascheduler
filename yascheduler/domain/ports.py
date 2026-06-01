@@ -21,16 +21,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from .model import (
-    ConnectedMachine,
-    Node,
-    ProcessResult,
-    Task,
-    TaskStatus,
-)
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from .model import (
+        ConnectedMachine,
+        Node,
+        ProcessResult,
+        Task,
+        TaskStatus,
+    )
 
 
 @runtime_checkable

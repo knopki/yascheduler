@@ -27,20 +27,23 @@
 # END_CHANGE_SUMMARY
 
 import json
+from typing import NoReturn
 
 import pytest
 
 from yascheduler.adapters.persistence import load_query
+from yascheduler.adapters.persistence.exceptions import UnitOfWorkNotInitializedError
 from yascheduler.adapters.persistence.postgres import (
     PostgresNodeRepository,
     PostgresTaskRepository,
 )
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
-from yascheduler.adapters.persistence.exceptions import UnitOfWorkNotInitializedError
 from yascheduler.domain.model import (
     Node,
     Task,
     TaskContext,
+)
+from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
 )
 
@@ -54,7 +57,7 @@ from yascheduler.domain.model import (
 #   LINKS: load_query
 # END_CONTRACT: test_load_query_first_call_reads_file
 @pytest.mark.unit
-def test_load_query_first_call_reads_file(tmp_path, monkeypatch):
+def test_load_query_first_call_reads_file(tmp_path, monkeypatch) -> None:
     """load_query reads the file on first call and returns its content."""
     load_query.cache_clear()
     sql_dir = tmp_path / "sql"
@@ -82,7 +85,7 @@ def test_load_query_first_call_reads_file(tmp_path, monkeypatch):
 #   LINKS: load_query
 # END_CONTRACT: test_load_query_second_call_uses_cache
 @pytest.mark.unit
-def test_load_query_second_call_uses_cache(tmp_path, monkeypatch):
+def test_load_query_second_call_uses_cache(tmp_path, monkeypatch) -> None:
     """load_query returns the cached value; file mutation has no effect."""
     load_query.cache_clear()
     sql_dir = tmp_path / "sql"
@@ -113,7 +116,7 @@ def test_load_query_second_call_uses_cache(tmp_path, monkeypatch):
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork, PostgresTaskRepository, PostgresNodeRepository
 # END_CONTRACT: test_uow_enter_creates_repositories
-async def test_uow_enter_creates_repositories(mocker):
+async def test_uow_enter_creates_repositories(mocker) -> None:
     """__aenter__ instantiates both task and node repositories."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -135,7 +138,7 @@ async def test_uow_enter_creates_repositories(mocker):
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.commit
 # END_CONTRACT: test_uow_commit_called
-async def test_uow_commit_called(mocker):
+async def test_uow_commit_called(mocker) -> None:
     """commit() calls connection.run('COMMIT')."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -158,7 +161,7 @@ async def test_uow_commit_called(mocker):
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.rollback
 # END_CONTRACT: test_uow_rollback_on_exception
-async def test_uow_rollback_on_exception(mocker):
+async def test_uow_rollback_on_exception(mocker) -> NoReturn:
     """Exception inside context triggers rollback and closes connection."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -183,7 +186,7 @@ async def test_uow_rollback_on_exception(mocker):
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.__aexit__
 # END_CONTRACT: test_uow_closes_connection
-async def test_uow_closes_connection(mocker):
+async def test_uow_closes_connection(mocker) -> None:
     """connection.close() is called on normal exit."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -206,7 +209,7 @@ async def test_uow_closes_connection(mocker):
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.commit, PostgresUnitOfWork._require_conn
 # END_CONTRACT: test_uow_commit_after_exit_raises
-async def test_uow_commit_after_exit_raises(mocker):
+async def test_uow_commit_after_exit_raises(mocker) -> None:
     """commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -232,7 +235,7 @@ async def test_uow_commit_after_exit_raises(mocker):
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.commit
 # END_CONTRACT: test_uow_double_commit
-async def test_uow_double_commit(mocker):
+async def test_uow_double_commit(mocker) -> None:
     """Second commit within the same context is accepted by pg8000 (idempotent)."""
     mock_conn = mocker.MagicMock()
     mocker.patch(

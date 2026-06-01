@@ -17,7 +17,7 @@
 #   PREVIOUS_CHANGE: v1.1.0 - Extract load_query implementation to sql_loader.py; re-export only.
 # END_CHANGE_SUMMARY
 
-from .sql_loader import load_query
 from .exceptions import UnitOfWorkNotInitializedError
+from .sql_loader import load_query
 
 __all__ = ["load_query", "UnitOfWorkNotInitializedError"]

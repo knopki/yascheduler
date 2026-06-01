@@ -65,7 +65,7 @@ from yascheduler.config.utils import ConfigWarning, warn_unknown_fields
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-DB]
 # END_CONTRACT: test_config_db_full_overrides
-def test_config_db_full_overrides():
+def test_config_db_full_overrides() -> None:
     """parses full INI section with overrides"""
     cfg = ConfigParser()
     cfg.read_string(
@@ -86,7 +86,7 @@ def test_config_db_full_overrides():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-DB]
 # END_CONTRACT: test_config_db_defaults
-def test_config_db_defaults():
+def test_config_db_defaults() -> None:
     """applies defaults when section has no keys"""
     cfg = ConfigParser()
     cfg.read_string("[db]\n")
@@ -105,7 +105,7 @@ def test_config_db_defaults():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-LOCAL]
 # END_CONTRACT: test_config_local_custom_data_dir
-def test_config_local_custom_data_dir():
+def test_config_local_custom_data_dir() -> None:
     """derived paths resolve under custom data_dir"""
     cfg = ConfigParser()
     cfg.read_string("[local]\ndata_dir=/opt/data\n")
@@ -120,7 +120,7 @@ def test_config_local_custom_data_dir():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-LOCAL]
 # END_CONTRACT: test_config_local_defaults
-def test_config_local_defaults():
+def test_config_local_defaults() -> None:
     """applies numeric defaults for empty section"""
     cfg = ConfigParser()
     cfg.read_string("[local]\n")
@@ -140,7 +140,7 @@ def test_config_local_defaults():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-REMOTE]
 # END_CONTRACT: test_config_remote_with_jump_host
-def test_config_remote_with_jump_host():
+def test_config_remote_with_jump_host() -> None:
     """parses jump host fields"""
     cfg = ConfigParser()
     cfg.read_string(
@@ -159,7 +159,7 @@ def test_config_remote_with_jump_host():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-REMOTE]
 # END_CONTRACT: test_config_remote_without_jump_host
-def test_config_remote_without_jump_host():
+def test_config_remote_without_jump_host() -> None:
     """jump host fields default to None"""
     cfg = ConfigParser()
     cfg.read_string("[remote]\nuser=root\n")
@@ -176,7 +176,7 @@ def test_config_remote_without_jump_host():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-CLOUD]
 # END_CONTRACT: test_config_cloud_hetzner_parsing
-def test_config_cloud_hetzner_parsing():
+def test_config_cloud_hetzner_parsing() -> None:
     """parses hetzner token and username"""
     cfg = ConfigParser()
     cfg.read_string("[clouds]\nhetzner_token=abc123\nhetzner_user=root\n")
@@ -194,7 +194,7 @@ def test_config_cloud_hetzner_parsing():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-CLOUD]
 # END_CONTRACT: test_config_cloud_upcloud_parsing
-def test_config_cloud_upcloud_parsing():
+def test_config_cloud_upcloud_parsing() -> None:
     """parses upcloud login and password"""
     cfg = ConfigParser()
     cfg.read_string("[clouds]\nupcloud_login=user\nupcloud_password=pass\n")
@@ -211,7 +211,7 @@ def test_config_cloud_upcloud_parsing():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-CLOUD]
 # END_CONTRACT: test_azure_image_reference_from_urn
-def test_azure_image_reference_from_urn():
+def test_azure_image_reference_from_urn() -> None:
     """parses URN into publisher, offer, sku, version"""
     ref = AzureImageReference.from_urn("Publisher:Offer:SKU:1.0")
     assert ref.publisher == "Publisher"
@@ -227,7 +227,7 @@ def test_azure_image_reference_from_urn():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-CLOUD]
 # END_CONTRACT: test_azure_image_reference_invalid_urn
-def test_azure_image_reference_invalid_urn():
+def test_azure_image_reference_invalid_urn() -> None:
     """raises ValueError for too-short URN"""
     with pytest.raises(ValueError):
         AzureImageReference.from_urn("a:b:c")
@@ -240,7 +240,7 @@ def test_azure_image_reference_invalid_urn():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-CLOUD]
 # END_CONTRACT: test_config_cloud_azure_rejects_root
-def test_config_cloud_azure_rejects_root():
+def test_config_cloud_azure_rejects_root() -> None:
     """raises ValueError for root user on Azure"""
     with pytest.raises(ValueError):
         ConfigCloudAzure(
@@ -259,7 +259,7 @@ def test_config_cloud_azure_rejects_root():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-ENGINE]
 # END_CONTRACT: test_engine_valid_parsing
-def test_engine_valid_parsing():
+def test_engine_valid_parsing() -> None:
     """parses a valid engine section"""
     cfg = ConfigParser()
     cfg.read_string(
@@ -284,7 +284,7 @@ def test_engine_valid_parsing():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-ENGINE]
 # END_CONTRACT: test_engine_invalid_spawn_template
-def test_engine_invalid_spawn_template():
+def test_engine_invalid_spawn_template() -> None:
     """raises ValueError for unknown template placeholder in spawn"""
     with pytest.raises(ValueError, match="unknown"):
         cfg = ConfigParser()
@@ -305,7 +305,7 @@ def test_engine_invalid_spawn_template():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-ENGINE]
 # END_CONTRACT: test_engine_missing_check_methods
-def test_engine_missing_check_methods():
+def test_engine_missing_check_methods() -> None:
     """raises ValueError when no check method is set"""
     with pytest.raises(ValueError):
         cfg = ConfigParser()
@@ -325,7 +325,7 @@ def test_engine_missing_check_methods():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-ENGINE]
 # END_CONTRACT: test_engine_empty_input_files
-def test_engine_empty_input_files():
+def test_engine_empty_input_files() -> None:
     """direct construction raises ValueError when input_files is empty"""
     with pytest.raises(ValueError):
         Engine(
@@ -344,7 +344,7 @@ def test_engine_empty_input_files():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-ENGINE-REPO]
 # END_CONTRACT: test_engine_repository_filter
-def test_engine_repository_filter():
+def test_engine_repository_filter() -> None:
     """filter returns new repo with matching engines only"""
     e1 = Engine(
         name="a",
@@ -376,7 +376,7 @@ def test_engine_repository_filter():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-ENGINE-REPO]
 # END_CONTRACT: test_engine_repository_filter_platforms
-def test_engine_repository_filter_platforms():
+def test_engine_repository_filter_platforms() -> None:
     """filter_platforms returns engines for matching platforms"""
     e1 = Engine(
         name="a",
@@ -409,7 +409,7 @@ def test_engine_repository_filter_platforms():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-ENGINE-REPO]
 # END_CONTRACT: test_engine_repository_immutable
-def test_engine_repository_immutable():
+def test_engine_repository_immutable() -> None:
     """__setitem__ and __delitem__ raise NotImplementedError"""
     e1 = Engine(
         name="a",
@@ -433,7 +433,7 @@ def test_engine_repository_immutable():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-UTILS]
 # END_CONTRACT: test_warn_unknown_fields
-def test_warn_unknown_fields():
+def test_warn_unknown_fields() -> None:
     """emits ConfigWarning for unknown config keys"""
     cfg = ConfigParser()
     cfg.read_string("[db]\nuser=root\nunknown_key=value\n")
@@ -449,7 +449,7 @@ def test_warn_unknown_fields():
 #   LINKS: [M-CONFIG-REMOTE]
 # END_CONTRACT: test_config_remote_no_warnings_known_keys
 @pytest.mark.filterwarnings("error::yascheduler.config.utils.ConfigWarning")
-def test_config_remote_no_warnings_known_keys():
+def test_config_remote_no_warnings_known_keys() -> None:
     """no warnings for known INI keys user and jump_user"""
     cfg = ConfigParser()
     cfg.read_string("[remote]\nuser=admin\njump_user=jumper\njump_host=bastion\n")
@@ -465,7 +465,7 @@ def test_config_remote_no_warnings_known_keys():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG-REMOTE]
 # END_CONTRACT: test_config_remote_warns_unknown_keys
-def test_config_remote_warns_unknown_keys():
+def test_config_remote_warns_unknown_keys() -> None:
     """emits ConfigWarning for unknown keys in remote section"""
     cfg = ConfigParser()
     cfg.read_string("[remote]\nuser=root\nbogus=yes\n")
@@ -480,7 +480,7 @@ def test_config_remote_warns_unknown_keys():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG]
 # END_CONTRACT: test_config_top_level_full_ini
-def test_config_top_level_full_ini():
+def test_config_top_level_full_ini() -> None:
     """assembles all sub-configs from full INI"""
     ini = "[db]\nuser=myuser\n[local]\n[remote]\nuser=root\n[clouds]\n"
     config = Config.from_config_parser(ini)
@@ -498,7 +498,7 @@ def test_config_top_level_full_ini():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CONFIG]
 # END_CONTRACT: test_config_top_level_empty_sections
-def test_config_top_level_empty_sections():
+def test_config_top_level_empty_sections() -> None:
     """handles empty sections with defaults"""
     ini = "[db]\n[local]\n[remote]\n[clouds]\n"
     config = Config.from_config_parser(ini)

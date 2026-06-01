@@ -39,6 +39,7 @@ from asyncssh.connection import SSHClientConnection
 from asyncssh.sftp import SFTPClient
 
 from yascheduler.config import LocalArchiveDeploy, LocalFilesDeploy, RemoteArchiveDeploy
+
 from .common import ProcessInfo
 from .protocol import OuterRunCallable, PEngineRepository, PProcessInfo, QuoteCallable
 
@@ -176,10 +177,10 @@ async def deploy_local_files(
     engine_dir: PurePath,
     files: Sequence[PurePath],
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     "Uploading binary from local; requires broadband connection"
 
-    async def upload(src: PurePath, dst: PurePath):
+    async def upload(src: PurePath, dst: PurePath) -> None:
         if log:
             log.debug(
                 "[Windows][deploy_local_files][UPLOAD] src=%s dst=%s",
@@ -205,7 +206,7 @@ async def deploy_local_archive(
     engine_dir: PurePath,
     archive: PurePath,
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     """
     Upload local archive.
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
@@ -243,7 +244,7 @@ async def deploy_remote_archive(
     engine_dir: PurePath,
     url: str,
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     """
     Downloading binary from a trusted non-public address.
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
@@ -327,7 +328,7 @@ async def windows_setup_node(
     engines: PEngineRepository,
     engines_dir: PurePath,
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     "Setup Windows node"
     async with conn.start_sftp_client() as sftp:
         await windows_deploy_engines(run, quote, sftp, engines, engines_dir, log)

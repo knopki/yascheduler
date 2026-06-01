@@ -23,15 +23,18 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from attrs import evolve
 
-from yascheduler.clouds import CloudAPIManager
-from yascheduler.config import Engine, EngineRepository
 from yascheduler.db import DB, TaskModel, TaskStatus
-from yascheduler.remote_machine import RemoteMachine, RemoteMachineRepository
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Mapping
+
+    from yascheduler.clouds import CloudAPIManager
+    from yascheduler.config import Engine, EngineRepository
+    from yascheduler.remote_machine import RemoteMachine, RemoteMachineRepository
 
 logger = logging.getLogger(__name__)
 

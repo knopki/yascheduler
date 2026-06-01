@@ -48,7 +48,7 @@ from yascheduler.remote_machine.checks import (
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_linux_true
 @pytest.mark.asyncio
-async def test_check_is_linux_true():
+async def test_check_is_linux_true() -> None:
     """check_is_linux returns True when uname returns Linux"""
     mock_conn = AsyncMock()
     mock_conn.run = AsyncMock(return_value=MagicMock(returncode=0, stdout="Linux\n"))
@@ -61,7 +61,7 @@ async def test_check_is_linux_true():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_linux_darwin
 @pytest.mark.asyncio
-async def test_check_is_linux_darwin():
+async def test_check_is_linux_darwin() -> None:
     """check_is_linux returns False when uname returns Darwin"""
     mock_conn = AsyncMock()
     mock_conn.run = AsyncMock(return_value=MagicMock(returncode=0, stdout="Darwin\n"))
@@ -74,7 +74,7 @@ async def test_check_is_linux_darwin():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_linux_nonzero_returncode
 @pytest.mark.asyncio
-async def test_check_is_linux_nonzero_returncode():
+async def test_check_is_linux_nonzero_returncode() -> None:
     """check_is_linux returns False when returncode is non-zero"""
     mock_conn = AsyncMock()
     mock_conn.run = AsyncMock(return_value=MagicMock(returncode=1, stdout="Linux\n"))
@@ -87,7 +87,7 @@ async def test_check_is_linux_nonzero_returncode():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_debian_like_true
 @pytest.mark.asyncio
-async def test_check_is_debian_like_true():
+async def test_check_is_debian_like_true() -> None:
     """check_is_debian_like returns True when ID_LIKE contains debian"""
     mock_conn = MagicMock()
     with patch(
@@ -104,7 +104,7 @@ async def test_check_is_debian_like_true():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_debian_true
 @pytest.mark.asyncio
-async def test_check_is_debian_true():
+async def test_check_is_debian_true() -> None:
     """check_is_debian returns True when ID is debian"""
     mock_conn = MagicMock()
     with patch(
@@ -121,7 +121,7 @@ async def test_check_is_debian_true():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_debian_false_for_ubuntu
 @pytest.mark.asyncio
-async def test_check_is_debian_false_for_ubuntu():
+async def test_check_is_debian_false_for_ubuntu() -> None:
     """check_is_debian returns False when ID is ubuntu"""
     mock_conn = MagicMock()
     with patch(
@@ -138,7 +138,7 @@ async def test_check_is_debian_false_for_ubuntu():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_debian_version_match
 @pytest.mark.asyncio
-async def test_check_is_debian_version_match():
+async def test_check_is_debian_version_match() -> None:
     """check_is_debian_11 returns True when version matches"""
     mock_conn = MagicMock()
     with patch(
@@ -155,7 +155,7 @@ async def test_check_is_debian_version_match():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_debian_version_mismatch
 @pytest.mark.asyncio
-async def test_check_is_debian_version_mismatch():
+async def test_check_is_debian_version_mismatch() -> None:
     """check_is_debian_11 returns False when version differs"""
     mock_conn = MagicMock()
     with patch(
@@ -172,7 +172,7 @@ async def test_check_is_debian_version_mismatch():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_windows_true
 @pytest.mark.asyncio
-async def test_check_is_windows_true():
+async def test_check_is_windows_true() -> None:
     """check_is_windows returns True when PowerShell OSVersion succeeds"""
     mock_conn = AsyncMock()
     mock_conn.run = AsyncMock(return_value=MagicMock(returncode=0))
@@ -185,7 +185,7 @@ async def test_check_is_windows_true():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_windows_false
 @pytest.mark.asyncio
-async def test_check_is_windows_false():
+async def test_check_is_windows_false() -> None:
     """check_is_windows returns False when PowerShell OSVersion fails"""
     mock_conn = AsyncMock()
     mock_conn.run = AsyncMock(return_value=MagicMock(returncode=1))
@@ -198,7 +198,7 @@ async def test_check_is_windows_false():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_windows_version_match
 @pytest.mark.asyncio
-async def test_check_is_windows_version_match():
+async def test_check_is_windows_version_match() -> None:
     """check_is_windows10 returns True when caption contains version"""
     mock_conn = MagicMock()
     with patch(
@@ -215,7 +215,7 @@ async def test_check_is_windows_version_match():
 #   OUTPUTS: { None - assertion on bool result }
 # END_CONTRACT: test_check_is_windows_version_mismatch
 @pytest.mark.asyncio
-async def test_check_is_windows_version_mismatch():
+async def test_check_is_windows_version_mismatch() -> None:
     """check_is_windows10 returns False when caption lacks version"""
     mock_conn = MagicMock()
     with patch(

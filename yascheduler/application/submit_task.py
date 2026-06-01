@@ -18,16 +18,19 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import datetime
-from pathlib import PurePath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from yascheduler.application.uow import AbstractUnitOfWork
-from yascheduler.config import EngineRepository
 from yascheduler.domain.exceptions import MissingInputFileError, UnsupportedEngineError
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+    from pathlib import PurePath
+
+    from yascheduler.application.uow import AbstractUnitOfWork
+    from yascheduler.config import EngineRepository
 
 logger = logging.getLogger(__name__)
 

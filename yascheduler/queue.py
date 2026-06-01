@@ -54,7 +54,7 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     #   SIDE_EFFECTS: Initializes internal queue state and done_pending set
     #   LINKS: M-QUEUE
     # END_CONTRACT: __init__
-    def __init__(self, name: str, *argv, maxsize: int = 0, **kwargs):
+    def __init__(self, name: str, *argv, maxsize: int = 0, **kwargs) -> None:
         self.name = name
         self._done_pending = set()
         super().__init__(maxsize, *argv, **kwargs)
@@ -104,7 +104,7 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     #   SIDE_EFFECTS: Removes item from done_pending set, decrements unfinished task counter
     #   LINKS: M-QUEUE
     # END_CONTRACT: item_done
-    def item_done(self, item: UMessage):
+    def item_done(self, item: UMessage) -> None:
         """Indicate that a enqueued task is complete."""
         self._done_pending.remove(item)
         super().task_done()

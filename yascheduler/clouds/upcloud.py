@@ -86,7 +86,7 @@ def upcloud_create_node_sync(
             user_data=cloud_config.render() if cloud_config else None,
         )
     )
-    ip_addr = cast(Optional[str], server.get_public_ip())
+    ip_addr = cast("Optional[str]", server.get_public_ip())
     assert ip_addr is not None
     log.info("CREATED %s", ip_addr)
     return ip_addr
@@ -122,7 +122,7 @@ def upcload_delete_node_sync(
     log: logging.Logger,
     cfg: ConfigCloudUpcloud,
     host: str,
-):
+) -> None:
     """Delete node"""
     client = get_client(cfg)
     for server in client.get_servers():

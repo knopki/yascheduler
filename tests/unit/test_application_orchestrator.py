@@ -44,7 +44,6 @@ from yascheduler.config import (
 )
 from yascheduler.queue import UniqueQueue
 
-
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -149,7 +148,7 @@ class TestOrchestratorLifecycle:
     # ------------------------------------------------------------------ #
 
     @pytest.mark.asyncio
-    async def test_orchestrator_constructor_initializes_queues(self):
+    async def test_orchestrator_constructor_initializes_queues(self) -> None:
         """Orchestrator __init__ creates 4 UniqueQueues with correct names."""
         orch = make_orchestrator()
         assert orch._conn_machine_q.name == "conn_machine"
@@ -162,7 +161,7 @@ class TestOrchestratorLifecycle:
     # ------------------------------------------------------------------ #
 
     @pytest.mark.asyncio
-    async def test_start_creates_background_tasks(self):
+    async def test_start_creates_background_tasks(self) -> None:
         """start() creates 5 background tasks for stats and all loops."""
         orch = make_orchestrator()
 
@@ -186,12 +185,12 @@ class TestOrchestratorLifecycle:
     # ------------------------------------------------------------------ #
 
     @pytest.mark.asyncio
-    async def test_stop_cancels_tasks_and_cleans_up(self):
+    async def test_stop_cancels_tasks_and_cleans_up(self) -> None:
         """stop() sets cancellation_event, cancels tasks, cleans up resources."""
         orch = make_orchestrator()
 
         # Create real asyncio Tasks that never complete on their own.
-        async def _never_end():
+        async def _never_end() -> None:
             await asyncio.Event().wait()
 
         task1 = asyncio.create_task(_never_end())
@@ -217,7 +216,7 @@ class TestOrchestratorLifecycle:
     # ------------------------------------------------------------------ #
 
     @pytest.mark.asyncio
-    async def test_cancellation_propagates_to_producer_consumer_loop(self):
+    async def test_cancellation_propagates_to_producer_consumer_loop(self) -> None:
         """cancellation_event set before loop start causes immediate exit.
 
         The producer-consumer loop checks ``self._cancellation_event.is_set()``
@@ -251,7 +250,7 @@ class TestOrchestratorLifecycle:
     # ------------------------------------------------------------------ #
 
     @pytest.mark.asyncio
-    async def test_concurrency_limits_allocate_limit(self):
+    async def test_concurrency_limits_allocate_limit(self) -> None:
         """allocate_limit config value is passed as workers_num to _create_producer_consumers."""
         orch = make_orchestrator(allocate_limit=3)
 
@@ -282,7 +281,7 @@ class TestOrchestratorLifecycle:
     # ------------------------------------------------------------------ #
 
     @pytest.mark.asyncio
-    async def test_concurrency_limits_deallocate_limit(self):
+    async def test_concurrency_limits_deallocate_limit(self) -> None:
         """deallocate_limit config value is passed as workers_num to _create_producer_consumers."""
         orch = make_orchestrator(deallocate_limit=5)
 
@@ -310,7 +309,7 @@ class TestOrchestratorLifecycle:
     # ------------------------------------------------------------------ #
 
     @pytest.mark.asyncio
-    async def test_concurrency_limits_conn_machine_limit(self):
+    async def test_concurrency_limits_conn_machine_limit(self) -> None:
         """conn_machine_limit config value is passed as workers_num to _create_producer_consumers."""
         orch = make_orchestrator(conn_machine_limit=4)
 
@@ -338,7 +337,7 @@ class TestOrchestratorLifecycle:
     # ------------------------------------------------------------------ #
 
     @pytest.mark.asyncio
-    async def test_concurrency_limits_consume_limit(self):
+    async def test_concurrency_limits_consume_limit(self) -> None:
         """consume_limit config value is passed as workers_num to _create_producer_consumers."""
         orch = make_orchestrator(consume_limit=7)
 

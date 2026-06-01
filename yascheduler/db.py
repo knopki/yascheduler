@@ -241,11 +241,11 @@ class DB:
         )
         # END_BLOCK_CREATE_TABLES
 
-    async def commit(self):
+    async def commit(self) -> None:
         """Commit"""
         await self.run("COMMIT;")
 
-    async def close(self):
+    async def close(self) -> None:
         """Close connection"""
         await self.loop.run_in_executor(self.executor, self.conn.close)
         self.executor.shutdown()
@@ -459,7 +459,7 @@ class DB:
         inserted = await self._task_repo.insert(domain_task)
         return self._task_to_model(inserted)
 
-    async def update_task_meta(self, task_id: int, metadata: Mapping[str, Any]):
+    async def update_task_meta(self, task_id: int, metadata: Mapping[str, Any]) -> None:
         """Update task metadata"""
         task = await self._task_repo.get(task_id)
         if task is not None:
@@ -480,7 +480,7 @@ class DB:
     #   SIDE_EFFECTS: Updates task status to RUNNING and sets IP
     #   LINKS: [M-DB]
     # END_CONTRACT: set_task_running
-    async def set_task_running(self, task_id: int, ip_addr: str):
+    async def set_task_running(self, task_id: int, ip_addr: str) -> None:
         """Set task running"""
         task = await self._task_repo.get(task_id)
         if task is not None:
@@ -493,7 +493,7 @@ class DB:
     #   SIDE_EFFECTS: Updates task status to DONE and sets metadata
     #   LINKS: [M-DB]
     # END_CONTRACT: set_task_done
-    async def set_task_done(self, task_id: int, metadata: Mapping[str, Any]):
+    async def set_task_done(self, task_id: int, metadata: Mapping[str, Any]) -> None:
         """Set task done"""
         task = await self._task_repo.get(task_id)
         if task is not None:
@@ -517,7 +517,7 @@ class DB:
     # END_CONTRACT: set_task_error
     async def set_task_error(
         self, task_id: int, metadata: Mapping[str, Any], error: Optional[str] = None
-    ):
+    ) -> None:
         """Set task error"""
         task = await self._task_repo.get(task_id)
         if task is not None:

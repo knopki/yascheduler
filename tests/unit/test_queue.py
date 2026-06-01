@@ -57,7 +57,7 @@ def msg(msg_id: str = "a", payload: str = "data") -> UMessage:
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_put_get
-async def test_put_get(queue):
+async def test_put_get(queue) -> None:
     m = msg()
     await queue.put(m)
     result = await queue.get()
@@ -71,7 +71,7 @@ async def test_put_get(queue):
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_deduplication
-async def test_deduplication(queue):
+async def test_deduplication(queue) -> None:
     m = msg()
     await queue.put(m)
     await queue.put(m)
@@ -85,7 +85,7 @@ async def test_deduplication(queue):
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_item_done_tracking
-async def test_item_done_tracking(queue):
+async def test_item_done_tracking(queue) -> None:
     m = msg()
     await queue.put(m)
     got = await queue.get()
@@ -101,7 +101,7 @@ async def test_item_done_tracking(queue):
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_item_done_allows_requeue
-async def test_item_done_allows_requeue(queue):
+async def test_item_done_allows_requeue(queue) -> None:
     m = msg()
     await queue.put(m)
     got = await queue.get()
@@ -117,7 +117,7 @@ async def test_item_done_allows_requeue(queue):
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_psize_after_get
-async def test_psize_after_get(queue):
+async def test_psize_after_get(queue) -> None:
     m = msg()
     await queue.put(m)
     await queue.get()
@@ -131,6 +131,6 @@ async def test_psize_after_get(queue):
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_task_done_raises
-async def test_task_done_raises(queue):
+async def test_task_done_raises(queue) -> None:
     with pytest.raises(NotImplementedError, match="task_done"):
         queue.task_done()

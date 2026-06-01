@@ -16,6 +16,8 @@
 #   LAST_CHANGE: v1.0.0 - Initial test data helpers
 # END_CHANGE_SUMMARY
 
+from __future__ import annotations
+
 from typing import Any
 
 from yascheduler.db import NodeModel, TaskModel, TaskStatus

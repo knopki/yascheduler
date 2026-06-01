@@ -30,20 +30,27 @@
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
 
+from typing import TYPE_CHECKING, NoReturn
+
 import pytest
 
-from yascheduler.domain.model import (
-    Node,
-    Task,
-    TaskContext,
-    TaskStatus as DomainTaskStatus,
-)
 from yascheduler.adapters.persistence.postgres import (
     PostgresNodeRepository,
     PostgresTaskRepository,
 )
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.db import DB
+from yascheduler.domain.model import (
+    Node,
+    Task,
+    TaskContext,
+)
+from yascheduler.domain.model import (
+    TaskStatus as DomainTaskStatus,
+)
+
+if TYPE_CHECKING:
+    from yascheduler.config import ConfigDb
 
 # ====================================================================
 # Task 8.2: PostgresTaskRepository CRUD
@@ -57,7 +64,7 @@ from yascheduler.db import DB
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.get, TaskContext.to_metadata
 # END_CONTRACT: test_repo_task_insert_and_get
-async def test_repo_task_insert_and_get(db: DB):
+async def test_repo_task_insert_and_get(db: DB) -> None:
     """Insert a task via repo, get it back, verify all fields including JSONB roundtrip."""
     repo = PostgresTaskRepository(db.conn, db.executor)
 
@@ -97,7 +104,7 @@ async def test_repo_task_insert_and_get(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.get
 # END_CONTRACT: test_repo_task_get_none
-async def test_repo_task_get_none(db: DB):
+async def test_repo_task_get_none(db: DB) -> None:
     """get() returns None for non-existent task."""
     repo = PostgresTaskRepository(db.conn, db.executor)
     assert await repo.get(99999) is None
@@ -110,7 +117,7 @@ async def test_repo_task_get_none(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.save, PostgresTaskRepository.get
 # END_CONTRACT: test_repo_task_save_updates
-async def test_repo_task_save_updates(db: DB):
+async def test_repo_task_save_updates(db: DB) -> None:
     """Save updates an existing task's fields via upsert."""
     repo = PostgresTaskRepository(db.conn, db.executor)
     ctx = TaskContext(engine="fleur")
@@ -141,7 +148,7 @@ async def test_repo_task_save_updates(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.list_by_status
 # END_CONTRACT: test_repo_task_list_by_status
-async def test_repo_task_list_by_status(db: DB):
+async def test_repo_task_list_by_status(db: DB) -> None:
     """list_by_status filters correctly."""
     repo = PostgresTaskRepository(db.conn, db.executor)
     ctx = TaskContext(engine="fleur")
@@ -179,7 +186,7 @@ async def test_repo_task_list_by_status(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.count_by_status
 # END_CONTRACT: test_repo_task_count_by_status
-async def test_repo_task_count_by_status(db: DB):
+async def test_repo_task_count_by_status(db: DB) -> None:
     """count_by_status returns correct aggregates."""
     repo = PostgresTaskRepository(db.conn, db.executor)
     ctx = TaskContext(engine="fleur")
@@ -205,7 +212,7 @@ async def test_repo_task_count_by_status(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.update_status
 # END_CONTRACT: test_repo_task_update_status_atomic
-async def test_repo_task_update_status_atomic(db: DB):
+async def test_repo_task_update_status_atomic(db: DB) -> None:
     """update_status only changes the status field."""
     repo = PostgresTaskRepository(db.conn, db.executor)
     ctx = TaskContext(engine="fleur")
@@ -232,7 +239,7 @@ async def test_repo_task_update_status_atomic(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.add, get, enable, disable, remove
 # END_CONTRACT: test_repo_node_crud
-async def test_repo_node_crud(db: DB):
+async def test_repo_node_crud(db: DB) -> None:
     """Full node lifecycle through repository."""
     repo = PostgresNodeRepository(db.conn, db.executor)
 
@@ -272,7 +279,7 @@ async def test_repo_node_crud(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.list_enabled, list_disabled, list_all
 # END_CONTRACT: test_repo_node_list_filters
-async def test_repo_node_list_filters(db: DB):
+async def test_repo_node_list_filters(db: DB) -> None:
     """list_enabled/disabled return correct subsets."""
     repo = PostgresNodeRepository(db.conn, db.executor)
     await repo.add(Node(ip="10.0.0.1", ncpus=2, enabled=True))
@@ -294,7 +301,7 @@ async def test_repo_node_list_filters(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.update
 # END_CONTRACT: test_repo_node_update
-async def test_repo_node_update(db: DB):
+async def test_repo_node_update(db: DB) -> None:
     """update persists all mutable fields."""
     repo = PostgresNodeRepository(db.conn, db.executor)
     await repo.add(Node(ip="10.0.0.1", ncpus=2, enabled=True, cloud="aws"))
@@ -325,7 +332,7 @@ async def test_repo_node_update(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.add_tmp
 # END_CONTRACT: test_repo_node_add_tmp
-async def test_repo_node_add_tmp(db: DB):
+async def test_repo_node_add_tmp(db: DB) -> None:
     """add_tmp inserts a disabled node with generated IP."""
     repo = PostgresNodeRepository(db.conn, db.executor)
     ip = await repo.add_tmp("aws", "deployer")
@@ -345,7 +352,7 @@ async def test_repo_node_add_tmp(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.count_by_cloud, count_by_status
 # END_CONTRACT: test_repo_node_count
-async def test_repo_node_count(db: DB):
+async def test_repo_node_count(db: DB) -> None:
     """Count aggregations work correctly."""
     repo = PostgresNodeRepository(db.conn, db.executor)
     await repo.add(Node(ip="10.0.0.1", ncpus=2, cloud="aws", enabled=True))
@@ -368,7 +375,7 @@ async def test_repo_node_count(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.get_by_ips
 # END_CONTRACT: test_repo_node_get_by_ips
-async def test_repo_node_get_by_ips(db: DB):
+async def test_repo_node_get_by_ips(db: DB) -> None:
     """Batch get_by_ips returns only matching nodes."""
     repo = PostgresNodeRepository(db.conn, db.executor)
     await repo.add(Node(ip="10.0.0.1", ncpus=2, cloud="aws"))
@@ -394,9 +401,8 @@ async def test_repo_node_get_by_ips(db: DB):
 #   SIDE_EFFECTS: Creates and closes pg8000 connections; commits a node insert.
 #   LINKS: PostgresUnitOfWork
 # END_CONTRACT: test_uow_integration
-async def test_uow_integration(_db_config, _init_schema):
+async def test_uow_integration(_db_config, _init_schema) -> None:
     """UoW creates repos from config, commit persists, exit closes."""
-    from yascheduler.config import ConfigDb
 
     config: ConfigDb = _db_config
 
@@ -422,9 +428,8 @@ async def test_uow_integration(_db_config, _init_schema):
 #   SIDE_EFFECTS: Creates and closes pg8000 connections; rolls back on exception.
 #   LINKS: PostgresUnitOfWork
 # END_CONTRACT: test_uow_rollback_integration
-async def test_uow_rollback_integration(_db_config, _init_schema):
+async def test_uow_rollback_integration(_db_config, _init_schema) -> NoReturn:
     """Uncommitted changes are lost on rollback."""
-    from yascheduler.config import ConfigDb
 
     config: ConfigDb = _db_config
 

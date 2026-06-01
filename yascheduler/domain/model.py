@@ -26,9 +26,9 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields, replace
 from enum import Enum, IntEnum, unique
+from typing import TYPE_CHECKING
 
 from .exceptions import (
     MachineBusyError,
@@ -38,6 +38,9 @@ from .exceptions import (
     TaskNotRunningError,
     TaskNotTodoError,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 @unique

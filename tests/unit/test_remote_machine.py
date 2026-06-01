@@ -22,19 +22,19 @@
 from datetime import datetime, timedelta
 from unittest.mock import Mock
 
+from tests.fixtures.mock_remote_machine import make_mock_remote_machine
+from yascheduler.remote_machine.adapters import (
+    darwin_adapter,
+    debian_adapter,
+    debian_like_adapter,
+    linux_adapter,
+    windows_adapter,
+)
 from yascheduler.remote_machine.remote_machine import (
     RemoteMachine,
     RemoteMachineMetadata,
 )
 from yascheduler.remote_machine.remote_machine_repository import RemoteMachineRepository
-from yascheduler.remote_machine.adapters import (
-    linux_adapter,
-    debian_adapter,
-    debian_like_adapter,
-    darwin_adapter,
-    windows_adapter,
-)
-from tests.fixtures.mock_remote_machine import make_mock_remote_machine
 
 
 class _ComparableMock(Mock):
@@ -82,7 +82,7 @@ class TestRemoteMachineMetadata:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_initial_state
-    def test_initial_state(self):
+    def test_initial_state(self) -> None:
         """Initial state: busy=None, free_since set to recent datetime."""
         meta = RemoteMachineMetadata()
         assert meta.busy is None
@@ -95,7 +95,7 @@ class TestRemoteMachineMetadata:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_busy_true_sets_free_since_none
-    def test_busy_true_sets_free_since_none(self):
+    def test_busy_true_sets_free_since_none(self) -> None:
         """Setting busy=True sets free_since to None."""
         meta = RemoteMachineMetadata()
         meta.busy = True
@@ -107,7 +107,7 @@ class TestRemoteMachineMetadata:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_busy_false_sets_free_since_recent
-    def test_busy_false_sets_free_since_recent(self):
+    def test_busy_false_sets_free_since_recent(self) -> None:
         """Setting busy=False sets free_since to recent datetime."""
         meta = RemoteMachineMetadata()
         meta.busy = True
@@ -122,7 +122,7 @@ class TestRemoteMachineMetadata:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_is_free_longer_than_when_free
-    def test_is_free_longer_than_when_free(self):
+    def test_is_free_longer_than_when_free(self) -> None:
         """is_free_longer_than returns True when free and delta is small."""
         meta = RemoteMachineMetadata()
         meta.busy = False
@@ -133,7 +133,7 @@ class TestRemoteMachineMetadata:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_is_free_longer_than_when_busy
-    def test_is_free_longer_than_when_busy(self):
+    def test_is_free_longer_than_when_busy(self) -> None:
         """is_free_longer_than returns False when busy."""
         meta = RemoteMachineMetadata()
         meta.busy = True
@@ -144,7 +144,7 @@ class TestRemoteMachineMetadata:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_is_free_longer_than_not_long_enough
-    def test_is_free_longer_than_not_long_enough(self):
+    def test_is_free_longer_than_not_long_enough(self) -> None:
         """is_free_longer_than returns False when not free long enough."""
         meta = RemoteMachineMetadata()
         meta.busy = False
@@ -171,7 +171,7 @@ class TestRemoteMachineRepositoryFilter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_filter_busy_true
-    def test_filter_busy_true(self):
+    def test_filter_busy_true(self) -> None:
         """filter(busy=True) returns only busy machines."""
         repo = self._make_repo(
             [
@@ -188,7 +188,7 @@ class TestRemoteMachineRepositoryFilter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_filter_busy_false
-    def test_filter_busy_false(self):
+    def test_filter_busy_false(self) -> None:
         """filter(busy=False) returns only free machines."""
         repo = self._make_repo(
             [
@@ -205,7 +205,7 @@ class TestRemoteMachineRepositoryFilter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_filter_platforms_match
-    def test_filter_platforms_match(self):
+    def test_filter_platforms_match(self) -> None:
         """filter(platforms=['debian']) includes machines with debian platform."""
         repo = self._make_repo(
             [
@@ -222,7 +222,7 @@ class TestRemoteMachineRepositoryFilter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_filter_platforms_no_match
-    def test_filter_platforms_no_match(self):
+    def test_filter_platforms_no_match(self) -> None:
         """filter(platforms=['windows']) excludes linux-only machines."""
         repo = self._make_repo(
             [
@@ -237,7 +237,7 @@ class TestRemoteMachineRepositoryFilter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_filter_free_since_gt
-    def test_filter_free_since_gt(self):
+    def test_filter_free_since_gt(self) -> None:
         """filter(free_since_gt=delta) includes machines free longer than delta."""
         free_long = datetime.now() - timedelta(minutes=10)
         free_short = datetime.now() - timedelta(seconds=30)
@@ -258,7 +258,7 @@ class TestRemoteMachineRepositoryFilter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_filter_reverse_sort
-    def test_filter_reverse_sort(self):
+    def test_filter_reverse_sort(self) -> None:
         """filter(reverse_sort=True) sorts by free_since descending."""
         t1 = datetime.now() - timedelta(minutes=5)
         t2 = datetime.now() - timedelta(minutes=1)
@@ -278,7 +278,7 @@ class TestRemoteMachineRepositoryFilter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_filter_original_unchanged
-    def test_filter_original_unchanged(self):
+    def test_filter_original_unchanged(self) -> None:
         """filter returns new instance without modifying original."""
         repo = self._make_repo(
             [
@@ -300,7 +300,7 @@ class TestRemoteMachineAdapter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_linux_adapter_platform
-    def test_linux_adapter_platform(self):
+    def test_linux_adapter_platform(self) -> None:
         """linux_adapter has correct platform name."""
         assert linux_adapter.platform == "linux"
         assert linux_adapter.path is not None
@@ -317,7 +317,7 @@ class TestRemoteMachineAdapter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_debian_adapter_platform
-    def test_debian_adapter_platform(self):
+    def test_debian_adapter_platform(self) -> None:
         """debian_adapter has correct platform name."""
         assert debian_adapter.platform == "debian"
 
@@ -326,7 +326,7 @@ class TestRemoteMachineAdapter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_debian_like_adapter_platform
-    def test_debian_like_adapter_platform(self):
+    def test_debian_like_adapter_platform(self) -> None:
         """debian_like_adapter has correct platform name."""
         assert debian_like_adapter.platform == "debian-like"
 
@@ -335,7 +335,7 @@ class TestRemoteMachineAdapter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_darwin_adapter_platform
-    def test_darwin_adapter_platform(self):
+    def test_darwin_adapter_platform(self) -> None:
         """darwin_adapter has correct platform name."""
         assert darwin_adapter.platform == "darwin"
 
@@ -344,7 +344,7 @@ class TestRemoteMachineAdapter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_windows_adapter_platform
-    def test_windows_adapter_platform(self):
+    def test_windows_adapter_platform(self) -> None:
         """windows_adapter has correct platform name."""
         assert windows_adapter.platform == "windows"
 
@@ -353,7 +353,7 @@ class TestRemoteMachineAdapter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_adapter_chain_debian_superset
-    def test_adapter_chain_debian_superset(self):
+    def test_adapter_chain_debian_superset(self) -> None:
         """debian_adapter.checks is superset of debian_like_adapter.checks."""
         assert set(debian_adapter.checks) >= set(debian_like_adapter.checks)
         assert len(debian_adapter.checks) > len(debian_like_adapter.checks)
@@ -363,7 +363,7 @@ class TestRemoteMachineAdapter:
     #   INPUTS: { None - test self }
     #   OUTPUTS: { None - test assertions }
     # END_CONTRACT: test_all_callable_fields_non_none_linux
-    def test_all_callable_fields_non_none_linux(self):
+    def test_all_callable_fields_non_none_linux(self) -> None:
         """All callable fields on linux_adapter are not None."""
         for attr_name in [
             "quote",

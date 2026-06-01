@@ -26,9 +26,8 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import AsyncGenerator, Generator
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import asyncssh
@@ -41,8 +40,11 @@ from yascheduler.config import Config
 from yascheduler.config.db import ConfigDb
 from yascheduler.db import DB
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Generator
 
-def pytest_collection_modifyitems(items):
+
+def pytest_collection_modifyitems(items) -> None:
     for item in items:
         if "/tests/e2e/" in str(item.path):
             item.add_marker("e2e")

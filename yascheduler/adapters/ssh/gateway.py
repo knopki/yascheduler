@@ -23,21 +23,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncGenerator, ItemsView, KeysView, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
-from pathlib import Path, PurePath
-from re import Pattern
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import asyncssh
 import backoff
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
-from asyncssh.process import SSHClientProcess, SSHCompletedProcess
-from asyncssh.sftp import SFTPClient
 
-from yascheduler.adapters.ssh.platform.adapters import RemoteMachineAdapter
 from yascheduler.adapters.ssh.platform.protocol import (
     AllSSHRetryExc,
     PEngine,
@@ -53,6 +47,16 @@ from yascheduler.remote_machine.remote_machine import (
     _init_paths,
     _resolve_tunnel,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, ItemsView, KeysView, Sequence
+    from pathlib import Path, PurePath
+    from re import Pattern
+
+    from asyncssh.process import SSHClientProcess, SSHCompletedProcess
+    from asyncssh.sftp import SFTPClient
+
+    from yascheduler.adapters.ssh.platform.adapters import RemoteMachineAdapter
 
 my_backoff_exc = partial(
     backoff.on_exception,

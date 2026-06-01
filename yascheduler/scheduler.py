@@ -28,13 +28,13 @@ from typing import Any, Optional, Union
 
 from attrs import define, field
 
+from .application.orchestrator import Orchestrator
+from .application.submit_task import submit_task
 from .clouds import CloudAPIManager
 from .compat import Self
 from .config import Config
 from .db import DB, TaskModel
 from .di import make_cli_deps, make_daemon
-from .application.orchestrator import Orchestrator
-from .application.submit_task import submit_task
 from .variables import CONFIG_FILE
 from .webhook import WebhookPayload as WebhookPayload  # noqa: F401 — re-export
 
@@ -74,7 +74,7 @@ class Scheduler:
     db: DB = field()
     clouds: CloudAPIManager = field()
     log: logging.Logger = field()
-    _orchestrator: Orchestrator | None = field(default=None, init=False)
+    _orchestrator: Optional[Orchestrator] = field(default=None, init=False)
 
     # START_CONTRACT: create
     #   PURPOSE: Async factory: build Scheduler with DB, clouds, and Orchestrator.
@@ -148,7 +148,7 @@ class Scheduler:
     #   SIDE_EFFECTS: Creates and starts Orchestrator with all producer-consumer loops.
     #   LINKS: M-APPLICATION-ORCHESTRATOR, M-DI
     # END_CONTRACT: start
-    async def start(self):
+    async def start(self) -> None:
         self._orchestrator = await make_daemon(
             self.config, self.log, db=self.db, clouds=self.clouds
         )
@@ -161,7 +161,7 @@ class Scheduler:
     #   SIDE_EFFECTS: Cancels all loops, disconnects machines, stops clouds.
     #   LINKS: M-APPLICATION-ORCHESTRATOR
     # END_CONTRACT: stop
-    async def stop(self):
+    async def stop(self) -> None:
         if self._orchestrator:
             await self._orchestrator.stop()
         else:

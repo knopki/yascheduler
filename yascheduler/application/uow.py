@@ -17,9 +17,10 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from yascheduler.domain.ports import NodeRepository, TaskRepository
+if TYPE_CHECKING:
+    from yascheduler.domain.ports import NodeRepository, TaskRepository
 
 
 @runtime_checkable

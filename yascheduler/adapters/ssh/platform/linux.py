@@ -37,6 +37,7 @@ from asyncssh.connection import SSHClientConnection
 from asyncssh.sftp import SFTPClient
 
 from yascheduler.config import LocalArchiveDeploy, LocalFilesDeploy, RemoteArchiveDeploy
+
 from .common import ProcessInfo
 from .protocol import OuterRunCallable, PEngineRepository, PProcessInfo, QuoteCallable
 
@@ -159,7 +160,7 @@ async def deploy_local_files(
     engine_dir: PurePath,
     files: Sequence[PurePath],
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     "Uploading binary from local; requires broadband connection"
     lpaths = list(map(str, files))
     if log:
@@ -183,7 +184,7 @@ async def deploy_local_archive(
     engine_dir: PurePath,
     archive: PurePath,
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     """
     Upload local archive.
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
@@ -216,7 +217,7 @@ async def deploy_remote_archive(
     engine_dir: PurePath,
     url: str,
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     """
     Downloading binary from a trusted non-public address.
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
@@ -281,7 +282,9 @@ async def linux_deploy_engines(
 #   SIDE_EFFECTS: Runs mpirun on remote, logs version string
 #   LINKS: M-REMOTE-LINUX
 # END_CONTRACT: log_mpi_version
-async def log_mpi_version(run: OuterRunCallable, log: Optional[logging.Logger] = None):
+async def log_mpi_version(
+    run: OuterRunCallable, log: Optional[logging.Logger] = None
+) -> None:
     r = await run("mpirun --allow-run-as-root -V", check=True)
     if not r.returncode and log:
         log.debug(
@@ -303,7 +306,7 @@ async def linux_setup_node(
     engines: PEngineRepository,
     engines_dir: PurePath,
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     "Setup generic linux node"
     async with conn.start_sftp_client() as sftp:
         await linux_deploy_engines(run, quote, sftp, engines, engines_dir, log)
@@ -323,7 +326,7 @@ async def linux_setup_deb_node(
     engines: PEngineRepository,
     engines_dir: PurePath,
     log: Optional[logging.Logger] = None,
-):
+) -> None:
     "Setup debian-like node"
 
     is_root = conn.get_extra_info("username") == "root"

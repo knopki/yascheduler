@@ -20,13 +20,17 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
-from yascheduler.clouds import CloudAPIManager
-from yascheduler.config import ConfigCloud
 from yascheduler.db import DB, NodeModel, TaskStatus
-from yascheduler.remote_machine import RemoteMachineRepository
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from yascheduler.clouds import CloudAPIManager
+    from yascheduler.config import ConfigCloud
+    from yascheduler.remote_machine import RemoteMachineRepository
 
 logger = logging.getLogger(__name__)
 

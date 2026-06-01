@@ -40,7 +40,7 @@ from .utils import make_default_field, warn_unknown_fields
 #   SIDE_EFFECTS: None
 #   LINKS: M-CONFIG-ENGINE
 # END_CONTRACT: _check_spawn
-def _check_spawn(instance: "Engine", _, value: str):
+def _check_spawn(instance: "Engine", _, value: str) -> None:
     try:
         value.format(task_path="", engine_path="", ncpus="")
     except KeyError as err:
@@ -57,7 +57,9 @@ def _check_spawn(instance: "Engine", _, value: str):
 #   SIDE_EFFECTS: None
 #   LINKS: M-CONFIG-ENGINE
 # END_CONTRACT: _check_check_
-def _check_check_(instance: "Engine", attribute: Attribute, value: Optional[str]):
+def _check_check_(
+    instance: "Engine", attribute: Attribute, value: Optional[str]
+) -> None:
     no_check_cmd_curr = attribute.name == "check_cmd" and not value
     no_check_pname_curr = attribute.name == "check_pname" and not value
     if (no_check_cmd_curr and not instance.check_pname) or (
@@ -77,7 +79,7 @@ def _check_check_(instance: "Engine", attribute: Attribute, value: Optional[str]
 # END_CONTRACT: _check_at_least_one_elem
 def _check_at_least_one_elem(
     instance: "Engine", attribute: Attribute, value: Optional[Sequence]
-):
+) -> None:
     if not value or len(value) < 1:
         raise ValueError(f"Engine {instance.name} has no *{attribute.name}* config set")
 

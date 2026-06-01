@@ -28,21 +28,16 @@ import base64
 import logging
 from asyncio.locks import Event, Semaphore
 from collections import Counter
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path, PurePath, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import asyncssh
 import backoff
-from asyncssh.sftp import SFTPClient
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-from yascheduler.clouds import CloudAPIManager
-from yascheduler.config import Config, ConfigCloud, Engine, EngineRepository
 from yascheduler.db import DB, NodeModel, TaskModel, TaskStatus
 from yascheduler.queue import UMessage, UniqueQueue
 from yascheduler.remote_machine import (
@@ -56,6 +51,15 @@ from yascheduler.webhook import WebhookPayload
 from .allocate_task import allocate_task
 from .consume_task import consume_task
 from .deallocate_nodes import deallocate_node
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+
+    from asyncssh.sftp import SFTPClient
+
+    from yascheduler.adapters.ssh.gateway import SSHMachineGateway
+    from yascheduler.clouds import CloudAPIManager
+    from yascheduler.config import Config, ConfigCloud, Engine, EngineRepository
 
 
 # START_CONTRACT: _safe_b64decode
@@ -385,7 +389,7 @@ class Orchestrator:
         for node in new_nodes:
             yield UMessage(node.ip, node)
 
-    async def _connect_machine_consumer(self, msg: UMessage[str, NodeModel]):
+    async def _connect_machine_consumer(self, msg: UMessage[str, NodeModel]) -> None:
         node = msg.payload
         keys = await asyncio.get_running_loop().run_in_executor(
             None, self._config.local.get_private_keys
@@ -432,7 +436,7 @@ class Orchestrator:
             yield UMessage(task.task_id, task)
 
     @backoff.on_exception(backoff.fibo, AllSSHRetryExc, max_time=60)
-    async def _allocator_consumer(self, msg: UMessage[int, TaskModel]):
+    async def _allocator_consumer(self, msg: UMessage[int, TaskModel]) -> None:
         # START_BLOCK_ALLOCATE
         await allocate_task(
             task=msg.payload,
@@ -454,7 +458,7 @@ class Orchestrator:
 
     async def _task_consumer_consumer(
         self, msg: UMessage[int, TaskModel], machine_not_found: Counter
-    ):
+    ) -> None:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
         machine = self._remote_machines.get(task.ip)
@@ -539,7 +543,7 @@ class Orchestrator:
     #   SIDE_EFFECTS: Disconnects remote machine, deletes cloud VM.
     #   LINKS: M-APPLICATION-DEALLOCATE
     # END_CONTRACT: Orchestrator._deallocator_consumer
-    async def _deallocator_consumer(self, msg: UMessage[str, NodeModel]):
+    async def _deallocator_consumer(self, msg: UMessage[str, NodeModel]) -> None:
         try:
             await deallocate_node(msg.payload, self._remote_machines, self._clouds)
         except Exception as err:
@@ -561,7 +565,7 @@ class Orchestrator:
         consumer: Callable,
         workers_num: int = 1,
     ) -> None:
-        async def worker():
+        async def worker() -> None:
             while not self._cancellation_event.is_set():
                 msg = await queue.get()
                 try:
@@ -602,7 +606,7 @@ class Orchestrator:
     # END_CONTRACT: Orchestrator._await_first_machine
     async def _await_first_machine(self) -> None:
         # START_BLOCK_WAIT_MACHINES
-        async def _wait():
+        async def _wait() -> None:
             while not len(self._remote_machines):
                 await asyncio.sleep(1)
 

@@ -24,10 +24,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
 from pathlib import Path, PurePosixPath
-from typing import Any
-
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import asyncssh
@@ -38,6 +36,9 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 from yascheduler.adapters.ssh.gateway import SSHMachineGateway
 from yascheduler.adapters.ssh.platform.protocol import PEngine
 from yascheduler.domain.model import ConnectedMachine, MachineState
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 
 @pytest.fixture(scope="session")

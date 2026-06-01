@@ -34,12 +34,12 @@ from ..compat import Self
 from .utils import make_default_field, opt_str_val, warn_unknown_fields
 
 
-def _check_az_user(_: "ConfigCloudAzure", __, value: str):
+def _check_az_user(_: "ConfigCloudAzure", __, value: str) -> None:
     if value == "root":
         raise ValueError("Root user is forbidden on Azure")
 
 
-def _fmt_key(prefix: str, name: str):
+def _fmt_key(prefix: str, name: str) -> str:
     return f"{prefix}_{name}"
 
 

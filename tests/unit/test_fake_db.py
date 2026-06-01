@@ -52,7 +52,7 @@ async def fake_db():
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_add_get_task
-async def test_fake_db_add_get_task(fake_db):
+async def test_fake_db_add_get_task(fake_db) -> None:
     """add_task then get_task returns TaskModel with auto-incremented ID"""
     task = await fake_db.add_task(label="test")
     assert task.task_id == 1
@@ -72,7 +72,7 @@ async def test_fake_db_add_get_task(fake_db):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_add_task_increments_id
-async def test_fake_db_add_task_increments_id(fake_db):
+async def test_fake_db_add_task_increments_id(fake_db) -> None:
     """each add_task gets an incremented task_id"""
     t1 = await fake_db.add_task(label="a")
     t2 = await fake_db.add_task(label="b")
@@ -87,7 +87,7 @@ async def test_fake_db_add_task_increments_id(fake_db):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_add_get_all_nodes
-async def test_fake_db_add_get_all_nodes(fake_db):
+async def test_fake_db_add_get_all_nodes(fake_db) -> None:
     """add_node stores nodes, get_all_nodes returns all"""
     n1 = await fake_db.add_node("10.0.0.1", "root")
     n2 = await fake_db.add_node("10.0.0.2", "admin", port=2222)
@@ -107,7 +107,7 @@ async def test_fake_db_add_get_all_nodes(fake_db):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_status_transitions
-async def test_fake_db_status_transitions(fake_db):
+async def test_fake_db_status_transitions(fake_db) -> None:
     """task status transitions through RUNNING to DONE"""
     await fake_db.add_task(label="job")
 
@@ -129,7 +129,7 @@ async def test_fake_db_status_transitions(fake_db):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_get_node_none
-async def test_fake_db_get_node_none(fake_db):
+async def test_fake_db_get_node_none(fake_db) -> None:
     """returns None for unknown IP"""
     assert await fake_db.get_node("unknown") is None
 
@@ -141,7 +141,7 @@ async def test_fake_db_get_node_none(fake_db):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_get_task_none
-async def test_fake_db_get_task_none(fake_db):
+async def test_fake_db_get_task_none(fake_db) -> None:
     """returns None for unknown task_id"""
     assert await fake_db.get_task(999) is None
 
@@ -153,7 +153,7 @@ async def test_fake_db_get_task_none(fake_db):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_enable_disable_node
-async def test_fake_db_enable_disable_node(fake_db):
+async def test_fake_db_enable_disable_node(fake_db) -> None:
     """enable_node and disable_node toggle enabled flag"""
     await fake_db.add_node("10.0.0.1", "root", enabled=False)
     node = await fake_db.get_node("10.0.0.1")
@@ -175,7 +175,7 @@ async def test_fake_db_enable_disable_node(fake_db):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_remove_node
-async def test_fake_db_remove_node(fake_db):
+async def test_fake_db_remove_node(fake_db) -> None:
     """remove_node deletes the node"""
     await fake_db.add_node("10.0.0.1", "root")
     await fake_db.remove_node("10.0.0.1")
@@ -189,7 +189,7 @@ async def test_fake_db_remove_node(fake_db):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_fake_db_set_task_error
-async def test_fake_db_set_task_error(fake_db):
+async def test_fake_db_set_task_error(fake_db) -> None:
     """embeds error in metadata and marks DONE"""
     await fake_db.add_task(label="job")
     await fake_db.set_task_error(1, {"key": "val"}, "oops")

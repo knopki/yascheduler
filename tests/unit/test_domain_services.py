@@ -38,7 +38,7 @@ from yascheduler.domain.services import match_task_to_node
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_match_found
-def test_match_found():
+def test_match_found() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=1, label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -54,7 +54,7 @@ def test_match_found():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_no_compatible_machine
-def test_no_compatible_machine():
+def test_no_compatible_machine() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=2, label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -70,7 +70,7 @@ def test_no_compatible_machine():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_all_busy_machines
-def test_all_busy_machines():
+def test_all_busy_machines() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=3, label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -91,7 +91,7 @@ def test_all_busy_machines():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_empty_list
-def test_empty_list():
+def test_empty_list() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=4, label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -106,7 +106,7 @@ def test_empty_list():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_multiple_compatible_returns_first
-def test_multiple_compatible_returns_first():
+def test_multiple_compatible_returns_first() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=5, label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -124,7 +124,7 @@ def test_multiple_compatible_returns_first():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_multiple_machines_skips_busy
-def test_multiple_machines_skips_busy():
+def test_multiple_machines_skips_busy() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=6, label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))

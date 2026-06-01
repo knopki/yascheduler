@@ -22,8 +22,8 @@
 #   LAST_CHANGE: v1.0.0 - Initial data model unit tests
 # END_CHANGE_SUMMARY
 
-import pytest
 import attrs
+import pytest
 
 from yascheduler.db import NodeModel, TaskModel, TaskStatus
 
@@ -35,7 +35,7 @@ from yascheduler.db import NodeModel, TaskModel, TaskStatus
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_task_status_values
-def test_task_status_values():
+def test_task_status_values() -> None:
     assert TaskStatus.TO_DO == 0
     assert TaskStatus.RUNNING == 1
     assert TaskStatus.DONE == 2
@@ -48,7 +48,7 @@ def test_task_status_values():
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_task_status_is_int
-def test_task_status_is_int():
+def test_task_status_is_int() -> None:
     assert isinstance(TaskStatus.TO_DO, int)
     assert isinstance(TaskStatus.RUNNING, int)
     assert isinstance(TaskStatus.DONE, int)
@@ -61,7 +61,7 @@ def test_task_status_is_int():
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_taskmodel_construction
-def test_taskmodel_construction():
+def test_taskmodel_construction() -> None:
     task = TaskModel(
         task_id=1,
         label="test",
@@ -85,7 +85,7 @@ def test_taskmodel_construction():
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_taskmodel_frozen_immutable
-def test_taskmodel_frozen_immutable():
+def test_taskmodel_frozen_immutable() -> None:
     task = TaskModel(task_id=1, label="test", ip="10.0.0.1", status=TaskStatus.TO_DO)
     with pytest.raises(attrs.exceptions.FrozenInstanceError):
         task.label = "new"  # type: ignore[misc]
@@ -98,7 +98,7 @@ def test_taskmodel_frozen_immutable():
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_taskmodel_hash_deterministic
-def test_taskmodel_hash_deterministic():
+def test_taskmodel_hash_deterministic() -> None:
     t1 = TaskModel(task_id=1, label="test", ip="10.0.0.1", status=TaskStatus.TO_DO)
     t2 = TaskModel(task_id=1, label="test", ip="10.0.0.1", status=TaskStatus.TO_DO)
     assert hash(t1) == hash(t2)
@@ -111,7 +111,7 @@ def test_taskmodel_hash_deterministic():
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_nodemodel_defaults
-def test_nodemodel_defaults():
+def test_nodemodel_defaults() -> None:
     node = NodeModel(ip="10.0.0.1", ncpus=4)
     assert node.ip == "10.0.0.1"
     assert node.ncpus == 4
@@ -128,7 +128,7 @@ def test_nodemodel_defaults():
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_nodemodel_all_args
-def test_nodemodel_all_args():
+def test_nodemodel_all_args() -> None:
     node = NodeModel(
         ip="10.0.0.1",
         ncpus=4,

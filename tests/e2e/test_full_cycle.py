@@ -21,15 +21,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-from yascheduler.config import Config
 from yascheduler.db import DB, TaskStatus
 from yascheduler.di import make_cli_deps, make_daemon
 from yascheduler.remote_machine import RemoteMachine
+
+if TYPE_CHECKING:
+    from yascheduler.config import Config
 
 log = logging.getLogger("e2e.test_full_cycle")
 

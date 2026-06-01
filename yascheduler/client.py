@@ -85,7 +85,7 @@ class Yascheduler:
         self,
         config_path: Union[PurePath, str] = CONFIG_FILE,
         logger: Optional[logging.Logger] = None,
-    ):
+    ) -> None:
         self.config = Config.from_config_parser(config_path)
         self._logger = logger
 

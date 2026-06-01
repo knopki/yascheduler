@@ -20,17 +20,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pg8000.native import Connection
 
-from yascheduler.config import ConfigDb
-
 from .exceptions import UnitOfWorkNotInitializedError
-
 from .postgres import PostgresNodeRepository, PostgresTaskRepository
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from yascheduler.config import ConfigDb
 
 T = TypeVar("T")
 

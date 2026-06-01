@@ -30,8 +30,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from yascheduler.config import Engine, EngineRepository
-from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 from yascheduler.di import CLIDeps
+from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -109,7 +109,7 @@ def make_task(task_id=1, status=TaskStatus.RUNNING, label="test", ip="10.0.0.1")
 class TestSubmit:
     """Behavioral tests for the ``submit`` CLI command."""
 
-    def test_submit_happy_path(self, tmp_path, capsys, monkeypatch):
+    def test_submit_happy_path(self, tmp_path, capsys, monkeypatch) -> None:
         """Submit a valid script: prints task ID, calls deps.submit with correct args."""
         script = tmp_path / "test.in"
         script.write_text("LABEL = Test job\nENGINE = g09\n")
@@ -140,7 +140,7 @@ class TestSubmit:
         assert call_args[0][2] == "g09"  # engine_name
         assert "local_folder" in call_args[0][1]  # metadata
 
-    def test_submit_missing_script(self, capsys):
+    def test_submit_missing_script(self, capsys) -> None:
         """Non-existent script raises ValueError with 'not a file'."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -156,7 +156,7 @@ class TestSubmit:
             with pytest.raises(ValueError, match="not a file"):
                 submit()
 
-    def test_submit_no_engine_key(self, tmp_path, capsys):
+    def test_submit_no_engine_key(self, tmp_path, capsys) -> None:
         """Script without ENGINE= line raises ValueError."""
         script = tmp_path / "test.in"
         script.write_text("LABEL = Test job\nSOMETHING = else\n")
@@ -175,7 +175,7 @@ class TestSubmit:
             with pytest.raises(ValueError, match="not defined an engine"):
                 submit()
 
-    def test_submit_unsupported_engine(self, tmp_path, capsys):
+    def test_submit_unsupported_engine(self, tmp_path, capsys) -> None:
         """Script with unknown ENGINE= raises ValueError 'not supported'."""
         script = tmp_path / "test.in"
         script.write_text("LABEL = Test\nENGINE = unknown\n")
@@ -200,7 +200,7 @@ class TestSubmit:
 class TestCheckStatus:
     """Behavioral tests for the ``check_status`` CLI command."""
 
-    def test_check_status_default_listing(self, capsys):
+    def test_check_status_default_listing(self, capsys) -> None:
         """Default mode prints task_id and status name for RUNNING and TO_DO tasks."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -225,7 +225,7 @@ class TestCheckStatus:
         assert "1   RUNNING" in out
         assert "2   TO_DO" in out
 
-    def test_check_status_info_mode(self, capsys):
+    def test_check_status_info_mode(self, capsys) -> None:
         """Info mode (-i) prints tab-separated task details."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -255,7 +255,7 @@ class TestCheckStatus:
         # Verify tab-separated format
         assert "\t" in out
 
-    def test_check_status_job_filter(self, capsys):
+    def test_check_status_job_filter(self, capsys) -> None:
         """Job filter (-j) calls list_by_jobs and prints results."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -283,7 +283,7 @@ class TestCheckStatus:
 class TestShowNodes:
     """Behavioral tests for the ``show_nodes`` CLI command."""
 
-    def test_show_nodes_with_tasks(self, capsys):
+    def test_show_nodes_with_tasks(self, capsys) -> None:
         """Show nodes with running tasks: prints formatted node lines."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -322,7 +322,7 @@ class TestShowNodes:
         assert "(task_id=-)" in out
         assert "hetzner" in out
 
-    def test_show_nodes_empty(self, capsys):
+    def test_show_nodes_empty(self, capsys) -> None:
         """No nodes and no tasks: produces no output."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -346,7 +346,7 @@ class TestShowNodes:
 class TestManageNode:
     """Behavioral tests for the ``manage_node`` CLI command."""
 
-    def test_manage_node_add_new(self, capsys):
+    def test_manage_node_add_new(self, capsys) -> None:
         """Add a new host: calls RemoteMachine.create, adds node, prints 'Added host'."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -381,7 +381,7 @@ class TestManageNode:
         assert added_node.port == 22
         assert added_node.ncpus == 0
 
-    def test_manage_node_add_existing(self, capsys):
+    def test_manage_node_add_existing(self, capsys) -> None:
         """Add a host already in DB: prints 'already in DB', returns False."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -403,7 +403,7 @@ class TestManageNode:
         out, _ = capsys.readouterr()
         assert "already in DB" in out
 
-    def test_manage_node_remove_hard(self, capsys):
+    def test_manage_node_remove_hard(self, capsys) -> None:
         """Hard remove: marks running tasks DONE, removes node."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -434,7 +434,7 @@ class TestManageNode:
         uow.nodes.remove.assert_called_once_with("10.0.0.1")
         uow.commit.assert_called_once()
 
-    def test_manage_node_remove_soft_with_tasks(self, capsys):
+    def test_manage_node_remove_soft_with_tasks(self, capsys) -> None:
         """Soft remove with running tasks: disables node (not remove)."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -462,7 +462,7 @@ class TestManageNode:
         uow.nodes.remove.assert_not_called()
         uow.commit.assert_called_once()
 
-    def test_manage_node_remove_soft_no_tasks(self, capsys):
+    def test_manage_node_remove_soft_no_tasks(self, capsys) -> None:
         """Soft remove with no running tasks: removes node immediately."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -490,7 +490,7 @@ class TestManageNode:
         uow.nodes.disable.assert_not_called()
         uow.commit.assert_called_once()
 
-    def test_manage_node_remove_nonexistent(self, capsys):
+    def test_manage_node_remove_nonexistent(self, capsys) -> None:
         """Remove a host not in DB: prints 'NOT in DB', returns False."""
         config = make_mock_config()
         uow = make_mock_uow()

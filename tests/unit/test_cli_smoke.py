@@ -30,7 +30,7 @@ import inspect
 import sys
 
 
-def test_utils_import_does_not_import_scheduler():
+def test_utils_import_does_not_import_scheduler() -> None:
     """Importing yascheduler.utils must not trigger yascheduler.scheduler import."""
     saved = sys.modules.pop("yascheduler.scheduler", None)
     try:
@@ -44,7 +44,7 @@ def test_utils_import_does_not_import_scheduler():
             sys.modules["yascheduler.scheduler"] = saved
 
 
-def _check_to_sync_decorated(func):
+def _check_to_sync_decorated(func) -> None:
     """Assert that *func* is decorated with ``@to_sync``.
 
     The ``@to_sync`` decorator wraps an ``async`` function via ``functools.wraps``,
@@ -64,31 +64,31 @@ class TestCLIFunctions:
 
     # --- @to_sync-decorated commands ---
 
-    def test_submit_function_exists(self):
+    def test_submit_function_exists(self) -> None:
         """``submit`` exists and is decorated with @to_sync."""
         from yascheduler.utils import submit
 
         _check_to_sync_decorated(submit)
 
-    def test_check_status_function_exists(self):
+    def test_check_status_function_exists(self) -> None:
         """``check_status`` exists and is decorated with @to_sync."""
         from yascheduler.utils import check_status
 
         _check_to_sync_decorated(check_status)
 
-    def test_init_function_exists(self):
+    def test_init_function_exists(self) -> None:
         """``init`` exists and is decorated with @to_sync."""
         from yascheduler.utils import init
 
         _check_to_sync_decorated(init)
 
-    def test_show_nodes_function_exists(self):
+    def test_show_nodes_function_exists(self) -> None:
         """``show_nodes`` exists and is decorated with @to_sync."""
         from yascheduler.utils import show_nodes
 
         _check_to_sync_decorated(show_nodes)
 
-    def test_manage_node_function_exists(self):
+    def test_manage_node_function_exists(self) -> None:
         """``manage_node`` exists and is decorated with @to_sync."""
         from yascheduler.utils import manage_node
 
@@ -96,7 +96,7 @@ class TestCLIFunctions:
 
     # --- daemonize (NOT @to_sync; uses make_daemon internally) ---
 
-    def test_daemonize_function_exists_and_uses_make_daemon(self):
+    def test_daemonize_function_exists_and_uses_make_daemon(self) -> None:
         """``daemonize`` exists, is a plain (not @to_sync) function, and references make_daemon."""
         from yascheduler.utils import daemonize
 

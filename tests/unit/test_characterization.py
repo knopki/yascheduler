@@ -38,7 +38,9 @@ class TestSchedulerCreateNewTask:
     @pytest.mark.asyncio
     @patch("yascheduler.scheduler.submit_task", new=AsyncMock(return_value=42))
     @patch("yascheduler.scheduler.make_cli_deps")
-    async def test_create_new_task_delegates_to_submit_task(self, mock_make_deps):
+    async def test_create_new_task_delegates_to_submit_task(
+        self, mock_make_deps
+    ) -> None:
         """create_new_task passes label, metadata, engine_name to submit_task and fetches result via db.get_task."""
         # Arrange
         mock_deps = MagicMock()
@@ -83,7 +85,7 @@ class TestSchedulerStart:
 
     @pytest.mark.asyncio
     @patch("yascheduler.scheduler.make_daemon")
-    async def test_start_delegates_to_orchestrator(self, mock_make_daemon):
+    async def test_start_delegates_to_orchestrator(self, mock_make_daemon) -> None:
         """start() creates Orchestrator via make_daemon, transfers resources, and calls orchestrator.start()."""
         # Arrange
         from yascheduler.scheduler import Scheduler
@@ -111,7 +113,7 @@ class TestSchedulerStop:
     """Scheduler.stop delegates to Orchestrator when available, falls back otherwise."""
 
     @pytest.mark.asyncio
-    async def test_stop_delegates_to_orchestrator_when_available(self):
+    async def test_stop_delegates_to_orchestrator_when_available(self) -> None:
         """stop() calls orchestrator.stop() when _orchestrator is set."""
         from yascheduler.scheduler import Scheduler
 
@@ -127,7 +129,7 @@ class TestSchedulerStop:
         mock_orch.stop.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_stop_falls_back_to_clouds_and_db_when_no_orchestrator(self):
+    async def test_stop_falls_back_to_clouds_and_db_when_no_orchestrator(self) -> None:
         """stop() calls clouds.stop() and db.close() when _orchestrator is None."""
         from yascheduler.scheduler import Scheduler
 
@@ -155,7 +157,7 @@ class TestClientQueueSubmitTaskAsync:
     @patch("yascheduler.di.make_cli_deps")
     async def test_queue_submit_task_async_uses_cli_deps(
         self, mock_make_cli_deps, mock_from_cfg
-    ):
+    ) -> None:
         """queue_submit_task_async calls deps.submit() via make_cli_deps, not Scheduler."""
         from yascheduler.client import Yascheduler
 

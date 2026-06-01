@@ -22,19 +22,23 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import PurePath
+from typing import TYPE_CHECKING
 
 from .adapters.persistence.postgres_uow import PostgresUnitOfWork
 from .adapters.ssh.gateway import SSHMachineGateway
 from .application.orchestrator import Orchestrator
 from .application.submit_task import submit_task
-from .application.uow import AbstractUnitOfWork
 from .clouds import CloudAPIManager
-from .config import Config, EngineRepository
 from .db import DB
 from .remote_machine import RemoteMachineRepository
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import PurePath
+
+    from .application.uow import AbstractUnitOfWork
+    from .config import Config, EngineRepository
 
 
 # START_CONTRACT: CLIDeps

@@ -49,7 +49,7 @@ from yascheduler.domain.exceptions import (
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_domain_error_is_exception
-def test_domain_error_is_exception():
+def test_domain_error_is_exception() -> None:
     assert issubclass(DomainError, Exception)
     try:
         raise DomainError("test")
@@ -65,7 +65,7 @@ def test_domain_error_is_exception():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_validation_error_hierarchy
-def test_validation_error_hierarchy():
+def test_validation_error_hierarchy() -> None:
     assert issubclass(ValidationError, DomainError)
     assert issubclass(ValidationError, Exception)
     # ValidationError should NOT be a direct subclass of Exception
@@ -81,7 +81,7 @@ def test_validation_error_hierarchy():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_unsupported_engine_error_fields
-def test_unsupported_engine_error_fields():
+def test_unsupported_engine_error_fields() -> None:
     exc = UnsupportedEngineError(engine_name="gromacs")
     assert exc.engine_name == "gromacs"
     assert "unsupported engine" in str(exc)
@@ -95,7 +95,7 @@ def test_unsupported_engine_error_fields():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_missing_input_file_error_fields
-def test_missing_input_file_error_fields():
+def test_missing_input_file_error_fields() -> None:
     exc = MissingInputFileError(engine_name="gromacs", filename="topol.top")
     assert exc.engine_name == "gromacs"
     assert exc.filename == "topol.top"
@@ -111,7 +111,7 @@ def test_missing_input_file_error_fields():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_task_error_hierarchy
-def test_task_error_hierarchy():
+def test_task_error_hierarchy() -> None:
     assert issubclass(TaskError, DomainError)
     assert issubclass(TaskError, Exception)
     assert TaskError.__mro__[1] is DomainError, (
@@ -126,7 +126,7 @@ def test_task_error_hierarchy():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_task_already_allocated_error
-def test_task_already_allocated_error():
+def test_task_already_allocated_error() -> None:
     exc = TaskAlreadyAllocatedError(task_id=42)
     assert exc.task_id == 42
     assert "already allocated" in str(exc)
@@ -140,7 +140,7 @@ def test_task_already_allocated_error():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_task_not_allocated_error
-def test_task_not_allocated_error():
+def test_task_not_allocated_error() -> None:
     exc = TaskNotAllocatedError(task_id=99)
     assert exc.task_id == 99
     assert "not allocated" in str(exc)
@@ -154,7 +154,7 @@ def test_task_not_allocated_error():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_machine_busy_error
-def test_machine_busy_error():
+def test_machine_busy_error() -> None:
     exc = MachineBusyError(ip="10.0.0.1")
     assert exc.ip == "10.0.0.1"
     assert "busy" in str(exc)
@@ -168,7 +168,7 @@ def test_machine_busy_error():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_scheduling_error_hierarchy
-def test_scheduling_error_hierarchy():
+def test_scheduling_error_hierarchy() -> None:
     assert issubclass(SchedulingError, DomainError)
     assert issubclass(SchedulingError, Exception)
     assert SchedulingError.__mro__[1] is DomainError, (
@@ -183,7 +183,7 @@ def test_scheduling_error_hierarchy():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_no_compatible_node_error
-def test_no_compatible_node_error():
+def test_no_compatible_node_error() -> None:
     platforms = ["linux", "gpu"]
     exc = NoCompatibleNodeError(task_id=7, platforms=platforms)
     assert exc.task_id == 7
@@ -198,7 +198,7 @@ def test_no_compatible_node_error():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_cloud_capacity_exhausted_error
-def test_cloud_capacity_exhausted_error():
+def test_cloud_capacity_exhausted_error() -> None:
     exc = CloudCapacityExhaustedError(task_id=5)
     assert exc.task_id == 5
     assert "capacity exhausted" in str(exc)
@@ -212,7 +212,7 @@ def test_cloud_capacity_exhausted_error():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_all_exceptions_importable
-def test_all_exceptions_importable():
+def test_all_exceptions_importable() -> None:
     """Verify all 11 exception classes import correctly by instantiating each once."""
     instances = [
         DomainError(),

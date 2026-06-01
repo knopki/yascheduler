@@ -77,7 +77,7 @@ def _read_input_files(engine, local_folder: str) -> dict[str, str]:
 #   LINKS: M-UTILS, M-DI
 # END_CONTRACT: submit
 @to_sync
-async def submit():
+async def submit() -> None:
     parser = argparse.ArgumentParser(
         description="Submit task to yascheduler via AiiDA script"
     )
@@ -307,7 +307,7 @@ async def _print_status_view(
 #   LINKS: M-UTILS, M-DI, M-APPLICATION-UOW, M-REMOTE
 # END_CONTRACT: check_status
 @to_sync
-async def check_status():
+async def check_status() -> None:
     args = _parse_status_args()
     config = Config.from_config_parser(CONFIG_FILE)
     deps = make_cli_deps(config)
@@ -344,7 +344,7 @@ async def check_status():
 #   LINKS: M-UTILS, M-DB
 # END_CONTRACT: init
 @to_sync
-async def init():
+async def init() -> None:
     # service initialization
     install_path = Path(__file__).parent
     # check for systemd (exit status is 0 if there is a process)
@@ -356,7 +356,7 @@ async def init():
     await _init_db(install_path)
 
 
-def _init_systemd(install_path: Path):
+def _init_systemd(install_path: Path) -> None:
     print("Installing systemd service")
     src_unit_file = install_path / "data/yascheduler.service"
     unit_file = Path("/lib/systemd/system/yascheduler.service")
@@ -371,7 +371,7 @@ def _init_systemd(install_path: Path):
         unit_file.write_text(systemd_script, "utf-8")
 
 
-def _init_sysv(install_path: Path):
+def _init_sysv(install_path: Path) -> None:
     print("Installing SysV service")
     src_startup_file = install_path / "data/yascheduler.sh"
     startup_file = Path("/etc/init.d/yascheduler")
@@ -387,7 +387,7 @@ def _init_sysv(install_path: Path):
         os.chmod(startup_file, 0o755)
 
 
-async def _init_db(install_path: Path):
+async def _init_db(install_path: Path) -> None:
     config = Config.from_config_parser(CONFIG_FILE)
     db = await DB.create(config.db, automigrate=False)
     schema = (
@@ -411,7 +411,7 @@ async def _init_db(install_path: Path):
 #   LINKS: M-UTILS, M-DI, M-APPLICATION-UOW
 # END_CONTRACT: show_nodes
 @to_sync
-async def show_nodes():
+async def show_nodes() -> None:
     config = Config.from_config_parser(CONFIG_FILE)
     deps = make_cli_deps(config)
 
@@ -585,7 +585,7 @@ async def manage_node():
 #   SIDE_EFFECTS: Creates Orchestrator via DI, sets up signal handlers, runs event loop
 #   LINKS: M-UTILS, M-DI
 # END_CONTRACT: daemonize
-def daemonize(log_file: Optional[Union[str, Path]] = None):
+def daemonize(log_file: Optional[Union[str, Path]] = None) -> None:
     from .scheduler import get_logger
 
     parser = argparse.ArgumentParser(description="Start yascheduler daemon")
@@ -601,7 +601,9 @@ def daemonize(log_file: Optional[Union[str, Path]] = None):
     logger = get_logger(log_file, level=logging._nameToLevel[args.log_level])
     config = Config.from_config_parser(CONFIG_FILE)
 
-    async def on_signal(orch, shield: Sequence[asyncio.Task], sig: signal.Signals):
+    async def on_signal(
+        orch, shield: Sequence[asyncio.Task], sig: signal.Signals
+    ) -> None:
         signame = signal.strsignal(sig)
         logger.info(f"Received signal {signame}")
         if sig in [signal.SIGTERM, signal.SIGINT]:
@@ -615,7 +617,7 @@ def daemonize(log_file: Optional[Union[str, Path]] = None):
             await asyncio.sleep(0.25)
             logger.info("Done")
 
-    async def run():
+    async def run() -> None:
         orch = await make_daemon(config, logger)
 
         loop = asyncio.get_running_loop()

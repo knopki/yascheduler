@@ -100,7 +100,7 @@ async def check_is_debian_like(conn: SSHClientConnection) -> bool:
     os_release = await _get_os_release(conn)
     if not os_release:
         return False
-    parts = cast(tuple[str, str, str], os_release)
+    parts = cast("tuple[str, str, str]", os_release)
     return "debian" in parts[0:2]
 
 
@@ -129,7 +129,7 @@ async def _check_debian_version(version: str, conn: SSHClientConnection) -> bool
     os_release = await _get_os_release(conn)
     if not os_release:
         return False
-    parts = cast(tuple[str, str, str], os_release)
+    parts = cast("tuple[str, str, str]", os_release)
     return len(parts) >= 3 and parts[2] == version
 
 

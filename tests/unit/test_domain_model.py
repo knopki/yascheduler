@@ -66,15 +66,15 @@ from yascheduler.domain.model import (
 #   LINKS: [M-DOMAIN-MODEL: TaskStatus]
 # END_CONTRACT: test_task_status_values
 class TestTaskStatus:
-    def test_values(self):
+    def test_values(self) -> None:
         assert TaskStatus.TO_DO == 0
         assert TaskStatus.RUNNING == 1
         assert TaskStatus.DONE == 2
 
-    def test_is_int(self):
+    def test_is_int(self) -> None:
         assert isinstance(TaskStatus.TO_DO, int)
 
-    def test_members(self):
+    def test_members(self) -> None:
         assert TaskStatus.TO_DO is TaskStatus(0)
         assert TaskStatus.RUNNING is TaskStatus(1)
         assert TaskStatus.DONE is TaskStatus(2)
@@ -88,10 +88,10 @@ class TestTaskStatus:
 #   LINKS: [M-DOMAIN-MODEL: MachineState]
 # END_CONTRACT: test_machine_state_distinct
 class TestMachineState:
-    def test_free_not_equal_busy(self):
+    def test_free_not_equal_busy(self) -> None:
         assert MachineState.FREE != MachineState.BUSY
 
-    def test_members(self):
+    def test_members(self) -> None:
         assert MachineState.FREE is MachineState(1)
         assert MachineState.BUSY is MachineState(2)
 
@@ -104,13 +104,13 @@ class TestMachineState:
 #   LINKS: [M-DOMAIN-MODEL: ProcessResult]
 # END_CONTRACT: test_process_result
 class TestProcessResult:
-    def test_defaults(self):
+    def test_defaults(self) -> None:
         r = ProcessResult(exit_code=0)
         assert r.exit_code == 0
         assert r.stdout == ""
         assert r.stderr == ""
 
-    def test_all_fields(self):
+    def test_all_fields(self) -> None:
         r = ProcessResult(exit_code=1, stdout="out", stderr="err")
         assert r.exit_code == 1
         assert r.stdout == "out"
@@ -125,7 +125,7 @@ class TestProcessResult:
 #   LINKS: [M-DOMAIN-MODEL: TaskContext]
 # END_CONTRACT: test_task_context
 class TestTaskContext:
-    def test_known_fields(self):
+    def test_known_fields(self) -> None:
         ctx = TaskContext(engine="cp2k", remote_folder="/r", local_folder="/l")
         assert ctx.engine == "cp2k"
         assert ctx.remote_folder == "/r"
@@ -134,16 +134,16 @@ class TestTaskContext:
         assert ctx.webhook_custom_params == {}
         assert ctx.error is None
 
-    def test_extra_defaults_to_empty_dict(self):
+    def test_extra_defaults_to_empty_dict(self) -> None:
         ctx = TaskContext(engine="cp2k")
         assert ctx.extra == {}
 
-    def test_extra_preserves_arbitrary_keys(self):
+    def test_extra_preserves_arbitrary_keys(self) -> None:
         ctx = TaskContext(engine="cp2k", extra={"input_xyz": "mol.xyz", "nproc": 4})
         assert ctx.extra["input_xyz"] == "mol.xyz"
         assert ctx.extra["nproc"] == 4
 
-    def test_to_metadata_roundtrip(self):
+    def test_to_metadata_roundtrip(self) -> None:
         ctx = TaskContext(
             engine="cp2k",
             remote_folder="/remote",
@@ -156,7 +156,7 @@ class TestTaskContext:
         restored = TaskContext.from_metadata(metadata)
         assert restored == ctx
 
-    def test_to_metadata_known_fields(self):
+    def test_to_metadata_known_fields(self) -> None:
         ctx = TaskContext(
             engine="cp2k",
             remote_folder="/r",
@@ -174,7 +174,7 @@ class TestTaskContext:
         assert restored.webhook_custom_params == {"p1": "v1", "p2": "v2"}
         assert restored.error == "something went wrong"
 
-    def test_from_metadata_extra_keys(self):
+    def test_from_metadata_extra_keys(self) -> None:
         metadata: dict[str, object] = {
             "engine": "cp2k",
             "input_xyz": "mol.xyz",
@@ -189,7 +189,7 @@ class TestTaskContext:
             "some_unknown": "value",
         }
 
-    def test_to_metadata_omits_none_values(self):
+    def test_to_metadata_omits_none_values(self) -> None:
         ctx = TaskContext(engine="cp2k")
         metadata = ctx.to_metadata()
         assert "remote_folder" not in metadata
@@ -206,7 +206,7 @@ class TestTaskContext:
     #   SIDE_EFFECTS: None
     #   LINKS:
     # END_CONTRACT: test_to_metadata_preserves_webhook_custom_params
-    def test_to_metadata_preserves_webhook_custom_params(self):
+    def test_to_metadata_preserves_webhook_custom_params(self) -> None:
         """webhook_custom_params empty and non-empty survive serialization roundtrip."""
         ctx = TaskContext(engine="fleur", webhook_custom_params={"key": "val"})
         meta = ctx.to_metadata()
@@ -221,7 +221,7 @@ class TestTaskContext:
     #   SIDE_EFFECTS: None
     #   LINKS:
     # END_CONTRACT: test_to_metadata_preserves_empty_webhook_custom_params
-    def test_to_metadata_preserves_empty_webhook_custom_params(self):
+    def test_to_metadata_preserves_empty_webhook_custom_params(self) -> None:
         """Empty webhook_custom_params is not dropped."""
         ctx = TaskContext(engine="fleur")
         meta = ctx.to_metadata()
@@ -238,12 +238,12 @@ class TestTaskContext:
 #   LINKS: [M-DOMAIN-MODEL: Engine, MissingInputFileError]
 # END_CONTRACT: test_engine_validate_inputs
 class TestEngine:
-    def test_validate_inputs_passes_when_all_present(self):
+    def test_validate_inputs_passes_when_all_present(self) -> None:
         engine = Engine(name="cp2k", spawn="cp2k", input_files=("inp", "xyz"))
         ctx = TaskContext(engine="cp2k", extra={"inp": "content", "xyz": "content"})
         engine.validate_inputs(ctx)  # no exception
 
-    def test_validate_inputs_raises_when_file_missing(self):
+    def test_validate_inputs_raises_when_file_missing(self) -> None:
         engine = Engine(name="cp2k", spawn="cp2k", input_files=("inp", "xyz"))
         ctx = TaskContext(engine="cp2k", extra={"inp": "content"})
         with pytest.raises(MissingInputFileError) as exc_info:
@@ -251,7 +251,7 @@ class TestEngine:
         assert "xyz" in str(exc_info.value)
         assert "cp2k" in str(exc_info.value)
 
-    def test_validate_inputs_no_input_files(self):
+    def test_validate_inputs_no_input_files(self) -> None:
         engine = Engine(name="cp2k", spawn="cp2k")
         ctx = TaskContext(engine="cp2k")
         engine.validate_inputs(ctx)  # no exception
@@ -271,7 +271,7 @@ class TestTask:
         base.update(overrides)
         return Task(**base)  # type: ignore[arg-type]
 
-    def test_construction_default_status(self):
+    def test_construction_default_status(self) -> None:
         task = self.make_task()
         assert task.task_id == 1
         assert task.label == "test"
@@ -279,12 +279,12 @@ class TestTask:
         assert task.status == TaskStatus.TO_DO
         assert task.allocated_ip is None
 
-    def test_immutability(self):
+    def test_immutability(self) -> None:
         task = self.make_task()
         with pytest.raises(FrozenInstanceError):
             task.status = TaskStatus.RUNNING  # type: ignore[misc]
 
-    def test_allocate_to(self):
+    def test_allocate_to(self) -> None:
         task = self.make_task()
         allocated = task.allocate_to("10.0.0.1")
         assert allocated.allocated_ip == "10.0.0.1"
@@ -293,39 +293,39 @@ class TestTask:
         # original unchanged
         assert task.allocated_ip is None
 
-    def test_allocate_to_already_allocated(self):
+    def test_allocate_to_already_allocated(self) -> None:
         task = self.make_task(allocated_ip="10.0.0.1")
         with pytest.raises(TaskAlreadyAllocatedError) as exc_info:
             task.allocate_to("10.0.0.2")
         assert "1" in str(exc_info.value)
 
-    def test_mark_running(self):
+    def test_mark_running(self) -> None:
         task = self.make_task()
         running = task.allocate_to("1.2.3.4").mark_running()
         assert running.status == TaskStatus.RUNNING
         assert running.task_id == task.task_id
 
-    def test_complete_on_running(self):
+    def test_complete_on_running(self) -> None:
         task = self.make_task()
         running = task.allocate_to("1.2.3.4").mark_running()
         done = running.complete()
         assert done.status == TaskStatus.DONE
         assert done.context.error is None
 
-    def test_complete_on_todo_raises(self):
+    def test_complete_on_todo_raises(self) -> None:
         task = self.make_task()
         with pytest.raises(TaskNotRunningError) as exc_info:
             task.complete()
         assert "1" in str(exc_info.value)
 
-    def test_fail_on_running(self):
+    def test_fail_on_running(self) -> None:
         task = self.make_task()
         running = task.allocate_to("1.2.3.4").mark_running()
         failed = running.fail("out of memory")
         assert failed.status == TaskStatus.DONE
         assert failed.context.error == "out of memory"
 
-    def test_fail_on_todo_raises(self):
+    def test_fail_on_todo_raises(self) -> None:
         task = self.make_task()
         with pytest.raises(TaskNotRunningError) as exc_info:
             task.fail("reason")
@@ -340,7 +340,7 @@ class TestTask:
 #   LINKS: [M-DOMAIN-MODEL: Node]
 # END_CONTRACT: test_node
 class TestNode:
-    def test_defaults(self):
+    def test_defaults(self) -> None:
         node = Node(ip="10.0.0.1", ncpus=4)
         assert node.ip == "10.0.0.1"
         assert node.ncpus == 4
@@ -349,7 +349,7 @@ class TestNode:
         assert node.username == "root"
         assert node.port == 22
 
-    def test_full_construction(self):
+    def test_full_construction(self) -> None:
         node = Node(
             ip="10.0.0.1",
             ncpus=8,
@@ -379,36 +379,36 @@ class TestConnectedMachine:
         defaults.update(overrides)
         return ConnectedMachine(**defaults)  # type: ignore[arg-type]
 
-    def test_is_compatible_free_and_match(self):
+    def test_is_compatible_free_and_match(self) -> None:
         m = self.make_machine(state=MachineState.FREE, platform="linux")
         assert m.is_compatible(("linux", "windows")) is True
 
-    def test_is_compatible_busy_not_match(self):
+    def test_is_compatible_busy_not_match(self) -> None:
         m = self.make_machine(state=MachineState.BUSY, platform="linux")
         assert m.is_compatible(("linux",)) is False
 
-    def test_is_compatible_platform_no_match(self):
+    def test_is_compatible_platform_no_match(self) -> None:
         m = self.make_machine(state=MachineState.FREE, platform="windows")
         assert m.is_compatible(("linux",)) is False
 
-    def test_is_compatible_empty_platforms(self):
+    def test_is_compatible_empty_platforms(self) -> None:
         m = self.make_machine(state=MachineState.FREE, platform="linux")
         assert m.is_compatible(()) is False
 
-    def test_occupy_transitions_to_busy(self):
+    def test_occupy_transitions_to_busy(self) -> None:
         m = self.make_machine(state=MachineState.FREE)
         occupied = m.occupy()
         assert occupied.state == MachineState.BUSY
         # original unchanged
         assert m.state == MachineState.FREE
 
-    def test_occupy_when_already_busy(self):
+    def test_occupy_when_already_busy(self) -> None:
         m = self.make_machine(state=MachineState.BUSY)
         with pytest.raises(MachineBusyError) as exc_info:
             m.occupy()
         assert "10.0.0.1" in str(exc_info.value)
 
-    def test_release_sets_free_and_timestamp(self):
+    def test_release_sets_free_and_timestamp(self) -> None:
         before = time.monotonic()
         m = self.make_machine(state=MachineState.BUSY)
         released = m.release()

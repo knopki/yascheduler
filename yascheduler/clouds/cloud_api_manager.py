@@ -294,7 +294,7 @@ class CloudAPIManager:
     #   SIDE_EFFECTS: Disables and removes node from DB, deletes cloud VM
     #   LINKS: M-CLOUD-MANAGER, M-DB
     # END_CONTRACT: deallocate
-    async def deallocate(self, ip_addr: str):
+    async def deallocate(self, ip_addr: str) -> Optional[bool]:
         node = await self.db.get_node(ip_addr)
         if not node or not node.cloud:
             return

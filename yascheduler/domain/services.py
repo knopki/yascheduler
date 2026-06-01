@@ -17,7 +17,10 @@
 
 from __future__ import annotations
 
-from .model import ConnectedMachine, Engine, Task
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .model import ConnectedMachine, Engine, Task
 
 
 # START_CONTRACT: match_task_to_node

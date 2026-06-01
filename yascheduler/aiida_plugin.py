@@ -23,6 +23,8 @@ Aiida plugin for yascheduler,
 with respect to the supported yascheduler engines
 """
 
+from typing import NoReturn
+
 import aiida.schedulers
 from aiida.common.escaping import escape_for_bash
 from aiida.common.exceptions import FeatureNotAvailable
@@ -46,7 +48,7 @@ class YaschedJobResource(NodeNumberJobResource):
     #   SIDE_EFFECTS: Calls parent constructor with provided arguments
     #   LINKS: M-AIIDA
     # END_CONTRACT: __init__
-    def __init__(self, *_, **kwargs):
+    def __init__(self, *_, **kwargs) -> None:
         super().__init__(**kwargs)
 
 
@@ -119,7 +121,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Logs a warning about unsupported job cancellation
     #   LINKS: M-AIIDA
     # END_CONTRACT: kill_job
-    def kill_job(self, jobid):
+    def kill_job(self, jobid) -> bool:
         """
         Report that job cancellation is not supported by yascheduler.
 
@@ -168,7 +170,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_detailed_jobinfo_command
-    def _get_detailed_jobinfo_command(self, jobid):
+    def _get_detailed_jobinfo_command(self, jobid) -> str:
         """
         Return the command to run to get the detailed information on a job,
         even after the job has finished.
@@ -227,7 +229,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_submit_command
-    def _get_submit_command(self, submit_script):
+    def _get_submit_command(self, submit_script) -> str:
         """
         Return the string to execute to submit a given script.
         """
@@ -292,7 +294,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Raises FeatureNotAvailable exception
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_kill_command
-    def _get_kill_command(self, jobid):
+    def _get_kill_command(self, jobid) -> NoReturn:
         """
         Return the command to kill the job with specified jobid.
         """
@@ -305,7 +307,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _parse_kill_output
-    def _parse_kill_output(self, retval, stdout, stderr):
+    def _parse_kill_output(self, retval, stdout, stderr) -> bool:
         """
         Parse the output of the kill command.
         """

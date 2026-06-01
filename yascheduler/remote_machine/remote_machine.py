@@ -33,24 +33,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from asyncio.locks import Semaphore
-from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from functools import partial
-from pathlib import PurePath
+from typing import TYPE_CHECKING
 
 import backoff
 from asyncssh.client import SSHClient
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
-from asyncssh.process import SSHClientProcess, SSHCompletedProcess
-from asyncssh.public_key import SSHKey
-from asyncssh.sftp import SFTPClient
-from asyncstdlib import all as aall, map as amap
+from asyncstdlib import all as aall
+from asyncstdlib import map as amap
 from attrs import define, field
 
 from yascheduler.domain.model import MachineState
 
-from ..compat import Self
 from .adapters import (
     RemoteMachineAdapter,
     darwin_adapter,
@@ -78,6 +74,16 @@ from .protocol import (
     SSHCheck,
     SSHRetryExc,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Sequence
+    from pathlib import PurePath
+
+    from asyncssh.process import SSHClientProcess, SSHCompletedProcess
+    from asyncssh.public_key import SSHKey
+    from asyncssh.sftp import SFTPClient
+
+    from ..compat import Self
 
 ADAPTERS: Sequence[RemoteMachineAdapter] = [
     debian_10_adapter,
@@ -184,7 +190,7 @@ class RemoteMachineMetadata:
     _busy: bool | None
     free_since: datetime | None
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._busy = None
         self.free_since = datetime.now()
 
@@ -193,7 +199,7 @@ class RemoteMachineMetadata:
         return self._busy
 
     @busy.setter
-    def busy(self, new_busy: bool):
+    def busy(self, new_busy: bool) -> None:
         if new_busy:
             self._busy = True
             self.free_since = None
@@ -357,7 +363,7 @@ class RemoteMachine:
         self._gateway.start_occupancy_check(self.ip, engine)
         self.meta.busy = True
 
-        async def _meta_sync():
+        async def _meta_sync() -> None:
             try:
                 while self.meta.busy is not False:
                     await asyncio.sleep(engine.sleep_interval)

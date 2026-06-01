@@ -46,7 +46,7 @@ from yascheduler.db import DB, TaskStatus
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_add_and_get_node
-async def test_add_and_get_node(db: DB):
+async def test_add_and_get_node(db: DB) -> None:
     """Insert a node and retrieve it; verify all fields match."""
     node = await db.add_node(
         "10.0.0.1", "admin", port=2222, ncpus=8, cloud="azure", enabled=True
@@ -75,7 +75,7 @@ async def test_add_and_get_node(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_get_all_nodes_filtering
-async def test_get_all_nodes_filtering(db: DB):
+async def test_get_all_nodes_filtering(db: DB) -> None:
     """Add enabled and disabled nodes; verify filtered queries."""
     await db.add_node("10.0.0.1", "root", enabled=True)
     await db.add_node("10.0.0.2", "root", enabled=False)
@@ -99,7 +99,7 @@ async def test_get_all_nodes_filtering(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_has_node
-async def test_has_node(db: DB):
+async def test_has_node(db: DB) -> None:
     """Check has_node for existing and non-existing IPs."""
     await db.add_node("10.0.0.1", "root")
 
@@ -114,7 +114,7 @@ async def test_has_node(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_enable_disable_node
-async def test_enable_disable_node(db: DB):
+async def test_enable_disable_node(db: DB) -> None:
     """Toggle node enabled status and verify."""
     await db.add_node("10.0.0.1", "root", enabled=False)
 
@@ -136,7 +136,7 @@ async def test_enable_disable_node(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_remove_node
-async def test_remove_node(db: DB):
+async def test_remove_node(db: DB) -> None:
     """Remove a node and verify it is gone."""
     await db.add_node("10.0.0.1", "root")
     assert await db.has_node("10.0.0.1") is True
@@ -153,7 +153,7 @@ async def test_remove_node(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_count_aggregations
-async def test_count_aggregations(db: DB):
+async def test_count_aggregations(db: DB) -> None:
     """Verify cloud and status aggregation queries."""
     await db.add_node("10.0.0.1", "root", cloud="azure", enabled=True)
     await db.add_node("10.0.0.2", "root", cloud="azure", enabled=False)
@@ -179,7 +179,7 @@ async def test_count_aggregations(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_add_and_get_task
-async def test_add_and_get_task(db: DB):
+async def test_add_and_get_task(db: DB) -> None:
     """Add a task and retrieve it; verify all fields including metadata."""
     meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
     task = await db.add_task(
@@ -207,7 +207,7 @@ async def test_add_and_get_task(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_task_lifecycle
-async def test_task_lifecycle(db: DB):
+async def test_task_lifecycle(db: DB) -> None:
     """Walk a task through TO_DO → RUNNING → DONE and verify each step."""
     meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
     task = await db.add_task(label="sim", metadata=meta)
@@ -233,7 +233,7 @@ async def test_task_lifecycle(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_set_task_error
-async def test_set_task_error(db: DB):
+async def test_set_task_error(db: DB) -> None:
     """set_task_error embeds error in metadata; without error passes metadata unchanged."""
     meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
     task = await db.add_task(label="fail-job", metadata=meta)
@@ -261,7 +261,7 @@ async def test_set_task_error(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_get_tasks_by_status
-async def test_get_tasks_by_status(db: DB):
+async def test_get_tasks_by_status(db: DB) -> None:
     """Filter tasks by status; multiple statuses supported."""
     await db.add_task(label="todo", status=TaskStatus.TO_DO)
     await db.add_task(label="running", status=TaskStatus.RUNNING)
@@ -291,7 +291,7 @@ async def test_get_tasks_by_status(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_get_tasks_by_jobs
-async def test_get_tasks_by_jobs(db: DB):
+async def test_get_tasks_by_jobs(db: DB) -> None:
     """Retrieve tasks by array of IDs; only requested IDs returned."""
     t1 = await db.add_task(label="a")
     await db.add_task(label="b")
@@ -310,7 +310,7 @@ async def test_get_tasks_by_jobs(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_get_task_ids_by_ip_and_status
-async def test_get_task_ids_by_ip_and_status(db: DB):
+async def test_get_task_ids_by_ip_and_status(db: DB) -> None:
     """Filter task IDs by IP and status."""
     ip = "192.168.1.1"
     t1 = await db.add_task(label="x", ip_addr=ip, status=TaskStatus.RUNNING)
@@ -328,7 +328,7 @@ async def test_get_task_ids_by_ip_and_status(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_get_tasks_with_cloud_by_id_status
-async def test_get_tasks_with_cloud_by_id_status(db: DB):
+async def test_get_tasks_with_cloud_by_id_status(db: DB) -> None:
     """JOIN tasks with nodes to get cloud attribute."""
     await db.add_node("10.0.0.1", "root", cloud="azure", enabled=True)
     t = await db.add_task(ip_addr="10.0.0.1", status=TaskStatus.RUNNING)
@@ -354,7 +354,7 @@ async def test_get_tasks_with_cloud_by_id_status(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_add_tmp_node
-async def test_add_tmp_node(db: DB):
+async def test_add_tmp_node(db: DB) -> None:
     """add_tmp_node creates a disabled node with provisional IP."""
     ip = await db.add_tmp_node("azure", "root")
     assert ip.startswith("prov")
@@ -374,7 +374,7 @@ async def test_add_tmp_node(db: DB):
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: test_migrate_idempotency
-async def test_migrate_idempotency(db: DB):
+async def test_migrate_idempotency(db: DB) -> None:
     """Call migrate() twice; no error, tables remain functional."""
     # First migrate (already ran in db fixture, but call again explicitly)
     await db.migrate()

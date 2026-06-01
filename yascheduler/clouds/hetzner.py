@@ -72,22 +72,22 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
 
     try:
         hkey = client.ssh_keys.create(name=key_name, public_key=pub_key)
-        return cast(int, hkey.id)
+        return cast("int", hkey.id)
     except APIException as err:
         if "already" in str(err):
             hkey = client.ssh_keys.get_by_fingerprint(
                 key.get_fingerprint("md5").split(":", maxsplit=1)[1]
             ) or client.ssh_keys.get_by_name(key_name)
             if hkey:
-                return cast(int, hkey.id)
+                return cast("int", hkey.id)
             prefix = "yakey"
             name_len = len(get_rnd_name(prefix))
             for hkey in client.ssh_keys.get_all():
                 if (
-                    cast(str, hkey.name).startswith(prefix)
-                    and len(cast(str, hkey.name)) == name_len
+                    cast("str", hkey.name).startswith(prefix)
+                    and len(cast("str", hkey.name)) == name_len
                 ):
-                    return cast(int, hkey.id)
+                    return cast("int", hkey.id)
         raise err
 
 
@@ -154,7 +154,7 @@ async def hetzner_delete_node(
     log: logging.Logger,
     cfg: ConfigCloudHetzner,
     host: str,
-):
+) -> None:
     """Delete node"""
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)

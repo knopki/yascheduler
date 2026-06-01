@@ -20,6 +20,8 @@
 #   PREVIOUS_CHANGE: v1.0.0 - Initial Protocol structural conformance tests
 # END_CHANGE_SUMMARY
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from yascheduler.domain.model import (
@@ -129,7 +131,7 @@ class StubCloudProvisioner:
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_task_repository_protocol
-def test_task_repository_protocol():
+def test_task_repository_protocol() -> None:
     stub = StubTaskRepository()
     assert isinstance(stub, TaskRepository)
 
@@ -141,7 +143,7 @@ def test_task_repository_protocol():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_node_repository_protocol
-def test_node_repository_protocol():
+def test_node_repository_protocol() -> None:
     stub = StubNodeRepository()
     assert isinstance(stub, NodeRepository)
 
@@ -153,7 +155,7 @@ def test_node_repository_protocol():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_machine_gateway_protocol
-def test_machine_gateway_protocol():
+def test_machine_gateway_protocol() -> None:
     stub = StubMachineGateway()
     assert isinstance(stub, MachineGateway)
 
@@ -165,6 +167,6 @@ def test_machine_gateway_protocol():
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_cloud_provisioner_protocol
-def test_cloud_provisioner_protocol():
+def test_cloud_provisioner_protocol() -> None:
     stub = StubCloudProvisioner()
     assert isinstance(stub, CloudProvisioner)

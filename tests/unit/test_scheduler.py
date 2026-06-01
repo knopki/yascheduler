@@ -26,10 +26,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.scheduler import WebhookPayload
-from yascheduler.db import TaskModel, TaskStatus
-from tests.fixtures.mock_scheduler import create_test_config, make_scheduler
 from tests.fixtures.mock_clouds import make_mock_clouds
+from tests.fixtures.mock_scheduler import create_test_config, make_scheduler
+from yascheduler.db import TaskModel, TaskStatus
+from yascheduler.scheduler import WebhookPayload
 
 TEST_INI = """
 [local]
@@ -96,7 +96,9 @@ def mock_clouds():
 #   OUTPUTS: { None - test assertions via pytest.raises }
 # END_CONTRACT: test_create_new_task_unknown_engine
 @pytest.mark.asyncio
-async def test_create_new_task_unknown_engine(test_config, mock_db, mock_clouds):
+async def test_create_new_task_unknown_engine(
+    test_config, mock_db, mock_clouds
+) -> None:
     """create_new_task raises RuntimeError for unknown engine (via patched submit_task)"""
     scheduler = make_scheduler(db=mock_db, config=test_config, clouds=mock_clouds)
     mock_submit = AsyncMock(side_effect=RuntimeError("not supported: nonexistent"))
@@ -118,7 +120,9 @@ async def test_create_new_task_unknown_engine(test_config, mock_db, mock_clouds)
 #   OUTPUTS: { None - test assertions via pytest.raises }
 # END_CONTRACT: test_create_new_task_missing_input_file
 @pytest.mark.asyncio
-async def test_create_new_task_missing_input_file(test_config, mock_db, mock_clouds):
+async def test_create_new_task_missing_input_file(
+    test_config, mock_db, mock_clouds
+) -> None:
     """create_new_task raises RuntimeError when input file is missing"""
     scheduler = make_scheduler(db=mock_db, config=test_config, clouds=mock_clouds)
     mock_submit = AsyncMock(side_effect=RuntimeError("missing input file 'input.txt'"))
@@ -140,7 +144,7 @@ async def test_create_new_task_missing_input_file(test_config, mock_db, mock_clo
 #   OUTPUTS: { None - test assertions on returned TaskModel }
 # END_CONTRACT: test_create_new_task_success
 @pytest.mark.asyncio
-async def test_create_new_task_success(test_config, mock_db, mock_clouds):
+async def test_create_new_task_success(test_config, mock_db, mock_clouds) -> None:
     """create_new_task calls submit_task, fetches result via db.get_task, returns TaskModel"""
     expected_task = TaskModel(
         task_id=1, label="test", ip="", status=TaskStatus.TO_DO, metadata={}
@@ -168,7 +172,7 @@ class TestWebhookPayload:
     #   OUTPUTS: { None - assertions on task_id, status, custom_params fields }
     # END_CONTRACT: test_construction
 
-    def test_construction(self):
+    def test_construction(self) -> None:
         payload = WebhookPayload(task_id=1, status=0, custom_params={"k": "v"})
         assert payload.task_id == 1
         assert payload.status == 0
@@ -180,6 +184,6 @@ class TestWebhookPayload:
     #   OUTPUTS: { None - assertion on default custom_params value }
     # END_CONTRACT: test_default_custom_params
 
-    def test_default_custom_params(self):
+    def test_default_custom_params(self) -> None:
         payload = WebhookPayload(task_id=42, status=1)
         assert payload.custom_params == {}
