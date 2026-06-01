@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - Accept shared SSHMachineGateway, pass to RemoteMachine.create().
-#   PREVIOUS_CHANGE: v2.1.4 - Fix KeyError in _print_stats when DB has no tasks for a status; fix unclosed aiohttp session by moving close into start() finally block so it runs inside the main coroutine.
+#   LAST_CHANGE: v2.2.1 - Fix pending task leak in _await_first_machine: cancel orphaned task after asyncio.wait(FIRST_COMPLETED).
+#   PREVIOUS_CHANGE: v2.2.0 - Accept shared SSHMachineGateway, pass to RemoteMachine.create().
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -606,10 +606,18 @@ class Orchestrator:
             while not len(self._remote_machines):
                 await asyncio.sleep(1)
 
-        await asyncio.wait(
-            [asyncio.create_task(x) for x in [_wait(), asyncio.sleep(30)]],
+        wait_task = asyncio.create_task(_wait())
+        timeout_task = asyncio.create_task(asyncio.sleep(30))
+        done, pending = await asyncio.wait(
+            [wait_task, timeout_task],
             return_when="FIRST_COMPLETED",
         )
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
         # END_BLOCK_WAIT_MACHINES
 
     # START_CONTRACT: Orchestrator._shutdown_barrier
