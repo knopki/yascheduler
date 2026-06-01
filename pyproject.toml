@@ -108,6 +108,7 @@ markers = [
 [tool.ruff]
 # Target python version
 target-version = "py39"
+exclude = ["scripts/grace_check.py"]
 
 [tool.ruff.lint]
 # Enable specific rules
