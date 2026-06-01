@@ -21,18 +21,16 @@
 
 """Cloud API manager"""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from asyncio.locks import Lock
-from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
 
 from attrs import define, field
 
-from ..compat import Self
-from ..config import ConfigCloud, ConfigLocal, ConfigRemote, EngineRepository
-from ..db import DB
 from .adapters import (
     CloudAdapter,
     get_azure_adapter,
@@ -41,6 +39,13 @@ from .adapters import (
 )
 from .cloud_api import CloudAPI
 from .protocols import CloudCapacity
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ..compat import Self
+    from ..config import ConfigCloud, ConfigLocal, ConfigRemote, EngineRepository
+    from ..db import DB
 
 CLOUD_ADAPTER_GETTERS = {
     "az": get_azure_adapter,
@@ -98,7 +103,7 @@ class CloudAPIManager:
         remote_config: ConfigRemote,
         cloud_configs: Sequence[ConfigCloud],
         engines: EngineRepository,
-        log: Optional[logging.Logger] = None,
+        log: logging.Logger | None = None,
     ) -> Self:
         "Create cloud API manager"
         if log:
@@ -180,8 +185,8 @@ class CloudAPIManager:
     #   LINKS: M-CLOUD-MANAGER
     # END_CONTRACT: select_best_provider
     async def select_best_provider(
-        self, want_platforms: Optional[Sequence[str]] = None
-    ) -> Optional[CloudAPI[ConfigCloud]]:
+        self, want_platforms: Sequence[str] | None = None
+    ) -> CloudAPI[ConfigCloud] | None:
         """Select best cloud API"""
         self.log.debug(
             "[CloudManager][select_best_provider] providers=%s",
@@ -231,8 +236,8 @@ class CloudAPIManager:
     #   LINKS: M-CLOUD-MANAGER, M-DB
     # END_CONTRACT: allocate_node
     async def allocate_node(
-        self, want_platforms: Optional[Sequence[str]] = None, throttle: bool = False
-    ) -> Optional[str]:
+        self, want_platforms: Sequence[str] | None = None, throttle: bool = False
+    ) -> str | None:
         """Allocate new node"""
         async with self.allocation_lock:
             api = await self.select_best_provider(want_platforms)
@@ -276,10 +281,10 @@ class CloudAPIManager:
     # END_CONTRACT: allocate
     async def allocate(
         self,
-        on_task: Optional[int] = None,
-        want_platforms: Optional[Sequence[str]] = None,
+        on_task: int | None = None,
+        want_platforms: Sequence[str] | None = None,
         throttle: bool = True,
-    ) -> Optional[str]:
+    ) -> str | None:
         if on_task in self.on_tasks:
             return
         if on_task:
@@ -299,7 +304,7 @@ class CloudAPIManager:
     #   SIDE_EFFECTS: Disables and removes node from DB, deletes cloud VM
     #   LINKS: M-CLOUD-MANAGER, M-DB
     # END_CONTRACT: deallocate
-    async def deallocate(self, ip_addr: str) -> Optional[bool]:
+    async def deallocate(self, ip_addr: str) -> bool | None:
         node = await self.db.get_node(ip_addr)
         if not node or not node.cloud:
             return

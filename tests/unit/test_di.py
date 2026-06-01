@@ -150,7 +150,7 @@ class TestMakeCliDeps:
         config = create_mock_config()
 
         deps = make_cli_deps(config)
-        uow = cast(PostgresUnitOfWork, deps.uow_factory())
+        uow = cast("PostgresUnitOfWork", deps.uow_factory())
 
         assert isinstance(uow, PostgresUnitOfWork)
         assert uow._config is config.db

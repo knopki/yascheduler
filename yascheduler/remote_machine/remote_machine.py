@@ -276,7 +276,7 @@ class RemoteMachine:
         tasks_dir: PurePath | None = None,
         jump_host: str | None = None,
         jump_username: str | None = None,
-        gateway: Any | None = None,
+        gateway: Any | None = None,  # noqa: ANN401
     ) -> Self:
         from yascheduler.adapters.ssh.gateway import SSHMachineGateway
 
