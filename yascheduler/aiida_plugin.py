@@ -23,6 +23,8 @@ Aiida plugin for yascheduler,
 with respect to the supported yascheduler engines
 """
 
+from __future__ import annotations
+
 from typing import NoReturn
 
 import aiida.schedulers
@@ -94,8 +96,8 @@ class YaScheduler(aiida.schedulers.Scheduler):
 
     # START_CONTRACT: get_jobs
     #   PURPOSE: Return list of currently active jobs from yascheduler
-    #   INPUTS: { jobs: Optional - list of job IDs to query } | { user: Optional - not supported, raises FeatureNotAvailable } | { as_dict: bool - return as dict keyed by job_id }
-    #   OUTPUTS: { list[JobInfo] - list of job info objects } | { dict - dict of job info keyed by job_id if as_dict=True }
+    #   INPUTS: { jobs: str | list[str] | None - job IDs to query; user: str | None - not supported; as_dict: bool - return as dict }
+    #   OUTPUTS: { list[JobInfo] | dict[str, JobInfo] - job info list or dict keyed by job_id }
     #   SIDE_EFFECTS: Executes remote command via transport
     #   LINKS: M-AIIDA
     # END_CONTRACT: get_jobs

@@ -137,7 +137,7 @@ def upcload_delete_node_sync(
                     time.sleep(5)
                 else:
                     break
-            for storage in server.storage_devices:
+            for storage in server.storage_devices:  # type: ignore[attr-defined]
                 storage.destroy()
             log.info("DELETED %s", host)
             break

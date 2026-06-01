@@ -122,8 +122,9 @@ async def hetzner_create_node(
     server = response.server
     ip_addr = server.public_net and server.public_net.ipv4 and server.public_net.ipv4.ip
     assert ip_addr
-    log.info("CREATED %s", ip_addr)
-    return ip_addr
+    ip_str = str(ip_addr)
+    log.info("CREATED %s", ip_str)
+    return ip_str
 
 
 # START_CONTRACT: find_srv

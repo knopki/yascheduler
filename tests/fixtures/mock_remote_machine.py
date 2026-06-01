@@ -17,6 +17,8 @@
 # END_CHANGE_SUMMARY
 #
 
+from __future__ import annotations
+
 from unittest.mock import MagicMock
 
 from yascheduler.remote_machine.remote_machine import (

@@ -18,12 +18,13 @@
 # END_CHANGE_SUMMARY
 #
 
+from __future__ import annotations
+
 import io
 import logging
 from configparser import ConfigParser
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from yascheduler.clouds.cloud_api_manager import CloudAPIManager
 from yascheduler.config import (
     Config,
     ConfigCloudAzure,
@@ -34,8 +35,11 @@ from yascheduler.config import (
     ConfigRemote,
     EngineRepository,
 )
-from yascheduler.db import DB
 from yascheduler.scheduler import Scheduler
+
+if TYPE_CHECKING:
+    from yascheduler.clouds.cloud_api_manager import CloudAPIManager
+    from yascheduler.db import DB
 
 
 def make_scheduler(

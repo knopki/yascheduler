@@ -19,6 +19,8 @@
 # END_CHANGE_SUMMARY
 #
 
+from __future__ import annotations
+
 from datetime import datetime, timedelta
 from unittest.mock import Mock
 
@@ -45,7 +47,7 @@ class _ComparableMock(Mock):
     #   INPUTS: { other: _ComparableMock - another mock to compare against }
     #   OUTPUTS: { bool - True if self sorts before other }
     # END_CONTRACT: __lt__
-    def __lt__(self, other: "_ComparableMock") -> bool:
+    def __lt__(self, other: _ComparableMock) -> bool:
         fs_self = self.meta.free_since
         fs_other = other.meta.free_since
         if fs_self is None and fs_other is None:
