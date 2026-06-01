@@ -23,6 +23,7 @@
 # END_CHANGE_SUMMARY
 
 import pytest
+import pytest_asyncio
 
 from yascheduler.queue import UMessage, UniqueQueue
 
@@ -34,8 +35,8 @@ from yascheduler.queue import UMessage, UniqueQueue
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: queue
-@pytest.fixture
-def queue():
+@pytest_asyncio.fixture
+async def queue():
     return UniqueQueue(name="test")
 
 
