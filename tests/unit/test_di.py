@@ -20,6 +20,7 @@
 # END_CHANGE_SUMMARY
 
 from pathlib import Path, PurePosixPath
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -149,7 +150,7 @@ class TestMakeCliDeps:
         config = create_mock_config()
 
         deps = make_cli_deps(config)
-        uow = deps.uow_factory()
+        uow = cast(PostgresUnitOfWork, deps.uow_factory())
 
         assert isinstance(uow, PostgresUnitOfWork)
         assert uow._config is config.db

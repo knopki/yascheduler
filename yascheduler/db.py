@@ -85,12 +85,12 @@ class TaskModel:
     task_id: int = field()
     label: str = field()
     ip: str = field()
-    status: TaskStatus = field(converter=TaskStatus)
+    status: TaskStatus = field(converter=lambda x: TaskStatus(x))
     metadata: Mapping[str, Any] = field(factory=dict)
     cloud: Optional[str] = field(default=None)
 
     def __hash__(self) -> int:
-        return hash(json.dumps(asdict(self), sort_keys=True))
+        return hash(json.dumps(asdict(self), sort_keys=True))  # type: ignore[arg-type]
 
 
 @define(frozen=True)

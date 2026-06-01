@@ -67,7 +67,7 @@ class ConfigLocal:
     @classmethod
     def get_valid_config_parser_fields(cls) -> Sequence[str]:
         "Returns a list of valid config keys"
-        return [f.name for f in fields(cls)]
+        return [f.name for f in fields(cls)]  # type: ignore[arg-type]
 
     # START_CONTRACT: from_config_parser_section
     #   PURPOSE: Create ConfigLocal instance from a config parser section

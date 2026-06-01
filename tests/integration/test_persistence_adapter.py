@@ -30,8 +30,6 @@
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
 
-from typing import NoReturn
-
 import pytest
 
 from yascheduler.adapters.persistence.postgres import (
@@ -428,7 +426,7 @@ async def test_uow_integration(_db_config: ConfigDb, _init_schema: None) -> None
 # END_CONTRACT: test_uow_rollback_integration
 async def test_uow_rollback_integration(
     _db_config: ConfigDb, _init_schema: None
-) -> NoReturn:
+) -> None:
     """Uncommitted changes are lost on rollback."""
 
     config: ConfigDb = _db_config

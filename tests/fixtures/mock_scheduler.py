@@ -53,7 +53,7 @@ def make_scheduler(
     return Scheduler(
         config=config,
         db=db,
-        clouds=clouds,
+        clouds=clouds,  # type: ignore[arg-type]
         log=log,
     )
 

@@ -13,7 +13,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-input_data = {}
+input_data: dict[str, str | None] = {}
 yac = Yascheduler()
 assert args.engine in yac.config.engines
 

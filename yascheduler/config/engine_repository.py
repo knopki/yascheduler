@@ -63,7 +63,7 @@ class EngineRepository(UserDict[str, Engine]):
 
     def __hash__(self) -> int:
         return hash(
-            json.dumps(asdict(self, value_serializer=_value_serializer), sort_keys=True)
+            json.dumps(asdict(self, value_serializer=_value_serializer), sort_keys=True)  # type: ignore[arg-type]
         )
 
     # START_CONTRACT: filter

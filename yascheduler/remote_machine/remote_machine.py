@@ -36,7 +36,7 @@ from asyncio.locks import Semaphore
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import backoff
 from asyncssh.client import SSHClient
@@ -220,7 +220,7 @@ class RemoteMachine:
     """Compatibility wrapper — delegates to SSHMachineGateway."""
 
     ip: str = field()
-    _gateway: object = field(alias="_gateway", repr=False)
+    _gateway: Any = field(alias="_gateway", repr=False)
     meta: RemoteMachineMetadata = field()
     log: logging.Logger = field(repr=False)
     hostname: str = field()
@@ -276,7 +276,7 @@ class RemoteMachine:
         tasks_dir: PurePath | None = None,
         jump_host: str | None = None,
         jump_username: str | None = None,
-        gateway: object | None = None,
+        gateway: Any | None = None,
     ) -> Self:
         from yascheduler.adapters.ssh.gateway import SSHMachineGateway
 

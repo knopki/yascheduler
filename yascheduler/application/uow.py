@@ -20,6 +20,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    import types
+
     from yascheduler.domain.ports import NodeRepository, TaskRepository
 
 
@@ -39,7 +41,7 @@ class AbstractUnitOfWork(Protocol):
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: object | None,
+        exc_tb: types.TracebackType | None,
     ) -> bool: ...
 
     async def commit(self) -> None: ...

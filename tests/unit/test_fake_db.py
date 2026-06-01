@@ -113,11 +113,13 @@ async def test_fake_db_status_transitions(fake_db: FakeDB) -> None:
 
     await fake_db.set_task_running(1, "10.0.0.1")
     task = await fake_db.get_task(1)
+    assert task is not None
     assert task.status == TaskStatus.RUNNING
     assert task.ip == "10.0.0.1"
 
     await fake_db.set_task_done(1, {"result": "ok"})
     task = await fake_db.get_task(1)
+    assert task is not None
     assert task.status == TaskStatus.DONE
     assert task.metadata == {"result": "ok"}
 
@@ -157,14 +159,17 @@ async def test_fake_db_enable_disable_node(fake_db: FakeDB) -> None:
     """enable_node and disable_node toggle enabled flag"""
     await fake_db.add_node("10.0.0.1", "root", enabled=False)
     node = await fake_db.get_node("10.0.0.1")
+    assert node is not None
     assert node.enabled is False
 
     await fake_db.enable_node("10.0.0.1")
     node = await fake_db.get_node("10.0.0.1")
+    assert node is not None
     assert node.enabled is True
 
     await fake_db.disable_node("10.0.0.1")
     node = await fake_db.get_node("10.0.0.1")
+    assert node is not None
     assert node.enabled is False
 
 
@@ -194,5 +199,6 @@ async def test_fake_db_set_task_error(fake_db: FakeDB) -> None:
     await fake_db.add_task(label="job")
     await fake_db.set_task_error(1, {"key": "val"}, "oops")
     task = await fake_db.get_task(1)
+    assert task is not None
     assert task.status == TaskStatus.DONE
     assert task.metadata == {"key": "val", "error": "oops"}

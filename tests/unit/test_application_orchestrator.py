@@ -28,6 +28,7 @@ Tests cover:
 """
 
 import asyncio
+from collections.abc import AsyncGenerator
 from pathlib import Path, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -225,9 +226,9 @@ class TestOrchestratorLifecycle:
         """
         orch = make_orchestrator(sleep_interval=0)
 
-        q = UniqueQueue("test", maxsize=10)
+        q: UniqueQueue = UniqueQueue("test", maxsize=10)
 
-        async def empty_producer() -> None:
+        async def empty_producer() -> AsyncGenerator[None, None]:
             """Yields nothing — a no-op async generator."""
             return
             yield  # pragma: no cover  # type: ignore[unreachable]

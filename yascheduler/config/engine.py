@@ -171,7 +171,9 @@ class Engine:
             "deploy_remote_archive",
         ]
         return [
-            f.name for f in fields(cls) if f.name not in exclude_names
+            f.name
+            for f in fields(cls)  # type: ignore[arg-type]
+            if f.name not in exclude_names
         ] + include_names
 
     # START_CONTRACT: from_config_parser_section
@@ -197,7 +199,7 @@ class Engine:
         name = sec.name[7:]
         engine_dir = engines_dir / name
 
-        deployable: Sequence[Deploy] = []
+        deployable: list[Deploy] = []
         deploy_local_files = [
             engine_dir / x.strip() for x in gettuple("deploy_local_files")
         ]

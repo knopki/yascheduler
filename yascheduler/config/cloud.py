@@ -108,7 +108,7 @@ class ConfigCloudAzure:
         include_names = ["user", "jump_user", "image", "size"]
         return [
             f"{cls.prefix}_{x}"
-            for x in [f.name for f in fields(cls) if f.name not in exclude_names]
+            for x in [f.name for f in fields(cls) if f.name not in exclude_names]  # type: ignore[arg-type]
             + include_names
         ]
 
@@ -190,7 +190,7 @@ class ConfigCloudHetzner:
         include_names = ["user", "jump_user"]
         return [
             f"{cls.prefix}_{x}"
-            for x in [f.name for f in fields(cls) if f.name not in exclude_names]
+            for x in [f.name for f in fields(cls) if f.name not in exclude_names]  # type: ignore[arg-type]
             + include_names
         ]
 
@@ -257,7 +257,7 @@ class ConfigCloudUpcloud:
         include_names = ["user", "jump_user"]
         return [
             f"{cls.prefix}_{x}"
-            for x in [f.name for f in fields(cls) if f.name not in exclude_names]
+            for x in [f.name for f in fields(cls) if f.name not in exclude_names]  # type: ignore[arg-type]
             + include_names
         ]
 

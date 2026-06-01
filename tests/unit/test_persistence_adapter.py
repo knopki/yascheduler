@@ -28,7 +28,7 @@
 
 import json
 from pathlib import Path
-from typing import NoReturn
+
 
 import pytest
 from pytest_mock import MockerFixture
@@ -167,7 +167,7 @@ async def test_uow_commit_called(mocker: MockerFixture) -> None:
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.rollback
 # END_CONTRACT: test_uow_rollback_on_exception
-async def test_uow_rollback_on_exception(mocker: MockerFixture) -> NoReturn:
+async def test_uow_rollback_on_exception(mocker: MockerFixture) -> None:
     """Exception inside context triggers rollback and closes connection."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -272,7 +272,7 @@ class TestPostgresTaskRepository:
     # -- helpers ---------------------------------------------------------------
 
     @staticmethod
-    def _make_repo(mocker: object) -> PostgresTaskRepository:
+    def _make_repo(mocker: MockerFixture) -> PostgresTaskRepository:
         """Build a minimal PostgresTaskRepository with a mock _run."""
         repo = PostgresTaskRepository.__new__(PostgresTaskRepository)
         mock_run = mocker.AsyncMock()
@@ -539,7 +539,7 @@ class TestPostgresNodeRepository:
     # -- helpers ---------------------------------------------------------------
 
     @staticmethod
-    def _make_repo(mocker: object) -> PostgresNodeRepository:
+    def _make_repo(mocker: MockerFixture) -> PostgresNodeRepository:
         """Build a minimal PostgresNodeRepository with a mock _run."""
         repo = PostgresNodeRepository.__new__(PostgresNodeRepository)
         mock_run = mocker.AsyncMock()

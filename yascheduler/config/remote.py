@@ -47,7 +47,9 @@ class ConfigRemote:
         exclude_names = ["username", "jump_username"]
         include_names = ["user", "jump_user"]
         return [
-            f.name for f in fields(cls) if f.name not in exclude_names
+            f.name
+            for f in fields(cls)  # type: ignore[arg-type]
+            if f.name not in exclude_names
         ] + include_names
 
     # START_CONTRACT: from_config_parser_section

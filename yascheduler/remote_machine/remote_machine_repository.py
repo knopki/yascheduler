@@ -94,7 +94,7 @@ class RemoteMachineRepository(UserDict[str, RemoteMachine]):
     ) -> Self:
         "Return machines filtered and sorted by `free_since`"
 
-        checks: Sequence[Callable[[RemoteMachine], bool]] = []
+        checks: list[Callable[[RemoteMachine], bool]] = []
         if busy is True:
             checks.append(lambda x: x.meta.busy is True)
         if busy is False:

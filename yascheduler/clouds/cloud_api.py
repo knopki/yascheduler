@@ -58,7 +58,7 @@ class CloudConfig(PCloudConfig):
 
     def render(self) -> str:
         "Render to user-data format"
-        return "#cloud-config\n" + json.dumps(asdict(self))
+        return "#cloud-config\n" + json.dumps(asdict(self))  # type: ignore[arg-type]
 
     def render_base64(self) -> str:
         "Render to user-data format as base64 string"
