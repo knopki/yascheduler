@@ -156,7 +156,7 @@ async def upcload_delete_node(
     log: logging.Logger,
     cfg: ConfigCloudUpcloud,
     host: str,
-):
+) -> None:
     """Delete node"""
     return await asyncio.get_running_loop().run_in_executor(
         executor, upcload_delete_node_sync, log, cfg, host

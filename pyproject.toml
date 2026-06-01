@@ -106,13 +106,11 @@ markers = [
 ]
 
 [tool.ruff]
-# Target python version
-target-version = "py39"
 exclude = ["scripts/grace_check.py"]
 
 [tool.ruff.lint]
 # Enable specific rules
-select = ["E", "F", "UP"]
+select = ["ANN", "ASYNC", "E", "F", "I", "N", "UP", "TCH", "W"]
 # Disable specific rules
 ignore = ["E501"]
 

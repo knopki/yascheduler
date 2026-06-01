@@ -33,7 +33,7 @@ from ..compat import Self
 from .engine import Engine
 
 
-def _value_serializer(_: type, __: Any, value: Any) -> Any:
+def _value_serializer(_: type, __: Any, value: Any) -> Any:  # noqa: ANN401
     "Serialize PurePath as string"
     if isinstance(value, PurePath):
         return str(value)

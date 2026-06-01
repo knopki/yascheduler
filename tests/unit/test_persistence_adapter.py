@@ -27,9 +27,11 @@
 # END_CHANGE_SUMMARY
 
 import json
+from pathlib import Path
 from typing import NoReturn
 
 import pytest
+from pytest_mock import MockerFixture
 
 from yascheduler.adapters.persistence import load_query
 from yascheduler.adapters.persistence.exceptions import UnitOfWorkNotInitializedError
@@ -57,7 +59,9 @@ from yascheduler.domain.model import (
 #   LINKS: load_query
 # END_CONTRACT: test_load_query_first_call_reads_file
 @pytest.mark.unit
-def test_load_query_first_call_reads_file(tmp_path, monkeypatch) -> None:
+def test_load_query_first_call_reads_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """load_query reads the file on first call and returns its content."""
     load_query.cache_clear()
     sql_dir = tmp_path / "sql"
@@ -85,7 +89,9 @@ def test_load_query_first_call_reads_file(tmp_path, monkeypatch) -> None:
 #   LINKS: load_query
 # END_CONTRACT: test_load_query_second_call_uses_cache
 @pytest.mark.unit
-def test_load_query_second_call_uses_cache(tmp_path, monkeypatch) -> None:
+def test_load_query_second_call_uses_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """load_query returns the cached value; file mutation has no effect."""
     load_query.cache_clear()
     sql_dir = tmp_path / "sql"
@@ -116,7 +122,7 @@ def test_load_query_second_call_uses_cache(tmp_path, monkeypatch) -> None:
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork, PostgresTaskRepository, PostgresNodeRepository
 # END_CONTRACT: test_uow_enter_creates_repositories
-async def test_uow_enter_creates_repositories(mocker) -> None:
+async def test_uow_enter_creates_repositories(mocker: MockerFixture) -> None:
     """__aenter__ instantiates both task and node repositories."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -138,7 +144,7 @@ async def test_uow_enter_creates_repositories(mocker) -> None:
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.commit
 # END_CONTRACT: test_uow_commit_called
-async def test_uow_commit_called(mocker) -> None:
+async def test_uow_commit_called(mocker: MockerFixture) -> None:
     """commit() calls connection.run('COMMIT')."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -161,7 +167,7 @@ async def test_uow_commit_called(mocker) -> None:
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.rollback
 # END_CONTRACT: test_uow_rollback_on_exception
-async def test_uow_rollback_on_exception(mocker) -> NoReturn:
+async def test_uow_rollback_on_exception(mocker: MockerFixture) -> NoReturn:
     """Exception inside context triggers rollback and closes connection."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -186,7 +192,7 @@ async def test_uow_rollback_on_exception(mocker) -> NoReturn:
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.__aexit__
 # END_CONTRACT: test_uow_closes_connection
-async def test_uow_closes_connection(mocker) -> None:
+async def test_uow_closes_connection(mocker: MockerFixture) -> None:
     """connection.close() is called on normal exit."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -209,7 +215,7 @@ async def test_uow_closes_connection(mocker) -> None:
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.commit, PostgresUnitOfWork._require_conn
 # END_CONTRACT: test_uow_commit_after_exit_raises
-async def test_uow_commit_after_exit_raises(mocker) -> None:
+async def test_uow_commit_after_exit_raises(mocker: MockerFixture) -> None:
     """commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -235,7 +241,7 @@ async def test_uow_commit_after_exit_raises(mocker) -> None:
 #   SIDE_EFFECTS: None (mocked connection)
 #   LINKS: PostgresUnitOfWork.commit
 # END_CONTRACT: test_uow_double_commit
-async def test_uow_double_commit(mocker) -> None:
+async def test_uow_double_commit(mocker: MockerFixture) -> None:
     """Second commit within the same context is accepted by pg8000 (idempotent)."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
@@ -266,7 +272,7 @@ class TestPostgresTaskRepository:
     # -- helpers ---------------------------------------------------------------
 
     @staticmethod
-    def _make_repo(mocker) -> PostgresTaskRepository:
+    def _make_repo(mocker: object) -> PostgresTaskRepository:
         """Build a minimal PostgresTaskRepository with a mock _run."""
         repo = PostgresTaskRepository.__new__(PostgresTaskRepository)
         mock_run = mocker.AsyncMock()
@@ -275,7 +281,7 @@ class TestPostgresTaskRepository:
 
     # -- get -------------------------------------------------------------------
 
-    async def test_get_returns_task(self, mocker) -> None:
+    async def test_get_returns_task(self, mocker: MockerFixture) -> None:
         """get returns a Task hydrated from the row returned by _run."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -297,7 +303,7 @@ class TestPostgresTaskRepository:
         assert task.context.engine == "fleur"
         assert task.status == DomainTaskStatus.RUNNING
 
-    async def test_get_returns_none_when_not_found(self, mocker) -> None:
+    async def test_get_returns_none_when_not_found(self, mocker: MockerFixture) -> None:
         """get returns None when _run returns an empty list."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
@@ -306,7 +312,9 @@ class TestPostgresTaskRepository:
 
         assert task is None
 
-    async def test_get_with_none_ip_and_extra_fields(self, mocker) -> None:
+    async def test_get_with_none_ip_and_extra_fields(
+        self, mocker: MockerFixture
+    ) -> None:
         """get handles null ip and extra metadata fields."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -344,7 +352,7 @@ class TestPostgresTaskRepository:
 
     # -- insert ----------------------------------------------------------------
 
-    async def test_insert_returns_task_with_id(self, mocker) -> None:
+    async def test_insert_returns_task_with_id(self, mocker: MockerFixture) -> None:
         """insert runs INSERT SQL and returns Task with generated ID."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -371,7 +379,7 @@ class TestPostgresTaskRepository:
 
     # -- save ------------------------------------------------------------------
 
-    async def test_save_calls_upsert(self, mocker) -> None:
+    async def test_save_calls_upsert(self, mocker: MockerFixture) -> None:
         """save calls _run with the upsert query and all task fields."""
         repo = self._make_repo(mocker)
         ctx = TaskContext(engine="fleur", remote_folder="/remote")
@@ -394,7 +402,7 @@ class TestPostgresTaskRepository:
         assert metadata["engine"] == "fleur"
         assert metadata["remote_folder"] == "/remote"
 
-    async def test_save_running_task(self, mocker) -> None:
+    async def test_save_running_task(self, mocker: MockerFixture) -> None:
         """save persists a RUNNING task with its allocated_ip."""
         repo = self._make_repo(mocker)
         ctx = TaskContext(engine="vasp")
@@ -414,7 +422,7 @@ class TestPostgresTaskRepository:
 
     # -- list_by_status --------------------------------------------------------
 
-    async def test_list_by_status_returns_tasks(self, mocker) -> None:
+    async def test_list_by_status_returns_tasks(self, mocker: MockerFixture) -> None:
         """list_by_status returns a Task for each row."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -444,7 +452,7 @@ class TestPostgresTaskRepository:
         assert tasks[1].task_id == 2
         assert tasks[1].status == DomainTaskStatus.RUNNING
 
-    async def test_list_by_status_empty(self, mocker) -> None:
+    async def test_list_by_status_empty(self, mocker: MockerFixture) -> None:
         """list_by_status returns empty list when no rows."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
@@ -455,7 +463,7 @@ class TestPostgresTaskRepository:
 
     # -- list_by_jobs ----------------------------------------------------------
 
-    async def test_list_by_jobs_returns_tasks(self, mocker) -> None:
+    async def test_list_by_jobs_returns_tasks(self, mocker: MockerFixture) -> None:
         """list_by_jobs returns tasks matching the given job ids."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -482,7 +490,7 @@ class TestPostgresTaskRepository:
         assert tasks[0].status == DomainTaskStatus.DONE
         assert tasks[1].task_id == 20
 
-    async def test_list_by_jobs_empty(self, mocker) -> None:
+    async def test_list_by_jobs_empty(self, mocker: MockerFixture) -> None:
         """list_by_jobs returns empty list when _run returns no rows."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
@@ -493,7 +501,7 @@ class TestPostgresTaskRepository:
 
     # -- count_by_status -------------------------------------------------------
 
-    async def test_count_by_status_returns_mapping(self, mocker) -> None:
+    async def test_count_by_status_returns_mapping(self, mocker: MockerFixture) -> None:
         """count_by_status returns a mapping of TaskStatus -> count."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -510,7 +518,7 @@ class TestPostgresTaskRepository:
             DomainTaskStatus.DONE: 10,
         }
 
-    async def test_count_by_status_empty(self, mocker) -> None:
+    async def test_count_by_status_empty(self, mocker: MockerFixture) -> None:
         """count_by_status returns empty mapping when no rows."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
@@ -531,7 +539,7 @@ class TestPostgresNodeRepository:
     # -- helpers ---------------------------------------------------------------
 
     @staticmethod
-    def _make_repo(mocker) -> PostgresNodeRepository:
+    def _make_repo(mocker: object) -> PostgresNodeRepository:
         """Build a minimal PostgresNodeRepository with a mock _run."""
         repo = PostgresNodeRepository.__new__(PostgresNodeRepository)
         mock_run = mocker.AsyncMock()
@@ -540,7 +548,7 @@ class TestPostgresNodeRepository:
 
     # -- get -------------------------------------------------------------------
 
-    async def test_get_returns_node(self, mocker) -> None:
+    async def test_get_returns_node(self, mocker: MockerFixture) -> None:
         """get returns a Node hydrated from the row returned by _run."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -564,7 +572,7 @@ class TestPostgresNodeRepository:
         assert node.username == "root"
         assert node.port == 22
 
-    async def test_get_returns_none_when_not_found(self, mocker) -> None:
+    async def test_get_returns_none_when_not_found(self, mocker: MockerFixture) -> None:
         """get returns None when _run returns empty."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
@@ -573,7 +581,7 @@ class TestPostgresNodeRepository:
 
         assert node is None
 
-    async def test_get_with_zero_ncpus(self, mocker) -> None:
+    async def test_get_with_zero_ncpus(self, mocker: MockerFixture) -> None:
         """get handles null/zero ncpus correctly (defaults to 0)."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -598,7 +606,9 @@ class TestPostgresNodeRepository:
 
     # -- get_by_ips ------------------------------------------------------------
 
-    async def test_get_by_ips_empty_returns_empty_dict(self, mocker) -> None:
+    async def test_get_by_ips_empty_returns_empty_dict(
+        self, mocker: MockerFixture
+    ) -> None:
         """get_by_ips([]) returns an empty dict."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
@@ -610,7 +620,7 @@ class TestPostgresNodeRepository:
 
     # -- list_all --------------------------------------------------------------
 
-    async def test_list_all_returns_nodes(self, mocker) -> None:
+    async def test_list_all_returns_nodes(self, mocker: MockerFixture) -> None:
         """list_all returns all nodes from _run."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -640,7 +650,9 @@ class TestPostgresNodeRepository:
 
     # -- list_enabled / list_disabled ------------------------------------------
 
-    async def test_list_enabled_returns_only_enabled(self, mocker) -> None:
+    async def test_list_enabled_returns_only_enabled(
+        self, mocker: MockerFixture
+    ) -> None:
         """list_enabled returns only nodes with valid IPs (containing '.')."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -675,7 +687,9 @@ class TestPostgresNodeRepository:
         # All rows have "." in IP, so all 3 pass the filter
         assert len(nodes) == 3
 
-    async def test_list_enabled_filters_invalid_ips(self, mocker) -> None:
+    async def test_list_enabled_filters_invalid_ips(
+        self, mocker: MockerFixture
+    ) -> None:
         """list_enabled excludes rows whose ip does not contain '.'."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -702,10 +716,11 @@ class TestPostgresNodeRepository:
         assert len(nodes) == 1
         assert nodes[0].ip == "10.0.0.1"
 
-    async def test_list_disabled_returns_disabled_with_valid_ips(self, mocker) -> None:
+    async def test_list_disabled_returns_disabled_with_valid_ips(
+        self, mocker: MockerFixture
+    ) -> None:
         """list_disabled returns all rows (SQL filters disabled) that have valid IPs."""
         repo = self._make_repo(mocker)
-        # SQL query returns only disabled rows; Python-side filters by "." in IP
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
                 "ip": "10.0.0.1",
@@ -730,7 +745,9 @@ class TestPostgresNodeRepository:
         assert len(nodes) == 2
         assert all(n.enabled is False for n in nodes)
 
-    async def test_list_disabled_filters_invalid_ips(self, mocker) -> None:
+    async def test_list_disabled_filters_invalid_ips(
+        self, mocker: MockerFixture
+    ) -> None:
         """list_disabled excludes rows whose ip does not contain '.'."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
@@ -759,7 +776,7 @@ class TestPostgresNodeRepository:
 
     # -- add -------------------------------------------------------------------
 
-    async def test_add_inserts_node(self, mocker) -> None:
+    async def test_add_inserts_node(self, mocker: MockerFixture) -> None:
         """add calls _run with the insert query and node fields."""
         repo = self._make_repo(mocker)
         node = Node(
@@ -782,7 +799,7 @@ class TestPostgresNodeRepository:
         assert kwargs["username"] == "root"
         assert kwargs["port"] == 22
 
-    async def test_add_inserts_cloud_node(self, mocker) -> None:
+    async def test_add_inserts_cloud_node(self, mocker: MockerFixture) -> None:
         """add persists a cloud-provisioned node."""
         repo = self._make_repo(mocker)
         node = Node(
@@ -802,7 +819,7 @@ class TestPostgresNodeRepository:
 
     # -- enable / disable / remove ---------------------------------------------
 
-    async def test_enable_executes_update(self, mocker) -> None:
+    async def test_enable_executes_update(self, mocker: MockerFixture) -> None:
         """enable calls _run with the enable query and ip."""
         repo = self._make_repo(mocker)
 
@@ -810,7 +827,7 @@ class TestPostgresNodeRepository:
 
         repo._run.assert_awaited_once_with(load_query("node/enable"), ip="10.0.0.1")  # type: ignore[attr-defined]
 
-    async def test_disable_executes_update(self, mocker) -> None:
+    async def test_disable_executes_update(self, mocker: MockerFixture) -> None:
         """disable calls _run with the disable query and ip."""
         repo = self._make_repo(mocker)
 
@@ -818,7 +835,7 @@ class TestPostgresNodeRepository:
 
         repo._run.assert_awaited_once_with(load_query("node/disable"), ip="10.0.0.1")  # type: ignore[attr-defined]
 
-    async def test_remove_executes_delete(self, mocker) -> None:
+    async def test_remove_executes_delete(self, mocker: MockerFixture) -> None:
         """remove calls _run with the remove (delete) query and ip."""
         repo = self._make_repo(mocker)
 

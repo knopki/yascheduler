@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(scope="session")
-async def ssh_container(tmp_path_factory: Any) -> AsyncGenerator[dict[str, Any], None]:
+async def ssh_container(tmp_path_factory: Any) -> AsyncGenerator[dict[str, Any], None]:  # noqa: ANN401
     """Start Docker SSH container, generate key pair, yield connection info."""
     key_dir = tmp_path_factory.mktemp("ssh_keys")
     key_path = key_dir / "id_rsa"

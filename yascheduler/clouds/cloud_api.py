@@ -77,7 +77,7 @@ class CloudAPI(Generic[TConfigCloud_inv]):
     log: logging.Logger = field()
     ssh_key_lock: asyncio.Lock = field(factory=asyncio.Lock)
 
-    def __attrs_post_init__(self):
+    def __attrs_post_init__(self) -> None:
         if self.log:
             object.__setattr__(self, "log", self.log.getChild(self.adapter.name))
         else:
@@ -217,7 +217,7 @@ class CloudAPI(Generic[TConfigCloud_inv]):
     #   SIDE_EFFECTS: Allocates cloud VM, transfers SSH keys, runs cloud-init, installs engines; cleans up on failure
     #   LINKS: M-CLOUD-API, M-REMOTE
     # END_CONTRACT: create_node
-    async def create_node(self):
+    async def create_node(self) -> str:
         "Create new node"
         async with self.adapter.get_op_semaphore():
             try:
@@ -257,7 +257,7 @@ class CloudAPI(Generic[TConfigCloud_inv]):
     #   SIDE_EFFECTS: Terminates cloud VM, releases cloud resources
     #   LINKS: M-CLOUD-API
     # END_CONTRACT: delete_node
-    async def delete_node(self, host: str):
+    async def delete_node(self, host: str) -> None:
         "Delete node"
         async with self.adapter.get_op_semaphore():
             return await self.adapter.delete_node(

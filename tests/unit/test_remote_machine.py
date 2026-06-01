@@ -45,7 +45,7 @@ class _ComparableMock(Mock):
     #   INPUTS: { other: _ComparableMock - another mock to compare against }
     #   OUTPUTS: { bool - True if self sorts before other }
     # END_CONTRACT: __lt__
-    def __lt__(self, other):
+    def __lt__(self, other: "_ComparableMock") -> bool:
         fs_self = self.meta.free_since
         fs_other = other.meta.free_since
         if fs_self is None and fs_other is None:
@@ -62,7 +62,9 @@ class _ComparableMock(Mock):
 #   INPUTS: { ip: str - hostname, platforms: list[str] - platform list, busy: bool - busy state, free_since: datetime|None - optional free_since timestamp }
 #   OUTPUTS: { _ComparableMock - mock object with meta, platforms, hostname attributes }
 # END_CONTRACT: _make_machine
-def _make_machine(ip, platforms, busy, free_since=None):
+def _make_machine(
+    ip: str, platforms: list[str], busy: bool, free_since: datetime | None = None
+) -> _ComparableMock:
     """Helper: create a comparable mock machine with sortable __lt__."""
     base = make_mock_remote_machine(ip=ip, platforms=platforms, busy=busy)
     if free_since is not None:
@@ -159,7 +161,9 @@ class TestRemoteMachineRepositoryFilter:
     #   INPUTS: { machines: list[tuple[str, list[str], bool]] - (ip, platforms, busy) tuples }
     #   OUTPUTS: { RemoteMachineRepository - populated repository instance }
     # END_CONTRACT: _make_repo
-    def _make_repo(self, machines):
+    def _make_repo(
+        self, machines: list[tuple[str, list[str], bool]]
+    ) -> RemoteMachineRepository:
         """Helper: create repository from list of (ip, platforms, busy) tuples."""
         repo = RemoteMachineRepository(log=None)
         for ip, platforms, busy in machines:

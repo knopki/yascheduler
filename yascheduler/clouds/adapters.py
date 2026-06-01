@@ -78,7 +78,7 @@ class CloudAdapter(Generic[TConfigCloud_co]):
     create_node_timeout: int = field(default=300)
 
     @cache
-    def get_op_semaphore(self):
+    def get_op_semaphore(self) -> asyncio.Semaphore:
         """
         Cached semaphore getter.
         It's because you cannot create async semaphore outside the loop.
@@ -94,7 +94,7 @@ class CloudAdapter(Generic[TConfigCloud_co]):
 #   SIDE_EFFECTS: None
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-AZ
 # END_CONTRACT: get_azure_adapter
-def get_azure_adapter(name: str):
+def get_azure_adapter(name: str) -> CloudAdapter:
     from .az import az_create_node, az_delete_node
 
     return CloudAdapter(
@@ -113,7 +113,7 @@ def get_azure_adapter(name: str):
 #   SIDE_EFFECTS: None
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-HETZNER
 # END_CONTRACT: get_hetzner_adapter
-def get_hetzner_adapter(name: str):
+def get_hetzner_adapter(name: str) -> CloudAdapter:
     from .hetzner import hetzner_create_node, hetzner_delete_node
 
     return CloudAdapter(
@@ -132,7 +132,7 @@ def get_hetzner_adapter(name: str):
 #   SIDE_EFFECTS: None
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-UPCLOUD
 # END_CONTRACT: get_upcloud_adapter
-def get_upcloud_adapter(name: str):
+def get_upcloud_adapter(name: str) -> CloudAdapter:
     from .upcloud import upcload_delete_node, upcloud_create_node
 
     return CloudAdapter(

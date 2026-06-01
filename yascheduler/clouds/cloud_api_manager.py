@@ -33,7 +33,12 @@ from attrs import define, field
 from ..compat import Self
 from ..config import ConfigCloud, ConfigLocal, ConfigRemote, EngineRepository
 from ..db import DB
-from .adapters import get_azure_adapter, get_hetzner_adapter, get_upcloud_adapter
+from .adapters import (
+    CloudAdapter,
+    get_azure_adapter,
+    get_hetzner_adapter,
+    get_upcloud_adapter,
+)
 from .cloud_api import CloudAPI
 from .protocols import CloudCapacity
 
@@ -51,7 +56,7 @@ CLOUD_ADAPTER_GETTERS = {
 #   SIDE_EFFECTS: Logs error on ImportError
 #   LINKS: M-CLOUD-MANAGER, M-CLOUD-ADAPTERS
 # END_CONTRACT: _resolve_adapter
-def _resolve_adapter(cfg, log):
+def _resolve_adapter(cfg: ConfigCloud, log: logging.Logger) -> CloudAdapter | None:
     # START_BLOCK_RESOLVE_ADAPTER
     try:
         getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]

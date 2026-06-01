@@ -39,7 +39,8 @@ class TestSchedulerCreateNewTask:
     @patch("yascheduler.scheduler.submit_task", new=AsyncMock(return_value=42))
     @patch("yascheduler.scheduler.make_cli_deps")
     async def test_create_new_task_delegates_to_submit_task(
-        self, mock_make_deps
+        self,
+        mock_make_deps: MagicMock,
     ) -> None:
         """create_new_task passes label, metadata, engine_name to submit_task and fetches result via db.get_task."""
         # Arrange
@@ -85,7 +86,10 @@ class TestSchedulerStart:
 
     @pytest.mark.asyncio
     @patch("yascheduler.scheduler.make_daemon")
-    async def test_start_delegates_to_orchestrator(self, mock_make_daemon) -> None:
+    async def test_start_delegates_to_orchestrator(
+        self,
+        mock_make_daemon: MagicMock,
+    ) -> None:
         """start() creates Orchestrator via make_daemon, transfers resources, and calls orchestrator.start()."""
         # Arrange
         from yascheduler.scheduler import Scheduler
@@ -156,7 +160,9 @@ class TestClientQueueSubmitTaskAsync:
     @patch("yascheduler.client.Config.from_config_parser")
     @patch("yascheduler.di.make_cli_deps")
     async def test_queue_submit_task_async_uses_cli_deps(
-        self, mock_make_cli_deps, mock_from_cfg
+        self,
+        mock_make_cli_deps: MagicMock,
+        mock_from_cfg: MagicMock,
     ) -> None:
         """queue_submit_task_async calls deps.submit() via make_cli_deps, not Scheduler."""
         from yascheduler.client import Yascheduler

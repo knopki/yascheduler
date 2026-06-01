@@ -30,7 +30,7 @@ from yascheduler.db import NodeModel, TaskModel, TaskStatus
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: make_task
-def make_task(**overrides: Any) -> TaskModel:
+def make_task(**overrides: Any) -> TaskModel:  # noqa: ANN401
     task_id: int = overrides.get("task_id", 1)
     label: str = overrides.get("label", "test-task")
     ip: str = overrides.get("ip", "127.0.0.1")
@@ -52,7 +52,7 @@ def make_task(**overrides: Any) -> TaskModel:
 #   SIDE_EFFECTS: None
 #   LINKS: M-DB
 # END_CONTRACT: make_node
-def make_node(**overrides: Any) -> NodeModel:
+def make_node(**overrides: Any) -> NodeModel:  # noqa: ANN401
     ip: str = overrides.get("ip", "192.168.1.1")
     ncpus: int | None = overrides.get("ncpus", 4)
     return NodeModel(

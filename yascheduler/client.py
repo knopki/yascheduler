@@ -47,7 +47,7 @@ def to_sync(
     """
 
     @wraps(func)
-    def outer(*args: ParamT.args, **kwargs: ParamT.kwargs):
+    def outer(*args: ParamT.args, **kwargs: ParamT.kwargs):  # noqa: ANN202
         """
         Execute the async method synchronously in sync and async runtime.
         """
@@ -101,7 +101,7 @@ class Yascheduler:
         label: str,
         metadata: Mapping[str, Any],
         engine_name: str,
-        webhook_onsubmit=False,
+        webhook_onsubmit: bool = False,
     ) -> int:
         """Submit new task"""
         from .di import make_cli_deps
@@ -121,7 +121,7 @@ class Yascheduler:
         label: str,
         metadata: Mapping[str, Any],
         engine_name: str,
-        webhook_onsubmit=False,
+        webhook_onsubmit: bool = False,
     ) -> int:
         """Submit new task"""
         fn = to_sync(self.queue_submit_task_async)

@@ -4,13 +4,13 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Custom exceptions for remote machine operations.
-#   SCOPE: PlatformGuessFailed exception.
+#   SCOPE: PlatformGuessFailedError exception.
 #   DEPENDS: none
 #   LINKS: M-PLATFORM-ADAPTERS, M-PLATFORM-EXC
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   PlatformGuessFailed - Raised when platform detection from host string fails
+#   PlatformGuessFailedError - Raised when platform detection from host string fails
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
@@ -19,5 +19,5 @@
 #
 
 
-class PlatformGuessFailed(Exception):
+class PlatformGuessFailedError(Exception):
     pass

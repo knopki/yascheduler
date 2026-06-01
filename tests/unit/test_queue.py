@@ -36,7 +36,7 @@ from yascheduler.queue import UMessage, UniqueQueue
 #   LINKS: M-QUEUE
 # END_CONTRACT: queue
 @pytest_asyncio.fixture
-async def queue():
+async def queue() -> UniqueQueue:
     return UniqueQueue(name="test")
 
 
@@ -58,7 +58,7 @@ def msg(msg_id: str = "a", payload: str = "data") -> UMessage:
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_put_get
-async def test_put_get(queue) -> None:
+async def test_put_get(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
     result = await queue.get()
@@ -72,7 +72,7 @@ async def test_put_get(queue) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_deduplication
-async def test_deduplication(queue) -> None:
+async def test_deduplication(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
     await queue.put(m)
@@ -86,7 +86,7 @@ async def test_deduplication(queue) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_item_done_tracking
-async def test_item_done_tracking(queue) -> None:
+async def test_item_done_tracking(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
     got = await queue.get()
@@ -102,7 +102,7 @@ async def test_item_done_tracking(queue) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_item_done_allows_requeue
-async def test_item_done_allows_requeue(queue) -> None:
+async def test_item_done_allows_requeue(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
     got = await queue.get()
@@ -118,7 +118,7 @@ async def test_item_done_allows_requeue(queue) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_psize_after_get
-async def test_psize_after_get(queue) -> None:
+async def test_psize_after_get(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
     await queue.get()
@@ -132,6 +132,6 @@ async def test_psize_after_get(queue) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_task_done_raises
-async def test_task_done_raises(queue) -> None:
+async def test_task_done_raises(queue: UniqueQueue) -> None:
     with pytest.raises(NotImplementedError, match="task_done"):
         queue.task_done()

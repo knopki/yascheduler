@@ -205,7 +205,7 @@ def _render_custom_data(
 # END_CONTRACT: create_vm_params
 def create_vm_params(
     location: str,
-    vm_name,
+    vm_name: str,
     vm_image: AzureImageReference,
     vm_size: str,
     nic: NetworkInterface,
@@ -263,7 +263,7 @@ async def create_node(
     cfg: ConfigCloudAzure,
     key: SSHKey,
     cloud_config: Optional[PCloudConfig] = None,
-):
+) -> str:
     """Create virtual machine with nic"""
     vm_name = get_rnd_name("yascheduler-vm")
     nic, ip_addr = await create_nic(log=log, cfg=cfg, client=nmc, vm_name=vm_name)

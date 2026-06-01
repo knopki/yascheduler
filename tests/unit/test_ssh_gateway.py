@@ -60,7 +60,7 @@ class _AsyncIter:
     def __aiter__(self) -> _AsyncIter:
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> Any:  # noqa: ANN401
         try:
             return next(self._it)
         except StopIteration:
@@ -69,15 +69,15 @@ class _AsyncIter:
 
 def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     """Create a mock adapter with async stubs for all platform methods."""
-    from unittest.mock import MagicMock as _MM
+    from unittest.mock import MagicMock
 
-    adapter = _MM()
+    adapter = MagicMock()
     adapter.platform = platform
     adapter.path = PurePosixPath
     adapter.quote = lambda s: s
 
-    async def _run(*args: object, **kwargs: Any) -> _MM:
-        result = _MM()
+    async def _run(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
+        result = MagicMock()
         result.returncode = 0
         result.stdout = "stdout"
         result.stderr = ""
@@ -85,8 +85,8 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
     adapter.run = _run
 
-    async def _run_bg(*args: object, **kwargs: Any) -> _MM:
-        return _MM()
+    async def _run_bg(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
+        return MagicMock()
 
     adapter.run_bg = _run_bg
 
@@ -95,8 +95,8 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
     adapter.get_cpu_cores = _get_cpu_cores
 
-    def _pgrep(*args: object, **kwargs: Any) -> _AsyncIter:
-        proc = _MM(spec=PProcessInfo)
+    def _pgrep(*args: object, **kwargs: Any) -> _AsyncIter:  # noqa: ANN401
+        proc = MagicMock(spec=PProcessInfo)
         proc.pid = 1234
         proc.name = "testproc"
         proc.command = "/usr/bin/testproc"
@@ -104,8 +104,8 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
     adapter.pgrep = _pgrep
 
-    def _list_processes(*args: object, **kwargs: Any) -> _AsyncIter:
-        proc = _MM(spec=PProcessInfo)
+    def _list_processes(*args: object, **kwargs: Any) -> _AsyncIter:  # noqa: ANN401
+        proc = MagicMock(spec=PProcessInfo)
         proc.pid = 1
         proc.name = "init"
         proc.command = "/sbin/init"
@@ -120,12 +120,12 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
 def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
     """Create a mock connection with SFTP client context manager."""
-    from unittest.mock import MagicMock as _MM
+    from unittest.mock import MagicMock
 
-    conn = _MM()
-    conn._transport = _MM()
+    conn = MagicMock()
+    conn._transport = MagicMock()
     conn._transport.is_closing.return_value = False
-    conn.close = _MM()
+    conn.close = MagicMock()
     conn.wait_closed = AsyncMock()
 
     # SFTP client context manager
@@ -140,7 +140,7 @@ def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
     conn.start_sftp_client = _sftp_ctx
 
     # -- connection options --
-    conn_opts = _MM()
+    conn_opts = MagicMock()
     conn_opts.host = ip
     conn_opts.port = 22
     conn_opts.username = "root"
@@ -741,7 +741,7 @@ class TestOccupancy:
         mock_pengine.check_cmd_code = 0
 
         # Override adapter.run to return matching exit code
-        async def _run_match(*args: object, **kwargs: Any) -> MagicMock:
+        async def _run_match(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
             result = MagicMock()
             result.returncode = 0
             result.stdout = "active"
@@ -764,7 +764,7 @@ class TestOccupancy:
         mock_pengine.check_cmd = "systemctl is-active test"
         mock_pengine.check_cmd_code = 0
 
-        async def _run_mismatch(*args: object, **kwargs: Any) -> MagicMock:
+        async def _run_mismatch(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
             result = MagicMock()
             result.returncode = 3  # service not running
             result.stdout = "inactive"
@@ -814,7 +814,9 @@ class TestOccupancy:
         mock_pengine.check_pname = "sleep"
 
         # Replace adapter.pgrep with one that raises SSHRetryExc
-        async def _pgrep_ssh_fail(*args: object, **kwargs: object):
+        async def _pgrep_ssh_fail(
+            *args: object, **kwargs: object
+        ) -> AsyncGenerator[None, None]:
             raise ChannelOpenError(1, "SSH connection lost")
             yield  # makes this an async generator
 

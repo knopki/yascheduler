@@ -24,7 +24,7 @@ Calls each CLI command function with patched sys.argv, Config, make_cli_deps,
 and UoW to verify output and mock call assertions without real DB/SSH.
 """
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,7 +38,7 @@ from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 # ---------------------------------------------------------------------------
 
 
-def make_mock_config():
+def make_mock_config() -> MagicMock:
     """Return a MagicMock Config with all expected attributes."""
     engine = MagicMock(spec=Engine)
     engine.name = "g09"
@@ -65,7 +65,7 @@ def make_mock_config():
     return config
 
 
-def make_mock_uow():
+def make_mock_uow() -> AsyncMock:
     """Return an AsyncMock UoW with .tasks and .nodes sub-mocks."""
     uow = AsyncMock()
     uow.__aenter__ = AsyncMock(return_value=uow)
@@ -76,7 +76,7 @@ def make_mock_uow():
     return uow
 
 
-def make_mock_deps(config, uow):
+def make_mock_deps(config: MagicMock, uow: AsyncMock) -> MagicMock:
     """Return a MagicMock CLIDeps wired to the given uow."""
     deps = MagicMock(spec=CLIDeps)
     deps.uow_factory = MagicMock(return_value=uow)
@@ -86,7 +86,12 @@ def make_mock_deps(config, uow):
     return deps
 
 
-def make_task(task_id=1, status=TaskStatus.RUNNING, label="test", ip="10.0.0.1"):
+def make_task(
+    task_id: int = 1,
+    status: TaskStatus = TaskStatus.RUNNING,
+    label: str = "test",
+    ip: str = "10.0.0.1",
+) -> Task:
     """Return a Task domain object with sensible defaults."""
     return Task(
         task_id=task_id,
@@ -109,7 +114,12 @@ def make_task(task_id=1, status=TaskStatus.RUNNING, label="test", ip="10.0.0.1")
 class TestSubmit:
     """Behavioral tests for the ``submit`` CLI command."""
 
-    def test_submit_happy_path(self, tmp_path, capsys, monkeypatch) -> None:
+    def test_submit_happy_path(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Submit a valid script: prints task ID, calls deps.submit with correct args."""
         script = tmp_path / "test.in"
         script.write_text("LABEL = Test job\nENGINE = g09\n")
@@ -140,7 +150,7 @@ class TestSubmit:
         assert call_args[0][2] == "g09"  # engine_name
         assert "local_folder" in call_args[0][1]  # metadata
 
-    def test_submit_missing_script(self, capsys) -> None:
+    def test_submit_missing_script(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Non-existent script raises ValueError with 'not a file'."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -156,7 +166,9 @@ class TestSubmit:
             with pytest.raises(ValueError, match="not a file"):
                 submit()
 
-    def test_submit_no_engine_key(self, tmp_path, capsys) -> None:
+    def test_submit_no_engine_key(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Script without ENGINE= line raises ValueError."""
         script = tmp_path / "test.in"
         script.write_text("LABEL = Test job\nSOMETHING = else\n")
@@ -175,7 +187,9 @@ class TestSubmit:
             with pytest.raises(ValueError, match="not defined an engine"):
                 submit()
 
-    def test_submit_unsupported_engine(self, tmp_path, capsys) -> None:
+    def test_submit_unsupported_engine(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Script with unknown ENGINE= raises ValueError 'not supported'."""
         script = tmp_path / "test.in"
         script.write_text("LABEL = Test\nENGINE = unknown\n")
@@ -200,7 +214,9 @@ class TestSubmit:
 class TestCheckStatus:
     """Behavioral tests for the ``check_status`` CLI command."""
 
-    def test_check_status_default_listing(self, capsys) -> None:
+    def test_check_status_default_listing(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Default mode prints task_id and status name for RUNNING and TO_DO tasks."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -225,7 +241,7 @@ class TestCheckStatus:
         assert "1   RUNNING" in out
         assert "2   TO_DO" in out
 
-    def test_check_status_info_mode(self, capsys) -> None:
+    def test_check_status_info_mode(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Info mode (-i) prints tab-separated task details."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -255,7 +271,7 @@ class TestCheckStatus:
         # Verify tab-separated format
         assert "\t" in out
 
-    def test_check_status_job_filter(self, capsys) -> None:
+    def test_check_status_job_filter(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Job filter (-j) calls list_by_jobs and prints results."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -283,7 +299,7 @@ class TestCheckStatus:
 class TestShowNodes:
     """Behavioral tests for the ``show_nodes`` CLI command."""
 
-    def test_show_nodes_with_tasks(self, capsys) -> None:
+    def test_show_nodes_with_tasks(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Show nodes with running tasks: prints formatted node lines."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -322,7 +338,7 @@ class TestShowNodes:
         assert "(task_id=-)" in out
         assert "hetzner" in out
 
-    def test_show_nodes_empty(self, capsys) -> None:
+    def test_show_nodes_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
         """No nodes and no tasks: produces no output."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -346,7 +362,7 @@ class TestShowNodes:
 class TestManageNode:
     """Behavioral tests for the ``manage_node`` CLI command."""
 
-    def test_manage_node_add_new(self, capsys) -> None:
+    def test_manage_node_add_new(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Add a new host: calls RemoteMachine.create, adds node, prints 'Added host'."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -381,7 +397,7 @@ class TestManageNode:
         assert added_node.port == 22
         assert added_node.ncpus == 0
 
-    def test_manage_node_add_existing(self, capsys) -> None:
+    def test_manage_node_add_existing(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Add a host already in DB: prints 'already in DB', returns False."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -403,7 +419,7 @@ class TestManageNode:
         out, _ = capsys.readouterr()
         assert "already in DB" in out
 
-    def test_manage_node_remove_hard(self, capsys) -> None:
+    def test_manage_node_remove_hard(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Hard remove: marks running tasks DONE, removes node."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -434,7 +450,9 @@ class TestManageNode:
         uow.nodes.remove.assert_called_once_with("10.0.0.1")
         uow.commit.assert_called_once()
 
-    def test_manage_node_remove_soft_with_tasks(self, capsys) -> None:
+    def test_manage_node_remove_soft_with_tasks(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Soft remove with running tasks: disables node (not remove)."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -462,7 +480,9 @@ class TestManageNode:
         uow.nodes.remove.assert_not_called()
         uow.commit.assert_called_once()
 
-    def test_manage_node_remove_soft_no_tasks(self, capsys) -> None:
+    def test_manage_node_remove_soft_no_tasks(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Soft remove with no running tasks: removes node immediately."""
         config = make_mock_config()
         uow = make_mock_uow()
@@ -490,7 +510,9 @@ class TestManageNode:
         uow.nodes.disable.assert_not_called()
         uow.commit.assert_called_once()
 
-    def test_manage_node_remove_nonexistent(self, capsys) -> None:
+    def test_manage_node_remove_nonexistent(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Remove a host not in DB: prints 'NOT in DB', returns False."""
         config = make_mock_config()
         uow = make_mock_uow()

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from pg8000.native import Connection
 
@@ -29,6 +29,7 @@ from .exceptions import UnitOfWorkNotInitializedError
 from .postgres import PostgresNodeRepository, PostgresTaskRepository
 
 if TYPE_CHECKING:
+    import types
     from collections.abc import Callable
 
     from yascheduler.config import ConfigDb
@@ -115,7 +116,7 @@ class PostgresUnitOfWork:
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: Any | None,
+        exc_tb: types.TracebackType | None,
     ) -> bool:
         """Rollback on error, close connection, shutdown executor."""
         if exc_type is not None and self._conn is not None:

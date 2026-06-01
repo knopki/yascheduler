@@ -48,7 +48,7 @@ class _PgRepository:
     #   SIDE_EFFECTS: None
     #   LINKS: None
     # END_CONTRACT: _run
-    async def _run(self, sql: str, **params: Any) -> list[dict[str, Any]]:
+    async def _run(self, sql: str, **params: Any) -> list[dict[str, Any]]:  # noqa: ANN401
         """Execute SQL via the thread pool and return rows as dicts keyed by column name."""
 
         def _fn() -> list[dict[str, Any]]:

@@ -149,6 +149,7 @@ class Orchestrator:
 
         self._bg_jobs: set[asyncio.Task[None]] = set()
         self._cancellation_event = Event()
+        self._machine_connected_event = Event()
         self._sleep_interval: int = min(e.sleep_interval for e in engines.values())
 
         lcfg = config.local
@@ -416,6 +417,7 @@ class Orchestrator:
                 port=node.port,
                 gateway=self._gateway,
             )
+            self._machine_connected_event.set()
         except asyncssh.misc.Error as err:
             self._log.error("Can't connect to machine with error: %s", err)
         except Exception as err:
@@ -606,9 +608,11 @@ class Orchestrator:
     # END_CONTRACT: Orchestrator._await_first_machine
     async def _await_first_machine(self) -> None:
         # START_BLOCK_WAIT_MACHINES
+        if self._remote_machines:
+            return
+
         async def _wait() -> None:
-            while not len(self._remote_machines):
-                await asyncio.sleep(1)
+            await self._machine_connected_event.wait()
 
         wait_task = asyncio.create_task(_wait())
         timeout_task = asyncio.create_task(asyncio.sleep(30))

@@ -660,7 +660,7 @@
       <path>yascheduler/remote_machine/exc.py</path>
       <depends>none</depends>
       <annotations>
-        <class-PlatformGuessFailed PURPOSE="Raised when no adapter matches detected platform" />
+        <class-PlatformGuessFailedError PURPOSE="Raised when no adapter matches detected platform" />
       </annotations>
     </M-REMOTE-EXC>
 
@@ -749,7 +749,7 @@
       <path>yascheduler/adapters/ssh/platform/exceptions.py</path>
       <depends>none</depends>
       <annotations>
-        <class-PlatformGuessFailed PURPOSE="Raised when no adapter matches detected platform" />
+        <class-PlatformGuessFailedError PURPOSE="Raised when no adapter matches detected platform" />
       </annotations>
     </M-PLATFORM-EXC>
 

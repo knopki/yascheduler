@@ -54,12 +54,14 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     #   SIDE_EFFECTS: Initializes internal queue state and done_pending set
     #   LINKS: M-QUEUE
     # END_CONTRACT: __init__
-    def __init__(self, name: str, *argv, maxsize: int = 0, **kwargs) -> None:
+    def __init__(
+        self, name: str, *argv: object, maxsize: int = 0, **kwargs: object
+    ) -> None:  # noqa: ANN002,ANN003
         self.name = name
         self._done_pending = set()
         super().__init__(maxsize, *argv, **kwargs)
 
-    def _get(self):
+    def _get(self) -> UMessage[TUMsgId, TUMsgPayload]:
         item = self._queue.popleft()
         self._done_pending.add(item)
         return item
@@ -94,7 +96,7 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     #   SIDE_EFFECTS: Raises NotImplementedError
     #   LINKS: M-QUEUE
     # END_CONTRACT: task_done
-    def task_done(self):
+    def task_done(self) -> None:
         raise NotImplementedError("task_done() not implemented, use item_done()")
 
     # START_CONTRACT: item_done
@@ -116,6 +118,6 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     #   SIDE_EFFECTS: None
     #   LINKS: M-QUEUE
     # END_CONTRACT: psize
-    def psize(self):
+    def psize(self) -> int:
         """Number of items not done but not in queue."""
         return len(self._done_pending)

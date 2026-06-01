@@ -53,7 +53,7 @@ class MyPureWindowsPath(PureWindowsPath):
     #   LINKS: M-REMOTE-WINDOWS
     # END_CONTRACT: MyPureWindowsPath._parse_args
     @classmethod
-    def _parse_args(cls, path):
+    def _parse_args(cls, path: str) -> tuple[str, str, list[str]]:
         drv, root, parts = cls._parse_args(path)
         # prevent leading slash like \C:\Users\user
         if not drv and root == "\\" and len(parts) > 2 and parts[0] == "\\":
@@ -146,7 +146,7 @@ async def windows_pgrep(
     conn: SSHClientConnection,
     quote: QuoteCallable,
     pattern: Union[str, Pattern[str]],
-    full=True,
+    full: bool = True,
 ) -> AsyncGenerator[PProcessInfo, None]:
     """
     Returns information about running processes, that name matches a pattern.

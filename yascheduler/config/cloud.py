@@ -28,13 +28,13 @@ from configparser import SectionProxy
 from functools import partial
 from typing import Optional, Union
 
-from attrs import define, field, fields, validators
+from attrs import Attribute, define, field, fields, validators
 
 from ..compat import Self
 from .utils import make_default_field, opt_str_val, warn_unknown_fields
 
 
-def _check_az_user(_: "ConfigCloudAzure", __, value: str) -> None:
+def _check_az_user(_: "ConfigCloudAzure", __: Attribute, value: str) -> None:
     if value == "root":
         raise ValueError("Root user is forbidden on Azure")
 

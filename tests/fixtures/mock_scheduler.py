@@ -21,7 +21,9 @@
 import io
 import logging
 from configparser import ConfigParser
+from typing import Any
 
+from yascheduler.clouds.cloud_api_manager import CloudAPIManager
 from yascheduler.config import (
     Config,
     ConfigCloudAzure,
@@ -32,10 +34,16 @@ from yascheduler.config import (
     ConfigRemote,
     EngineRepository,
 )
+from yascheduler.db import DB
 from yascheduler.scheduler import Scheduler
 
 
-def make_scheduler(db, config, clouds=None, remote_machines=None):
+def make_scheduler(
+    db: DB,
+    config: Config,
+    clouds: CloudAPIManager | None = None,
+    remote_machines: list[Any] | None = None,
+) -> Scheduler:
     """Construct a refactored Scheduler with injected mocks.
 
     After refactoring, Scheduler no longer accepts remote_machines

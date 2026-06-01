@@ -83,7 +83,7 @@ class CLIDeps:
     #   SIDE_EFFECTS: Opens a DB connection via UoW.
     #   LINKS: M-APPLICATION-UOW
     # END_CONTRACT: CLIDeps.query
-    async def query(self, task_id: int):
+    async def query(self, task_id: int) -> object | None:
 
         async with self.uow_factory() as uow:
             return await uow.tasks.get(task_id)
@@ -159,5 +159,5 @@ def make_cli_deps(config: Config) -> CLIDeps:
 #   SIDE_EFFECTS: None
 #   LINKS: M-AIIDA
 # END_CONTRACT: make_aiida
-def make_aiida(config: Config):
+def make_aiida(config: Config) -> None:
     raise NotImplementedError("make_aiida will be implemented in a future phase")

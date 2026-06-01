@@ -84,7 +84,7 @@ class TaskContext:
     def to_metadata(self) -> dict[str, object]:
         """Serialize to flat dict for JSONB storage."""
 
-        def factory(items):
+        def factory(items: list[tuple[str, object]]) -> dict[str, object]:
             return {k: v for k, v in items if v is not None and k != "extra"}
 
         result = asdict(self, dict_factory=factory)

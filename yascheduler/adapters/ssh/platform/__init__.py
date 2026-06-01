@@ -53,7 +53,7 @@ from .checks import (
     check_is_windows12,
 )
 from .common import ProcessInfo, run, run_bg
-from .exceptions import PlatformGuessFailed
+from .exceptions import PlatformGuessFailedError
 from .linux import (
     deploy_local_archive,
     deploy_local_files,
@@ -140,7 +140,7 @@ __all__ = [
     "ProcessInfo",
     "run",
     "run_bg",
-    "PlatformGuessFailed",
+    "PlatformGuessFailedError",
     "SFTPRetryExc",
     "SSHRetryExc",
     "AllSSHRetryExc",

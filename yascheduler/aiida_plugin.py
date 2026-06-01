@@ -29,7 +29,12 @@ import aiida.schedulers
 from aiida.common.escaping import escape_for_bash
 from aiida.common.exceptions import FeatureNotAvailable
 from aiida.orm import load_node
-from aiida.schedulers.datastructures import JobInfo, JobState, NodeNumberJobResource
+from aiida.schedulers.datastructures import (
+    JobInfo,
+    JobState,
+    JobTemplate,
+    NodeNumberJobResource,
+)
 from aiida.schedulers.scheduler import SchedulerError
 
 _MAP_STATUS_YASCHEDULER = {
@@ -48,7 +53,7 @@ class YaschedJobResource(NodeNumberJobResource):
     #   SIDE_EFFECTS: Calls parent constructor with provided arguments
     #   LINKS: M-AIIDA
     # END_CONTRACT: __init__
-    def __init__(self, *_, **kwargs) -> None:
+    def __init__(self, *_, **kwargs) -> None:  # noqa: ANN002, ANN003
         super().__init__(**kwargs)
 
 
@@ -74,7 +79,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Changes remote working directory via transport, executes submit command
     #   LINKS: M-AIIDA
     # END_CONTRACT: submit_job
-    def submit_job(self, working_directory, filename):
+    def submit_job(self, working_directory: str, filename: str) -> str:
         """
         Submit a job script to yascheduler.
 
@@ -94,7 +99,12 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Executes remote command via transport
     #   LINKS: M-AIIDA
     # END_CONTRACT: get_jobs
-    def get_jobs(self, jobs=None, user=None, as_dict=False):
+    def get_jobs(
+        self,
+        jobs: str | list[str] | None = None,
+        user: str | None = None,
+        as_dict: bool = False,
+    ) -> list[JobInfo] | dict[str, JobInfo]:
         """
         Return the list of currently active jobs.
 
@@ -121,7 +131,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Logs a warning about unsupported job cancellation
     #   LINKS: M-AIIDA
     # END_CONTRACT: kill_job
-    def kill_job(self, jobid) -> bool:
+    def kill_job(self, jobid: str) -> bool:
         """
         Report that job cancellation is not supported by yascheduler.
 
@@ -141,7 +151,9 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_joblist_command
-    def _get_joblist_command(self, jobs=None, user=None):
+    def _get_joblist_command(
+        self, jobs: str | list[str] | None = None, user: str | None = None
+    ) -> str:
         """
         The command to report full information on existing jobs.
         """
@@ -170,7 +182,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_detailed_jobinfo_command
-    def _get_detailed_jobinfo_command(self, jobid) -> str:
+    def _get_detailed_jobinfo_command(self, jobid: str) -> str:
         """
         Return the command to run to get the detailed information on a job,
         even after the job has finished.
@@ -184,7 +196,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_detailed_job_info_command
-    def _get_detailed_job_info_command(self, job_id):
+    def _get_detailed_job_info_command(self, job_id: str) -> str:
         """
         Return the command to run to get detailed information on a job.
 
@@ -200,7 +212,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Loads AiiDA node from DB via load_node()
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_submit_script_header
-    def _get_submit_script_header(self, job_tmpl):
+    def _get_submit_script_header(self, job_tmpl: JobTemplate) -> str:
         """
         Return the submit script header, using the parameters from the
         job_tmpl.
@@ -229,7 +241,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_submit_command
-    def _get_submit_command(self, submit_script) -> str:
+    def _get_submit_command(self, submit_script: str) -> str:
         """
         Return the string to execute to submit a given script.
         """
@@ -242,7 +254,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Logs warnings/errors on stderr or invalid output
     #   LINKS: M-AIIDA
     # END_CONTRACT: _parse_submit_output
-    def _parse_submit_output(self, retval, stdout, stderr):
+    def _parse_submit_output(self, retval: int, stdout: str, stderr: str) -> str:
         """
         Parse the output of the submit command, as returned by executing the
         command returned by _get_submit_command command.
@@ -266,7 +278,9 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Logs warnings on stderr
     #   LINKS: M-AIIDA
     # END_CONTRACT: _parse_joblist_output
-    def _parse_joblist_output(self, retval, stdout, stderr):
+    def _parse_joblist_output(
+        self, retval: int, stdout: str, stderr: str
+    ) -> list[JobInfo]:
         """
         Parse the queue output string, as returned by executing the
         command returned by _get_joblist_command command,
@@ -294,7 +308,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Raises FeatureNotAvailable exception
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_kill_command
-    def _get_kill_command(self, jobid) -> NoReturn:
+    def _get_kill_command(self, jobid: str) -> NoReturn:
         """
         Return the command to kill the job with specified jobid.
         """
@@ -307,7 +321,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _parse_kill_output
-    def _parse_kill_output(self, retval, stdout, stderr) -> bool:
+    def _parse_kill_output(self, retval: int, stdout: str, stderr: str) -> bool:
         """
         Parse the output of the kill command.
         """

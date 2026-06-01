@@ -33,7 +33,7 @@ from yascheduler.config.db import ConfigDb
 from yascheduler.db import DB
 
 
-def pytest_collection_modifyitems(items) -> None:
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if "/tests/integration/" in str(item.path):
             item.add_marker("integration")
@@ -83,7 +83,7 @@ async def _init_schema(
 
     instance = await DB.create(_db_config, automigrate=False)
     schema_path = (
-        Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent.parent  # noqa: ASYNC240
         / "yascheduler"
         / "adapters"
         / "persistence"

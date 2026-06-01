@@ -30,7 +30,7 @@
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
 
-from typing import TYPE_CHECKING, NoReturn
+from typing import NoReturn
 
 import pytest
 
@@ -39,6 +39,7 @@ from yascheduler.adapters.persistence.postgres import (
     PostgresTaskRepository,
 )
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
+from yascheduler.config import ConfigDb
 from yascheduler.db import DB
 from yascheduler.domain.model import (
     Node,
@@ -48,9 +49,6 @@ from yascheduler.domain.model import (
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
 )
-
-if TYPE_CHECKING:
-    from yascheduler.config import ConfigDb
 
 # ====================================================================
 # Task 8.2: PostgresTaskRepository CRUD
@@ -401,7 +399,7 @@ async def test_repo_node_get_by_ips(db: DB) -> None:
 #   SIDE_EFFECTS: Creates and closes pg8000 connections; commits a node insert.
 #   LINKS: PostgresUnitOfWork
 # END_CONTRACT: test_uow_integration
-async def test_uow_integration(_db_config, _init_schema) -> None:
+async def test_uow_integration(_db_config: ConfigDb, _init_schema: None) -> None:
     """UoW creates repos from config, commit persists, exit closes."""
 
     config: ConfigDb = _db_config
@@ -428,7 +426,9 @@ async def test_uow_integration(_db_config, _init_schema) -> None:
 #   SIDE_EFFECTS: Creates and closes pg8000 connections; rolls back on exception.
 #   LINKS: PostgresUnitOfWork
 # END_CONTRACT: test_uow_rollback_integration
-async def test_uow_rollback_integration(_db_config, _init_schema) -> NoReturn:
+async def test_uow_rollback_integration(
+    _db_config: ConfigDb, _init_schema: None
+) -> NoReturn:
     """Uncommitted changes are lost on rollback."""
 
     config: ConfigDb = _db_config

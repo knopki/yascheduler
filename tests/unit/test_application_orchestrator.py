@@ -50,11 +50,11 @@ from yascheduler.queue import UniqueQueue
 
 
 def create_mock_config(
-    allocate_limit=3,
-    consume_limit=2,
-    conn_machine_limit=1,
-    deallocate_limit=1,
-):
+    allocate_limit: int = 3,
+    consume_limit: int = 2,
+    conn_machine_limit: int = 1,
+    deallocate_limit: int = 1,
+) -> MagicMock:
     """Create a mocked Config with local/remote sub-configs."""
     local = MagicMock(spec=ConfigLocal)
     local.conn_machine_pending = 10
@@ -83,12 +83,12 @@ def create_mock_config(
 
 
 def make_orchestrator(
-    allocate_limit=3,
-    consume_limit=2,
-    conn_machine_limit=1,
-    deallocate_limit=1,
-    sleep_interval=0,
-):
+    allocate_limit: int = 3,
+    consume_limit: int = 2,
+    conn_machine_limit: int = 1,
+    deallocate_limit: int = 1,
+    sleep_interval: int = 0,
+) -> Orchestrator:
     """Create an Orchestrator with all dependencies mocked.
 
     Uses a real Engine with sleep_interval=0 so asleep_until calls
@@ -227,7 +227,7 @@ class TestOrchestratorLifecycle:
 
         q = UniqueQueue("test", maxsize=10)
 
-        async def empty_producer():
+        async def empty_producer() -> None:
             """Yields nothing — a no-op async generator."""
             return
             yield  # pragma: no cover  # type: ignore[unreachable]

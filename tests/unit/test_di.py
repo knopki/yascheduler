@@ -39,7 +39,7 @@ from yascheduler.di import CLIDeps, make_aiida, make_cli_deps, make_daemon
 # =============================================================================
 
 
-def create_mock_config():
+def create_mock_config() -> MagicMock:
     """Create a mocked Config with sub-config mocks needed by DI factories."""
     engines = MagicMock(spec=EngineRepository)
     db = MagicMock(spec=ConfigDb)

@@ -25,7 +25,12 @@ from yascheduler.remote_machine.remote_machine import (
 )
 
 
-def make_mock_remote_machine(ip, platforms, busy=None, hostname=None):
+def make_mock_remote_machine(
+    ip: str,
+    platforms: list[str],
+    busy: bool | None = None,
+    hostname: str | None = None,
+) -> MagicMock:
     meta = RemoteMachineMetadata()
     if busy is True:
         meta.busy = True

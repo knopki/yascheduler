@@ -41,7 +41,9 @@ from .webhook import WebhookPayload as WebhookPayload  # noqa: F401 — re-expor
 logging.basicConfig(level=logging.INFO)
 
 
-def get_logger(log_file: Optional[Union[str, Path]] = None, level: int = logging.INFO):
+def get_logger(
+    log_file: Optional[Union[str, Path]] = None, level: int = logging.INFO
+) -> logging.Logger:
     logging.captureWarnings(True)
     logger = logging.getLogger("yascheduler")
     logger.setLevel(level)

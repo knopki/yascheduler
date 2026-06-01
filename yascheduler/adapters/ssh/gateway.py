@@ -57,6 +57,10 @@ if TYPE_CHECKING:
     from asyncssh.sftp import SFTPClient
 
     from yascheduler.adapters.ssh.platform.adapters import RemoteMachineAdapter
+    from yascheduler.adapters.ssh.platform.protocol import (
+        OuterRunCallable,
+        QuoteCallable,
+    )
 
 my_backoff_exc = partial(
     backoff.on_exception,
@@ -494,7 +498,7 @@ class SSHMachineGateway:
     def get_path(self, ip: str) -> type[PurePath]:
         return self._machines[ip].adapter.path
 
-    def get_quote(self, ip: str):
+    def get_quote(self, ip: str) -> QuoteCallable:
         return self._machines[ip].adapter.quote
 
     def get_data_dir(self, ip: str) -> PurePath:
@@ -543,13 +547,15 @@ class SSHMachineGateway:
     def register_machine(self, ip: str, state: _MachineState) -> None:
         self._machines[ip] = state
 
-    def _make_run_fn(self, conn: SSHClientConnection, adapter: RemoteMachineAdapter):
+    def _make_run_fn(
+        self, conn: SSHClientConnection, adapter: RemoteMachineAdapter
+    ) -> OuterRunCallable:
         """Build OuterRunCallable with pre-bound conn and quote."""
 
         async def _run_fn(
             *args: object,
             cwd: str | None = None,
-            **kwargs: Any,
+            **kwargs: Any,  # noqa: ANN401
         ) -> SSHCompletedProcess:
             return await adapter.run(
                 conn,

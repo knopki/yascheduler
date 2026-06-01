@@ -30,7 +30,7 @@ from yascheduler import LOG_FILE, PID_FILE
 from yascheduler.utils import daemonize
 
 
-def start_daemon(pid_file, log_file) -> None:
+def start_daemon(pid_file: str, log_file: str) -> None:
     """Launch daemon in its context as per
     https://stackoverflow.com/questions/13106221/"""
     with daemon.DaemonContext(

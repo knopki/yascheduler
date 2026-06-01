@@ -44,7 +44,7 @@ def test_utils_import_does_not_import_scheduler() -> None:
             sys.modules["yascheduler.scheduler"] = saved
 
 
-def _check_to_sync_decorated(func) -> None:
+def _check_to_sync_decorated(func: object) -> None:
     """Assert that *func* is decorated with ``@to_sync``.
 
     The ``@to_sync`` decorator wraps an ``async`` function via ``functools.wraps``,

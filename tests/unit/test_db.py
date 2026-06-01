@@ -64,7 +64,7 @@ class _MockColumn:
 #   LINKS: [M-DB]
 # END_CONTRACT: mock_conn
 @pytest.fixture
-def mock_conn():
+def mock_conn() -> MagicMock:
     """Mocked pg8000.Connection with configurable run/row_count."""
     conn = MagicMock(spec=Connection)
     conn.run = MagicMock()
@@ -80,7 +80,7 @@ def mock_conn():
 #   LINKS: [M-DB]
 # END_CONTRACT: db
 @pytest.fixture
-async def db(mock_conn):
+async def db(mock_conn: MagicMock) -> DB:
     """DB instance with mocked connection, real loop/executor."""
     loop = asyncio.get_running_loop()
     exe = ThreadPoolExecutor(max_workers=1)
@@ -99,7 +99,7 @@ async def db(mock_conn):
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_add_node
-async def test_add_node(db, mock_conn) -> None:
+async def test_add_node(db: DB, mock_conn: MagicMock) -> None:
     """executes INSERT SQL and returns NodeModel"""
     mock_conn.row_count = 1
     node = await db.add_node("10.0.0.1", "root")
@@ -118,7 +118,7 @@ async def test_add_node(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_get_node_found
-async def test_get_node_found(db, mock_conn) -> None:
+async def test_get_node_found(db: DB, mock_conn: MagicMock) -> None:
     """returns NodeModel when row found"""
     mock_conn.run.return_value = [("10.0.0.1", 4, True, "az", "root", 22)]
     mock_conn.columns = [
@@ -147,7 +147,7 @@ async def test_get_node_found(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_get_node_not_found
-async def test_get_node_not_found(db, mock_conn) -> None:
+async def test_get_node_not_found(db: DB, mock_conn: MagicMock) -> None:
     """returns None when no matching row"""
     mock_conn.run.return_value = []
     node = await db.get_node("10.0.0.99")
@@ -161,7 +161,7 @@ async def test_get_node_not_found(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_get_all_nodes
-async def test_get_all_nodes(db, mock_conn) -> None:
+async def test_get_all_nodes(db: DB, mock_conn: MagicMock) -> None:
     """returns list of NodeModel from all rows"""
     mock_conn.run.return_value = [
         ("10.0.0.1", 4, True, None, "root", 22),
@@ -188,7 +188,7 @@ async def test_get_all_nodes(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_enable_node
-async def test_enable_node(db, mock_conn) -> None:
+async def test_enable_node(db: DB, mock_conn: MagicMock) -> None:
     """executes UPDATE SET enabled=TRUE"""
     await db.enable_node("10.0.0.1")
     call_args = mock_conn.run.call_args
@@ -204,7 +204,7 @@ async def test_enable_node(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_disable_node
-async def test_disable_node(db, mock_conn) -> None:
+async def test_disable_node(db: DB, mock_conn: MagicMock) -> None:
     """executes UPDATE SET enabled=FALSE"""
     await db.disable_node("10.0.0.1")
     call_args = mock_conn.run.call_args
@@ -220,7 +220,7 @@ async def test_disable_node(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_remove_node
-async def test_remove_node(db, mock_conn) -> None:
+async def test_remove_node(db: DB, mock_conn: MagicMock) -> None:
     """executes DELETE with correct IP"""
     await db.remove_node("10.0.0.1")
     call_args = mock_conn.run.call_args
@@ -240,7 +240,7 @@ async def test_remove_node(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_add_task
-async def test_add_task(db, mock_conn) -> None:
+async def test_add_task(db: DB, mock_conn: MagicMock) -> None:
     """executes INSERT and returns TaskModel"""
     mock_conn.run.return_value = [(1, "calc", "10.0.0.1", 0, {})]
     mock_conn.columns = [
@@ -267,7 +267,7 @@ async def test_add_task(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_get_task
-async def test_get_task(db, mock_conn) -> None:
+async def test_get_task(db: DB, mock_conn: MagicMock) -> None:
     """executes SELECT and returns TaskModel"""
     mock_conn.run.return_value = [(42, "job", "10.0.0.1", 1, {"k": "v"})]
     mock_conn.columns = [
@@ -294,7 +294,7 @@ async def test_get_task(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_update_task_status
-async def test_update_task_status(db, mock_conn) -> None:
+async def test_update_task_status(db: DB, mock_conn: MagicMock) -> None:
     """delegates to repo.update_status with correct status"""
     from unittest.mock import AsyncMock
 
@@ -316,7 +316,7 @@ async def test_update_task_status(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_set_task_running
-async def test_set_task_running(db, mock_conn) -> None:
+async def test_set_task_running(db: DB, mock_conn: MagicMock) -> None:
     """updates status to RUNNING and sets IP"""
     mock_task = Task(
         task_id=42,
@@ -342,7 +342,7 @@ async def test_set_task_running(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_set_task_done
-async def test_set_task_done(db, mock_conn) -> None:
+async def test_set_task_done(db: DB, mock_conn: MagicMock) -> None:
     """updates status to DONE and sets metadata"""
     meta = {"result": "ok"}
     mock_task = Task(
@@ -369,7 +369,7 @@ async def test_set_task_done(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_set_task_error_with_message
-async def test_set_task_error_with_message(db, mock_conn) -> None:
+async def test_set_task_error_with_message(db: DB, mock_conn: MagicMock) -> None:
     """embeds error in metadata when message provided"""
     meta = {"key": "val"}
     mock_task = Task(
@@ -397,7 +397,7 @@ async def test_set_task_error_with_message(db, mock_conn) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-DB]
 # END_CONTRACT: test_set_task_error_without_message
-async def test_set_task_error_without_message(db, mock_conn) -> None:
+async def test_set_task_error_without_message(db: DB, mock_conn: MagicMock) -> None:
     """passes metadata unchanged when no error message"""
     meta = {"key": "val"}
     mock_task = Task(

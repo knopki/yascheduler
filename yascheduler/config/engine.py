@@ -40,7 +40,7 @@ from .utils import make_default_field, warn_unknown_fields
 #   SIDE_EFFECTS: None
 #   LINKS: M-CONFIG-ENGINE
 # END_CONTRACT: _check_spawn
-def _check_spawn(instance: "Engine", _, value: str) -> None:
+def _check_spawn(instance: "Engine", _: Attribute, value: str) -> None:
     try:
         value.format(task_path="", engine_path="", ncpus="")
     except KeyError as err:

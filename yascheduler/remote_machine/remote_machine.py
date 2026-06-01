@@ -66,7 +66,7 @@ from .adapters import (
     windows12_adapter,
     windows_adapter,
 )
-from .exc import PlatformGuessFailed
+from .exc import PlatformGuessFailedError
 from .protocol import (
     PEngine,
     PEngineRepository,
@@ -146,7 +146,7 @@ async def _detect_platform(
 ) -> tuple[RemoteMachineAdapter, Sequence[str]]:
     sess_lim = Semaphore(MAX_SESSIONS)
 
-    async def with_limit(conn: SSHClientConnection, fn: SSHCheck):
+    async def with_limit(conn: SSHClientConnection, fn: SSHCheck) -> bool:
         async with sess_lim:
             return await fn(conn)
 
@@ -161,7 +161,7 @@ async def _detect_platform(
         if check and not adapter:
             adapter = candidate
     if not adapter:
-        raise PlatformGuessFailed()
+        raise PlatformGuessFailedError()
     return adapter, platforms
 
 
@@ -175,13 +175,15 @@ def _init_paths(
     engines_dir: PurePath | None,
     tasks_dir: PurePath | None,
 ) -> tuple[PurePath, PurePath, PurePath]:
-    Path = adapter.path
-    if not isinstance(data_dir, Path):
-        data_dir = Path(str(data_dir)) if data_dir else Path("./data")
-    if not isinstance(engines_dir, Path):
-        engines_dir = Path(str(engines_dir)) if engines_dir else data_dir / "engines"
-    if not isinstance(tasks_dir, Path):
-        tasks_dir = Path(str(tasks_dir)) if tasks_dir else data_dir / "tasks"
+    path_cls = adapter.path
+    if not isinstance(data_dir, path_cls):
+        data_dir = path_cls(str(data_dir)) if data_dir else path_cls("./data")
+    if not isinstance(engines_dir, path_cls):
+        engines_dir = (
+            path_cls(str(engines_dir)) if engines_dir else data_dir / "engines"
+        )
+    if not isinstance(tasks_dir, path_cls):
+        tasks_dir = path_cls(str(tasks_dir)) if tasks_dir else data_dir / "tasks"
     return data_dir, engines_dir, tasks_dir
 
 
@@ -309,7 +311,7 @@ class RemoteMachine:
 
     @classmethod
     @asynccontextmanager
-    async def create_ctx(cls, *args, **kwargs) -> AsyncGenerator[RemoteMachine, None]:
+    async def create_ctx(cls, *args, **kwargs) -> AsyncGenerator[RemoteMachine, None]:  # noqa: ANN002, ANN003
         machine = await cls.create(*args, **kwargs)
         yield machine
         await machine.close()
@@ -318,12 +320,12 @@ class RemoteMachine:
         await self._gateway.disconnect(self.ip)
 
     @asynccontextmanager
-    async def sftp(self, **kwargs) -> AsyncGenerator[SFTPClient, None]:
+    async def sftp(self, **kwargs) -> AsyncGenerator[SFTPClient, None]:  # noqa: ANN003
         async with self._gateway.get_sftp(self.ip) as sftp:
             yield sftp
 
     @my_backoff_exc()
-    async def run(self, *args, cwd: str | None = None, **kwargs) -> SSHCompletedProcess:
+    async def run(self, *args, cwd: str | None = None, **kwargs) -> SSHCompletedProcess:  # noqa: ANN002, ANN003
         state = self._gateway.get_machine_state(self.ip)
         conn = await self._gateway.get_conn(self.ip)
         return await state.adapter.run(
@@ -331,7 +333,11 @@ class RemoteMachine:
         )
 
     async def run_bg(
-        self, command: str, *args, cwd: str | None = None, **kwargs
+        self,
+        command: str,
+        *args,  # noqa: ANN002
+        cwd: str | None = None,
+        **kwargs,  # noqa: ANN003
     ) -> SSHClientProcess:
         state = self._gateway.get_machine_state(self.ip)
         conn = await self._gateway.get_conn(self.ip)

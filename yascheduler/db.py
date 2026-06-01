@@ -202,7 +202,7 @@ class DB:
     #   LINKS: [M-DB]
     # END_CONTRACT: create
     @classmethod
-    async def create(cls, config: ConfigDb, automigrate=True) -> Self:
+    async def create(cls, config: ConfigDb, automigrate: bool = True) -> Self:
         """Async init"""
         loop = asyncio.get_running_loop()
         exe = ThreadPoolExecutor(max_workers=1)  # pg8000 is not thread safe
@@ -212,11 +212,11 @@ class DB:
             await ins.migrate()
         return ins
 
-    async def run(self, sql: str, **params):
+    async def run(self, sql: str, **params: Any) -> list[tuple[Any, ...]]:  # noqa: ANN401
         """Run query async with backoff"""
 
         @backoff.on_exception(backoff.fibo, InterfaceError, max_time=60)
-        def run_fn():
+        def run_fn() -> list[tuple[Any, ...]]:
             return self.conn.run(sql, **params)
 
         return await self.loop.run_in_executor(self.executor, run_fn)

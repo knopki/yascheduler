@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
 
-def pytest_collection_modifyitems(items) -> None:
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if "/tests/e2e/" in str(item.path):
             item.add_marker("e2e")
@@ -70,7 +70,7 @@ def _db_config(postgres_container: PostgresContainer) -> ConfigDb:
 
 @pytest.fixture(scope="session")
 async def ssh_container(
-    tmp_path_factory: Any,
+    tmp_path_factory: Any,  # noqa: ANN401
 ) -> AsyncGenerator[dict[str, Any], None]:
     import asyncio
 
@@ -106,7 +106,7 @@ async def ssh_container(
 
 @pytest.fixture(scope="session")
 def e2e_config(
-    tmp_path_factory: Any,
+    tmp_path_factory: Any,  # noqa: ANN401
     _db_config: ConfigDb,
     ssh_container: dict[str, Any],
 ) -> Config:
@@ -171,7 +171,7 @@ async def _init_schema(
 ) -> None:
     instance = await DB.create(_db_config, automigrate=False)
     schema_path = (
-        Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent.parent  # noqa: ASYNC240
         / "yascheduler"
         / "adapters"
         / "persistence"

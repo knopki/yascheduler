@@ -35,8 +35,11 @@ from typing import Any, Optional, Union
 
 from pg8000 import ProgrammingError
 
+from .application.orchestrator import Orchestrator
+from .application.uow import AbstractUnitOfWork
 from .client import to_sync
 from .config import Config
+from .config.engine import Engine
 from .db import DB
 from .di import make_cli_deps, make_daemon
 from .domain.model import Node, Task, TaskStatus
@@ -56,7 +59,7 @@ def _parse_script_metadata(script_text: str) -> dict[str, str]:
     return script_params
 
 
-def _read_input_files(engine, local_folder: str) -> dict[str, str]:
+def _read_input_files(engine: Engine, local_folder: str) -> dict[str, str]:
     """Read input files specified by engine config, return dict of filename -> content."""
     metadata: dict[str, str] = {}
     for input_file in engine.input_files:
@@ -85,7 +88,7 @@ async def submit() -> None:
 
     args = parser.parse_args()
     script_file = Path(args.script)
-    if not script_file.exists():
+    if not script_file.exists():  # noqa: ASYNC240
         raise ValueError("Script parameter is not a file name")
 
     logging.captureWarnings(True)
@@ -95,7 +98,7 @@ async def submit() -> None:
     config = Config.from_config_parser(CONFIG_FILE)
     deps = make_cli_deps(config)
 
-    script_params = _parse_script_metadata(script_file.read_text())
+    script_params = _parse_script_metadata(script_file.read_text())  # noqa: ASYNC240
 
     label = script_params.get("LABEL", "AiiDA job")
     metadata: dict[str, Any] = {"local_folder": os.getcwd()}
@@ -118,7 +121,7 @@ async def submit() -> None:
     print(str(task_id))
 
 
-def _parse_status_args():
+def _parse_status_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Show status of tasks")
     parser.add_argument("-j", "--jobs", required=False, default=None, nargs="*")
     parser.add_argument(
@@ -160,7 +163,7 @@ def _print_status_default(tasks: list[Task]) -> None:
 
 
 async def _download_convergence_snippet(
-    machine, remote_folder: str, local_path: Path
+    machine: RemoteMachine, remote_folder: str, local_path: Path
 ) -> bool:
     """Download OUTPUT file via SFTP for convergence parsing. Returns True on success."""
     try:
@@ -332,7 +335,7 @@ async def check_status() -> None:
         else:
             _print_status_default(tasks)
 
-    if local_calc_snippet and os.path.exists(local_calc_snippet):
+    if local_calc_snippet and os.path.exists(local_calc_snippet):  # noqa: ASYNC240
         os.unlink(local_calc_snippet)
 
 
@@ -348,7 +351,7 @@ async def init() -> None:
     # service initialization
     install_path = Path(__file__).parent
     # check for systemd (exit status is 0 if there is a process)
-    has_systemd = not os.system("pidof systemd")
+    has_systemd = not os.system("pidof systemd")  # noqa: ASYNC221
     if has_systemd:
         _init_systemd(install_path)
     else:
@@ -438,7 +441,7 @@ async def show_nodes() -> None:
             print(msg)
 
 
-def _parse_node_args():
+def _parse_node_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Add nodes to yascheduler daemon")
     parser.add_argument("host", help="[user@]IP[:port][~ncpus]")
     parser.add_argument(
@@ -471,7 +474,7 @@ def _parse_node_args():
     return parser.parse_args()
 
 
-async def _remove_node_hard(uow, host: str) -> bool:
+async def _remove_node_hard(uow: AbstractUnitOfWork, host: str) -> bool:
     """Hard-remove a node: mark associated tasks DONE and remove node record."""
     task_ids = await uow.tasks.list_ids_by_ip_and_status(host, TaskStatus.RUNNING)
     for task_id in task_ids:
@@ -484,7 +487,7 @@ async def _remove_node_hard(uow, host: str) -> bool:
     return True
 
 
-async def _remove_node_soft(uow, host: str) -> bool:
+async def _remove_node_soft(uow: AbstractUnitOfWork, host: str) -> bool:
     """Soft-remove a node: disable if tasks exist, remove immediately otherwise."""
     task_ids = await uow.tasks.list_ids_by_ip_and_status(host, TaskStatus.RUNNING)
     if task_ids:
@@ -500,7 +503,7 @@ async def _remove_node_soft(uow, host: str) -> bool:
 
 
 async def _add_node(
-    uow,
+    uow: AbstractUnitOfWork,
     host: str,
     username: str,
     port: int,
@@ -542,7 +545,7 @@ async def _add_node(
 #   LINKS: M-UTILS, M-DI, M-APPLICATION-UOW, M-REMOTE
 # END_CONTRACT: manage_node
 @to_sync
-async def manage_node():
+async def manage_node() -> Optional[bool]:
     args = _parse_node_args()
     config = Config.from_config_parser(CONFIG_FILE)
     deps = make_cli_deps(config)
@@ -602,7 +605,7 @@ def daemonize(log_file: Optional[Union[str, Path]] = None) -> None:
     config = Config.from_config_parser(CONFIG_FILE)
 
     async def on_signal(
-        orch, shield: Sequence[asyncio.Task], sig: signal.Signals
+        orch: Orchestrator, shield: Sequence[asyncio.Task], sig: signal.Signals
     ) -> None:
         signame = signal.strsignal(sig)
         logger.info(f"Received signal {signame}")
@@ -626,7 +629,7 @@ def daemonize(log_file: Optional[Union[str, Path]] = None) -> None:
         shielded = [current_task] if current_task else []
         for sig in [signal.SIGTERM, signal.SIGINT]:
 
-            def handler():
+            def handler() -> asyncio.Task[Any]:
                 task = on_signal(orch, shielded, sig)  # noqa: B023
                 return asyncio.create_task(task)
 

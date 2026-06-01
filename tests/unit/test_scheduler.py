@@ -28,6 +28,7 @@ import pytest
 
 from tests.fixtures.mock_clouds import make_mock_clouds
 from tests.fixtures.mock_scheduler import create_test_config, make_scheduler
+from yascheduler.config import Config
 from yascheduler.db import TaskModel, TaskStatus
 from yascheduler.scheduler import WebhookPayload
 
@@ -58,7 +59,7 @@ platforms = linux
 #   OUTPUTS: { SchedulerConfig - parsed test configuration }
 # END_CONTRACT: test_config
 @pytest.fixture
-def test_config():
+def test_config() -> Config:
     return create_test_config(TEST_INI)
 
 
@@ -68,7 +69,7 @@ def test_config():
 #   OUTPUTS: { MagicMock - mock database with add_task, update_task_meta, commit, get_tasks_by_status, set_task_running, set_task_error as AsyncMock methods }
 # END_CONTRACT: mock_db
 @pytest.fixture
-def mock_db():
+def mock_db() -> MagicMock:
     """Create a mock DB with all methods needed by Scheduler"""
     db = MagicMock()
     db.add_task = AsyncMock()
@@ -86,7 +87,7 @@ def mock_db():
 #   OUTPUTS: { MockCloudProvider - mock cloud provider with allocate, mark_task_done, get_capacity methods }
 # END_CONTRACT: mock_clouds
 @pytest.fixture
-def mock_clouds():
+def mock_clouds() -> MagicMock:
     return make_mock_clouds()
 
 
@@ -97,7 +98,7 @@ def mock_clouds():
 # END_CONTRACT: test_create_new_task_unknown_engine
 @pytest.mark.asyncio
 async def test_create_new_task_unknown_engine(
-    test_config, mock_db, mock_clouds
+    test_config: Config, mock_db: MagicMock, mock_clouds: MagicMock
 ) -> None:
     """create_new_task raises RuntimeError for unknown engine (via patched submit_task)"""
     scheduler = make_scheduler(db=mock_db, config=test_config, clouds=mock_clouds)
@@ -121,7 +122,7 @@ async def test_create_new_task_unknown_engine(
 # END_CONTRACT: test_create_new_task_missing_input_file
 @pytest.mark.asyncio
 async def test_create_new_task_missing_input_file(
-    test_config, mock_db, mock_clouds
+    test_config: Config, mock_db: MagicMock, mock_clouds: MagicMock
 ) -> None:
     """create_new_task raises RuntimeError when input file is missing"""
     scheduler = make_scheduler(db=mock_db, config=test_config, clouds=mock_clouds)
@@ -144,7 +145,9 @@ async def test_create_new_task_missing_input_file(
 #   OUTPUTS: { None - test assertions on returned TaskModel }
 # END_CONTRACT: test_create_new_task_success
 @pytest.mark.asyncio
-async def test_create_new_task_success(test_config, mock_db, mock_clouds) -> None:
+async def test_create_new_task_success(
+    test_config: Config, mock_db: MagicMock, mock_clouds: MagicMock
+) -> None:
     """create_new_task calls submit_task, fetches result via db.get_task, returns TaskModel"""
     expected_task = TaskModel(
         task_id=1, label="test", ip="", status=TaskStatus.TO_DO, metadata={}

@@ -22,7 +22,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from yascheduler.domain.model import (
     ConnectedMachine,
@@ -37,6 +37,9 @@ from yascheduler.domain.ports import (
     NodeRepository,
     TaskRepository,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class StubTaskRepository:

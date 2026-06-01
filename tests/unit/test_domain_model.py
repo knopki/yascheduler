@@ -265,9 +265,9 @@ class TestEngine:
 #   LINKS: [M-DOMAIN-MODEL: Task, TaskAlreadyAllocatedError, TaskNotAllocatedError]
 # END_CONTRACT: test_task
 class TestTask:
-    def make_task(self, **overrides):
+    def make_task(self, **overrides: object) -> Task:
         ctx = TaskContext(engine="cp2k")
-        base = dict(task_id=1, label="test", context=ctx)
+        base: dict[str, object] = dict(task_id=1, label="test", context=ctx)
         base.update(overrides)
         return Task(**base)  # type: ignore[arg-type]
 
@@ -374,8 +374,8 @@ class TestNode:
 #   LINKS: [M-DOMAIN-MODEL: ConnectedMachine, MachineBusyError]
 # END_CONTRACT: test_connected_machine
 class TestConnectedMachine:
-    def make_machine(self, **overrides):
-        defaults = dict(ip="10.0.0.1", platform="linux", ncpus=4)
+    def make_machine(self, **overrides: object) -> ConnectedMachine:
+        defaults: dict[str, object] = dict(ip="10.0.0.1", platform="linux", ncpus=4)
         defaults.update(overrides)
         return ConnectedMachine(**defaults)  # type: ignore[arg-type]
 

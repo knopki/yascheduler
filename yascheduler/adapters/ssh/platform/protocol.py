@@ -173,7 +173,10 @@ class RunBgCallable(Protocol):
 class OuterRunCallable(Protocol):
     @abstractmethod
     def __call__(
-        self, *args: object, cwd: Optional[str] = None, **kwargs: Any
+        self,
+        *args: object,
+        cwd: Optional[str] = None,
+        **kwargs: Any,  # noqa: ANN401
     ) -> Coroutine[Any, Any, SSHCompletedProcess]:
         pass
 
