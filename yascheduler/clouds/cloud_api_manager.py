@@ -34,6 +34,7 @@ from yascheduler.adapters.cloud.adapters import (
     get_azure_adapter,
     get_hetzner_adapter,
     get_upcloud_adapter,
+    get_vastai_adapter,
 )
 
 if TYPE_CHECKING:
@@ -49,6 +50,7 @@ CLOUD_ADAPTER_GETTERS = {
     "az": get_azure_adapter,
     "hetzner": get_hetzner_adapter,
     "upcloud": get_upcloud_adapter,
+    "vastai": get_vastai_adapter,
 }
 
 

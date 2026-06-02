@@ -35,7 +35,13 @@
 #
 """Configuration module"""
 
-from .cloud import ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud
+from .cloud import (
+    ConfigCloud,
+    ConfigCloudAzure,
+    ConfigCloudHetzner,
+    ConfigCloudUpcloud,
+    ConfigCloudVastAI,
+)
 from .config import Config
 from .db import ConfigDb
 from .engine import (
@@ -55,6 +61,7 @@ __all__ = [
     "ConfigCloudAzure",
     "ConfigCloudHetzner",
     "ConfigCloudUpcloud",
+    "ConfigCloudVastAI",
     "ConfigDb",
     "ConfigLocal",
     "ConfigRemote",
