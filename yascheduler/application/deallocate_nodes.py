@@ -1,34 +1,35 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 1.1.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and trigger VM deletion.
+#   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return IPs for VM deletion.
 #   SCOPE: deallocate_nodes async function.
-#   DEPENDS: M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG-CLOUD
-#   LINKS: M-DB, M-SCHEDULER, M-CLOUD-MANAGER, M-REMOTE-REPO
+#   DEPENDS: M-APPLICATION-UOW, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG-CLOUD
+#   LINKS: M-APPLICATION-UOW, M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   deallocate_node - Disconnect and cloud-deallocate a single node
-#   deallocate_nodes - Disable idle cloud nodes and delete their VMs
+#   deallocate_nodes - Disable idle cloud nodes and return IPs for VM deletion
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Extract deallocate_node for per-node consumer; refactor deallocate_nodes to use it.
-#   PREVIOUS_CHANGE: v1.0.0 - Extract deallocate_nodes use case from scheduler deallocator loops.
+#   LAST_CHANGE: v2.0.0 - Rewrite to use UoW + domain types instead of DB + NodeModel
+#   PREVIOUS_CHANGE: v1.1.0 - Extract deallocate_node for per-node consumer; refactor deallocate_nodes to use it.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from yascheduler.db import DB, NodeModel, TaskStatus
+from yascheduler.domain.model import Node, TaskStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
+    from yascheduler.application.uow import AbstractUnitOfWork
     from yascheduler.config import ConfigCloud
     from yascheduler.remote_machine import RemoteMachineRepository
 
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 # START_CONTRACT: deallocate_node
 #   PURPOSE: Disconnect and cloud-deallocate a single node.
 #   INPUTS: {
-#     node: NodeModel - The node to deallocate,
+#     node: Node - The node to deallocate,
 #     remote_machines: RemoteMachineRepository - Connected SSH machines,
 #     clouds: CloudProvisionerImpl - Cloud provider manager
 #   }
@@ -47,7 +48,7 @@ logger = logging.getLogger(__name__)
 #   LINKS: M-REMOTE-REPO, M-CLOUD-MANAGER
 # END_CONTRACT: deallocate_node
 async def deallocate_node(
-    node: NodeModel,
+    node: Node,
     remote_machines: RemoteMachineRepository,
     clouds: CloudProvisionerImpl,
 ) -> None:
@@ -58,50 +59,51 @@ async def deallocate_node(
 
 
 # START_CONTRACT: deallocate_nodes
-#   PURPOSE: Disable idle cloud nodes exceeding tolerance and delete their VMs.
+#   PURPOSE: Disable idle cloud nodes exceeding tolerance and return their IPs for VM deletion.
 #   INPUTS: {
-#     db: DB - Legacy database facade,
-#     remote_machines: RemoteMachineRepository - Connected SSH machines,
-#     clouds: CloudProvisionerImpl - Cloud provider manager,
-#     config_clouds: Sequence[ConfigCloud] - Cloud configuration with idle_tolerance
+#     uow_factory: Callable[[], AbstractUnitOfWork] - Unit of Work factory,
+#     config_clouds: Sequence[ConfigCloud] - Cloud configuration with idle_tolerance,
+#     idle_machines: dict[str, float] - IP -> free_since monotonic timestamp
 #   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Disables nodes in DB, disconnects remote machines, deletes cloud VMs.
-#   LINKS: M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER
+#   OUTPUTS: { list[str] - List of disabled node IPs for orchestrator to deallocate }
+#   SIDE_EFFECTS: Disables nodes in DB.
+#   LINKS: M-APPLICATION-UOW, M-CONFIG-CLOUD
 # END_CONTRACT: deallocate_nodes
 async def deallocate_nodes(
-    db: DB,
-    remote_machines: RemoteMachineRepository,
-    clouds: CloudProvisionerImpl,
+    uow_factory: Callable[[], AbstractUnitOfWork],
     config_clouds: Sequence[ConfigCloud],
-) -> None:
+    idle_machines: dict[str, datetime],
+) -> list[str]:
     # START_BLOCK_DISABLE_IDLE
-    tasks = await db.get_tasks_by_status((TaskStatus.RUNNING,))
-    busy_ips = [t.ip for t in tasks]
-    all_enabled_nodes = {
-        n.ip: n for n in await db.get_enabled_nodes() if n.ip not in busy_ips
-    }
+    async with uow_factory() as uow:
+        running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
+        busy_ips = {t.allocated_ip for t in running_tasks if t.allocated_ip}
+        all_enabled_nodes = {
+            n.ip: n for n in await uow.nodes.list_enabled() if n.ip not in busy_ips
+        }
+
+    now = datetime.now()
     for ccfg in config_clouds:
         tdlim = timedelta(seconds=ccfg.idle_tolerance)
-        idlers = remote_machines.filter(
-            busy=False, reverse_sort=False, free_since_gt=tdlim
-        )
         nodes_to_disable = [
             ip
             for ip, node in all_enabled_nodes.items()
-            if node.cloud == ccfg.prefix and ip in idlers.keys()
+            if node.cloud == ccfg.prefix
+            and ip in idle_machines
+            and (now - idle_machines[ip]) >= tdlim
         ]
         for ip in nodes_to_disable:
-            await db.disable_node(ip)
-            await db.commit()
+            async with uow_factory() as uow:
+                await uow.nodes.disable(ip)
+                await uow.commit()
     # END_BLOCK_DISABLE_IDLE
 
-    # START_BLOCK_DEALLOCATE_CLOUD
-    free_disabled_nodes = [
-        node
-        for node in await db.get_disabled_nodes()
-        if node.ip not in busy_ips and "." in node.ip
-    ]
-    for node in free_disabled_nodes:
-        await deallocate_node(node, remote_machines, clouds)
-    # END_BLOCK_DEALLOCATE_CLOUD
+    # START_BLOCK_COLLECT_DISABLED
+    async with uow_factory() as uow:
+        free_disabled_nodes = [
+            node
+            for node in await uow.nodes.list_disabled()
+            if node.ip not in busy_ips and "." in node.ip and node.cloud
+        ]
+    return [node.ip for node in free_disabled_nodes]
+    # END_BLOCK_COLLECT_DISABLED

@@ -200,6 +200,8 @@
         <class-TaskError PURPOSE="Task lifecycle errors" />
         <class-TaskAlreadyAllocatedError PURPOSE="Task already bound to a node" />
         <class-TaskNotAllocatedError PURPOSE="Task not yet allocated to a node" />
+        <class-TaskNotTodoError PURPOSE="Task not in TODO status" />
+        <class-TaskNotRunningError PURPOSE="Task not in RUNNING status" />
         <class-MachineBusyError PURPOSE="Operation attempted on a busy machine" />
         <class-SchedulingError PURPOSE="Scheduling/allocation errors" />
         <class-NoCompatibleNodeError PURPOSE="No matching node found for task" />
@@ -217,7 +219,7 @@
         <class-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
         <class-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs()" />
-        <class-Task PURPOSE="Task entity with allocate_to, mark_running, complete, fail lifecycle" />
+        <class-Task PURPOSE="Task entity with allocate_to, mark_running, complete, fail, reject lifecycle" />
         <class-Node PURPOSE="Persistent compute node record" />
         <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
       </annotations>
@@ -269,35 +271,43 @@
     <M-APPLICATION-ALLOCATE NAME="Allocate task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Match a TO_DO task to a free machine or request cloud provisioning.</purpose>
       <path>yascheduler/application/allocate_task.py</path>
-      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG</depends>
+      <depends>M-APPLICATION-UOW, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-DOMAIN-MODEL</depends>
       <annotations>
         <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or request cloud node" />
+        <fn-_validate_engine PURPOSE="Validate task engine is configured and supported" />
+        <fn-_allocate_free_machine PURPOSE="Find free machine and start task on it" />
+        <fn-_find_free_machines PURPOSE="Find free compatible machines for task allocation" />
+        <fn-_try_start_on_machine PURPOSE="Attempt to start a task on a specific machine" />
       </annotations>
     </M-APPLICATION-ALLOCATE>
 
     <M-APPLICATION-CONSUME NAME="Consume task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Download outputs from remote machine and mark task DONE.</purpose>
       <path>yascheduler/application/consume_task.py</path>
-      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG</depends>
+      <depends>M-APPLICATION-UOW, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-DOMAIN-MODEL</depends>
       <annotations>
         <fn-consume_task PURPOSE="Download task outputs and mark DONE or ERROR" />
+        <fn-_prepare_store_folder PURPOSE="Create local output directory from domain Task context" />
+        <fn-_sftp_download_job PURPOSE="Open SFTP session, download files, clean remote dir" />
+        <fn-_download_task_outputs PURPOSE="Download output files via SFTP with retry" />
+        <fn-_finalize_task PURPOSE="Apply domain lifecycle, save via UoW, send webhook, notify cloud manager" />
       </annotations>
     </M-APPLICATION-CONSUME>
 
     <M-APPLICATION-DEALLOCATE NAME="Deallocate idle nodes use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Disable idle cloud nodes and trigger VM deletion.</purpose>
+      <purpose>Disable idle cloud nodes and return IPs for VM deletion.</purpose>
       <path>yascheduler/application/deallocate_nodes.py</path>
-      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG-CLOUD</depends>
+      <depends>M-APPLICATION-UOW, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG-CLOUD, M-DOMAIN-MODEL</depends>
       <annotations>
         <fn-deallocate_node PURPOSE="Disconnect and cloud-deallocate a single node" />
-        <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and delete their VMs" />
+        <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and return IPs for VM deletion" />
       </annotations>
     </M-APPLICATION-DEALLOCATE>
 
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Manages producer-consumer loops calling use cases and SSH helpers.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-WEBHOOK, M-SSH-GATEWAY</depends>
+      <depends>M-APPLICATION-UOW, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-WEBHOOK, M-SSH-GATEWAY, M-DOMAIN-MODEL</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
@@ -311,7 +321,7 @@
       <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CLOUD-MANAGER, M-REMOTE-REPO</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit and query" />
-        <fn-make_daemon PURPOSE="Async factory creating Orchestrator with all daemon dependencies" />
+        <fn-make_daemon PURPOSE="Async factory creating Orchestrator with UoW factory" />
         <fn-make_cli_deps PURPOSE="Sync factory creating lightweight CLIDeps" />
         <fn-make_aiida PURPOSE="Stub for future AiiDA integration" />
       </annotations>
@@ -887,7 +897,7 @@
          ═══════════════════════════════════════════════ -->
 
     <DF-SUBMIT NAME="Submit task">M-CLIENT -> M-DI -> M-APPLICATION-SUBMIT -> M-APPLICATION-UOW -> M-DOMAIN-PORTS</DF-SUBMIT>
-    <DF-SCHEDULE NAME="Schedule task (v2.0)">M-APPLICATION-ORCHESTRATOR -> M-APPLICATION-ALLOCATE / M-APPLICATION-CONSUME -> M-REMOTE-REPO -> M-DB</DF-SCHEDULE>
+    <DF-SCHEDULE NAME="Schedule task (v2.0)">M-APPLICATION-ORCHESTRATOR -> M-APPLICATION-ALLOCATE / M-APPLICATION-CONSUME / M-APPLICATION-DEALLOCATE -> M-APPLICATION-UOW</DF-SCHEDULE>
     <DF-ALLOCATE-CLOUD NAME="Allocate cloud node">M-SCHEDULER -> M-CLOUD-MANAGER -> M-CLOUD-API -> M-CLOUD-AZ / M-CLOUD-HETZNER / M-CLOUD-UPCLOUD</DF-ALLOCATE-CLOUD>
     <DF-ALLOCATE-EXISTING NAME="Allocate existing node">M-SCHEDULER -> M-REMOTE-REPO -> M-REMOTE</DF-ALLOCATE-EXISTING>
     <DF-EXECUTE NAME="Execute task">M-SCHEDULER -> M-REMOTE -> M-CONFIG-ENGINE</DF-EXECUTE>

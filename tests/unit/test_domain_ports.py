@@ -49,7 +49,9 @@ class StubTaskRepository:
     async def save(self, task: Task) -> None:
         pass
 
-    async def list_by_status(self, statuses: set[TaskStatus]) -> list[Task]:
+    async def list_by_status(
+        self, statuses: set[TaskStatus], *, limit: int | None = None
+    ) -> list[Task]:
         return []
 
     async def insert(self, task: Task) -> Task:
@@ -63,6 +65,9 @@ class StubTaskRepository:
 
     async def list_ids_by_ip_and_status(self, ip: str, status: TaskStatus) -> list[int]:
         return []
+
+    async def count_by_status(self) -> dict[TaskStatus, int]:
+        return {}
 
 
 class StubNodeRepository:
@@ -97,6 +102,9 @@ class StubNodeRepository:
         return []
 
     async def get_by_ips(self, ips: list[str]) -> dict[str, Node]:
+        return {}
+
+    async def count_by_status(self) -> dict[bool, int]:
         return {}
 
 

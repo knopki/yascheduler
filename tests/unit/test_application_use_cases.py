@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -16,7 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial use case unit tests covering all 4 application functions.
+#   LAST_CHANGE: v2.0.0 - Update to UoW-based signatures (task_id, uow_factory) across allocate, consume, deallocate.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial use case unit tests covering all 4 application functions.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for application use cases.
@@ -28,25 +29,23 @@ Tests cover the 4 application use cases:
 - deallocate_nodes (yascheduler.application.deallocate_nodes)
 """
 
+from collections.abc import Callable
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime
 from pathlib import Path, PurePath, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
 from yascheduler.application.allocate_task import allocate_task
 from yascheduler.application.consume_task import consume_task
 from yascheduler.application.deallocate_nodes import deallocate_nodes
 from yascheduler.application.submit_task import submit_task
+from yascheduler.application.uow import AbstractUnitOfWork
 from yascheduler.config import Engine, EngineRepository
 from yascheduler.config.cloud import ConfigCloudAzure
-from yascheduler.db import DB, TaskModel
-from yascheduler.db import TaskStatus as DbTaskStatus
 from yascheduler.domain.exceptions import MissingInputFileError, UnsupportedEngineError
-from yascheduler.domain.model import Task, TaskStatus
-from yascheduler.remote_machine import RemoteMachine, RemoteMachineRepository
+from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 
 # =============================================================================
 # Fixtures
@@ -80,8 +79,8 @@ def mock_engine_repo(engine: Engine) -> MagicMock:
 @pytest.fixture
 def mock_uow_factory() -> MagicMock:
     """Factory that returns a fully-mocked UnitOfWork with async methods."""
-    uow = MagicMock()
-    uow.tasks = MagicMock()
+    uow = AsyncMock()
+    uow.tasks = AsyncMock()
     uow.tasks.insert = AsyncMock()
     uow.tasks.save = AsyncMock()
     uow.tasks.get = AsyncMock()
@@ -92,17 +91,17 @@ def mock_uow_factory() -> MagicMock:
 
 
 @pytest.fixture
-def running_task_model() -> TaskModel:
-    """A RUNNING TaskModel for use with consume_task."""
-    return TaskModel(
+def running_task() -> Task:
+    """A RUNNING domain Task for use with consume_task."""
+    return Task(
         task_id=1,
         label="test",
-        ip="10.0.0.1",
-        status=DbTaskStatus.RUNNING,
-        metadata={
-            "engine": "test_engine",
-            "remote_folder": "/remote/tasks/20250101_120000_42",
-        },
+        context=TaskContext(
+            engine="test_engine",
+            remote_folder="/remote/tasks/20250101_120000_42",
+        ),
+        status=TaskStatus.RUNNING,
+        allocated_ip="10.0.0.1",
     )
 
 
@@ -199,73 +198,88 @@ class TestAllocateTask:
     """allocate_task — match a TO_DO task to free machine or request cloud."""
 
     @pytest.fixture
-    def db_mock(self) -> AsyncMock:
-        db = AsyncMock(spec=DB)
-        db.get_tasks_by_status.return_value = []
-        db.set_task_error = AsyncMock()
-        db.set_task_running = AsyncMock()
-        db.commit = AsyncMock()
-        return db
-
-    @pytest.fixture
-    def todo_task(self) -> TaskModel:
-        return TaskModel(
+    def todo_task(self) -> Task:
+        return Task(
             task_id=1,
             label="test",
-            ip="",
-            status=DbTaskStatus.TO_DO,
-            metadata={"engine": "test_engine"},
+            context=TaskContext(engine="test_engine"),
+            status=TaskStatus.TO_DO,
         )
 
-    async def test_allocate_task_unsupported_engine(
-        self, db_mock: AsyncMock, todo_task: TaskModel
-    ) -> None:
-        """Engine name not in repo -> set_task_error, return False."""
+    async def test_allocate_task_unsupported_engine(self, todo_task: Task) -> None:
+        """Engine name not in repo -> reject via UoW, return False."""
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = None  # engine lookup fails
+
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
 
         do_webhook = AsyncMock()
 
         result = await allocate_task(
-            task=todo_task,
+            task_id=todo_task.task_id,
             engines=engines,
-            db=db_mock,
-            remote_machines=MagicMock(spec=RemoteMachineRepository),
-            clouds=MagicMock(spec=CloudProvisionerImpl),
+            uow_factory=uow_factory,
+            remote_machines=MagicMock(),
+            clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
             do_task_webhook=do_webhook,
         )
 
         assert result is False
-        db_mock.set_task_error.assert_called_once_with(
-            1, metadata=todo_task.metadata, error="unsupported engine"
-        )
-        do_webhook.assert_called_once_with(1, todo_task.metadata, DbTaskStatus.DONE)
+        uow.tasks.save.assert_called_once()
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert saved_task.status == TaskStatus.DONE
+        assert saved_task.context.error == "unsupported engine"
+        do_webhook.assert_called_once()
+        _wh_id, _wh_meta, _wh_status = do_webhook.call_args[0]
+        assert _wh_id == 1
+        assert _wh_status == TaskStatus.DONE
 
     async def test_allocate_task_finds_free_machine(
         self,
-        db_mock: AsyncMock,
-        todo_task: TaskModel,
+        todo_task: Task,
         engine: Engine,
     ) -> None:
         """Free compatible machine exists -> allocated, returns True."""
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        free_machine = MagicMock(spec=RemoteMachine)
+        free_machine = MagicMock()
         free_machine.start_occupancy_check = AsyncMock()
 
-        remote_machines = MagicMock(spec=RemoteMachineRepository)
+        remote_machines = MagicMock()
         remote_machines.filter.return_value = {"10.0.0.1": free_machine}
 
-        clouds = MagicMock(spec=CloudProvisionerImpl)
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        clouds = MagicMock()
+        clouds.mark_task_done = MagicMock()
         start_on_machine = AsyncMock(return_value=True)
         do_webhook = AsyncMock()
 
         result = await allocate_task(
-            task=todo_task,
+            task_id=todo_task.task_id,
             engines=engines,
-            db=db_mock,
+            uow_factory=uow_factory,
             remote_machines=remote_machines,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
@@ -282,21 +296,27 @@ class TestAllocateTask:
         _call_machine, _call_engine, _call_task = start_on_machine.call_args[0]
         assert _call_machine is free_machine
         assert _call_engine is engine
-        assert _call_task.ip == "10.0.0.1"
+        assert _call_task.allocated_ip == "10.0.0.1"
         # occupancy check started
         free_machine.start_occupancy_check.assert_called_once_with(engine)
-        # db updated
-        db_mock.set_task_running.assert_called_once_with(1, "10.0.0.1")
-        db_mock.commit.assert_called_once()
+        # db updated via UoW
+        uow.tasks.save.assert_called_once()
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert saved_task.allocated_ip == "10.0.0.1"
+        assert saved_task.status == TaskStatus.RUNNING
+        uow.commit.assert_called_once()
         # webhook with RUNNING status
-        do_webhook.assert_called_once_with(1, todo_task.metadata, DbTaskStatus.RUNNING)
+        do_webhook.assert_called_once_with(
+            saved_task.task_id,
+            saved_task.context.to_metadata(),
+            TaskStatus.RUNNING,
+        )
         # cloud marked done
         clouds.mark_task_done.assert_called_once_with(1)
 
     async def test_allocate_task_no_free_machine_requests_cloud(
         self,
-        db_mock: AsyncMock,
-        todo_task: TaskModel,
+        todo_task: Task,
         engine: Engine,
     ) -> None:
         """No free machine -> clouds.allocate called, return False."""
@@ -304,18 +324,28 @@ class TestAllocateTask:
         engines.get.return_value = engine
 
         # empty remote machines
-        remote_machines = MagicMock(spec=RemoteMachineRepository)
+        remote_machines = MagicMock()
         remote_machines.filter.return_value = {}
 
-        clouds = MagicMock(spec=CloudProvisionerImpl)
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        clouds = MagicMock()
         clouds.allocate_with_tracking = AsyncMock(return_value=None)
         start_on_machine = AsyncMock()
         do_webhook = AsyncMock()
 
         result = await allocate_task(
-            task=todo_task,
+            task_id=todo_task.task_id,
             engines=engines,
-            db=db_mock,
+            uow_factory=uow_factory,
             remote_machines=remote_machines,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
@@ -327,7 +357,7 @@ class TestAllocateTask:
             on_task=1, platforms=["linux"], throttle=True
         )
         start_on_machine.assert_not_called()
-        db_mock.set_task_running.assert_not_called()
+        uow.tasks.save.assert_not_called()
 
 
 # =============================================================================
@@ -337,14 +367,6 @@ class TestAllocateTask:
 
 class TestConsumeTask:
     """consume_task — download outputs, mark DONE or ERROR."""
-
-    @pytest.fixture
-    def db_mock(self) -> AsyncMock:
-        db = AsyncMock(spec=DB)
-        db.set_task_done = AsyncMock()
-        db.set_task_error = AsyncMock()
-        db.commit = AsyncMock()
-        return db
 
     @pytest.fixture
     def sftp_mock(self) -> AsyncMock:
@@ -358,7 +380,7 @@ class TestConsumeTask:
         async_sftp_cm = AsyncMock()
         async_sftp_cm.__aenter__.return_value = sftp_mock
 
-        machine = MagicMock(spec=RemoteMachine)
+        machine = MagicMock()
         machine.sftp = MagicMock(return_value=async_sftp_cm)
         # machine.path returns PurePosixPath class so machine.path(remote_folder)
         # constructs a PurePosixPath, matching the real behaviour.
@@ -368,11 +390,11 @@ class TestConsumeTask:
     async def _run_consume(
         self,
         machine: MagicMock,
-        task: TaskModel,
+        task: Task,
+        uow_factory: Callable[[], AbstractUnitOfWork],
         engines: EngineRepository,
-        db: AsyncMock,
         local_tasks_dir: Path,
-        clouds: CloudProvisionerImpl,
+        clouds: MagicMock,
         do_webhook: AsyncMock,
     ) -> None:
         """Run consume_task with backoff and executor patched out."""
@@ -389,10 +411,10 @@ class TestConsumeTask:
                 mock_get_loop.return_value = mock_loop
                 mock_loop.run_in_executor = AsyncMock(return_value=None)
                 await consume_task(
+                    task_id=task.task_id,
                     machine=machine,
-                    task=task,
                     engines=engines,
-                    db=db,
+                    uow_factory=uow_factory,
                     local_tasks_dir=local_tasks_dir,
                     clouds=clouds,
                     do_task_webhook=do_webhook,
@@ -402,20 +424,31 @@ class TestConsumeTask:
         self,
         machine_mock: MagicMock,
         sftp_mock: AsyncMock,
-        running_task_model: TaskModel,
+        running_task: Task,
         mock_engine_repo: MagicMock,
-        db_mock: AsyncMock,
     ) -> None:
-        """All output files downloaded -> set_task_done + webhook(DONE)."""
+        """All output files downloaded -> save DONE + webhook(DONE)."""
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
         do_webhook = AsyncMock()
-        clouds = MagicMock(spec=CloudProvisionerImpl)
+        clouds = MagicMock()
+        clouds.mark_task_done = MagicMock()
         local_tasks_dir = MagicMock(spec=Path)
 
         await self._run_consume(
             machine=machine_mock,
-            task=running_task_model,
+            task=running_task,
+            uow_factory=uow_factory,
             engines=mock_engine_repo,
-            db=db_mock,
             local_tasks_dir=local_tasks_dir,
             clouds=clouds,
             do_webhook=do_webhook,
@@ -429,13 +462,16 @@ class TestConsumeTask:
         )
         # Remote tree cleaned up
         sftp_mock.rmtree.assert_called_once()
-        # DB marked done (no error)
-        db_mock.set_task_done.assert_called_once()
-        db_mock.set_task_error.assert_not_called()
+        # DB saved with DONE status
+        uow.tasks.save.assert_called_once()
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert saved_task.status == TaskStatus.DONE
+        assert saved_task.context.error is None
+        uow.commit.assert_called_once()
         # Webhook with DONE
         do_webhook.assert_called_once()
         _wh_id, _wh_meta, _wh_status = do_webhook.call_args[0]
-        assert _wh_status == DbTaskStatus.DONE
+        assert _wh_status == TaskStatus.DONE
         assert "error" not in _wh_meta
         # Cloud notified
         clouds.mark_task_done.assert_called_once_with(1)
@@ -444,33 +480,47 @@ class TestConsumeTask:
         self,
         machine_mock: MagicMock,
         sftp_mock: AsyncMock,
-        running_task_model: TaskModel,
+        running_task: Task,
         mock_engine_repo: MagicMock,
-        db_mock: AsyncMock,
     ) -> None:
-        """Download raises OSError -> set_task_error + webhook(DONE)."""
+        """Download raises OSError -> save DONE with error + webhook(DONE)."""
         sftp_mock.get = AsyncMock(side_effect=OSError("Connection refused"))
+
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
         do_webhook = AsyncMock()
-        clouds = MagicMock(spec=CloudProvisionerImpl)
+        clouds = MagicMock()
+        clouds.mark_task_done = MagicMock()
         local_tasks_dir = MagicMock(spec=Path)
 
         await self._run_consume(
             machine=machine_mock,
-            task=running_task_model,
+            task=running_task,
+            uow_factory=uow_factory,
             engines=mock_engine_repo,
-            db=db_mock,
             local_tasks_dir=local_tasks_dir,
             clouds=clouds,
             do_webhook=do_webhook,
         )
 
-        # set_task_error was called (not set_task_done)
-        db_mock.set_task_error.assert_called_once()
-        db_mock.set_task_done.assert_not_called()
+        # save was called with DONE + error
+        uow.tasks.save.assert_called_once()
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert saved_task.status == TaskStatus.DONE
+        assert saved_task.context.error is not None
         # Webhook still fires with DONE status
         do_webhook.assert_called_once()
         _wh_status = do_webhook.call_args[0][2]
-        assert _wh_status == DbTaskStatus.DONE
+        assert _wh_status == TaskStatus.DONE
         # error info present in metadata passed to webhook
         _wh_meta = do_webhook.call_args[0][1]
         assert "error" in _wh_meta
@@ -482,97 +532,81 @@ class TestConsumeTask:
 
 
 class TestDeallocateNodes:
-    """deallocate_nodes — disable idle cloud nodes, deallocate cloud VMs."""
+    """deallocate_nodes — disable idle cloud nodes, return IPs for VM deletion."""
 
-    @pytest.fixture
-    def db_mock(self) -> AsyncMock:
-        db = AsyncMock(spec=DB)
-        db.get_tasks_by_status.return_value = []  # no running tasks
-        db.get_enabled_nodes.return_value = []
-        db.get_disabled_nodes.return_value = []
-        db.disable_node = AsyncMock()
-        db.commit = AsyncMock()
-        return db
-
-    async def test_deallocate_nodes_disables_idle_cloud_nodes(
-        self, db_mock: AsyncMock
-    ) -> None:
-        """Enabled cloud node idle beyond tolerance -> disable_node called."""
+    async def test_deallocate_nodes_disables_idle_cloud_nodes(self) -> None:
+        """Enabled cloud node idle beyond tolerance -> disable_node called, IP returned."""
         # An enabled Azure node
-        az_node = MagicMock()
-        az_node.ip = "10.0.0.1"
-        az_node.cloud = "az"
-        db_mock.get_enabled_nodes.return_value = [az_node]
-        db_mock.get_disabled_nodes.return_value = []  # none already disabled
+        az_node = Node(ip="10.0.0.1", ncpus=4, cloud="az")
 
-        # Remote machine filter returns the node as free
-        idler_machine = MagicMock(spec=RemoteMachine)
-        remote_machines = MagicMock(spec=RemoteMachineRepository)
-        remote_machines.filter.return_value = {"10.0.0.1": idler_machine}
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.nodes = AsyncMock()
+        uow.nodes.list_enabled = AsyncMock(return_value=[az_node])
+        uow.nodes.list_disabled = AsyncMock(return_value=[az_node])
+        uow.nodes.disable = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
 
-        clouds = MagicMock(spec=CloudProvisionerImpl)
-        clouds.deallocate = AsyncMock()
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
 
         config_clouds = [
             MagicMock(spec=ConfigCloudAzure, prefix="az", idle_tolerance=300)
         ]
 
-        await deallocate_nodes(
-            db=db_mock,
-            remote_machines=remote_machines,
-            clouds=clouds,
+        # free_since is well beyond tolerance so the node qualifies
+        idle_machines = {"10.0.0.1": datetime(2020, 1, 1, 0, 0, 0)}
+
+        result = await deallocate_nodes(
+            uow_factory=uow_factory,
             config_clouds=config_clouds,
+            idle_machines=idle_machines,
         )
 
         # First phase: node should be disabled
-        db_mock.disable_node.assert_called_once_with("10.0.0.1")
-        db_mock.commit.assert_called()
+        uow.nodes.disable.assert_called_once_with("10.0.0.1")
+        uow.commit.assert_called()
 
-        # remote_machines.filter called with idle tolerance
-        expected_td = timedelta(seconds=300)
-        remote_machines.filter.assert_called_with(
-            busy=False, reverse_sort=False, free_since_gt=expected_td
-        )
+        # Second phase: disabled node qualifies (has cloud, valid ip) -> returned
+        assert isinstance(result, list)
+        assert "10.0.0.1" in result
 
-    async def test_deallocate_nodes_skips_non_cloud_nodes(
-        self, db_mock: AsyncMock
-    ) -> None:
-        """Node with cloud=None -> clouds.deallocate NOT called."""
+    async def test_deallocate_nodes_skips_non_cloud_nodes(self) -> None:
+        """Node with cloud=None -> NOT disabled, NOT in returned list."""
         # An enabled node without cloud
-        local_node = MagicMock()
-        local_node.ip = "10.0.0.1"
-        local_node.cloud = None
+        local_node = Node(ip="10.0.0.1", ncpus=4, cloud=None)
 
-        # Disabled nodes include this node (non-cloud)
-        disabled_node = MagicMock()
-        disabled_node.ip = "10.0.0.1"
-        disabled_node.cloud = None
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.nodes = AsyncMock()
+        uow.nodes.list_enabled = AsyncMock(return_value=[local_node])
+        uow.nodes.list_disabled = AsyncMock(return_value=[local_node])
+        uow.nodes.disable = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
 
-        db_mock.get_enabled_nodes.return_value = [local_node]
-        db_mock.get_disabled_nodes.return_value = [disabled_node]
-
-        # Remote machine filter returns the node as free
-        idler_machine = MagicMock(spec=RemoteMachine)
-        remote_machines = MagicMock(spec=RemoteMachineRepository)
-        # For "ip in remote_machines.keys()" check in phase 2
-        remote_machines.keys.return_value = ["10.0.0.1"]
-        remote_machines.filter.return_value = {"10.0.0.1": idler_machine}
-
-        clouds = MagicMock(spec=CloudProvisionerImpl)
-        clouds.deallocate = AsyncMock()
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
 
         config_clouds = [
             MagicMock(spec=ConfigCloudAzure, prefix="az", idle_tolerance=300)
         ]
 
-        await deallocate_nodes(
-            db=db_mock,
-            remote_machines=remote_machines,
-            clouds=clouds,
+        idle_machines = {"10.0.0.1": datetime(2020, 1, 1, 0, 0, 0)}
+
+        result = await deallocate_nodes(
+            uow_factory=uow_factory,
             config_clouds=config_clouds,
+            idle_machines=idle_machines,
         )
 
         # In first phase: node.cloud=None != "az" prefix, so NOT disabled
-        db_mock.disable_node.assert_not_called()
-        # In second phase: node.cloud is None -> continue -> deallocate NOT called
-        clouds.deallocate.assert_not_called()
+        uow.nodes.disable.assert_not_called()
+        # In second phase: node.cloud is None -> filtered out, not returned
+        assert isinstance(result, list)
+        assert "10.0.0.1" not in result

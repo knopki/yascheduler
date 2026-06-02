@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -13,7 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add deallocate_limit concurrency test; update call_count for 4 producer-consumer loops.
+#   LAST_CHANGE: v1.2.0 - Update to uow_factory constructor; remove db parameter.
+#   PREVIOUS_CHANGE: v1.1.0 - Add deallocate_limit concurrency test; update call_count for 4 producer-consumer loops.
 #   PREVIOUS_CHANGE: v1.0.0 - Initial Orchestrator unit tests.
 # END_CHANGE_SUMMARY
 #
@@ -35,6 +36,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from yascheduler.application.orchestrator import Orchestrator
+from yascheduler.application.uow import AbstractUnitOfWork
 from yascheduler.config import (
     Config,
     ConfigDb,
@@ -102,7 +104,13 @@ def make_orchestrator(
         deallocate_limit=deallocate_limit,
     )
 
-    db = AsyncMock()
+    mock_uow = AsyncMock()
+    mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
+    mock_uow.__aexit__ = AsyncMock(return_value=False)
+
+    def uow_factory() -> AbstractUnitOfWork:
+        return mock_uow
+
     clouds = AsyncMock()
     remote_machines = MagicMock()
     remote_machines.disconnect_all = AsyncMock()
@@ -122,7 +130,7 @@ def make_orchestrator(
         mock_http.return_value = AsyncMock()
         orch = Orchestrator(
             config=config,
-            db=db,
+            uow_factory=uow_factory,
             clouds=clouds,
             remote_machines=remote_machines,
             gateway=gateway,

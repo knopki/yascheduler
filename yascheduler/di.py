@@ -1,5 +1,5 @@
 # FILE: yascheduler/di.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
 #   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Build CloudProvisionerImpl directly instead of CloudAPIManager (Phase 4).
-#   PREVIOUS_CHANGE: v1.1.0 - Add SSHMachineGateway creation and injection into Orchestrator.
+#   LAST_CHANGE: v2.0.0 - Pass uow_factory to Orchestrator instead of DB; keep DB for schema migration and CloudProvisionerImpl only.
+#   PREVIOUS_CHANGE: v1.2.0 - Build CloudProvisionerImpl directly instead of CloudAPIManager (Phase 4).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -93,10 +93,10 @@ class CLIDeps:
 
 # START_CONTRACT: make_daemon
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
-#   INPUTS: { config: Config, log: Optional[Logger] }
+#   INPUTS: { config: Config, log: Optional[Logger], db: Optional[DB], clouds: Optional[CloudProvisionerImpl] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates DB connection, CloudProvisionerImpl, SSHMachineGateway, RemoteMachineRepository.
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-DB, M-CLOUD-MANAGER, M-SSH-GATEWAY
+#   SIDE_EFFECTS: Creates DB connection for schema migration, UoW factory, CloudProvisionerImpl, SSHMachineGateway, RemoteMachineRepository.
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-DB, M-CLOUD-MANAGER, M-SSH-GATEWAY, M-APPLICATION-UOW
 # END_CONTRACT: make_daemon
 async def make_daemon(
     config: Config,
@@ -110,6 +110,10 @@ async def make_daemon(
 
     if db is None:
         db = await DB.create(config.db)
+
+    def uow_factory() -> AbstractUnitOfWork:
+        return PostgresUnitOfWork(config.db)
+
     if clouds is None:
         _adapters: dict[str, CloudAdapter] = {}
         _configs: dict[str, ConfigCloud] = {}
@@ -143,7 +147,7 @@ async def make_daemon(
 
     return Orchestrator(
         config=config,
-        db=db,
+        uow_factory=uow_factory,
         clouds=clouds,
         remote_machines=remote_machines,
         gateway=gateway,

@@ -213,7 +213,8 @@ class TestMakeDaemon:
         assert "clouds" in _call_kwargs
         assert _call_kwargs["clouds"] is not None
         assert _call_kwargs["config"] is config
-        assert _call_kwargs["db"] is mock_db
+        assert "uow_factory" in _call_kwargs
+        assert callable(_call_kwargs["uow_factory"])
         assert _call_kwargs["remote_machines"] is mock_rm
         assert _call_kwargs["gateway"] is mock_gw
         assert _call_kwargs["log"] is resolved_log

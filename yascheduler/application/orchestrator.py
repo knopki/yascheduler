@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, webhook, and SSH helpers.
-#   DEPENDS: M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-SSH-GATEWAY
-#   LINKS: M-DB, M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
+#   DEPENDS: M-APPLICATION-UOW, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-SSH-GATEWAY
+#   LINKS: M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.1 - Fix pending task leak in _await_first_machine: cancel orphaned task after asyncio.wait(FIRST_COMPLETED).
-#   PREVIOUS_CHANGE: v2.2.0 - Accept shared SSHMachineGateway, pass to RemoteMachine.create().
+#   LAST_CHANGE: v2.0.0 - Rewrite to use uow_factory + domain types instead of DB + legacy types.
+#   PREVIOUS_CHANGE: v2.2.1 - Fix pending task leak in _await_first_machine: cancel orphaned task after asyncio.wait(FIRST_COMPLETED).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ import aiohttp
 import asyncssh
 import backoff
 
-from yascheduler.db import DB, NodeModel, TaskModel, TaskStatus
+from yascheduler.domain.model import Node, Task, TaskStatus
 from yascheduler.queue import UMessage, UniqueQueue
 from yascheduler.remote_machine import (
     AllSSHRetryExc,
@@ -50,7 +50,7 @@ from yascheduler.webhook import WebhookPayload
 
 from .allocate_task import allocate_task
 from .consume_task import consume_task
-from .deallocate_nodes import deallocate_node
+from .deallocate_nodes import deallocate_node, deallocate_nodes
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 
     from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
     from yascheduler.adapters.ssh.gateway import SSHMachineGateway
+    from yascheduler.application.uow import AbstractUnitOfWork
     from yascheduler.config import Config, ConfigCloud, Engine, EngineRepository
 
 
@@ -112,23 +113,23 @@ async def _write_remote_file(
 
 # START_CONTRACT: Orchestrator
 #   PURPOSE: Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases.
-#   INPUTS: { config, db, clouds, remote_machines, gateway, engines, log, config_clouds, local_tasks_dir }
+#   INPUTS: { config, uow_factory, clouds, remote_machines, gateway, engines, log, config_clouds, local_tasks_dir }
 #   OUTPUTS: { Orchestrator instance }
 #   SIDE_EFFECTS: Creates queues, HTTP session, cancellation event.
-#   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
+#   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
 # END_CONTRACT: Orchestrator
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { config: Config, db: DB, clouds: CloudProvisionerImpl, remote_machines: RemoteMachineRepository, gateway: SSHMachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
+    #   INPUTS: { config: Config, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisionerImpl, remote_machines: RemoteMachineRepository, gateway: SSHMachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues, Semaphore. HTTP session deferred to start().
-    #   LINKS: M-CONFIG, M-DB, M-QUEUE, M-SSH-GATEWAY
+    #   LINKS: M-CONFIG, M-APPLICATION-UOW, M-QUEUE, M-SSH-GATEWAY
     # END_CONTRACT: Orchestrator.__init__
     def __init__(
         self,
         config: Config,
-        db: DB,
+        uow_factory: Callable[[], AbstractUnitOfWork],
         clouds: CloudProvisionerImpl,
         remote_machines: RemoteMachineRepository,
         gateway: SSHMachineGateway,
@@ -138,7 +139,7 @@ class Orchestrator:
         local_tasks_dir: Path,
     ) -> None:
         self._config = config
-        self._db = db
+        self._uow_factory = uow_factory
         self._clouds = clouds
         self._remote_machines = remote_machines
         self._gateway = gateway
@@ -154,16 +155,16 @@ class Orchestrator:
 
         lcfg = config.local
         self._webhook_sem = Semaphore(lcfg.webhook_reqs_limit)
-        self._conn_machine_q: UniqueQueue[str, NodeModel] = UniqueQueue(
+        self._conn_machine_q: UniqueQueue[str, Node] = UniqueQueue(
             "conn_machine", maxsize=lcfg.conn_machine_pending
         )
-        self._allocate_q: UniqueQueue[int, TaskModel] = UniqueQueue(
+        self._allocate_q: UniqueQueue[int, Task] = UniqueQueue(
             "allocate", maxsize=lcfg.allocate_pending
         )
-        self._consume_q: UniqueQueue[int, TaskModel] = UniqueQueue(
+        self._consume_q: UniqueQueue[int, Task] = UniqueQueue(
             "consume", maxsize=lcfg.consume_pending
         )
-        self._deallocate_q: UniqueQueue[str, NodeModel] = UniqueQueue(
+        self._deallocate_q: UniqueQueue[str, str] = UniqueQueue(
             "deallocate", maxsize=lcfg.deallocate_pending
         )
         self._http: aiohttp.ClientSession | None = None
@@ -172,7 +173,7 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._upload_task_data
     #   PURPOSE: Upload task input files to remote machine via SFTP.
-    #   INPUTS: { sftp, task, remote_dir, input_files }
+    #   INPUTS: { sftp, task: Task, remote_dir, input_files }
     #   OUTPUTS: { bool - True on success }
     #   SIDE_EFFECTS: Creates remote directories, writes files via SFTP.
     #   LINKS: M-REMOTE-REPO
@@ -180,7 +181,7 @@ class Orchestrator:
     async def _upload_task_data(
         self,
         sftp: SFTPClient,
-        task: TaskModel,
+        task: Task,
         remote_dir: PurePath,
         input_files: Sequence[str],
     ) -> bool:
@@ -200,18 +201,19 @@ class Orchestrator:
 
         for input_file in input_files:
             r_input_file = remote_dir / input_file
+            file_data = task.context.extra[input_file]
             if input_file == "fort.9":
                 await _write_remote_file(
                     sftp,
                     r_input_file.as_posix(),
-                    _safe_b64decode(task.metadata[input_file]),
+                    _safe_b64decode(str(file_data)),
                     self._log,
                 )
             else:
                 await _write_remote_file(
                     sftp,
                     r_input_file.as_posix(),
-                    task.metadata[input_file],
+                    str(file_data),
                     self._log,
                     mode="w",
                 )
@@ -220,22 +222,23 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._exec_spawn_command
     #   PURPOSE: Execute spawn command on remote machine via SSH.
-    #   INPUTS: { machine, engine, task, task_dir, eng_path }
+    #   INPUTS: { machine, engine, task: Task, task_dir, eng_path }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Runs background process on remote machine.
-    #   LINKS: M-REMOTE-REPO, M-DB
+    #   LINKS: M-REMOTE-REPO, M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator._exec_spawn_command
     async def _exec_spawn_command(
         self,
         machine: RemoteMachine,
         engine: Engine,
-        task: TaskModel,
+        task: Task,
         task_dir: PurePath,
         eng_path: PurePath,
     ) -> None:
         # START_BLOCK_SPAWN
         try:
-            node = await self._db.get_node(task.ip)
+            async with self._uow_factory() as uow:
+                node = await uow.nodes.get(task.allocated_ip or "")
             ncpus = (node and node.ncpus) or await machine.get_cpu_cores()
             run_cmd = engine.spawn.format(
                 engine_path=str(eng_path),
@@ -250,16 +253,16 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._start_task_on_machine
     #   PURPOSE: Upload inputs and spawn calculation process on remote node.
-    #   INPUTS: { machine: RemoteMachine, engine: Engine, task: TaskModel }
+    #   INPUTS: { machine: RemoteMachine, engine: Engine, task: Task }
     #   OUTPUTS: { bool - True on successful spawn }
     #   SIDE_EFFECTS: Uploads files, marks machine busy, executes spawn command.
-    #   LINKS: M-REMOTE-REPO, M-DB
+    #   LINKS: M-REMOTE-REPO, M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator._start_task_on_machine
     async def _start_task_on_machine(
         self,
         machine: RemoteMachine,
         engine: Engine,
-        task: TaskModel,
+        task: Task,
     ) -> bool:
         self._log.info(
             "Submitting task_id=%s %s with %s to %s",
@@ -268,9 +271,9 @@ class Orchestrator:
             engine.name,
             machine.hostname,
         )
-        assert task.metadata.get("remote_folder")
+        assert task.context.remote_folder is not None
         machine.meta.busy = True
-        remote_folder = machine.path(task.metadata["remote_folder"])
+        remote_folder = machine.path(task.context.remote_folder)
 
         # START_BLOCK_DEPLOY
         async with machine.sftp() as sftp:
@@ -299,7 +302,7 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._do_task_webhook
     #   PURPOSE: Send webhook notification for task status change.
-    #   INPUTS: { task_id, metadata, status }
+    #   INPUTS: { task_id, metadata, status: TaskStatus }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Sends HTTP POST to webhook_url.
     #   LINKS:
@@ -345,13 +348,14 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Logs statistics every 10 seconds.
-    #   LINKS: M-DB
+    #   LINKS: M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator._print_stats
     async def _print_stats(self) -> None:
         while not self._cancellation_event.is_set():
             end_time = datetime.now() + timedelta(seconds=10)
-            ncounters = await self._db.count_nodes_by_status()
-            tcounters = await self._db.count_tasks_by_status()
+            async with self._uow_factory() as uow:
+                ncounters = await uow.nodes.count_by_status()
+                tcounters = await uow.tasks.count_by_status()
             tmpl = (
                 "THREADS: {tasks} "
                 "NODES: busy:{n_busy}/enabled:{n_enabled}/total:{n_total} "
@@ -382,15 +386,16 @@ class Orchestrator:
 
     async def _connect_machine_producer(
         self,
-    ) -> AsyncGenerator[UMessage[str, NodeModel], None]:
-        enabled_nodes = await self._db.get_enabled_nodes()
+    ) -> AsyncGenerator[UMessage[str, Node], None]:
+        async with self._uow_factory() as uow:
+            enabled_nodes = await uow.nodes.list_enabled()
         new_nodes = [
             n for n in enabled_nodes if n.ip not in self._remote_machines.keys()
         ]
         for node in new_nodes:
             yield UMessage(node.ip, node)
 
-    async def _connect_machine_consumer(self, msg: UMessage[str, NodeModel]) -> None:
+    async def _connect_machine_consumer(self, msg: UMessage[str, Node]) -> None:
         node = msg.payload
         keys = await asyncio.get_running_loop().run_in_executor(
             None, self._config.local.get_private_keys
@@ -425,10 +430,11 @@ class Orchestrator:
 
     async def _allocator_producer(
         self,
-    ) -> AsyncGenerator[UMessage[int, TaskModel], None]:
+    ) -> AsyncGenerator[UMessage[int, Task], None]:
         ccap = await self._clouds_get_capacity()
         tlim = max(ccap, len(self._remote_machines.filter(busy=False)), 10)
-        tasks = await self._db.get_tasks_by_status((TaskStatus.TO_DO,), tlim)
+        async with self._uow_factory() as uow:
+            tasks = await uow.tasks.list_by_status({TaskStatus.TO_DO}, limit=tlim)
         if tasks:
             ids = [str(t.task_id) for t in tasks]
             self._log.debug(
@@ -438,12 +444,12 @@ class Orchestrator:
             yield UMessage(task.task_id, task)
 
     @backoff.on_exception(backoff.fibo, AllSSHRetryExc, max_time=60)
-    async def _allocator_consumer(self, msg: UMessage[int, TaskModel]) -> None:
+    async def _allocator_consumer(self, msg: UMessage[int, Task]) -> None:
         # START_BLOCK_ALLOCATE
         await allocate_task(
-            task=msg.payload,
+            task_id=msg.id,
             engines=self._engines,
-            db=self._db,
+            uow_factory=self._uow_factory,
             remote_machines=self._remote_machines,
             clouds=self._clouds,
             start_task_on_machine=self._start_task_on_machine,
@@ -453,28 +459,34 @@ class Orchestrator:
 
     async def _task_consumer_producer(
         self,
-    ) -> AsyncGenerator[UMessage[int, TaskModel], None]:
-        tasks = await self._db.get_tasks_by_status((TaskStatus.RUNNING,))
+    ) -> AsyncGenerator[UMessage[int, Task], None]:
+        async with self._uow_factory() as uow:
+            tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
         for task in tasks:
             yield UMessage(task.task_id, task)
 
     async def _task_consumer_consumer(
-        self, msg: UMessage[int, TaskModel], machine_not_found: Counter
+        self, msg: UMessage[int, Task], machine_not_found: Counter
     ) -> None:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
-        machine = self._remote_machines.get(task.ip)
+        machine = self._remote_machines.get(task.allocated_ip or "")
         if machine is None:
-            self._log.warning("Task %s - machine %s is gone", task_id, task.ip)
+            self._log.warning(
+                "Task %s - machine %s is gone", task_id, task.allocated_ip
+            )
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:
-                await self._db.set_task_error(
-                    task_id, metadata=task.metadata, error="node is gone"
+                task = task.fail("node is gone")
+                async with self._uow_factory() as uow:
+                    await uow.tasks.save(task)
+                    await uow.commit()
+                await self._do_task_webhook(
+                    task_id, task.context.to_metadata(), TaskStatus.DONE
                 )
-                await self._do_task_webhook(task_id, task.metadata, TaskStatus.DONE)
             return
         if machine.meta.busy is None:
-            engine = self._engines.get(task.metadata["engine"])
+            engine = self._engines.get(task.context.engine)
             if engine:
                 await machine.start_occupancy_check(engine)
         # START_BLOCK_CONSUME
@@ -485,10 +497,10 @@ class Orchestrator:
                 task_id,
             )
             await consume_task(
+                task_id=task_id,
                 machine=machine,
-                task=task,
                 engines=self._engines,
-                db=self._db,
+                uow_factory=self._uow_factory,
                 local_tasks_dir=self._local_tasks_dir,
                 clouds=self._clouds,
                 do_task_webhook=self._do_task_webhook,
@@ -498,58 +510,51 @@ class Orchestrator:
     # ---- Deallocator producer-consumer ----
 
     # START_CONTRACT: Orchestrator._deallocator_producer
-    #   PURPOSE: Find idle nodes exceeding tolerance, disable them, yield disabled nodes for deallocation.
+    #   PURPOSE: Find idle nodes exceeding tolerance, disable them via use case, yield disabled IPs for deallocation.
     #   INPUTS: { None }
-    #   OUTPUTS: { AsyncGenerator[UMessage[str, NodeModel], None] - yields disabled cloud nodes }
-    #   SIDE_EFFECTS: Disables idle nodes in DB.
+    #   OUTPUTS: { AsyncGenerator[UMessage[str, str], None] - yields disabled cloud node IPs }
+    #   SIDE_EFFECTS: Disables idle nodes in DB via deallocate_nodes use case.
     #   LINKS: M-APPLICATION-DEALLOCATE
     # END_CONTRACT: Orchestrator._deallocator_producer
     async def _deallocator_producer(
         self,
-    ) -> AsyncGenerator[UMessage[str, NodeModel], None]:
-        # START_BLOCK_DISABLE_IDLE
-        tasks = await self._db.get_tasks_by_status((TaskStatus.RUNNING,))
-        busy_ips = [t.ip for t in tasks]
-        all_enabled_nodes = {
-            n.ip: n for n in await self._db.get_enabled_nodes() if n.ip not in busy_ips
-        }
-        for ccfg in self._config_clouds:
-            tdlim = timedelta(seconds=ccfg.idle_tolerance)
-            idlers = self._remote_machines.filter(
-                busy=False, reverse_sort=False, free_since_gt=tdlim
-            )
-            nodes_to_disable = [
-                ip
-                for ip, node in all_enabled_nodes.items()
-                if node.cloud == ccfg.prefix and ip in idlers.keys()
-            ]
-            for ip in nodes_to_disable:
-                await self._db.disable_node(ip)
-                await self._db.commit()
-        # END_BLOCK_DISABLE_IDLE
+    ) -> AsyncGenerator[UMessage[str, str], None]:
+        # START_BLOCK_COLLECT_IDLE
+        idle_machines: dict[str, datetime] = {}
+        for ip, m in self._remote_machines.filter(busy=False).items():
+            if m.meta.free_since is not None:
+                idle_machines[ip] = m.meta.free_since
+        # END_BLOCK_COLLECT_IDLE
 
-        # START_BLOCK_COLLECT_DEALLOCATE
-        free_disabled_nodes = [
-            node
-            for node in await self._db.get_disabled_nodes()
-            if node.ip not in busy_ips and "." in node.ip and node.cloud
-        ]
-        for node in free_disabled_nodes:
-            yield UMessage(node.ip, node)
-        # END_BLOCK_COLLECT_DEALLOCATE
+        # START_BLOCK_DEALLOCATE_USE_CASE
+        disabled_ips = await deallocate_nodes(
+            self._uow_factory, self._config_clouds, idle_machines
+        )
+        # END_BLOCK_DEALLOCATE_USE_CASE
+
+        # START_BLOCK_YIELD_DISABLED
+        for ip in disabled_ips:
+            yield UMessage(ip, ip)
+        # END_BLOCK_YIELD_DISABLED
 
     # START_CONTRACT: Orchestrator._deallocator_consumer
-    #   PURPOSE: Disconnect and cloud-deallocate a single node.
-    #   INPUTS: { msg: UMessage[str, NodeModel] - node to deallocate }
+    #   PURPOSE: Disconnect and cloud-deallocate a single disabled node.
+    #   INPUTS: { msg: UMessage[str, str] - disabled node IP }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Disconnects remote machine, deletes cloud VM.
     #   LINKS: M-APPLICATION-DEALLOCATE
     # END_CONTRACT: Orchestrator._deallocator_consumer
-    async def _deallocator_consumer(self, msg: UMessage[str, NodeModel]) -> None:
+    async def _deallocator_consumer(self, msg: UMessage[str, str]) -> None:
+        ip = msg.payload
         try:
-            await deallocate_node(msg.payload, self._remote_machines, self._clouds)
+            async with self._uow_factory() as uow:
+                node = await uow.nodes.get(ip)
+            if node is not None:
+                await deallocate_node(node, self._remote_machines, self._clouds)
+            elif ip in self._remote_machines:
+                await self._remote_machines.disconnect_many([ip])
         except Exception as err:
-            self._log.error("Deallocator error for node %s: %s", msg.id, err)
+            self._log.error("Deallocator error for %s: %s", ip, err)
 
     # ---- Infrastructure ----
 
@@ -643,7 +648,7 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates and owns aiohttp session (closed in finally block), starts background tasks, connects machines, runs producer-consumer loops with config-limited concurrency.
-    #   LINKS: M-QUEUE, M-DB
+    #   LINKS: M-QUEUE, M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator.start
     async def start(self) -> None:
         self._log.debug(

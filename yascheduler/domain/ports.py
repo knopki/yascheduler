@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 1.9.0
+# VERSION: 1.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineGateway, CloudProvisioner Protocol classes.
@@ -8,15 +8,15 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TaskRepository - Async port for task persistence (get, save, insert, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status)
-#   NodeRepository - Async port for node persistence (full CRUD lifecycle, list_all, get_by_ips)
+#   TaskRepository - Async port for task persistence (get, save, insert, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status)
+#   NodeRepository - Async port for node persistence (full CRUD lifecycle, list_all, get_by_ips, count_by_status)
 #   MachineGateway - Async port for remote machine operations (list, run, upload, download)
 #   CloudProvisioner - Async port for cloud node provisioning (allocate, deallocate, capacity)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Add update_status, list_ids_by_ip_and_status to TaskRepository; list_all, get_by_ips to NodeRepository.
-#   PREVIOUS_CHANGE: v1.8.0 - Add list_by_jobs() to TaskRepository port for query use cases.
+#   LAST_CHANGE: v1.10.0 - Add count_by_status to TaskRepository and NodeRepository ports; add limit param to list_by_status.
+#   PREVIOUS_CHANGE: v1.9.0 - Add update_status, list_ids_by_ip_and_status to TaskRepository; list_all, get_by_ips to NodeRepository.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from .model import (
@@ -43,7 +44,9 @@ class TaskRepository(Protocol):
 
     async def save(self, task: Task) -> None: ...
 
-    async def list_by_status(self, statuses: set[TaskStatus]) -> list[Task]: ...
+    async def list_by_status(
+        self, statuses: set[TaskStatus], *, limit: int | None = None
+    ) -> list[Task]: ...
 
     async def insert(self, task: Task) -> Task: ...
 
@@ -54,6 +57,8 @@ class TaskRepository(Protocol):
     async def list_ids_by_ip_and_status(
         self, ip: str, status: TaskStatus
     ) -> list[int]: ...
+
+    async def count_by_status(self) -> Mapping[TaskStatus, int]: ...
 
 
 @runtime_checkable
@@ -81,6 +86,8 @@ class NodeRepository(Protocol):
     async def list_all(self) -> list[Node]: ...
 
     async def get_by_ips(self, ips: list[str]) -> dict[str, Node]: ...
+
+    async def count_by_status(self) -> Mapping[bool, int]: ...
 
 
 @runtime_checkable

@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.6.0
+# VERSION: 1.6.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
 #   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling.
@@ -15,6 +15,8 @@
 #   TaskError - Task lifecycle errors
 #   TaskAlreadyAllocatedError - Task already bound to a node
 #   TaskNotAllocatedError - Task not yet allocated to a node
+#   TaskNotTodoError - Task not in TODO status
+#   TaskNotRunningError - Task not in RUNNING status
 #   MachineBusyError - Operation attempted on a busy machine
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
@@ -22,7 +24,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Create domain exception hierarchy for Hexagonal + DDD migration.
+#   LAST_CHANGE: v1.6.1 - Add TaskNotTodoError and TaskNotRunningError to MODULE_MAP and knowledge graph annotations.
 # END_CHANGE_SUMMARY
 
 

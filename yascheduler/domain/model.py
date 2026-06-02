@@ -13,7 +13,7 @@
 #   ProcessResult - Exit code and captured output from remote execution
 #   TaskContext - Typed task metadata with arbitrary extras
 #   Engine - Calculation engine specification with platform support
-#   Task - Task entity with allocate_to, mark_running, complete, fail lifecycle
+#   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
 # END_MODULE_MAP
@@ -176,7 +176,7 @@ class Task:
     #   INPUTS: { None }
     #   OUTPUTS: { Task - New Task instance with status=RUNNING }
     #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotAllocatedError - if not RUNNING
+    #   RAISES: TaskNotAllocatedError - if not yet allocated to a node; TaskNotTodoError - if status is not TO_DO
     #   LINKS:
     # END_CONTRACT: Task.mark_running
     def mark_running(self) -> Task:
@@ -225,6 +225,28 @@ class Task:
             context=replace(self.context, error=reason),
         )
         # END_BLOCK_MARK_FAILED
+
+    # START_CONTRACT: Task.reject
+    #   PURPOSE: Mark a TO_DO task as DONE with error reason (e.g. unsupported engine).
+    #   INPUTS: { reason: str - Rejection description }
+    #   OUTPUTS: { Task - New Task instance with status=DONE and context.error set }
+    #   SIDE_EFFECTS: None
+    #   RAISES: TaskNotTodoError - if not TO_DO
+    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotTodoError
+    # END_CONTRACT: Task.reject
+    def reject(self, reason: str) -> Task:
+        """Mark a TO_DO task as DONE with error reason."""
+        # START_BLOCK_VALIDATE_TODO
+        if self.status != TaskStatus.TO_DO:
+            raise TaskNotTodoError(self.task_id)
+        # END_BLOCK_VALIDATE_TODO
+        # START_BLOCK_MARK_REJECTED
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            context=replace(self.context, error=reason),
+        )
+        # END_BLOCK_MARK_REJECTED
 
 
 @dataclass(frozen=True)
