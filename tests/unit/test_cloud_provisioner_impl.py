@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path, PurePath
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -62,8 +63,21 @@ def _make_mock_adapter(
     adapter.create_node_conn_timeout = 30
     adapter.create_node_timeout = 300
 
-    # Semaphore mock — use value 1 so a single acquire makes locked() return True
-    sem = asyncio.Semaphore(1)
+    # Semaphore mock — stateful mock avoids asyncio.Semaphore which needs event loop on 3.9
+    sem = MagicMock()
+    _locked = False
+
+    def _acquire() -> None:
+        nonlocal _locked
+        _locked = True
+
+    def _release() -> None:
+        nonlocal _locked
+        _locked = False
+
+    sem.locked.side_effect = lambda: _locked
+    sem.acquire = AsyncMock(side_effect=_acquire)
+    sem.release = MagicMock(side_effect=_release)
     adapter.get_op_semaphore.return_value = sem
 
     # Platform check
@@ -203,6 +217,12 @@ def make_provisioner(
     logger: MagicMock | None = None,
 ) -> CloudProvisionerImpl:
     """Helper to construct a CloudProvisionerImpl with defaults."""
+    # Python 3.9: asyncio.Lock() requires a running event loop during init.
+    if sys.version_info < (3, 10):
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
     return CloudProvisionerImpl(
         adapters=adapters or {},  # type: ignore[arg-type]
         configs=configs or {},  # type: ignore[arg-type]

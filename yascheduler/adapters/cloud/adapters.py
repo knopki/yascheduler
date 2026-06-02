@@ -31,11 +31,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from functools import cache
 from typing import TYPE_CHECKING, Generic
 
 if TYPE_CHECKING:
+    import logging
+
     from yascheduler.config import ConfigCloud
 
 from attrs import define, field
@@ -188,7 +189,7 @@ CLOUD_ADAPTER_GETTERS = {
 #   SIDE_EFFECTS: Logs error on ImportError
 #   LINKS: M-CLOUD-ADAPTERS
 # END_CONTRACT: _resolve_adapter
-def _resolve_adapter(cfg: "ConfigCloud", log: logging.Logger) -> CloudAdapter | None:
+def _resolve_adapter(cfg: ConfigCloud, log: logging.Logger) -> CloudAdapter | None:
     try:
         getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]
         return getter(cfg.prefix)
