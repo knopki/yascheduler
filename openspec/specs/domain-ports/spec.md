@@ -14,9 +14,20 @@ The system SHALL define a `TaskRepository` Protocol with async methods:
 `update_status(task_id: int, status: TaskStatus) -> None`,
 `list_ids_by_ip_and_status(ip: str, status: TaskStatus) -> list[int]`.
 
+The `TaskRepository` Protocol SHALL define an async `list_by_status` method
+with an optional `limit` parameter for bounded queries.
+
 #### Scenario: Repository method signatures are async
 - **WHEN** a class implements `TaskRepository` with matching async method signatures
 - **THEN** it satisfies the Protocol structurally
+
+#### Scenario: List tasks by status without limit
+- **WHEN** `list_by_status({TaskStatus.TO_DO})` is called
+- **THEN** returns all tasks with TO_DO status
+
+#### Scenario: List tasks by status with limit
+- **WHEN** `list_by_status({TaskStatus.TO_DO}, limit=10)` is called
+- **THEN** returns at most 10 tasks with TO_DO status
 
 ### Requirement: NodeRepository port
 
