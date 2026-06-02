@@ -3,8 +3,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Mapping of cloud config types to create/delete callables.
 #   SCOPE: Adapter registry mapping provider config classes to their operations.
-#   DEPENDS: M-CLOUD-PROTOCOLS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD
-#   LINKS: M-CLOUD-API, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD
+#   DEPENDS: M-CLOUD-PROTOCOLS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD, M-CLOUD-VASTAI
+#   LINKS: M-CLOUD-API, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD, M-CLOUD-VASTAI
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -16,10 +16,12 @@
 #   get_azure_adapter           # (name: str) -> CloudAdapter
 #   get_hetzner_adapter         # (name: str) -> CloudAdapter
 #   get_upcloud_adapter         # (name: str) -> CloudAdapter
+#   get_vastai_adapter          # (name: str) -> CloudAdapter
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Relocated from yascheduler/clouds/adapters.py; updated provider imports.
+#   LAST_CHANGE: v1.7.0 - Added VastAI adapter.
+#   PREVIOUS_CHANGE: v1.0.0 - Relocated from yascheduler/clouds/adapters.py; updated provider imports.
 # END_CHANGE_SUMMARY
 
 """Cloud adapters"""
@@ -140,5 +142,24 @@ def get_upcloud_adapter(name: str) -> CloudAdapter:
         supported_platform_checks=(can_debian_buster,),
         create_node=upcloud_create_node,
         delete_node=upcload_delete_node,
+        op_limit=1,
+    )
+
+
+# START_CONTRACT: get_vastai_adapter
+#   PURPOSE: Create CloudAdapter for VastAI with Bullseye platform support, single op limit
+#   INPUTS: { name: str - cloud provider name }
+#   OUTPUTS: { CloudAdapter - configured VastAI cloud adapter }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
+# END_CONTRACT: get_vastai_adapter
+def get_vastai_adapter(name: str) -> CloudAdapter:
+    from .providers.vastai import vastai_create_node, vastai_delete_node
+
+    return CloudAdapter(
+        name=name,
+        supported_platform_checks=(can_debian_bullseye,),
+        create_node=vastai_create_node,
+        delete_node=vastai_delete_node,
         op_limit=1,
     )

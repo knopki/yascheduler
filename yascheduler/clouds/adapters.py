@@ -144,7 +144,7 @@ def get_upcloud_adapter(name: str) -> CloudAdapter:
     )
 
 
-def get_vastai_adapter(name: str):
+def get_vastai_adapter(name: str) -> CloudAdapter:
     from .vastai import vastai_create_node, vastai_delete_node
 
     return CloudAdapter(

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/config/cloud.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud.
+#   PURPOSE: Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud, VastAI.
 #   SCOPE: Provider-specific config parsing, Azure image reference, cloud config union.
 #   DEPENDS: M-CONFIG-UTILS, M-COMPAT
-#   LINKS: M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD
+#   LINKS: M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD, M-CLOUD-VASTAI
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -14,11 +14,13 @@
 #   ConfigCloudAzure     # Azure cloud configuration dataclass
 #   ConfigCloudHetzner   # Hetzner cloud configuration dataclass
 #   ConfigCloudUpcloud   # UpCloud cloud configuration dataclass
-#   ConfigCloud          # Union[ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud]
+#   ConfigCloudVastAI    # VastAI cloud configuration dataclass
+#   ConfigCloud          # Union[ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI]
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - Added ConfigCloudVastAI.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
 """Cloud configurations"""
@@ -322,6 +324,13 @@ class ConfigCloudVastAI:
     jump_username: Optional[str] = field(default=None, validator=opt_str_val)
     jump_host: Optional[str] = field(default=None, validator=opt_str_val)
 
+    # START_CONTRACT: get_valid_config_parser_fields
+    #   PURPOSE: Return valid config parser field names with vastai_ prefix for VastAI cloud
+    #   INPUTS: { None }
+    #   OUTPUTS: { Sequence[str] - list of valid prefixed config keys }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD
+    # END_CONTRACT: get_valid_config_parser_fields
     @classmethod
     def get_valid_config_parser_fields(cls) -> Sequence[str]:
         "Returns a list of valid config keys"
@@ -333,6 +342,13 @@ class ConfigCloudVastAI:
             + include_names
         ]
 
+    # START_CONTRACT: from_config_parser_section
+    #   PURPOSE: Create ConfigCloudVastAI instance from a config parser section
+    #   INPUTS: { sec: SectionProxy - config parser section with vastai_ prefixed cloud keys }
+    #   OUTPUTS: { ConfigCloudVastAI - VastAI cloud configuration }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-CONFIG-CLOUD, M-CLOUD-VASTAI
+    # END_CONTRACT: from_config_parser_section
     @classmethod
     def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigCloudVastAI":
         "Create config from config parser's section"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/config/__init__.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public re-exports from config submodules.
@@ -18,6 +18,7 @@
 #   ConfigCloudAzure - Azure-specific cloud config
 #   ConfigCloudHetzner - Hetzner-specific cloud config
 #   ConfigCloudUpcloud - Upcloud-specific cloud config
+#   ConfigCloudVastAI - VastAI-specific cloud config
 #   ConfigDb - database connection config
 #   ConfigLocal - local daemon settings
 #   ConfigRemote - remote machine defaults
@@ -30,7 +31,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - Added ConfigCloudVastAI.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
 """Configuration module"""
