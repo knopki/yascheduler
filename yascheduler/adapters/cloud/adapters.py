@@ -28,6 +28,8 @@
 
 """Cloud adapters"""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from functools import cache
