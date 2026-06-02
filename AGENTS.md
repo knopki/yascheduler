@@ -49,6 +49,8 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
   models, DB (mocked), remote machine management, scheduler orchestration
 - [test-db-integration](openspec/specs/test-db-integration) — integration tests
   for DB against real PostgreSQL via testcontainers
+- [e2e-testing](openspec/specs/e2e-testing) — end-to-end tests: full task
+  lifecycle against real PostgreSQL and SSH containers via testcontainers
 - [testing-infrastructure](openspec/specs/testing-infrastructure) — pytest
   config, directory structure, shared fixtures, CI workflow
 
@@ -56,16 +58,20 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 
 - New code should include focused unit tests for core logic and pure behavior;
   test happy paths first, then meaningful edge cases.
+- For changes touching DB queries, node lifecycle, SSH interaction, or
+  orchestrator flow, also add or update integration/e2e tests per the relevant
+  OpenSpec specs (`test-db-integration`, `e2e-testing`).
+- Run tests: `uv run -m unit`, `uv run -m integration`, `uv run -m e2e`
+  (Docker must be running for integration and e2e — they use testcontainers).
 - Static checks: `uv run zuban check`, `uv run ruff check .`,
   `uv run ruff format --check .`
 - Spec validation: `openspec validate --all --json` must pass after creating a
   change proposal and after any modification to `openspec/specs/` (on
   archive/sync too).
 - Validate GRACE-lite must pass after any code modification session.
-- For behavior changes, add focused tests when feasible or document manual
-  verification.
-- Avoid real cloud, SSH, system service, or DB mutations unless explicitly
-  requested and configured.
+- Use testcontainers for integration and e2e tests (PostgreSQL, SSH). Avoid
+  only uncontrolled production resources (real cloud accounts, production DBs,
+  live SSH servers) unless explicitly requested and configured.
 
 <!-- START_GRACE-lite -->
 
