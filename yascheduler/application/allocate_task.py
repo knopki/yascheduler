@@ -32,7 +32,7 @@ from yascheduler.db import DB, TaskModel, TaskStatus
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
-    from yascheduler.clouds import CloudAPIManager
+    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
     from yascheduler.config import Engine, EngineRepository
     from yascheduler.remote_machine import RemoteMachine, RemoteMachineRepository
 
@@ -83,7 +83,7 @@ async def _validate_engine(
 #     db: DB - Legacy database facade,
 #     start_task_on_machine: Callable[[RemoteMachine, Engine, TaskModel], Awaitable[bool]] - Upload+spawn callback,
 #     do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]] - Webhook callback,
-#     clouds: CloudAPIManager - Cloud provider manager
+#     clouds: CloudProvisionerImpl - Cloud provider manager
 #   }
 #   OUTPUTS: { bool - True if task started successfully on this machine }
 #   SIDE_EFFECTS: Sets task running, starts occupancy check, sends webhook, marks cloud task done.
@@ -99,7 +99,7 @@ async def _try_start_on_machine(
         [RemoteMachine, Engine, TaskModel], Awaitable[bool]
     ],
     do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
-    clouds: CloudAPIManager,
+    clouds: CloudProvisionerImpl,
 ) -> bool:
     task_m = evolve(task, ip=ip)
     logger.debug(
@@ -152,7 +152,7 @@ async def _find_free_machines(
 # START_CONTRACT: _allocate_free_machine
 #   PURPOSE: Find a free compatible machine and start the task on it.
 #   INPUTS: { task: TaskModel, engine: Engine, db: DB, remote_machines: RemoteMachineRepository,
-#     start_task_on_machine: Callable, do_task_webhook: Callable, clouds: CloudAPIManager }
+#     start_task_on_machine: Callable, do_task_webhook: Callable, clouds: CloudProvisionerImpl }
 #   OUTPUTS: { bool - True if allocated to a machine, False if not }
 #   SIDE_EFFECTS: Updates task status, starts occupancy check, sends webhook, marks cloud task done.
 #   LINKS: M-DB, M-REMOTE-REPO, M-CLOUD-MANAGER
@@ -166,7 +166,7 @@ async def _allocate_free_machine(
         [RemoteMachine, Engine, TaskModel], Awaitable[bool]
     ],
     do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
-    clouds: CloudAPIManager,
+    clouds: CloudProvisionerImpl,
 ) -> bool:
     free_machines = await _find_free_machines(engine, db, remote_machines)
 
@@ -195,7 +195,7 @@ async def _allocate_free_machine(
 #     engines: EngineRepository - Config engine repository,
 #     db: DB - Legacy database facade,
 #     remote_machines: RemoteMachineRepository - Connected SSH machines,
-#     clouds: CloudAPIManager - Cloud provider manager,
+#     clouds: CloudProvisionerImpl - Cloud provider manager,
 #     start_task_on_machine: Callable - Callback to upload+spawn on remote machine,
 #     do_task_webhook: Callable - Callback to send webhook notification
 #   }
@@ -208,7 +208,7 @@ async def allocate_task(
     engines: EngineRepository,
     db: DB,
     remote_machines: RemoteMachineRepository,
-    clouds: CloudAPIManager,
+    clouds: CloudProvisionerImpl,
     start_task_on_machine: Callable[
         [RemoteMachine, Engine, TaskModel], Awaitable[bool]
     ],
@@ -233,6 +233,8 @@ async def allocate_task(
 
     # START_BLOCK_ALLOCATE_CLOUD
     logger.debug("[AllocateTask][allocate_task][CLOUD] task_id=%s", task.task_id)
-    await clouds.allocate(task.task_id, want_platforms=engine.platforms, throttle=True)
+    await clouds.allocate_with_tracking(
+        on_task=task.task_id, platforms=list(engine.platforms), throttle=True
+    )
     return False
     # END_BLOCK_ALLOCATE_CLOUD

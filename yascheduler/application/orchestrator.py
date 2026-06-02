@@ -57,8 +57,8 @@ if TYPE_CHECKING:
 
     from asyncssh.sftp import SFTPClient
 
+    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
     from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-    from yascheduler.clouds import CloudAPIManager
     from yascheduler.config import Config, ConfigCloud, Engine, EngineRepository
 
 
@@ -120,7 +120,7 @@ async def _write_remote_file(
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { config: Config, db: DB, clouds: CloudAPIManager, remote_machines: RemoteMachineRepository, gateway: SSHMachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
+    #   INPUTS: { config: Config, db: DB, clouds: CloudProvisionerImpl, remote_machines: RemoteMachineRepository, gateway: SSHMachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues, Semaphore. HTTP session deferred to start().
     #   LINKS: M-CONFIG, M-DB, M-QUEUE, M-SSH-GATEWAY
@@ -129,7 +129,7 @@ class Orchestrator:
         self,
         config: Config,
         db: DB,
-        clouds: CloudAPIManager,
+        clouds: CloudProvisionerImpl,
         remote_machines: RemoteMachineRepository,
         gateway: SSHMachineGateway,
         engines: EngineRepository,
@@ -556,7 +556,7 @@ class Orchestrator:
     async def _clouds_get_capacity(self) -> int:
         ccap = await self._clouds.get_capacity()
         n_busy_cloud_nodes = sum(x.current for x in ccap.values())
-        max_nodes = sum(x.config.max_nodes for x in self._clouds.apis.values())
+        max_nodes = sum(c.max_nodes for c in self._clouds.configs.values())
         diff = max_nodes - n_busy_cloud_nodes
         return max(0, diff)
 

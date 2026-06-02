@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
 #   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY
+#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CLOUD-MANAGER, M-REMOTE-REPO
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLIENT, M-UTILS
 # END_MODULE_CONTRACT
 #
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add SSHMachineGateway creation and injection into Orchestrator.
-#   PREVIOUS_CHANGE: v1.0.0 - Create DI composition root with daemon and CLI factories.
+#   LAST_CHANGE: v1.2.0 - Build CloudProvisionerImpl directly instead of CloudAPIManager (Phase 4).
+#   PREVIOUS_CHANGE: v1.1.0 - Add SSHMachineGateway creation and injection into Orchestrator.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -25,11 +25,12 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .adapters.cloud.manager import CloudProvisionerImpl
 from .adapters.persistence.postgres_uow import PostgresUnitOfWork
 from .adapters.ssh.gateway import SSHMachineGateway
 from .application.orchestrator import Orchestrator
 from .application.submit_task import submit_task
-from .clouds import CloudAPIManager
+from .clouds.cloud_api_manager import _resolve_adapter
 from .db import DB
 from .remote_machine import RemoteMachineRepository
 
@@ -37,8 +38,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import PurePath
 
+    from .adapters.cloud.adapters import CloudAdapter
     from .application.uow import AbstractUnitOfWork
-    from .config import Config, EngineRepository
+    from .config import Config, ConfigCloud, EngineRepository
 
 
 # START_CONTRACT: CLIDeps
@@ -93,7 +95,7 @@ class CLIDeps:
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
 #   INPUTS: { config: Config, log: Optional[Logger] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates DB connection, CloudAPIManager, SSHMachineGateway, RemoteMachineRepository.
+#   SIDE_EFFECTS: Creates DB connection, CloudProvisionerImpl, SSHMachineGateway, RemoteMachineRepository.
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-DB, M-CLOUD-MANAGER, M-SSH-GATEWAY
 # END_CONTRACT: make_daemon
 async def make_daemon(
@@ -101,7 +103,7 @@ async def make_daemon(
     log: logging.Logger | None = None,
     *,
     db: DB | None = None,
-    clouds: CloudAPIManager | None = None,
+    clouds: CloudProvisionerImpl | None = None,
 ) -> Orchestrator:
     if log is None:
         log = logging.getLogger("Orchestrator")
@@ -109,11 +111,30 @@ async def make_daemon(
     if db is None:
         db = await DB.create(config.db)
     if clouds is None:
-        clouds = await CloudAPIManager.create(
-            db=db,
+        _adapters: dict[str, CloudAdapter] = {}
+        _configs: dict[str, ConfigCloud] = {}
+        for cfg in config.clouds:
+            if cfg.max_nodes <= 0:
+                log.warning(
+                    "Cloud %s skipped: max_nodes=%d <= 0",
+                    cfg.prefix,
+                    cfg.max_nodes,
+                )
+                continue
+            adapter = _resolve_adapter(cfg, log)
+            if adapter is None:
+                continue
+            _adapters[adapter.name] = adapter
+            _configs[adapter.name] = cfg
+
+        log.info("Active cloud APIs: %s", ", ".join(_adapters.keys()) or "-")
+        clouds = CloudProvisionerImpl(
+            adapters=_adapters,
+            configs=_configs,
+            node_repo=db._node_repo,
+            machine_gateway=SSHMachineGateway(log=log),
             local_config=config.local,
             remote_config=config.remote,
-            cloud_configs=config.clouds,
             engines=config.engines,
             log=log,
         )

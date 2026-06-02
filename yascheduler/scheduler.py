@@ -5,7 +5,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Backward-compatible Scheduler wrapper delegating to Orchestrator and use cases.
 #   SCOPE: Scheduler class (thin wrapper), get_logger, WebhookPayload.
-#   DEPENDS: M-DB, M-CLOUD-MANAGER, M-CONFIG, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK
+#   DEPENDS: M-DB, M-CLOUD-MANAGER, M-CLOUD-PROVISIONER, M-CONFIG, M-COMPAT, M-VARIABLES, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK
 #   LINKS: M-DB, M-APPLICATION-ORCHESTRATOR, M-DI
 # END_MODULE_CONTRACT
 #
@@ -28,11 +28,12 @@ from typing import Any, Optional, Union
 
 from attrs import define, field
 
+from .adapters.cloud.adapters import CloudAdapter  # noqa: TC001
+from .adapters.cloud.manager import CloudProvisionerImpl
 from .application.orchestrator import Orchestrator
 from .application.submit_task import submit_task
-from .clouds import CloudAPIManager
 from .compat import Self
-from .config import Config
+from .config import Config, ConfigCloud  # noqa: TC001
 from .db import DB, TaskModel
 from .di import make_cli_deps, make_daemon
 from .variables import CONFIG_FILE
@@ -74,7 +75,7 @@ def get_logger(
 class Scheduler:
     config: Config = field()
     db: DB = field()
-    clouds: CloudAPIManager = field()
+    clouds: CloudProvisionerImpl = field()
     log: logging.Logger = field()
     _orchestrator: Optional[Orchestrator] = field(default=None, init=False)
 
@@ -82,7 +83,7 @@ class Scheduler:
     #   PURPOSE: Async factory: build Scheduler with DB, clouds, and Orchestrator.
     #   INPUTS: { config: Optional[Config], log: Optional[logging.Logger] }
     #   OUTPUTS: { Self - fully initialized Scheduler instance }
-    #   SIDE_EFFECTS: Creates DB connection, initialises CloudAPIManager.
+    #   SIDE_EFFECTS: Creates DB connection, builds CloudProvisionerImpl.
     #   LINKS: M-DB, M-CLOUD-MANAGER, M-CONFIG, M-DI
     # END_CONTRACT: create
     @classmethod
@@ -97,11 +98,29 @@ class Scheduler:
             log = logging.getLogger(cls.__name__)
         cfg = config or Config.from_config_parser(CONFIG_FILE)
         db = await DB.create(cfg.db)
-        clouds = await CloudAPIManager.create(
-            db=db,
+
+        from .clouds.cloud_api_manager import _resolve_adapter
+
+        _adapters: dict[str, CloudAdapter] = {}
+        _configs: dict[str, ConfigCloud] = {}
+        for cc in cfg.clouds:
+            if cc.max_nodes <= 0:
+                continue
+            adapter = _resolve_adapter(cc, log)
+            if adapter is None:
+                continue
+            _adapters[adapter.name] = adapter
+            _configs[adapter.name] = cc
+
+        from .adapters.ssh.gateway import SSHMachineGateway
+
+        clouds = CloudProvisionerImpl(
+            adapters=_adapters,
+            configs=_configs,
+            node_repo=db._node_repo,
+            machine_gateway=SSHMachineGateway(log=log),
             local_config=cfg.local,
             remote_config=cfg.remote,
-            cloud_configs=cfg.clouds,
             engines=cfg.engines,
             log=log,
         )

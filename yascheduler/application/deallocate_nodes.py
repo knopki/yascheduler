@@ -28,7 +28,7 @@ from yascheduler.db import DB, NodeModel, TaskStatus
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from yascheduler.clouds import CloudAPIManager
+    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
     from yascheduler.config import ConfigCloud
     from yascheduler.remote_machine import RemoteMachineRepository
 
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 #   INPUTS: {
 #     node: NodeModel - The node to deallocate,
 #     remote_machines: RemoteMachineRepository - Connected SSH machines,
-#     clouds: CloudAPIManager - Cloud provider manager
+#     clouds: CloudProvisionerImpl - Cloud provider manager
 #   }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Disconnects remote machine, deletes cloud VM.
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 async def deallocate_node(
     node: NodeModel,
     remote_machines: RemoteMachineRepository,
-    clouds: CloudAPIManager,
+    clouds: CloudProvisionerImpl,
 ) -> None:
     if node.ip in remote_machines.keys():
         await remote_machines.disconnect_many([node.ip])
@@ -62,7 +62,7 @@ async def deallocate_node(
 #   INPUTS: {
 #     db: DB - Legacy database facade,
 #     remote_machines: RemoteMachineRepository - Connected SSH machines,
-#     clouds: CloudAPIManager - Cloud provider manager,
+#     clouds: CloudProvisionerImpl - Cloud provider manager,
 #     config_clouds: Sequence[ConfigCloud] - Cloud configuration with idle_tolerance
 #   }
 #   OUTPUTS: { None }
@@ -72,7 +72,7 @@ async def deallocate_node(
 async def deallocate_nodes(
     db: DB,
     remote_machines: RemoteMachineRepository,
-    clouds: CloudAPIManager,
+    clouds: CloudProvisionerImpl,
     config_clouds: Sequence[ConfigCloud],
 ) -> None:
     # START_BLOCK_DISABLE_IDLE

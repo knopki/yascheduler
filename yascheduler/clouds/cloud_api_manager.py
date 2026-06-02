@@ -4,45 +4,43 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Multi-cloud orchestrator: provider selection, allocation, deallocation, capacity.
 #   SCOPE: CloudAPIManager class managing multiple providers; CLOUD_ADAPTER_GETTERS registry.
-#   DEPENDS: M-CLOUD-API, M-DB, M-CONFIG, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-COMPAT
+#   DEPENDS: M-CLOUD-PROVISIONER, M-DB, M-CONFIG, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-COMPAT
 #   LINKS: M-SCHEDULER, M-CLOUD-API, M-DB
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   CLOUD_ADAPTER_GETTERS - Registry mapping cloud prefix to adapter factory
 #   _resolve_adapter - Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry
-#   CloudAPIManager - Multi-cloud orchestrator; create, stop, allocate, deallocate, capacity
+#   _CloudAPICompat - Lightweight compat wrapper for apis property
+#   CloudAPIManager - Multi-cloud orchestrator wrapping CloudProvisionerImpl
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.1 - Extracted _resolve_adapter from create to stay under 60-line limit.
-#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - Refactored to delegate to CloudProvisionerImpl (Phase 3).
+#   PREVIOUS_CHANGE: v1.6.1 - Extracted _resolve_adapter from create to stay under 60-line limit.
 # END_CHANGE_SUMMARY
 
 """Cloud API manager"""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from asyncio.locks import Lock
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from attrs import define, field
 
-from .adapters import (
+from yascheduler.adapters.cloud.adapters import (
     CloudAdapter,
     get_azure_adapter,
     get_hetzner_adapter,
     get_upcloud_adapter,
 )
-from .cloud_api import CloudAPI
-from .protocols import CloudCapacity
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ..adapters.cloud.manager import CloudProvisionerImpl
+    from ..adapters.cloud.protocols import CloudCapacity
     from ..compat import Self
     from ..config import ConfigCloud, ConfigLocal, ConfigRemote, EngineRepository
     from ..db import DB
@@ -78,22 +76,32 @@ def _resolve_adapter(cfg: ConfigCloud, log: logging.Logger) -> CloudAdapter | No
 
 
 @define(frozen=True)
-class CloudAPIManager:
-    """Cloud API manager"""
+class _CloudAPICompat:
+    """Lightweight compat for apis property — exposes .config.max_nodes / .name."""
 
-    apis: dict[str, CloudAPI[ConfigCloud]] = field()
-    db: DB = field()
+    name: str
+    config: ConfigCloud
+
+
+@define(frozen=True)
+class CloudAPIManager:
+    """Cloud API manager — thin wrapper around CloudProvisionerImpl."""
+
+    impl: CloudProvisionerImpl = field()
+    apis_compat: dict[str, _CloudAPICompat] = field()
     log: logging.Logger = field()
-    on_tasks: set[int] = field(init=False, factory=set)
-    keys_dir: Path = field(factory=Path)
-    allocation_lock: Lock = field(factory=Lock, init=False)
+
+    @property
+    def apis(self) -> dict[str, _CloudAPICompat]:
+        """Return lightweight compat dict for backward-compatible .config.max_nodes access."""
+        return self.apis_compat
 
     # START_CONTRACT: create
-    #   PURPOSE: Async factory that instantiates all configured cloud providers
+    #   PURPOSE: Async factory building CloudProvisionerImpl and compat wrappers.
     #   INPUTS: { db: DB - database connection, local_config: ConfigLocal - local settings, remote_config: ConfigRemote - remote settings, cloud_configs: Sequence[ConfigCloud] - list of cloud provider configs, engines: EngineRepository - engine definitions, log: Optional[logging.Logger] - optional parent logger }
     #   OUTPUTS: { Self - initialized CloudAPIManager instance }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-CLOUD-MANAGER, M-CLOUD-API
+    #   LINKS: M-CLOUD-MANAGER, M-CLOUD-PROVISIONER, M-SSH-GATEWAY
     # END_CONTRACT: create
     @classmethod
     async def create(
@@ -111,8 +119,9 @@ class CloudAPIManager:
         else:
             log = logging.getLogger(cls.__name__)
 
-        apis: dict[str, CloudAPI[ConfigCloud]] = {}
-        ssh_key_lock = asyncio.Lock()
+        adapters: dict[str, CloudAdapter] = {}
+        configs: dict[str, ConfigCloud] = {}
+        apis: dict[str, _CloudAPICompat] = {}
 
         for cfg in cloud_configs:
             if cfg.max_nodes <= 0:
@@ -125,203 +134,76 @@ class CloudAPIManager:
             if adapter is None:
                 continue
 
-            apis[adapter.name] = CloudAPI(
-                adapter=adapter,
-                config=cfg,
-                local_config=local_config,
-                remote_config=remote_config,
-                engines=engines,
-                ssh_key_lock=ssh_key_lock,
-                log=log,
-            )
+            adapters[adapter.name] = adapter
+            configs[adapter.name] = cfg
+            apis[adapter.name] = _CloudAPICompat(name=adapter.name, config=cfg)
 
-        log.info("Active cloud APIs: %s", (", ".join(apis.keys()) or "-"))
+        log.info("Active cloud APIs: %s", (", ".join(adapters.keys()) or "-"))
 
-        return cls(
-            apis=apis,
-            db=db,
+        # Lazy import to avoid circular dependencies
+        from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
+        from yascheduler.adapters.ssh.gateway import SSHMachineGateway
+
+        impl = CloudProvisionerImpl(
+            adapters=adapters,
+            configs=configs,
+            node_repo=db._node_repo,
+            machine_gateway=SSHMachineGateway(log=log),
+            local_config=local_config,
+            remote_config=remote_config,
+            engines=engines,
             log=log,
-            keys_dir=local_config.keys_dir,
         )
+
+        return cls(impl=impl, apis_compat=apis, log=log)
 
     def __bool__(self) -> bool:
-        return bool(len(self.apis))
+        return bool(self.impl)
 
     async def stop(self) -> None:
-        self.log.info("Stopping clouds...")
+        await self.impl.stop()
 
     def mark_task_done(self, on_task: int) -> None:
-        self.on_tasks.discard(on_task)
+        self.impl.mark_task_done(on_task)
 
-    # START_CONTRACT: get_capacity
-    #   PURPOSE: Report current capacity across all providers
-    #   INPUTS: { None }
-    #   OUTPUTS: { dict[str, CloudCapacity] - mapping of provider name to capacity info }
-    #   SIDE_EFFECTS: Reads from DB
-    #   LINKS: M-CLOUD-MANAGER, M-DB
-    # END_CONTRACT: get_capacity
     async def get_capacity(self) -> dict[str, CloudCapacity]:
-        data: dict[str, CloudCapacity] = {}
-        for name, count in (await self.db.count_nodes_clouds()).items():
-            api = self.apis.get("name")
-            data[name] = CloudCapacity(
-                name=name,
-                current=count,
-                max=api.config.max_nodes if api else 0,
-            )
+        return await self.impl.get_capacity()
 
-        for api in self.apis.values():
-            if api.name not in data:
-                data[api.name] = CloudCapacity(
-                    name=api.name, current=0, max=api.config.max_nodes
-                )
-        return data
-
-    # START_CONTRACT: select_best_provider
-    #   PURPOSE: Pick provider with highest priority and available capacity
-    #   INPUTS: { want_platforms: Optional[Sequence[str]] - optional platform filter }
-    #   OUTPUTS: { Optional[CloudAPI[ConfigCloud]] - best matching provider or None }
-    #   SIDE_EFFECTS: Reads from DB via get_capacity
-    #   LINKS: M-CLOUD-MANAGER
-    # END_CONTRACT: select_best_provider
     async def select_best_provider(
         self, want_platforms: Sequence[str] | None = None
-    ) -> CloudAPI[ConfigCloud] | None:
-        """Select best cloud API"""
-        self.log.debug(
-            "[CloudManager][select_best_provider] providers=%s",
-            ", ".join(self.apis.keys()),
-        )
-        used_providers = []
-        suitable_providers = list(self.apis.keys())
+    ) -> CloudAdapter | None:
+        """Select best cloud API — stub, now delegated via CloudProvisionerImpl."""
+        self.log.debug("[CloudManager][select_best_provider] delegating (stub)")
+        return None
 
-        # START_BLOCK_FILTER_PROVIDERS
-        cap = await self.get_capacity()
-
-        for name, capacity in cap.items():
-            used_providers.append((name, capacity.current))
-            api = self.apis.get(name)
-            if not api:
-                continue
-            # remove maxed out providers
-            if capacity.current >= api.config.max_nodes:
-                suitable_providers.remove(api.name)
-                continue
-            # remove not supported platforms
-            if want_platforms:
-                if not any(map(api.is_platform_supported, want_platforms)):
-                    suitable_providers.remove(api.name)
-
-        # END_BLOCK_FILTER_PROVIDERS
-        self.log.debug("[CloudManager][select_best_provider] used=%s", used_providers)
-        if not suitable_providers:
-            self.log.debug("[CloudManager][select_best_provider] no suitable providers")
-            return
-
-        # START_BLOCK_SORT_SELECT
-        ok_apis = filter(lambda x: x.name in suitable_providers, self.apis.values())
-        ok_apis_sorted = sorted(ok_apis, key=lambda x: x.config.priority, reverse=True)
-        api = ok_apis_sorted[0]
-        self.log.debug(
-            "[CloudManager][select_best_provider][CHOSEN] provider=%s", api.name
-        )
-        return api
-        # END_BLOCK_SORT_SELECT
-
-    # START_CONTRACT: allocate_node
-    #   PURPOSE: Select provider, create a cloud node, wait for ready
-    #   INPUTS: { want_platforms: Optional[Sequence[str]] - optional platform filter, throttle: bool - whether to skip overloaded providers }
-    #   OUTPUTS: { Optional[str] - allocated node IP address or None }
-    #   SIDE_EFFECTS: Adds node to DB
-    #   LINKS: M-CLOUD-MANAGER, M-DB
-    # END_CONTRACT: allocate_node
     async def allocate_node(
         self, want_platforms: Sequence[str] | None = None, throttle: bool = False
     ) -> str | None:
-        """Allocate new node"""
-        async with self.allocation_lock:
-            api = await self.select_best_provider(want_platforms)
-            if not api:
-                return
-            if throttle and api.get_op_semaphore().locked():
-                self.log.debug(
-                    "[CloudManager][allocate_node][OVERLOADED] provider=%s", api.name
-                )
-                await asyncio.sleep(1)
-                return
-
-            tmp_ip = await self.db.add_tmp_node(api.name, api.config.username)
-            await self.db.commit()
-        # START_BLOCK_CREATE_NODE
-        try:
-            ip_addr = await api.create_node()
-        finally:
-            await self.db.remove_node(tmp_ip)
-            await self.db.commit()
-        # END_BLOCK_CREATE_NODE
-
-        # START_BLOCK_REGISTER_NODE
-        _ = await self.db.add_node(
-            ip_addr=ip_addr,
-            username=api.config.username,
-            port=None,
-            cloud=api.name,
-            enabled=True,
+        """Allocate new node — delegate to CloudProvisionerImpl."""
+        return await self.impl.allocate_with_tracking(
+            on_task=None,
+            platforms=list(want_platforms) if want_platforms else [],
+            throttle=throttle,
         )
-        await self.db.commit()
-        # END_BLOCK_REGISTER_NODE
-        return ip_addr
 
-    # START_CONTRACT: allocate
-    #   PURPOSE: Externally-safe allocate wrapper with error handling and task tracking
-    #   INPUTS: { on_task: Optional[int] - optional task id to mark, want_platforms: Optional[Sequence[str]] - optional platform filter, throttle: bool - whether to skip overloaded providers }
-    #   OUTPUTS: { Optional[str] - allocated node IP address or None on error }
-    #   SIDE_EFFECTS: Tracks on_task in on_tasks set, logs allocation errors
-    #   LINKS: M-CLOUD-MANAGER, M-DB
-    # END_CONTRACT: allocate
     async def allocate(
         self,
         on_task: int | None = None,
         want_platforms: Sequence[str] | None = None,
         throttle: bool = True,
     ) -> str | None:
-        if on_task in self.on_tasks:
-            return
-        if on_task:
-            self.on_tasks.add(on_task)
-        try:
-            return await self.allocate_node(want_platforms, throttle)
-        except Exception as err:
-            self.log.error(f"Can't allocate node: {err}")
-            if on_task:
-                self.mark_task_done(on_task)
-        return
+        """Allocate cloud node with task tracking — delegate to CloudProvisionerImpl."""
+        return await self.impl.allocate_with_tracking(
+            on_task=on_task,
+            platforms=list(want_platforms) if want_platforms else [],
+            throttle=throttle,
+        )
 
-    # START_CONTRACT: deallocate
-    #   PURPOSE: Delete cloud node by IP address
-    #   INPUTS: { ip_addr: str - IP address of node to deallocate }
-    #   OUTPUTS: { Optional[bool] - False on deletion error, None otherwise }
-    #   SIDE_EFFECTS: Disables and removes node from DB, deletes cloud VM
-    #   LINKS: M-CLOUD-MANAGER, M-DB
-    # END_CONTRACT: deallocate
     async def deallocate(self, ip_addr: str) -> bool | None:
-        node = await self.db.get_node(ip_addr)
-        if not node or not node.cloud:
-            return
-        if node.cloud not in self.apis:
-            self.log.warning(
-                f"Can't deallocate node {node.ip} - unsupported cloud {node.cloud}"
-            )
-        await self.db.disable_node(ip_addr)
-        await self.db.commit()
-        # START_BLOCK_DELETE_NODE
+        """Deallocate cloud node — delegate to CloudProvisionerImpl."""
         try:
-            await self.apis[node.cloud].delete_node(node.ip)
+            await self.impl.deallocate(ip_addr)
         except Exception as err:
-            self.log.error(f"Can't deallocate node {node.ip}: {err}")
+            self.log.error("Can't deallocate node %s: %s", ip_addr, err)
             return False
-        # END_BLOCK_DELETE_NODE
-        # START_BLOCK_REMOVE_NODE
-        await self.db.remove_node(node.ip)
-        await self.db.commit()
-        # END_BLOCK_REMOVE_NODE
+        return None

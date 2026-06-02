@@ -37,7 +37,7 @@ from yascheduler.remote_machine import RemoteMachine, SFTPRetryExc
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
-    from yascheduler.clouds import CloudAPIManager
+    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
     from yascheduler.config import EngineRepository
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,7 @@ async def _download_task_outputs(
 #     store_folder: Path - Local directory where outputs were saved,
 #     db: DB - Legacy database facade,
 #     do_task_webhook: Callable - Callback to send webhook notification,
-#     clouds: CloudAPIManager - Cloud provider manager
+#     clouds: CloudProvisionerImpl - Cloud provider manager
 #   }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Updates task status in DB, sends webhook, marks task done in cloud manager.
@@ -174,7 +174,7 @@ async def _finalize_task(
     store_folder: Path,
     db: DB,
     do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
-    clouds: CloudAPIManager,
+    clouds: CloudProvisionerImpl,
 ) -> None:
     # START_BLOCK_SET_STATUS
     if sftp_errors:
@@ -204,7 +204,7 @@ async def _finalize_task(
 #     engines: EngineRepository - Config engine repository,
 #     db: DB - Legacy database facade,
 #     local_tasks_dir: Path - Local base directory for output storage,
-#     clouds: CloudAPIManager - Cloud provider manager,
+#     clouds: CloudProvisionerImpl - Cloud provider manager,
 #     do_task_webhook: Callable - Callback to send webhook notification
 #   }
 #   OUTPUTS: { None }
@@ -217,7 +217,7 @@ async def consume_task(
     engines: EngineRepository,
     db: DB,
     local_tasks_dir: Path,
-    clouds: CloudAPIManager,
+    clouds: CloudProvisionerImpl,
     do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
 ) -> None:
     store_folder, output_files, remote_folder = await _prepare_store_folder(

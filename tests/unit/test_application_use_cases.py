@@ -35,11 +35,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
 from yascheduler.application.allocate_task import allocate_task
 from yascheduler.application.consume_task import consume_task
 from yascheduler.application.deallocate_nodes import deallocate_nodes
 from yascheduler.application.submit_task import submit_task
-from yascheduler.clouds import CloudAPIManager
 from yascheduler.config import Engine, EngineRepository
 from yascheduler.config.cloud import ConfigCloudAzure
 from yascheduler.db import DB, TaskModel
@@ -231,7 +231,7 @@ class TestAllocateTask:
             engines=engines,
             db=db_mock,
             remote_machines=MagicMock(spec=RemoteMachineRepository),
-            clouds=MagicMock(spec=CloudAPIManager),
+            clouds=MagicMock(spec=CloudProvisionerImpl),
             start_task_on_machine=AsyncMock(),
             do_task_webhook=do_webhook,
         )
@@ -258,7 +258,7 @@ class TestAllocateTask:
         remote_machines = MagicMock(spec=RemoteMachineRepository)
         remote_machines.filter.return_value = {"10.0.0.1": free_machine}
 
-        clouds = MagicMock(spec=CloudAPIManager)
+        clouds = MagicMock(spec=CloudProvisionerImpl)
         start_on_machine = AsyncMock(return_value=True)
         do_webhook = AsyncMock()
 
@@ -307,8 +307,8 @@ class TestAllocateTask:
         remote_machines = MagicMock(spec=RemoteMachineRepository)
         remote_machines.filter.return_value = {}
 
-        clouds = MagicMock(spec=CloudAPIManager)
-        clouds.allocate = AsyncMock(return_value=None)
+        clouds = MagicMock(spec=CloudProvisionerImpl)
+        clouds.allocate_with_tracking = AsyncMock(return_value=None)
         start_on_machine = AsyncMock()
         do_webhook = AsyncMock()
 
@@ -323,8 +323,8 @@ class TestAllocateTask:
         )
 
         assert result is False
-        clouds.allocate.assert_called_once_with(
-            1, want_platforms=("linux",), throttle=True
+        clouds.allocate_with_tracking.assert_called_once_with(
+            on_task=1, platforms=["linux"], throttle=True
         )
         start_on_machine.assert_not_called()
         db_mock.set_task_running.assert_not_called()
@@ -372,7 +372,7 @@ class TestConsumeTask:
         engines: EngineRepository,
         db: AsyncMock,
         local_tasks_dir: Path,
-        clouds: CloudAPIManager,
+        clouds: CloudProvisionerImpl,
         do_webhook: AsyncMock,
     ) -> None:
         """Run consume_task with backoff and executor patched out."""
@@ -408,7 +408,7 @@ class TestConsumeTask:
     ) -> None:
         """All output files downloaded -> set_task_done + webhook(DONE)."""
         do_webhook = AsyncMock()
-        clouds = MagicMock(spec=CloudAPIManager)
+        clouds = MagicMock(spec=CloudProvisionerImpl)
         local_tasks_dir = MagicMock(spec=Path)
 
         await self._run_consume(
@@ -451,7 +451,7 @@ class TestConsumeTask:
         """Download raises OSError -> set_task_error + webhook(DONE)."""
         sftp_mock.get = AsyncMock(side_effect=OSError("Connection refused"))
         do_webhook = AsyncMock()
-        clouds = MagicMock(spec=CloudAPIManager)
+        clouds = MagicMock(spec=CloudProvisionerImpl)
         local_tasks_dir = MagicMock(spec=Path)
 
         await self._run_consume(
@@ -510,7 +510,7 @@ class TestDeallocateNodes:
         remote_machines = MagicMock(spec=RemoteMachineRepository)
         remote_machines.filter.return_value = {"10.0.0.1": idler_machine}
 
-        clouds = MagicMock(spec=CloudAPIManager)
+        clouds = MagicMock(spec=CloudProvisionerImpl)
         clouds.deallocate = AsyncMock()
 
         config_clouds = [
@@ -558,7 +558,7 @@ class TestDeallocateNodes:
         remote_machines.keys.return_value = ["10.0.0.1"]
         remote_machines.filter.return_value = {"10.0.0.1": idler_machine}
 
-        clouds = MagicMock(spec=CloudAPIManager)
+        clouds = MagicMock(spec=CloudProvisionerImpl)
         clouds.deallocate = AsyncMock()
 
         config_clouds = [

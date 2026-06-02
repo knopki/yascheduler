@@ -282,7 +282,11 @@ class DB:
         return self._node_to_model(node)
 
     async def count_nodes_clouds(self) -> Mapping[str, int]:
-        """Count nodes in clouds"""
+        """Count nodes in clouds.
+
+        NOTE: No longer called by cloud code paths (CloudProvisionerImpl uses
+        NodeRepository.count_by_cloud directly). Kept for backward compatibility.
+        """
         return await self._node_repo.count_by_cloud()
 
     async def count_nodes_by_status(self) -> Mapping[bool, int]:
@@ -295,6 +299,8 @@ class DB:
     #   OUTPUTS: { str - generated provisional IP address }
     #   SIDE_EFFECTS: Inserts disabled node with provisional IP into yascheduler_nodes
     #   LINKS: [M-DB]
+    #   NOTE: No longer called by cloud code paths (CloudProvisionerImpl uses NodeRepository.add_tmp directly).
+    #         Kept for backward compatibility — consider removing in a future cleanup.
     # END_CONTRACT: add_tmp_node
     async def add_tmp_node(self, cloud: str, username: str) -> str:
         """Add temporary node"""

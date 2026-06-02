@@ -38,14 +38,14 @@ from yascheduler.config import (
 from yascheduler.scheduler import Scheduler
 
 if TYPE_CHECKING:
-    from yascheduler.clouds.cloud_api_manager import CloudAPIManager
+    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
     from yascheduler.db import DB
 
 
 def make_scheduler(
     db: DB,
     config: Config,
-    clouds: CloudAPIManager | None = None,
+    clouds: CloudProvisionerImpl | None = None,
     remote_machines: list[Any] | None = None,
 ) -> Scheduler:
     """Construct a refactored Scheduler with injected mocks.

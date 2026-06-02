@@ -1,19 +1,20 @@
 # FILE: tests/fixtures/mock_clouds.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Mock CloudAPIManager factory with configurable capacity for scheduler unit tests.
-#   SCOPE: make_mock_clouds helper returning MagicMock with stubbed allocate, deallocate, get_capacity, mark_task_done, apis, stop.
+#   PURPOSE: Mock CloudProvisionerImpl factory with configurable capacity for scheduler unit tests.
+#   SCOPE: make_mock_clouds helper returning MagicMock with stubbed allocate, deallocate, get_capacity, mark_task_done, configs, stop.
 #   DEPENDS: M-CLOUD-MANAGER
 #   LINKS: M-CLOUD-MANAGER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   make_mock_clouds - Create a mock CloudAPIManager with configurable max/current cloud capacity
+#   make_mock_clouds - Create a mock CloudProvisionerImpl with configurable max/current cloud capacity
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial mock CloudAPIManager fixture.
+#   LAST_CHANGE: v1.1.0 - Update to mock CloudProvisionerImpl interface (Phase 4 wiring).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial mock CloudAPIManager fixture.
 # END_CHANGE_SUMMARY
 #
 
@@ -23,14 +24,14 @@ from yascheduler.clouds.protocols import CloudCapacity
 
 
 def make_mock_clouds(max_nodes: int = 10, current_nodes: int = 5) -> MagicMock:
-    """Create a mock CloudAPIManager with stubbed cloud API methods.
+    """Create a mock CloudProvisionerImpl with stubbed cloud API methods.
 
     Returns a MagicMock with the following attributes:
         allocate - AsyncMock returning None
         deallocate - AsyncMock returning None
         get_capacity - AsyncMock returning dict with CloudCapacity
         mark_task_done - MagicMock (synchronous)
-        apis - MagicMock whose .values() returns mock API configs
+        configs - MagicMock whose .values() returns config dicts with max_nodes
         stop - AsyncMock returning None
     """
     mock = MagicMock(spec=None)
@@ -47,9 +48,9 @@ def make_mock_clouds(max_nodes: int = 10, current_nodes: int = 5) -> MagicMock:
     mock.mark_task_done = MagicMock()
     mock.stop = AsyncMock(return_value=None)
 
-    mock_api = MagicMock()
-    mock_api.config.max_nodes = max_nodes
-    mock.apis = MagicMock()
-    mock.apis.values.return_value = [mock_api]
+    mock_config = MagicMock()
+    mock_config.max_nodes = max_nodes
+    mock.configs = MagicMock()
+    mock.configs.values.return_value = [mock_config]
 
     return mock

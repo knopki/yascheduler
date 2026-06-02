@@ -39,7 +39,7 @@
     <M-SCHEDULER NAME="Scheduler" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Backward-compatible thin wrapper: delegates to Orchestrator and use cases.</purpose>
       <path>yascheduler/scheduler.py</path>
-      <depends>M-DB, M-CLOUD-MANAGER, M-CONFIG, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK</depends>
+      <depends>M-DB, M-CLOUD-MANAGER, M-CLOUD-PROVISIONER, M-CONFIG, M-COMPAT, M-VARIABLES, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK</depends>
       <annotations>
         <class-Scheduler PURPOSE="Backward-compatible async daemon wrapper (delegates to Orchestrator)" />
         <class-WebhookPayload PURPOSE="Re-exported from webhook module" />
@@ -308,7 +308,7 @@
     <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Composition root with factories per entry point: daemon, CLI, AiiDA.</purpose>
       <path>yascheduler/di.py</path>
-      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY</depends>
+      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CLOUD-MANAGER, M-REMOTE-REPO</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit and query" />
         <fn-make_daemon PURPOSE="Async factory creating Orchestrator with all daemon dependencies" />
@@ -500,7 +500,7 @@
     <M-CLOUD-MANAGER NAME="Cloud manager" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Multi-cloud orchestrator: provider selection, allocation, deallocation, capacity.</purpose>
       <path>yascheduler/clouds/cloud_api_manager.py</path>
-      <depends>M-CLOUD-API, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-DB, M-CONFIG, M-COMPAT</depends>
+      <depends>M-CLOUD-PROVISIONER, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-DB, M-CONFIG, M-COMPAT</depends>
       <annotations>
         <class-CloudAPIManager PURPOSE="Manages multiple cloud provider instances" />
         <export-CLOUD_ADAPTER_GETTERS PURPOSE="Registry mapping cloud prefix to adapter factory" />
@@ -556,7 +556,7 @@
 
     <M-CLOUD-PROTOCOLS NAME="Cloud protocols" TYPE="UTILITY" STATUS="implemented">
       <purpose>Protocol definitions for cloud config, node creation, deletion callables.</purpose>
-      <path>yascheduler/clouds/protocols.py</path>
+      <path>yascheduler/adapters/cloud/protocols.py</path>
       <depends>M-CONFIG-CLOUD</depends>
       <annotations>
         <class-PCloudConfig PURPOSE="Cloud-init config protocol" />
@@ -568,7 +568,7 @@
 
     <M-CLOUD-UTILS NAME="Cloud utilities" TYPE="UTILITY" STATUS="implemented">
       <purpose>Cloud helper utilities: random naming, SSH key name extraction.</purpose>
-      <path>yascheduler/clouds/utils.py</path>
+      <path>yascheduler/adapters/cloud/utils.py</path>
       <depends>none</depends>
       <annotations>
         <fn-get_rnd_name PURPOSE="Create random string with prefix" />
@@ -584,6 +584,60 @@
         <export-CloudAPIManager PURPOSE="Cloud API manager class" />
       </annotations>
     </M-CLOUDS-HUB>
+
+    <!-- ═══════════════════════════════════════════════
+         New Cloud Adapter modules (v2.0.0)
+         ═══════════════════════════════════════════════ -->
+
+    <M-CLOUD-PROVISIONER NAME="Cloud provisioner" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>CloudProvisionerImpl — implementation of CloudProvisioner port with multi-provider support.</purpose>
+      <path>yascheduler/adapters/cloud/manager.py</path>
+      <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-SSH-GATEWAY, M-CONFIG</depends>
+      <annotations>
+        <class-CloudProvisionerImpl PURPOSE="Implementation of CloudProvisioner protocol" />
+        <fn-allocate PURPOSE="Allocate cloud node" />
+        <fn-deallocate PURPOSE="Deallocate cloud node" />
+        <fn-capacity PURPOSE="Get cloud capacity" />
+        <fn-allocate_with_tracking PURPOSE="Allocate with tracking" />
+        <fn-get_capacity PURPOSE="Get capacity" />
+        <fn-mark_task_done PURPOSE="Mark task done" />
+      </annotations>
+    </M-CLOUD-PROVISIONER>
+
+    <M-CLOUD-PROVIDERS NAME="Cloud providers" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Cloud provider SDK adapters (Azure, Hetzner, UpCloud) with optional import handling.</purpose>
+      <path>yascheduler/adapters/cloud/providers/</path>
+      <depends>M-CLOUD-PROTOCOLS, M-CONFIG-CLOUD</depends>
+      <annotations>
+        <fn-az_create_node PURPOSE="Create Azure node" />
+        <fn-az_delete_node PURPOSE="Delete Azure node" />
+        <fn-hetzner_create_node PURPOSE="Create Hetzner node" />
+        <fn-hetzner_delete_node PURPOSE="Delete Hetzner node" />
+        <fn-upcloud_create_node PURPOSE="Create UpCloud node" />
+        <fn-upcload_delete_node PURPOSE="Delete UpCloud node" />
+      </annotations>
+    </M-CLOUD-PROVIDERS>
+
+    <M-CLOUD-CONFIG NAME="Cloud config dataclass" TYPE="UTILITY" STATUS="implemented">
+      <purpose>CloudConfig dataclass implementing PCloudConfig for cloud-init rendering.</purpose>
+      <path>yascheduler/adapters/cloud/cloud_config.py</path>
+      <depends>M-CLOUD-PROTOCOLS</depends>
+      <annotations>
+        <class-CloudConfig PURPOSE="Cloud config dataclass" />
+      </annotations>
+    </M-CLOUD-CONFIG>
+
+    <M-CLOUD-ADAPTERS-NEW NAME="Cloud adapter factory" TYPE="UTILITY" STATUS="implemented">
+      <purpose>CloudAdapter class and adapter factory functions for provider registration.</purpose>
+      <path>yascheduler/adapters/cloud/adapters.py</path>
+      <depends>M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDERS</depends>
+      <annotations>
+        <class-CloudAdapter PURPOSE="Cloud adapter wrapper class" />
+        <fn-get_azure_adapter PURPOSE="Get Azure adapter" />
+        <fn-get_hetzner_adapter PURPOSE="Get Hetzner adapter" />
+        <fn-get_upcloud_adapter PURPOSE="Get UpCloud adapter" />
+      </annotations>
+    </M-CLOUD-ADAPTERS-NEW>
 
     <!-- ═══════════════════════════════════════════════
          Remote machine management
@@ -853,7 +907,10 @@
     <CrossLink from="M-SCHEDULER" to="M-REMOTE-REPO" relation="manages connected remote machines" />
     <CrossLink from="M-SCHEDULER" to="M-REMOTE" relation="uploads files, spawns and monitors tasks" />
     <CrossLink from="M-SCHEDULER" to="M-REMOTE-PROTOCOL" relation="imports SSH/SFTP retry exceptions for backoff retry logic" />
-    <CrossLink from="M-CLOUD-MANAGER" to="M-CLOUD-API" relation="dispatches to provider-specific API" />
+    <CrossLink from="M-CLOUD-MANAGER" to="M-CLOUD-PROVISIONER" relation="delegates to CloudProvisionerImpl" />
+    <CrossLink from="M-CLOUD-PROVISIONER" to="M-DOMAIN-PORTS" relation="implements CloudProvisioner protocol" />
+    <CrossLink from="M-CLOUD-PROVISIONER" to="M-CLOUD-ADAPTERS-NEW" relation="uses provider adapters" />
+    <CrossLink from="M-CLOUD-PROVISIONER" to="M-SSH-GATEWAY" relation="uses SSH for VM setup" />
     <CrossLink from="M-CLOUD-API" to="M-REMOTE" relation="connects to newly created cloud VMs" />
     <CrossLink from="M-CLOUD-API" to="M-REMOTE-PROTOCOL" relation="imports SSHRetryExc for connection retry logic" />
     <CrossLink from="M-CLIENT" to="M-DB" relation="submits tasks and queries status" />

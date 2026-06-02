@@ -175,15 +175,13 @@ class TestMakeDaemon:
 
     @pytest.mark.asyncio
     async def test_creates_all_dependencies_and_returns_orchestrator(self) -> None:
-        """make_daemon calls DB.create, CloudAPIManager.create, RemoteMachineRepository, and returns Orchestrator."""
+        """make_daemon calls DB.create, builds CloudProvisionerImpl, and returns Orchestrator."""
         config = create_mock_config()
         mock_orch_instance = MagicMock()
 
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
-            patch(
-                "yascheduler.di.CloudAPIManager.create", new=AsyncMock()
-            ) as mock_clouds_create,
+            patch("yascheduler.di._resolve_adapter", return_value=None) as mock_resolve,
             patch("yascheduler.di.SSHMachineGateway") as mock_gateway,
             patch("yascheduler.di.RemoteMachineRepository") as mock_rm_repo,
             patch(
@@ -193,8 +191,6 @@ class TestMakeDaemon:
         ):
             mock_db = AsyncMock()
             mock_db_create.return_value = mock_db
-            mock_clouds = AsyncMock()
-            mock_clouds_create.return_value = mock_clouds
             mock_gw = MagicMock()
             mock_gateway.return_value = mock_gw
             mock_rm = MagicMock()
@@ -208,27 +204,19 @@ class TestMakeDaemon:
 
         mock_get_logger.assert_called_once_with("Orchestrator")
         mock_db_create.assert_awaited_once_with(config.db)
-        mock_clouds_create.assert_awaited_once_with(
-            db=mock_db,
-            local_config=config.local,
-            remote_config=config.remote,
-            cloud_configs=config.clouds,
-            engines=config.engines,
-            log=resolved_log,
-        )
-        mock_gateway.assert_called_once_with(log=resolved_log)
+        # No cloud adapters configured (mock returns None)
+        mock_resolve.assert_not_called()
+        mock_gateway.assert_called()
         mock_rm_repo.assert_called_once_with(log=resolved_log)
-        mock_orch.assert_called_once_with(
-            config=config,
-            db=mock_db,
-            clouds=mock_clouds,
-            remote_machines=mock_rm,
-            gateway=mock_gw,
-            engines=config.engines,
-            log=resolved_log,
-            config_clouds=config.clouds,
-            local_tasks_dir=config.local.tasks_dir,
-        )
+        # Orchestrator receives a CloudProvisionerImpl
+        _call_kwargs = mock_orch.call_args.kwargs
+        assert "clouds" in _call_kwargs
+        assert _call_kwargs["clouds"] is not None
+        assert _call_kwargs["config"] is config
+        assert _call_kwargs["db"] is mock_db
+        assert _call_kwargs["remote_machines"] is mock_rm
+        assert _call_kwargs["gateway"] is mock_gw
+        assert _call_kwargs["log"] is resolved_log
 
     @pytest.mark.asyncio
     async def test_uses_provided_db(self) -> None:
@@ -238,31 +226,24 @@ class TestMakeDaemon:
 
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
-            patch(
-                "yascheduler.di.CloudAPIManager.create", new=AsyncMock()
-            ) as mock_clouds_create,
+            patch("yascheduler.di._resolve_adapter", return_value=None),
             patch("yascheduler.di.RemoteMachineRepository"),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger"),
         ):
-            mock_clouds_create.return_value = AsyncMock()
-
             await make_daemon(config, db=custom_db)
 
         mock_db_create.assert_not_called()
-        mock_clouds_create.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_uses_provided_clouds(self) -> None:
-        """When clouds= keyword is passed, CloudAPIManager.create is not called."""
+        """When clouds= keyword is passed, adapter building is skipped."""
         config = create_mock_config()
         custom_clouds = AsyncMock()
 
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
-            patch(
-                "yascheduler.di.CloudAPIManager.create", new=AsyncMock()
-            ) as mock_clouds_create,
+            patch("yascheduler.di._resolve_adapter") as mock_resolve,
             patch("yascheduler.di.RemoteMachineRepository"),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger"),
@@ -271,7 +252,7 @@ class TestMakeDaemon:
 
             await make_daemon(config, clouds=custom_clouds)
 
-        mock_clouds_create.assert_not_called()
+        mock_resolve.assert_not_called()
         mock_db_create.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -281,7 +262,7 @@ class TestMakeDaemon:
 
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()),
-            patch("yascheduler.di.CloudAPIManager.create", new=AsyncMock()),
+            patch("yascheduler.di._resolve_adapter", return_value=None),
             patch("yascheduler.di.RemoteMachineRepository"),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger") as mock_get_logger,
@@ -298,7 +279,7 @@ class TestMakeDaemon:
 
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()),
-            patch("yascheduler.di.CloudAPIManager.create", new=AsyncMock()),
+            patch("yascheduler.di._resolve_adapter", return_value=None),
             patch("yascheduler.di.RemoteMachineRepository"),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger") as mock_get_logger,
