@@ -54,11 +54,12 @@ result = yac.queue_submit_task(
 print(result)
 ```
 
-Or run directly in console with `yascheduler` (use a key `-l DEBUG` to change the log level).
+Or run directly in console with `yascheduler` (use a key `-l DEBUG` to change
+the log level).
 
 _Supervisor_ config reads e.g.:
 
-```
+```ini
 [program:scheduler]
 command=/usr/local/bin/yascheduler
 user=root
@@ -386,6 +387,67 @@ Settings prefix is `upcloud`.
 - `upcloud_password`
 
   Password.
+
+#### VastAI
+
+VastAI is a GPU marketplace for on-demand GPU instances.
+See [Cloud Providers](CLOUD.md) for setup instructions.
+
+Settings prefix is `vastai`.
+
+- `vastai_api_key`
+
+  VastAI API key. Get it from [Console](https://vast.ai/console/cli/)
+
+- `vastai_image`
+
+  Docker image to use for instances.
+
+  _Default_: `pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel`
+
+- `vastai_disk_gb`
+
+  Disk space in GB.
+
+  _Default_: `80`
+
+- `vastai_min_vram_mb`
+
+  Minimum VRAM in MB.
+
+  _Default_: `81920` (80 GB)
+
+- `vastai_num_gpus`
+
+  Number of GPUs.
+
+  _Default_: `1`
+
+- `vastai_max_price_per_hr`
+
+  Maximum price per hour in USD.
+
+  _Default_: `1.50`
+
+- `vastai_onstart_script`
+
+  Script to run on instance startup.
+
+  _Default_: empty
+
+- `vastai_docker_options`
+
+  Additional Docker options (e.g., port mappings).
+
+  _Default_: empty
+
+  _Example_: `-p 8384:8384`
+
+- `vastai_env`
+
+  Environment variables for the container.
+
+  _Default_: empty
 
 ### Engines `[engine.*]`
 

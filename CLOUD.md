@@ -56,7 +56,8 @@ Add the _Client Secret_ to this Application Registration. Use the correct `appId
 az ad app credential reset --id 00000000-0000-0000-0000-000000000000 --append
 ```
 
-Use `tenant` as the `az_tenant_id` and `password` as the `az_client_secret` cloud settings.
+Use `tenant` as the `az_tenant_id` and `password` as the `az_client_secret`
+cloud settings.
 
 Create virtual networks:
 
@@ -77,10 +78,11 @@ az network vnet create \
     --subnet-prefix 10.0.0.0/22
 ```
 
-According to our experience, while creating the nodes, the Azure allocates the new public
-IP-addresses slowly and unwillingly, so we support **the internal IP-addresses** only.
-This is no problem, if `yascheduler` is installed in the internal network.
-If this is not the case, one has to setup a _jump host_, allowing connections from the outside:
+According to our experience, while creating the nodes, the Azure allocates the
+new public IP-addresses slowly and unwillingly, so we support **the internal
+IP-addresses** only. This is no problem, if `yascheduler` is installed in the
+internal network. If this is not the case, one has to setup a _jump host_,
+allowing connections from the outside:
 
 ```bash
 az vm create \
@@ -98,8 +100,64 @@ az vm create \
     --ssh-key-values "$(ssh-keygen -y -f path/to/private/key)"
 ```
 
-Save the `publicIpAddress` as `az_jump_host`, and `az_jump_user` will be `yascheduler`.
+Save the `publicIpAddress` as `az_jump_host`, and `az_jump_user` will be
+`yascheduler`.
 
 [az_cli_install]: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli
 [az_manage_rg]: https://docs.microsoft.com/en-us/cli/azure/manage-azure-groups-azure-cli
 [az_app_create]: https://docs.microsoft.com/en-us/cli/azure/ad/app?view=azure-cli-latest#az-ad-app-create
+
+## VastAI
+
+VastAI is a GPU marketplace for on-demand GPU instances. Yascheduler
+automatically creates and deletes VastAI instances based on task demand.
+
+### VastAI Setup
+
+1. **Get VastAI API key** from [Console](https://vast.ai/console/cli/)
+
+2. **Install the VastAI connector**:
+
+   ```bash
+   pip install yascheduler
+   ```
+
+3. **Configure in `/etc/yascheduler/yascheduler.conf`**:
+
+   Add to the `[clouds]` section:
+
+   ```ini
+   [clouds]
+   vastai_api_key = YOUR_VAST_API_KEY_HERE
+   vastai_image = pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel
+   vastai_disk_gb = 80
+   vastai_min_vram_mb = 81920
+   vastai_num_gpus = 1
+   vastai_max_price_per_hr = 1.50
+   vastai_max_nodes = 10
+   vastai_user = root
+   vastai_priority = 0
+   vastai_idle_tolerance = 300
+   vastai_onstart_script =
+   vastai_docker_options = -p 8384:8384
+   vastai_jump_user =
+   vastai_jump_host =
+   ```
+
+4. **Initialize**: Run `yainit`
+
+5. **Start yascheduler service**
+
+### Features
+
+- **Automatic instance search** - Finds cheapest available GPU offers matching criteria
+- **SSH readiness verification** - Waits for instances to be fully ready
+- **Proper cleanup** - Instances are deleted automatically when idle
+- **Async support** - Full integration with yascheduler's async patterns
+
+### Notes
+
+- Instances are created with `runtype: ssh_direct` for direct SSH access
+- The `onstart_script` can be used to customize instance initialization
+- Yascheduler automatically manages instance lifecycle - no manual intervention
+  needed
