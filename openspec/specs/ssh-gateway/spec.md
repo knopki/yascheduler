@@ -12,7 +12,8 @@ connection lifecycle, occupancy monitoring, and retry logic.
 
 The system SHALL provide an `SSHMachineGateway` class that satisfies the
 `MachineGateway` Protocol using asyncssh for SSH connections, command
-execution, and SFTP.
+execution, and SFTP. The gateway SHALL be self-contained — it SHALL NOT import
+from `remote_machine/` or `clouds/`.
 
 #### Scenario: Connect to machine
 - **WHEN** `gateway.connect(ip="10.0.0.1", username="root", client_keys=[...])` is called
@@ -74,3 +75,19 @@ The system SHALL retry SSH connections on transient failures using the
 #### Scenario: Retry on connection refused
 - **WHEN** SSH connection fails with a retryable exception
 - **THEN** the connection is retried with exponential backoff up to 60 seconds
+
+### Requirement: SSHMachineGateway owns shared SSH infrastructure
+
+The system SHALL provide all SSH infrastructure constants and helpers in
+`adapters/ssh/helpers.py`, including `ADAPTERS` registry, `DEFAULT_CONN_OPTS`,
+`MySSHClient`, `MAX_SESSIONS`, `my_backoff_exc`, `_detect_platform`,
+`_init_paths`, and `_resolve_tunnel`. `SSHMachineGateway` SHALL import these
+from `adapters/ssh/helpers.py`, not from `remote_machine/`.
+
+#### Scenario: Gateway imports helpers from own package
+- **WHEN** `gateway.py` imports `ADAPTERS`, `DEFAULT_CONN_OPTS`, `_detect_platform`
+- **THEN** they are imported from `adapters/ssh/helpers.py`
+
+#### Scenario: Helpers functional equivalence
+- **WHEN** `_detect_platform(conn, adapters)` is called from the new location
+- **THEN** it returns the same adapter and platform list as the old implementation

@@ -12,22 +12,23 @@ idle cloud nodes.
 
 The system SHALL provide an `Orchestrator` class that runs 4 producer-consumer
 loops. The `Orchestrator` SHALL accept `uow_factory: Callable[[], AbstractUnitOfWork]`
-instead of `DB`. All producer queries SHALL use UoW. The `Orchestrator` SHALL
-NOT depend on `M-DB`.
+and `gateway: SSHMachineGateway` instead of `RemoteMachineRepository`. The
+`Orchestrator` SHALL NOT import from `remote_machine/` or `clouds/`.
 
 #### Scenario: Orchestrator starts all loops
 - **WHEN** `await orchestrator.start()` is called
-- **THEN** all 4 loops begin executing concurrently, using `uow_factory` for all persistence queries
+- **THEN** all 4 loops begin executing concurrently, using `uow_factory` for all persistence queries and `gateway` for all SSH operations
 
 #### Scenario: Graceful shutdown
 - **WHEN** `await orchestrator.stop()` is called
-- **THEN** all loops receive cancellation, pending queue items are drained, and connections are closed
+- **THEN** all loops receive cancellation, pending queue items are drained, and connections are closed via gateway
 
 ### Requirement: Allocate loop
 
 The system SHALL poll TO_DO tasks via UoW and dispatch to the `allocate_task`
 use case with configured concurrency limits. The producer SHALL load domain
-`Task` objects from `TaskRepository.list_by_status`.
+`Task` objects from `TaskRepository.list_by_status`. SSH operations SHALL use
+`SSHMachineGateway`.
 
 #### Scenario: Task allocated in order
 - **WHEN** multiple TO_DO tasks exist
@@ -37,7 +38,7 @@ use case with configured concurrency limits. The producer SHALL load domain
 
 The system SHALL poll RUNNING tasks via UoW and dispatch to the `consume_task`
 use case when the remote machine reports completion. Queue messages SHALL
-carry domain `Task` objects.
+carry domain `Task` objects. SSH operations SHALL use `SSHMachineGateway`.
 
 #### Scenario: Completed task consumed
 - **WHEN** a RUNNING task's machine reports `state=FREE`
@@ -47,7 +48,7 @@ carry domain `Task` objects.
 
 The system SHALL identify idle cloud nodes via UoW, call `deallocate_nodes`
 to disable them, then handle SSH disconnect and cloud deallocation for
-returned IPs.
+returned IPs via `SSHMachineGateway`.
 
 #### Scenario: Cloud node idle too long
 - **WHEN** a cloud node has been free longer than `idle_tolerance` seconds
@@ -56,11 +57,11 @@ returned IPs.
 ### Requirement: Connect machine loop
 
 The system SHALL poll enabled nodes from `NodeRepository` via UoW and establish
-SSH connections.
+SSH connections via `SSHMachineGateway`.
 
 #### Scenario: New node connected
 - **WHEN** a new enabled node appears in the database
-- **THEN** an SSH connection is established and the machine is registered
+- **THEN** an SSH connection is established via gateway and the machine is registered
 
 ### Requirement: Stats logging
 

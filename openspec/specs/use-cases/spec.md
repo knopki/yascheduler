@@ -28,13 +28,11 @@ task in the database after validating the engine and inputs.
 
 The system SHALL provide an `allocate_task` async function that matches a
 TO_DO task to a free machine or requests cloud provisioning. The function
-SHALL accept `task_id: int` and `uow_factory: Callable[[], AbstractUnitOfWork]`
-instead of `TaskModel` and `DB`. It SHALL load the domain `Task` via UoW,
-validate the engine against `EngineRepository`, and save state transitions
-through domain lifecycle methods (`allocate_to`, `mark_running`).
+SHALL accept `task_id: int`, `uow_factory`, and `SSHMachineGateway` instead
+of `RemoteMachineRepository`. It SHALL NOT import from `remote_machine/`.
 
 #### Scenario: Allocate to free machine
-- **WHEN** `allocate_task(task_id, engines, uow_factory, machine_gateway, cloud, webhook)` is called and a free compatible machine exists
+- **WHEN** `allocate_task(task_id, engines, uow_factory, gateway, cloud, webhook)` is called and a free compatible machine exists
 - **THEN** the task is loaded via UoW, allocated via `task.allocate_to(ip)`, transitioned to RUNNING via `task.mark_running()`, saved via `uow.tasks.save()`, and committed
 
 #### Scenario: No free machine — request cloud
@@ -49,13 +47,12 @@ through domain lifecycle methods (`allocate_to`, `mark_running`).
 
 The system SHALL provide a `consume_task` async function that downloads
 outputs from a remote machine and marks the task DONE. The function SHALL
-accept `task_id: int` and `uow_factory: Callable[[], AbstractUnitOfWork]`
-instead of `TaskModel` and `DB`. It SHALL load the domain `Task` via UoW,
-download outputs, and mark done/error through `task.complete()` / `task.fail()`.
+accept `task_id: int`, `uow_factory`, and `SSHMachineGateway` instead of
+`RemoteMachine`. It SHALL NOT import from `remote_machine/`.
 
 #### Scenario: Successful consumption
-- **WHEN** `consume_task(task_id, machine, engines, uow_factory, local_tasks_dir, cloud, webhook)` is called on a completed task
-- **THEN** the task is loaded via UoW, output files are downloaded, the task is transitioned via `task.complete()`, saved via `uow.tasks.save()`, committed, and remote directory is cleaned
+- **WHEN** `consume_task(task_id, gateway, engines, uow_factory, local_tasks_dir, cloud, webhook)` is called on a completed task
+- **THEN** the task is loaded via UoW, output files are downloaded via gateway, the task is transitioned via `task.complete()`, saved via `uow.tasks.save()`, committed, and remote directory is cleaned
 
 #### Scenario: Download failure
 - **WHEN** output file download fails
@@ -65,11 +62,11 @@ download outputs, and mark done/error through `task.complete()` / `task.fail()`.
 
 The system SHALL provide a `deallocate_nodes` async function that disables
 idle cloud nodes exceeding tolerance. The function SHALL accept
-`uow_factory: Callable[[], AbstractUnitOfWork]` instead of `DB`. It SHALL
-query nodes via `NodeRepository` and disable them through UoW.
+`uow_factory` and `SSHMachineGateway` instead of `RemoteMachineRepository`.
+It SHALL NOT import from `remote_machine/`.
 
 #### Scenario: Idle cloud node disabled
-- **WHEN** `deallocate_nodes(uow_factory, cloud, config_clouds, idle_machines)` is called and an idle cloud node exceeds tolerance
+- **WHEN** `deallocate_nodes(uow_factory, cloud, config_clouds, idle_machines, gateway)` is called and an idle cloud node exceeds tolerance
 - **THEN** the node is disabled via `uow.nodes.disable(ip)` and committed; the IP is returned for orchestrator-level SSH cleanup
 
 #### Scenario: Non-cloud node skipped
@@ -82,7 +79,8 @@ query nodes via `NodeRepository` and disable them through UoW.
 
 ### Requirement: Use cases importable from application
 
-The system SHALL expose all use cases from `yascheduler.application`.
+The system SHALL expose all use cases from `yascheduler.application`. No use
+case SHALL import from `remote_machine/` or `clouds/`.
 
 #### Scenario: Import use case
 - **WHEN** `from yascheduler.application.submit_task import submit_task` is executed

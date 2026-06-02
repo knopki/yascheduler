@@ -1,32 +1,20 @@
-## ADDED Requirements
+# Cloud Wrapper
 
-### Requirement: CloudAPIManager becomes compatibility wrapper
+## Purpose
 
-The system SHALL refactor CloudAPIManager as a thin wrapper that delegates
-to CloudProvisionerImpl.
+Transitional compatibility wrappers in the legacy clouds/ package that delegated
+to CloudProvisionerImpl during the migration to adapters/cloud/. The clouds/
+package and all wrappers are removed; use CloudProvisionerImpl directly.
 
-#### Scenario: Old allocate call still works
-- **WHEN** existing code calls cloud_manager.allocate(task_id, want_platforms=["linux"])
-- **THEN** the call delegates to CloudProvisionerImpl.allocate()
+## Requirements
 
-#### Scenario: Old deallocate call still works
-- **WHEN** existing code calls cloud_manager.deallocate("10.0.0.1")
-- **THEN** the call delegates to CloudProvisionerImpl.deallocate()
+### Requirement: Wrapper code removed
 
-### Requirement: CloudAPI becomes compatibility wrapper
+The system SHALL delete the `clouds/` package and all compatibility wrappers
+(CloudAPIManager, CloudAPI). Consumers SHALL use `CloudProvisionerImpl` from
+`adapters/cloud/manager.py` for cloud provisioning, `adapters/cloud/cloud_config.py`
+for cloud-init rendering, and `adapters/cloud/ssh_keys.py` for SSH key management.
 
-The system SHALL refactor CloudAPI as a thin wrapper that delegates to
-CloudProvisionerImpl for VM lifecycle operations.
-
-#### Scenario: Old create_node call still works
-- **WHEN** existing code calls cloud_api.create_node()
-- **THEN** the call delegates to CloudProvisionerImpl
-
-### Requirement: Old imports preserved
-
-The system SHALL ensure imports from yascheduler.clouds still resolve during
-the transition period.
-
-#### Scenario: Import CloudAPIManager from old location
-- **WHEN** from yascheduler.clouds import CloudAPIManager is executed
-- **THEN** the import succeeds, returning the wrapper class
+#### Scenario: Import from new location
+- **WHEN** cloud provisioning is needed
+- **THEN** CloudProvisionerImpl is imported from adapters.cloud.manager

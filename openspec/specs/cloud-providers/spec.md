@@ -1,4 +1,11 @@
-## ADDED Requirements
+# Cloud Providers
+
+## Purpose
+
+Relocate provider-specific VM lifecycle code and cloud support modules to
+adapters/cloud/, with graceful handling of optional provider SDKs.
+
+## Requirements
 
 ### Requirement: Provider code relocated
 
