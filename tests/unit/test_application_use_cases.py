@@ -228,7 +228,7 @@ class TestAllocateTask:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=uow_factory,
-            remote_machines=MagicMock(),
+            gateway=MagicMock(),
             clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
             do_task_webhook=do_webhook,
@@ -250,14 +250,21 @@ class TestAllocateTask:
         engine: Engine,
     ) -> None:
         """Free compatible machine exists -> allocated, returns True."""
+        import time
+
+        from yascheduler.domain.model import ConnectedMachine, MachineState
+
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        free_machine = MagicMock()
-        free_machine.start_occupancy_check = AsyncMock()
+        free_machine = MagicMock(spec=ConnectedMachine)
+        free_machine.ip = "10.0.0.1"
+        free_machine.state = MachineState.FREE
+        free_machine.free_since = time.monotonic()
 
-        remote_machines = MagicMock()
-        remote_machines.filter.return_value = {"10.0.0.1": free_machine}
+        gateway = MagicMock()
+        gateway.list_free = MagicMock(return_value=[free_machine])
+        gateway.start_occupancy_check = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -280,25 +287,23 @@ class TestAllocateTask:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=uow_factory,
-            remote_machines=remote_machines,
+            gateway=gateway,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             do_task_webhook=do_webhook,
         )
 
         assert result is True
-        # machine filtered with correct params
-        remote_machines.filter.assert_called_once_with(
-            busy=False, platforms=("linux",), reverse_sort=True
-        )
+        # gateway.list_free called with correct params
+        gateway.list_free.assert_called_once_with(platforms=["linux"])
         # task started on machine
         start_on_machine.assert_called_once()
         _call_machine, _call_engine, _call_task = start_on_machine.call_args[0]
         assert _call_machine is free_machine
         assert _call_engine is engine
         assert _call_task.allocated_ip == "10.0.0.1"
-        # occupancy check started
-        free_machine.start_occupancy_check.assert_called_once_with(engine)
+        # occupancy check started via gateway
+        gateway.start_occupancy_check.assert_called_once_with("10.0.0.1", engine)
         # db updated via UoW
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
@@ -323,9 +328,9 @@ class TestAllocateTask:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        # empty remote machines
-        remote_machines = MagicMock()
-        remote_machines.filter.return_value = {}
+        # empty free machines
+        gateway = MagicMock()
+        gateway.list_free = MagicMock(return_value=[])
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -346,7 +351,7 @@ class TestAllocateTask:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=uow_factory,
-            remote_machines=remote_machines,
+            gateway=gateway,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             do_task_webhook=do_webhook,
@@ -376,20 +381,19 @@ class TestConsumeTask:
         return sftp
 
     @pytest.fixture
-    def machine_mock(self, sftp_mock: AsyncMock) -> MagicMock:
+    def gateway_mock(self, sftp_mock: AsyncMock) -> MagicMock:
         async_sftp_cm = AsyncMock()
         async_sftp_cm.__aenter__.return_value = sftp_mock
 
-        machine = MagicMock()
-        machine.sftp = MagicMock(return_value=async_sftp_cm)
-        # machine.path returns PurePosixPath class so machine.path(remote_folder)
-        # constructs a PurePosixPath, matching the real behaviour.
-        machine.path = PurePosixPath
-        return machine
+        gateway = MagicMock()
+        gateway.get_sftp = MagicMock(return_value=async_sftp_cm)
+        gateway.get_path = MagicMock(return_value=PurePosixPath)
+        return gateway
 
     async def _run_consume(
         self,
-        machine: MagicMock,
+        ip: str,
+        gateway: MagicMock,
         task: Task,
         uow_factory: Callable[[], AbstractUnitOfWork],
         engines: EngineRepository,
@@ -412,7 +416,8 @@ class TestConsumeTask:
                 mock_loop.run_in_executor = AsyncMock(return_value=None)
                 await consume_task(
                     task_id=task.task_id,
-                    machine=machine,
+                    ip=ip,
+                    gateway=gateway,
                     engines=engines,
                     uow_factory=uow_factory,
                     local_tasks_dir=local_tasks_dir,
@@ -422,7 +427,7 @@ class TestConsumeTask:
 
     async def test_consume_task_download_success_marks_done(
         self,
-        machine_mock: MagicMock,
+        gateway_mock: MagicMock,
         sftp_mock: AsyncMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
@@ -445,7 +450,8 @@ class TestConsumeTask:
         local_tasks_dir = MagicMock(spec=Path)
 
         await self._run_consume(
-            machine=machine_mock,
+            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            gateway=gateway_mock,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -478,7 +484,7 @@ class TestConsumeTask:
 
     async def test_consume_task_download_failure_marks_error(
         self,
-        machine_mock: MagicMock,
+        gateway_mock: MagicMock,
         sftp_mock: AsyncMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
@@ -503,7 +509,8 @@ class TestConsumeTask:
         local_tasks_dir = MagicMock(spec=Path)
 
         await self._run_consume(
-            machine=machine_mock,
+            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            gateway=gateway_mock,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,

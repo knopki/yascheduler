@@ -4,8 +4,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, capacity, provider selection.
 #   SCOPE: CloudProvisionerImpl with all provider SDKs, NodeRepository, and SSHMachineGateway mocked.
-#   DEPENDS: M-CLOUD-PROVISIONER, M-DOMAIN-PORTS, M-CLOUD-ADAPTERS
-#   LINKS: M-CLOUD-MANAGER
+#   DEPENDS: M-CLOUD-PROVISIONER, M-DOMAIN-PORTS, M-CLOUD-ADAPTERS-NEW
+#   LINKS: M-CLOUD-PROVISIONER, M-CLOUD-ADAPTERS-NEW
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -39,6 +39,7 @@ from yascheduler.adapters.cloud.manager import (
     CloudSetupError,
 )
 from yascheduler.adapters.cloud.protocols import CloudCapacity
+from yascheduler.adapters.cloud.ssh_keys import get_or_create_ssh_key
 from yascheduler.domain.model import Node
 
 # =============================================================================
@@ -263,8 +264,8 @@ class TestAllocate:
         )
 
         with patch(
-            "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key_sync",
-            return_value=MagicMock(),
+            "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            new=AsyncMock(return_value=MagicMock()),
         ):
             node = await prov.allocate(["linux"])
 
@@ -357,8 +358,8 @@ class TestAllocate:
 
         with (
             patch(
-                "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key_sync",
-                return_value=MagicMock(),
+                "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                new=AsyncMock(return_value=MagicMock()),
             ),
             pytest.raises(CloudSetupError, match="SSH connect to"),
         ):
@@ -414,8 +415,8 @@ class TestAllocateWithTracking:
         )
 
         with patch(
-            "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key_sync",
-            return_value=MagicMock(),
+            "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            new=AsyncMock(return_value=MagicMock()),
         ):
             result = await prov.allocate_with_tracking(on_task=7, platforms=["linux"])
 
@@ -651,36 +652,30 @@ class TestIsPlatformSupported:
 
 
 class TestSshKeyGeneration:
-    """_get_ssh_key_sync() — SSH key load/generate (filesystem)."""
+    """get_or_create_ssh_key() — SSH key load/generate (filesystem)."""
 
     def test_generates_new_key_when_none_exists(
         self, mock_local_config: MagicMock
     ) -> None:
         """Generates new SSH key and writes to keys_dir when no existing key."""
-        adapter, config = _make_mock_adapter()
-        prov = make_provisioner(
-            adapters={"test": adapter},
-            configs={"test": config},
-            local_config=mock_local_config,
-        )
+        mock_log = MagicMock()
 
         mock_key = MagicMock()
         mock_key.get_fingerprint.return_value = "md5:abcd"
 
         with (
             patch(
-                "yascheduler.adapters.cloud.manager.generate_private_key",
+                "yascheduler.adapters.cloud.ssh_keys.generate_private_key",
                 return_value=mock_key,
             ) as mock_gen,
             patch(
-                "yascheduler.adapters.cloud.manager.get_rnd_name",
+                "yascheduler.adapters.cloud.ssh_keys.get_rnd_name",
                 return_value="yakey-rnd123",
             ),
         ):
-            result = prov._get_ssh_key_sync()
+            result = get_or_create_ssh_key(mock_local_config.keys_dir, mock_log)
 
         mock_gen.assert_called_once_with(alg_name="ssh-rsa", comment="yakey-rnd123")
-        # chmod is called on filepath (Path), not on the key
         mock_local_config.keys_dir.__truediv__.assert_called_once_with("yakey-rnd123")
         result_path = mock_local_config.keys_dir.__truediv__.return_value
         mock_key.write_private_key.assert_called_once_with(result_path)
@@ -689,29 +684,21 @@ class TestSshKeyGeneration:
 
     def test_loads_existing_key(self) -> None:
         """Loads existing SSH key from keys_dir."""
-        local_config = MagicMock()
         keys_dir = MagicMock(spec=Path)
         existing_file = MagicMock(spec=Path)
         existing_file.name = "yakey-existing"
         existing_file.is_file.return_value = True
         keys_dir.iterdir.return_value = [existing_file]
-        local_config.keys_dir = keys_dir
-
-        adapter, config = _make_mock_adapter()
-        prov = make_provisioner(
-            adapters={"test": adapter},
-            configs={"test": config},
-            local_config=local_config,
-        )
+        mock_log = MagicMock()
 
         mock_key = MagicMock()
         mock_key.get_fingerprint.return_value = "md5:efgh"
 
         with patch(
-            "yascheduler.adapters.cloud.manager.read_private_key",
+            "yascheduler.adapters.cloud.ssh_keys.read_private_key",
             return_value=mock_key,
         ) as mock_read:
-            result = prov._get_ssh_key_sync()
+            result = get_or_create_ssh_key(keys_dir, mock_log)
 
         mock_read.assert_called_once_with(existing_file)
         mock_key.set_comment.assert_called_once_with("yakey-existing")

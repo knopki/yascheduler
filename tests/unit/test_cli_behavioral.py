@@ -363,14 +363,16 @@ class TestManageNode:
     """Behavioral tests for the ``manage_node`` CLI command."""
 
     def test_manage_node_add_new(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Add a new host: calls RemoteMachine.create, adds node, prints 'Added host'."""
+        """Add a new host: calls SSHMachineGateway, adds node, prints 'Added host'."""
         config = make_mock_config()
         uow = make_mock_uow()
         uow.nodes.get = AsyncMock(return_value=None)  # not in DB yet
         deps = make_mock_deps(config, uow)
 
-        mock_machine = AsyncMock()
-        mock_machine.setup_node = AsyncMock()
+        mock_gateway = AsyncMock()
+        mock_gateway.connect = AsyncMock()
+        mock_gateway.setup_node = AsyncMock()
+        mock_gateway.disconnect = AsyncMock()
 
         from yascheduler.utils import manage_node
 
@@ -379,9 +381,8 @@ class TestManageNode:
             patch("yascheduler.utils.Config.from_config_parser", return_value=config),
             patch("yascheduler.utils.make_cli_deps", return_value=deps),
             patch(
-                "yascheduler.utils.RemoteMachine.create",
-                new_callable=AsyncMock,
-                return_value=mock_machine,
+                "yascheduler.utils.SSHMachineGateway",
+                return_value=mock_gateway,
             ),
         ):
             result = manage_node()

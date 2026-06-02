@@ -1,11 +1,11 @@
 # FILE: yascheduler/adapters/cloud/__init__.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public re-exports from adapters/cloud submodules.
 #   SCOPE: Re-exports of cloud adapter, protocol, config, and provisioner symbols.
-#   DEPENDS: M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-CLOUD-PROVISIONER
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS
+#   DEPENDS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVISIONER
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -21,11 +21,13 @@
 #   get_azure_adapter - Create CloudAdapter for Azure
 #   get_hetzner_adapter - Create CloudAdapter for Hetzner
 #   get_upcloud_adapter - Create CloudAdapter for UpCloud
+#   get_or_create_ssh_key - Load existing SSH key or generate new one
+#   get_key_name - Get SSHKey's name
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add CloudProvisionerImpl, CloudAllocateError, CloudSetupError exports.
-#   PREVIOUS_CHANGE: v1.0.0 - Extracted from yascheduler/clouds/ package.
+#   LAST_CHANGE: v1.2.0 - Add get_or_create_ssh_key, get_key_name re-exports from ssh_keys.
+#   PREVIOUS_CHANGE: v1.1.0 - Add CloudProvisionerImpl, CloudAllocateError, CloudSetupError exports.
 # END_CHANGE_SUMMARY
 
 """Cloud adapters module"""
@@ -44,6 +46,7 @@ from .protocols import (
     DeleteNodeCallable,
     PCloudConfig,
 )
+from .ssh_keys import get_key_name, get_or_create_ssh_key
 
 __all__ = [
     "CloudAdapter",
@@ -57,5 +60,7 @@ __all__ = [
     "PCloudConfig",
     "get_azure_adapter",
     "get_hetzner_adapter",
+    "get_key_name",
+    "get_or_create_ssh_key",
     "get_upcloud_adapter",
 ]

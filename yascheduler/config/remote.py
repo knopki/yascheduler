@@ -6,7 +6,7 @@
 #   PURPOSE: Remote machine defaults: data directories, SSH username, jump host.
 #   SCOPE: Remote paths, SSH user, jump host.
 #   DEPENDS: M-CONFIG-UTILS, M-COMPAT
-#   LINKS: M-REMOTE, M-CLOUD-API
+#   LINKS: none
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

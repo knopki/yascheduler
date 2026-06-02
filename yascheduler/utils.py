@@ -3,15 +3,15 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Console scripts for yascheduler: submit, status, init, node management, daemon startup.
 #   SCOPE: CLI commands for task submission, status checking, service initialization, node management, daemon startup.
-#   DEPENDS: M-CLIENT, M-CONFIG, M-DB, M-REMOTE, M-VARIABLES, M-DI, M-DOMAIN-MODEL
-#   LINKS: M-CLIENT, M-DI, M-DB
+#   DEPENDS: M-CLIENT, M-CONFIG, M-DB, M-SSH-GATEWAY, M-VARIABLES, M-DI, M-DOMAIN-MODEL
+#   LINKS: M-CLIENT, M-DI, M-DB, M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   submit - Submit task to yascheduler via AiiDA script
 #   check_status - Show status of tasks
 #   _print_status_view - Display detailed view with remote output and convergence
-#   _display_remote_output - Connect to remote machine, tail OUTPUT file
+#   _display_remote_output - Connect via SSHMachineGateway, tail OUTPUT file
 #   init - Service initialization (systemd/sysv + DB)
 #   show_nodes - Show enabled nodes and running tasks
 #   manage_node - Add/remove nodes from daemon
@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - Extract _display_remote_output from _print_status_view to comply with 60-line function limit.
-#   PREVIOUS_CHANGE: v2.1.0 - Refactor check_status, show_nodes, manage_node to use DI/UoW (make_cli_deps + domain ports).
+#   LAST_CHANGE: v2.3.0 - Replace all RemoteMachine usage with SSHMachineGateway (import, _download_convergence_snippet, _display_remote_output, _print_status_view, _add_node).
+#   PREVIOUS_CHANGE: v2.2.0 - Extract _display_remote_output from _print_status_view to comply with 60-line function limit.
 # END_CHANGE_SUMMARY
 
 import argparse
@@ -35,6 +35,7 @@ from typing import Any, Optional, Union
 
 from pg8000 import ProgrammingError
 
+from .adapters.ssh.gateway import SSHMachineGateway
 from .application.orchestrator import Orchestrator
 from .application.uow import AbstractUnitOfWork
 from .client import to_sync
@@ -43,7 +44,6 @@ from .config.engine import Engine
 from .db import DB
 from .di import make_cli_deps, make_daemon
 from .domain.model import Node, Task, TaskStatus
-from .remote_machine import RemoteMachine
 from .variables import CONFIG_FILE
 
 
@@ -163,12 +163,12 @@ def _print_status_default(tasks: list[Task]) -> None:
 
 
 async def _download_convergence_snippet(
-    machine: RemoteMachine, remote_folder: str, local_path: Path
+    gateway: SSHMachineGateway, ip: str, remote_folder: str, local_path: Path
 ) -> bool:
     """Download OUTPUT file via SFTP for convergence parsing. Returns True on success."""
     try:
-        r_output = machine.path(remote_folder) / "OUTPUT"
-        async with machine.sftp() as sftp:
+        r_output = gateway.get_path(ip)(remote_folder) / "OUTPUT"
+        async with gateway.get_sftp(ip) as sftp:
             await sftp.get([str(r_output)], local_path)
         return True
     except OSError:
@@ -216,35 +216,49 @@ def _parse_convergence(filepath: Path) -> str:
 
 
 # START_CONTRACT: _display_remote_output
-#   PURPOSE: Connect to remote machine, tail OUTPUT file, return (machine, remote_folder) or None
+#   PURPOSE: Connect to remote machine via gateway, tail OUTPUT file, return (gateway, ip, remote_folder) or None
 #   INPUTS: { task: Task, ssh_user: str, config: Config }
-#   OUTPUTS: { Optional[tuple[RemoteMachine, str]] - (machine, remote_folder) or None if skipped }
+#   OUTPUTS: { Optional[tuple[SSHMachineGateway, str, str]] - (gateway, ip, remote_folder) or None if skipped }
 #   SIDE_EFFECTS: Connects via SSH, reads remote file, prints to stdout
-#   LINKS: M-REMOTE
+#   LINKS: M-SSH-GATEWAY
 # END_CONTRACT: _display_remote_output
 async def _display_remote_output(
     task: Task, ssh_user: str, config: Config
-) -> Optional[tuple[RemoteMachine, str]]:
-    """Connect to machine, display tail of remote OUTPUT, return (machine, remote_folder) or None."""
+) -> Optional[tuple[SSHMachineGateway, str, str]]:
+    """Connect to machine via gateway, display tail of remote OUTPUT."""
     if not task.allocated_ip:
         print("NO ALLOCATED IP")
         return None
-    machine = await RemoteMachine.create(
-        host=task.allocated_ip,
-        username=ssh_user,
-        client_keys=config.local.get_private_keys(),
-    )
+    ip = task.allocated_ip
+    gateway = SSHMachineGateway()
+    try:
+        await gateway.connect(
+            ip=ip,
+            username=ssh_user,
+            client_keys=config.local.get_private_keys(),
+        )
+    except Exception:
+        print("CAN'T CONNECT")
+        return None
     remote_folder = task.context.remote_folder
     if not remote_folder:
         print("OUTDATED TASK, SKIPPING")
+        await gateway.disconnect(ip)
         return None
-    r_output = machine.path(remote_folder) / "OUTPUT"
-    result = await machine.run(f"tail -n15 {machine.quote(str(r_output))}")
+    r_output = gateway.get_path(ip)(remote_folder) / "OUTPUT"
+    state = gateway.get_machine_state(ip)
+    if state is None:
+        print("CAN'T CONNECT")
+        return None
+    result = await gateway.run_full(
+        state.machine,
+        f"tail -n15 {gateway.get_quote(ip)(str(r_output))}",
+    )
     if result.returncode:
         print("OUTDATED TASK, SKIPPING")
     else:
         print(result.stdout)
-    return machine, remote_folder
+    return gateway, ip, remote_folder
 
 
 # START_CONTRACT: _print_status_view
@@ -252,7 +266,7 @@ async def _display_remote_output(
 #   INPUTS: { tasks: list[Task], config: Config, fetch_convergence: bool }
 #   OUTPUTS: { Optional[Path] - Path to convergence snippet file, or None }
 #   SIDE_EFFECTS: Connects to remote machines via SSH, writes temp file
-#   LINKS: M-UTILS, M-DI, M-REMOTE
+#   LINKS: M-UTILS, M-DI, M-SSH-GATEWAY
 # END_CONTRACT: _print_status_view
 async def _print_status_view(
     tasks: list[Task], config: Config, fetch_convergence: bool = False
@@ -287,17 +301,19 @@ async def _print_status_view(
         conn = await _display_remote_output(task, ssh_user, config)
         if conn is None:
             continue
-        machine, remote_folder = conn
+        gateway, ip, remote_folder = conn
 
         if fetch_convergence:
             local_calc_snippet = Path(config.local.data_dir, "local_calc_snippet.tmp")
             success = await _download_convergence_snippet(
-                machine, remote_folder, local_calc_snippet
+                gateway, ip, remote_folder, local_calc_snippet
             )
             if success:
                 output = _parse_convergence(local_calc_snippet)
                 if output:
                     print(output)
+
+        await gateway.disconnect(ip)
 
     return local_calc_snippet
 
@@ -307,7 +323,7 @@ async def _print_status_view(
 #   INPUTS: { None - reads CLI args via argparse }
 #   OUTPUTS: { None - prints status/output to stdout }
 #   SIDE_EFFECTS: Connects to DB via UoW, optionally reads remote files via SSH/SFTP
-#   LINKS: M-UTILS, M-DI, M-APPLICATION-UOW, M-REMOTE
+#   LINKS: M-UTILS, M-DI, M-APPLICATION-UOW, M-SSH-GATEWAY
 # END_CONTRACT: check_status
 @to_sync
 async def check_status() -> None:
@@ -512,8 +528,9 @@ async def _add_node(
     skip_setup: bool = False,
 ) -> None:
     """Add a new node: optionally run setup and create DB record."""
-    machine = await RemoteMachine.create(
-        host=host,
+    gateway = SSHMachineGateway()
+    await gateway.connect(
+        ip=host,
         username=username,
         client_keys=config.local.get_private_keys(),
         engines_dir=config.remote.engines_dir,
@@ -522,7 +539,7 @@ async def _add_node(
 
     if not skip_setup:
         print("Setup host...")
-        await machine.setup_node(config.engines)
+        await gateway.setup_node(host, config.engines)
 
     await uow.nodes.add(
         Node(
@@ -534,6 +551,7 @@ async def _add_node(
         )
     )
     await uow.commit()
+    await gateway.disconnect(host)
     print(f"Added host to yascheduler: {host}:{port}")
 
 
@@ -542,7 +560,7 @@ async def _add_node(
 #   INPUTS: { None - reads CLI args via argparse }
 #   OUTPUTS: { bool | None - returns True on success, False/None on failure }
 #   SIDE_EFFECTS: Modifies DB node records via UoW, optionally runs remote node setup via SSH
-#   LINKS: M-UTILS, M-DI, M-APPLICATION-UOW, M-REMOTE
+#   LINKS: M-UTILS, M-DI, M-APPLICATION-UOW, M-SSH-GATEWAY
 # END_CONTRACT: manage_node
 @to_sync
 async def manage_node() -> Optional[bool]:

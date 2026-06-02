@@ -5,7 +5,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Backward-compatible Scheduler wrapper delegating to Orchestrator and use cases.
 #   SCOPE: Scheduler class (thin wrapper), get_logger, WebhookPayload.
-#   DEPENDS: M-DB, M-CLOUD-MANAGER, M-CLOUD-PROVISIONER, M-CONFIG, M-COMPAT, M-VARIABLES, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK
+#   DEPENDS: M-DB, M-CLOUD-PROVISIONER, M-CONFIG, M-COMPAT, M-VARIABLES, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK
 #   LINKS: M-DB, M-APPLICATION-ORCHESTRATOR, M-DI
 # END_MODULE_CONTRACT
 #
@@ -99,7 +99,7 @@ class Scheduler:
         cfg = config or Config.from_config_parser(CONFIG_FILE)
         db = await DB.create(cfg.db)
 
-        from .clouds.cloud_api_manager import _resolve_adapter
+        from .adapters.cloud.adapters import _resolve_adapter
 
         _adapters: dict[str, CloudAdapter] = {}
         _configs: dict[str, ConfigCloud] = {}

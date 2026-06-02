@@ -1,9 +1,9 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 2.0.0
+# VERSION: 3.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, webhook, and SSH helpers.
-#   DEPENDS: M-APPLICATION-UOW, M-REMOTE-REPO, M-CLOUD-MANAGER, M-CONFIG, M-QUEUE, M-TIME, M-SSH-GATEWAY
+#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG, M-QUEUE, M-TIME
 #   LINKS: M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
 # END_MODULE_CONTRACT
 #
@@ -11,14 +11,11 @@
 #   _safe_b64decode - Decode base64 with lenient padding handling
 #   _write_remote_file - Write data to remote file via SFTP with error handling
 #   Orchestrator - Daemon loop manager: connect machines, allocate, consume, deallocate
-#   Orchestrator._exec_spawn_command - Execute spawn command on remote machine
-#   Orchestrator._await_first_machine - Wait up to 30s for first machine connection
-#   Orchestrator._shutdown_barrier - Gather bg jobs and work around aiohttp close race
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Rewrite to use uow_factory + domain types instead of DB + legacy types.
-#   PREVIOUS_CHANGE: v2.2.1 - Fix pending task leak in _await_first_machine: cancel orphaned task after asyncio.wait(FIRST_COMPLETED).
+#   LAST_CHANGE: v3.0.0 - Replace RemoteMachineRepository/RemoteMachine with SSHMachineGateway/ConnectedMachine.
+#   PREVIOUS_CHANGE: v2.0.0 - Rewrite to use uow_factory + domain types instead of DB + legacy types.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -26,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import time
 from asyncio.locks import Event, Semaphore
 from collections import Counter
 from dataclasses import asdict
@@ -38,13 +36,15 @@ import aiohttp
 import asyncssh
 import backoff
 
-from yascheduler.domain.model import Node, Task, TaskStatus
-from yascheduler.queue import UMessage, UniqueQueue
-from yascheduler.remote_machine import (
-    AllSSHRetryExc,
-    RemoteMachine,
-    RemoteMachineRepository,
+from yascheduler.adapters.ssh.exceptions import AllSSHRetryExc
+from yascheduler.domain.model import (
+    ConnectedMachine,
+    MachineState,
+    Node,
+    Task,
+    TaskStatus,
 )
+from yascheduler.queue import UMessage, UniqueQueue
 from yascheduler.time import asleep_until
 from yascheduler.webhook import WebhookPayload
 
@@ -85,7 +85,7 @@ def _safe_b64decode(b64_data: str | bytes) -> bytes:
 #   INPUTS: { sftp: SFTPClient, path: str, data: bytes | str, log: Logger, mode: str }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Writes file on remote machine.
-#   LINKS: M-REMOTE-REPO
+#   LINKS: M-SSH-GATEWAY
 # END_CONTRACT: _write_remote_file
 async def _write_remote_file(
     sftp: SFTPClient,
@@ -113,7 +113,7 @@ async def _write_remote_file(
 
 # START_CONTRACT: Orchestrator
 #   PURPOSE: Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases.
-#   INPUTS: { config, uow_factory, clouds, remote_machines, gateway, engines, log, config_clouds, local_tasks_dir }
+#   INPUTS: { config, uow_factory, clouds, gateway, engines, log, config_clouds, local_tasks_dir }
 #   OUTPUTS: { Orchestrator instance }
 #   SIDE_EFFECTS: Creates queues, HTTP session, cancellation event.
 #   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
@@ -121,7 +121,7 @@ async def _write_remote_file(
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { config: Config, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisionerImpl, remote_machines: RemoteMachineRepository, gateway: SSHMachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
+    #   INPUTS: { config: Config, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisionerImpl, gateway: SSHMachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues, Semaphore. HTTP session deferred to start().
     #   LINKS: M-CONFIG, M-APPLICATION-UOW, M-QUEUE, M-SSH-GATEWAY
@@ -131,7 +131,6 @@ class Orchestrator:
         config: Config,
         uow_factory: Callable[[], AbstractUnitOfWork],
         clouds: CloudProvisionerImpl,
-        remote_machines: RemoteMachineRepository,
         gateway: SSHMachineGateway,
         engines: EngineRepository,
         log: logging.Logger,
@@ -141,7 +140,6 @@ class Orchestrator:
         self._config = config
         self._uow_factory = uow_factory
         self._clouds = clouds
-        self._remote_machines = remote_machines
         self._gateway = gateway
         self._engines = engines
         self._log = log
@@ -152,6 +150,7 @@ class Orchestrator:
         self._cancellation_event = Event()
         self._machine_connected_event = Event()
         self._sleep_interval: int = min(e.sleep_interval for e in engines.values())
+        self._occupancy_started: set[str] = set()
 
         lcfg = config.local
         self._webhook_sem = Semaphore(lcfg.webhook_reqs_limit)
@@ -169,67 +168,69 @@ class Orchestrator:
         )
         self._http: aiohttp.ClientSession | None = None
 
-    # ---- SSH helpers (moved from Scheduler) ----
+    # ---- SSH helpers ----
 
     # START_CONTRACT: Orchestrator._upload_task_data
     #   PURPOSE: Upload task input files to remote machine via SFTP.
-    #   INPUTS: { sftp, task: Task, remote_dir, input_files }
+    #   INPUTS: { gateway, ip, task, remote_dir, input_files }
     #   OUTPUTS: { bool - True on success }
     #   SIDE_EFFECTS: Creates remote directories, writes files via SFTP.
-    #   LINKS: M-REMOTE-REPO
+    #   LINKS: M-SSH-GATEWAY
     # END_CONTRACT: Orchestrator._upload_task_data
     async def _upload_task_data(
         self,
-        sftp: SFTPClient,
+        gateway: SSHMachineGateway,
+        ip: str,
         task: Task,
         remote_dir: PurePath,
         input_files: Sequence[str],
     ) -> bool:
 
         # START_BLOCK_UPLOAD
-        try:
-            await sftp.makedirs(PurePosixPath(remote_dir), exist_ok=True)
-        except asyncssh.misc.Error as err:
-            self._log.error(
-                "Create %s - SFTPError: %s (%s) (task_id=%s)",
-                remote_dir,
-                err.reason,
-                err.code,
-                task.task_id,
-            )
-            raise err
+        async with gateway.get_sftp(ip) as sftp:
+            try:
+                await sftp.makedirs(PurePosixPath(remote_dir), exist_ok=True)
+            except asyncssh.misc.Error as err:
+                self._log.error(
+                    "Create %s - SFTPError: %s (%s) (task_id=%s)",
+                    remote_dir,
+                    err.reason,
+                    err.code,
+                    task.task_id,
+                )
+                raise err
 
-        for input_file in input_files:
-            r_input_file = remote_dir / input_file
-            file_data = task.context.extra[input_file]
-            if input_file == "fort.9":
-                await _write_remote_file(
-                    sftp,
-                    r_input_file.as_posix(),
-                    _safe_b64decode(str(file_data)),
-                    self._log,
-                )
-            else:
-                await _write_remote_file(
-                    sftp,
-                    r_input_file.as_posix(),
-                    str(file_data),
-                    self._log,
-                    mode="w",
-                )
+            for input_file in input_files:
+                r_input_file = remote_dir / input_file
+                file_data = task.context.extra[input_file]
+                if input_file == "fort.9":
+                    await _write_remote_file(
+                        sftp,
+                        r_input_file.as_posix(),
+                        _safe_b64decode(str(file_data)),
+                        self._log,
+                    )
+                else:
+                    await _write_remote_file(
+                        sftp,
+                        r_input_file.as_posix(),
+                        str(file_data),
+                        self._log,
+                        mode="w",
+                    )
         return True
         # END_BLOCK_UPLOAD
 
     # START_CONTRACT: Orchestrator._exec_spawn_command
     #   PURPOSE: Execute spawn command on remote machine via SSH.
-    #   INPUTS: { machine, engine, task: Task, task_dir, eng_path }
+    #   INPUTS: { machine, engine, task, task_dir, eng_path }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Runs background process on remote machine.
-    #   LINKS: M-REMOTE-REPO, M-APPLICATION-UOW
+    #   LINKS: M-SSH-GATEWAY, M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator._exec_spawn_command
     async def _exec_spawn_command(
         self,
-        machine: RemoteMachine,
+        machine: ConnectedMachine,
         engine: Engine,
         task: Task,
         task_dir: PurePath,
@@ -239,13 +240,15 @@ class Orchestrator:
         try:
             async with self._uow_factory() as uow:
                 node = await uow.nodes.get(task.allocated_ip or "")
-            ncpus = (node and node.ncpus) or await machine.get_cpu_cores()
+            ncpus = (node and node.ncpus) or await self._gateway.get_cpu_cores(
+                machine.ip
+            )
             run_cmd = engine.spawn.format(
                 engine_path=str(eng_path),
-                task_path=machine.quote(str(task_dir)),
+                task_path=self._gateway.get_quote(machine.ip)(str(task_dir)),
                 ncpus=ncpus,
             )
-            await machine.run_bg(run_cmd, cwd=str(task_dir))
+            await self._gateway.run_bg(machine, run_cmd, cwd=str(task_dir))
         except Exception as err:
             self._log.error("SSH spawn cmd error: %s", err)
             raise err
@@ -253,14 +256,14 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._start_task_on_machine
     #   PURPOSE: Upload inputs and spawn calculation process on remote node.
-    #   INPUTS: { machine: RemoteMachine, engine: Engine, task: Task }
+    #   INPUTS: { machine: ConnectedMachine, engine: Engine, task: Task }
     #   OUTPUTS: { bool - True on successful spawn }
     #   SIDE_EFFECTS: Uploads files, marks machine busy, executes spawn command.
-    #   LINKS: M-REMOTE-REPO, M-APPLICATION-UOW
+    #   LINKS: M-SSH-GATEWAY, M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator._start_task_on_machine
     async def _start_task_on_machine(
         self,
-        machine: RemoteMachine,
+        machine: ConnectedMachine,
         engine: Engine,
         task: Task,
     ) -> bool:
@@ -269,16 +272,17 @@ class Orchestrator:
             task.task_id,
             task.label,
             engine.name,
-            machine.hostname,
+            self._gateway.get_hostname(machine.ip),
         )
         assert task.context.remote_folder is not None
-        machine.meta.busy = True
-        remote_folder = machine.path(task.context.remote_folder)
+        self._gateway.update_machine(machine.occupy())
+        path_type = self._gateway.get_path(machine.ip)
+        remote_folder = path_type(task.context.remote_folder)
 
         # START_BLOCK_DEPLOY
-        async with machine.sftp() as sftp:
+        async with self._gateway.get_sftp(machine.ip) as sftp:
             try:
-                root_dir = machine.path(await sftp.realpath("."))
+                root_dir = path_type(await sftp.realpath("."))
                 task_dir = (
                     remote_folder
                     if remote_folder.is_absolute()
@@ -290,7 +294,9 @@ class Orchestrator:
                     engine_path = (
                         root_dir / self._config.remote.engines_dir / engine.name
                     )
-                await self._upload_task_data(sftp, task, task_dir, engine.input_files)
+                await self._upload_task_data(
+                    self._gateway, machine.ip, task, task_dir, engine.input_files
+                )
             except Exception as err:
                 self._log.error("Can't upload task_id=%s files: %s", task.task_id, err)
                 raise err
@@ -356,6 +362,11 @@ class Orchestrator:
             async with self._uow_factory() as uow:
                 ncounters = await uow.nodes.count_by_status()
                 tcounters = await uow.tasks.count_by_status()
+            n_busy = sum(
+                1
+                for s in self._gateway.items()
+                if s[1].machine.state == MachineState.BUSY
+            )
             tmpl = (
                 "THREADS: {tasks} "
                 "NODES: busy:{n_busy}/enabled:{n_enabled}/total:{n_total} "
@@ -363,7 +374,7 @@ class Orchestrator:
             )
             msg = tmpl.format(
                 tasks=len(asyncio.all_tasks()),
-                n_busy=len(self._remote_machines.filter(busy=True).keys()),
+                n_busy=n_busy,
                 n_enabled=ncounters[True],
                 n_total=sum(ncounters.values()),
                 t_run=tcounters.get(TaskStatus.RUNNING, 0),
@@ -389,9 +400,7 @@ class Orchestrator:
     ) -> AsyncGenerator[UMessage[str, Node], None]:
         async with self._uow_factory() as uow:
             enabled_nodes = await uow.nodes.list_enabled()
-        new_nodes = [
-            n for n in enabled_nodes if n.ip not in self._remote_machines.keys()
-        ]
+        new_nodes = [n for n in enabled_nodes if not self._gateway.contains(n.ip)]
         for node in new_nodes:
             yield UMessage(node.ip, node)
 
@@ -408,19 +417,17 @@ class Orchestrator:
                     jump_host, jump_username = cloud.jump_host, cloud.jump_username
 
         try:
-            self._remote_machines[node.ip] = await RemoteMachine.create(
-                host=node.ip,
+            await self._gateway.connect(
+                ip=node.ip,
                 username=node.username,
                 client_keys=keys,
-                logger=self._log,
+                connect_timeout=10,
                 data_dir=self._config.remote.data_dir,
                 engines_dir=self._config.remote.engines_dir,
                 tasks_dir=self._config.remote.tasks_dir,
-                connect_timeout=10,
                 jump_username=jump_username,
                 jump_host=jump_host,
                 port=node.port,
-                gateway=self._gateway,
             )
             self._machine_connected_event.set()
         except asyncssh.misc.Error as err:
@@ -432,7 +439,7 @@ class Orchestrator:
         self,
     ) -> AsyncGenerator[UMessage[int, Task], None]:
         ccap = await self._clouds_get_capacity()
-        tlim = max(ccap, len(self._remote_machines.filter(busy=False)), 10)
+        tlim = max(ccap, len(self._gateway.list_free(None)), 10)
         async with self._uow_factory() as uow:
             tasks = await uow.tasks.list_by_status({TaskStatus.TO_DO}, limit=tlim)
         if tasks:
@@ -450,7 +457,7 @@ class Orchestrator:
             task_id=msg.id,
             engines=self._engines,
             uow_factory=self._uow_factory,
-            remote_machines=self._remote_machines,
+            gateway=self._gateway,
             clouds=self._clouds,
             start_task_on_machine=self._start_task_on_machine,
             do_task_webhook=self._do_task_webhook,
@@ -470,11 +477,10 @@ class Orchestrator:
     ) -> None:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
-        machine = self._remote_machines.get(task.allocated_ip or "")
-        if machine is None:
-            self._log.warning(
-                "Task %s - machine %s is gone", task_id, task.allocated_ip
-            )
+        ip = task.allocated_ip or ""
+        state = self._gateway.get_machine_state(ip)
+        if state is None:
+            self._log.warning("Task %s - machine %s is gone", task_id, ip)
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:
                 task = task.fail("node is gone")
@@ -485,26 +491,35 @@ class Orchestrator:
                     task_id, task.context.to_metadata(), TaskStatus.DONE
                 )
             return
-        if machine.meta.busy is None:
+
+        machine = state.machine
+        if ip not in self._occupancy_started:
             engine = self._engines.get(task.context.engine)
             if engine:
-                await machine.start_occupancy_check(engine)
+                self._gateway.start_occupancy_check(ip, engine)
+                self._occupancy_started.add(ip)
+                state = self._gateway.get_machine_state(ip)
+                if state is not None:
+                    machine = state.machine
+
         # START_BLOCK_CONSUME
-        if machine.meta.busy is False:
+        if machine.state == MachineState.FREE and ip in self._occupancy_started:
             self._log.debug(
                 "[Orchestrator][_task_consumer][CONSUME] machine=%s task_id=%s",
-                machine.hostname,
+                ip,
                 task_id,
             )
             await consume_task(
                 task_id=task_id,
-                machine=machine,
+                ip=ip,
+                gateway=self._gateway,
                 engines=self._engines,
                 uow_factory=self._uow_factory,
                 local_tasks_dir=self._local_tasks_dir,
                 clouds=self._clouds,
                 do_task_webhook=self._do_task_webhook,
             )
+            self._occupancy_started.discard(ip)
         # END_BLOCK_CONSUME
 
     # ---- Deallocator producer-consumer ----
@@ -521,9 +536,11 @@ class Orchestrator:
     ) -> AsyncGenerator[UMessage[str, str], None]:
         # START_BLOCK_COLLECT_IDLE
         idle_machines: dict[str, datetime] = {}
-        for ip, m in self._remote_machines.filter(busy=False).items():
-            if m.meta.free_since is not None:
-                idle_machines[ip] = m.meta.free_since
+        for ip, state in self._gateway.items():
+            m = state.machine
+            if m.state == MachineState.FREE and m.free_since is not None:
+                elapsed = time.monotonic() - m.free_since
+                idle_machines[ip] = datetime.now() - timedelta(seconds=elapsed)
         # END_BLOCK_COLLECT_IDLE
 
         # START_BLOCK_DEALLOCATE_USE_CASE
@@ -550,9 +567,9 @@ class Orchestrator:
             async with self._uow_factory() as uow:
                 node = await uow.nodes.get(ip)
             if node is not None:
-                await deallocate_node(node, self._remote_machines, self._clouds)
-            elif ip in self._remote_machines:
-                await self._remote_machines.disconnect_many([ip])
+                await deallocate_node(node, self._gateway, self._clouds)
+            elif self._gateway.contains(ip):
+                await self._gateway.disconnect(ip)
         except Exception as err:
             self._log.error("Deallocator error for %s: %s", ip, err)
 
@@ -609,11 +626,11 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-REMOTE-REPO
+    #   LINKS: M-SSH-GATEWAY
     # END_CONTRACT: Orchestrator._await_first_machine
     async def _await_first_machine(self) -> None:
         # START_BLOCK_WAIT_MACHINES
-        if self._remote_machines:
+        if len(self._gateway) > 0:
             return
 
         async def _wait() -> None:
@@ -709,7 +726,7 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Cancels jobs, disconnects machines, stops clouds. Session is closed by start() when barrier lifts.
-    #   LINKS: M-CLOUD-MANAGER, M-REMOTE-REPO
+    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY
     # END_CONTRACT: Orchestrator.stop
     async def stop(self) -> None:
         self._log.info("Stopping...")
@@ -723,4 +740,4 @@ class Orchestrator:
                 pass
 
         await self._clouds.stop()
-        await self._remote_machines.disconnect_all()
+        await self._gateway.disconnect_all()

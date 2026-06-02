@@ -112,9 +112,9 @@ def make_orchestrator(
         return mock_uow
 
     clouds = AsyncMock()
-    remote_machines = MagicMock()
-    remote_machines.disconnect_all = AsyncMock()
     gateway = MagicMock()
+    gateway.__len__ = MagicMock(return_value=1)
+    gateway.disconnect_all = AsyncMock()
 
     # EngineRepository.values() must yield at least one Engine so
     # Orchestrator.__init__ can compute min(sleep_interval).
@@ -132,7 +132,6 @@ def make_orchestrator(
             config=config,
             uow_factory=uow_factory,
             clouds=clouds,
-            remote_machines=remote_machines,
             gateway=gateway,
             engines=engines,
             log=log,
@@ -179,7 +178,7 @@ class TestOrchestratorLifecycle:
         orch._cancellation_event.set()
         # wait_some_machines needs at least one connected machine to
         # exit instantly instead of waiting up to 30 s.
-        orch._remote_machines.__len__.return_value = 1  # type: ignore[attr-defined]
+        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
 
         with patch(
             "yascheduler.application.orchestrator.asyncio.sleep",
@@ -217,7 +216,7 @@ class TestOrchestratorLifecycle:
 
         # Cleanup methods called
         orch._clouds.stop.assert_called_once()  # type: ignore[attr-defined]
-        orch._remote_machines.disconnect_all.assert_called_once()  # type: ignore[attr-defined]
+        orch._gateway.disconnect_all.assert_called_once()  # type: ignore[attr-defined]
         # _http lifecycle owned by start()'s finally block, not stop()
 
     # ------------------------------------------------------------------ #
@@ -264,7 +263,7 @@ class TestOrchestratorLifecycle:
         orch = make_orchestrator(allocate_limit=3)
 
         orch._cancellation_event.set()
-        orch._remote_machines.__len__.return_value = 1  # type: ignore[attr-defined]
+        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
 
         with patch.object(
             orch,
@@ -295,7 +294,7 @@ class TestOrchestratorLifecycle:
         orch = make_orchestrator(deallocate_limit=5)
 
         orch._cancellation_event.set()
-        orch._remote_machines.__len__.return_value = 1  # type: ignore[attr-defined]
+        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
 
         with patch.object(
             orch,
@@ -323,7 +322,7 @@ class TestOrchestratorLifecycle:
         orch = make_orchestrator(conn_machine_limit=4)
 
         orch._cancellation_event.set()
-        orch._remote_machines.__len__.return_value = 1  # type: ignore[attr-defined]
+        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
 
         with patch.object(
             orch,
@@ -351,7 +350,7 @@ class TestOrchestratorLifecycle:
         orch = make_orchestrator(consume_limit=7)
 
         orch._cancellation_event.set()
-        orch._remote_machines.__len__.return_value = 1  # type: ignore[attr-defined]
+        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
 
         with patch.object(
             orch,

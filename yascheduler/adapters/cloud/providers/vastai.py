@@ -5,7 +5,7 @@
 #   PURPOSE: VastAI GPU marketplace instance creation and deletion via REST API.
 #   SCOPE: VastAI create/delete node functions.
 #   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS
-#   LINKS: M-CLOUD-ADAPTERS, M-CONFIG-CLOUD
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

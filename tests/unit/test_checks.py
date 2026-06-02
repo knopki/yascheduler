@@ -4,8 +4,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for OS check functions in yascheduler.remote_machine.checks.
 #   SCOPE: check_is_linux, check_is_debian_like, check_is_debian, check_is_debian_11, check_is_windows, check_is_windows10.
-#   DEPENDS: M-REMOTE-CHECKS, M-PLATFORM-CHECKS
-#   LINKS: M-REMOTE-CHECKS, M-PLATFORM-CHECKS
+#   DEPENDS: M-PLATFORM-CHECKS
+#   LINKS: M-PLATFORM-CHECKS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -32,7 +32,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.remote_machine.checks import (
+from yascheduler.adapters.ssh.platform.checks import (
     check_is_debian,
     check_is_debian_11,
     check_is_debian_like,

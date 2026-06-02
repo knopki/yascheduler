@@ -5,7 +5,7 @@
 #   PURPOSE: UpCloud server creation and deletion via API.
 #   SCOPE: UpCloud create/delete node functions.
 #   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
-#   LINKS: M-CLOUD-ADAPTERS, M-CONFIG-CLOUD
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

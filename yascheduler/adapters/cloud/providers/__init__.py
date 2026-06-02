@@ -5,7 +5,7 @@
 #   PURPOSE: Public re-exports from cloud provider submodules.
 #   SCOPE: Re-exports of provider create/delete entry points.
 #   DEPENDS: M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD, M-CLOUD-VASTAI
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD, M-CLOUD-VASTAI
+#   LINKS: M-CLOUD-PROVIDERS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

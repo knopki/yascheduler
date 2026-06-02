@@ -4,7 +4,7 @@
 #   PURPOSE: SSH machine gateway implementing MachineGateway protocol via asyncssh.
 #   SCOPE: SSHMachineGateway class with connection lifecycle, command execution, SFTP, occupancy monitoring.
 #   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL
-#   LINKS: M-SSH-GATEWAY, M-REMOTE
+#   LINKS: M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Fix race: start_occupancy_check now occupies ConnectedMachine so _meta_sync sees BUSY. Return True on SSH failure in occupancy_check.
-#   PREVIOUS_CHANGE: v1.1.0 - Extract _open_connection from connect to reduce function size.
+#   LAST_CHANGE: v1.2.1 - Replace remote_machine imports with local helpers module; gateway is now self-contained.
+#   PREVIOUS_CHANGE: v1.2.0 - Fix race: start_occupancy_check now occupies ConnectedMachine so _meta_sync sees BUSY. Return True on SSH failure in occupancy_check.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -32,15 +32,10 @@ import asyncssh
 import backoff
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
-from yascheduler.adapters.ssh.platform.protocol import (
-    AllSSHRetryExc,
-    PEngine,
-    PEngineRepository,
-    PProcessInfo,
-    SSHRetryExc,
-)
 from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
-from yascheduler.remote_machine.remote_machine import (
+
+from .exceptions import AllSSHRetryExc, SSHRetryExc
+from .helpers import (
     ADAPTERS,
     DEFAULT_CONN_OPTS,
     _detect_platform,
@@ -59,6 +54,9 @@ if TYPE_CHECKING:
     from yascheduler.adapters.ssh.platform.adapters import RemoteMachineAdapter
     from yascheduler.adapters.ssh.platform.protocol import (
         OuterRunCallable,
+        PEngine,
+        PEngineRepository,
+        PProcessInfo,
         QuoteCallable,
     )
 
@@ -90,7 +88,7 @@ class _MachineState:
 
 # START_CONTRACT: SSHMachineGateway
 #   PURPOSE: SSH implementation of MachineGateway protocol.
-#   LINKS: M-SSH-GATEWAY, M-DOMAIN-PORTS, M-REMOTE
+#   LINKS: M-SSH-GATEWAY, M-DOMAIN-PORTS
 # END_CONTRACT: SSHMachineGateway
 class SSHMachineGateway:
     """SSH gateway implementing MachineGateway protocol."""

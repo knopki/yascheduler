@@ -5,7 +5,7 @@
 #   PURPOSE: CloudConfig class — renders cloud-init user-data format.
 #   SCOPE: PCloudConfig implementation for cloud provisioning.
 #   DEPENDS: M-CLOUD-PROTOCOLS
-#   LINKS: M-CLOUD-API, M-CLOUD-MANAGER
+#   LINKS: M-CLOUD-CONFIG, M-CLOUD-PROVISIONER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

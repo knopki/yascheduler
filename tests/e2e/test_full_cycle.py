@@ -28,7 +28,7 @@ import pytest
 from yascheduler.adapters.ssh.gateway import SSHMachineGateway
 from yascheduler.db import DB, TaskStatus
 from yascheduler.di import make_cli_deps, make_daemon
-from yascheduler.remote_machine import RemoteMachine
+from yascheduler.domain.model import MachineState
 
 if TYPE_CHECKING:
     from yascheduler.config import Config
@@ -44,26 +44,25 @@ async def test_full_cycle(
     config = e2e_config
 
     # START_BLOCK_ADD_NODE
-    setup_gw = SSHMachineGateway(log=log)
-    machine = await RemoteMachine.create(
-        host=ssh_container["host"],
+    gateway = SSHMachineGateway(log=log)
+    machine = await gateway.connect(
+        ip=ssh_container["host"],
         username=ssh_container["username"],
         client_keys=[ssh_container["key_path"]],
         port=ssh_container["port"],
-        gateway=setup_gw,
         data_dir=config.remote.data_dir,
         engines_dir=config.remote.engines_dir,
         tasks_dir=config.remote.tasks_dir,
-        logger=log,
     )
-    await machine.setup_node(config.engines)
+    await gateway.setup_node(ssh_container["host"], config.engines)
 
-    proc = await machine.run(f"test -f {machine.engines_dir}/test_shell/run.sh")
-    assert proc.exit_status == 0, (
-        f"Engine script not deployed at {machine.engines_dir}/test_shell/run.sh"
+    engines_dir = gateway.get_engines_dir(ssh_container["host"])
+    proc = await gateway.run(machine, f"test -f {engines_dir}/test_shell/run.sh")
+    assert proc.exit_code == 0, (
+        f"Engine script not deployed at {engines_dir}/test_shell/run.sh"
     )
 
-    await machine.close()
+    await gateway.disconnect(ssh_container["host"])
 
     await db.add_node(
         ip_addr=ssh_container["host"],
@@ -97,8 +96,8 @@ async def test_full_cycle(
             if task and task.status == TaskStatus.RUNNING:
                 saw_running = True
                 node_ip = task.ip
-                machine = orchestrator._remote_machines.get(node_ip)
-                if machine and machine.meta.busy is True:
+                state = orchestrator._gateway.get_machine_state(node_ip)
+                if state and state.machine.state == MachineState.BUSY:
                     saw_busy = True
             if task and task.status == TaskStatus.DONE:
                 break
@@ -122,9 +121,9 @@ async def test_full_cycle(
         # END_BLOCK_VERIFY
 
         # START_BLOCK_VERIFY_FREE
-        machine = orchestrator._remote_machines.get(ssh_container["host"])
-        assert machine is not None, "Machine not found in orchestrator registry"
-        assert machine.meta.busy is False, (
+        state = orchestrator._gateway.get_machine_state(ssh_container["host"])
+        assert state is not None, "Machine not found in orchestrator registry"
+        assert state.machine.state == MachineState.FREE, (
             "Machine should be free after task completion"
         )
         # END_BLOCK_VERIFY_FREE

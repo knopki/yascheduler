@@ -4,7 +4,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for di.py — dependency injection composition root.
 #   SCOPE: CLIDeps dataclass, make_cli_deps, make_aiida, make_daemon factories.
-#   DEPENDS: M-DI, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-DB, M-CLOUD-MANAGER
+#   DEPENDS: M-DI, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-DB, M-CLOUD-PROVISIONER
 #   LINKS: M-DI, M-APPLICATION-ORCHESTRATOR
 # END_MODULE_CONTRACT
 #
@@ -183,7 +183,6 @@ class TestMakeDaemon:
             patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
             patch("yascheduler.di._resolve_adapter", return_value=None) as mock_resolve,
             patch("yascheduler.di.SSHMachineGateway") as mock_gateway,
-            patch("yascheduler.di.RemoteMachineRepository") as mock_rm_repo,
             patch(
                 "yascheduler.di.Orchestrator", return_value=mock_orch_instance
             ) as mock_orch,
@@ -193,8 +192,6 @@ class TestMakeDaemon:
             mock_db_create.return_value = mock_db
             mock_gw = MagicMock()
             mock_gateway.return_value = mock_gw
-            mock_rm = MagicMock()
-            mock_rm_repo.return_value = mock_rm
             resolved_log = MagicMock()
             mock_get_logger.return_value = resolved_log
 
@@ -207,7 +204,6 @@ class TestMakeDaemon:
         # No cloud adapters configured (mock returns None)
         mock_resolve.assert_not_called()
         mock_gateway.assert_called()
-        mock_rm_repo.assert_called_once_with(log=resolved_log)
         # Orchestrator receives a CloudProvisionerImpl
         _call_kwargs = mock_orch.call_args.kwargs
         assert "clouds" in _call_kwargs
@@ -215,7 +211,6 @@ class TestMakeDaemon:
         assert _call_kwargs["config"] is config
         assert "uow_factory" in _call_kwargs
         assert callable(_call_kwargs["uow_factory"])
-        assert _call_kwargs["remote_machines"] is mock_rm
         assert _call_kwargs["gateway"] is mock_gw
         assert _call_kwargs["log"] is resolved_log
 
@@ -228,7 +223,6 @@ class TestMakeDaemon:
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
             patch("yascheduler.di._resolve_adapter", return_value=None),
-            patch("yascheduler.di.RemoteMachineRepository"),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger"),
         ):
@@ -245,7 +239,6 @@ class TestMakeDaemon:
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
             patch("yascheduler.di._resolve_adapter") as mock_resolve,
-            patch("yascheduler.di.RemoteMachineRepository"),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger"),
         ):
@@ -264,7 +257,6 @@ class TestMakeDaemon:
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()),
             patch("yascheduler.di._resolve_adapter", return_value=None),
-            patch("yascheduler.di.RemoteMachineRepository"),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger") as mock_get_logger,
         ):
@@ -281,7 +273,6 @@ class TestMakeDaemon:
         with (
             patch("yascheduler.di.DB.create", new=AsyncMock()),
             patch("yascheduler.di._resolve_adapter", return_value=None),
-            patch("yascheduler.di.RemoteMachineRepository"),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger") as mock_get_logger,
         ):

@@ -6,7 +6,7 @@
 #   PURPOSE: Calculation engine definition: spawn command, check command, deployables, platforms.
 #   SCOPE: Engine dataclass, deploy types (LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy).
 #   DEPENDS: M-CONFIG-UTILS
-#   LINKS: M-CONFIG-ENGINE-REPO, M-REMOTE-LINUX, M-REMOTE-WINDOWS
+#   LINKS: M-CONFIG-ENGINE-REPO, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

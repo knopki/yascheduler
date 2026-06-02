@@ -1,12 +1,12 @@
 # FILE: yascheduler/adapters/cloud/manager.py
-# VERSION: 1.0.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — implementation of the CloudProvisioner port with multi-provider support.
 #   SCOPE: CloudProvisionerImpl class implementing allocate, deallocate, capacity with provider selection,
-#     SSH key management, cloud-config building, cloud-init wait, and node setup via SSHMachineGateway.
-#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-CLOUD-ADAPTERS, M-CLOUD-PROTOCOLS, M-CONFIG, M-SSH-GATEWAY
-#   LINKS: M-CLOUD-MANAGER, M-SSH-GATEWAY, M-CLOUD-API
+#     cloud-config building, cloud-init wait, and node setup via SSHMachineGateway.
+#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CONFIG, M-SSH-GATEWAY
+#   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-CLOUD-ADAPTERS-NEW
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -16,9 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Extract _acquire_provider_slot from allocate, _connect_to_vm from _setup_vm to fix func-size warnings.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial implementation: allocate, deallocate, capacity, provider selection,
-#     SSH key mgmt, cloud-config, cloud-init, node setup, backward-compat methods.
+#   LAST_CHANGE: v1.2.0 - Extract SSH key logic to ssh_keys.py; delegate _get_ssh_key to get_or_create_ssh_key.
+#   PREVIOUS_CHANGE: v1.1.0 - Extract _acquire_provider_slot from allocate, _connect_to_vm from _setup_vm to fix func-size warnings.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -29,14 +28,13 @@ import asyncio
 from asyncio.locks import Lock
 from typing import TYPE_CHECKING
 
-from asyncssh.public_key import generate_private_key, read_private_key
 from attrs import define, field
 
 from yascheduler.domain.model import ConnectedMachine, Node
 
 from .cloud_config import CloudConfig
 from .protocols import CloudCapacity
-from .utils import get_rnd_name
+from .ssh_keys import get_or_create_ssh_key
 
 if TYPE_CHECKING:
     import logging
@@ -393,58 +391,18 @@ class CloudProvisionerImpl:
         """Check if adapter supports the given platform."""
         return any(check(platform) for check in adapter.supported_platform_checks)
 
-    # START_CONTRACT: CloudProvisionerImpl._get_ssh_key_sync
-    #   PURPOSE: Load existing SSH key or generate a new one (sync, runs in executor).
-    #   INPUTS: { None }
-    #   OUTPUTS: { SSHKey - loaded or generated key }
-    #   SIDE_EFFECTS: May write new key file to keys_dir.
-    #   LINKS: M-CLOUD-API
-    # END_CONTRACT: CloudProvisionerImpl._get_ssh_key_sync
-    def _get_ssh_key_sync(self) -> SSHKey:
-        """Load existing SSH key or generate a new one."""
-        prefix = "yakey"
-        # START_BLOCK_LOAD_EXISTING
-        keys_dir = self.local_config.keys_dir
-        for filepath in keys_dir.iterdir():
-            if not filepath.name.startswith(prefix) or not filepath.is_file():
-                continue
-            ssh_key = read_private_key(filepath)
-            ssh_key.set_comment(filepath.name)
-            self.log.debug(
-                "[CloudProvisionerImpl][get_ssh_key] loaded key=%s fingerprint=%s",
-                filepath.name,
-                ssh_key.get_fingerprint("md5"),
-            )
-            return ssh_key
-        # END_BLOCK_LOAD_EXISTING
-
-        # START_BLOCK_GENERATE_NEW
-        key_name = get_rnd_name(prefix)
-        filepath = keys_dir / key_name
-        ssh_key = generate_private_key(alg_name="ssh-rsa", comment=key_name)
-        ssh_key.write_private_key(filepath)
-        filepath.chmod(0o600)
-        ssh_key.set_comment(key_name)
-        self.log.info(
-            "[CloudProvisionerImpl][get_ssh_key] generated key=%s fingerprint=%s",
-            key_name,
-            ssh_key.get_fingerprint("md5"),
-        )
-        # END_BLOCK_GENERATE_NEW
-        return ssh_key
-
     # START_CONTRACT: CloudProvisionerImpl._get_ssh_key
-    #   PURPOSE: Async wrapper around _get_ssh_key_sync with lock for thread safety.
+    #   PURPOSE: Async wrapper around get_or_create_ssh_key with lock for thread safety.
     #   INPUTS: { None }
     #   OUTPUTS: { SSHKey - loaded or generated SSH key }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-CLOUD-API, _get_ssh_key_sync
+    #   LINKS: M-CLOUD-PROVISIONER, M-CLOUD-SSH-KEYS
     # END_CONTRACT: CloudProvisionerImpl._get_ssh_key
     async def _get_ssh_key(self) -> SSHKey:
         """Async-thread-safe SSH key load/generate."""
         async with self.ssh_key_lock:
             return await asyncio.get_running_loop().run_in_executor(
-                None, self._get_ssh_key_sync
+                None, get_or_create_ssh_key, self.local_config.keys_dir, self.log
             )
 
     # START_CONTRACT: CloudProvisionerImpl._get_cloud_config_data

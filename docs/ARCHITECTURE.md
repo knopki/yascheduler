@@ -17,8 +17,8 @@ yascheduler is midway through a migration from a monolithic structure to a
 hexagonal (ports-and-adapters) architecture. Three layers are in place:
 **domain** (entities, ports, exceptions, services), **persistence adapter**
 (PostgreSQL repositories, UoW, SQL loader), and **application layer** (use
-cases, orchestrator, DI). The remaining work — SSH/cloud adapters as proper
-hexagonal ports, CLI decoupling, and domain events — is still planned.
+cases, orchestrator, DI). The remaining work — CLI decoupling and domain events
+— is still planned.
 
 `scheduler.py` is now a thin backward-compatible wrapper that delegates to
 `Orchestrator` (daemon loops) and `submit_task` (use case). `client.py` no
@@ -61,8 +61,6 @@ longer imports `scheduler.py` — it uses `make_cli_deps()` from `di.py`.
 ┌──────────────────────────────┼───────────────────────────────────┐
 │  LEGACY (not yet fully migrated)                                  │
 │  db.py            Wrapper delegating to persistence adapter       │
-│  clouds/          Multi-cloud VM provisioning (az/hz/upcloud)     │
-│  remote_machine/  SSH connection, platform detection, SFTP       │
 │  config/          INI config tree (attrs)                        │
 │  queue.py         UniqueQueue                                   │
 │  client.py        Public API — uses make_cli_deps (no Scheduler) │
@@ -73,22 +71,22 @@ longer imports `scheduler.py` — it uses `make_cli_deps()` from `di.py`.
 
 ### 1.2 Key Components
 
-| Component               | Responsibility                                          |
-| ----------------------- | ------------------------------------------------------- |
-| `domain/`               | Entities, value objects, ports, services, exceptions    |
-| `adapters/persistence/` | PostgreSQL repositories, UoW, SQL loader                |
-| `application/`          | Use cases (submit, allocate, consume, deallocate),      |
-|                         | `Orchestrator` (daemon loops), `AbstractUnitOfWork`     |
-| `di.py`                 | Composition root: `make_daemon()`, `make_cli_deps()`    |
-| `scheduler.py`          | Thin backward-compat wrapper → `Orchestrator` + DI      |
-| `db.py`                 | Wrapper delegating to PostgresTaskRepository / NodeRepo |
-| `clouds/`               | Multi-cloud VM provisioning (Azure, Hetzner, UpCloud)   |
-| `remote_machine/`       | SSH connection, platform detection, command execution   |
-| `config/`               | Config tree parsed from INI (uses attrs)                |
-| `utils.py`              | CLI entry points (6 commands), uses DI for submit       |
-| `client.py`             | Public Python API (`class Yascheduler`) — no Scheduler  |
-| `aiida_plugin.py`       | AiiDA scheduler integration                             |
-| `webhook.py`            | `WebhookPayload` frozen dataclass                       |
+| Component               | Responsibility                                           |
+| ----------------------- | -------------------------------------------------------- |
+| `domain/`               | Entities, value objects, ports, services, exceptions     |
+| `adapters/persistence/` | PostgreSQL repositories, UoW, SQL loader                 |
+| `application/`          | Use cases (submit, allocate, consume, deallocate),       |
+|                         | `Orchestrator` (daemon loops), `AbstractUnitOfWork`      |
+| `di.py`                 | Composition root: `make_daemon()`, `make_cli_deps()`     |
+| `scheduler.py`          | Thin backward-compat wrapper → `Orchestrator` + DI       |
+| `db.py`                 | Wrapper delegating to PostgresTaskRepository / NodeRepo  |
+| `adapters/ssh/`         | SSH gateway, helpers, platform adapters (✅ migrated)    |
+| `adapters/cloud/`       | Cloud provisioner, providers, cloud config (✅ migrated) |
+| `config/`               | Config tree parsed from INI (uses attrs)                 |
+| `utils.py`              | CLI entry points (6 commands), uses DI for submit        |
+| `client.py`             | Public Python API (`class Yascheduler`) — no Scheduler   |
+| `aiida_plugin.py`       | AiiDA scheduler integration                              |
+| `webhook.py`            | `WebhookPayload` frozen dataclass                        |
 
 ### 1.3 Pain Points (remaining)
 
@@ -103,8 +101,8 @@ longer imports `scheduler.py` — it uses `make_cli_deps()` from `di.py`.
 - **`utils.py` CLI commands mix** argparse, DB, SSH, and cloud-init in one file.
 - **`config/` uses attrs** — domain uses dataclasses; config still attrs
   (low priority, deferred to phase 5.6).
-- **SSH/cloud still legacy modules** — not yet refactored as adapter
-  implementations of domain ports (phase 4).
+- **SSH/cloud adapters implemented** — `SSHMachineGateway` implements
+  `MachineGateway`; `CloudProvisionerImpl` implements `CloudProvisioner`.
 
 ---
 
@@ -112,8 +110,8 @@ longer imports `scheduler.py` — it uses `make_cli_deps()` from `di.py`.
 
 ### 2.1 Hexagonal + DDD (remaining layers)
 
-Domain, persistence, and application are in place. The remaining work adds
-SSH/cloud adapters, CLI decoupling, and domain events.
+Domain, persistence, application, and SSH/cloud adapters are in place. The
+remaining work adds CLI decoupling and domain events.
 
 ```txt
 ┌─────────────────────────────────────────────────────────────────┐
@@ -139,9 +137,11 @@ SSH/cloud adapters, CLI decoupling, and domain events.
 └──────────────────────────────┬───────────────────────────────────┘
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
-│  ADAPTERS: SSH, CLOUD, CLI (planned)                             │
-│  ssh/gateway.py               SSHMachineGateway (phase 4)        │
-│  cloud/                       Azure/Hetzner/UpCloud (phase 4)    │
+│  ADAPTERS: SSH ✅, CLOUD ✅, CLI (planned)                        │
+│  ssh/gateway.py               SSHMachineGateway                  │
+│  ssh/helpers.py               Shared SSH infra                   │
+│  ssh/exceptions.py            SSH retry exception types          │
+│  cloud/                       Azure/Hetzner/UpCloud providers    │
 │  cli/commands.py              Thin CLI wrappers (phase 5)        │
 │  notifier/webhook.py          aiohttp webhook dispatcher         │
 │                  (depends on: domain, application)                │
@@ -369,8 +369,7 @@ repositories.
 dependency-injected parameters. `submit_task` is fully ported to domain
 ports (UoW + repositories); `allocate_task`, `consume_task`, and
 `deallocate_nodes` still accept legacy `DB` / `RemoteMachineRepository` /
-`CloudAPIManager` and will be fully ported when SSH/cloud adapters are
-extracted (phase 4).
+`CloudAPIManager` and remain to be fully ported to domain ports.
 
 **`submit_task.py`** — Creates a `TO_DO` task after validating engine and
 inputs. Fully UoW-based: inserts via `uow.tasks.insert()`, saves via
@@ -428,11 +427,12 @@ implemented.
 
 ### 3.4 Remaining Adapters — planned
 
-**`ssh/gateway.py`** (phase 4) — Implements `MachineGateway` using asyncssh.
-Replaces the domain/infrastructure mixing currently in `remote_machine/`.
+**`ssh/`** ✅ — `SSHMachineGateway` implements `MachineGateway` via asyncssh.
+`ssh/helpers.py` provides shared SSH infrastructure; `ssh/exceptions.py` re-exports
+retry exception types. Replaces the legacy `remote_machine/` module.
 
-**`cloud/`** (phase 4) — Cloud providers as adapters implementing
-`CloudProvisioner`.
+**`cloud/`** ✅ — Cloud providers as adapters implementing `CloudProvisioner`.
+Includes Azure, Hetzner, UpCloud providers with adapter factory.
 
 **`notifier/webhook.py`** — `aiohttp`-based webhook dispatcher. Handles
 retry, rate limiting, and error logging. Becomes a domain-event handler in
@@ -586,13 +586,17 @@ yascheduler/
 ├── di.py                            ✅ composition root
 ├── webhook.py                       ✅ WebhookPayload dataclass
 │
-├── adapters/                        (expanded below)
+├── adapters/
 │   ├── persistence/                 ✅ (see above)
-│   ├── ssh/                         ← planned (phase 4)
+│   ├── ssh/                         ✅
 │   │   ├── gateway.py
+│   │   ├── helpers.py
+│   │   ├── exceptions.py
 │   │   └── platform/
-│   ├── cloud/                       ← planned (phase 4)
+│   ├── cloud/                       ✅
 │   │   ├── manager.py
+│   │   ├── cloud_config.py
+│   │   ├── adapters.py
 │   │   └── providers/
 │   ├── cli/                         ← planned (phase 5)
 │   │   └── commands.py
@@ -604,8 +608,6 @@ yascheduler/
 ├── aiida_plugin.py                  # unchanged
 ├── db.py                            # wrapper delegating to persistence
 ├── utils.py                         # CLI entry points → adapters/cli/
-├── clouds/                          # to migrate → adapters/cloud/
-├── remote_machine/                  # to migrate → adapters/ssh/
 ├── config/                          # to merge → config.py (phase 5.6)
 ├── queue.py                         # retained (no domain coupling)
 ├── time.py                          # retained (utility)
@@ -633,7 +635,7 @@ now a thin wrapper (163 LOC).
   `make_daemon()`.
 - `submit_task` is fully UoW-based; allocate/consume/deallocate use cases
   still use legacy `DB`/`RemoteMachineRepository`/`CloudAPIManager`
-  (to be ported in phase 4).
+  (to be ported to domain ports in a future phase).
 
 ### Phase 3.5 — Domain Events (optional but recommended)
 
@@ -645,20 +647,17 @@ now a thin wrapper (163 LOC).
 - Use cases record events; message bus dispatches after `uow.commit()`.
 - Remove scattered `do_task_webhook()` calls from use cases.
 
-### Phase 4 — SSH & Cloud Adapters
+### Phase 4 — SSH & Cloud Adapters — ✅ done
 
-**Goal**: Move `remote_machine/` and `clouds/` into `adapters/`.
+**Achieved**: Moved `remote_machine/` and `clouds/` into `adapters/`.
 
-- Split `RemoteMachine` → `ConnectedMachine` (domain) + `SSHMachineGateway`
-  (adapter). Ephemeral connection wrapping `Node`.
-- Move cloud providers into `adapters/cloud/providers/`.
-
-  At this point cloud modules switch from `db.py` (old wrapper) to
-  `NodeRepository` (port). The `db.py` wrapper can be retired for cloud
-  code paths.
-
-- Old modules (`remote_machine/`, `clouds/`) become re-export wrappers, then
-  removed.
+- `RemoteMachine` split into `ConnectedMachine` (domain entity) +
+  `SSHMachineGateway` (adapter implementing `MachineGateway`).
+- Cloud providers moved into `adapters/cloud/providers/` with new
+  `CloudProvisionerImpl` implementing `CloudProvisioner` port.
+- Old `remote_machine/` and `clouds/` modules removed.
+- Shared SSH infrastructure extracted to `adapters/ssh/helpers.py`;
+  retry exception types to `adapters/ssh/exceptions.py`.
 - Tests updated to use adapter interfaces.
 
 ### Phase 5 — CLI Decoupling
@@ -711,8 +710,8 @@ Use cases are tested with fakes: no real DB, no real SSH, no real cloud.
 | ------------------ | ------------------------------- | ------- |
 | Persistence        | `testcontainers[postgres]`      | ✅ done |
 | Use case + real DB | testcontainers + fake SSH/cloud | Phase 3 |
-| SSH adapter        | Docker SSH server               | Phase 4 |
-| Cloud adapter      | Staged (manual) or mock HTTP    | Phase 4 |
+| SSH adapter        | Docker SSH server               | ✅ done |
+| Cloud adapter      | Staged (manual) or mock HTTP    | ✅ done |
 
 ### 7.3 Smoke Tests (Public API)
 

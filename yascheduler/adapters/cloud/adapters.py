@@ -3,8 +3,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Mapping of cloud config types to create/delete callables.
 #   SCOPE: Adapter registry mapping provider config classes to their operations.
-#   DEPENDS: M-CLOUD-PROTOCOLS, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD, M-CLOUD-VASTAI
-#   LINKS: M-CLOUD-API, M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD, M-CLOUD-VASTAI
+#   DEPENDS: M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDERS
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDERS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -17,18 +17,24 @@
 #   get_hetzner_adapter         # (name: str) -> CloudAdapter
 #   get_upcloud_adapter         # (name: str) -> CloudAdapter
 #   get_vastai_adapter          # (name: str) -> CloudAdapter
+#   CLOUD_ADAPTER_GETTERS       # Registry mapping cloud prefix to adapter factory
+#   _resolve_adapter            # Look up cloud adapter by prefix from registry
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Added VastAI adapter.
-#   PREVIOUS_CHANGE: v1.0.0 - Relocated from yascheduler/clouds/adapters.py; updated provider imports.
+#   LAST_CHANGE: v1.8.0 - Add CLOUD_ADAPTER_GETTERS and _resolve_adapter from clouds/cloud_api_manager.py.
+#   PREVIOUS_CHANGE: v1.7.0 - Added VastAI adapter.
 # END_CHANGE_SUMMARY
 
 """Cloud adapters"""
 
 import asyncio
+import logging
 from functools import cache
-from typing import Generic
+from typing import TYPE_CHECKING, Generic
+
+if TYPE_CHECKING:
+    from yascheduler.config import ConfigCloud
 
 from attrs import define, field
 
@@ -163,3 +169,32 @@ def get_vastai_adapter(name: str) -> CloudAdapter:
         delete_node=vastai_delete_node,
         op_limit=1,
     )
+
+
+CLOUD_ADAPTER_GETTERS = {
+    "az": get_azure_adapter,
+    "hetzner": get_hetzner_adapter,
+    "upcloud": get_upcloud_adapter,
+    "vastai": get_vastai_adapter,
+}
+
+
+# START_CONTRACT: _resolve_adapter
+#   PURPOSE: Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry
+#   INPUTS: { cfg: ConfigCloud - cloud provider config with prefix, log: logging.Logger - logger instance }
+#   OUTPUTS: { Optional[CloudAdapter] - resolved adapter or None if prefix unknown or deps missing }
+#   SIDE_EFFECTS: Logs error on ImportError
+#   LINKS: M-CLOUD-ADAPTERS
+# END_CONTRACT: _resolve_adapter
+def _resolve_adapter(cfg: "ConfigCloud", log: logging.Logger) -> CloudAdapter | None:
+    try:
+        getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]
+        return getter(cfg.prefix)
+    except KeyError:
+        return None
+    except ImportError:
+        log.error(
+            "The cloud %s is skipped because the dependencies are not installed",
+            cfg.prefix,
+        )
+        return None

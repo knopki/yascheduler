@@ -6,7 +6,7 @@
 #   PURPOSE: Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud, VastAI.
 #   SCOPE: Provider-specific config parsing, Azure image reference, cloud config union.
 #   DEPENDS: M-CONFIG-UTILS, M-COMPAT
-#   LINKS: M-CLOUD-AZ, M-CLOUD-HETZNER, M-CLOUD-UPCLOUD, M-CLOUD-VASTAI
+#   LINKS: M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -338,7 +338,7 @@ class ConfigCloudVastAI:
         include_names = ["user", "jump_user"]
         return [
             f"{cls.prefix}_{x}"
-            for x in [f.name for f in fields(cls) if f.name not in exclude_names]
+            for x in [f.name for f in fields(cls) if f.name not in exclude_names]  # type: ignore[arg-type]
             + include_names
         ]
 

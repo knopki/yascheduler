@@ -4,8 +4,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Mock CloudProvisionerImpl factory with configurable capacity for scheduler unit tests.
 #   SCOPE: make_mock_clouds helper returning MagicMock with stubbed allocate, deallocate, get_capacity, mark_task_done, configs, stop.
-#   DEPENDS: M-CLOUD-MANAGER
-#   LINKS: M-CLOUD-MANAGER
+#   DEPENDS: M-CLOUD-PROVISIONER
+#   LINKS: M-CLOUD-PROVISIONER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -20,7 +20,7 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-from yascheduler.clouds.protocols import CloudCapacity
+from yascheduler.adapters.cloud.protocols import CloudCapacity
 
 
 def make_mock_clouds(max_nodes: int = 10, current_nodes: int = 5) -> MagicMock:

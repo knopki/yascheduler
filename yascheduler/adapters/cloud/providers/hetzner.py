@@ -5,7 +5,7 @@
 #   PURPOSE: Hetzner Cloud server creation and deletion via API.
 #   SCOPE: Hetzner create/delete node functions.
 #   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
-#   LINKS: M-CLOUD-ADAPTERS, M-CONFIG-CLOUD
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -42,7 +42,8 @@ try:
 except ImportError:
     _HETZNER_AVAILABLE = False
 
-from ..utils import get_key_name, get_rnd_name
+from ..ssh_keys import get_key_name
+from ..utils import get_rnd_name
 
 if TYPE_CHECKING:
     import logging

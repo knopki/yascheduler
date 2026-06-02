@@ -1,9 +1,9 @@
 # FILE: yascheduler/di.py
-# VERSION: 2.0.0
+# VERSION: 3.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
 #   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CLOUD-MANAGER, M-REMOTE-REPO
+#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLIENT, M-UTILS
 # END_MODULE_CONTRACT
 #
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Pass uow_factory to Orchestrator instead of DB; keep DB for schema migration and CloudProvisionerImpl only.
-#   PREVIOUS_CHANGE: v1.2.0 - Build CloudProvisionerImpl directly instead of CloudAPIManager (Phase 4).
+#   LAST_CHANGE: v3.0.0 - Remove RemoteMachineRepository; wire SSHMachineGateway directly to Orchestrator.
+#   PREVIOUS_CHANGE: v2.0.0 - Pass uow_factory to Orchestrator instead of DB; keep DB for schema migration and CloudProvisionerImpl only.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -25,14 +25,13 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .adapters.cloud.adapters import _resolve_adapter
 from .adapters.cloud.manager import CloudProvisionerImpl
 from .adapters.persistence.postgres_uow import PostgresUnitOfWork
 from .adapters.ssh.gateway import SSHMachineGateway
 from .application.orchestrator import Orchestrator
 from .application.submit_task import submit_task
-from .clouds.cloud_api_manager import _resolve_adapter
 from .db import DB
-from .remote_machine import RemoteMachineRepository
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -95,8 +94,8 @@ class CLIDeps:
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
 #   INPUTS: { config: Config, log: Optional[Logger], db: Optional[DB], clouds: Optional[CloudProvisionerImpl] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates DB connection for schema migration, UoW factory, CloudProvisionerImpl, SSHMachineGateway, RemoteMachineRepository.
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-DB, M-CLOUD-MANAGER, M-SSH-GATEWAY, M-APPLICATION-UOW
+#   SIDE_EFFECTS: Creates DB connection for schema migration, UoW factory, CloudProvisionerImpl, SSHMachineGateway.
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-DB, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-APPLICATION-UOW
 # END_CONTRACT: make_daemon
 async def make_daemon(
     config: Config,
@@ -143,13 +142,11 @@ async def make_daemon(
             log=log,
         )
     gateway = SSHMachineGateway(log=log)
-    remote_machines = RemoteMachineRepository(log=log)
 
     return Orchestrator(
         config=config,
         uow_factory=uow_factory,
         clouds=clouds,
-        remote_machines=remote_machines,
         gateway=gateway,
         engines=config.engines,
         log=log,
