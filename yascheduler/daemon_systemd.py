@@ -5,8 +5,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Systemd service entry point for the scheduler daemon.
 #   SCOPE: Systemd daemon main function.
-#   DEPENDS: M-UTILS, M-VARIABLES
-#   LINKS: M-UTILS, M-VARIABLES
+#   DEPENDS: M-CLI-COMMANDS, M-VARIABLES
+#   LINKS: M-CLI-COMMANDS, M-VARIABLES
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -14,7 +14,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.6.1 - Import daemonize from adapters.cli.daemonize instead of utils.
 # END_CHANGE_SUMMARY
 """
 Yascheduler systemd daemon
@@ -22,6 +22,6 @@ Yascheduler systemd daemon
 
 if __name__ == "__main__":
     from yascheduler import LOG_FILE
-    from yascheduler.utils import daemonize
+    from yascheduler.adapters.cli.daemonize import daemonize
 
     daemonize(log_file=LOG_FILE)

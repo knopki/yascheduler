@@ -5,7 +5,7 @@
 #   PURPOSE: Global constants for config file, PID file, and log file paths.
 #   SCOPE: Path constants only.
 #   DEPENDS: none
-#   LINKS: M-MAIN, M-UTILS
+#   LINKS: M-MAIN
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

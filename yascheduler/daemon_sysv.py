@@ -5,8 +5,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: SysV init service entry point for launching the scheduler daemon.
 #   SCOPE: SysV daemon with PID file management.
-#   DEPENDS: M-UTILS, M-VARIABLES
-#   LINKS: M-UTILS, M-VARIABLES
+#   DEPENDS: M-CLI-COMMANDS, M-VARIABLES
+#   LINKS: M-CLI-COMMANDS, M-VARIABLES
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -14,7 +14,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.6.1 - Import daemonize from adapters.cli.daemonize instead of utils.
 # END_CHANGE_SUMMARY
 """
 SystemV Daemon functions
@@ -27,7 +27,7 @@ import daemon
 from daemon import pidfile
 
 from yascheduler import LOG_FILE, PID_FILE
-from yascheduler.utils import daemonize
+from yascheduler.adapters.cli.daemonize import daemonize
 
 
 def start_daemon(pid_file: str, log_file: str) -> None:

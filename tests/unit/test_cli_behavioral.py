@@ -3,8 +3,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Behavioral CLI tests — exercise CLI function bodies with mocked DI stack.
 #   SCOPE: submit, check_status, show_nodes, manage_node function body tests with mocked Config/CLIDeps/UoW.
-#   DEPENDS: M-UTILS, M-DI, M-DOMAIN-MODEL
-#   LINKS: M-UTILS, M-DI
+#   DEPENDS: M-CLI-COMMANDS, M-DI, M-DOMAIN-MODEL
+#   LINKS: M-CLI-COMMANDS, M-DI
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,7 +15,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial behavioral CLI tests.
+#   LAST_CHANGE: v1.1.0 - Import from adapters.cli instead of utils.
 # END_CHANGE_SUMMARY
 
 """Behavioral CLI tests — exercise CLI function bodies with mocked DI stack.
@@ -132,12 +132,15 @@ class TestSubmit:
         uow = make_mock_uow()
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import submit
+        from yascheduler.adapters.cli import submit
 
         with (
             patch("sys.argv", ["yasubmit", str(script)]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.submit.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch("yascheduler.adapters.cli.submit.make_cli_deps", return_value=deps),
         ):
             submit()
 
@@ -156,12 +159,15 @@ class TestSubmit:
         uow = make_mock_uow()
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import submit
+        from yascheduler.adapters.cli import submit
 
         with (
             patch("sys.argv", ["yasubmit", "/nonexistent/script.in"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.submit.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch("yascheduler.adapters.cli.submit.make_cli_deps", return_value=deps),
         ):
             with pytest.raises(ValueError, match="not a file"):
                 submit()
@@ -177,12 +183,15 @@ class TestSubmit:
         uow = make_mock_uow()
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import submit
+        from yascheduler.adapters.cli import submit
 
         with (
             patch("sys.argv", ["yasubmit", str(script)]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.submit.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch("yascheduler.adapters.cli.submit.make_cli_deps", return_value=deps),
         ):
             with pytest.raises(ValueError, match="not defined an engine"):
                 submit()
@@ -200,12 +209,15 @@ class TestSubmit:
         uow = make_mock_uow()
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import submit
+        from yascheduler.adapters.cli import submit
 
         with (
             patch("sys.argv", ["yasubmit", str(script)]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.submit.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch("yascheduler.adapters.cli.submit.make_cli_deps", return_value=deps),
         ):
             with pytest.raises(ValueError, match="not supported"):
                 submit()
@@ -228,12 +240,17 @@ class TestCheckStatus:
         )
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import check_status
+        from yascheduler.adapters.cli import check_status
 
         with (
             patch("sys.argv", ["yastatus"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.check_status.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.check_status.make_cli_deps", return_value=deps
+            ),
         ):
             check_status()
 
@@ -254,12 +271,17 @@ class TestCheckStatus:
         )
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import check_status
+        from yascheduler.adapters.cli import check_status
 
         with (
             patch("sys.argv", ["yastatus", "-i"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.check_status.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.check_status.make_cli_deps", return_value=deps
+            ),
         ):
             check_status()
 
@@ -282,12 +304,17 @@ class TestCheckStatus:
         )
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import check_status
+        from yascheduler.adapters.cli import check_status
 
         with (
             patch("sys.argv", ["yastatus", "-j", "1", "2"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.check_status.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.check_status.make_cli_deps", return_value=deps
+            ),
         ):
             check_status()
 
@@ -316,12 +343,17 @@ class TestShowNodes:
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import show_nodes
+        from yascheduler.adapters.cli import show_nodes
 
         with (
             patch("sys.argv", ["yanodes"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.show_nodes.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.show_nodes.make_cli_deps", return_value=deps
+            ),
         ):
             show_nodes()
 
@@ -346,12 +378,17 @@ class TestShowNodes:
         uow.nodes.list_all = AsyncMock(return_value=[])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import show_nodes
+        from yascheduler.adapters.cli import show_nodes
 
         with (
             patch("sys.argv", ["yanodes"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.show_nodes.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.show_nodes.make_cli_deps", return_value=deps
+            ),
         ):
             show_nodes()
 
@@ -374,14 +411,19 @@ class TestManageNode:
         mock_gateway.setup_node = AsyncMock()
         mock_gateway.disconnect = AsyncMock()
 
-        from yascheduler.utils import manage_node
+        from yascheduler.adapters.cli import manage_node
 
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
             patch(
-                "yascheduler.utils.SSHMachineGateway",
+                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
+            ),
+            patch(
+                "yascheduler.adapters.cli.manage_node.SSHMachineGateway",
                 return_value=mock_gateway,
             ),
         ):
@@ -407,12 +449,17 @@ class TestManageNode:
         )
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import manage_node
+        from yascheduler.adapters.cli import manage_node
 
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
+            ),
         ):
             result = manage_node()
 
@@ -430,12 +477,17 @@ class TestManageNode:
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1, 2])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import manage_node
+        from yascheduler.adapters.cli import manage_node
 
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1", "--remove-hard"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
+            ),
         ):
             result = manage_node()
 
@@ -463,12 +515,17 @@ class TestManageNode:
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import manage_node
+        from yascheduler.adapters.cli import manage_node
 
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1", "--remove-soft"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
+            ),
         ):
             result = manage_node()
 
@@ -493,12 +550,17 @@ class TestManageNode:
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import manage_node
+        from yascheduler.adapters.cli import manage_node
 
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1", "--remove-soft"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
+            ),
         ):
             result = manage_node()
 
@@ -520,12 +582,17 @@ class TestManageNode:
         uow.nodes.get = AsyncMock(return_value=None)
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.utils import manage_node
+        from yascheduler.adapters.cli import manage_node
 
         with (
             patch("sys.argv", ["yanodes", "nonexistent.host", "--remove-hard"]),
-            patch("yascheduler.utils.Config.from_config_parser", return_value=config),
-            patch("yascheduler.utils.make_cli_deps", return_value=deps),
+            patch(
+                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
+                return_value=config,
+            ),
+            patch(
+                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
+            ),
         ):
             result = manage_node()
 

@@ -46,12 +46,12 @@ Issues = "https://github.com/tilde-lab/yascheduler/issues"
 Source = "https://github.com/tilde-lab/yascheduler"
 
 [project.scripts]
-yainit = "yascheduler.utils:init"
-yanodes = "yascheduler.utils:show_nodes"
-yascheduler = "yascheduler.utils:daemonize"
-yasetnode = "yascheduler.utils:manage_node"
-yastatus = "yascheduler.utils:check_status"
-yasubmit = "yascheduler.utils:submit"
+yainit = "yascheduler.adapters.cli.init:init"
+yanodes = "yascheduler.adapters.cli.show_nodes:show_nodes"
+yascheduler = "yascheduler.adapters.cli.daemonize:daemonize"
+yasetnode = "yascheduler.adapters.cli.manage_node:manage_node"
+yastatus = "yascheduler.adapters.cli.check_status:check_status"
+yasubmit = "yascheduler.adapters.cli.submit:submit"
 
 [project.entry-points."aiida.schedulers"]
 yascheduler = "yascheduler.aiida_plugin:YaScheduler"

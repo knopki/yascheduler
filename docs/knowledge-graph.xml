@@ -125,19 +125,19 @@
       </annotations>
     </M-VARIABLES>
 
-    <M-UTILS NAME="Utilities" TYPE="UTILITY" STATUS="implemented">
-      <purpose>CLI entry points: submit, status, init, node management, daemonize.</purpose>
-      <path>yascheduler/utils.py</path>
-      <depends>M-CLIENT, M-CONFIG, M-DB, M-VARIABLES, M-DI, M-DOMAIN-MODEL</depends>
+    <M-CLI-COMMANDS NAME="CLI commands package" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Per-command CLI adapter modules — parse args, call use cases via DI, format output.</purpose>
+      <path>yascheduler/adapters/cli/__init__.py</path>
+      <depends>M-DI, M-CONFIG, M-DB, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-VARIABLES, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR</depends>
       <annotations>
-        <fn-submit PURPOSE="Submit task to yascheduler via AiiDA script" />
-        <fn-check_status PURPOSE="Show status of tasks" />
-        <fn-init PURPOSE="Service initialization (systemd/sysv + DB)" />
-        <fn-show_nodes PURPOSE="Show enabled nodes and running tasks" />
-        <fn-manage_node PURPOSE="Add/remove nodes from daemon" />
-        <fn-daemonize PURPOSE="Start yascheduler daemon" />
+        <fn-submit PURPOSE="Submit task via AiiDA script (adapters/cli/submit.py)" />
+        <fn-check_status PURPOSE="Show status of tasks (adapters/cli/check_status.py)" />
+        <fn-init PURPOSE="Service initialization (adapters/cli/init.py)" />
+        <fn-show_nodes PURPOSE="Show enabled nodes and running tasks (adapters/cli/show_nodes.py)" />
+        <fn-manage_node PURPOSE="Add/remove nodes from daemon (adapters/cli/manage_node.py)" />
+        <fn-daemonize PURPOSE="Start yascheduler daemon (adapters/cli/daemonize.py)" />
       </annotations>
-    </M-UTILS>
+    </M-CLI-COMMANDS>
 
     <M-TIME NAME="Time utilities" TYPE="UTILITY" STATUS="implemented">
       <purpose>Sleep utilities for sync and async contexts.</purpose>
@@ -162,7 +162,7 @@
     <M-DAEMON-SYSTEMD NAME="Systemd daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Systemd service entry point for the scheduler daemon.</purpose>
       <path>yascheduler/daemon_systemd.py</path>
-      <depends>M-UTILS, M-VARIABLES</depends>
+      <depends>M-CLI-COMMANDS, M-VARIABLES</depends>
       <annotations>
       </annotations>
     </M-DAEMON-SYSTEMD>
@@ -170,7 +170,7 @@
     <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SysV init service entry point for launching the scheduler daemon.</purpose>
       <path>yascheduler/daemon_sysv.py</path>
-      <depends>M-UTILS, M-VARIABLES</depends>
+      <depends>M-CLI-COMMANDS, M-VARIABLES</depends>
       <annotations>
         <fn-start_daemon PURPOSE="SysV daemon entry point with PID file management" />
       </annotations>
@@ -556,6 +556,9 @@
         <fn-get_azure_adapter PURPOSE="Get Azure adapter" />
         <fn-get_hetzner_adapter PURPOSE="Get Hetzner adapter" />
         <fn-get_upcloud_adapter PURPOSE="Get UpCloud adapter" />
+        <fn-get_vastai_adapter PURPOSE="Get VastAI adapter" />
+        <const-CLOUD_ADAPTER_GETTERS PURPOSE="Registry mapping cloud prefix to adapter factory" />
+        <fn-_resolve_adapter PURPOSE="Look up cloud adapter by prefix from registry" />
       </annotations>
     </M-CLOUD-ADAPTERS-NEW>
 
@@ -710,7 +713,7 @@
     <DF-SCHEDULE NAME="Schedule task (v2.0)">M-APPLICATION-ORCHESTRATOR -> M-APPLICATION-ALLOCATE / M-APPLICATION-CONSUME / M-APPLICATION-DEALLOCATE -> M-APPLICATION-UOW</DF-SCHEDULE>
 
     <DF-AIIDA-INTEGRATION NAME="AiiDA integration">M-AIIDA -> M-CLIENT</DF-AIIDA-INTEGRATION>
-    <DF-DAEMON-START NAME="Daemon start">M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-UTILS</DF-DAEMON-START>
+    <DF-DAEMON-START NAME="Daemon start">M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-CLI-COMMANDS</DF-DAEMON-START>
     <DF-CONFIG-LOAD NAME="Load configuration">M-CONFIG -> M-CONFIG-DB; M-CONFIG -> M-CONFIG-LOCAL; M-CONFIG -> M-CONFIG-REMOTE; M-CONFIG -> M-CONFIG-CLOUD; M-CONFIG -> M-CONFIG-ENGINE</DF-CONFIG-LOAD>
     <DF-PERSISTENCE NAME="Persistence layer">M-DB -> M-PERSISTENCE-POSTGRES -> M-PERSISTENCE</DF-PERSISTENCE>
 
@@ -747,8 +750,8 @@
     <CrossLink from="M-DI" to="M-APPLICATION-ORCHESTRATOR" relation="creates Orchestrator with wired dependencies" />
     <CrossLink from="M-DI" to="M-PERSISTENCE-UOW" relation="creates UoW factory from PostgresUnitOfWork" />
     <CrossLink from="M-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
-    <CrossLink from="M-UTILS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
-    <CrossLink from="M-UTILS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
+    <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
+    <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
     <CrossLink from="M-SCHEDULER" to="M-WEBHOOK" relation="re-exports WebhookPayload for backward compatibility" />
