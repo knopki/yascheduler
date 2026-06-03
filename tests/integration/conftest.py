@@ -1,24 +1,24 @@
 # FILE: tests/integration/conftest.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Pytest fixtures for PostgreSQL integration tests via testcontainers.
 #   SCOPE: Session-scoped PostgresContainer + schema init, function-scoped DB connections, per-test TRUNCATE.
-#   DEPENDS: M-DB, M-CONFIG-DB
-#   LINKS: M-DB
+#   DEPENDS: M-DB, M-CONFIG-DB, M-PERSISTENCE-SCHEMA
+#   LINKS: M-DB, M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   postgres_container - session-scoped fixture: starts postgres:16-alpine container
 #   _db_config - session-scoped fixture: parses container URL into ConfigDb
-#   _init_schema - session-scoped fixture: applies schema.sql and migrate() once
+#   _init_schema - session-scoped fixture: applies schema.sql via apply_schema() once
 #   db - function-scoped fixture: fresh DB connection per test, TRUNCATE on teardown
 #   pytest_collection_modifyitems - auto-mark all tests as "integration"
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Move TRUNCATE into db fixture teardown; remove autouse clean_tables.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial integration test infrastructure with testcontainers-postgres.
+#   LAST_CHANGE: v1.2.0 - _init_schema uses sync apply_schema() instead of legacy DB.run/migrate.
+#   PREVIOUS_CHANGE: v1.1.0 - Move TRUNCATE into db fixture teardown; remove autouse clean_tables.
 # END_CHANGE_SUMMARY
 
 """Integration test fixtures."""
@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 import pytest
 from testcontainers.postgres import PostgresContainer
 
+from yascheduler.adapters.persistence.postgres_schema import apply_schema
 from yascheduler.config.db import ConfigDb
 from yascheduler.db import DB
 
@@ -67,32 +68,18 @@ def _db_config(postgres_container: PostgresContainer) -> ConfigDb:
 
 
 # START_CONTRACT: _init_schema
-#   PURPOSE: Apply schema.sql and migrate() once per session so per-test DB connections start with ready tables.
-#   INPUTS: { postgres_container: PostgresContainer, _db_config: ConfigDb }
+#   PURPOSE: Apply schema.sql once per session so per-test DB connections start with ready tables.
+#   INPUTS: { _db_config: ConfigDb }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates yascheduler_nodes/yascheduler_tasks tables, runs ALTER TABLE migrations
-#   LINKS: M-DB
+#   SIDE_EFFECTS: Creates yascheduler_nodes/yascheduler_tasks tables
+#   LINKS: M-PERSISTENCE-SCHEMA
 # END_CONTRACT: _init_schema
 @pytest.fixture(scope="session")
-async def _init_schema(
-    postgres_container: PostgresContainer,
+def _init_schema(
     _db_config: ConfigDb,
 ) -> None:
-    """Apply schema and migration once per session."""
-    from pathlib import Path
-
-    instance = await DB.create(_db_config, automigrate=False)
-    schema_path = (
-        Path(__file__).resolve().parent.parent.parent  # noqa: ASYNC240
-        / "yascheduler"
-        / "adapters"
-        / "persistence"
-        / "sql"
-        / "schema.sql"
-    )
-    await instance.run(schema_path.read_text())
-    await instance.migrate()
-    await instance.close()
+    """Apply schema once per session via apply_schema()."""
+    apply_schema(_db_config)
 
 
 # START_CONTRACT: db

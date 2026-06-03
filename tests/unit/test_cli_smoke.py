@@ -1,11 +1,11 @@
 # FILE: tests/unit/test_cli_smoke.py
-# VERSION: 1.0.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CLI smoke tests — verify all 6 CLI commands are importable and structurally correct.
 #   SCOPE: Import-level smoke tests: no real DB/SSH needed, just verify function existence
-#          and decorator contracts (@to_sync for submit/check_status/init/show_nodes/manage_node,
-#          internal make_daemon use for daemonize).
+#          and decorator contracts (@to_sync for submit/check_status/show_nodes/manage_node,
+#          plain sync for init, internal make_daemon use for daemonize).
 #   DEPENDS: M-CLI-COMMANDS
 #   LINKS: M-CLI-COMMANDS
 # END_MODULE_CONTRACT
@@ -16,7 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Import from adapters.cli instead of utils.
+#   LAST_CHANGE: v1.2.0 - init is now a plain sync function (not @to_sync), test checks sync instead.
+#   PREVIOUS_CHANGE: v1.1.0 - Import from adapters.cli instead of utils.
 # END_CHANGE_SUMMARY
 
 """CLI smoke tests (task 7.6): verify all 6 CLI commands still functional.
@@ -59,6 +60,17 @@ def _check_to_sync_decorated(func: object) -> None:
     )
 
 
+def _check_sync_function(func: object) -> None:
+    """Assert that *func* is a plain synchronous callable (not async, not @to_sync)."""
+    assert callable(func), f"{func} is not callable"
+    assert not asyncio.iscoroutinefunction(func), (
+        f"{func.__name__} must not be a coroutine function"
+    )
+    assert not hasattr(func, "__wrapped__"), (
+        f"{func.__name__} must not be @to_sync decorated"
+    )
+
+
 class TestCLIFunctions:
     """Smoke tests for CLI command functions — import and verify structure."""
 
@@ -77,10 +89,10 @@ class TestCLIFunctions:
         _check_to_sync_decorated(check_status)
 
     def test_init_function_exists(self) -> None:
-        """``init`` exists and is decorated with @to_sync."""
+        """``init`` exists and is a plain sync function (not @to_sync)."""
         from yascheduler.adapters.cli import init
 
-        _check_to_sync_decorated(init)
+        _check_sync_function(init)
 
     def test_show_nodes_function_exists(self) -> None:
         """``show_nodes`` exists and is decorated with @to_sync."""

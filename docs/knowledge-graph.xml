@@ -128,7 +128,7 @@
     <M-CLI-COMMANDS NAME="CLI commands package" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Per-command CLI adapter modules — parse args, call use cases via DI, format output.</purpose>
       <path>yascheduler/adapters/cli/__init__.py</path>
-      <depends>M-DI, M-CONFIG, M-DB, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-VARIABLES, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR</depends>
+      <depends>M-DI, M-CONFIG, M-DB, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-VARIABLES, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE-SCHEMA</depends>
       <annotations>
         <fn-submit PURPOSE="Submit task via AiiDA script (adapters/cli/submit.py)" />
         <fn-check_status PURPOSE="Show status of tasks (adapters/cli/check_status.py)" />
@@ -379,6 +379,15 @@
         <fn-_require_conn PURPOSE="Guard returning Connection or raising UnitOfWorkNotInitializedError" />
       </annotations>
     </M-PERSISTENCE-UOW>
+
+    <M-PERSISTENCE-SCHEMA NAME="Schema applier" TYPE="DATA_LAYER" STATUS="implemented">
+      <purpose>Synchronous transactional application of schema.sql via pg8000 for CLI init and test fixtures.</purpose>
+      <path>yascheduler/adapters/persistence/postgres_schema.py</path>
+      <depends>M-PERSISTENCE-SQLLOADER, M-CONFIG-DB</depends>
+      <annotations>
+        <fn-apply_schema PURPOSE="Apply schema.sql in BEGIN/COMMIT transaction, rollback on failure" />
+      </annotations>
+    </M-PERSISTENCE-SCHEMA>
 
     <!-- ═══════════════════════════════════════════════
          Configuration
@@ -752,6 +761,7 @@
     <CrossLink from="M-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
+    <CrossLink from="M-CLI-COMMANDS" to="M-PERSISTENCE-SCHEMA" relation="init command calls apply_schema for DB schema initialization" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
     <CrossLink from="M-SCHEDULER" to="M-WEBHOOK" relation="re-exports WebhookPayload for backward compatibility" />

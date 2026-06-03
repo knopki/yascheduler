@@ -1,10 +1,10 @@
 # FILE: tests/e2e/conftest.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test fixtures — PostgreSQL + SSH containers, config, schema, DB.
 #   SCOPE: Session-scoped containers and config, function-scoped DB with TRUNCATE.
-#   DEPENDS: M-DB, M-CONFIG, M-SSH-GATEWAY
-#   LINKS: M-DB, M-CONFIG
+#   DEPENDS: M-DB, M-CONFIG, M-SSH-GATEWAY, M-PERSISTENCE-SCHEMA
+#   LINKS: M-DB, M-CONFIG, M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,13 +13,13 @@
 #   _db_config - session-scoped ConfigDb from container URL
 #   ssh_container - session-scoped SSH container with key pair
 #   e2e_config - session-scoped Config with temp dir, INI, engine script, SSH key
-#   _init_schema - session-scoped schema.sql application
+#   _init_schema - session-scoped schema.sql application via apply_schema()
 #   db - function-scoped DB with TRUNCATE teardown
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Add E2E fixtures: postgres, SSH, config, schema, db.
-#   PREVIOUS_CHANGE: v1.0.0 - Auto-mark e2e tests via directory-level conftest hook.
+#   LAST_CHANGE: v2.1.0 - _init_schema uses sync apply_schema() instead of legacy DB.run/migrate.
+#   PREVIOUS_CHANGE: v2.0.0 - Add E2E fixtures: postgres, SSH, config, schema, db.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 from testcontainers.postgres import PostgresContainer
 
+from yascheduler.adapters.persistence.postgres_schema import apply_schema
 from yascheduler.config import Config
 from yascheduler.config.db import ConfigDb
 from yascheduler.db import DB
@@ -165,22 +166,11 @@ def e2e_config(
 
 
 @pytest.fixture(scope="session")
-async def _init_schema(
-    postgres_container: PostgresContainer,
+def _init_schema(
     _db_config: ConfigDb,
 ) -> None:
-    instance = await DB.create(_db_config, automigrate=False)
-    schema_path = (
-        Path(__file__).resolve().parent.parent.parent  # noqa: ASYNC240
-        / "yascheduler"
-        / "adapters"
-        / "persistence"
-        / "sql"
-        / "schema.sql"
-    )
-    await instance.run(schema_path.read_text())
-    await instance.migrate()
-    await instance.close()
+    """Apply schema once per session via apply_schema()."""
+    apply_schema(_db_config)
 
 
 @pytest.fixture

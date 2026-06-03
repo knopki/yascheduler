@@ -1,31 +1,29 @@
 # FILE: yascheduler/adapters/cli/init.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yainit CLI command — install service unit files and initialize DB schema.
 #   SCOPE: init command + systemd/sysv service install + DB schema creation.
-#   DEPENDS: M-CONFIG, M-DB, M-VARIABLES
-#   LINKS: M-CLI-COMMANDS, M-DB
+#   DEPENDS: M-CONFIG, M-VARIABLES, M-PERSISTENCE-SCHEMA
+#   LINKS: M-CLI-COMMANDS, M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   init - Service initialization (systemd/sysv + DB)
+#   init - Service initialization (systemd/sysv + DB), sync
 #   _init_systemd - Write systemd service unit file
 #   _init_sysv - Write SysV init script
-#   _init_db - Create DB schema from SQL file
+#   _init_db - Create DB schema via apply_schema adapter
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
+#   LAST_CHANGE: v2.0.0 - Sync init(); _init_db() calls apply_schema() instead of legacy DB class.
+#   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
 # END_CHANGE_SUMMARY
 
 import os
 from pathlib import Path
 
-from pg8000 import ProgrammingError
-
-from yascheduler.client import to_sync
+from yascheduler.adapters.persistence.postgres_schema import apply_schema
 from yascheduler.config import Config
-from yascheduler.db import DB
 from yascheduler.variables import CONFIG_FILE
 
 
@@ -34,17 +32,16 @@ from yascheduler.variables import CONFIG_FILE
 #   INPUTS: { None - reads config from CONFIG_FILE }
 #   OUTPUTS: { None - no return value }
 #   SIDE_EFFECTS: Writes service unit files, creates DB tables
-#   LINKS: M-CLI-COMMANDS, M-DB
+#   LINKS: M-CLI-COMMANDS, M-PERSISTENCE-SCHEMA
 # END_CONTRACT: init
-@to_sync
-async def init() -> None:
+def init() -> None:
     install_path = Path(__file__).parent.parent.parent  # yascheduler/
-    has_systemd = not os.system("pidof systemd")  # noqa: ASYNC221
+    has_systemd = not os.system("pidof systemd")
     if has_systemd:
         _init_systemd(install_path)
     else:
         _init_sysv(install_path)
-    await _init_db(install_path)
+    _init_db()
 
 
 def _init_systemd(install_path: Path) -> None:
@@ -78,17 +75,6 @@ def _init_sysv(install_path: Path) -> None:
         os.chmod(startup_file, 0o755)
 
 
-async def _init_db(install_path: Path) -> None:
+def _init_db() -> None:
     config = Config.from_config_parser(CONFIG_FILE)
-    db = await DB.create(config.db, automigrate=False)
-    schema = (
-        install_path / "adapters" / "persistence" / "sql" / "schema.sql"
-    ).read_text()
-    try:
-        await db.run(schema)
-        await db.commit()
-        await db.close()
-    except ProgrammingError as e:
-        if "already exists" in str(e.args[0]):
-            print("Database already initialized!")
-        raise
+    apply_schema(config.db)
