@@ -32,7 +32,7 @@ import asyncssh
 import backoff
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
-from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
+from yascheduler.domain import ConnectedMachine, MachineState, ProcessResult
 
 from .exceptions import AllSSHRetryExc, SSHRetryExc
 from .helpers import (
@@ -51,8 +51,8 @@ if TYPE_CHECKING:
     from asyncssh.process import SSHClientProcess, SSHCompletedProcess
     from asyncssh.sftp import SFTPClient
 
-    from yascheduler.adapters.ssh.platform.adapters import RemoteMachineAdapter
-    from yascheduler.adapters.ssh.platform.protocol import (
+    from .platform.adapters import RemoteMachineAdapter
+    from .platform.protocol import (
         OuterRunCallable,
         PEngine,
         PEngineRepository,

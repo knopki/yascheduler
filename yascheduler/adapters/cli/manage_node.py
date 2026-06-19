@@ -22,12 +22,12 @@
 import argparse
 from typing import Optional
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-from yascheduler.application.uow import AbstractUnitOfWork
+from yascheduler.adapters import SSHMachineGateway
+from yascheduler.application import AbstractUnitOfWork
 from yascheduler.client import to_sync
 from yascheduler.config import Config
 from yascheduler.di import make_cli_deps
-from yascheduler.domain.model import Node, TaskStatus
+from yascheduler.domain import Node, TaskStatus
 from yascheduler.variables import CONFIG_FILE
 
 

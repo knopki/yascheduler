@@ -23,15 +23,15 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from yascheduler.domain.model import Node, TaskStatus
+from yascheduler.domain import Node, TaskStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
-    from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-    from yascheduler.application.uow import AbstractUnitOfWork
+    from yascheduler.adapters import CloudProvisionerImpl, SSHMachineGateway
     from yascheduler.config import ConfigCloud
+
+    from .uow import AbstractUnitOfWork
 
 logger = logging.getLogger(__name__)
 

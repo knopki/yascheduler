@@ -35,7 +35,7 @@ from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 from asyncstdlib import all as aall
 from asyncstdlib import map as amap
 
-from yascheduler.adapters.ssh.platform.adapters import (
+from .platform.adapters import (
     RemoteMachineAdapter,
     darwin_adapter,
     debian_10_adapter,
@@ -54,10 +54,10 @@ from yascheduler.adapters.ssh.platform.adapters import (
     windows12_adapter,
     windows_adapter,
 )
-from yascheduler.adapters.ssh.platform.exceptions import (
+from .platform.exceptions import (
     PlatformGuessFailedError,
 )
-from yascheduler.adapters.ssh.platform.protocol import (
+from .platform.protocol import (
     SSHCheck,
     SSHRetryExc,
 )

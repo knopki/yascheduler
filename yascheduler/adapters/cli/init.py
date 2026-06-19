@@ -22,7 +22,7 @@
 import os
 from pathlib import Path
 
-from yascheduler.adapters.persistence.postgres_schema import apply_schema
+from yascheduler.adapters.persistence import apply_schema
 from yascheduler.config import Config
 from yascheduler.variables import CONFIG_FILE
 

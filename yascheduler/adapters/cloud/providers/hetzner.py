@@ -42,8 +42,7 @@ try:
 except ImportError:
     _HETZNER_AVAILABLE = False
 
-from ..ssh_keys import get_key_name
-from ..utils import get_rnd_name
+from yascheduler.adapters.cloud import get_key_name, get_rnd_name
 
 if TYPE_CHECKING:
     import logging
@@ -51,8 +50,8 @@ if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
     from hcloud.servers.client import BoundServer
 
-    from ....config import ConfigCloudHetzner
-    from ..protocols import PCloudConfig
+    from yascheduler.adapters.cloud import PCloudConfig
+    from yascheduler.config import ConfigCloudHetzner
 
 executor = ThreadPoolExecutor(max_workers=5)
 

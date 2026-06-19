@@ -1,5 +1,5 @@
 # FILE: yascheduler/adapters/cloud/__init__.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public re-exports from adapters/cloud submodules.
@@ -26,8 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Add get_or_create_ssh_key, get_key_name re-exports from ssh_keys.
-#   PREVIOUS_CHANGE: v1.1.0 - Add CloudProvisionerImpl, CloudAllocateError, CloudSetupError exports.
+#   LAST_CHANGE: v1.3.0 - Facade metadata update for clean-architecture-imports R2 enforcement.
+#   PREVIOUS_CHANGE: v1.2.0 - Add get_or_create_ssh_key, get_key_name re-exports from ssh_keys.
 # END_CHANGE_SUMMARY
 
 """Cloud adapters module"""
@@ -47,6 +47,7 @@ from .protocols import (
     PCloudConfig,
 )
 from .ssh_keys import get_key_name, get_or_create_ssh_key
+from .utils import get_rnd_name
 
 __all__ = [
     "CloudAdapter",
@@ -62,5 +63,6 @@ __all__ = [
     "get_hetzner_adapter",
     "get_key_name",
     "get_or_create_ssh_key",
+    "get_rnd_name",
     "get_upcloud_adapter",
 ]

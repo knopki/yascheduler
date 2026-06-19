@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from attrs import define, field
 
-from yascheduler.domain.model import ConnectedMachine, Node
+from yascheduler.domain import ConnectedMachine, Node
 
 from .cloud_config import CloudConfig
 from .protocols import CloudCapacity
@@ -43,16 +43,17 @@ if TYPE_CHECKING:
 
     from asyncssh.public_key import SSHKey
 
-    from yascheduler.adapters.cloud.adapters import CloudAdapter
-    from yascheduler.adapters.cloud.protocols import PCloudConfig
-    from yascheduler.adapters.ssh.gateway import SSHMachineGateway
+    from yascheduler.adapters import SSHMachineGateway
     from yascheduler.config import (
         ConfigCloud,
         ConfigLocal,
         ConfigRemote,
         EngineRepository,
     )
-    from yascheduler.domain.ports import NodeRepository
+    from yascheduler.domain import NodeRepository
+
+    from .adapters import CloudAdapter
+    from .protocols import PCloudConfig
 
 
 class CloudAllocateError(Exception):

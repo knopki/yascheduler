@@ -25,16 +25,21 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from yascheduler.domain.events import TaskAllocated, TaskFailed
-from yascheduler.domain.model import ConnectedMachine, Task, TaskStatus
+from yascheduler.domain import (
+    ConnectedMachine,
+    Task,
+    TaskAllocated,
+    TaskFailed,
+    TaskStatus,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
-    from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-    from yascheduler.application.uow import AbstractUnitOfWork
+    from yascheduler.adapters import CloudProvisionerImpl, SSHMachineGateway
     from yascheduler.config import Engine, EngineRepository
+
+    from .uow import AbstractUnitOfWork
 
 logger = logging.getLogger(__name__)
 

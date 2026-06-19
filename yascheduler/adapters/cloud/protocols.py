@@ -33,7 +33,7 @@ from typing import Optional, Protocol, TypeVar, Union
 from asyncssh.public_key import SSHKey
 from attr import define
 
-from ...config import ConfigCloud
+from yascheduler.config import ConfigCloud
 
 SupportedPlatformChecker = Callable[[str], bool]
 

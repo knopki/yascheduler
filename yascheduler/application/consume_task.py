@@ -32,17 +32,17 @@ from typing import TYPE_CHECKING, Any
 import backoff
 from asyncssh.sftp import SFTPError
 
-from yascheduler.adapters.ssh.exceptions import SFTPRetryExc
-from yascheduler.domain.events import TaskCompleted, TaskFailed
+from yascheduler.adapters import SFTPRetryExc
+from yascheduler.domain import TaskCompleted, TaskFailed
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
-    from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-    from yascheduler.application.uow import AbstractUnitOfWork
+    from yascheduler.adapters import CloudProvisionerImpl, SSHMachineGateway
     from yascheduler.config import EngineRepository
-    from yascheduler.domain.model import Task
+    from yascheduler.domain import Task
+
+    from .uow import AbstractUnitOfWork
 
 logger = logging.getLogger(__name__)
 

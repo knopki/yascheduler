@@ -1,23 +1,29 @@
 # FILE: yascheduler/adapters/persistence/__init__.py
-# VERSION: 1.2.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Persistence adapter entry point — re-exports from persistence submodules.
-#   SCOPE: Re-export load_query, UnitOfWorkNotInitializedError; package marker.
-#   DEPENDS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS
-#   LINKS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-POSTGRES, M-DB
+#   PURPOSE: Persistence subpackage facade — re-exports persistence symbols for the adapters layer facade.
+#   SCOPE: Re-export load_query, UnitOfWorkNotInitializedError, apply_schema, PostgresUnitOfWork; package marker.
+#   DEPENDS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-POSTGRES
+#   LINKS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SCHEMA, M-DB
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   load_query - read a named SQL file once (cached), re-exported from sql_loader
 #   UnitOfWorkNotInitializedError - raised when UoW API is used without entering context
+#   apply_schema - apply schema.sql in a transactional block (CLI init)
+#   PostgresUnitOfWork - concrete UoW backed by Postgres (consumed by composition root)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Re-export UnitOfWorkNotInitializedError from exceptions.
-#   PREVIOUS_CHANGE: v1.1.0 - Extract load_query implementation to sql_loader.py; re-export only.
+#   LAST_CHANGE: v1.4.0 - Re-export PostgresUnitOfWork from postgres_uow (clean-architecture-imports R2 — composition root wiring).
+#   PREVIOUS_CHANGE: v1.3.0 - Re-export apply_schema from postgres_schema (clean-architecture-imports R2 enforcement).
 # END_CHANGE_SUMMARY
 
 from .exceptions import UnitOfWorkNotInitializedError
-from .sql_loader import load_query
+from .postgres_schema import apply_schema
+from .postgres_uow import PostgresUnitOfWork
 
-__all__ = ["load_query", "UnitOfWorkNotInitializedError"]
+__all__ = [
+    "PostgresUnitOfWork",
+    "UnitOfWorkNotInitializedError",
+    "apply_schema",
+]

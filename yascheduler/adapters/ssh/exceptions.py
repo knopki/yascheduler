@@ -19,7 +19,7 @@
 
 """SSH retry exception types — public façade for adapters/ssh/ consumers."""
 
-from yascheduler.adapters.ssh.platform.protocol import (
+from .platform.protocol import (
     AllSSHRetryExc,
     SFTPRetryExc,
     SSHRetryExc,

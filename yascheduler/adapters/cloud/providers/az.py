@@ -75,14 +75,14 @@ try:
 except ImportError:
     _AZURE_AVAILABLE = False
 
-from ..utils import get_rnd_name
+from yascheduler.adapters.cloud import get_rnd_name
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
     from azure.core.credentials_async import AsyncTokenCredential
 
-    from ....config.cloud import AzureImageReference, ConfigCloudAzure
-    from ..protocols import PCloudConfig
+    from yascheduler.adapters.cloud import PCloudConfig
+    from yascheduler.config import AzureImageReference, ConfigCloudAzure
 
 # Azure SDK is too noisy
 for logger_name in [

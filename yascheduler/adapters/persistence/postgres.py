@@ -24,8 +24,9 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
-from ...domain.model import Node, Task, TaskContext, TaskStatus
-from . import load_query
+from yascheduler.domain import Node, Task, TaskContext, TaskStatus
+
+from .sql_loader import load_query
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

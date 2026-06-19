@@ -23,8 +23,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     import types
 
-    from yascheduler.domain.events import DomainEvent
-    from yascheduler.domain.ports import NodeRepository, TaskRepository
+    from yascheduler.domain import DomainEvent, NodeRepository, TaskRepository
 
 
 @runtime_checkable

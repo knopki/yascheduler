@@ -26,12 +26,12 @@ from dataclasses import asdict
 import aiohttp
 import backoff
 
-from yascheduler.domain.events import (
+from yascheduler.domain import (
     DomainEvent,
     TaskAllocated,
     TaskCreated,
+    TaskStatus,
 )
-from yascheduler.domain.model import TaskStatus
 from yascheduler.webhook import WebhookPayload
 
 logger = logging.getLogger(__name__)

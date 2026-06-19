@@ -25,8 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from yascheduler.client import to_sync
-from yascheduler.config import Config
-from yascheduler.config.engine import Engine
+from yascheduler.config import Config, Engine
 from yascheduler.di import make_cli_deps
 from yascheduler.variables import CONFIG_FILE
 

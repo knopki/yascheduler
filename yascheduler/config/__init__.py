@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/config/__init__.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public re-exports from config submodules.
 #   SCOPE: Re-exports Config, ConfigCloud*, ConfigDb, ConfigLocal, ConfigRemote,
 #     Deploy, Engine, EngineRepository, LocalArchiveDeploy, LocalFilesDeploy,
-#     RemoteArchiveDeploy.
+#     RemoteArchiveDeploy, AzureImageReference.
 #   DEPENDS: M-CONFIG, M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD,
 #     M-CONFIG-ENGINE, M-CONFIG-ENGINE-REPO
 #   LINKS: M-CONFIG, M-SCHEDULER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
+#   AzureImageReference - Azure VM image URN reference (consumed by cloud providers)
 #   Config - application-wide configuration container
 #   ConfigCloud - base cloud provider config
 #   ConfigCloudAzure - Azure-specific cloud config
@@ -31,13 +32,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Added ConfigCloudVastAI.
-#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.8.0 - Re-export AzureImageReference from .cloud (clean-architecture-imports R2).
+#   PREVIOUS_CHANGE: v1.7.0 - Added ConfigCloudVastAI.
 # END_CHANGE_SUMMARY
 #
 """Configuration module"""
 
 from .cloud import (
+    AzureImageReference,
     ConfigCloud,
     ConfigCloudAzure,
     ConfigCloudHetzner,
@@ -58,6 +60,7 @@ from .local import ConfigLocal
 from .remote import ConfigRemote
 
 __all__ = [
+    "AzureImageReference",
     "Config",
     "ConfigCloud",
     "ConfigCloudAzure",

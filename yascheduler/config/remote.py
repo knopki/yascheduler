@@ -26,7 +26,8 @@ from typing import Optional
 
 from attrs import define, field, fields
 
-from ..compat import Self
+from yascheduler.compat import Self
+
 from .utils import make_default_field, opt_str_val, warn_unknown_fields
 
 

@@ -33,10 +33,9 @@ if TYPE_CHECKING:
     import types
     from collections.abc import Callable
 
-    from yascheduler.application.message_bus import MessageBus
+    from yascheduler.application import MessageBus
     from yascheduler.config import ConfigDb
-    from yascheduler.domain.events import DomainEvent
-    from yascheduler.domain.model import Task
+    from yascheduler.domain import DomainEvent, Task
 
 T = TypeVar("T")
 

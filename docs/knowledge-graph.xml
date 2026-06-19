@@ -128,7 +128,7 @@
     <M-CLI-COMMANDS NAME="CLI commands package" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Per-command CLI adapter modules — parse args, call use cases via DI, format output.</purpose>
       <path>yascheduler/adapters/cli/__init__.py</path>
-      <depends>M-DI, M-CONFIG, M-DB, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-VARIABLES, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE-SCHEMA</depends>
+      <depends>M-DI, M-CONFIG, M-DB, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-VARIABLES, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE</depends>
       <annotations>
         <fn-submit PURPOSE="Submit task via AiiDA script (adapters/cli/submit.py)" />
         <fn-check_status PURPOSE="Show status of tasks (adapters/cli/check_status.py)" />
@@ -181,10 +181,42 @@
          ═══════════════════════════════════════════════ -->
 
     <M-DOMAIN NAME="Domain layer entry point" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Domain layer entry point — re-exports domain events.</purpose>
+      <purpose>Domain layer entry point — re-exports domain events, model entities, exception hierarchy, and port interfaces.</purpose>
       <path>yascheduler/domain/__init__.py</path>
-      <depends>M-DOMAIN-EVENTS</depends>
+      <depends>M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS</depends>
       <annotations>
+        <export-DomainEvent PURPOSE="Base frozen dataclass for all task lifecycle events" />
+        <export-Event PURPOSE="Union type alias of all event types" />
+        <export-TaskAbandoned PURPOSE="Task abandoned on lost node event" />
+        <export-TaskAllocated PURPOSE="Task assigned to node event" />
+        <export-TaskCompleted PURPOSE="Task finished event" />
+        <export-TaskCreated PURPOSE="Task submitted event" />
+        <export-TaskFailed PURPOSE="Task failed event" />
+        <export-TaskStatus PURPOSE="IntEnum: TO_DO=0, RUNNING=1, DONE=2" />
+        <export-MachineState PURPOSE="Enum: FREE, BUSY" />
+        <export-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
+        <export-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
+        <export-Engine PURPOSE="Calculation engine specification with platform support" />
+        <export-Task PURPOSE="Task entity with lifecycle methods" />
+        <export-Node PURPOSE="Persistent compute node record" />
+        <export-ConnectedMachine PURPOSE="Runtime connected machine with state transitions" />
+        <export-DomainError PURPOSE="Base class for all domain exceptions" />
+        <export-ValidationError PURPOSE="Input validation errors" />
+        <export-UnsupportedEngineError PURPOSE="Unknown calculation engine requested" />
+        <export-MissingInputFileError PURPOSE="Required engine input file not provided" />
+        <export-TaskError PURPOSE="Task lifecycle errors" />
+        <export-TaskAlreadyAllocatedError PURPOSE="Task already bound to a node" />
+        <export-TaskNotAllocatedError PURPOSE="Task not yet allocated to a node" />
+        <export-TaskNotTodoError PURPOSE="Task not in TODO status" />
+        <export-TaskNotRunningError PURPOSE="Task not in RUNNING status" />
+        <export-MachineBusyError PURPOSE="Operation attempted on a busy machine" />
+        <export-SchedulingError PURPOSE="Scheduling/allocation errors" />
+        <export-NoCompatibleNodeError PURPOSE="No matching node found for task" />
+        <export-CloudCapacityExhaustedError PURPOSE="Cloud provider at capacity" />
+        <export-TaskRepository PURPOSE="Async port for task persistence" />
+        <export-NodeRepository PURPOSE="Async port for node persistence" />
+        <export-MachineGateway PURPOSE="Async port for remote machine operations" />
+        <export-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
       </annotations>
     </M-DOMAIN>
 
@@ -264,6 +296,18 @@
     <!-- ═══════════════════════════════════════════════
          Application layer (v2.0.0)
          ═══════════════════════════════════════════════ -->
+
+    <M-APPLICATION NAME="Application layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task.</purpose>
+      <path>yascheduler/application/__init__.py</path>
+      <depends>M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-SUBMIT</depends>
+      <annotations>
+        <export-AbstractUnitOfWork PURPOSE="Unit-of-work boundary for application use cases" />
+        <export-Orchestrator PURPOSE="Task lifecycle orchestrator" />
+        <export-MessageBus PURPOSE="In-process event bus for domain events" />
+        <export-submit_task PURPOSE="Use case: register a new task in TO_DO state" />
+      </annotations>
+    </M-APPLICATION>
 
     <M-APPLICATION-UOW NAME="Abstract Unit of Work Protocol" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Protocol defining transactional boundary: tasks, nodes, commit, rollback, event dispatch.</purpose>
@@ -355,13 +399,14 @@
          Persistence adapters
          ═══════════════════════════════════════════════ -->
 
-    <M-PERSISTENCE NAME="Persistence adapter entry point" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Persistence adapter package — re-exports from sql_loader, postgres, postgres_uow.</purpose>
+    <M-PERSISTENCE NAME="Persistence subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Persistence subpackage facade — internal organization of the adapters layer; re-exported by M-ADAPTERS for cross-layer consumers and composition root.</purpose>
       <path>yascheduler/adapters/persistence/__init__.py</path>
-      <depends>M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS</depends>
+      <depends>M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-POSTGRES</depends>
       <annotations>
-        <export-load_query PURPOSE="Re-exported from sql_loader" />
         <export-UnitOfWorkNotInitializedError PURPOSE="Re-exported from exceptions" />
+        <export-apply_schema PURPOSE="Apply DB schema migrations" />
+        <export-PostgresUnitOfWork PURPOSE="Concrete UoW backed by Postgres (consumed by composition root)" />
       </annotations>
     </M-PERSISTENCE>
 
@@ -512,6 +557,7 @@
         <export-ConfigDb PURPOSE="DB connection configuration" />
         <export-ConfigLocal PURPOSE="Local daemon settings" />
         <export-ConfigRemote PURPOSE="Remote machine defaults" />
+        <export-AzureImageReference PURPOSE="Azure VM image URN reference (consumed by cloud providers under TYPE_CHECKING)" />
         <export-ConfigCloudAzure PURPOSE="Azure cloud config" />
         <export-ConfigCloudHetzner PURPOSE="Hetzner cloud config" />
         <export-ConfigCloudUpcloud PURPOSE="UpCloud cloud config" />
@@ -523,8 +569,48 @@
 
 
     <!-- ═══════════════════════════════════════════════
+         Adapters layer facade (clean-architecture-imports)
+         ═══════════════════════════════════════════════ -->
+
+    <M-ADAPTERS NAME="Adapters layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Adapters layer facade — sole public surface for cross-layer consumers (application, composition root). Re-exports gateway, retry exceptions, cloud provisioner, and webhook handler.</purpose>
+      <path>yascheduler/adapters/__init__.py</path>
+      <depends>M-SSH, M-CLOUD, M-PERSISTENCE, M-NOTIFIER</depends>
+      <annotations>
+        <export-SSHMachineGateway PURPOSE="Async SSH machine gateway implementation" />
+        <export-AllSSHRetryExc PURPOSE="Tuple of all retryable SSH exceptions" />
+        <export-SFTPRetryExc PURPOSE="Tuple of retryable SFTP exceptions" />
+        <export-CloudProvisionerImpl PURPOSE="Cloud provisioner implementation" />
+        <export-webhook_handler PURPOSE="Async webhook event handler" />
+      </annotations>
+    </M-ADAPTERS>
+
+    <!-- ═══════════════════════════════════════════════
          New Cloud Adapter modules (v2.0.0)
          ═══════════════════════════════════════════════ -->
+
+    <M-CLOUD NAME="Cloud subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Cloud subpackage facade — internal organization of the adapters layer; re-exported by M-ADAPTERS for cross-layer consumers.</purpose>
+      <path>yascheduler/adapters/cloud/__init__.py</path>
+      <depends>M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVISIONER</depends>
+      <annotations>
+        <export-CloudAdapter PURPOSE="Cloud adapter wrapper class" />
+        <export-CloudAllocateError PURPOSE="Cloud node allocation error" />
+        <export-CloudCapacity PURPOSE="Cloud capacity dataclass" />
+        <export-CloudConfig PURPOSE="Cloud config for cloud-init rendering" />
+        <export-CloudProvisionerImpl PURPOSE="CloudProvisioner port implementation" />
+        <export-CloudSetupError PURPOSE="Cloud node setup error" />
+        <export-CreateNodeCallable PURPOSE="Create node in the cloud protocol" />
+        <export-DeleteNodeCallable PURPOSE="Delete node in the cloud protocol" />
+        <export-PCloudConfig PURPOSE="Cloud config init protocol" />
+        <export-get_azure_adapter PURPOSE="Create CloudAdapter for Azure" />
+        <export-get_hetzner_adapter PURPOSE="Create CloudAdapter for Hetzner" />
+        <export-get_key_name PURPOSE="Extract key name from SSHKey" />
+        <export-get_or_create_ssh_key PURPOSE="Load or generate SSH key" />
+        <export-get_rnd_name PURPOSE="Generate random name with prefix (cloud-internal)" />
+        <export-get_upcloud_adapter PURPOSE="Create CloudAdapter for UpCloud" />
+      </annotations>
+    </M-CLOUD>
 
     <M-CLOUD-PROVISIONER NAME="Cloud provisioner" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>CloudProvisionerImpl — implementation of CloudProvisioner port with multi-provider support.</purpose>
@@ -605,11 +691,12 @@
       </annotations>
     </M-CLOUD-SSH-KEYS>
 
-    <M-NOTIFIER NAME="Notifier Package" TYPE="INTEGRATION" STATUS="implemented">
-      <purpose>Notification adapter package providing webhook and other notification mechanisms.</purpose>
+    <M-NOTIFIER NAME="Notifier subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Notifier subpackage facade — re-exports webhook_handler as public surface for the adapters layer facade.</purpose>
       <path>yascheduler/adapters/notifier/__init__.py</path>
-      <depends>none</depends>
+      <depends>M-NOTIFIER-WEBHOOK</depends>
       <annotations>
+        <export-webhook_handler PURPOSE="Async webhook event handler dispatching domain events to configured endpoint" />
       </annotations>
     </M-NOTIFIER>
 
@@ -627,6 +714,17 @@
     <!-- ═══════════════════════════════════════════════
           SSH Adapter
           ═══════════════════════════════════════════════ -->
+
+    <M-SSH NAME="SSH subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>SSH subpackage facade — internal organization of the adapters layer; re-exports gateway class and retry exceptions for the M-ADAPTERS layer facade.</purpose>
+      <path>yascheduler/adapters/ssh/__init__.py</path>
+      <depends>M-SSH-GATEWAY, M-SSH-EXCEPTIONS</depends>
+      <annotations>
+        <export-SSHMachineGateway PURPOSE="Async SSH machine gateway implementation" />
+        <export-AllSSHRetryExc PURPOSE="Tuple of all retryable SSH exceptions" />
+        <export-SFTPRetryExc PURPOSE="Tuple of retryable SFTP exceptions" />
+      </annotations>
+    </M-SSH>
 
     <M-SSH-GATEWAY NAME="SSH machine gateway" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>SSH machine gateway implementing MachineGateway protocol via asyncssh.</purpose>
@@ -780,15 +878,20 @@
 
 
     <!-- Domain layer internal links -->
-    <CrossLink from="M-DOMAIN" to="M-DOMAIN-EVENTS" relation="re-exports event types from domain package" />
+    <CrossLink from="M-DOMAIN" to="M-DOMAIN-EVENTS" relation="re-exports events, model, exceptions, ports from domain package" />
     <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EXCEPTIONS" relation="raises domain exceptions from entity methods" />
     <CrossLink from="M-DOMAIN-PORTS" to="M-DOMAIN-MODEL" relation="uses domain entities in port signatures" />
     <CrossLink from="M-DOMAIN-SERVICES" to="M-DOMAIN-MODEL" relation="operates on Task, Engine, ConnectedMachine entities" />
 
+    <!-- Adapters layer facade links (clean-architecture-imports) -->
+    <CrossLink from="M-ADAPTERS" to="M-SSH" relation="re-exports gateway and retry exceptions via layer facade" />
+    <CrossLink from="M-ADAPTERS" to="M-CLOUD" relation="re-exports CloudProvisionerImpl and CloudAdapter via layer facade" />
+    <CrossLink from="M-ADAPTERS" to="M-PERSISTENCE" relation="re-exports PostgresUnitOfWork via layer facade" />
+    <CrossLink from="M-ADAPTERS" to="M-NOTIFIER" relation="re-exports webhook_handler via layer facade" />
+
     <!-- Persistence adapter links -->
     <CrossLink from="M-DB" to="M-PERSISTENCE-POSTGRES" relation="delegates task and node persistence to repositories" />
     <CrossLink from="M-PERSISTENCE-POSTGRES" to="M-PERSISTENCE-SQLLOADER" relation="uses load_query for SQL file loading" />
-    <CrossLink from="M-PERSISTENCE" to="M-PERSISTENCE-SQLLOADER" relation="re-exports load_query" />
     <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-POSTGRES" relation="instantiates and wires repositories" />
     <CrossLink from="M-PERSISTENCE-POSTGRES" to="M-DOMAIN-MODEL" relation="maps DB rows to domain entities" />
     <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-EXCEPTIONS" relation="raises UnitOfWorkNotInitializedError for state-contract violations" />

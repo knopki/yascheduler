@@ -44,8 +44,8 @@ if TYPE_CHECKING:
 
     from asyncssh.public_key import SSHKey
 
-    from ....config import ConfigCloudVastAI
-    from ..protocols import PCloudConfig
+    from yascheduler.adapters.cloud import PCloudConfig
+    from yascheduler.config import ConfigCloudVastAI
 
 BASE_URL = "https://console.vast.ai/api/v0"
 

@@ -37,3 +37,6 @@ jobs:
 
       - name: type check
         run: uv run zuban check
+
+      - name: import-linter
+        run: uv run lint-imports

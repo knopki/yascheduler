@@ -29,7 +29,8 @@ from typing import Any
 
 from attrs import asdict, define, field, validators
 
-from ..compat import Self
+from yascheduler.compat import Self
+
 from .engine import Engine
 
 

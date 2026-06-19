@@ -69,6 +69,7 @@ upcloud = ["upcloud_api~=2.0"]
 dev = [
   "build",
   "commitizen",
+  "import-linter >=2.5,<2.6",
   "pytest~=8.0",
   "pytest-asyncio~=0.25",
   "pytest-cov~=6.0",
@@ -113,6 +114,24 @@ exclude = ["scripts/grace_check.py"]
 select = ["ANN", "ASYNC", "E", "F", "I", "N", "UP", "TCH", "W"]
 # Disable specific rules
 ignore = ["E501"]
+
+[tool.importlinter]
+root_package = "yascheduler"
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Clean architecture layers"
+type = "layers"
+layers = [
+  "yascheduler.adapters",
+  "yascheduler.application",
+  "yascheduler.domain",
+]
+ignore_imports = [
+  # Residual edges — see openspec/specs/package-facades (Documented residual edges). Removed by gateway-sftp-wrapping.
+  "yascheduler.application.consume_task -> yascheduler.adapters",
+  "yascheduler.application.orchestrator -> yascheduler.adapters",
+]
 
 [tool.setuptools.package-data]
 "yascheduler.adapters.persistence.sql" = ["**/*.sql"]

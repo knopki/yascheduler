@@ -32,13 +32,13 @@ from pathlib import Path
 import pytest
 from pytest_mock import MockerFixture
 
-from yascheduler.adapters.persistence import load_query
 from yascheduler.adapters.persistence.exceptions import UnitOfWorkNotInitializedError
 from yascheduler.adapters.persistence.postgres import (
     PostgresNodeRepository,
     PostgresTaskRepository,
 )
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
+from yascheduler.adapters.persistence.sql_loader import load_query
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
     Node,

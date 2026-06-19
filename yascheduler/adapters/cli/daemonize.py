@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from yascheduler.application.orchestrator import Orchestrator
+from yascheduler.application import Orchestrator
 from yascheduler.client import to_sync
 from yascheduler.config import Config
 from yascheduler.di import make_daemon

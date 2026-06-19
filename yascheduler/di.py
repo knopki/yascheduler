@@ -19,6 +19,7 @@
 #   LAST_CHANGE: v4.0.1 - Extract _setup_domain_events helper; remove webhook handler registration from CLI mode.
 #   PREVIOUS_CHANGE: v4.0.0 - Wire MessageBus with webhook handlers; pass bus to PostgresUnitOfWork.
 # END_CHANGE_SUMMARY
+# FIXME: remove this module
 
 from __future__ import annotations
 
@@ -29,16 +30,17 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 
-from .adapters.cloud.adapters import _resolve_adapter
-from .adapters.cloud.manager import CloudProvisionerImpl
-from .adapters.notifier.webhook import webhook_handler
-from .adapters.persistence.postgres_uow import PostgresUnitOfWork
-from .adapters.ssh.gateway import SSHMachineGateway
-from .application.message_bus import MessageBus
-from .application.orchestrator import Orchestrator
-from .application.submit_task import submit_task
+from .adapters import (
+    CloudAdapter,
+    CloudProvisionerImpl,
+    PostgresUnitOfWork,
+    SSHMachineGateway,
+    webhook_handler,
+)
+from .adapters.cloud.adapters import _resolve_adapter  # FIXME: import of private
+from .application import AbstractUnitOfWork, MessageBus, Orchestrator, submit_task
 from .db import DB
-from .domain.events import (
+from .domain import (
     TaskAbandoned,
     TaskAllocated,
     TaskCompleted,
@@ -50,8 +52,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import PurePath
 
-    from .adapters.cloud.adapters import CloudAdapter
-    from .application.uow import AbstractUnitOfWork
     from .config import Config, ConfigCloud, EngineRepository
 
 

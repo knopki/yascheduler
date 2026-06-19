@@ -21,7 +21,7 @@ Yascheduler systemd daemon
 """
 
 if __name__ == "__main__":
-    from yascheduler import LOG_FILE
-    from yascheduler.adapters.cli.daemonize import daemonize
+    from .adapters.cli import daemonize
+    from .variables import LOG_FILE
 
     daemonize(log_file=LOG_FILE)

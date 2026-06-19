@@ -34,13 +34,13 @@ from typing import TYPE_CHECKING
 import asyncssh
 import backoff
 
-from yascheduler.adapters.ssh.exceptions import AllSSHRetryExc
-from yascheduler.domain.events import TaskAbandoned
-from yascheduler.domain.model import (
+from yascheduler.adapters import AllSSHRetryExc
+from yascheduler.domain import (
     ConnectedMachine,
     MachineState,
     Node,
     Task,
+    TaskAbandoned,
     TaskStatus,
 )
 from yascheduler.queue import UMessage, UniqueQueue
@@ -56,10 +56,10 @@ if TYPE_CHECKING:
     import aiohttp
     from asyncssh.sftp import SFTPClient
 
-    from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
-    from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-    from yascheduler.application.uow import AbstractUnitOfWork
+    from yascheduler.adapters import CloudProvisionerImpl, SSHMachineGateway
     from yascheduler.config import Config, ConfigCloud, Engine, EngineRepository
+
+    from .uow import AbstractUnitOfWork
 
 
 # START_CONTRACT: _safe_b64decode

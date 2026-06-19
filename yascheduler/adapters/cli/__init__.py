@@ -1,5 +1,5 @@
 # FILE: yascheduler/adapters/cli/__init__.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: CLI adapter package — re-exports per-command modules.
 #   SCOPE: Re-exports all 6 CLI command functions from per-command submodules.
@@ -17,16 +17,16 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Re-export from per-command submodules instead of monolithic commands.py.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial CLI adapter package scaffold.
+#   LAST_CHANGE: v2.1.0 - Switched to relative imports (R1) for submodules (clean-architecture-imports).
+#   PREVIOUS_CHANGE: v2.0.0 - Re-export from per-command submodules instead of monolithic commands.py.
 # END_CHANGE_SUMMARY
 
-from yascheduler.adapters.cli.check_status import check_status
-from yascheduler.adapters.cli.daemonize import daemonize
-from yascheduler.adapters.cli.init import init
-from yascheduler.adapters.cli.manage_node import manage_node
-from yascheduler.adapters.cli.show_nodes import show_nodes
-from yascheduler.adapters.cli.submit import submit
+from .check_status import check_status
+from .daemonize import daemonize
+from .init import init
+from .manage_node import manage_node
+from .show_nodes import show_nodes
+from .submit import submit
 
 __all__ = [
     "check_status",

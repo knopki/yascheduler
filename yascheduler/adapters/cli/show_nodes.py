@@ -18,7 +18,7 @@
 from yascheduler.client import to_sync
 from yascheduler.config import Config
 from yascheduler.di import make_cli_deps
-from yascheduler.domain.model import TaskStatus
+from yascheduler.domain import TaskStatus
 from yascheduler.variables import CONFIG_FILE
 
 

@@ -66,7 +66,7 @@ from asyncssh.sftp import (
     SFTPNoMatchingByteRangeLock,
 )
 
-from yascheduler.config.engine import (
+from yascheduler.config import (
     LocalArchiveDeploy,
     LocalFilesDeploy,
     RemoteArchiveDeploy,

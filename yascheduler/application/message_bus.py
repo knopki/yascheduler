@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from yascheduler.domain.events import DomainEvent
+    from yascheduler.domain import DomainEvent
 
 logger = logging.getLogger(__name__)
 

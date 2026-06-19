@@ -26,8 +26,8 @@ import os
 import daemon
 from daemon import pidfile
 
-from yascheduler import LOG_FILE, PID_FILE
-from yascheduler.adapters.cli.daemonize import daemonize
+from .adapters.cli import daemonize
+from .variables import LOG_FILE, PID_FILE
 
 
 def start_daemon(pid_file: str, log_file: str) -> None:

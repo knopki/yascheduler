@@ -27,11 +27,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway
+from yascheduler.adapters import SSHMachineGateway
 from yascheduler.client import to_sync
 from yascheduler.config import Config
 from yascheduler.di import make_cli_deps
-from yascheduler.domain.model import Task, TaskStatus
+from yascheduler.domain import Task, TaskStatus
 from yascheduler.variables import CONFIG_FILE
 
 

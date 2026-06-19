@@ -23,16 +23,22 @@ from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from yascheduler.domain.events import TaskCreated
-from yascheduler.domain.exceptions import MissingInputFileError, UnsupportedEngineError
-from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.domain import (
+    MissingInputFileError,
+    Task,
+    TaskContext,
+    TaskCreated,
+    TaskStatus,
+    UnsupportedEngineError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from pathlib import PurePath
 
-    from yascheduler.application.uow import AbstractUnitOfWork
     from yascheduler.config import EngineRepository
+
+    from .uow import AbstractUnitOfWork
 
 logger = logging.getLogger(__name__)
 

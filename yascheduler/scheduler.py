@@ -19,6 +19,7 @@
 #   LAST_CHANGE: v2.1.2 - Extract WebhookPayload to webhook.py; replace attrs with dataclasses.
 #   PREVIOUS_CHANGE: v2.0.0 - Refactor: delegate all loop infrastructure to Orchestrator, submit to use case.
 # END_CHANGE_SUMMARY
+# FIXME: remove this module
 
 
 import logging
@@ -28,10 +29,11 @@ from typing import Any, Optional, Union
 
 from attrs import define, field
 
-from .adapters.cloud.adapters import CloudAdapter  # noqa: TC001
-from .adapters.cloud.manager import CloudProvisionerImpl
-from .application.orchestrator import Orchestrator
-from .application.submit_task import submit_task
+from .adapters import (
+    CloudAdapter,  # noqa: TC001
+    CloudProvisionerImpl,
+)
+from .application import Orchestrator, submit_task
 from .compat import Self
 from .config import Config, ConfigCloud  # noqa: TC001
 from .db import DB, TaskModel
@@ -112,7 +114,7 @@ class Scheduler:
             _adapters[adapter.name] = adapter
             _configs[adapter.name] = cc
 
-        from .adapters.ssh.gateway import SSHMachineGateway
+        from .adapters import SSHMachineGateway
 
         clouds = CloudProvisionerImpl(
             adapters=_adapters,

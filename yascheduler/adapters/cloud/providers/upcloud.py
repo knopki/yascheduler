@@ -38,15 +38,15 @@ try:
 except ImportError:
     _UPCLOUD_AVAILABLE = False
 
-from ..utils import get_rnd_name
+from yascheduler.adapters.cloud import get_rnd_name
 
 if TYPE_CHECKING:
     import logging
 
     from asyncssh.public_key import SSHKey
 
-    from ....config import ConfigCloudUpcloud
-    from ..protocols import PCloudConfig
+    from yascheduler.adapters.cloud import PCloudConfig
+    from yascheduler.config import ConfigCloudUpcloud
 
 executor = ThreadPoolExecutor(max_workers=5)
 

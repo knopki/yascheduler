@@ -20,7 +20,7 @@ import logging
 from pg8000 import DatabaseError
 from pg8000.native import Connection
 
-from yascheduler.config.db import ConfigDb
+from yascheduler.config import ConfigDb
 
 from .sql_loader import load_query
 

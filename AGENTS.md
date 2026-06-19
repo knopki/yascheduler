@@ -62,10 +62,9 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
   orchestrator flow, also add or update integration/e2e tests per the relevant
   OpenSpec specs (`test-db-integration`, `e2e-testing`).
 - Run tests: `uv run pytest -m unit`, `uv run pytest -m integration`, `uv run
-pytest -m e2e` (Docker must be running for integration and e2e — they use
-  testcontainers).
+pytest -m e2e`.
 - Static checks: `uv run zuban check`, `uv run ruff check .`, `uv run ruff
-format --check .`
+format --check .`, `uv run lint-imports`
 - Spec validation: `openspec validate --all --json` must pass after creating a
   change proposal and after any modification to `openspec/specs/` (on
   archive/sync too).
