@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/submit_task.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Submit task use case — validates inputs, creates a domain Task, persists via UoW.
 #   SCOPE: submit_task async function.
-#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-CONFIG, M-APPLICATION-UOW
-#   LINKS: M-DOMAIN-MODEL, M-APPLICATION-UOW, M-SCHEDULER
+#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS, M-CONFIG, M-APPLICATION-UOW
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-SCHEDULER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -12,7 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extract submit_task use case from scheduler.create_new_task.
+#   LAST_CHANGE: v1.1.0 - Record TaskCreated event on task submission.
+#   PREVIOUS_CHANGE: v1.0.0 - Extract submit_task use case from scheduler.create_new_task.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from yascheduler.domain.events import TaskCreated
 from yascheduler.domain.exceptions import MissingInputFileError, UnsupportedEngineError
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
 
@@ -46,9 +48,9 @@ logger = logging.getLogger(__name__)
 #     remote_tasks_dir: PurePosixPath - Remote base directory for task folders
 #   }
 #   OUTPUTS: { int - The generated task_id }
-#   SIDE_EFFECTS: Inserts a task row in the database via UoW.
+#   SIDE_EFFECTS: Inserts a task row in the database via UoW. Records TaskCreated event dispatched on commit.
 #   RAISES: UnsupportedEngineError, MissingInputFileError
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS
 # END_CONTRACT: submit_task
 async def submit_task(
     label: str,
@@ -81,6 +83,14 @@ async def submit_task(
         remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")
         context = replace(task.context, remote_folder=remote_folder)
         task = replace(task, context=context)
+        task = task.record_event(
+            TaskCreated(
+                task_id=task.task_id,
+                webhook_url=task.context.webhook_url,
+                webhook_custom_params=task.context.webhook_custom_params,
+                engine_name=task.context.engine,
+            )
+        )
         await uow.tasks.save(task)
         await uow.commit()
     # END_BLOCK_PERSIST

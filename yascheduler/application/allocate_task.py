@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 3.0.0
+# VERSION: 4.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function.
-#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG
-#   LINKS: M-DOMAIN-MODEL, M-APPLICATION-UOW, M-SCHEDULER, M-CLOUD-PROVISIONER, M-SSH-GATEWAY
+#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG, M-DOMAIN-EVENTS
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-SCHEDULER, M-CLOUD-PROVISIONER, M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -16,19 +16,20 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v3.0.0 - Replace RemoteMachineRepository/RemoteMachine with SSHMachineGateway/ConnectedMachine.
-#   PREVIOUS_CHANGE: v2.0.0 - Rewrite to use UoW + domain Task instead of DB + TaskModel.
+#   LAST_CHANGE: v4.0.0 - Replace do_task_webhook callbacks with domain events (TaskAllocated, TaskFailed).
+#   PREVIOUS_CHANGE: v3.0.0 - Replace RemoteMachineRepository/RemoteMachine with SSHMachineGateway/ConnectedMachine.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from yascheduler.domain.events import TaskAllocated, TaskFailed
 from yascheduler.domain.model import ConnectedMachine, Task, TaskStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable
 
     from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
     from yascheduler.adapters.ssh.gateway import SSHMachineGateway
@@ -43,18 +44,16 @@ logger = logging.getLogger(__name__)
 #   INPUTS: {
 #     task: Task - The task to validate,
 #     engines: EngineRepository - Config engine repository,
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]] - Webhook callback
+#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
 #   }
 #   OUTPUTS: { Engine | None - The resolved engine, or None if invalid }
-#   SIDE_EFFECTS: Sets task error and sends webhook if engine is unsupported.
-#   LINKS: M-DOMAIN-MODEL, M-CONFIG
+#   SIDE_EFFECTS: Sets task error and records TaskFailed event if engine is unsupported.
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-CONFIG
 # END_CONTRACT: _validate_engine
 async def _validate_engine(
     task: Task,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
 ) -> Engine | None:
     # START_BLOCK_VALIDATE_ENGINE
     engine_name: str | None = task.context.engine
@@ -64,10 +63,17 @@ async def _validate_engine(
             "Unsupported engine '%s' for task_id=%s", engine_name, task.task_id
         )
         task = task.reject("unsupported engine")
+        task = task.record_event(
+            TaskFailed(
+                task_id=task.task_id,
+                webhook_url=task.context.webhook_url,
+                webhook_custom_params=task.context.webhook_custom_params,
+                reason="unsupported engine",
+            )
+        )
         async with uow_factory() as uow:
             await uow.tasks.save(task)
             await uow.commit()
-        await do_task_webhook(task.task_id, task.context.to_metadata(), TaskStatus.DONE)
         return None
     # END_BLOCK_VALIDATE_ENGINE
     return engine
@@ -82,12 +88,11 @@ async def _validate_engine(
 #     gateway: SSHMachineGateway - SSH gateway for occupancy checks,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
-#     do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]] - Webhook callback,
 #     clouds: CloudProvisionerImpl - Cloud provider manager
 #   }
 #   OUTPUTS: { bool - True if task started successfully on this machine }
-#   SIDE_EFFECTS: Sets task running, starts occupancy check, sends webhook, marks cloud task done.
-#   LINKS: M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
+#   SIDE_EFFECTS: Sets task running, starts occupancy check, records TaskAllocated event, marks cloud task done.
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
 # END_CONTRACT: _try_start_on_machine
 async def _try_start_on_machine(
     machine: ConnectedMachine,
@@ -96,7 +101,6 @@ async def _try_start_on_machine(
     gateway: SSHMachineGateway,
     uow_factory: Callable[[], AbstractUnitOfWork],
     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
-    do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
     clouds: CloudProvisionerImpl,
 ) -> bool:
     task = task.allocate_to(machine.ip).mark_running()
@@ -113,10 +117,18 @@ async def _try_start_on_machine(
         machine.ip,
     )
     gateway.start_occupancy_check(machine.ip, engine)
+    task = task.record_event(
+        TaskAllocated(
+            task_id=task.task_id,
+            webhook_url=task.context.webhook_url,
+            webhook_custom_params=task.context.webhook_custom_params,
+            node_ip=machine.ip,
+            engine_name=task.context.engine,
+        )
+    )
     async with uow_factory() as uow:
         await uow.tasks.save(task)
         await uow.commit()
-    await do_task_webhook(task.task_id, task.context.to_metadata(), TaskStatus.RUNNING)
     clouds.mark_task_done(task.task_id)
     return True
 
@@ -153,9 +165,9 @@ async def _find_free_machines(
 # START_CONTRACT: _allocate_free_machine
 #   PURPOSE: Find a free compatible machine and start the task on it.
 #   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, gateway: SSHMachineGateway,
-#     start_task_on_machine: Callable, do_task_webhook: Callable, clouds: CloudProvisionerImpl }
+#     start_task_on_machine: Callable, clouds: CloudProvisionerImpl }
 #   OUTPUTS: { bool - True if allocated to a machine, False if not }
-#   SIDE_EFFECTS: Updates task status, starts occupancy check, sends webhook, marks cloud task done.
+#   SIDE_EFFECTS: Updates task status, starts occupancy check, records TaskAllocated event, marks cloud task done.
 #   LINKS: M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
 # END_CONTRACT: _allocate_free_machine
 async def _allocate_free_machine(
@@ -164,7 +176,6 @@ async def _allocate_free_machine(
     uow_factory: Callable[[], AbstractUnitOfWork],
     gateway: SSHMachineGateway,
     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
-    do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
     clouds: CloudProvisionerImpl,
 ) -> bool:
     free_machines = await _find_free_machines(engine, uow_factory, gateway)
@@ -178,7 +189,6 @@ async def _allocate_free_machine(
             gateway,
             uow_factory,
             start_task_on_machine,
-            do_task_webhook,
             clouds,
         ):
             return True
@@ -195,12 +205,11 @@ async def _allocate_free_machine(
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     gateway: SSHMachineGateway - SSH gateway with connected machines,
 #     clouds: CloudProvisionerImpl - Cloud provider manager,
-#     start_task_on_machine: Callable - Callback to upload+spawn on remote machine,
-#     do_task_webhook: Callable - Callback to send webhook notification
+#     start_task_on_machine: Callable - Callback to upload+spawn on remote machine
 #   }
 #   OUTPUTS: { bool - True if allocated to a machine, False if cloud requested or error }
-#   SIDE_EFFECTS: May update task status in DB, start occupancy check, send webhook, request cloud node.
-#   LINKS: M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
+#   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), request cloud node.
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
 # END_CONTRACT: allocate_task
 async def allocate_task(
     task_id: int,
@@ -209,7 +218,6 @@ async def allocate_task(
     gateway: SSHMachineGateway,
     clouds: CloudProvisionerImpl,
     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
-    do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
 ) -> bool:
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
@@ -218,7 +226,7 @@ async def allocate_task(
 
     logger.debug("[AllocateTask][allocate_task] task_id=%s", task.task_id)
 
-    engine = await _validate_engine(task, engines, uow_factory, do_task_webhook)
+    engine = await _validate_engine(task, engines, uow_factory)
     if engine is None:
         return False
 
@@ -228,7 +236,6 @@ async def allocate_task(
         uow_factory,
         gateway,
         start_task_on_machine,
-        do_task_webhook,
         clouds,
     ):
         return True

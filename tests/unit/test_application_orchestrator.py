@@ -29,6 +29,7 @@ Tests cover:
 """
 
 import asyncio
+from collections import Counter
 from collections.abc import AsyncGenerator
 from pathlib import Path, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -45,6 +46,8 @@ from yascheduler.config import (
     Engine,
     EngineRepository,
 )
+from yascheduler.domain.events import TaskAbandoned
+from yascheduler.domain.model import Task, TaskContext, TaskStatus
 from yascheduler.queue import UniqueQueue
 
 # =============================================================================
@@ -124,22 +127,16 @@ def make_orchestrator(
 
     log = MagicMock()
 
-    with patch(
-        "yascheduler.application.orchestrator.aiohttp.ClientSession"
-    ) as mock_http:
-        mock_http.return_value = AsyncMock()
-        orch = Orchestrator(
-            config=config,
-            uow_factory=uow_factory,
-            clouds=clouds,
-            gateway=gateway,
-            engines=engines,
-            log=log,
-            config_clouds=[],
-            local_tasks_dir=Path("/tmp"),
-        )
-    # Replace any real aiohttp session with a mock for safe fast teardown
-    orch._http = AsyncMock()
+    orch = Orchestrator(
+        config=config,
+        uow_factory=uow_factory,
+        clouds=clouds,
+        gateway=gateway,
+        engines=engines,
+        log=log,
+        config_clouds=[],
+        local_tasks_dir=Path("/tmp"),
+    )
     return orch
 
 
@@ -367,3 +364,65 @@ class TestOrchestratorLifecycle:
         consume_call = mock_pc.call_args_list[2]
         assert consume_call.kwargs["queue"] is orch._consume_q
         assert consume_call.kwargs["workers_num"] == 7
+
+
+class TestOrchestratorTaskAbandoned:
+    """Test that TaskAbandoned event is recorded when machine is gone."""
+
+    async def test_machine_gone_records_task_abandoned_event(self) -> None:
+        """When a machine is gone for > broken_tasks_passes cycles, TaskAbandoned is recorded."""
+        from yascheduler.queue import UMessage
+
+        orch = make_orchestrator()
+
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        orch._uow_factory = uow_factory  # type: ignore[method-assign]
+
+        # Gateway returns None for machine state (machine gone)
+        orch._gateway.get_machine_state = MagicMock(return_value=None)  # type: ignore[method-assign]
+
+        task = Task(
+            task_id=42,
+            label="test",
+            context=TaskContext(
+                engine="test_engine",
+                webhook_url="https://hook.example.com",
+                webhook_custom_params={"k": "v"},
+            ),
+            status=TaskStatus.RUNNING,
+            allocated_ip="10.0.0.1",
+        )
+        msg = UMessage(42, task)
+        machine_not_found: Counter[str] = Counter()
+
+        # First call: counter is 1, not enough yet
+        await orch._task_consumer_consumer(msg, machine_not_found)
+        assert machine_not_found[42] == 1  # type: ignore[index]
+        uow.tasks.save.assert_not_called()
+
+        # Call enough times to exceed broken_tasks_passes (20)
+        machine_not_found[42] = 21  # type: ignore[index]
+        await orch._task_consumer_consumer(msg, machine_not_found)
+
+        # save should have been called with a task that has TaskAbandoned event
+        uow.tasks.save.assert_called_once()
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert saved_task.status == TaskStatus.DONE
+        assert saved_task.context.error == "node is gone"
+        assert len(saved_task._events) == 1
+        event = saved_task._events[0]
+        assert isinstance(event, TaskAbandoned)
+        assert event.task_id == 42
+        assert event.node_ip == "10.0.0.1"
+        assert event.webhook_url == "https://hook.example.com"
+        assert event.webhook_custom_params == {"k": "v"}
+        uow.commit.assert_called_once()

@@ -39,6 +39,7 @@ from yascheduler.adapters.persistence.postgres import (
     PostgresTaskRepository,
 )
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
+from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
     Node,
     Task,
@@ -129,11 +130,36 @@ async def test_uow_enter_creates_repositories(mocker: MockerFixture) -> None:
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
-    uow = PostgresUnitOfWork(config)
+    bus = MessageBus()
+    uow = PostgresUnitOfWork(config, bus)
 
     async with uow:
         assert isinstance(uow.tasks, PostgresTaskRepository)
         assert isinstance(uow.nodes, PostgresNodeRepository)
+
+
+# START_CONTRACT: test_collect_events_preserves_shared_list
+#   PURPOSE: Verify collect_events mutates in place so repo._saved_tasks and uow._saved_tasks are the same list.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: None (mocked connection)
+#   LINKS: PostgresUnitOfWork.collect_events
+# END_CONTRACT: test_collect_events_preserves_shared_list
+async def test_collect_events_preserves_shared_list(mocker: MockerFixture) -> None:
+    """collect_events preserves shared list reference between UoW and repo."""
+    mock_conn = mocker.MagicMock()
+    mocker.patch(
+        "yascheduler.adapters.persistence.postgres_uow.Connection",
+        return_value=mock_conn,
+    )
+    config = mocker.MagicMock()
+    bus = MessageBus()
+    uow = PostgresUnitOfWork(config, bus)
+
+    async with uow:
+        assert uow.tasks._saved_tasks is uow._saved_tasks
+        await uow.collect_events()
+        assert uow.tasks._saved_tasks is uow._saved_tasks
 
 
 # START_CONTRACT: test_uow_commit_called
@@ -151,7 +177,8 @@ async def test_uow_commit_called(mocker: MockerFixture) -> None:
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
-    uow = PostgresUnitOfWork(config)
+    bus = MessageBus()
+    uow = PostgresUnitOfWork(config, bus)
 
     async with uow:
         await uow.commit()
@@ -174,7 +201,8 @@ async def test_uow_rollback_on_exception(mocker: MockerFixture) -> None:
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
-    uow = PostgresUnitOfWork(config)
+    bus = MessageBus()
+    uow = PostgresUnitOfWork(config, bus)
 
     with pytest.raises(ValueError):
         async with uow:
@@ -199,7 +227,8 @@ async def test_uow_closes_connection(mocker: MockerFixture) -> None:
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
-    uow = PostgresUnitOfWork(config)
+    bus = MessageBus()
+    uow = PostgresUnitOfWork(config, bus)
 
     async with uow:
         pass
@@ -222,7 +251,8 @@ async def test_uow_commit_after_exit_raises(mocker: MockerFixture) -> None:
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
-    uow = PostgresUnitOfWork(config)
+    bus = MessageBus()
+    uow = PostgresUnitOfWork(config, bus)
 
     async with uow:
         pass  # connection now closed by __aexit__
@@ -248,7 +278,8 @@ async def test_uow_double_commit(mocker: MockerFixture) -> None:
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
-    uow = PostgresUnitOfWork(config)
+    bus = MessageBus()
+    uow = PostgresUnitOfWork(config, bus)
 
     async with uow:
         await uow.commit()
@@ -274,6 +305,7 @@ class TestPostgresTaskRepository:
     def _make_repo(mocker: MockerFixture) -> PostgresTaskRepository:
         """Build a minimal PostgresTaskRepository with a mock _run."""
         repo = PostgresTaskRepository.__new__(PostgresTaskRepository)
+        repo._saved_tasks = None
         mock_run = mocker.AsyncMock()
         mocker.patch.object(repo, "_run", mock_run)
         return repo

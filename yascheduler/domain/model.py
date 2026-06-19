@@ -1,10 +1,10 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.6.0
+# VERSION: 1.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext, Engine value objects; Task, Node, ConnectedMachine entities.
-#   DEPENDS: M-DOMAIN-EXCEPTIONS
-#   LINKS: M-DOMAIN-EXCEPTIONS
+#   DEPENDS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
+#   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,14 +13,14 @@
 #   ProcessResult - Exit code and captured output from remote execution
 #   TaskContext - Typed task metadata with arbitrary extras
 #   Engine - Calculation engine specification with platform support
-#   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle
+#   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, pull_events
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - TaskContext.to_metadata/from_metadata for JSONB serialization
-#   PREVIOUS_CHANGE: v1.6.0 - Create domain entities for Hexagonal + DDD migration.
+#   LAST_CHANGE: v1.8.0 - Add _events tuple, record_event, pull_events to Task for domain event support.
+#   PREVIOUS_CHANGE: v1.7.0 - TaskContext.to_metadata/from_metadata for JSONB serialization
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -41,6 +41,8 @@ from .exceptions import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from .events import DomainEvent
 
 
 @unique
@@ -152,6 +154,7 @@ class Task:
     context: TaskContext
     status: TaskStatus = TaskStatus.TO_DO
     allocated_ip: str | None = None
+    _events: tuple[DomainEvent, ...] = field(default=(), repr=False)
 
     # START_CONTRACT: Task.allocate_to
     #   PURPOSE: Bind task to a node IP if not already allocated.
@@ -247,6 +250,26 @@ class Task:
             context=replace(self.context, error=reason),
         )
         # END_BLOCK_MARK_REJECTED
+
+    # START_CONTRACT: Task.record_event
+    #   PURPOSE: Append a domain event to the task's event tuple, returning a new Task.
+    #   INPUTS: { event: DomainEvent }
+    #   OUTPUTS: { Task - New instance with event appended to _events }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-DOMAIN-EVENTS
+    # END_CONTRACT: Task.record_event
+    def record_event(self, event: DomainEvent) -> Task:
+        return replace(self, _events=self._events + (event,))
+
+    # START_CONTRACT: Task.pull_events
+    #   PURPOSE: Extract accumulated events, returning a clean Task and the event tuple.
+    #   INPUTS: { None }
+    #   OUTPUTS: { tuple[Task, tuple[DomainEvent, ...]] - (clean_task, collected_events) }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-DOMAIN-EVENTS
+    # END_CONTRACT: Task.pull_events
+    def pull_events(self) -> tuple[Task, tuple[DomainEvent, ...]]:
+        return replace(self, _events=()), self._events
 
 
 @dataclass(frozen=True)

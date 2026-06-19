@@ -44,6 +44,12 @@ from yascheduler.application.submit_task import submit_task
 from yascheduler.application.uow import AbstractUnitOfWork
 from yascheduler.config import Engine, EngineRepository
 from yascheduler.config.cloud import ConfigCloudAzure
+from yascheduler.domain.events import (
+    TaskAllocated,
+    TaskCompleted,
+    TaskCreated,
+    TaskFailed,
+)
 from yascheduler.domain.exceptions import MissingInputFileError, UnsupportedEngineError
 from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 
@@ -222,7 +228,8 @@ class TestAllocateTask:
         def uow_factory() -> AbstractUnitOfWork:
             return uow
 
-        do_webhook = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
 
         result = await allocate_task(
             task_id=todo_task.task_id,
@@ -231,7 +238,6 @@ class TestAllocateTask:
             gateway=MagicMock(),
             clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
-            do_task_webhook=do_webhook,
         )
 
         assert result is False
@@ -239,10 +245,6 @@ class TestAllocateTask:
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
         assert saved_task.context.error == "unsupported engine"
-        do_webhook.assert_called_once()
-        _wh_id, _wh_meta, _wh_status = do_webhook.call_args[0]
-        assert _wh_id == 1
-        assert _wh_status == TaskStatus.DONE
 
     async def test_allocate_task_finds_free_machine(
         self,
@@ -272,6 +274,8 @@ class TestAllocateTask:
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
         uow.__aexit__ = AsyncMock(return_value=False)
 
@@ -281,7 +285,6 @@ class TestAllocateTask:
         clouds = MagicMock()
         clouds.mark_task_done = MagicMock()
         start_on_machine = AsyncMock(return_value=True)
-        do_webhook = AsyncMock()
 
         result = await allocate_task(
             task_id=todo_task.task_id,
@@ -290,7 +293,6 @@ class TestAllocateTask:
             gateway=gateway,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
-            do_task_webhook=do_webhook,
         )
 
         assert result is True
@@ -310,12 +312,6 @@ class TestAllocateTask:
         assert saved_task.allocated_ip == "10.0.0.1"
         assert saved_task.status == TaskStatus.RUNNING
         uow.commit.assert_called_once()
-        # webhook with RUNNING status
-        do_webhook.assert_called_once_with(
-            saved_task.task_id,
-            saved_task.context.to_metadata(),
-            TaskStatus.RUNNING,
-        )
         # cloud marked done
         clouds.mark_task_done.assert_called_once_with(1)
 
@@ -336,6 +332,8 @@ class TestAllocateTask:
         uow.tasks = AsyncMock()
         uow.tasks.get = AsyncMock(return_value=todo_task)
         uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
         uow.__aexit__ = AsyncMock(return_value=False)
 
@@ -345,7 +343,6 @@ class TestAllocateTask:
         clouds = MagicMock()
         clouds.allocate_with_tracking = AsyncMock(return_value=None)
         start_on_machine = AsyncMock()
-        do_webhook = AsyncMock()
 
         result = await allocate_task(
             task_id=todo_task.task_id,
@@ -354,7 +351,6 @@ class TestAllocateTask:
             gateway=gateway,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
-            do_task_webhook=do_webhook,
         )
 
         assert result is False
@@ -399,7 +395,6 @@ class TestConsumeTask:
         engines: EngineRepository,
         local_tasks_dir: Path,
         clouds: MagicMock,
-        do_webhook: AsyncMock,
     ) -> None:
         """Run consume_task with backoff and executor patched out."""
         # backoff.on_exception -> identity decorator (bypass retry logic)
@@ -422,7 +417,6 @@ class TestConsumeTask:
                     uow_factory=uow_factory,
                     local_tasks_dir=local_tasks_dir,
                     clouds=clouds,
-                    do_task_webhook=do_webhook,
                 )
 
     async def test_consume_task_download_success_marks_done(
@@ -432,19 +426,20 @@ class TestConsumeTask:
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
-        """All output files downloaded -> save DONE + webhook(DONE)."""
+        """All output files downloaded -> save DONE + cloud notified."""
         uow = AsyncMock()
         uow.tasks = AsyncMock()
         uow.tasks.get = AsyncMock(return_value=running_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
         uow.__aexit__ = AsyncMock(return_value=False)
 
         def uow_factory() -> AbstractUnitOfWork:
             return uow
 
-        do_webhook = AsyncMock()
         clouds = MagicMock()
         clouds.mark_task_done = MagicMock()
         local_tasks_dir = MagicMock(spec=Path)
@@ -457,7 +452,6 @@ class TestConsumeTask:
             engines=mock_engine_repo,
             local_tasks_dir=local_tasks_dir,
             clouds=clouds,
-            do_webhook=do_webhook,
         )
 
         # Exactly one output file downloaded
@@ -474,11 +468,6 @@ class TestConsumeTask:
         assert saved_task.status == TaskStatus.DONE
         assert saved_task.context.error is None
         uow.commit.assert_called_once()
-        # Webhook with DONE
-        do_webhook.assert_called_once()
-        _wh_id, _wh_meta, _wh_status = do_webhook.call_args[0]
-        assert _wh_status == TaskStatus.DONE
-        assert "error" not in _wh_meta
         # Cloud notified
         clouds.mark_task_done.assert_called_once_with(1)
 
@@ -489,7 +478,7 @@ class TestConsumeTask:
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
-        """Download raises OSError -> save DONE with error + webhook(DONE)."""
+        """Download raises OSError -> save DONE with error."""
         sftp_mock.get = AsyncMock(side_effect=OSError("Connection refused"))
 
         uow = AsyncMock()
@@ -497,13 +486,14 @@ class TestConsumeTask:
         uow.tasks.get = AsyncMock(return_value=running_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
         uow.__aexit__ = AsyncMock(return_value=False)
 
         def uow_factory() -> AbstractUnitOfWork:
             return uow
 
-        do_webhook = AsyncMock()
         clouds = MagicMock()
         clouds.mark_task_done = MagicMock()
         local_tasks_dir = MagicMock(spec=Path)
@@ -516,7 +506,6 @@ class TestConsumeTask:
             engines=mock_engine_repo,
             local_tasks_dir=local_tasks_dir,
             clouds=clouds,
-            do_webhook=do_webhook,
         )
 
         # save was called with DONE + error
@@ -524,13 +513,6 @@ class TestConsumeTask:
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
         assert saved_task.context.error is not None
-        # Webhook still fires with DONE status
-        do_webhook.assert_called_once()
-        _wh_status = do_webhook.call_args[0][2]
-        assert _wh_status == TaskStatus.DONE
-        # error info present in metadata passed to webhook
-        _wh_meta = do_webhook.call_args[0][1]
-        assert "error" in _wh_meta
 
 
 # =============================================================================
@@ -617,3 +599,277 @@ class TestDeallocateNodes:
         # In second phase: node.cloud is None -> filtered out, not returned
         assert isinstance(result, list)
         assert "10.0.0.1" not in result
+
+
+# =============================================================================
+# Event recording characterization tests (D4)
+# =============================================================================
+
+
+class TestSubmitTaskEvents:
+    """Verify submit_task records TaskCreated event."""
+
+    async def test_submit_task_records_task_created_event(
+        self, engine: Engine, mock_engine_repo: MagicMock, mock_uow_factory: MagicMock
+    ) -> None:
+        uow = mock_uow_factory.return_value
+
+        def _insert_side_effect(task: Task) -> Task:
+            return replace(task, task_id=55)
+
+        uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
+
+        await submit_task(
+            label="evt_test",
+            metadata={"inp": "data"},
+            engine_name="test_engine",
+            engines=mock_engine_repo,
+            uow_factory=mock_uow_factory,
+            remote_tasks_dir=PurePath("/remote/tasks"),
+        )
+
+        saved_arg: Task = uow.tasks.save.call_args[0][0]
+        assert len(saved_arg._events) == 1
+        event = saved_arg._events[0]
+        assert isinstance(event, TaskCreated)
+        assert event.task_id == 55
+        assert event.engine_name == "test_engine"
+
+
+class TestAllocateTaskEvents:
+    """Verify allocate_task records TaskFailed or TaskAllocated events."""
+
+    async def test_validate_engine_records_task_failed_event(self) -> None:
+        """Unsupported engine records TaskFailed event."""
+        engines = MagicMock(spec=EngineRepository)
+        engines.get.return_value = None
+
+        todo_task = Task(
+            task_id=1,
+            label="t",
+            context=TaskContext(engine="bad"),
+            status=TaskStatus.TO_DO,
+        )
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        await allocate_task(
+            task_id=1,
+            engines=engines,
+            uow_factory=uow_factory,
+            gateway=MagicMock(),
+            clouds=MagicMock(),
+            start_task_on_machine=AsyncMock(),
+        )
+
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert len(saved_task._events) == 1
+        event = saved_task._events[0]
+        assert isinstance(event, TaskFailed)
+        assert event.reason == "unsupported engine"
+
+    async def test_allocate_free_machine_records_task_allocated_event(
+        self, engine: Engine
+    ) -> None:
+        """Successful allocation records TaskAllocated event."""
+        import time
+
+        from yascheduler.domain.model import ConnectedMachine, MachineState
+
+        engines = MagicMock(spec=EngineRepository)
+        engines.get.return_value = engine
+
+        free_machine = MagicMock(spec=ConnectedMachine)
+        free_machine.ip = "10.0.0.1"
+        free_machine.state = MachineState.FREE
+        free_machine.free_since = time.monotonic()
+
+        gateway = MagicMock()
+        gateway.list_free = MagicMock(return_value=[free_machine])
+        gateway.start_occupancy_check = MagicMock()
+
+        todo_task = Task(
+            task_id=1,
+            label="t",
+            context=TaskContext(engine="test_engine"),
+            status=TaskStatus.TO_DO,
+        )
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        clouds = MagicMock()
+        clouds.mark_task_done = MagicMock()
+        start_on_machine = AsyncMock(return_value=True)
+
+        await allocate_task(
+            task_id=1,
+            engines=engines,
+            uow_factory=uow_factory,
+            gateway=gateway,
+            clouds=clouds,
+            start_task_on_machine=start_on_machine,
+        )
+
+        # save was called — check the last save has a TaskAllocated event
+        save_calls = uow.tasks.save.call_args_list
+        last_save_task: Task = save_calls[-1][0][0]
+        allocated_events = [
+            e for e in last_save_task._events if isinstance(e, TaskAllocated)
+        ]
+        assert len(allocated_events) == 1
+        assert allocated_events[0].node_ip == "10.0.0.1"
+        assert allocated_events[0].engine_name == "test_engine"
+
+
+class TestConsumeTaskEvents:
+    """Verify consume_task records TaskCompleted or TaskFailed events."""
+
+    @pytest.fixture
+    def sftp_mock(self) -> AsyncMock:
+        sftp = AsyncMock()
+        sftp.get = AsyncMock(return_value=None)
+        sftp.rmtree = AsyncMock(return_value=None)
+        return sftp
+
+    @pytest.fixture
+    def gateway_mock(self, sftp_mock: AsyncMock) -> MagicMock:
+        async_sftp_cm = AsyncMock()
+        async_sftp_cm.__aenter__.return_value = sftp_mock
+
+        gateway = MagicMock()
+        gateway.get_sftp = MagicMock(return_value=async_sftp_cm)
+        gateway.get_path = MagicMock(return_value=PurePosixPath)
+        return gateway
+
+    async def _run_consume(
+        self,
+        ip: str,
+        gateway: MagicMock,
+        task: Task,
+        uow_factory: Callable[[], AbstractUnitOfWork],
+        engines: EngineRepository,
+        local_tasks_dir: Path,
+        clouds: MagicMock,
+    ) -> None:
+        with patch(
+            "yascheduler.application.consume_task.backoff.on_exception"
+        ) as mock_bo:
+            mock_bo.return_value = lambda f: f
+            with patch(
+                "yascheduler.application.consume_task.asyncio.get_running_loop"
+            ) as mock_get_loop:
+                mock_loop = MagicMock()
+                mock_get_loop.return_value = mock_loop
+                mock_loop.run_in_executor = AsyncMock(return_value=None)
+                await consume_task(
+                    task_id=task.task_id,
+                    ip=ip,
+                    gateway=gateway,
+                    engines=engines,
+                    uow_factory=uow_factory,
+                    local_tasks_dir=local_tasks_dir,
+                    clouds=clouds,
+                )
+
+    async def test_consume_success_records_task_completed_event(
+        self,
+        gateway_mock: MagicMock,
+        sftp_mock: AsyncMock,
+        running_task: Task,
+        mock_engine_repo: MagicMock,
+    ) -> None:
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        clouds = MagicMock()
+        clouds.mark_task_done = MagicMock()
+        local_tasks_dir = MagicMock(spec=Path)
+
+        await self._run_consume(
+            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            gateway=gateway_mock,
+            task=running_task,
+            uow_factory=uow_factory,
+            engines=mock_engine_repo,
+            local_tasks_dir=local_tasks_dir,
+            clouds=clouds,
+        )
+
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert len(saved_task._events) == 1
+        event = saved_task._events[0]
+        assert isinstance(event, TaskCompleted)
+        assert event.task_id == 1
+
+    async def test_consume_failure_records_task_failed_event(
+        self,
+        gateway_mock: MagicMock,
+        sftp_mock: AsyncMock,
+        running_task: Task,
+        mock_engine_repo: MagicMock,
+    ) -> None:
+        sftp_mock.get = AsyncMock(side_effect=OSError("Connection refused"))
+
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        clouds = MagicMock()
+        clouds.mark_task_done = MagicMock()
+        local_tasks_dir = MagicMock(spec=Path)
+
+        await self._run_consume(
+            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            gateway=gateway_mock,
+            task=running_task,
+            uow_factory=uow_factory,
+            engines=mock_engine_repo,
+            local_tasks_dir=local_tasks_dir,
+            clouds=clouds,
+        )
+
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert len(saved_task._events) == 1
+        event = saved_task._events[0]
+        assert isinstance(event, TaskFailed)
+        assert event.task_id == 1

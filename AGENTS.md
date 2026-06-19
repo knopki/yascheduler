@@ -61,17 +61,18 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 - For changes touching DB queries, node lifecycle, SSH interaction, or
   orchestrator flow, also add or update integration/e2e tests per the relevant
   OpenSpec specs (`test-db-integration`, `e2e-testing`).
-- Run tests: `uv run -m unit`, `uv run -m integration`, `uv run -m e2e`
-  (Docker must be running for integration and e2e — they use testcontainers).
-- Static checks: `uv run zuban check`, `uv run ruff check .`,
-  `uv run ruff format --check .`
+- Run tests: `uv run pytest -m unit`, `uv run pytest -m integration`, `uv run
+pytest -m e2e` (Docker must be running for integration and e2e — they use
+  testcontainers).
+- Static checks: `uv run zuban check`, `uv run ruff check .`, `uv run ruff
+format --check .`
 - Spec validation: `openspec validate --all --json` must pass after creating a
   change proposal and after any modification to `openspec/specs/` (on
   archive/sync too).
 - Validate GRACE-lite must pass after any code modification session.
-- Use testcontainers for integration and e2e tests (PostgreSQL, SSH). Avoid
-  only uncontrolled production resources (real cloud accounts, production DBs,
-  live SSH servers) unless explicitly requested and configured.
+- Use testcontainers for integration and e2e tests (PostgreSQL, SSH). Avoid only
+  uncontrolled production resources (real cloud accounts, production DBs, live
+  SSH servers) unless explicitly requested and configured.
 
 <!-- START_GRACE-lite -->
 

@@ -37,6 +37,7 @@ from yascheduler.adapters.persistence.postgres import (
     PostgresTaskRepository,
 )
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
+from yascheduler.application.message_bus import MessageBus
 from yascheduler.config import ConfigDb
 from yascheduler.db import DB
 from yascheduler.domain.model import (
@@ -402,7 +403,7 @@ async def test_uow_integration(_db_config: ConfigDb, _init_schema: None) -> None
 
     config: ConfigDb = _db_config
 
-    async with PostgresUnitOfWork(config) as uow:
+    async with PostgresUnitOfWork(config, MessageBus()) as uow:
         assert uow.tasks is not None
         assert uow.nodes is not None
 
@@ -432,12 +433,12 @@ async def test_uow_rollback_integration(
     config: ConfigDb = _db_config
 
     with pytest.raises(ValueError):
-        async with PostgresUnitOfWork(config) as uow:
+        async with PostgresUnitOfWork(config, MessageBus()) as uow:
             await uow.nodes.add(Node(ip="10.0.0.99", ncpus=2, enabled=True))
             raise ValueError("simulated error")
 
     # After rollback, node should NOT exist
-    async with PostgresUnitOfWork(config) as uow:
+    async with PostgresUnitOfWork(config, MessageBus()) as uow:
         n = await uow.nodes.get("10.0.0.99")
         assert n is None
 

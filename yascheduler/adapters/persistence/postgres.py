@@ -63,11 +63,20 @@ class _PgRepository:
 #   PURPOSE: Async task CRUD using pg8000 Connection dispatched via ThreadPoolExecutor.
 #   INPUTS: { conn: Connection - pg8000 native connection, executor: ThreadPoolExecutor }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Captures asyncio event loop at init for run_in_executor dispatch.
+#   SIDE_EFFECTS: Captures asyncio event loop at init for run_in_executor dispatch; tracks saved tasks for event collection.
 #   LINKS: M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL
 # END_CONTRACT: PostgresTaskRepository
 class PostgresTaskRepository(_PgRepository):
     """PostgreSQL implementation of TaskRepository port."""
+
+    def __init__(
+        self,
+        conn: Connection,
+        executor: ThreadPoolExecutor,
+        saved_tasks: list[Task] | None = None,
+    ) -> None:
+        super().__init__(conn, executor)
+        self._saved_tasks = saved_tasks
 
     # START_CONTRACT: get
     #   PURPOSE: Fetch a single task by its database ID.
@@ -101,6 +110,8 @@ class PostgresTaskRepository(_PgRepository):
             ip=task.allocated_ip,
             metadata=metadata,
         )
+        if self._saved_tasks is not None:
+            self._saved_tasks.append(task)
 
     # START_CONTRACT: update_status
     #   PURPOSE: Atomically update only the status field of a task.
@@ -210,6 +221,7 @@ class PostgresTaskRepository(_PgRepository):
         elif not isinstance(metadata, dict):
             metadata = {}
         ctx = TaskContext.from_metadata(metadata)
+        # Events are transient — always empty when loaded from DB.
         return Task(
             task_id=row["task_id"],
             label=row.get("label", ""),

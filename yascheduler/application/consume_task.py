@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 3.0.0
+# VERSION: 4.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and mark task DONE.
 #   SCOPE: consume_task async function.
-#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG
-#   LINKS: M-APPLICATION-UOW, M-SCHEDULER, M-CLOUD-PROVISIONER, M-SSH-GATEWAY
+#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-EVENTS
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SCHEDULER, M-CLOUD-PROVISIONER, M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -12,12 +12,13 @@
 #   _prepare_store_folder - Create local output directory from domain Task context
 #   _sftp_download_job - Open SFTP session, download files, clean remote dir
 #   _download_task_outputs - Download output files via SFTP with retry
-#   _finalize_task - Apply domain lifecycle, save via UoW, send webhook, notify cloud manager
+#   _finalize_task - Apply domain lifecycle, save via UoW, record events, notify cloud manager
+#   _record_finalization_event - Apply domain status and record corresponding event
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v3.0.0 - Replace RemoteMachine with SSHMachineGateway + ip-based operations.
-#   PREVIOUS_CHANGE: v2.0.0 - Rewrite to use UoW + domain Task instead of DB + TaskModel.
+#   LAST_CHANGE: v4.0.2 - Remove dead new_meta in _record_finalization_event (leftover from webhook removal).
+#   PREVIOUS_CHANGE: v4.0.1 - Extract _record_finalization_event helper to fix GRACE size limits.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -32,15 +33,16 @@ import backoff
 from asyncssh.sftp import SFTPError
 
 from yascheduler.adapters.ssh.exceptions import SFTPRetryExc
-from yascheduler.domain.model import Task, TaskStatus
+from yascheduler.domain.events import TaskCompleted, TaskFailed
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Callable
 
     from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
     from yascheduler.adapters.ssh.gateway import SSHMachineGateway
     from yascheduler.application.uow import AbstractUnitOfWork
     from yascheduler.config import EngineRepository
+    from yascheduler.domain.model import Task
 
 logger = logging.getLogger(__name__)
 
@@ -159,36 +161,20 @@ async def _download_task_outputs(
     return meta_add, sftp_errors
 
 
-# START_CONTRACT: _finalize_task
-#   PURPOSE: Apply domain lifecycle (complete/fail), save via UoW, send webhook, and notify cloud manager.
-#   INPUTS: {
-#     task: Task - Domain task to finalize,
-#     meta_add: list[tuple[str, Any]] - Additional metadata to merge,
-#     sftp_errors: list[tuple[str | None, Exception]] - SFTP download errors,
-#     store_folder: Path - Local directory where outputs were saved,
-#     uow_factory: Callable - Factory providing AbstractUnitOfWork,
-#     do_task_webhook: Callable - Callback to send webhook notification,
-#     clouds: CloudProvisionerImpl - Cloud provider manager
-#   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Applies domain lifecycle, saves task via UoW, sends webhook, marks task done in cloud manager.
-#   LINKS: M-APPLICATION-UOW, M-CLOUD-PROVISIONER
-# END_CONTRACT: _finalize_task
-async def _finalize_task(
+# START_CONTRACT: _record_finalization_event
+#   PURPOSE: Apply domain status (complete/fail) based on SFTP errors and record corresponding event.
+#   INPUTS: { task: Task, meta_add: list, sftp_errors: list, store_folder: Path }
+#   OUTPUTS: { Task - with status applied and event recorded }
+#   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
+# END_CONTRACT: _record_finalization_event
+def _record_finalization_event(
     task: Task,
     meta_add: list[tuple[str, Any]],
     sftp_errors: list[tuple[str | None, Exception]],
     store_folder: Path,
-    uow_factory: Callable[[], AbstractUnitOfWork],
-    do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
-    clouds: CloudProvisionerImpl,
-) -> None:
-    # START_BLOCK_SET_STATUS
+) -> Task:
     if sftp_errors:
         meta_add.append(("error", {p: str(e) for p, e in sftp_errors}))
-
-    new_meta = task.context.to_metadata()
-    new_meta.update(dict(meta_add))
 
     # Update task context so that save() persists download paths and extras
     meta_dict = dict(meta_add)
@@ -208,10 +194,53 @@ async def _finalize_task(
         error_msg = str({p: str(e) for p, e in sftp_errors})
         updated_context = replace(updated_context, error=error_msg)
         task = replace(task, context=updated_context).fail(error_msg)
+        task = task.record_event(
+            TaskFailed(
+                task_id=task.task_id,
+                webhook_url=task.context.webhook_url,
+                webhook_custom_params=task.context.webhook_custom_params,
+                reason=error_msg,
+            )
+        )
     else:
         task = replace(task, context=updated_context).complete()
+        task = task.record_event(
+            TaskCompleted(
+                task_id=task.task_id,
+                webhook_url=task.context.webhook_url,
+                webhook_custom_params=task.context.webhook_custom_params,
+                local_folder=str(store_folder),
+                has_errors=False,
+            )
+        )
 
-    await do_task_webhook(task.task_id, new_meta, TaskStatus.DONE)
+    return task
+
+
+# START_CONTRACT: _finalize_task
+#   PURPOSE: Apply domain lifecycle (complete/fail), save via UoW, record events, and notify cloud manager.
+#   INPUTS: {
+#     task: Task - Domain task to finalize,
+#     meta_add: list[tuple[str, Any]] - Additional metadata to merge,
+#     sftp_errors: list[tuple[str | None, Exception]] - SFTP download errors,
+#     store_folder: Path - Local directory where outputs were saved,
+#     uow_factory: Callable - Factory providing AbstractUnitOfWork,
+#     clouds: CloudProvisionerImpl - Cloud provider manager
+#   }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Applies domain lifecycle, saves task via UoW, records TaskCompleted or TaskFailed event, marks task done in cloud manager.
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-CLOUD-PROVISIONER
+# END_CONTRACT: _finalize_task
+async def _finalize_task(
+    task: Task,
+    meta_add: list[tuple[str, Any]],
+    sftp_errors: list[tuple[str | None, Exception]],
+    store_folder: Path,
+    uow_factory: Callable[[], AbstractUnitOfWork],
+    clouds: CloudProvisionerImpl,
+) -> None:
+    # START_BLOCK_SET_STATUS
+    task = _record_finalization_event(task, meta_add, sftp_errors, store_folder)
 
     async with uow_factory() as uow:
         await uow.tasks.save(task)
@@ -234,12 +263,11 @@ async def _finalize_task(
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable - Factory providing AbstractUnitOfWork,
 #     local_tasks_dir: Path - Local base directory for output storage,
-#     clouds: CloudProvisionerImpl - Cloud provider manager,
-#     do_task_webhook: Callable - Callback to send webhook notification
+#     clouds: CloudProvisionerImpl - Cloud provider manager
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Downloads files via SFTP, applies domain lifecycle, saves via UoW, sends webhook.
-#   LINKS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
+#   SIDE_EFFECTS: Downloads files via SFTP, applies domain lifecycle, saves via UoW, records events.
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
 # END_CONTRACT: consume_task
 async def consume_task(
     task_id: int,
@@ -249,7 +277,6 @@ async def consume_task(
     uow_factory: Callable[[], AbstractUnitOfWork],
     local_tasks_dir: Path,
     clouds: CloudProvisionerImpl,
-    do_task_webhook: Callable[[int, Mapping[str, Any], TaskStatus], Awaitable[None]],
 ) -> None:
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
@@ -263,6 +290,4 @@ async def consume_task(
     meta_add, sftp_errors = await _download_task_outputs(
         gateway, ip, output_files, store_folder, remote_folder, task
     )
-    await _finalize_task(
-        task, meta_add, sftp_errors, store_folder, uow_factory, do_task_webhook, clouds
-    )
+    await _finalize_task(task, meta_add, sftp_errors, store_folder, uow_factory, clouds)

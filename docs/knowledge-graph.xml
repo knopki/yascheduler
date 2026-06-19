@@ -181,9 +181,9 @@
          ═══════════════════════════════════════════════ -->
 
     <M-DOMAIN NAME="Domain layer entry point" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Domain layer entry point</purpose>
+      <purpose>Domain layer entry point — re-exports domain events.</purpose>
       <path>yascheduler/domain/__init__.py</path>
-      <depends>none</depends>
+      <depends>M-DOMAIN-EVENTS</depends>
       <annotations>
       </annotations>
     </M-DOMAIN>
@@ -212,14 +212,14 @@
     <M-DOMAIN-MODEL NAME="Domain entities" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Domain entities.</purpose>
       <path>yascheduler/domain/model.py</path>
-      <depends>M-DOMAIN-EXCEPTIONS</depends>
+      <depends>M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS</depends>
       <annotations>
         <class-TaskStatus PURPOSE="IntEnum: TO_DO=0, RUNNING=1, DONE=2" />
         <class-MachineState PURPOSE="Enum: FREE, BUSY" />
         <class-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
         <class-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs()" />
-        <class-Task PURPOSE="Task entity with allocate_to, mark_running, complete, fail, reject lifecycle" />
+        <class-Task PURPOSE="Task entity with lifecycle methods and event recording (record_event, pull_events, _events tuple)" />
         <class-Node PURPOSE="Persistent compute node record" />
         <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
       </annotations>
@@ -237,6 +237,21 @@
       </annotations>
     </M-DOMAIN-PORTS>
 
+    <M-DOMAIN-EVENTS NAME="Domain events" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Domain events for task lifecycle transitions.</purpose>
+      <path>yascheduler/domain/events.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-DomainEvent PURPOSE="Base frozen dataclass with task_id, webhook_url, webhook_custom_params" />
+        <class-TaskCreated PURPOSE="Task submitted event with engine_name" />
+        <class-TaskAllocated PURPOSE="Task assigned to node with node_ip and engine_name" />
+        <class-TaskCompleted PURPOSE="Task finished with local_folder and has_errors" />
+        <class-TaskFailed PURPOSE="Task failed with reason" />
+        <class-TaskAbandoned PURPOSE="Task abandoned on lost node with node_ip" />
+        <type-Event PURPOSE="Union type alias of all event types" />
+      </annotations>
+    </M-DOMAIN-EVENTS>
+
     <M-DOMAIN-SERVICES NAME="Domain services" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Domain services: cross-entity business logic.</purpose>
       <path>yascheduler/domain/services.py</path>
@@ -251,18 +266,27 @@
          ═══════════════════════════════════════════════ -->
 
     <M-APPLICATION-UOW NAME="Abstract Unit of Work Protocol" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Protocol defining transactional boundary: tasks, nodes, commit, rollback.</purpose>
+      <purpose>Protocol defining transactional boundary: tasks, nodes, commit, rollback, event dispatch.</purpose>
       <path>yascheduler/application/uow.py</path>
-      <depends>M-DOMAIN-PORTS</depends>
+      <depends>M-DOMAIN-PORTS, M-DOMAIN-EVENTS</depends>
       <annotations>
-        <class-AbstractUnitOfWork PURPOSE="Async context manager Protocol with task and node repositories" />
+        <class-AbstractUnitOfWork PURPOSE="Async context manager Protocol with task and node repositories and event dispatch" />
       </annotations>
     </M-APPLICATION-UOW>
 
+    <M-APPLICATION-MESSAGE-BUS NAME="Message bus" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>In-process message bus that dispatches domain events to registered handlers.</purpose>
+      <path>yascheduler/application/message_bus.py</path>
+      <depends>M-DOMAIN-EVENTS</depends>
+      <annotations>
+        <class-MessageBus PURPOSE="Event dispatcher with type-based handler registry" />
+      </annotations>
+    </M-APPLICATION-MESSAGE-BUS>
+
     <M-APPLICATION-SUBMIT NAME="Submit task use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Validate engine/inputs, create domain Task, persist via UoW.</purpose>
+      <purpose>Validate engine/inputs, create domain Task, persist via UoW, record TaskCreated event.</purpose>
       <path>yascheduler/application/submit_task.py</path>
-      <depends>M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-CONFIG, M-APPLICATION-UOW</depends>
+      <depends>M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-CONFIG, M-APPLICATION-UOW, M-DOMAIN-EVENTS</depends>
       <annotations>
         <fn-submit_task PURPOSE="Create a new TO_DO task after validating engine and inputs" />
       </annotations>
@@ -271,7 +295,7 @@
     <M-APPLICATION-ALLOCATE NAME="Allocate task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Match a TO_DO task to a free machine or request cloud provisioning.</purpose>
       <path>yascheduler/application/allocate_task.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-EVENTS</depends>
       <annotations>
         <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or request cloud node" />
         <fn-_validate_engine PURPOSE="Validate task engine is configured and supported" />
@@ -284,13 +308,13 @@
     <M-APPLICATION-CONSUME NAME="Consume task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Download outputs from remote machine and mark task DONE.</purpose>
       <path>yascheduler/application/consume_task.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-EVENTS</depends>
       <annotations>
         <fn-consume_task PURPOSE="Download task outputs and mark DONE or ERROR" />
         <fn-_prepare_store_folder PURPOSE="Create local output directory from domain Task context" />
         <fn-_sftp_download_job PURPOSE="Open SFTP session, download files, clean remote dir" />
         <fn-_download_task_outputs PURPOSE="Download output files via SFTP with retry" />
-        <fn-_finalize_task PURPOSE="Apply domain lifecycle, save via UoW, send webhook, notify cloud manager" />
+        <fn-_finalize_task PURPOSE="Apply domain lifecycle, save via UoW, record domain events (TaskCompleted/TaskFailed), notify cloud manager" />
       </annotations>
     </M-APPLICATION-CONSUME>
 
@@ -307,7 +331,7 @@
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Manages producer-consumer loops calling use cases and SSH helpers.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-WEBHOOK, M-SSH-GATEWAY, M-DOMAIN-MODEL</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-DOMAIN-EVENTS</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
@@ -316,9 +340,9 @@
     </M-APPLICATION-ORCHESTRATOR>
 
     <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Composition root with factories per entry point: daemon, CLI, AiiDA.</purpose>
+      <purpose>Composition root with factories per entry point: daemon, CLI, AiiDA. Wires MessageBus with webhook handlers.</purpose>
       <path>yascheduler/di.py</path>
-      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
+      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit and query" />
         <fn-make_daemon PURPOSE="Async factory creating Orchestrator with UoW factory" />
@@ -371,11 +395,11 @@
     </M-PERSISTENCE-POSTGRES>
 
     <M-PERSISTENCE-UOW NAME="PostgreSQL Unit of Work" TYPE="DATA_LAYER" STATUS="implemented">
-      <purpose>PostgresUnitOfWork managing shared pg8000 Connection across repositories with commit/rollback.</purpose>
+      <purpose>PostgresUnitOfWork managing shared pg8000 Connection across repositories with commit/rollback and event dispatch.</purpose>
       <path>yascheduler/adapters/persistence/postgres_uow.py</path>
-      <depends>M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-PERSISTENCE-EXCEPTIONS</depends>
+      <depends>M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN-EVENTS</depends>
       <annotations>
-        <class-PostgresUnitOfWork PURPOSE="Async context manager for transactional boundaries with shared connection" />
+        <class-PostgresUnitOfWork PURPOSE="Async context manager for transactional boundaries with shared connection and event dispatch" />
         <fn-_require_conn PURPOSE="Guard returning Connection or raising UnitOfWorkNotInitializedError" />
       </annotations>
     </M-PERSISTENCE-UOW>
@@ -581,6 +605,24 @@
       </annotations>
     </M-CLOUD-SSH-KEYS>
 
+    <M-NOTIFIER NAME="Notifier Package" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Notification adapter package providing webhook and other notification mechanisms.</purpose>
+      <path>yascheduler/adapters/notifier/__init__.py</path>
+      <depends>none</depends>
+      <annotations>
+      </annotations>
+    </M-NOTIFIER>
+
+    <M-NOTIFIER-WEBHOOK NAME="Webhook notifier" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Webhook event handler that sends HTTP notifications for task lifecycle events.</purpose>
+      <path>yascheduler/adapters/notifier/webhook.py</path>
+      <depends>M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-WEBHOOK</depends>
+      <annotations>
+        <fn-webhook_handler PURPOSE="Async handler that sends webhooks for task lifecycle events" />
+        <fn-_send_webhook PURPOSE="Send webhook with fibonacci backoff retry on transient failures" />
+      </annotations>
+    </M-NOTIFIER-WEBHOOK>
+
 
     <!-- ═══════════════════════════════════════════════
           SSH Adapter
@@ -738,6 +780,7 @@
 
 
     <!-- Domain layer internal links -->
+    <CrossLink from="M-DOMAIN" to="M-DOMAIN-EVENTS" relation="re-exports event types from domain package" />
     <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EXCEPTIONS" relation="raises domain exceptions from entity methods" />
     <CrossLink from="M-DOMAIN-PORTS" to="M-DOMAIN-MODEL" relation="uses domain entities in port signatures" />
     <CrossLink from="M-DOMAIN-SERVICES" to="M-DOMAIN-MODEL" relation="operates on Task, Engine, ConnectedMachine entities" />
@@ -757,7 +800,18 @@
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-CONSUME" relation="calls consume_task use case in consumer loop" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-DEALLOCATE" relation="calls deallocate_node per node in producer-consumer loop with deallocate_limit concurrency" />
     <CrossLink from="M-DI" to="M-APPLICATION-ORCHESTRATOR" relation="creates Orchestrator with wired dependencies" />
-    <CrossLink from="M-DI" to="M-PERSISTENCE-UOW" relation="creates UoW factory from PostgresUnitOfWork" />
+    <CrossLink from="M-DI" to="M-PERSISTENCE-UOW" relation="creates UoW factory from PostgresUnitOfWork with MessageBus" />
+    <CrossLink from="M-DI" to="M-APPLICATION-MESSAGE-BUS" relation="creates MessageBus and registers webhook handlers" />
+    <CrossLink from="M-DI" to="M-NOTIFIER-WEBHOOK" relation="registers webhook_handler for all event types" />
+    <CrossLink from="M-PERSISTENCE-UOW" to="M-APPLICATION-MESSAGE-BUS" relation="dispatches events via bus after commit" />
+    <CrossLink from="M-PERSISTENCE-UOW" to="M-DOMAIN-EVENTS" relation="collects events from saved aggregates via pull_events" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-EVENTS" relation="records TaskAbandoned event on lost nodes" />
+    <CrossLink from="M-APPLICATION-SUBMIT" to="M-DOMAIN-EVENTS" relation="records TaskCreated event on submission" />
+    <CrossLink from="M-APPLICATION-ALLOCATE" to="M-DOMAIN-EVENTS" relation="records TaskAllocated and TaskFailed events" />
+    <CrossLink from="M-APPLICATION-CONSUME" to="M-DOMAIN-EVENTS" relation="records TaskCompleted and TaskFailed events" />
+    <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EVENTS" relation="Task aggregate stores events and provides record_event/pull_events" />
+    <CrossLink from="M-NOTIFIER-WEBHOOK" to="M-DOMAIN-EVENTS" relation="handles domain events for webhook delivery" />
+    <CrossLink from="M-NOTIFIER-WEBHOOK" to="M-WEBHOOK" relation="uses WebhookPayload for HTTP request serialization" />
     <CrossLink from="M-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
@@ -765,7 +819,6 @@
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
     <CrossLink from="M-SCHEDULER" to="M-WEBHOOK" relation="re-exports WebhookPayload for backward compatibility" />
-    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-WEBHOOK" relation="uses WebhookPayload for webhook serialization" />
 
     <!-- Cloud adapter cross-links -->
     <CrossLink from="M-CLOUD-PROVISIONER" to="M-CLOUD-SSH-KEYS" relation="delegates SSH key load/generate to get_or_create_ssh_key" />

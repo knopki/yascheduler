@@ -1,9 +1,9 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 3.0.0
+# VERSION: 4.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, webhook, and SSH helpers.
-#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG, M-QUEUE, M-TIME
+#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers.
+#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-DOMAIN-EVENTS
 #   LINKS: M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
 # END_MODULE_CONTRACT
 #
@@ -14,29 +14,28 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v3.0.0 - Replace RemoteMachineRepository/RemoteMachine with SSHMachineGateway/ConnectedMachine.
-#   PREVIOUS_CHANGE: v2.0.0 - Rewrite to use uow_factory + domain types instead of DB + legacy types.
+#   LAST_CHANGE: v4.0.0 - Remove _do_task_webhook; record TaskAbandoned event instead of direct webhook call.
+#   PREVIOUS_CHANGE: v3.0.0 - Replace RemoteMachineRepository/RemoteMachine with SSHMachineGateway/ConnectedMachine.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import logging
+import logging  # noqa: TC003 — used at runtime for log calls
 import time
-from asyncio.locks import Event, Semaphore
+from asyncio.locks import Event
 from collections import Counter
-from dataclasses import asdict
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path, PurePath, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import aiohttp
 import asyncssh
 import backoff
 
 from yascheduler.adapters.ssh.exceptions import AllSSHRetryExc
+from yascheduler.domain.events import TaskAbandoned
 from yascheduler.domain.model import (
     ConnectedMachine,
     MachineState,
@@ -46,15 +45,15 @@ from yascheduler.domain.model import (
 )
 from yascheduler.queue import UMessage, UniqueQueue
 from yascheduler.time import asleep_until
-from yascheduler.webhook import WebhookPayload
 
 from .allocate_task import allocate_task
 from .consume_task import consume_task
 from .deallocate_nodes import deallocate_node, deallocate_nodes
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Callable, Sequence
 
+    import aiohttp
     from asyncssh.sftp import SFTPClient
 
     from yascheduler.adapters.cloud.manager import CloudProvisionerImpl
@@ -115,7 +114,7 @@ async def _write_remote_file(
 #   PURPOSE: Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases.
 #   INPUTS: { config, uow_factory, clouds, gateway, engines, log, config_clouds, local_tasks_dir }
 #   OUTPUTS: { Orchestrator instance }
-#   SIDE_EFFECTS: Creates queues, HTTP session, cancellation event.
+#   SIDE_EFFECTS: Creates queues, cancellation event.
 #   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
 # END_CONTRACT: Orchestrator
 class Orchestrator:
@@ -123,7 +122,7 @@ class Orchestrator:
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
     #   INPUTS: { config: Config, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisionerImpl, gateway: SSHMachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Creates UniqueQueues, Semaphore. HTTP session deferred to start().
+    #   SIDE_EFFECTS: Creates UniqueQueues.
     #   LINKS: M-CONFIG, M-APPLICATION-UOW, M-QUEUE, M-SSH-GATEWAY
     # END_CONTRACT: Orchestrator.__init__
     def __init__(
@@ -136,6 +135,7 @@ class Orchestrator:
         log: logging.Logger,
         config_clouds: Sequence[ConfigCloud],
         local_tasks_dir: Path,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         self._config = config
         self._uow_factory = uow_factory
@@ -145,6 +145,7 @@ class Orchestrator:
         self._log = log
         self._config_clouds = config_clouds
         self._local_tasks_dir = local_tasks_dir
+        self._http_session = http_session
 
         self._bg_jobs: set[asyncio.Task[None]] = set()
         self._cancellation_event = Event()
@@ -153,7 +154,6 @@ class Orchestrator:
         self._occupancy_started: set[str] = set()
 
         lcfg = config.local
-        self._webhook_sem = Semaphore(lcfg.webhook_reqs_limit)
         self._conn_machine_q: UniqueQueue[str, Node] = UniqueQueue(
             "conn_machine", maxsize=lcfg.conn_machine_pending
         )
@@ -166,7 +166,6 @@ class Orchestrator:
         self._deallocate_q: UniqueQueue[str, str] = UniqueQueue(
             "deallocate", maxsize=lcfg.deallocate_pending
         )
-        self._http: aiohttp.ClientSession | None = None
 
     # ---- SSH helpers ----
 
@@ -306,47 +305,6 @@ class Orchestrator:
 
         return True
 
-    # START_CONTRACT: Orchestrator._do_task_webhook
-    #   PURPOSE: Send webhook notification for task status change.
-    #   INPUTS: { task_id, metadata, status: TaskStatus }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Sends HTTP POST to webhook_url.
-    #   LINKS:
-    # END_CONTRACT: Orchestrator._do_task_webhook
-    async def _do_task_webhook(
-        self,
-        task_id: int,
-        metadata: Mapping[str, Any],
-        status: TaskStatus,
-    ) -> None:
-        url = metadata.get("webhook_url")
-        if not url or self._http is None:
-            return
-        retry = backoff.on_exception(backoff.fibo, aiohttp.ClientError, max_time=60)
-        async with self._webhook_sem:
-            self._log.info("Executing webhook of type %s to %s", status.value, url)
-            payload = WebhookPayload(
-                task_id, status.value, metadata.get("webhook_custom_params", {})
-            )
-            try:
-                async with retry(self._http.post)(url, data=asdict(payload)) as resp:  # type: ignore[arg-type]
-                    if resp.ok:
-                        return
-                    self._log.warn(
-                        "Webhook for task_id=%s bad response: %s %s",
-                        task_id,
-                        resp.status,
-                        resp.reason,
-                    )
-                    if self._log.isEnabledFor(logging.DEBUG):
-                        self._log.debug(
-                            "[Orchestrator][_do_task_webhook] task_id=%s response=%s",
-                            task_id,
-                            (await resp.text("utf-8")),
-                        )
-            except Exception as err:
-                self._log.error("Webhook for task_id=%s failed: %s", task_id, err)
-
     # ---- Stats ----
 
     # START_CONTRACT: Orchestrator._print_stats
@@ -460,7 +418,6 @@ class Orchestrator:
             gateway=self._gateway,
             clouds=self._clouds,
             start_task_on_machine=self._start_task_on_machine,
-            do_task_webhook=self._do_task_webhook,
         )
         # END_BLOCK_ALLOCATE
 
@@ -472,6 +429,13 @@ class Orchestrator:
         for task in tasks:
             yield UMessage(task.task_id, task)
 
+    # START_CONTRACT: Orchestrator._task_consumer_consumer
+    #   PURPOSE: Check task machine state, record TaskAbandoned for lost nodes, or consume completed tasks.
+    #   INPUTS: { msg: UMessage[int, Task], machine_not_found: Counter }
+    #   OUTPUTS: { None }
+    #   SIDE_EFFECTS: Records TaskAbandoned event for lost nodes; calls consume_task use case for free machines.
+    #   LINKS: M-APPLICATION-CONSUME, M-DOMAIN-EVENTS
+    # END_CONTRACT: Orchestrator._task_consumer_consumer
     async def _task_consumer_consumer(
         self, msg: UMessage[int, Task], machine_not_found: Counter
     ) -> None:
@@ -480,16 +444,27 @@ class Orchestrator:
         ip = task.allocated_ip or ""
         state = self._gateway.get_machine_state(ip)
         if state is None:
-            self._log.warning("Task %s - machine %s is gone", task_id, ip)
+            # START_BLOCK_MACHINE_GONE
+            self._log.warning(
+                "[Orchestrator][_task_consumer_consumer][MACHINE_GONE] task_id=%s ip=%s",
+                task_id,
+                ip,
+            )
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:
                 task = task.fail("node is gone")
+                task = task.record_event(
+                    TaskAbandoned(
+                        task_id=task.task_id,
+                        webhook_url=task.context.webhook_url,
+                        webhook_custom_params=task.context.webhook_custom_params,
+                        node_ip=ip,
+                    )
+                )
                 async with self._uow_factory() as uow:
                     await uow.tasks.save(task)
                     await uow.commit()
-                await self._do_task_webhook(
-                    task_id, task.context.to_metadata(), TaskStatus.DONE
-                )
+            # END_BLOCK_MACHINE_GONE
             return
 
         machine = state.machine
@@ -517,7 +492,6 @@ class Orchestrator:
                 uow_factory=self._uow_factory,
                 local_tasks_dir=self._local_tasks_dir,
                 clouds=self._clouds,
-                do_task_webhook=self._do_task_webhook,
             )
             self._occupancy_started.discard(ip)
         # END_BLOCK_CONSUME
@@ -664,7 +638,7 @@ class Orchestrator:
     #   PURPOSE: Start all producer-consumer loops for the daemon.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Creates and owns aiohttp session (closed in finally block), starts background tasks, connects machines, runs producer-consumer loops with config-limited concurrency.
+    #   SIDE_EFFECTS: Starts background tasks, connects machines, runs producer-consumer loops with config-limited concurrency.
     #   LINKS: M-QUEUE, M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator.start
     async def start(self) -> None:
@@ -673,59 +647,53 @@ class Orchestrator:
             ", ".join(self._engines.keys()),
         )
 
-        try:
-            self._http = aiohttp.ClientSession()
-            self._bg_jobs.add(asyncio.create_task(self._print_stats()))
+        self._bg_jobs.add(asyncio.create_task(self._print_stats()))
 
-            conn_machine_co = self._create_producer_consumers(
-                queue=self._conn_machine_q,
-                producer=self._connect_machine_producer,
-                consumer=self._connect_machine_consumer,
-                workers_num=self._config.local.conn_machine_limit,
-            )
-            self._bg_jobs.add(asyncio.create_task(conn_machine_co))
+        conn_machine_co = self._create_producer_consumers(
+            queue=self._conn_machine_q,
+            producer=self._connect_machine_producer,
+            consumer=self._connect_machine_consumer,
+            workers_num=self._config.local.conn_machine_limit,
+        )
+        self._bg_jobs.add(asyncio.create_task(conn_machine_co))
 
-            await self._await_first_machine()
+        await self._await_first_machine()
 
-            allocate_co = self._create_producer_consumers(
-                queue=self._allocate_q,
-                producer=self._allocator_producer,
-                consumer=self._allocator_consumer,
-                workers_num=self._config.local.allocate_limit,
-            )
-            self._bg_jobs.add(asyncio.create_task(allocate_co))
+        allocate_co = self._create_producer_consumers(
+            queue=self._allocate_q,
+            producer=self._allocator_producer,
+            consumer=self._allocator_consumer,
+            workers_num=self._config.local.allocate_limit,
+        )
+        self._bg_jobs.add(asyncio.create_task(allocate_co))
 
-            machine_not_found: Counter[str] = Counter()
-            consume_co = self._create_producer_consumers(
-                queue=self._consume_q,
-                producer=self._task_consumer_producer,
-                consumer=partial(
-                    self._task_consumer_consumer,
-                    machine_not_found=machine_not_found,
-                ),
-                workers_num=self._config.local.consume_limit,
-            )
-            self._bg_jobs.add(asyncio.create_task(consume_co))
+        machine_not_found: Counter[str] = Counter()
+        consume_co = self._create_producer_consumers(
+            queue=self._consume_q,
+            producer=self._task_consumer_producer,
+            consumer=partial(
+                self._task_consumer_consumer,
+                machine_not_found=machine_not_found,
+            ),
+            workers_num=self._config.local.consume_limit,
+        )
+        self._bg_jobs.add(asyncio.create_task(consume_co))
 
-            deallocate_co = self._create_producer_consumers(
-                queue=self._deallocate_q,
-                producer=self._deallocator_producer,
-                consumer=self._deallocator_consumer,
-                workers_num=self._config.local.deallocate_limit,
-            )
-            self._bg_jobs.add(asyncio.create_task(deallocate_co))
+        deallocate_co = self._create_producer_consumers(
+            queue=self._deallocate_q,
+            producer=self._deallocator_producer,
+            consumer=self._deallocator_consumer,
+            workers_num=self._config.local.deallocate_limit,
+        )
+        self._bg_jobs.add(asyncio.create_task(deallocate_co))
 
-            await self._shutdown_barrier()
-        finally:
-            if self._http is not None:
-                await self._http.close()
-                self._http = None
+        await self._shutdown_barrier()
 
     # START_CONTRACT: Orchestrator.stop
     #   PURPOSE: Signal the daemon to stop and clean up non-session resources.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Cancels jobs, disconnects machines, stops clouds. Session is closed by start() when barrier lifts.
+    #   SIDE_EFFECTS: Cancels jobs, disconnects machines, stops clouds.
     #   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY
     # END_CONTRACT: Orchestrator.stop
     async def stop(self) -> None:
@@ -741,3 +709,5 @@ class Orchestrator:
 
         await self._clouds.stop()
         await self._gateway.disconnect_all()
+        if self._http_session is not None:
+            await self._http_session.close()

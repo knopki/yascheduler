@@ -1,37 +1,50 @@
 # FILE: yascheduler/di.py
-# VERSION: 3.0.0
+# VERSION: 4.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
 #   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLIENT, M-CLI-COMMANDS
+#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   make_daemon - Async factory creating Orchestrator with all daemon dependencies
+#   make_daemon - Async factory creating Orchestrator with all daemon dependencies including MessageBus
 #   make_cli_deps - Sync factory creating lightweight CLIDeps for CLI commands
 #   make_aiida - Stub for future AiiDA integration
+#   _setup_domain_events - Create MessageBus, HTTP session and register webhook handlers
 #   CLIDeps - Lightweight dependency container for CLI submit and query operations
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v3.0.0 - Remove RemoteMachineRepository; wire SSHMachineGateway directly to Orchestrator.
-#   PREVIOUS_CHANGE: v2.0.0 - Pass uow_factory to Orchestrator instead of DB; keep DB for schema migration and CloudProvisionerImpl only.
+#   LAST_CHANGE: v4.0.1 - Extract _setup_domain_events helper; remove webhook handler registration from CLI mode.
+#   PREVIOUS_CHANGE: v4.0.0 - Wire MessageBus with webhook handlers; pass bus to PostgresUnitOfWork.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
+
+import aiohttp
 
 from .adapters.cloud.adapters import _resolve_adapter
 from .adapters.cloud.manager import CloudProvisionerImpl
+from .adapters.notifier.webhook import webhook_handler
 from .adapters.persistence.postgres_uow import PostgresUnitOfWork
 from .adapters.ssh.gateway import SSHMachineGateway
+from .application.message_bus import MessageBus
 from .application.orchestrator import Orchestrator
 from .application.submit_task import submit_task
 from .db import DB
+from .domain.events import (
+    TaskAbandoned,
+    TaskAllocated,
+    TaskCompleted,
+    TaskCreated,
+    TaskFailed,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -90,6 +103,27 @@ class CLIDeps:
             return await uow.tasks.get(task_id)
 
 
+# START_CONTRACT: _setup_domain_events
+#   PURPOSE: Create MessageBus, HTTP client session, and register webhook handlers for all event types.
+#   INPUTS: { None }
+#   OUTPUTS: { tuple[MessageBus, aiohttp.ClientSession] - (bus, http_session) }
+#   SIDE_EFFECTS: Creates HTTP session; registers webhook_handler for each event type.
+#   LINKS: M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS
+# END_CONTRACT: _setup_domain_events
+def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
+    bus = MessageBus()
+    http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+    for event_type in (
+        TaskCreated,
+        TaskAllocated,
+        TaskCompleted,
+        TaskFailed,
+        TaskAbandoned,
+    ):
+        bus.register(event_type, partial(webhook_handler, http=http))
+    return bus, http
+
+
 # START_CONTRACT: make_daemon
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
 #   INPUTS: { config: Config, log: Optional[Logger], db: Optional[DB], clouds: Optional[CloudProvisionerImpl] }
@@ -110,49 +144,56 @@ async def make_daemon(
     if db is None:
         db = await DB.create(config.db)
 
-    def uow_factory() -> AbstractUnitOfWork:
-        return PostgresUnitOfWork(config.db)
+    bus, http = _setup_domain_events()
+    try:
 
-    if clouds is None:
-        _adapters: dict[str, CloudAdapter] = {}
-        _configs: dict[str, ConfigCloud] = {}
-        for cfg in config.clouds:
-            if cfg.max_nodes <= 0:
-                log.warning(
-                    "Cloud %s skipped: max_nodes=%d <= 0",
-                    cfg.prefix,
-                    cfg.max_nodes,
-                )
-                continue
-            adapter = _resolve_adapter(cfg, log)
-            if adapter is None:
-                continue
-            _adapters[adapter.name] = adapter
-            _configs[adapter.name] = cfg
+        def uow_factory() -> AbstractUnitOfWork:
+            return PostgresUnitOfWork(config.db, bus)
 
-        log.info("Active cloud APIs: %s", ", ".join(_adapters.keys()) or "-")
-        clouds = CloudProvisionerImpl(
-            adapters=_adapters,
-            configs=_configs,
-            node_repo=db._node_repo,
-            machine_gateway=SSHMachineGateway(log=log),
-            local_config=config.local,
-            remote_config=config.remote,
+        if clouds is None:
+            _adapters: dict[str, CloudAdapter] = {}
+            _configs: dict[str, ConfigCloud] = {}
+            for cfg in config.clouds:
+                if cfg.max_nodes <= 0:
+                    log.warning(
+                        "Cloud %s skipped: max_nodes=%d <= 0",
+                        cfg.prefix,
+                        cfg.max_nodes,
+                    )
+                    continue
+                adapter = _resolve_adapter(cfg, log)
+                if adapter is None:
+                    continue
+                _adapters[adapter.name] = adapter
+                _configs[adapter.name] = cfg
+
+            log.info("Active cloud APIs: %s", ", ".join(_adapters.keys()) or "-")
+            clouds = CloudProvisionerImpl(
+                adapters=_adapters,
+                configs=_configs,
+                node_repo=db._node_repo,
+                machine_gateway=SSHMachineGateway(log=log),
+                local_config=config.local,
+                remote_config=config.remote,
+                engines=config.engines,
+                log=log,
+            )
+        gateway = SSHMachineGateway(log=log)
+
+        return Orchestrator(
+            config=config,
+            uow_factory=uow_factory,
+            clouds=clouds,
+            gateway=gateway,
             engines=config.engines,
             log=log,
+            config_clouds=config.clouds,
+            local_tasks_dir=config.local.tasks_dir,
+            http_session=http,
         )
-    gateway = SSHMachineGateway(log=log)
-
-    return Orchestrator(
-        config=config,
-        uow_factory=uow_factory,
-        clouds=clouds,
-        gateway=gateway,
-        engines=config.engines,
-        log=log,
-        config_clouds=config.clouds,
-        local_tasks_dir=config.local.tasks_dir,
-    )
+    except Exception:
+        await http.close()
+        raise
 
 
 # START_CONTRACT: make_cli_deps
@@ -164,8 +205,10 @@ async def make_daemon(
 # END_CONTRACT: make_cli_deps
 def make_cli_deps(config: Config) -> CLIDeps:
 
+    bus = MessageBus()
+
     def _uow_factory() -> AbstractUnitOfWork:
-        return PostgresUnitOfWork(config.db)
+        return PostgresUnitOfWork(config.db, bus)
 
     return CLIDeps(
         engines=config.engines,

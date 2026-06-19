@@ -34,6 +34,13 @@ from yascheduler.config import (
     EngineRepository,
 )
 from yascheduler.di import CLIDeps, make_aiida, make_cli_deps, make_daemon
+from yascheduler.domain.events import (
+    TaskAbandoned,
+    TaskAllocated,
+    TaskCompleted,
+    TaskCreated,
+    TaskFailed,
+)
 
 # =============================================================================
 # Helpers
@@ -135,25 +142,49 @@ class TestCLIDeps:
 class TestMakeCliDeps:
     """make_cli_deps factory for lightweight CLI dependencies."""
 
-    def test_returns_cli_deps_with_correct_fields(self) -> None:
+    @pytest.mark.asyncio
+    async def test_returns_cli_deps_with_correct_fields(self) -> None:
         """make_cli_deps returns CLIDeps with config-derived engines and remote_tasks_dir."""
         config = create_mock_config()
 
-        deps = make_cli_deps(config)
+        with patch("yascheduler.di.aiohttp.ClientSession"):
+            deps = make_cli_deps(config)
 
         assert isinstance(deps, CLIDeps)
         assert deps.engines is config.engines
         assert deps.remote_tasks_dir is config.remote.tasks_dir
 
-    def test_uow_factory_creates_postgres_unit_of_work(self) -> None:
-        """uow_factory callable returns a PostgresUnitOfWork initialized with config.db."""
+    @pytest.mark.asyncio
+    async def test_uow_factory_creates_postgres_unit_of_work(self) -> None:
+        """uow_factory callable returns a PostgresUnitOfWork initialized with config.db and bus."""
         config = create_mock_config()
 
-        deps = make_cli_deps(config)
+        with patch("yascheduler.di.aiohttp.ClientSession"):
+            deps = make_cli_deps(config)
         uow = cast("PostgresUnitOfWork", deps.uow_factory())
 
         assert isinstance(uow, PostgresUnitOfWork)
         assert uow._config is config.db
+
+    @pytest.mark.asyncio
+    async def test_no_webhook_handlers_in_cli_mode(self) -> None:
+        """CLI mode registers no webhook handlers — bus has empty handler registry."""
+        config = create_mock_config()
+
+        with patch("yascheduler.di.aiohttp.ClientSession"):
+            deps = make_cli_deps(config)
+
+        # Access the bus via the UoW factory to verify no handlers registered
+        uow = cast("PostgresUnitOfWork", deps.uow_factory())
+        bus = uow._bus
+        for event_type in (
+            TaskCreated,
+            TaskAllocated,
+            TaskCompleted,
+            TaskFailed,
+            TaskAbandoned,
+        ):
+            assert event_type not in bus._handlers
 
 
 class TestMakeAiida:

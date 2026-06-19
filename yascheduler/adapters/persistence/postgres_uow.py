@@ -1,25 +1,26 @@
 # FILE: yascheduler/adapters/persistence/postgres_uow.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit of Work implementation for PostgreSQL using pg8000.
-#   SCOPE: PostgresUnitOfWork managing transactions, repositories, and connection lifecycle.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-CONFIG-DB
-#   LINKS: M-PERSISTENCE-POSTGRES, M-CONFIG-DB
+#   SCOPE: PostgresUnitOfWork managing transactions, repositories, event dispatch, and connection lifecycle.
+#   DEPENDS: M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN-EVENTS
+#   LINKS: M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-APPLICATION-MESSAGE-BUS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   PostgresUnitOfWork - async context manager providing tasks and node repositories
+#   PostgresUnitOfWork - async context manager providing tasks and node repositories with event dispatch
 #   _require_conn - guard returning Connection or raising UnitOfWorkNotInitializedError
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Replace RuntimeError with UnitOfWorkNotInitializedError in tasks, nodes, and _require_conn.
-#   PREVIOUS_CHANGE: v1.2.0 - Convert tasks/nodes to properties for structural Protocol compatibility.
+#   LAST_CHANGE: v1.4.1 - Fix collect_events in-place mutation to preserve shared list reference with repo.
+#   PREVIOUS_CHANGE: v1.4.0 - Add MessageBus dispatch, collect_events, publish_events; track saved tasks for event collection.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, TypeVar
 
@@ -32,9 +33,14 @@ if TYPE_CHECKING:
     import types
     from collections.abc import Callable
 
+    from yascheduler.application.message_bus import MessageBus
     from yascheduler.config import ConfigDb
+    from yascheduler.domain.events import DomainEvent
+    from yascheduler.domain.model import Task
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 # START_CONTRACT: PostgresUnitOfWork
@@ -55,8 +61,10 @@ class PostgresUnitOfWork:
     #   SIDE_EFFECTS: Creates a ThreadPoolExecutor(max_workers=1).
     #   LINKS: ThreadPoolExecutor, ConfigDb
     # END_CONTRACT: PostgresUnitOfWork.__init__
-    def __init__(self, config: ConfigDb) -> None:
+    def __init__(self, config: ConfigDb, bus: MessageBus) -> None:
         self._config = config
+        self._bus = bus
+        self._saved_tasks: list[Task] = []
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._conn: Connection | None = None
         self._tasks: PostgresTaskRepository | None = None
@@ -87,13 +95,16 @@ class PostgresUnitOfWork:
     # END_CONTRACT: PostgresUnitOfWork.__aenter__
     async def __aenter__(self) -> PostgresUnitOfWork:
         """Open connection, begin transaction, wire repositories."""
+        self._saved_tasks = []
         loop = asyncio.get_running_loop()
         try:
             self._conn = await loop.run_in_executor(
                 self._executor, self._create_connection
             )
             await loop.run_in_executor(self._executor, lambda: self._conn.run("BEGIN"))
-            self._tasks = PostgresTaskRepository(self._conn, self._executor)
+            self._tasks = PostgresTaskRepository(
+                self._conn, self._executor, self._saved_tasks
+            )
             self._nodes = PostgresNodeRepository(self._conn, self._executor)
         except BaseException:
             if self._conn is not None:
@@ -134,28 +145,62 @@ class PostgresUnitOfWork:
         return False
 
     # START_CONTRACT: PostgresUnitOfWork.commit
-    #   PURPOSE: Commit the current transaction synchronously via the thread pool.
+    #   PURPOSE: Commit the current transaction and dispatch collected events.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Commits the pg8000 connection transaction.
-    #   LINKS: _require_conn, _run_sync
+    #   SIDE_EFFECTS: Commits the pg8000 connection transaction; dispatches domain events via MessageBus.
+    #   LINKS: _require_conn, _run_sync, publish_events
     # END_CONTRACT: PostgresUnitOfWork.commit
     async def commit(self) -> None:
-        """Commit the transaction."""
+        """Commit the transaction and dispatch collected events."""
         conn = self._require_conn()
         await self._run_sync(lambda: conn.run("COMMIT"))
+        try:
+            await self.publish_events()
+        except Exception:
+            logger.exception("[PostgresUoW][commit] Event dispatch failed after commit")
 
     # START_CONTRACT: PostgresUnitOfWork.rollback
-    #   PURPOSE: Roll back the current transaction synchronously via the thread pool.
+    #   PURPOSE: Roll back the current transaction and discard collected events.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Rolls back the pg8000 connection transaction.
+    #   SIDE_EFFECTS: Rolls back the pg8000 connection transaction; clears saved tasks.
     #   LINKS: _require_conn, _run_sync
     # END_CONTRACT: PostgresUnitOfWork.rollback
     async def rollback(self) -> None:
-        """Rollback the transaction."""
+        """Rollback the transaction and discard events."""
         conn = self._require_conn()
         await self._run_sync(lambda: conn.run("ROLLBACK"))
+        self._saved_tasks.clear()
+
+    # START_CONTRACT: PostgresUnitOfWork.collect_events
+    #   PURPOSE: Pull events from all saved aggregates, returning collected events and updating saved tasks.
+    #   INPUTS: { None }
+    #   OUTPUTS: { list[DomainEvent] - flat list of all collected events }
+    #   SIDE_EFFECTS: Replaces _saved_tasks with clean (event-free) task instances.
+    #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
+    # END_CONTRACT: PostgresUnitOfWork.collect_events
+    async def collect_events(self) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        saved = list(self._saved_tasks)
+        self._saved_tasks.clear()
+        for task in saved:
+            clean_task, task_events = task.pull_events()
+            events.extend(task_events)
+            self._saved_tasks.append(clean_task)
+        return events
+
+    # START_CONTRACT: PostgresUnitOfWork.publish_events
+    #   PURPOSE: Collect events and dispatch them via the message bus.
+    #   INPUTS: { None }
+    #   OUTPUTS: { None }
+    #   SIDE_EFFECTS: Dispatches events; clears _saved_tasks.
+    #   LINKS: M-APPLICATION-MESSAGE-BUS
+    # END_CONTRACT: PostgresUnitOfWork.publish_events
+    async def publish_events(self) -> None:
+        events = await self.collect_events()
+        await self._bus.dispatch(events)
+        self._saved_tasks.clear()
 
     # START_CONTRACT: _require_conn
     #   PURPOSE: Return the active connection or raise UnitOfWorkNotInitializedError if UoW was not entered.
