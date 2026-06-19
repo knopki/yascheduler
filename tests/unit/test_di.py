@@ -16,9 +16,11 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Create unit tests for di.py
+#   LAST_CHANGE: v1.0.1 - Stub aiohttp.ClientSession in TestMakeDaemon to prevent leaked real sessions (Orchestrator mocked, so close() never runs).
+#   PREVIOUS_CHANGE: v1.0.0 - Create unit tests for di.py
 # END_CHANGE_SUMMARY
 
+from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -203,6 +205,19 @@ class TestMakeAiida:
 
 class TestMakeDaemon:
     """make_daemon async factory — creates full daemon dependency graph."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_http_session(self) -> Iterator[MagicMock]:
+        """Stub aiohttp.ClientSession so no real session is created.
+
+        make_daemon hands the session to Orchestrator, which closes it on
+        stop(). These tests mock Orchestrator, so stop() never runs — a real
+        session would leak and emit "Unclosed client session" on GC.
+        """
+        session = MagicMock()
+        session.close = AsyncMock()
+        with patch("yascheduler.di.aiohttp.ClientSession", return_value=session):
+            yield session
 
     @pytest.mark.asyncio
     async def test_creates_all_dependencies_and_returns_orchestrator(self) -> None:
