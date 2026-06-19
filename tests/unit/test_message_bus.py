@@ -42,13 +42,17 @@ class TestMessageBus:
             received.append(event)
 
         bus.register(TaskCreated, on_created)
-        event = TaskCreated(task_id=1, webhook_url=None, engine_name="cp2k")
+        event = TaskCreated(
+            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="cp2k"
+        )
         await bus.dispatch([event])
         assert received == [event]
 
     async def test_dispatch_with_no_handlers(self) -> None:
         bus = MessageBus()
-        event = TaskFailed(task_id=1, webhook_url=None, reason="err")
+        event = TaskFailed(
+            task_id=1, webhook_url=None, webhook_custom_params={}, reason="err"
+        )
         await bus.dispatch([event])  # no error raised
 
     async def test_multiple_handlers_per_event_type(self) -> None:
@@ -64,7 +68,9 @@ class TestMessageBus:
 
         bus.register(TaskCreated, handler_a)
         bus.register(TaskCreated, handler_b)
-        event = TaskCreated(task_id=1, webhook_url=None, engine_name="cp2k")
+        event = TaskCreated(
+            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="cp2k"
+        )
         await bus.dispatch([event])
         assert log_a == [event]
         assert log_b == [event]
@@ -77,7 +83,9 @@ class TestMessageBus:
             results.append((event, label))
 
         bus.register(TaskCreated, functools.partial(handler, label="test"))
-        event = TaskCreated(task_id=1, webhook_url=None, engine_name="cp2k")
+        event = TaskCreated(
+            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="cp2k"
+        )
         await bus.dispatch([event])
         assert results == [(event, "test")]
 
@@ -116,7 +124,9 @@ class TestUoWEventDispatch:
 
         bus.register(TaskCreated, on_created)
 
-        event = TaskCreated(task_id=1, webhook_url=None, engine_name="fleur")
+        event = TaskCreated(
+            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+        )
         task = Task(task_id=1, label="t", context=TaskContext(engine="fleur"))
         task = task.record_event(event)
 
@@ -184,8 +194,12 @@ class TestUoWEventDispatch:
 
         bus.register(TaskCreated, on_created)
 
-        e1 = TaskCreated(task_id=1, webhook_url=None, engine_name="fleur")
-        e2 = TaskCreated(task_id=2, webhook_url=None, engine_name="vasp")
+        e1 = TaskCreated(
+            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+        )
+        e2 = TaskCreated(
+            task_id=2, webhook_url=None, webhook_custom_params={}, engine_name="vasp"
+        )
 
         t1 = Task(task_id=1, label="t1", context=TaskContext(engine="fleur"))
         t1 = t1.record_event(e1)
