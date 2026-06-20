@@ -15,7 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Import from adapters.cli instead of utils.
+#   LAST_CHANGE: v1.2.0 - Switch patch calls to patch.object with explicit module refs (fixes mock resolution on Python 3.9-3.12 where cli.__init__ re-export shadows submodules).
+#   PREVIOUS_CHANGE: v1.1.0 - Import from adapters.cli instead of utils.
 # END_CHANGE_SUMMARY
 
 """Behavioral CLI tests — exercise CLI function bodies with mocked DI stack.
@@ -24,6 +25,7 @@ Calls each CLI command function with patched sys.argv, Config, make_cli_deps,
 and UoW to verify output and mock call assertions without real DB/SSH.
 """
 
+import importlib
 from pathlib import Path, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,6 +34,11 @@ import pytest
 from yascheduler.config import Engine, EngineRepository
 from yascheduler.di import CLIDeps
 from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
+
+submit_mod = importlib.import_module("yascheduler.adapters.cli.submit")
+check_status_mod = importlib.import_module("yascheduler.adapters.cli.check_status")
+show_nodes_mod = importlib.import_module("yascheduler.adapters.cli.show_nodes")
+manage_node_mod = importlib.import_module("yascheduler.adapters.cli.manage_node")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -132,17 +139,12 @@ class TestSubmit:
         uow = make_mock_uow()
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import submit
-
         with (
             patch("sys.argv", ["yasubmit", str(script)]),
-            patch(
-                "yascheduler.adapters.cli.submit.Config.from_config_parser",
-                return_value=config,
-            ),
-            patch("yascheduler.adapters.cli.submit.make_cli_deps", return_value=deps),
+            patch.object(submit_mod.Config, "from_config_parser", return_value=config),
+            patch.object(submit_mod, "make_cli_deps", return_value=deps),
         ):
-            submit()
+            submit_mod.submit()
 
         out, _ = capsys.readouterr()
         assert "42" in out.strip()
@@ -159,18 +161,13 @@ class TestSubmit:
         uow = make_mock_uow()
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import submit
-
         with (
             patch("sys.argv", ["yasubmit", "/nonexistent/script.in"]),
-            patch(
-                "yascheduler.adapters.cli.submit.Config.from_config_parser",
-                return_value=config,
-            ),
-            patch("yascheduler.adapters.cli.submit.make_cli_deps", return_value=deps),
+            patch.object(submit_mod.Config, "from_config_parser", return_value=config),
+            patch.object(submit_mod, "make_cli_deps", return_value=deps),
         ):
             with pytest.raises(ValueError, match="not a file"):
-                submit()
+                submit_mod.submit()
 
     def test_submit_no_engine_key(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -183,18 +180,13 @@ class TestSubmit:
         uow = make_mock_uow()
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import submit
-
         with (
             patch("sys.argv", ["yasubmit", str(script)]),
-            patch(
-                "yascheduler.adapters.cli.submit.Config.from_config_parser",
-                return_value=config,
-            ),
-            patch("yascheduler.adapters.cli.submit.make_cli_deps", return_value=deps),
+            patch.object(submit_mod.Config, "from_config_parser", return_value=config),
+            patch.object(submit_mod, "make_cli_deps", return_value=deps),
         ):
             with pytest.raises(ValueError, match="not defined an engine"):
-                submit()
+                submit_mod.submit()
 
     def test_submit_unsupported_engine(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -209,18 +201,13 @@ class TestSubmit:
         uow = make_mock_uow()
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import submit
-
         with (
             patch("sys.argv", ["yasubmit", str(script)]),
-            patch(
-                "yascheduler.adapters.cli.submit.Config.from_config_parser",
-                return_value=config,
-            ),
-            patch("yascheduler.adapters.cli.submit.make_cli_deps", return_value=deps),
+            patch.object(submit_mod.Config, "from_config_parser", return_value=config),
+            patch.object(submit_mod, "make_cli_deps", return_value=deps),
         ):
             with pytest.raises(ValueError, match="not supported"):
-                submit()
+                submit_mod.submit()
 
 
 class TestCheckStatus:
@@ -240,19 +227,14 @@ class TestCheckStatus:
         )
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import check_status
-
         with (
             patch("sys.argv", ["yastatus"]),
-            patch(
-                "yascheduler.adapters.cli.check_status.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                check_status_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.check_status.make_cli_deps", return_value=deps
-            ),
+            patch.object(check_status_mod, "make_cli_deps", return_value=deps),
         ):
-            check_status()
+            check_status_mod.check_status()
 
         out, _ = capsys.readouterr()
         assert "1   RUNNING" in out
@@ -271,19 +253,14 @@ class TestCheckStatus:
         )
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import check_status
-
         with (
             patch("sys.argv", ["yastatus", "-i"]),
-            patch(
-                "yascheduler.adapters.cli.check_status.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                check_status_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.check_status.make_cli_deps", return_value=deps
-            ),
+            patch.object(check_status_mod, "make_cli_deps", return_value=deps),
         ):
-            check_status()
+            check_status_mod.check_status()
 
         out, _ = capsys.readouterr()
         assert "task_id=1" in out
@@ -304,19 +281,14 @@ class TestCheckStatus:
         )
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import check_status
-
         with (
             patch("sys.argv", ["yastatus", "-j", "1", "2"]),
-            patch(
-                "yascheduler.adapters.cli.check_status.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                check_status_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.check_status.make_cli_deps", return_value=deps
-            ),
+            patch.object(check_status_mod, "make_cli_deps", return_value=deps),
         ):
-            check_status()
+            check_status_mod.check_status()
 
         uow.tasks.list_by_jobs.assert_called_once_with(job_ids=["1", "2"])
         out, _ = capsys.readouterr()
@@ -343,19 +315,14 @@ class TestShowNodes:
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import show_nodes
-
         with (
             patch("sys.argv", ["yanodes"]),
-            patch(
-                "yascheduler.adapters.cli.show_nodes.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                show_nodes_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.show_nodes.make_cli_deps", return_value=deps
-            ),
+            patch.object(show_nodes_mod, "make_cli_deps", return_value=deps),
         ):
-            show_nodes()
+            show_nodes_mod.show_nodes()
 
         out, _ = capsys.readouterr()
         # node1: port 22 → no port suffix, ncpus=4, occupied by my_job
@@ -378,19 +345,14 @@ class TestShowNodes:
         uow.nodes.list_all = AsyncMock(return_value=[])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import show_nodes
-
         with (
             patch("sys.argv", ["yanodes"]),
-            patch(
-                "yascheduler.adapters.cli.show_nodes.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                show_nodes_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.show_nodes.make_cli_deps", return_value=deps
-            ),
+            patch.object(show_nodes_mod, "make_cli_deps", return_value=deps),
         ):
-            show_nodes()
+            show_nodes_mod.show_nodes()
 
         out, _ = capsys.readouterr()
         assert out.strip() == ""
@@ -411,23 +373,17 @@ class TestManageNode:
         mock_gateway.setup_node = AsyncMock()
         mock_gateway.disconnect = AsyncMock()
 
-        from yascheduler.adapters.cli import manage_node
-
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1"]),
-            patch(
-                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                manage_node_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
-            ),
-            patch(
-                "yascheduler.adapters.cli.manage_node.SSHMachineGateway",
-                return_value=mock_gateway,
+            patch.object(manage_node_mod, "make_cli_deps", return_value=deps),
+            patch.object(
+                manage_node_mod, "SSHMachineGateway", return_value=mock_gateway
             ),
         ):
-            result = manage_node()
+            result = manage_node_mod.manage_node()
 
         # manage_node "add" path has no explicit return — implicit None
         assert result is None
@@ -449,19 +405,14 @@ class TestManageNode:
         )
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import manage_node
-
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1"]),
-            patch(
-                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                manage_node_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
-            ),
+            patch.object(manage_node_mod, "make_cli_deps", return_value=deps),
         ):
-            result = manage_node()
+            result = manage_node_mod.manage_node()
 
         assert result is False
         out, _ = capsys.readouterr()
@@ -477,19 +428,14 @@ class TestManageNode:
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1, 2])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import manage_node
-
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1", "--remove-hard"]),
-            patch(
-                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                manage_node_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
-            ),
+            patch.object(manage_node_mod, "make_cli_deps", return_value=deps),
         ):
-            result = manage_node()
+            result = manage_node_mod.manage_node()
 
         assert result is True
         out, _ = capsys.readouterr()
@@ -515,19 +461,14 @@ class TestManageNode:
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import manage_node
-
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1", "--remove-soft"]),
-            patch(
-                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                manage_node_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
-            ),
+            patch.object(manage_node_mod, "make_cli_deps", return_value=deps),
         ):
-            result = manage_node()
+            result = manage_node_mod.manage_node()
 
         assert result is True
         out, _ = capsys.readouterr()
@@ -550,19 +491,14 @@ class TestManageNode:
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import manage_node
-
         with (
             patch("sys.argv", ["yanodes", "10.0.0.1", "--remove-soft"]),
-            patch(
-                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                manage_node_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
-            ),
+            patch.object(manage_node_mod, "make_cli_deps", return_value=deps),
         ):
-            result = manage_node()
+            result = manage_node_mod.manage_node()
 
         assert result is True
         out, _ = capsys.readouterr()
@@ -582,19 +518,14 @@ class TestManageNode:
         uow.nodes.get = AsyncMock(return_value=None)
         deps = make_mock_deps(config, uow)
 
-        from yascheduler.adapters.cli import manage_node
-
         with (
             patch("sys.argv", ["yanodes", "nonexistent.host", "--remove-hard"]),
-            patch(
-                "yascheduler.adapters.cli.manage_node.Config.from_config_parser",
-                return_value=config,
+            patch.object(
+                manage_node_mod.Config, "from_config_parser", return_value=config
             ),
-            patch(
-                "yascheduler.adapters.cli.manage_node.make_cli_deps", return_value=deps
-            ),
+            patch.object(manage_node_mod, "make_cli_deps", return_value=deps),
         ):
-            result = manage_node()
+            result = manage_node_mod.manage_node()
 
         assert result is False
         out, _ = capsys.readouterr()
