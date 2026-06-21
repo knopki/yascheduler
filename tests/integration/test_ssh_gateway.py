@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Add TestOccupancyRaceCondition: regression for two-level state desync bug.
-#   PREVIOUS_CHANGE: v1.1.0 - Add occupancy_check integration tests (check_pname, check_cmd, start_occupancy_check).
+#   LAST_CHANGE: v1.2.1 - Update TestOccupancyRaceCondition for new get_machine_state contract returning ConnectedMachine (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v1.2.0 - Add TestOccupancyRaceCondition: regression for two-level state desync bug.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -273,9 +273,8 @@ class TestOccupancyRunBgLeak:
         ip = machine.ip
 
         # Simulate what _exec_spawn_command does: run_bg without storing result
-        proc = await gateway.run_bg(machine, "sleep 60")
-        # Immediately discard the handle (simulating not storing it)
-        del proc
+        await gateway.run_bg(machine, "sleep 60")
+        # (Handle intentionally not stored — simulating not storing it)
         import gc
 
         gc.collect()
@@ -574,9 +573,9 @@ class TestOccupancyRaceCondition:
 
             # Simulate _meta_sync: it polls gateway state and would mirror to meta.busy
             # With the fix, it sees BUSY (not FREE), so meta.busy stays True
-            gw_state = gateway.get_machine_state(ip)
-            assert gw_state is not None
-            assert gw_state.machine.state == MachineState.BUSY, (
+            gw_machine = gateway.get_machine_state(ip)
+            assert gw_machine is not None
+            assert gw_machine.state == MachineState.BUSY, (
                 "_meta_sync would see FREE without the fix, causing premature task consumption"
             )
         finally:
@@ -601,8 +600,9 @@ class TestOccupancyRaceCondition:
             # Without the fix, at least one poll would see FREE
             for _ in range(4):
                 await asyncio.sleep(0.5)
-                gw_state = gateway.get_machine_state(ip)
-                assert gw_state.machine.state == MachineState.BUSY, (  # type: ignore[union-attr]
+                gw_machine = gateway.get_machine_state(ip)
+                assert gw_machine is not None
+                assert gw_machine.state == MachineState.BUSY, (
                     "_meta_sync must consistently see BUSY while process is running"
                 )
         finally:
@@ -688,13 +688,12 @@ class TestOccupancySpawnScenario:
         machine = await self._get_machine(gateway)
         ip = machine.ip
 
-        proc = await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
         try:
             await asyncio.sleep(1)
             busy = await gateway.occupancy_check(ip, engine)
             assert busy is True, "pgrep should find sleep process started via run_bg"
         finally:
-            proc.close()
             await gateway.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_pname_detects_spawn_like_command_via_run_bg(
@@ -709,13 +708,12 @@ class TestOccupancySpawnScenario:
         ip = machine.ip
 
         # Simulate spawn command: cd to dir, then run sleep
-        proc = await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
         try:
             await asyncio.sleep(1)
             busy = await gateway.occupancy_check(ip, engine)
             assert busy is True, "sleep process should be found by pgrep after run_bg"
         finally:
-            proc.close()
             await gateway.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_pname_still_detects_after_handle_discarded(
@@ -732,8 +730,7 @@ class TestOccupancySpawnScenario:
         machine = await self._get_machine(gateway)
         ip = machine.ip
 
-        proc = await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
-        del proc
+        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
         import gc
 
         gc.collect()
@@ -755,13 +752,12 @@ class TestOccupancySpawnScenario:
         machine = await self._get_machine(gateway)
         ip = machine.ip
 
-        proc = await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
         try:
             await asyncio.sleep(1)
             busy = await gateway.occupancy_check(ip, engine)
             assert busy is True, "check_cmd should detect sleep via ps|grep"
         finally:
-            proc.close()
             await gateway.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_occupancy_check_via_pgrep_raw_output(
@@ -771,7 +767,7 @@ class TestOccupancySpawnScenario:
         machine = await self._get_machine(gateway)
 
         # Start sleep via run_bg
-        proc = await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
         try:
             await asyncio.sleep(0.5)
 
@@ -793,5 +789,4 @@ class TestOccupancySpawnScenario:
                 f"No process with 'sleep' in name/command found: {procs}"
             )
         finally:
-            proc.close()
             await gateway.run(machine, "killall sleep 2>/dev/null || true")

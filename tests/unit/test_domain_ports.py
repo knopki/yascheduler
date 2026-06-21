@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
@@ -16,13 +16,13 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add stubs for update_status, list_ids_by_ip_and_status, list_all, get_by_ips port methods.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial Protocol structural conformance tests
+#   LAST_CHANGE: v1.2.0 - Update StubMachineGateway to satisfy extended MachineGateway Protocol (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v1.1.0 - Add stubs for update_status, list_ids_by_ip_and_status, list_all, get_by_ips port methods.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from yascheduler.domain.model import (
     ConnectedMachine,
@@ -35,11 +35,14 @@ from yascheduler.domain.ports import (
     CloudProvisioner,
     MachineGateway,
     NodeRepository,
+    OccupancyConfig,
+    TaskExecutionEngine,
     TaskRepository,
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Sequence
+    from pathlib import Path, PurePath
 
 
 class StubTaskRepository:
@@ -109,11 +112,53 @@ class StubNodeRepository:
 
 
 class StubMachineGateway:
-    async def list_free(self, platforms: list[str] | None) -> list[ConnectedMachine]:
+    async def connect(
+        self,
+        ip: str,
+        username: str,
+        client_keys: Sequence[PurePath] | None,
+        *,
+        port: int = 22,
+        connect_timeout: int | None = None,
+        data_dir: PurePath | None = None,
+        engines_dir: PurePath | None = None,
+        tasks_dir: PurePath | None = None,
+        jump_host: str | None = None,
+        jump_username: str | None = None,
+    ) -> ConnectedMachine:
+        raise NotImplementedError
+
+    async def disconnect(self, ip: str) -> None:
+        pass
+
+    async def disconnect_all(self) -> None:
+        pass
+
+    def list_free(self, platforms: list[str] | None) -> list[ConnectedMachine]:
         return []
+
+    def list_connected(self) -> list[ConnectedMachine]:
+        return []
+
+    def contains(self, ip: str) -> bool:
+        return False
+
+    def get_machine_state(self, ip: str) -> ConnectedMachine | None:
+        return None
+
+    def update_machine(self, machine: ConnectedMachine) -> None:
+        pass
+
+    def __len__(self) -> int:
+        return 0
 
     async def run(self, machine: ConnectedMachine, cmd: str) -> ProcessResult:
         return ProcessResult(exit_code=0)
+
+    async def run_bg(
+        self, machine: ConnectedMachine, cmd: str, *, cwd: str | None = None
+    ) -> None:
+        pass
 
     async def upload(self, machine: ConnectedMachine, local: Path, remote: str) -> None:
         pass
@@ -122,6 +167,32 @@ class StubMachineGateway:
         self, machine: ConnectedMachine, remote: str, local: Path
     ) -> None:
         pass
+
+    async def download_outputs(
+        self,
+        ip: str,
+        remote_dir: str,
+        local_dir: Path,
+        files: list[str],
+        task_id: int | None = None,
+    ) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]]:
+        return ([], [])
+
+    def start_occupancy_check(self, ip: str, config: OccupancyConfig) -> None:
+        pass
+
+    async def start_task_on_machine(
+        self,
+        machine: ConnectedMachine,
+        engine: TaskExecutionEngine,
+        task: Task,
+        ncpus: int,
+        engines_dir: PurePath,
+    ) -> bool:
+        return True
+
+    async def get_cpu_cores(self, ip: str) -> int:
+        return 0
 
 
 class StubCloudProvisioner:

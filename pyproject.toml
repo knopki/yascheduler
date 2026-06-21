@@ -127,11 +127,7 @@ layers = [
   "yascheduler.application",
   "yascheduler.domain",
 ]
-ignore_imports = [
-  # Residual edges — see openspec/specs/package-facades (Documented residual edges). Removed by gateway-sftp-wrapping.
-  "yascheduler.application.consume_task -> yascheduler.adapters",
-  "yascheduler.application.orchestrator -> yascheduler.adapters",
-]
+ignore_imports = []
 
 [tool.setuptools.package-data]
 "yascheduler.adapters.persistence.sql" = ["**/*.sql"]

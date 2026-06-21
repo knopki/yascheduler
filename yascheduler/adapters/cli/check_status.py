@@ -19,8 +19,10 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
+#   LAST_CHANGE: v1.1.0 - Use _get_machine_state (adapter-internal) instead of renamed get_machine_state (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
 # END_CHANGE_SUMMARY
+# FIXME: split adapter and applicacation layer (business logic)
 
 import argparse
 import os
@@ -160,7 +162,7 @@ async def _display_remote_output(
         await gateway.disconnect(ip)
         return None
     r_output = gateway.get_path(ip)(remote_folder) / "OUTPUT"
-    state = gateway.get_machine_state(ip)
+    state = gateway._get_machine_state(ip)  # FIXME: use of private method
     if state is None:
         print("CAN'T CONNECT")
         return None

@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 3.0.0
+# VERSION: 3.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return IPs for VM deletion.
 #   SCOPE: deallocate_nodes async function.
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v3.0.0 - Replace RemoteMachineRepository with SSHMachineGateway.
-#   PREVIOUS_CHANGE: v2.0.0 - Rewrite to use UoW + domain types instead of DB + NodeModel.
+#   LAST_CHANGE: v3.1.0 - Use MachineGateway Protocol and gateway.contains() instead of gateway.keys() (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v3.0.0 - Replace RemoteMachineRepository with SSHMachineGateway.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -28,8 +28,9 @@ from yascheduler.domain import Node, TaskStatus
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from yascheduler.adapters import CloudProvisionerImpl, SSHMachineGateway
+    from yascheduler.adapters import CloudProvisionerImpl
     from yascheduler.config import ConfigCloud
+    from yascheduler.domain import MachineGateway
 
     from .uow import AbstractUnitOfWork
 
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 #   PURPOSE: Disconnect and cloud-deallocate a single node.
 #   INPUTS: {
 #     node: Node - The node to deallocate,
-#     gateway: SSHMachineGateway - SSH gateway,
+#     gateway: MachineGateway - SSH gateway,
 #     clouds: CloudProvisionerImpl - Cloud provider manager
 #   }
 #   OUTPUTS: { None }
@@ -49,10 +50,10 @@ logger = logging.getLogger(__name__)
 # END_CONTRACT: deallocate_node
 async def deallocate_node(
     node: Node,
-    gateway: SSHMachineGateway,
+    gateway: MachineGateway,
     clouds: CloudProvisionerImpl,
 ) -> None:
-    if node.ip in gateway.keys():
+    if gateway.contains(node.ip):
         await gateway.disconnect(node.ip)
     if node.cloud:
         await clouds.deallocate(node.ip)

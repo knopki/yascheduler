@@ -14,6 +14,7 @@
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
 # END_CHANGE_SUMMARY
+# FIXME: split adapter and applicacation layer (business logic)
 
 from yascheduler.client import to_sync
 from yascheduler.config import Config

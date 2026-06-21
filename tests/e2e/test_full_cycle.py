@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Add full lifecycle E2E test.
-#   PREVIOUS_CHANGE: n/a
+#   LAST_CHANGE: v1.0.1 - Update get_machine_state assertions for new ConnectedMachine return contract (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v1.0.0 - Add full lifecycle E2E test.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ async def test_full_cycle(
                 saw_running = True
                 node_ip = task.ip
                 state = orchestrator._gateway.get_machine_state(node_ip)
-                if state and state.machine.state == MachineState.BUSY:
+                if state and state.state == MachineState.BUSY:
                     saw_busy = True
             if task and task.status == TaskStatus.DONE:
                 break
@@ -123,7 +123,7 @@ async def test_full_cycle(
         # START_BLOCK_VERIFY_FREE
         state = orchestrator._gateway.get_machine_state(ssh_container["host"])
         assert state is not None, "Machine not found in orchestrator registry"
-        assert state.machine.state == MachineState.FREE, (
+        assert state.state == MachineState.FREE, (
             "Machine should be free after task completion"
         )
         # END_BLOCK_VERIFY_FREE

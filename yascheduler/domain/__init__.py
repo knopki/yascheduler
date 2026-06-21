@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 1.8.0
+# VERSION: 1.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain layer entry point — re-exports events, model entities, exception hierarchy, and port interfaces.
 #   SCOPE: Re-exports domain events from .events, domain entities from .model, exception tree from .exceptions, and port Protocols from .ports.
@@ -33,18 +33,21 @@
 #   TaskNotTodoError - Task not in TODO status
 #   TaskNotRunningError - Task not in RUNNING status
 #   MachineBusyError - Operation attempted on a busy machine
+#   MachineConnectionError - SSH connection failure carrying ip and reason
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
 #   CloudCapacityExhaustedError - Cloud provider at capacity
 #   TaskRepository - Async port for task persistence
 #   NodeRepository - Async port for node persistence
 #   MachineGateway - Async port for remote machine operations
+#   OccupancyConfig - Minimal structural contract for occupancy check configuration
+#   TaskExecutionEngine - Engine contract for task deployment (superset of OccupancyConfig)
 #   CloudProvisioner - Async port for cloud node provisioning
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Extended facade to expose model, exceptions tree, and ports alongside events; part of clean-architecture-imports.
-#   PREVIOUS_CHANGE: v1.7.0 - Add domain event re-exports for public API (domain-events change).
+#   LAST_CHANGE: v1.9.0 - Add TaskExecutionEngine export (gateway-port-cleanup scope expansion).
+#   PREVIOUS_CHANGE: v1.8.0 - Extended facade to expose model, exceptions tree, and ports alongside events; part of clean-architecture-imports.
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -76,6 +79,7 @@ __all__ = [
     "TaskNotTodoError",
     "TaskNotRunningError",
     "MachineBusyError",
+    "MachineConnectionError",
     "SchedulingError",
     "NoCompatibleNodeError",
     "CloudCapacityExhaustedError",
@@ -83,6 +87,8 @@ __all__ = [
     "TaskRepository",
     "NodeRepository",
     "MachineGateway",
+    "OccupancyConfig",
+    "TaskExecutionEngine",
     "CloudProvisioner",
 ]
 
@@ -99,6 +105,7 @@ from .exceptions import (
     CloudCapacityExhaustedError,
     DomainError,
     MachineBusyError,
+    MachineConnectionError,
     MissingInputFileError,
     NoCompatibleNodeError,
     SchedulingError,
@@ -124,5 +131,7 @@ from .ports import (
     CloudProvisioner,
     MachineGateway,
     NodeRepository,
+    OccupancyConfig,
+    TaskExecutionEngine,
     TaskRepository,
 )

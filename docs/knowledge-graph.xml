@@ -213,9 +213,12 @@
         <export-SchedulingError PURPOSE="Scheduling/allocation errors" />
         <export-NoCompatibleNodeError PURPOSE="No matching node found for task" />
         <export-CloudCapacityExhaustedError PURPOSE="Cloud provider at capacity" />
+        <export-MachineConnectionError PURPOSE="SSH connection failure carrying ip and reason" />
         <export-TaskRepository PURPOSE="Async port for task persistence" />
         <export-NodeRepository PURPOSE="Async port for node persistence" />
         <export-MachineGateway PURPOSE="Async port for remote machine operations" />
+        <export-OccupancyConfig PURPOSE="Minimal structural contract for occupancy check configuration" />
+        <export-TaskExecutionEngine PURPOSE="Engine contract for task deployment (superset of OccupancyConfig)" />
         <export-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
       </annotations>
     </M-DOMAIN>
@@ -238,6 +241,7 @@
         <class-SchedulingError PURPOSE="Scheduling/allocation errors" />
         <class-NoCompatibleNodeError PURPOSE="No matching node found for task" />
         <class-CloudCapacityExhaustedError PURPOSE="Cloud provider at capacity" />
+        <class-MachineConnectionError PURPOSE="SSH connection failure carrying ip and reason" />
       </annotations>
     </M-DOMAIN-EXCEPTIONS>
 
@@ -265,6 +269,8 @@
         <class-TaskRepository PURPOSE="Async port for task persistence" />
         <class-NodeRepository PURPOSE="Async port for node persistence (full CRUD lifecycle)" />
         <class-MachineGateway PURPOSE="Async port for remote machine operations" />
+        <class-OccupancyConfig PURPOSE="Minimal structural contract for occupancy check configuration" />
+        <class-TaskExecutionEngine PURPOSE="Engine contract for task deployment (superset of OccupancyConfig)" />
         <class-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
       </annotations>
     </M-DOMAIN-PORTS>
@@ -356,9 +362,8 @@
       <annotations>
         <fn-consume_task PURPOSE="Download task outputs and mark DONE or ERROR" />
         <fn-_prepare_store_folder PURPOSE="Create local output directory from domain Task context" />
-        <fn-_sftp_download_job PURPOSE="Open SFTP session, download files, clean remote dir" />
-        <fn-_download_task_outputs PURPOSE="Download output files via SFTP with retry" />
         <fn-_finalize_task PURPOSE="Apply domain lifecycle, save via UoW, record domain events (TaskCompleted/TaskFailed), notify cloud manager" />
+        <fn-_record_finalization_event PURPOSE="Apply domain status and record corresponding event" />
       </annotations>
     </M-APPLICATION-CONSUME>
 
@@ -373,9 +378,9 @@
     </M-APPLICATION-DEALLOCATE>
 
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Manages producer-consumer loops calling use cases and SSH helpers.</purpose>
+      <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineGateway Protocol.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-DOMAIN-EVENTS</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-DOMAIN-EVENTS</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
@@ -729,7 +734,7 @@
     <M-SSH-GATEWAY NAME="SSH machine gateway" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>SSH machine gateway implementing MachineGateway protocol via asyncssh.</purpose>
       <path>yascheduler/adapters/ssh/gateway.py</path>
-      <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL</depends>
+      <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL</depends>
       <annotations>
         <class-SSHMachineGateway PURPOSE="SSH implementation of MachineGateway protocol" />
         <fn-connect PURPOSE="Open SSH connection, detect platform, register machine" />
@@ -745,7 +750,11 @@
         <fn-occupancy_check PURPOSE="Check if engine process is still running" />
         <fn-start_occupancy_check PURPOSE="Start background occupancy monitoring; occupies ConnectedMachine at gateway level" />
         <fn-update_machine PURPOSE="Replace ConnectedMachine in state for occupy/release transitions" />
-        <fn-get_machine_state PURPOSE="Return internal _MachineState for an IP" />
+        <fn-_get_machine_state PURPOSE="Return internal _MachineState for an IP (adapter-internal)" />
+        <fn-get_machine_state PURPOSE="Return ConnectedMachine registered for an IP, or None" />
+        <fn-list_connected PURPOSE="Return list of all registered ConnectedMachine objects" />
+        <fn-download_outputs PURPOSE="SFTP session, per-file retry download, remote dir cleanup; returns (meta_add, sftp_errors)" />
+        <fn-start_task_on_machine PURPOSE="Upload inputs and spawn process; returns True on success" />
       </annotations>
     </M-SSH-GATEWAY>
 
@@ -909,6 +918,7 @@
     <CrossLink from="M-PERSISTENCE-UOW" to="M-APPLICATION-MESSAGE-BUS" relation="dispatches events via bus after commit" />
     <CrossLink from="M-PERSISTENCE-UOW" to="M-DOMAIN-EVENTS" relation="collects events from saved aggregates via pull_events" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-EVENTS" relation="records TaskAbandoned event on lost nodes" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-PORTS" relation="uses MachineGateway Protocol and TaskExecutionEngine via gateway.start_task_on_machine" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-DOMAIN-EVENTS" relation="records TaskCreated event on submission" />
     <CrossLink from="M-APPLICATION-ALLOCATE" to="M-DOMAIN-EVENTS" relation="records TaskAllocated and TaskFailed events" />
     <CrossLink from="M-APPLICATION-CONSUME" to="M-DOMAIN-EVENTS" relation="records TaskCompleted and TaskFailed events" />

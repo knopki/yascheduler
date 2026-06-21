@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway.py
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineGateway — connection lifecycle, command execution, SFTP, occupancy monitoring.
@@ -20,7 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Split _make_state into _make_mock_adapter + _make_mock_connection + _make_state for GRACE func-size compliance.
+#   LAST_CHANGE: v1.0.1 - Move get_machine_state and list_connected tests to test_ssh_gateway_machine_queries.py to stay under hard size limit (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v1.0.0 - Split _make_state into _make_mock_adapter + _make_mock_connection + _make_state for GRACE func-size compliance.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -497,13 +498,11 @@ class TestCommandExecution:
     async def test_run_bg_starts_background_process(
         self, gateway: SSHMachineGateway
     ) -> None:
-        """run_bg() delegates to adapter.run_bg and returns a process handle."""
+        """run_bg() delegates to adapter.run_bg (returns None per port contract)."""
         state = _make_state()
         gateway._machines["10.0.0.1"] = state
 
-        proc = await gateway.run_bg(state.machine, "long_running", cwd="/tmp")
-        # The adapter returns a MagicMock, so proc should be our mock
-        assert proc is not None
+        await gateway.run_bg(state.machine, "long_running", cwd="/tmp")
 
     @pytest.mark.asyncio
     async def test_run_full_raises_key_error_for_unknown_ip(
@@ -627,13 +626,6 @@ class TestMachineState:
         gateway._machines["10.0.0.1"] = state
         assert gateway.contains("10.0.0.1") is True
         assert gateway.contains("10.0.0.2") is False
-
-    def test_get_machine_state(self, gateway: SSHMachineGateway) -> None:
-        """get_machine_state returns _MachineState or None."""
-        state = _make_state(ip="10.0.0.1")
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.get_machine_state("10.0.0.1") is state
-        assert gateway.get_machine_state("10.0.0.2") is None
 
 
 # =============================================================================

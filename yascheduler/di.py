@@ -19,7 +19,6 @@
 #   LAST_CHANGE: v4.0.1 - Extract _setup_domain_events helper; remove webhook handler registration from CLI mode.
 #   PREVIOUS_CHANGE: v4.0.0 - Wire MessageBus with webhook handlers; pass bus to PostgresUnitOfWork.
 # END_CHANGE_SUMMARY
-# FIXME: remove this module
 
 from __future__ import annotations
 

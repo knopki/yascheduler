@@ -1,12 +1,4 @@
-# Orchestrator
-
-## Purpose
-
-Orchestrator class that manages concurrent producer-consumer loops for
-connecting machines, allocating tasks, consuming results, and deallocating
-idle cloud nodes.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Orchestrator manages producer-consumer loops
 
@@ -40,6 +32,20 @@ SHALL NOT contain any reference to adapter-specific methods (`get_sftp`,
 - **WHEN** the orchestrator allocates a task to a machine
 - **THEN** the orchestrator resolves `ncpus` via UoW and calls `gateway.start_task_on_machine(machine, engine, task, ncpus, self._config.remote.engines_dir)` — never touches `get_sftp`, `get_path`, or `get_quote` directly
 
+### Requirement: Connect machine loop
+
+The system SHALL poll enabled nodes from `NodeRepository` via UoW and establish
+SSH connections via `MachineGateway`. Connection failures SHALL be caught as
+`MachineConnectionError` (domain exception), not `asyncssh.misc.Error`.
+
+#### Scenario: New node connected
+- **WHEN** a new enabled node appears in the database
+- **THEN** an SSH connection is established via gateway and the machine is registered
+
+#### Scenario: Connection failure caught as domain error
+- **WHEN** `gateway.connect(...)` fails
+- **THEN** the orchestrator catches `MachineConnectionError` and logs the error
+
 ### Requirement: Allocate loop
 
 The system SHALL poll TO_DO tasks via UoW and dispatch to the `allocate_task`
@@ -62,6 +68,20 @@ carry domain `Task` objects. SSH operations SHALL use `MachineGateway`.
 - **WHEN** a RUNNING task's machine reports `state=FREE`
 - **THEN** `consume_task` is called with `task_id` to download outputs
 
+### Requirement: Stats logging
+
+The system SHALL periodically log queue sizes, node counts, and task counts
+at a configurable interval. The orchestrator SHALL use `gateway.list_connected()`
+instead of `gateway.items()` for iterating connected machines.
+
+#### Scenario: Stats printed every N seconds
+- **WHEN** the orchestrator is running
+- **THEN** usage statistics are logged at the configured interval
+
+#### Scenario: Stats uses list_connected
+- **WHEN** `_print_stats` iterates connected machines
+- **THEN** it uses `gateway.list_connected()` and accesses `machine.state` directly (not `state.machine.state`)
+
 ### Requirement: Deallocate loop
 
 The system SHALL identify idle cloud nodes via UoW, call `deallocate_nodes`
@@ -77,40 +97,3 @@ connected machines.
 #### Scenario: Deallocator uses list_connected
 - **WHEN** `_deallocator_producer` iterates connected machines
 - **THEN** it uses `gateway.list_connected()` and accesses `machine.ip` directly
-
-### Requirement: Connect machine loop
-
-The system SHALL poll enabled nodes from `NodeRepository` via UoW and establish
-SSH connections via `MachineGateway`. Connection failures SHALL be caught as
-`MachineConnectionError` (domain exception), not `asyncssh.misc.Error`.
-
-#### Scenario: New node connected
-- **WHEN** a new enabled node appears in the database
-- **THEN** an SSH connection is established via gateway and the machine is registered
-
-#### Scenario: Connection failure caught as domain error
-- **WHEN** `gateway.connect(...)` fails
-- **THEN** the orchestrator catches `MachineConnectionError` and logs the error
-
-### Requirement: Stats logging
-
-The system SHALL periodically log queue sizes, node counts, and task counts
-at a configurable interval. The orchestrator SHALL use `gateway.list_connected()`
-instead of `gateway.items()` for iterating connected machines.
-
-#### Scenario: Stats printed every N seconds
-- **WHEN** the orchestrator is running
-- **THEN** usage statistics are logged at the configured interval
-
-#### Scenario: Stats uses list_connected
-- **WHEN** `_print_stats` iterates connected machines
-- **THEN** it uses `gateway.list_connected()` and accesses `machine.state` directly (not `state.machine.state`)
-
-### Requirement: Orchestrator concurrency limits
-
-The system SHALL enforce configurable concurrency limits for each loop:
-`conn_machine_limit`, `allocate_limit`, `consume_limit`, `deallocate_limit`.
-
-#### Scenario: Allocation concurrency respected
-- **WHEN** `allocate_limit=3` and 10 TO_DO tasks exist
-- **THEN** at most 3 allocations proceed concurrently

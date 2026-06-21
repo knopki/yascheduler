@@ -1,12 +1,24 @@
-# SSH Gateway
+## MODIFIED Requirements
 
-## Purpose
+### Requirement: SSH connection retry
 
-Provide an SSHMachineGateway class that satisfies the MachineGateway Protocol
-using asyncssh for SSH connections, command execution, and SFTP transfer, with
-connection lifecycle, occupancy monitoring, and retry logic.
+The system SHALL retry SSH connections on transient failures using the
+`backoff` library with fibonacci backoff and `max_time=60`. The gateway
+SHALL use a two-method pattern for `connect()`: inner `_connect_impl` with
+`@my_backoff_exc()` decorator (retries on `SSHRetryExc`), outer `connect`
+translates exhausted `(asyncssh.misc.Error, OSError)` exceptions to `MachineConnectionError`.
 
-## Requirements
+#### Scenario: Retry on connection refused
+- **WHEN** SSH connection fails with a retryable exception (in `SSHRetryExc`)
+- **THEN** the connection is retried with fibonacci backoff up to 60 seconds
+
+#### Scenario: Non-retryable error skips retry
+- **WHEN** SSH connection fails with a non-retryable exception (e.g., `PermissionDenied`)
+- **THEN** the error is NOT retried and immediately translated to `MachineConnectionError`
+
+#### Scenario: Exhausted retry raises MachineConnectionError
+- **WHEN** all retry attempts are exhausted
+- **THEN** the outer `connect` method catches `(asyncssh.misc.Error, OSError)` and raises `MachineConnectionError` wrapping the last exception
 
 ### Requirement: SSHMachineGateway implements MachineGateway
 
@@ -71,6 +83,8 @@ operations SHALL remain in the orchestrator. The gateway MAY use private helpers
 - **WHEN** `gateway._get_machine_state("10.0.0.1")` is called
 - **THEN** returns `_MachineState | None` (adapter-internal dataclass)
 
+## ADDED Requirements
+
 ### Requirement: Backoff on gateway methods
 
 The system SHALL apply `@my_backoff_exc()` (fibonacci, max_time=60, SSHRetryExc)
@@ -93,73 +107,3 @@ methods: `upload`, `download`.
 #### Scenario: get_cpu_cores retries on SSH failure
 - **WHEN** `get_cpu_cores` fails with a retryable SSH exception
 - **THEN** the operation is retried with fibonacci backoff up to 60 seconds
-
-### Requirement: List free machines with platform filter
-
-The system SHALL return only FREE machines that match the requested platforms.
-
-#### Scenario: Filter by platform
-- **WHEN** `gateway.list_free(["linux", "debian-12"])` is called
-- **THEN** returns only FREE machines with platform "linux" or "debian-12"
-
-#### Scenario: Empty list when no match
-- **WHEN** `gateway.list_free(["windows"])` is called and no Windows machines are connected
-- **THEN** returns an empty list
-
-### Requirement: Disconnect and cleanup
-
-The system SHALL support disconnecting specific machines or all machines,
-closing SSH connections and removing from the registry.
-
-#### Scenario: Disconnect single machine
-- **WHEN** `gateway.disconnect("10.0.0.1")` is called
-- **THEN** the SSH connection is closed and the machine is removed from the registry
-
-#### Scenario: Disconnect all
-- **WHEN** `gateway.disconnect_all()` is called
-- **THEN** all SSH connections are closed and the registry is cleared
-
-### Requirement: Occupancy monitoring
-
-The system SHALL periodically check if an engine process is still running on
-a machine and update the machine state to FREE when the process exits.
-
-#### Scenario: Process exits, machine becomes free
-- **WHEN** occupancy check detects the engine process has exited
-- **THEN** the `ConnectedMachine` state is updated to FREE with `free_since` set
-
-### Requirement: SSH connection retry
-
-The system SHALL retry SSH connections on transient failures using the
-`backoff` library with fibonacci backoff and `max_time=60`. The gateway
-SHALL use a two-method pattern for `connect()`: inner `_connect_impl` with
-`@my_backoff_exc()` decorator (retries on `SSHRetryExc`), outer `connect`
-translates exhausted `(asyncssh.misc.Error, OSError)` exceptions to `MachineConnectionError`.
-
-#### Scenario: Retry on connection refused
-- **WHEN** SSH connection fails with a retryable exception (in `SSHRetryExc`)
-- **THEN** the connection is retried with fibonacci backoff up to 60 seconds
-
-#### Scenario: Non-retryable error skips retry
-- **WHEN** SSH connection fails with a non-retryable exception (e.g., `PermissionDenied`)
-- **THEN** the error is NOT retried and immediately translated to `MachineConnectionError`
-
-#### Scenario: Exhausted retry raises MachineConnectionError
-- **WHEN** all retry attempts are exhausted
-- **THEN** the outer `connect` method catches `(asyncssh.misc.Error, OSError)` and raises `MachineConnectionError` wrapping the last exception
-
-### Requirement: SSHMachineGateway owns shared SSH infrastructure
-
-The system SHALL provide all SSH infrastructure constants and helpers in
-`adapters/ssh/helpers.py`, including `ADAPTERS` registry, `DEFAULT_CONN_OPTS`,
-`MySSHClient`, `MAX_SESSIONS`, `my_backoff_exc`, `_detect_platform`,
-`_init_paths`, and `_resolve_tunnel`. `SSHMachineGateway` SHALL import these
-from `adapters/ssh/helpers.py`, not from `remote_machine/`.
-
-#### Scenario: Gateway imports helpers from own package
-- **WHEN** `gateway.py` imports `ADAPTERS`, `DEFAULT_CONN_OPTS`, `_detect_platform`
-- **THEN** they are imported from `adapters/ssh/helpers.py`
-
-#### Scenario: Helpers functional equivalence
-- **WHEN** `_detect_platform(conn, adapters)` is called from the new location
-- **THEN** it returns the same adapter and platform list as the old implementation

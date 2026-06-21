@@ -18,6 +18,7 @@
 #   LAST_CHANGE: v2.0.0 - Sync init(); _init_db() calls apply_schema() instead of legacy DB class.
 #   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
 # END_CHANGE_SUMMARY
+# FIXME: split adapter and applicacation layer (business logic)
 
 import os
 from pathlib import Path

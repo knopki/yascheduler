@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 4.0.0
+# VERSION: 4.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function.
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.0.0 - Replace do_task_webhook callbacks with domain events (TaskAllocated, TaskFailed).
-#   PREVIOUS_CHANGE: v3.0.0 - Replace RemoteMachineRepository/RemoteMachine with SSHMachineGateway/ConnectedMachine.
+#   LAST_CHANGE: v4.2.0 - Update callback type from Engine to TaskExecutionEngine (gateway-port-cleanup scope expansion).
+#   PREVIOUS_CHANGE: v4.1.0 - Use MachineGateway Protocol instead of concrete SSHMachineGateway (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from yascheduler.domain import (
     ConnectedMachine,
     Task,
     TaskAllocated,
+    TaskExecutionEngine,
     TaskFailed,
     TaskStatus,
 )
@@ -36,8 +37,9 @@ from yascheduler.domain import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from yascheduler.adapters import CloudProvisionerImpl, SSHMachineGateway
+    from yascheduler.adapters import CloudProvisionerImpl
     from yascheduler.config import Engine, EngineRepository
+    from yascheduler.domain import MachineGateway
 
     from .uow import AbstractUnitOfWork
 
@@ -90,9 +92,9 @@ async def _validate_engine(
 #     machine: ConnectedMachine - The machine to try,
 #     engine: Engine - The resolved engine config,
 #     task: Task - The task to allocate,
-#     gateway: SSHMachineGateway - SSH gateway for occupancy checks,
+#     gateway: MachineGateway - SSH gateway for occupancy checks,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
+#     start_task_on_machine: Callable[[ConnectedMachine, TaskExecutionEngine, Task], Awaitable[bool]] - Upload+spawn callback,
 #     clouds: CloudProvisionerImpl - Cloud provider manager
 #   }
 #   OUTPUTS: { bool - True if task started successfully on this machine }
@@ -103,9 +105,11 @@ async def _try_start_on_machine(
     machine: ConnectedMachine,
     engine: Engine,
     task: Task,
-    gateway: SSHMachineGateway,
+    gateway: MachineGateway,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
+    start_task_on_machine: Callable[
+        [ConnectedMachine, TaskExecutionEngine, Task], Awaitable[bool]
+    ],
     clouds: CloudProvisionerImpl,
 ) -> bool:
     task = task.allocate_to(machine.ip).mark_running()
@@ -143,7 +147,7 @@ async def _try_start_on_machine(
 #   INPUTS: {
 #     engine: Engine - The resolved engine config,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     gateway: SSHMachineGateway - SSH gateway with connected machines
+#     gateway: MachineGateway - SSH gateway with connected machines
 #   }
 #   OUTPUTS: { list[ConnectedMachine] - Free machines matching platforms }
 #   SIDE_EFFECTS: None
@@ -152,7 +156,7 @@ async def _try_start_on_machine(
 async def _find_free_machines(
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    gateway: SSHMachineGateway,
+    gateway: MachineGateway,
 ) -> list[ConnectedMachine]:
     # START_BLOCK_FIND_FREE_MACHINES
     async with uow_factory() as uow:
@@ -169,7 +173,7 @@ async def _find_free_machines(
 
 # START_CONTRACT: _allocate_free_machine
 #   PURPOSE: Find a free compatible machine and start the task on it.
-#   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, gateway: SSHMachineGateway,
+#   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, gateway: MachineGateway,
 #     start_task_on_machine: Callable, clouds: CloudProvisionerImpl }
 #   OUTPUTS: { bool - True if allocated to a machine, False if not }
 #   SIDE_EFFECTS: Updates task status, starts occupancy check, records TaskAllocated event, marks cloud task done.
@@ -179,8 +183,10 @@ async def _allocate_free_machine(
     task: Task,
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    gateway: SSHMachineGateway,
-    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
+    gateway: MachineGateway,
+    start_task_on_machine: Callable[
+        [ConnectedMachine, TaskExecutionEngine, Task], Awaitable[bool]
+    ],
     clouds: CloudProvisionerImpl,
 ) -> bool:
     free_machines = await _find_free_machines(engine, uow_factory, gateway)
@@ -208,7 +214,7 @@ async def _allocate_free_machine(
 #     task_id: int - The task id to allocate,
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     gateway: SSHMachineGateway - SSH gateway with connected machines,
+#     gateway: MachineGateway - SSH gateway with connected machines,
 #     clouds: CloudProvisionerImpl - Cloud provider manager,
 #     start_task_on_machine: Callable - Callback to upload+spawn on remote machine
 #   }
@@ -220,9 +226,11 @@ async def allocate_task(
     task_id: int,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    gateway: SSHMachineGateway,
+    gateway: MachineGateway,
     clouds: CloudProvisionerImpl,
-    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
+    start_task_on_machine: Callable[
+        [ConnectedMachine, TaskExecutionEngine, Task], Awaitable[bool]
+    ],
 ) -> bool:
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)

@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain exception hierarchy.
-#   SCOPE: Test all 11 exception classes for inheritance, field access, and message format.
+#   SCOPE: Test all 12 exception classes for inheritance, field access, and message format.
 #   DEPENDS: none
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -17,20 +17,24 @@
 #   test_task_already_allocated_error - task_id stored, message format
 #   test_task_not_allocated_error - task_id stored, message format
 #   test_machine_busy_error - ip stored, message contains it
+#   test_machine_connection_error_fields - ip and reason stored; message contains both
+#   test_machine_connection_error_is_domain_error - catchable as DomainError and Exception
 #   test_scheduling_error_hierarchy - SchedulingError inherits from DomainError
 #   test_no_compatible_node_error - task_id + platforms stored
 #   test_cloud_capacity_exhausted_error - task_id stored
-#   test_all_exceptions_importable - verify all 11 import from yascheduler.domain.exceptions
+#   test_all_exceptions_importable - verify all 12 import from yascheduler.domain.exceptions
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial domain exception tests
+#   LAST_CHANGE: v1.1.0 - Add MachineConnectionError tests (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial domain exception tests
 # END_CHANGE_SUMMARY
 
 from yascheduler.domain.exceptions import (
     CloudCapacityExhaustedError,
     DomainError,
     MachineBusyError,
+    MachineConnectionError,
     MissingInputFileError,
     NoCompatibleNodeError,
     SchedulingError,
@@ -161,6 +165,37 @@ def test_machine_busy_error() -> None:
     assert "10.0.0.1" in str(exc)
 
 
+# START_CONTRACT: test_machine_connection_error_fields
+#   PURPOSE: Verify MachineConnectionError stores ip and reason; message contains both.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_machine_connection_error_fields
+def test_machine_connection_error_fields() -> None:
+    exc = MachineConnectionError(ip="10.0.0.1", reason="Connection refused")
+    assert exc.ip == "10.0.0.1"
+    assert exc.reason == "Connection refused"
+    assert "10.0.0.1" in str(exc)
+    assert "Connection refused" in str(exc)
+
+
+# START_CONTRACT: test_machine_connection_error_is_domain_error
+#   PURPOSE: Verify MachineConnectionError is catchable as DomainError and Exception.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_machine_connection_error_is_domain_error
+def test_machine_connection_error_is_domain_error() -> None:
+    assert issubclass(MachineConnectionError, DomainError)
+    try:
+        raise MachineConnectionError("10.0.0.1", "boom")
+    except DomainError as e:
+        assert isinstance(e, MachineConnectionError)
+        assert e.ip == "10.0.0.1"
+
+
 # START_CONTRACT: test_scheduling_error_hierarchy
 #   PURPOSE: Verify SchedulingError inherits from DomainError.
 #   INPUTS: { None }
@@ -206,14 +241,14 @@ def test_cloud_capacity_exhausted_error() -> None:
 
 
 # START_CONTRACT: test_all_exceptions_importable
-#   PURPOSE: Verify all 11 exception classes are importable from yascheduler.domain.exceptions.
+#   PURPOSE: Verify all 12 exception classes are importable from yascheduler.domain.exceptions.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_all_exceptions_importable
 def test_all_exceptions_importable() -> None:
-    """Verify all 11 exception classes import correctly by instantiating each once."""
+    """Verify all 12 exception classes import correctly by instantiating each once."""
     instances = [
         DomainError(),
         ValidationError(),
@@ -223,10 +258,11 @@ def test_all_exceptions_importable() -> None:
         TaskAlreadyAllocatedError(task_id=1),
         TaskNotAllocatedError(task_id=2),
         MachineBusyError(ip="0.0.0.0"),
+        MachineConnectionError(ip="0.0.0.0", reason="x"),
         SchedulingError(),
         NoCompatibleNodeError(task_id=3, platforms=["a"]),
         CloudCapacityExhaustedError(task_id=4),
     ]
-    assert len(instances) == 11
+    assert len(instances) == 12
     for inst in instances:
         assert isinstance(inst, Exception)

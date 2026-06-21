@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Update to UoW-based signatures (task_id, uow_factory) across allocate, consume, deallocate.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial use case unit tests covering all 4 application functions.
+#   LAST_CHANGE: v2.1.0 - Update TestConsumeTask/TestConsumeTaskEvents to mock gateway.download_outputs instead of SFTP internals (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v2.0.0 - Update to UoW-based signatures (task_id, uow_factory) across allocate, consume, deallocate.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for application use cases.
@@ -32,8 +32,8 @@ Tests cover the 4 application use cases:
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
-from pathlib import Path, PurePath, PurePosixPath
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path, PurePath
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -370,20 +370,9 @@ class TestConsumeTask:
     """consume_task — download outputs, mark DONE or ERROR."""
 
     @pytest.fixture
-    def sftp_mock(self) -> AsyncMock:
-        sftp = AsyncMock()
-        sftp.get = AsyncMock(return_value=None)
-        sftp.rmtree = AsyncMock(return_value=None)
-        return sftp
-
-    @pytest.fixture
-    def gateway_mock(self, sftp_mock: AsyncMock) -> MagicMock:
-        async_sftp_cm = AsyncMock()
-        async_sftp_cm.__aenter__.return_value = sftp_mock
-
+    def gateway_mock(self) -> MagicMock:
         gateway = MagicMock()
-        gateway.get_sftp = MagicMock(return_value=async_sftp_cm)
-        gateway.get_path = MagicMock(return_value=PurePosixPath)
+        gateway.download_outputs = AsyncMock(return_value=([], []))
         return gateway
 
     async def _run_consume(
@@ -396,33 +385,19 @@ class TestConsumeTask:
         local_tasks_dir: Path,
         clouds: MagicMock,
     ) -> None:
-        """Run consume_task with backoff and executor patched out."""
-        # backoff.on_exception -> identity decorator (bypass retry logic)
-        with patch(
-            "yascheduler.application.consume_task.backoff.on_exception"
-        ) as mock_bo:
-            mock_bo.return_value = lambda f: f
-            # asyncio.get_running_loop -> avoid real executor calls
-            with patch(
-                "yascheduler.application.consume_task.asyncio.get_running_loop"
-            ) as mock_get_loop:
-                mock_loop = MagicMock()
-                mock_get_loop.return_value = mock_loop
-                mock_loop.run_in_executor = AsyncMock(return_value=None)
-                await consume_task(
-                    task_id=task.task_id,
-                    ip=ip,
-                    gateway=gateway,
-                    engines=engines,
-                    uow_factory=uow_factory,
-                    local_tasks_dir=local_tasks_dir,
-                    clouds=clouds,
-                )
+        await consume_task(
+            task_id=task.task_id,
+            ip=ip,
+            gateway=gateway,
+            engines=engines,
+            uow_factory=uow_factory,
+            local_tasks_dir=local_tasks_dir,
+            clouds=clouds,
+        )
 
     async def test_consume_task_download_success_marks_done(
         self,
         gateway_mock: MagicMock,
-        sftp_mock: AsyncMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
@@ -454,14 +429,14 @@ class TestConsumeTask:
             clouds=clouds,
         )
 
-        # Exactly one output file downloaded
-        sftp_mock.get.assert_called_once_with(
-            "/remote/tasks/20250101_120000_42/OUTPUT",
-            local_tasks_dir / "20250101_120000_42",
-            preserve=True,
+        # download_outputs called with correct params
+        gateway_mock.download_outputs.assert_called_once()
+        assert gateway_mock.download_outputs.call_args[1]["ip"] == "10.0.0.1"
+        assert (
+            gateway_mock.download_outputs.call_args[1]["remote_dir"]
+            == "/remote/tasks/20250101_120000_42"
         )
-        # Remote tree cleaned up
-        sftp_mock.rmtree.assert_called_once()
+        assert gateway_mock.download_outputs.call_args[1]["task_id"] == 1
         # DB saved with DONE status
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
@@ -474,12 +449,13 @@ class TestConsumeTask:
     async def test_consume_task_download_failure_marks_error(
         self,
         gateway_mock: MagicMock,
-        sftp_mock: AsyncMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
-        """Download raises OSError -> save DONE with error."""
-        sftp_mock.get = AsyncMock(side_effect=OSError("Connection refused"))
+        """Download returns errors -> save DONE with error."""
+        gateway_mock.download_outputs = AsyncMock(
+            return_value=([], [("/remote/file", OSError("Connection refused"))])
+        )
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -746,20 +722,9 @@ class TestConsumeTaskEvents:
     """Verify consume_task records TaskCompleted or TaskFailed events."""
 
     @pytest.fixture
-    def sftp_mock(self) -> AsyncMock:
-        sftp = AsyncMock()
-        sftp.get = AsyncMock(return_value=None)
-        sftp.rmtree = AsyncMock(return_value=None)
-        return sftp
-
-    @pytest.fixture
-    def gateway_mock(self, sftp_mock: AsyncMock) -> MagicMock:
-        async_sftp_cm = AsyncMock()
-        async_sftp_cm.__aenter__.return_value = sftp_mock
-
+    def gateway_mock(self) -> MagicMock:
         gateway = MagicMock()
-        gateway.get_sftp = MagicMock(return_value=async_sftp_cm)
-        gateway.get_path = MagicMock(return_value=PurePosixPath)
+        gateway.download_outputs = AsyncMock(return_value=([], []))
         return gateway
 
     async def _run_consume(
@@ -772,30 +737,19 @@ class TestConsumeTaskEvents:
         local_tasks_dir: Path,
         clouds: MagicMock,
     ) -> None:
-        with patch(
-            "yascheduler.application.consume_task.backoff.on_exception"
-        ) as mock_bo:
-            mock_bo.return_value = lambda f: f
-            with patch(
-                "yascheduler.application.consume_task.asyncio.get_running_loop"
-            ) as mock_get_loop:
-                mock_loop = MagicMock()
-                mock_get_loop.return_value = mock_loop
-                mock_loop.run_in_executor = AsyncMock(return_value=None)
-                await consume_task(
-                    task_id=task.task_id,
-                    ip=ip,
-                    gateway=gateway,
-                    engines=engines,
-                    uow_factory=uow_factory,
-                    local_tasks_dir=local_tasks_dir,
-                    clouds=clouds,
-                )
+        await consume_task(
+            task_id=task.task_id,
+            ip=ip,
+            gateway=gateway,
+            engines=engines,
+            uow_factory=uow_factory,
+            local_tasks_dir=local_tasks_dir,
+            clouds=clouds,
+        )
 
     async def test_consume_success_records_task_completed_event(
         self,
         gateway_mock: MagicMock,
-        sftp_mock: AsyncMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
@@ -835,11 +789,12 @@ class TestConsumeTaskEvents:
     async def test_consume_failure_records_task_failed_event(
         self,
         gateway_mock: MagicMock,
-        sftp_mock: AsyncMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
-        sftp_mock.get = AsyncMock(side_effect=OSError("Connection refused"))
+        gateway_mock.download_outputs = AsyncMock(
+            return_value=([], [("/remote/file", OSError("Connection refused"))])
+        )
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()

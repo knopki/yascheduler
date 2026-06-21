@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 4.0.0
+# VERSION: 4.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and mark task DONE.
 #   SCOPE: consume_task async function.
@@ -10,15 +10,13 @@
 # START_MODULE_MAP
 #   consume_task - Load task via UoW, download outputs, mark DONE or ERROR
 #   _prepare_store_folder - Create local output directory from domain Task context
-#   _sftp_download_job - Open SFTP session, download files, clean remote dir
-#   _download_task_outputs - Download output files via SFTP with retry
 #   _finalize_task - Apply domain lifecycle, save via UoW, record events, notify cloud manager
 #   _record_finalization_event - Apply domain status and record corresponding event
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.0.2 - Remove dead new_meta in _record_finalization_event (leftover from webhook removal).
-#   PREVIOUS_CHANGE: v4.0.1 - Extract _record_finalization_event helper to fix GRACE size limits.
+#   LAST_CHANGE: v4.1.0 - Delegate SFTP download to gateway.download_outputs(); remove _sftp_download_job and _download_task_outputs; use MachineGateway Protocol (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v4.0.2 - Remove dead new_meta in _record_finalization_event (leftover from webhook removal).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,18 +27,14 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-import backoff
-from asyncssh.sftp import SFTPError
-
-from yascheduler.adapters import SFTPRetryExc
 from yascheduler.domain import TaskCompleted, TaskFailed
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.adapters import CloudProvisionerImpl, SSHMachineGateway
+    from yascheduler.adapters import CloudProvisionerImpl
     from yascheduler.config import EngineRepository
-    from yascheduler.domain import Task
+    from yascheduler.domain import MachineGateway, Task
 
     from .uow import AbstractUnitOfWork
 
@@ -77,88 +71,6 @@ async def _prepare_store_folder(
     )
     # END_BLOCK_CREATE_DIR
     return store_folder, output_files, remote_folder
-
-
-# START_CONTRACT: _sftp_download_job
-#   PURPOSE: Open SFTP session, download all output files, clean remote directory.
-#   INPUTS: {
-#     gateway: SSHMachineGateway - SSH gateway,
-#     ip: str - Machine IP address,
-#     output_files: list[str] - Remote file paths to download,
-#     store_folder: Path - Local download destination,
-#     remote_folder: str - Remote directory to clean,
-#     task: Task - Completed task (for logging)
-#   }
-#   OUTPUTS: { list[tuple[str | None, Exception]] - Download errors }
-#   SIDE_EFFECTS: Downloads files via SFTP, removes remote directory tree.
-#   LINKS: M-SSH-GATEWAY
-# END_CONTRACT: _sftp_download_job
-async def _sftp_download_job(
-    gateway: SSHMachineGateway,
-    ip: str,
-    output_files: list[str],
-    store_folder: Path,
-    remote_folder: str,
-    task: Task,
-) -> list[tuple[str | None, Exception]]:
-    errors: list[tuple[str | None, Exception]] = []
-    file_get_retry = backoff.on_exception(backoff.fibo, SFTPRetryExc, max_time=60)
-    path_type = gateway.get_path(ip)
-    async with gateway.get_sftp(ip) as sftp:
-        for out_file in output_files:
-            try:
-                await file_get_retry(sftp.get)(out_file, store_folder, preserve=True)
-            except (OSError, SFTPError) as err:
-                errors.append((out_file, err))
-                logger.warning(
-                    "Cannot download file for task_id=%s from %s: %s",
-                    task.task_id,
-                    out_file,
-                    err,
-                )
-        await sftp.rmtree(path_type(remote_folder))
-    return errors
-
-
-# START_CONTRACT: _download_task_outputs
-#   PURPOSE: Download output files from remote machine via SFTP with retry, then clean remote dir.
-#   INPUTS: {
-#     gateway: SSHMachineGateway - SSH gateway,
-#     ip: str - Machine IP address,
-#     output_files: list[str] - Remote file paths to download,
-#     store_folder: Path - Local directory for downloaded files,
-#     remote_folder: str - Remote directory to clean after download,
-#     task: Task - The completed task (for logging)
-#   }
-#   OUTPUTS: { tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]] - (meta_add, sftp_errors) }
-#   SIDE_EFFECTS: Downloads files via SFTP, removes remote directory tree.
-#   LINKS: M-SSH-GATEWAY
-# END_CONTRACT: _download_task_outputs
-async def _download_task_outputs(
-    gateway: SSHMachineGateway,
-    ip: str,
-    output_files: list[str],
-    store_folder: Path,
-    remote_folder: str,
-    task: Task,
-) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]]:
-    # START_BLOCK_DOWNLOAD
-    meta_add: list[tuple[str, Any]] = [
-        ("remote_folder", remote_folder),
-        ("local_folder", str(store_folder)),
-    ]
-
-    job_retry = backoff.on_exception(backoff.fibo, SFTPRetryExc, max_time=60)
-    try:
-        sftp_errors = await job_retry(_sftp_download_job)(
-            gateway, ip, output_files, store_folder, remote_folder, task
-        )
-    except Exception as err:
-        logger.warning("Cannot scp from %s: %s", remote_folder, err)
-        sftp_errors = [(remote_folder, err)]
-    # END_BLOCK_DOWNLOAD
-
-    return meta_add, sftp_errors
 
 
 # START_CONTRACT: _record_finalization_event
@@ -259,7 +171,7 @@ async def _finalize_task(
 #   INPUTS: {
 #     task_id: int - ID of the task to consume,
 #     ip: str - IP address of the machine where the task ran,
-#     gateway: SSHMachineGateway - SSH gateway for SFTP operations,
+#     gateway: MachineGateway - SSH gateway for output download,
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable - Factory providing AbstractUnitOfWork,
 #     local_tasks_dir: Path - Local base directory for output storage,
@@ -272,7 +184,7 @@ async def _finalize_task(
 async def consume_task(
     task_id: int,
     ip: str,
-    gateway: SSHMachineGateway,
+    gateway: MachineGateway,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
     local_tasks_dir: Path,
@@ -287,7 +199,11 @@ async def consume_task(
     store_folder, output_files, remote_folder = await _prepare_store_folder(
         task, local_tasks_dir, engines
     )
-    meta_add, sftp_errors = await _download_task_outputs(
-        gateway, ip, output_files, store_folder, remote_folder, task
+    meta_add, sftp_errors = await gateway.download_outputs(
+        ip=ip,
+        remote_dir=remote_folder,
+        local_dir=store_folder,
+        files=output_files,
+        task_id=task.task_id,
     )
     await _finalize_task(task, meta_add, sftp_errors, store_folder, uow_factory, clouds)

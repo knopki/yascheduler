@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.6.1
+# VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
-#   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling.
+#   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling, connection.
 #   DEPENDS: none
 #   LINKS: M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
@@ -18,13 +18,15 @@
 #   TaskNotTodoError - Task not in TODO status
 #   TaskNotRunningError - Task not in RUNNING status
 #   MachineBusyError - Operation attempted on a busy machine
+#   MachineConnectionError - SSH connection failure carrying ip and reason
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
 #   CloudCapacityExhaustedError - Cloud provider at capacity
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.1 - Add TaskNotTodoError and TaskNotRunningError to MODULE_MAP and knowledge graph annotations.
+#   LAST_CHANGE: v1.7.0 - Add MachineConnectionError for SSH connection failures (gateway-port-cleanup).
+#   PREVIOUS_CHANGE: v1.6.1 - Add TaskNotTodoError and TaskNotRunningError to MODULE_MAP and knowledge graph annotations.
 # END_CHANGE_SUMMARY
 
 
@@ -95,6 +97,15 @@ class MachineBusyError(DomainError):
     def __init__(self, ip: str) -> None:
         self.ip = ip
         super().__init__(f"machine at {ip} is busy")
+
+
+class MachineConnectionError(DomainError):
+    """SSH connection failure when establishing a connection to a remote machine."""
+
+    def __init__(self, ip: str, reason: str) -> None:
+        self.ip = ip
+        self.reason = reason
+        super().__init__(f"cannot connect to {ip}: {reason}")
 
 
 class SchedulingError(DomainError):
