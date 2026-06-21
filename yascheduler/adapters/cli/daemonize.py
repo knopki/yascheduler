@@ -1,20 +1,22 @@
 # FILE: yascheduler/adapters/cli/daemonize.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yascheduler CLI command — start the daemon with signal handling.
-#   SCOPE: daemonize command — creates Orchestrator via DI, runs event loop.
+#   SCOPE: daemonize command — creates Orchestrator via DI, runs event loop, configures yascheduler logger.
 #   DEPENDS: M-DI, M-CONFIG, M-VARIABLES, M-APPLICATION-ORCHESTRATOR
 #   LINKS: M-CLI-COMMANDS, M-DI
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   daemonize - Start yascheduler daemon via make_daemon()
+#   _get_logger - Configure and return the yascheduler logger (inlined from scheduler.py)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
+#   LAST_CHANGE: v1.1.0 - Inline _get_logger from scheduler.py prior to scheduler.py deletion.
+#   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
 # END_CHANGE_SUMMARY
-# FIXME: split adapter and applicacation layer (business logic)
+# FIXME: split adapter and application layer (business logic)
 
 import argparse
 import asyncio
@@ -31,6 +33,43 @@ from yascheduler.di import make_daemon
 from yascheduler.variables import CONFIG_FILE
 
 
+# START_CONTRACT: _get_logger
+#   PURPOSE: Configure and return the yascheduler logger (inlined from scheduler.py)
+#   INPUTS: { log_file: Optional[Union[str, Path]] - path to log file, or None; level: int - log level (default INFO) }
+#   OUTPUTS: { logging.Logger - the configured yascheduler logger }
+#   SIDE_EFFECTS: Sets basicConfig, captureWarnings, and configures backoff/asyncssh log levels.
+#   LINKS: none
+# END_CONTRACT: _get_logger
+def _get_logger(
+    log_file: Optional[Union[str, Path]] = None, level: int = logging.INFO
+) -> logging.Logger:
+    logging.basicConfig(level=logging.INFO)
+    logging.captureWarnings(True)
+    logger = logging.getLogger("yascheduler")
+    logger.setLevel(level)
+
+    third_party_level = logging.ERROR if level >= logging.INFO else logging.DEBUG
+
+    backoff_logger = logging.getLogger("backoff")
+    backoff_logger.setLevel(third_party_level)
+
+    asyncssh_logger = logging.getLogger("asyncssh")
+    asyncssh_logger.setLevel(third_party_level)
+
+    if log_file:
+        fh = logging.FileHandler(log_file)
+        fh.setLevel(logging.DEBUG)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+        backoff_logger.addHandler(fh)
+        asyncssh_logger.addHandler(fh)
+
+    return logger
+
+
 # START_CONTRACT: daemonize
 #   PURPOSE: Start the yascheduler daemon with signal handling via make_daemon
 #   INPUTS: { log_file: Optional[Union[str, Path]] - path to log file, or None }
@@ -39,8 +78,6 @@ from yascheduler.variables import CONFIG_FILE
 #   LINKS: M-CLI-COMMANDS, M-DI
 # END_CONTRACT: daemonize
 def daemonize(log_file: Optional[Union[str, Path]] = None) -> None:
-    from yascheduler.scheduler import get_logger
-
     parser = argparse.ArgumentParser(description="Start yascheduler daemon")
     parser.add_argument(
         "-l",
@@ -51,7 +88,7 @@ def daemonize(log_file: Optional[Union[str, Path]] = None) -> None:
     )
     args = parser.parse_args()
 
-    logger = get_logger(log_file, level=logging._nameToLevel[args.log_level])
+    logger = _get_logger(log_file, level=logging._nameToLevel[args.log_level])
     config = Config.from_config_parser(CONFIG_FILE)
 
     async def on_signal(

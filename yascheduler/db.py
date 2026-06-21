@@ -5,7 +5,7 @@
 #   PURPOSE: PostgreSQL persistence for tasks, nodes, and their statuses.
 #   SCOPE: Task and node CRUD, status transitions, schema migration.
 #   DEPENDS: M-CONFIG-DB, M-COMPAT, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL, M-SCHEDULER
+#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

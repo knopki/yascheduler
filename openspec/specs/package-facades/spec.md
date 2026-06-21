@@ -81,7 +81,7 @@ any import.
 - **THEN** it uses `from yascheduler.adapters import SSHMachineGateway, CloudProvisionerImpl`, not `from yascheduler.adapters.ssh import SSHMachineGateway` or `from yascheduler.adapters.ssh.gateway import SSHMachineGateway`
 
 #### Scenario: Composition root imports use layer facades
-- **WHEN** a module in the composition root (`scheduler.py`, `di.py`, `client.py`) imports a symbol from any layer
+- **WHEN** a module in the composition root (`di.py`, `client.py`) imports a symbol from any layer
 - **THEN** the import goes through the layer's `__init__.py` (e.g. `from yascheduler.adapters import webhook_handler`), not through a subpackage facade or deep submodule path
 
 #### Scenario: Within-layer cross-subpackage imports also use the layer facade
@@ -113,7 +113,7 @@ checked for layer direction by R3) but SHALL still be subject to R2
 
 - `yascheduler.config` — shared infrastructure, may be imported by any layer.
 - `yascheduler.data` — shared infrastructure, may be imported by any layer.
-- `yascheduler.scheduler`, `yascheduler.di`, `yascheduler.client` — composition root; may import from any layer.
+- `yascheduler.di`, `yascheduler.client` — composition root; may import from any layer.
 - `yascheduler.db` — legacy, scheduled for deletion; MUST NOT be modified by this change.
 - `yascheduler.compat` — internal utility; not part of the public API.
 - `yascheduler.aiida_plugin` — separate stable entry point; not part of the package's main public API.
@@ -123,7 +123,7 @@ checked for layer direction by R3) but SHALL still be subject to R2
 - **THEN** modules in the outside-set list are not checked for R3 violations
 
 #### Scenario: Outside-set modules still use facades
-- **WHEN** `yascheduler.scheduler` imports `Task` from `yascheduler.domain`
+- **WHEN** `yascheduler.di` imports `Task` from `yascheduler.domain`
 - **THEN** it imports via `from yascheduler.domain import Task` (R2 applies)
 
 #### Scenario: db.py is not modified
@@ -220,16 +220,16 @@ enforcement demands the facade form.
 
 - **`yascheduler/adapters/__init__.py`** (the adapters LAYER facade — sole public surface for cross-layer consumers and composition root) SHALL re-export:
   - `SSHMachineGateway`, `AllSSHRetryExc`, `SFTPRetryExc` from `.ssh` (consumed by `yascheduler.application.*` at module level for backoff and under `TYPE_CHECKING` for type hints; also consumed within the `adapters` layer by `cli.*` and `cloud.manager`).
-  - `CloudProvisionerImpl` from `.cloud` (consumed by `yascheduler.application.*` under `TYPE_CHECKING` and by the composition root `yascheduler.di`, `yascheduler.scheduler`).
-  - `CloudAdapter` from `.cloud` (consumed by the composition root `yascheduler.scheduler` for adapter typing).
+  - `CloudProvisionerImpl` from `.cloud` (consumed by `yascheduler.application.*` under `TYPE_CHECKING` and by the composition root `yascheduler.di`).
+  - `CloudAdapter` from `.cloud` (consumed by the composition root `yascheduler.di` for adapter typing).
   - `apply_schema` from `.persistence` (consumed by `adapters.cli.init`).
   - `webhook_handler` from `.notifier` (consumed by the composition root `yascheduler.di`).
   - `PostgresUnitOfWork` from `.persistence` (consumed by the composition root `yascheduler.di` for UoW wiring).
 - **`yascheduler/application/__init__.py`** SHALL re-export:
   - `AbstractUnitOfWork` from `.uow` (consumed by `adapters.cli.manage_node`).
-  - `Orchestrator` from `.orchestrator` (consumed by `adapters.cli.daemonize` and the composition root `yascheduler.scheduler`).
+  - `Orchestrator` from `.orchestrator` (consumed by `adapters.cli.daemonize` and the composition root `yascheduler.di`).
   - `MessageBus` from `.message_bus` (consumed by `adapters.persistence.postgres_uow` and the composition root `yascheduler.di`).
-  - `submit_task` from `.submit_task` (consumed by the composition root `yascheduler.di`, `yascheduler.scheduler`).
+  - `submit_task` from `.submit_task` (consumed by the composition root `yascheduler.di`).
 - **`yascheduler/adapters/notifier/__init__.py`** SHALL re-export:
   - `webhook_handler` from `.webhook` (consumed by the composition root via the `adapters` layer facade).
 - **`yascheduler/adapters/cloud/__init__.py`** SHALL re-export:
@@ -244,7 +244,7 @@ enforcement demands the facade form.
 
 The re-exports enumerated here are the complete set required to make
 every pre-existing cross-package import R2-compliant, including
-composition-root (`yascheduler.di`, `yascheduler.scheduler`) wiring.
+composition-root (`yascheduler.di`) wiring.
 
 #### Scenario: Adapters layer facade exposes the cross-layer surface
 - **WHEN** a consumer imports `from yascheduler.adapters import SSHMachineGateway, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
@@ -276,7 +276,7 @@ The following deep-path imports SHALL remain (R2 carve-outs) because
 the symbols are deliberately private (leading underscore) and MUST NOT
 be promoted to any facade:
 
-- `yascheduler/di.py` and `yascheduler/scheduler.py`: `from .adapters.cloud.adapters import _resolve_adapter`. `_resolve_adapter` is a private factory that the composition root wires explicitly; promoting it would leak an internal symbol to the cross-layer public surface. These are the only R2 carve-outs in the codebase outside the two R3 residual edges.
+- `yascheduler/di.py`: `from .adapters.cloud.adapters import _resolve_adapter`. `_resolve_adapter` is a private factory that the composition root wires explicitly; promoting it would leak an internal symbol to the cross-layer public surface. This is the only R2 carve-out in the codebase outside the two R3 residual edges.
 
 #### Scenario: Private symbols stay on deep paths
 - **WHEN** a leading-underscore symbol (e.g. `_resolve_adapter`) is needed by the composition root

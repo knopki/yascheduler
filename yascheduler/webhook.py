@@ -5,7 +5,7 @@
 #   PURPOSE: Webhook payload data transfer object.
 #   SCOPE: WebhookPayload frozen dataclass.
 #   DEPENDS: none
-#   LINKS: M-SCHEDULER, M-APPLICATION-ORCHESTRATOR
+#   LINKS: M-APPLICATION-ORCHESTRATOR
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

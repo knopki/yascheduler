@@ -22,7 +22,7 @@
 #   LAST_CHANGE: v1.1.0 - Use _get_machine_state (adapter-internal) instead of renamed get_machine_state (gateway-port-cleanup).
 #   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
 # END_CHANGE_SUMMARY
-# FIXME: split adapter and applicacation layer (business logic)
+# FIXME: split adapter and application layer (business logic)
 
 import argparse
 import os

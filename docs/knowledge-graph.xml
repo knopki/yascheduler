@@ -36,21 +36,6 @@
       </annotations>
     </M-WEBHOOK>
 
-    <M-SCHEDULER NAME="Scheduler" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Backward-compatible thin wrapper: delegates to Orchestrator and use cases.</purpose>
-      <path>yascheduler/scheduler.py</path>
-      <depends>M-DB, M-CLOUD-PROVISIONER, M-CONFIG, M-COMPAT, M-VARIABLES, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-DI, M-WEBHOOK</depends>
-      <annotations>
-        <class-Scheduler PURPOSE="Backward-compatible async daemon wrapper (delegates to Orchestrator)" />
-        <class-WebhookPayload PURPOSE="Re-exported from webhook module" />
-        <fn-get_logger PURPOSE="Configure and return the yascheduler logger" />
-        <fn-create PURPOSE="Async factory: builds Scheduler with DB and clouds" />
-        <fn-start PURPOSE="Delegates to Orchestrator.start()" />
-        <fn-stop PURPOSE="Delegates to Orchestrator.stop()" />
-        <fn-create_new_task PURPOSE="Delegates to submit_task use case via DI" />
-      </annotations>
-    </M-SCHEDULER>
-
     <M-DB NAME="Database layer" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgreSQL persistence for tasks, nodes, and their statuses.</purpose>
       <path>yascheduler/db.py</path>
@@ -879,8 +864,6 @@
          Cross-module links
          ═══════════════════════════════════════════════ -->
 
-    <CrossLink from="M-SCHEDULER" to="M-DB" relation="reads/writes tasks and nodes" />
-
     <CrossLink from="M-CLIENT" to="M-DB" relation="submits tasks and queries status" />
     <CrossLink from="M-AIIDA" to="M-CLIENT" relation="delegates task submission to client" />
     <CrossLink from="M-CONFIG" to="M-CONFIG-ENGINE-REPO" relation="provides engine collection to scheduler" />
@@ -906,8 +889,6 @@
     <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-EXCEPTIONS" relation="raises UnitOfWorkNotInitializedError for state-contract violations" />
 
     <!-- Application layer cross-links (v2.0.0) -->
-    <CrossLink from="M-SCHEDULER" to="M-DI" relation="delegates daemon creation to make_daemon" />
-    <CrossLink from="M-SCHEDULER" to="M-APPLICATION-SUBMIT" relation="delegates task submission to submit_task use case" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ALLOCATE" relation="calls allocate_task use case in consumer loop" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-CONSUME" relation="calls consume_task use case in consumer loop" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-DEALLOCATE" relation="calls deallocate_node per node in producer-consumer loop with deallocate_limit concurrency" />
@@ -931,7 +912,6 @@
     <CrossLink from="M-CLI-COMMANDS" to="M-PERSISTENCE-SCHEMA" relation="init command calls apply_schema for DB schema initialization" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
-    <CrossLink from="M-SCHEDULER" to="M-WEBHOOK" relation="re-exports WebhookPayload for backward compatibility" />
 
     <!-- Cloud adapter cross-links -->
     <CrossLink from="M-CLOUD-PROVISIONER" to="M-CLOUD-SSH-KEYS" relation="delegates SSH key load/generate to get_or_create_ssh_key" />

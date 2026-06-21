@@ -6,7 +6,7 @@
 #   PURPOSE: Top-level configuration container aggregating all sub-configs.
 #   SCOPE: Config frozen dataclass parsed from INI file, aggregates sub-configs.
 #   DEPENDS: M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE-REPO
-#   LINKS: M-CONFIG-HUB, M-SCHEDULER
+#   LINKS: M-CONFIG-HUB
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

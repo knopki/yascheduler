@@ -1,10 +1,4 @@
-# db-wrapper
-
-## Purpose
-
-DB class wraps persistence adapter repositories while preserving backward-compatible public API.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: DB provides task and node CRUD
 
@@ -40,21 +34,3 @@ Lifecycle methods: `commit`, `migrate`, `close`.
 #### Scenario: add_tmp_node generates provisional IP
 - **WHEN** `db.add_tmp_node("az", "root")` is called
 - **THEN** a disabled node is created with a generated IP
-
-### Requirement: TaskModel and NodeModel are immutable attrs
-
-`TaskModel` SHALL be frozen with fields: `task_id`, `label`, `ip`, `status`
-(converted via `TaskStatus` converter), `metadata` (Mapping), `cloud`.
-It SHALL produce deterministic hashes.
-
-`NodeModel` SHALL be frozen with fields: `ip`, `ncpus`, `enabled`, `cloud`,
-`username`, `port`, with documented defaults (`enabled=True`, `cloud=None`,
-`username="root"`, `port=22`).
-
-#### Scenario: TaskModel immutability and hashing
-- **WHEN** attribute assignment is attempted on `TaskModel`
-- **THEN** an exception is raised
-
-#### Scenario: NodeModel defaults
-- **WHEN** `NodeModel` is constructed with only required fields
-- **THEN** optional fields have documented default values

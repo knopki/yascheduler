@@ -1,8 +1,8 @@
 # FILE: tests/unit/test_webhook_handler.py
-# VERSION: 1.0.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Tests for the webhook notification handler.
-#   SCOPE: Unit tests for webhook_handler event dispatch and _send_webhook.
+#   SCOPE: Unit tests for webhook_handler event dispatch, _send_webhook, and WebhookPayload construction.
 #   DEPENDS: M-NOTIFIER-WEBHOOK
 #   LINKS: M-NOTIFIER-WEBHOOK
 # END_MODULE_CONTRACT
@@ -14,11 +14,13 @@
 #   test_custom_params_forwarded - WebhookPayload carries webhook_custom_params through
 #   test_send_error_logged_not_raised - Non-ok HTTP response logs warning without raising; asserts on log and return value
 #   test_send_webhook_retries_on_client_error - ClientError triggers backoff retry; _send_webhook succeeds on second attempt
+#   test_webhookpayload_construction - WebhookPayload construction with explicit custom_params (relocated from test_scheduler.py)
+#   test_webhookpayload_default_custom_params - WebhookPayload default custom_params is empty dict when not provided (relocated from test_scheduler.py)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Add autouse _fast_backoff fixture (no-op asyncio.sleep + fast-forward datetime.now) so the backoff fibonacci retry (max_time=60) does not stall or overflow tests.
-#   PREVIOUS_CHANGE: v1.2.0 - Fix mock types (MagicMock for context manager compat); rewrite retry test to call _send_webhook directly; add assertions to error test; fix ruff warnings.
+#   LAST_CHANGE: v1.4.0 - Relocate TestWebhookPayload (construction/default custom_params) from tests/unit/test_scheduler.py prior to scheduler.py deletion.
+#   PREVIOUS_CHANGE: v1.3.0 - Add autouse _fast_backoff fixture (no-op asyncio.sleep + fast-forward datetime.now) so the backoff fibonacci retry (max_time=60) does not stall or overflow tests.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -198,3 +200,29 @@ async def test_send_webhook_retries_on_client_error(
         await _send_webhook(URL, payload, http)
 
     assert call_count == 2
+
+
+class TestWebhookPayload:
+    """Tests for WebhookPayload dataclass (relocated from tests/unit/test_scheduler.py)."""
+
+    # START_CONTRACT: test_webhookpayload_construction
+    #   PURPOSE: Verify WebhookPayload construction with explicit custom_params
+    #   INPUTS: { None }
+    #   OUTPUTS: { None - assertions on task_id, status, custom_params fields }
+    # END_CONTRACT: test_webhookpayload_construction
+
+    def test_webhookpayload_construction(self) -> None:
+        payload = WebhookPayload(task_id=1, status=0, custom_params={"k": "v"})
+        assert payload.task_id == 1
+        assert payload.status == 0
+        assert payload.custom_params == {"k": "v"}
+
+    # START_CONTRACT: test_webhookpayload_default_custom_params
+    #   PURPOSE: Verify WebhookPayload default custom_params is empty dict when not provided
+    #   INPUTS: { None }
+    #   OUTPUTS: { None - assertion on default custom_params value }
+    # END_CONTRACT: test_webhookpayload_default_custom_params
+
+    def test_webhookpayload_default_custom_params(self) -> None:
+        payload = WebhookPayload(task_id=42, status=1)
+        assert payload.custom_params == {}

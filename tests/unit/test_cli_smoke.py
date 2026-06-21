@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_smoke.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CLI smoke tests — verify all 6 CLI commands are importable and structurally correct.
@@ -11,13 +11,12 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   test_utils_import_does_not_import_scheduler - utils import must not pull in scheduler
 #   TestCLIFunctions - Smoke test each of the 6 CLI entry points
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - init is now a plain sync function (not @to_sync), test checks sync instead.
-#   PREVIOUS_CHANGE: v1.1.0 - Import from adapters.cli instead of utils.
+#   LAST_CHANGE: v1.3.0 - Drop test_utils_import_does_not_import_scheduler after scheduler.py deletion (target module no longer exists).
+#   PREVIOUS_CHANGE: v1.2.0 - init is now a plain sync function (not @to_sync), test checks sync instead.
 # END_CHANGE_SUMMARY
 
 """CLI smoke tests (task 7.6): verify all 6 CLI commands still functional.
@@ -28,21 +27,6 @@ doesn't crash (no real DB/SSH needed, just mock everything).
 
 import asyncio
 import inspect
-import sys
-
-
-def test_utils_import_does_not_import_scheduler() -> None:
-    """Importing yascheduler.adapters.cli must not trigger yascheduler.scheduler import."""
-    saved = sys.modules.pop("yascheduler.scheduler", None)
-    try:
-        import yascheduler.adapters.cli  # noqa: F401
-
-        assert "yascheduler.scheduler" not in sys.modules, (
-            "Importing yascheduler.adapters.cli should not transitively import yascheduler.scheduler"
-        )
-    finally:
-        if saved is not None:
-            sys.modules["yascheduler.scheduler"] = saved
 
 
 def _check_to_sync_decorated(func: object) -> None:

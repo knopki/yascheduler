@@ -81,7 +81,6 @@ root (`di.py`) wires the graph per entry point.
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
 │  ENTRY POINTS & LEGACY WRAPPERS                                  │
-│  scheduler.py        Thin backward-compat wrapper → Orchestrator │
 │  client.py           Public API — Yascheduler facade             │
 │  db.py               Wrapper delegating to persistence adapter   │
 │  webhook.py          WebhookPayload frozen dataclass             │
@@ -117,7 +116,6 @@ the sub layer.
 | `adapters/notifier/`    | Webhook event handler                                                                         |
 | `application/`          | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                 |
 | `di.py`                 | Composition root: `make_daemon()`, `make_cli_deps()`                                          |
-| `scheduler.py`          | Thin backward-compat wrapper → Orchestrator + use cases                                       |
 | `db.py`                 | Legacy wrapper; delegates to `PostgresTaskRepository`/`NodeRepository`                        |
 | `client.py`             | Public Python API (`class Yascheduler`) — uses `make_cli_deps()` for submit, `DB` for queries |
 | `aiida_plugin.py`       | AiiDA scheduler plugin (uses `Yascheduler` client)                                            |
@@ -174,8 +172,8 @@ current load.
 
 `db.py` wraps these repositories, converting between its legacy
 `TaskModel`/`NodeModel` (attrs) and domain `Task`/`Node` (dataclasses).
-Its public surface is unchanged from the pre-migration era; `client.py`,
-`scheduler.py`, and `CloudProvisionerImpl` still consume it.
+Its public surface is unchanged from the pre-migration era; `client.py`
+and `CloudProvisionerImpl` still consume it.
 
 ### 2.3 Application (`yascheduler/application/`)
 
@@ -255,9 +253,6 @@ Failures are logged and swallowed after backoff exhausts.
 
 ### 2.9 Public API & Legacy Wrappers
 
-- **`scheduler.py`** — `class Scheduler` delegates `start()`/`stop()` to
-  `Orchestrator` and `create_new_task()` to the `submit_task` use case
-  via DI. ~190 LOC.
 - **`client.py`** — `class Yascheduler` facade.
   `queue_submit_task_async()` uses `make_cli_deps()` → `CLIDeps.submit()`
   (no daemon graph). Query methods (`queue_get_tasks*`,
@@ -265,7 +260,7 @@ Failures are logged and swallowed after backoff exhausts.
 - **`db.py`** — legacy wrapper (~540 LOC). Converts between
   `TaskModel`/`NodeModel` (attrs) and domain `Task`/`Node`, delegates to
   `PostgresTaskRepository` / `PostgresNodeRepository`. Consumed by
-  `client.py`, `scheduler.py`, `CloudProvisionerImpl`.
+  `client.py` and `CloudProvisionerImpl`.
 - **`webhook.py`** — `WebhookPayload` frozen dataclass, consumed by
   `notifier/webhook.py`.
 - **`aiida_plugin.py`** — AiiDA plugin uses `Yascheduler` client
@@ -383,7 +378,6 @@ architecture description; add via a separate proposal if needed.
   Method signatures are preserved.
 - CLI commands (`yasubmit`, `yastatus`, `yanodes`, `yasetnode`,
   `yainit`, `yascheduler`) preserve their user-facing behavior.
-- `class Scheduler` in `scheduler.py` preserves its pre-migration surface.
 - INI config format (including `[engine.*]` sections and `%(key)s`
   interpolation) is preserved.
 - DB schema (`schema.sql`) is preserved; schema changes require
@@ -461,7 +455,6 @@ yascheduler/
 │   ├── uow.py
 │   └── message_bus.py
 ├── di.py                      # composition root
-├── scheduler.py               # backward-compat wrapper
 ├── client.py                  # Yascheduler facade
 ├── aiida_plugin.py            # AiiDA plugin
 ├── db.py                      # legacy wrapper → persistence adapter
