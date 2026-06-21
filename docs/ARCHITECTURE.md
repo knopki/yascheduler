@@ -2,743 +2,580 @@
 
 > **Authoritative structure reference**: `docs/knowledge-graph.xml` is the
 > canonical source for module inventory, dependency edges, data flows, and
-> cross-module relationships. This document provides architectural
-> rationale, a migration roadmap, and design-decisions not captured in the
-> graph. When the two diverge, the graph is correct; update this document
-> afterwards.
+> cross-module relationships. This document provides architectural rationale
+> and design decisions not captured in the graph. When the two diverge, the
+> graph is correct; update this document afterwards.
 
 ---
 
-## 1. Current Architecture
+## 1. Overview
 
-### 1.1 Overview
-
-yascheduler is midway through a migration from a monolithic structure to a
-hexagonal (ports-and-adapters) architecture. Three layers are in place:
-**domain** (entities, ports, exceptions, services), **persistence adapter**
-(PostgreSQL repositories, UoW, SQL loader), and **application layer** (use
-cases, orchestrator, DI). The remaining work — CLI decoupling and domain events
-— is still planned.
-
-`scheduler.py` is now a thin backward-compatible wrapper that delegates to
-`Orchestrator` (daemon loops) and `submit_task` (use case). `client.py` no
-longer imports `scheduler.py` — it uses `make_cli_deps()` from `di.py`.
+yascheduler follows a hexagonal (ports-and-adapters) architecture with a
+domain core and four adapter families. The domain layer has no yascheduler
+imports. The application layer orchestrates use cases against domain ports
+and the Unit-of-Work boundary. Adapters implement ports for PostgreSQL,
+SSH, cloud providers, CLI, and webhook notifications. A single composition
+root (`di.py`) wires the graph per entry point.
 
 ```txt
 ┌─────────────────────────────────────────────────────────────────┐
-│  DOMAIN ✅                                                        │
+│  DOMAIN                                                          │
 │  model.py        Task, Node, ConnectedMachine, Engine,           │
-│                  TaskContext, TaskStatus (frozen dataclasses)     │
+│                  TaskContext, TaskStatus, ProcessResult          │
+│                  (frozen dataclasses; Task records/pulls events) │
 │  services.py     match_task_to_node                              │
 │  ports.py        TaskRepository, NodeRepository,                 │
-│                  MachineGateway, CloudProvisioner (Protocols)     │
+│                  MachineGateway, CloudProvisioner (Protocols)    │
+│  events.py       DomainEvent, Event union, Task* events          │
 │  exceptions.py   DomainError hierarchy                           │
 │                  (depends on: stdlib only)                        │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
-│  ADAPTERS: PERSISTENCE ✅                                         │
-│  postgres.py       PostgresTaskRepository, PostgresNodeRepository│
-│  postgres_uow.py   PostgresUnitOfWork                            │
-│  sql_loader.py     load_query(name) → cached SQL strings         │
-│  sql/              task/*.sql, node/*.sql, schema.sql             │
-│                  (depends on: domain)                             │
+│  ADAPTERS: PERSISTENCE                                           │
+│  postgres.py         PostgresTaskRepository,                     │
+│                      PostgresNodeRepository                      │
+│  postgres_uow.py     PostgresUnitOfWork                          │
+│  postgres_schema.py  apply_schema (BEGIN/COMMIT DDL)             │
+│  sql_loader.py       load_query(name) → cached SQL strings       │
+│  exceptions.py       UnitOfWorkNotInitializedError               │
+│  sql/                task/*.sql, node/*.sql, schema.sql          │
+│                  (depends on: domain, message bus)               │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
-│  APPLICATION ✅                                                   │
-│  submit_task.py    SubmitTask use case (UoW-based)               │
-│  allocate_task.py  AllocateTask use case                         │
-│  consume_task.py   ConsumeTask use case                          │
-│  deallocate_nodes  DeallocateNodes use case                      │
-│  orchestrator.py   Producer-consumer loops, SSH helpers          │
-│  uow.py            AbstractUnitOfWork Protocol                   │
-│  di.py             make_daemon(), make_cli_deps(), make_aiida()  │
-│  scheduler.py      Thin wrapper → Orchestrator + use cases       │
-│                  (depends on: domain, persistence, legacy infra)  │
+│  APPLICATION                                                     │
+│  submit_task.py      SubmitTask use case                         │
+│  allocate_task.py    AllocateTask use case                       │
+│  consume_task.py     ConsumeTask use case                        │
+│  deallocate_nodes.py DeallocateNodes use case                    │
+│  orchestrator.py     Producer-consumer daemon loops              │
+│  uow.py              AbstractUnitOfWork Protocol                 │
+│  message_bus.py      In-process event dispatcher                 │
+│                  (depends on: domain)                            │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
-│  LEGACY (not yet fully migrated)                                  │
-│  db.py            Wrapper delegating to persistence adapter       │
-│  config/          INI config tree (attrs)                        │
-│  queue.py         UniqueQueue                                   │
-│  client.py        Public API — uses make_cli_deps (no Scheduler) │
-│  utils.py         CLI entry points (monolithic)                  │
-│                  (depends on: domain, persistence, application)   │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### 1.2 Key Components
-
-| Component               | Responsibility                                           |
-| ----------------------- | -------------------------------------------------------- |
-| `domain/`               | Entities, value objects, ports, services, exceptions     |
-| `adapters/persistence/` | PostgreSQL repositories, UoW, SQL loader                 |
-| `application/`          | Use cases (submit, allocate, consume, deallocate),       |
-|                         | `Orchestrator` (daemon loops), `AbstractUnitOfWork`      |
-| `di.py`                 | Composition root: `make_daemon()`, `make_cli_deps()`     |
-| `scheduler.py`          | Thin backward-compat wrapper → `Orchestrator` + DI       |
-| `db.py`                 | Wrapper delegating to PostgresTaskRepository / NodeRepo  |
-| `adapters/ssh/`         | SSH gateway, helpers, platform adapters (✅ migrated)    |
-| `adapters/cloud/`       | Cloud provisioner, providers, cloud config (✅ migrated) |
-| `config/`               | Config tree parsed from INI (uses attrs)                 |
-| `utils.py`              | CLI entry points (6 commands), uses DI for submit        |
-| `client.py`             | Public Python API (`class Yascheduler`) — no Scheduler   |
-| `aiida_plugin.py`       | AiiDA scheduler integration                              |
-| `webhook.py`            | `WebhookPayload` frozen dataclass                        |
-
-### 1.3 Pain Points (remaining)
-
-- **Allocate/consume/deallocate use cases still use legacy `DB`** — not yet
-  fully ported to domain ports. Only `submit_task` uses UoW + repositories.
-  The other use cases accept `DB`, `RemoteMachineRepository`, and
-  `CloudAPIManager` as parameters instead of domain port abstractions.
-- **`pg8000` in `ThreadPoolExecutor(max_workers=1)`** — serializes all DB
-  access (now inside the persistence adapter).
-- **Webhook logic embedded in `Orchestrator._do_task_webhook()`** — not yet
-  extracted to a domain-event handler (deferred to phase 3.5).
-- **`utils.py` CLI commands mix** argparse, DB, SSH, and cloud-init in one file.
-- **`config/` uses attrs** — domain uses dataclasses; config still attrs
-  (low priority, deferred to phase 5.6).
-- **SSH/cloud adapters implemented** — `SSHMachineGateway` implements
-  `MachineGateway`; `CloudProvisionerImpl` implements `CloudProvisioner`.
-
----
-
-## 2. Target Architecture
-
-### 2.1 Hexagonal + DDD (remaining layers)
-
-Domain, persistence, application, and SSH/cloud adapters are in place. The
-remaining work adds CLI decoupling and domain events.
-
-```txt
-┌─────────────────────────────────────────────────────────────────┐
-│  DOMAIN ✅                                                        │
-│  — see §1.1 for current contents                                │
+│  ADAPTERS: SSH, CLOUD, CLI, NOTIFIER                             │
+│  ssh/gateway.py             SSHMachineGateway (MachineGateway)   │
+│  ssh/helpers.py             Shared SSH infra                     │
+│  ssh/exceptions.py          Retry exception types                │
+│  ssh/platform/              Linux/Windows platform detection     │
+│  cloud/manager.py           CloudProvisionerImpl                 │
+│  cloud/adapters.py          Azure/Hetzner/UpCloud adapter factory│
+│  cloud/providers/           Provider SDK adapters                │
+│  cloud/ssh_keys.py          SSH key load/generate                │
+│  cloud/cloud_config.py      CloudConfig for cloud-init           │
+│  cli/                       Per-command modules (6)              │
+│  notifier/webhook.py        Webhook event handler                │
+│                  (depends on: domain, application)               │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
-│  ADAPTERS: PERSISTENCE ✅                                         │
-│  — see §1.1 for current contents                                │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-┌──────────────────────────────┼───────────────────────────────────┐
-│  APPLICATION ✅                                                   │
-│  submit_task.py    SubmitTask use case (UoW-based)               │
-│  allocate_task.py  AllocateTask use case (legacy DB/SSH)         │
-│  consume_task.py   ConsumeTask use case (legacy DB/SSH)          │
-│  deallocate_nodes  DeallocateNodes use case (legacy DB/SSH)      │
-│  orchestrator.py   Producer-consumer loops, SSH helpers          │
-│  uow.py            AbstractUnitOfWork Protocol                   │
-│  di.py             make_daemon(), make_cli_deps(), make_aiida()  │
-│                  (depends on: domain, persistence, legacy infra)  │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-┌──────────────────────────────┼───────────────────────────────────┐
-│  ADAPTERS: SSH ✅, CLOUD ✅, CLI (planned)                        │
-│  ssh/gateway.py               SSHMachineGateway                  │
-│  ssh/helpers.py               Shared SSH infra                   │
-│  ssh/exceptions.py            SSH retry exception types          │
-│  cloud/                       Azure/Hetzner/UpCloud providers    │
-│  cli/commands.py              Thin CLI wrappers (phase 5)        │
-│  notifier/webhook.py          aiohttp webhook dispatcher         │
-│                  (depends on: domain, application)                │
-└──────────────────────────────────────────────────────────────────┘
-                               │
-┌──────────────────────────────┼───────────────────────────────────┐
-│                     COMPOSITION ROOT ✅ (di.py)                   │
+│                     COMPOSITION ROOT (di.py)                     │
 │  make_daemon()      Async factory: Orchestrator with all deps    │
 │  make_cli_deps()    Sync factory: CLIDeps for CLI/AiiDA          │
-│  make_aiida()       Stub (not yet implemented)                   │
-│                  (depends on: everything — wires the graph)       │
+│  make_aiida()       Stub (NotImplementedError)                   │
+│                  (depends on: everything — wires the graph)      │
+└──────────────────────────────────────────────────────────────────┘
+                               │
+┌──────────────────────────────┼───────────────────────────────────┐
+│  ENTRY POINTS & LEGACY WRAPPERS                                  │
+│  scheduler.py        Thin backward-compat wrapper → Orchestrator │
+│  client.py           Public API — Yascheduler facade             │
+│  db.py               Wrapper delegating to persistence adapter   │
+│  webhook.py          WebhookPayload frozen dataclass             │
+│  aiida_plugin.py     AiiDA scheduler integration                 │
+│  queue.py            UniqueQueue                                │
+│  config/             INI config tree (attrs)                     │
+│  daemon_systemd.py   Systemd entry point                         │
+│  daemon_sysv.py      SysV entry point                            │
+│  variables.py, time.py, compat.py   Path/time/typing utilities   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Design Decisions
+### Adapters layer facade
 
-| Decision                 | Choice                            | Rationale                                          |
-| ------------------------ | --------------------------------- | -------------------------------------------------- |
-| Domain model library     | stdlib `dataclasses`              | Zero dependencies in domain ✅                     |
-| Port definitions         | `typing.Protocol`                 | Structural subtyping, no inheritance required ✅   |
-| Domain layer concurrency | Synchronous                       | Simpler, testable, no I/O ✅                       |
-| Application/adapters     | Async (`async def`)               | Matches existing asyncssh, aiohttp, asyncio        |
-| Persistence              | pg8000, raw SQL in `.sql` files   | No ORM overhead, SQL tooling friendly ✅           |
-| DI                       | Manual, no container              | Project size doesn't justify framework overhead ✅ |
-| Unit of Work             | Factory-injected into use case    | Transaction per use case, testable with fakes ✅   |
-| Domain Events            | Deferred to phase 3.5             | Requires stable UoW first                          |
-| Bounded contexts         | Monolith with internal boundaries | Avoids cross-context boilerplate                   |
-| Project structure        | Layered (domain/app/adapters)     | "Screaming architecture", clear import rules ✅    |
-| Config library           | attrs → dataclasses               | Deferred to phase 5.6 (no functional gain)         |
-
-### 2.3 Import Rules
-
-```txt
-domain/       → may NOT import from yascheduler at all (stdlib only) ✅
-application/  → may import domain/ ✅; allocate/consume/deallocate also import legacy infra (transitional)
-adapters/     → may import domain/, application/
-di.py         → may import everything (top of dependency graph) ✅
-config.py     → may import nothing from yascheduler
-```
-
-Enforcement via tooling (e.g., `import-linter` or `layer-lint`) is out of
-scope for the architecture migration; add via a separate proposal.
+`yascheduler/adapters/__init__.py` is the sole public surface for cross-layer
+consumers. Application code and the composition root import gateway,
+cloud provisioner, persistence UoW, and webhook handler **only** through
+this facade — never through submodule paths. Subpackage `__init__.py`
+files (`ssh/`, `cloud/`, `persistence/`, `notifier/`) mirror this rule at
+the sub layer.
 
 ---
 
-## 3. Layer Details
+## 2. Component Reference
 
-### 3.1 Domain (`yascheduler/domain/`) — ✅ implemented
+| Component               | Responsibility                                                                                |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| `domain/`               | Entities, value objects, ports, services, exceptions, events                                  |
+| `adapters/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                      |
+| `adapters/ssh/`         | `SSHMachineGateway` + platform adapters                                                       |
+| `adapters/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                |
+| `adapters/cli/`         | 6 per-command modules                                                                         |
+| `adapters/notifier/`    | Webhook event handler                                                                         |
+| `application/`          | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                 |
+| `di.py`                 | Composition root: `make_daemon()`, `make_cli_deps()`                                          |
+| `scheduler.py`          | Thin backward-compat wrapper → Orchestrator + use cases                                       |
+| `db.py`                 | Legacy wrapper; delegates to `PostgresTaskRepository`/`NodeRepository`                        |
+| `client.py`             | Public Python API (`class Yascheduler`) — uses `make_cli_deps()` for submit, `DB` for queries |
+| `aiida_plugin.py`       | AiiDA scheduler plugin (uses `Yascheduler` client)                                            |
+| `webhook.py`            | `WebhookPayload` frozen dataclass                                                             |
+| `config/`               | Config tree parsed from INI (uses attrs)                                                      |
 
-**`model.py`** — Entities and value objects as frozen dataclasses.
+### 2.1 Domain (`yascheduler/domain/`)
 
-```python
-import time
-from dataclasses import dataclass, field, replace
-from enum import Enum, IntEnum
+Frozen dataclasses for entities, `typing.Protocol` for ports, a `DomainError`
+hierarchy, and domain events. Pure stdlib; no yascheduler imports.
 
-class TaskStatus(IntEnum):
-    TO_DO = 0
-    RUNNING = 1
-    DONE = 2
+- **`model.py`** — `Task`, `Node`, `ConnectedMachine`, `Engine`,
+  `TaskContext`, `TaskStatus`, `MachineState`, `ProcessResult`. `Task`
+  stores events in a `_events` tuple and exposes `record_event` /
+  `pull_events`.
+- **`ports.py`** — `TaskRepository`, `NodeRepository`, `MachineGateway`,
+  `CloudProvisioner` (async). Pure-computation contracts such as
+  `OccupancyConfig` and `TaskExecutionEngine` are sync.
+- **`services.py`** — `match_task_to_node(task, engine, free_machines)`.
+- **`events.py`** — `DomainEvent` base + `TaskCreated`, `TaskAllocated`,
+  `TaskCompleted`, `TaskFailed`, `TaskAbandoned`. `Event` is the union
+  alias.
+- **`exceptions.py`** — `DomainError` with `ValidationError`,
+  `TaskError`, `MachineBusyError`, `SchedulingError`,
+  `MachineConnectionError` subtrees (see §3.2).
 
-class MachineState(Enum):
-    FREE = "free"
-    BUSY = "busy"
+I/O ports declare `async def`. This does not couple the domain to
+asyncio — ports only declare the contract; the domain never awaits.
 
-@dataclass(frozen=True)
-class Engine:
-    name: str
-    spawn: str
-    input_files: tuple[str, ...]
-    output_files: tuple[str, ...]
-    platforms: tuple[str, ...]
-    check_cmd: str | None = None
-    check_pname: str | None = None
+### 2.2 Persistence Adapter (`yascheduler/adapters/persistence/`)
 
-    def validate_inputs(self, context: TaskContext) -> None: ...
+- **`postgres.py`** — `PostgresTaskRepository`, `PostgresNodeRepository`
+  implementing the domain ports via pg8000. Each method runs a
+  `load_query(name)` SQL file in a `ThreadPoolExecutor` and maps rows to
+  domain entities.
+- **`postgres_uow.py`** — `PostgresUnitOfWork` implementing the UoW
+  pattern. Owns one `pg8000.Connection` and one
+  `ThreadPoolExecutor(max_workers=1)` per instance; commits/rolls back on
+  exit; dispatches events pulled from saved aggregates via the injected
+  `MessageBus` after `commit()`.
+- **`postgres_schema.py`** — `apply_schema(config_db)` applies
+  `schema.sql` in a `BEGIN/COMMIT` transaction (used by CLI `init` and
+  test fixtures).
+- **`sql_loader.py`** — `load_query(name)` with `@functools.cache`.
+- **`sql/`** — one file per query: `task/*.sql`, `node/*.sql`,
+  `schema.sql`.
+- **`exceptions.py`** — `UnitOfWorkNotInitializedError`.
 
-@dataclass(frozen=True)
-class TaskContext:
-    engine: str
-    remote_folder: str | None = None
-    local_folder: str | None = None
-    webhook_url: str | None = None
-    webhook_custom_params: dict[str, object] = field(default_factory=dict)
-    error: str | None = None
-    extra: dict[str, object] = field(default_factory=dict)
-
-@dataclass(frozen=True)
-class Task:
-    task_id: int
-    label: str
-    status: TaskStatus
-    context: TaskContext
-    allocated_ip: str | None = None
-    def allocate_to(self, ip: str) -> "Task": ...
-    def mark_running(self) -> "Task": ...
-    def complete(self) -> "Task": ...
-    def fail(self, reason: str) -> "Task": ...
-
-@dataclass(frozen=True)
-class Node:
-    ip: str
-    ncpus: int
-    enabled: bool
-    cloud: str | None = None
-    username: str = "root"
-    port: int = 22
-
-@dataclass(frozen=True)
-class ConnectedMachine:
-    ip: str
-    platform: str
-    ncpus: int
-    state: MachineState
-    free_since: float | None = None
-    def is_compatible(self, platforms: tuple[str, ...]) -> bool: ...
-    def occupy(self) -> "ConnectedMachine": ...
-    def release(self) -> "ConnectedMachine": ...
-
-@dataclass(frozen=True)
-class ProcessResult:
-    exit_code: int
-    stdout: str = ""
-    stderr: str = ""
-```
-
-**`ports.py`** — Abstract interfaces as Protocols.
-
-```python
-from typing import Protocol
-
-class TaskRepository(Protocol):
-    async def get(self, task_id: int) -> Task: ...
-    async def save(self, task: Task) -> None: ...
-    async def list_by_status(self, statuses: set[TaskStatus]) -> list[Task]: ...
-
-class NodeRepository(Protocol):
-    async def get(self, ip: str) -> Node: ...
-    async def list_enabled(self) -> list[Node]: ...
-    async def list_disabled(self) -> list[Node]: ...
-    async def add(self, node: Node) -> None: ...
-    async def add_tmp(self, ip: str, cloud: str) -> None: ...
-    async def update(self, node: Node) -> None: ...
-    async def enable(self, ip: str) -> None: ...
-    async def disable(self, ip: str) -> None: ...
-    async def remove(self, ip: str) -> None: ...
-
-class MachineGateway(Protocol):
-    async def list_free(self, platforms: list[str] | None = None) -> list[ConnectedMachine]: ...
-    async def run(self, machine: ConnectedMachine, cmd: str) -> ProcessResult: ...
-    async def upload(self, machine: ConnectedMachine, local: Path, remote: str) -> None: ...
-    async def download(self, machine: ConnectedMachine, remote: str, local: Path) -> None: ...
-
-class CloudProvisioner(Protocol):
-    async def allocate(self, platforms: list[str]) -> Node: ...
-    async def deallocate(self, ip: str) -> None: ...
-    async def capacity(self) -> dict[str, int]: ...
-```
-
-I/O ports use `async def`. This does **not** couple the domain to asyncio —
-ports merely _declare_ the signature the domain expects. The domain never
-awaits or schedules coroutines; it treats port methods as abstract contracts.
-
-Pure-computation ports (e.g., `AllocationPolicy`) use synchronous signatures.
-
-**`services.py`** — Cross-entity domain logic.
-
-```python
-def match_task_to_node(
-    task: Task,
-    engine: Engine,
-    free_machines: list[ConnectedMachine],
-) -> ConnectedMachine | None: ...
-```
-
-**`exceptions.py`** — Domain error hierarchy (see §4.2).
-
-### 3.2 Persistence Adapter (`yascheduler/adapters/persistence/`) — ✅ implemented
-
-**`postgres.py`** — `PostgresTaskRepository` and `PostgresNodeRepository`
-implementing the domain ports via pg8000. Maps between DB rows and domain
-entities (`Task`/`Node` ↔ `TaskModel`/`NodeModel` conversions happen in
-`db.py` wrapper).
-
-**`postgres_uow.py`** — `PostgresUnitOfWork` implementing the UoW pattern:
-manages a shared pg8000 `Connection` across repositories with
-`commit()`/`rollback()` semantics.
-
-**`sql_loader.py`** — `load_query(name)` loads `.sql` files from
-`sql/` directory with `@functools.lru_cache`.
-
-**`sql/`** — SQL files organized by entity:
-
-```txt
-sql/
-├── schema.sql
-├── task/
-│   ├── get_by_id.sql
-│   ├── list_by_status.sql
-│   ├── list_by_jobs.sql
-│   ├── insert.sql
-│   ├── update.sql
-│   └── count_by_status.sql
-└── node/
-    ├── get_by_ip.sql
-    ├── list_enabled.sql
-    ├── list_disabled.sql
-    ├── insert.sql
-    ├── insert_tmp.sql
-    ├── update.sql
-    ├── enable.sql
-    ├── disable.sql
-    └── remove.sql
-```
+pg8000 is synchronous. `PostgresUnitOfWork` owns a
+`ThreadPoolExecutor(max_workers=1)`; this serializes DB access within a
+single UoW instance. Concurrent use cases each create their own UoW and
+therefore their own executor. This is intentional and adequate for
+current load.
 
 `db.py` wraps these repositories, converting between its legacy
 `TaskModel`/`NodeModel` (attrs) and domain `Task`/`Node` (dataclasses).
-The legacy public API of `db.py` is unchanged — cloud modules and scheduler
-still call `DB` methods. `db.py` delegates internally to the new
-repositories.
+Its public surface is unchanged from the pre-migration era; `client.py`,
+`scheduler.py`, and `CloudProvisionerImpl` still consume it.
 
-### 3.3 Application (`yascheduler/application/`) — ✅ implemented
+### 2.3 Application (`yascheduler/application/`)
 
-**Use cases** orchestrate domain objects and legacy infrastructure through
-dependency-injected parameters. `submit_task` is fully ported to domain
-ports (UoW + repositories); `allocate_task`, `consume_task`, and
-`deallocate_nodes` still accept legacy `DB` / `RemoteMachineRepository` /
-`CloudAPIManager` and remain to be fully ported to domain ports.
+Use cases orchestrate domain objects and adapter ports through
+dependency-injected parameters. Every use case is UoW-based.
 
-**`submit_task.py`** — Creates a `TO_DO` task after validating engine and
-inputs. Fully UoW-based: inserts via `uow.tasks.insert()`, saves via
-`uow.tasks.save()`, commits transactionally.
+- **`submit_task.py`** — validates engine and inputs, creates a `TO_DO`
+  task via `uow.tasks.insert()`, records `TaskCreated`, commits.
+- **`allocate_task.py`** — matches a `TO_DO` task to a free compatible
+  machine via `gateway.list_free` + `match_task_to_node`, starts the
+  task on the machine through the injected `start_task_on_machine`
+  callback, starts occupancy check, records `TaskAllocated` (or
+  `TaskFailed` on validation failure), falls back to
+  `clouds.allocate_with_tracking` if no machine is free.
+- **`consume_task.py`** — downloads outputs via
+  `gateway.download_outputs`, applies `Task.complete()` / `Task.fail()`,
+  records `TaskCompleted` / `TaskFailed`, notifies `CloudProvisionerImpl`.
+- **`deallocate_nodes.py`** — disables idle cloud nodes exceeding
+  tolerance, returns their IPs for VM deletion by the orchestrator.
+- **`orchestrator.py`** — long-running daemon driving four
+  producer-consumer loop pairs (connect-machines, allocate, consume,
+  deallocate) over `UniqueQueue` with configurable concurrency. Holds
+  SSH helpers (`_start_task_on_machine`) and records `TaskAbandoned` for
+  lost nodes.
+- **`uow.py`** — `AbstractUnitOfWork` Protocol.
+- **`message_bus.py`** — `MessageBus` with type-keyed handler
+  registry; `dispatch(events)` awaits async handlers and logs failures
+  without skipping subsequent handlers.
 
-```python
-async def submit_task(
-    label: str,
-    metadata: Mapping[str, Any],
-    engine_name: str,
-    engines: EngineRepository,
-    uow_factory: Callable[[], AbstractUnitOfWork],
-    remote_tasks_dir: PurePath,
-) -> int:
-```
+`application/__init__.py` is the sole public surface: it re-exports
+`AbstractUnitOfWork`, `Orchestrator`, `MessageBus`, and `submit_task`.
 
-**`allocate_task.py`** — Matches a `TO_DO` task to a free compatible machine
-or requests cloud provisioning. Uses legacy `DB`, `RemoteMachineRepository`,
-`CloudAPIManager`. Validates engine, finds free machines, starts task on
-first match; falls back to cloud allocation if no machine is available.
+### 2.4 SSH Adapter (`yascheduler/adapters/ssh/`)
 
-**`consume_task.py`** — Downloads outputs from a remote machine via SFTP and
-marks the task DONE (or ERROR on download failure). Uses legacy `DB` and
-`RemoteMachine`. Splits into `_prepare_store_folder`, `_download_task_outputs`,
-`_finalize_task` helpers for size compliance.
+`SSHMachineGateway` implements `MachineGateway` via asyncssh. Tracks
+connected machines with their occupancy state, runs commands, uploads and
+downloads files, installs engine dependencies, and runs background
+occupancy checks. Platform detection delegated to `ssh/platform/`
+adapters (Linux, Windows). `ssh/helpers.py` holds the SSH client factory,
+connection options, and platform detection glue; `ssh/exceptions.py`
+re-exports retry exception tuples.
 
-**`deallocate_nodes.py`** — Disables idle cloud nodes exceeding tolerance
-and triggers VM deletion. `deallocate_node` handles a single node;
-`deallocate_nodes` iterates all configured cloud providers.
+### 2.5 Cloud Adapter (`yascheduler/adapters/cloud/`)
 
-**`orchestrator.py`** — Long-running daemon managing 4 producer-consumer
-loop pairs: connect-machines, allocate, consume, deallocate. Each pair uses
-a `UniqueQueue` with configurable concurrency limits. Contains SSH helpers
-(`_upload_task_data`, `_start_task_on_machine`, `_exec_spawn_command`),
-webhook dispatch (`_do_task_webhook`), and periodic stats logging.
+`CloudProvisionerImpl` implements `CloudProvisioner`. Provider SDK
+integration lives in `cloud/providers/` (Azure, Hetzner, UpCloud);
+`cloud/adapters.py` registers provider factories and resolves them by
+config prefix. `cloud/ssh_keys.py` loads or generates SSH keys;
+`cloud/cloud_config.py` renders cloud-init configuration.
 
-**`uow.py`** — `AbstractUnitOfWork` Protocol defining the transactional
-boundary contract:
+### 2.6 CLI Adapter (`yascheduler/adapters/cli/`)
 
-```python
-class AbstractUnitOfWork(Protocol):
-    @property
-    def tasks(self) -> TaskRepository: ...
-    @property
-    def nodes(self) -> NodeRepository: ...
-    async def __aenter__(self) -> AbstractUnitOfWork: ...
-    async def __aexit__(self, *args) -> None: ...
-    async def commit(self) -> None: ...
-    async def rollback(self) -> None: ...
-```
+Six per-command modules, each parsing argparse, calling use cases via DI,
+and formatting output: `submit.py`, `check_status.py`, `init.py`,
+`show_nodes.py`, `manage_node.py`, `daemonize.py`. The package
+`__init__.py` re-exports all six. There is no monolithic `commands.py`.
 
-**Domain Events** (phase 3.5) — Use cases record events on aggregates.
-After `uow.commit()`, the message bus dispatches them to handlers. Not yet
-implemented.
+### 2.7 Notifier (`yascheduler/adapters/notifier/`)
 
-### 3.4 Remaining Adapters — planned
+`webhook_handler(event, http)` is registered on the `MessageBus` for all
+five event types. It maps events to `WebhookPayload`, posts to
+`event.webhook_url` via the shared `aiohttp.ClientSession` with fibonacci
+backoff (`@backoff.on_exception`) and a 10-concurrent semaphore.
+Failures are logged and swallowed after backoff exhausts.
 
-**`ssh/`** ✅ — `SSHMachineGateway` implements `MachineGateway` via asyncssh.
-`ssh/helpers.py` provides shared SSH infrastructure; `ssh/exceptions.py` re-exports
-retry exception types. Replaces the legacy `remote_machine/` module.
+### 2.8 Composition Root (`yascheduler/di.py`)
 
-**`cloud/`** ✅ — Cloud providers as adapters implementing `CloudProvisioner`.
-Includes Azure, Hetzner, UpCloud providers with adapter factory.
+- **`make_daemon(config, log, *, db, clouds)`** — creates `DB` (with
+  auto-migration), `_setup_domain_events()` (MessageBus + aiohttp
+  session + webhook handler registration), a `PostgresUnitOfWork`
+  factory, `CloudProvisionerImpl`, and `SSHMachineGateway`; returns a
+  wired `Orchestrator`. Accepts pre-built `db` / `clouds` for tests.
+- **`make_cli_deps(config)`** — returns a `CLIDeps` dataclass with
+  `engines`, `uow_factory`, `remote_tasks_dir`, and convenience
+  `submit()` / `query()` methods. No SSH/cloud/daemon dependencies.
+- **`make_aiida(config)`** — stub, raises `NotImplementedError`.
 
-**`notifier/webhook.py`** — `aiohttp`-based webhook dispatcher. Handles
-retry, rate limiting, and error logging. Becomes a domain-event handler in
-phase 3.5.
+### 2.9 Public API & Legacy Wrappers
 
-**`cli/commands.py`** (phase 5) — Thin wrappers calling use cases. Replaces
-the current monolithic `utils.py`.
+- **`scheduler.py`** — `class Scheduler` delegates `start()`/`stop()` to
+  `Orchestrator` and `create_new_task()` to the `submit_task` use case
+  via DI. ~190 LOC.
+- **`client.py`** — `class Yascheduler` facade.
+  `queue_submit_task_async()` uses `make_cli_deps()` → `CLIDeps.submit()`
+  (no daemon graph). Query methods (`queue_get_tasks*`,
+  `queue_get_task*`) still construct a `DB` instance directly.
+- **`db.py`** — legacy wrapper (~540 LOC). Converts between
+  `TaskModel`/`NodeModel` (attrs) and domain `Task`/`Node`, delegates to
+  `PostgresTaskRepository` / `PostgresNodeRepository`. Consumed by
+  `client.py`, `scheduler.py`, `CloudProvisionerImpl`.
+- **`webhook.py`** — `WebhookPayload` frozen dataclass, consumed by
+  `notifier/webhook.py`.
+- **`aiida_plugin.py`** — AiiDA plugin uses `Yascheduler` client
+  directly.
 
-### 3.5 Configuration & DI — ✅ partially implemented
+### 2.10 Configuration (`yascheduler/config/`)
 
-**`di.py`** — Composition root with factory functions, one per entry point:
-
-```python
-async def make_daemon(config: Config, log=None, *, db=None, clouds=None) -> Orchestrator: ...
-def make_cli_deps(config: Config) -> CLIDeps: ...
-def make_aiida(config: Config): ...  # stub, raises NotImplementedError
-```
-
-`make_daemon()` creates `DB`, `CloudAPIManager`, `RemoteMachineRepository`,
-and wires them into `Orchestrator`. Accepts optional pre-built `db` and
-`clouds` for testing.
-
-`make_cli_deps()` returns a `CLIDeps` dataclass with `engines`,
-`uow_factory`, `remote_tasks_dir`, and convenience methods `submit()` and
-`query()`. No SSH/cloud/daemon dependencies — lightweight for CLI use.
-
-`make_aiida()` is a stub for future AiiDA plugin integration.
-
-**`client.py`** uses `make_cli_deps()` — no longer imports `scheduler.py`.
-**`utils.py`** uses `make_cli_deps()` for submit, `make_daemon()` for daemon.
-**`scheduler.py`** delegates to `make_daemon()` for `start()` and
-`make_cli_deps()` for `create_new_task()`.
-
-Config (`config/`) currently uses attrs. Migration to dataclasses is
-deferred to phase 5.6 — no functional benefit, purely consistency.
+INI-parsed configuration tree built on `attrs`: `Config` (root),
+`ConfigDb`, `ConfigLocal`, `ConfigRemote`, `ConfigCloud*` (Azure,
+Hetzner, UpCloud), `Engine`, `EngineRepository`. Domain uses stdlib
+dataclasses; config uses attrs (see §6, Planned).
 
 ---
 
-## 4. Key Design Topics
+## 3. Key Design Topics
 
-### 4.1 Sync Domain / Async Adapters
+### 3.1 Sync Domain / Async Adapters
 
-- Domain methods are synchronous — they compute, validate, and return.
-- All I/O ports (`TaskRepository`, `MachineGateway`, `CloudProvisioner`) use
-  `async def`. This does **not** violate domain purity: the domain only
-  _declares_ the contract; it never executes coroutines.
-- Use cases are `async def` — they `await` repository calls, pass results to
-  sync domain services, and `await` the result back to storage.
-- pg8000 is synchronous; it runs in a `ThreadPoolExecutor` inside the
+- Domain methods are synchronous — compute, validate, return.
+- All I/O ports (`TaskRepository`, `MachineGateway`, `CloudProvisioner`)
+  declare `async def`. The domain never awaits; it only declares the
+  contract.
+- Use cases are `async def` — they await repository calls, pass results
+  to sync domain services, and await persistence back.
+- pg8000 is synchronous; runs in `ThreadPoolExecutor` inside the
   persistence adapter.
 
-### 4.2 Exception Hierarchy
+### 3.2 Exception Hierarchy
 
 ```txt
-DomainError                      (domain/exceptions.py) ✅
+DomainError                              (domain/exceptions.py)
 ├── ValidationError
 │   ├── UnsupportedEngineError
 │   └── MissingInputFileError
 ├── TaskError
 │   ├── TaskAlreadyAllocatedError
-│   └── TaskNotAllocatedError
+│   ├── TaskNotAllocatedError
+│   ├── TaskNotTodoError
+│   └── TaskNotRunningError
 ├── MachineBusyError
-└── SchedulingError
-    ├── NoCompatibleNodeError
-    └── CloudCapacityExhaustedError
+├── SchedulingError
+│   ├── NoCompatibleNodeError
+│   └── CloudCapacityExhaustedError
+└── MachineConnectionError
 
-ApplicationError                  (yascheduler/exceptions.py — planned)
-└── InfrastructureError
-    ├── PersistenceError
-    ├── MachineCommunicationError
-    └── CloudProvisioningError
+UnitOfWorkNotInitializedError            (adapters/persistence/exceptions.py)
 ```
 
-- `DomainError` subclasses carry domain context (task_id, engine name, etc.).
-- Use cases catch `ValidationError` → mark task DONE with error (fatal),
-  `SchedulingError` → retry later (transient),
-  `InfrastructureError` → log and retry.
-- New exception classes replace old `RuntimeError("string")` and string-based
-  status codes as each use case is migrated.
+`DomainError` subclasses carry domain context (task_id, engine name,
+ip). Use cases catch `ValidationError` → mark task with error,
+`SchedulingError` → retry later, infrastructure failures → log and
+retry. A planned `ApplicationError` / `InfrastructureError` hierarchy
+for adapter-layer errors is captured in §6.
 
-### 4.3 Unit of Work
+### 3.3 Unit of Work
 
-- Each use case gets a fresh UoW via factory.
-- UoW manages transaction boundaries: `commit()` succeeds or `rollback()` on
+- Each use case call gets a fresh UoW via the injected factory.
+- UoW manages the transaction: `commit()` on success, `rollback()` on
   exception.
-- Multiple repositories within one use case share the same connection and
-  transaction.
-- Domain events are collected during the UoW and dispatched **after** commit
-  (phase 3.5).
+- Repositories within one UoW share one connection and one transaction.
+- Aggregates record events via `Task.record_event(...)`. On
+  `uow.commit()`, the UoW pulls events via `pull_events()` and
+  dispatches them through the `MessageBus` **after** the commit
+  succeeds.
 
-### 4.4 SQL in Files
+### 3.4 Domain Events
+
+```txt
+Task aggregate ──record_event──> _events tuple
+                                        │
+PostgresUnitOfWork.commit() ─pull_events─┘
+                  │
+                  ▼
+           MessageBus.dispatch(events)
+                  │
+                  ▼ (per event type)
+        webhook_handler (notifier adapter)
+                  │
+                  ▼
+       HTTP POST (fibonacci backoff, 10-concurrent semaphore)
+```
+
+Events decouple side effects from use cases. The orchestrator and use
+cases only record events; the message bus dispatches them to handlers
+registered by the composition root. Adding a new side effect (metrics,
+audit log) means registering a new handler — no use case changes.
+
+### 3.5 SQL in Files
 
 - One file per query, named `entity/operation.sql`.
-- Lazy-loaded via `load_query(name)` → `@functools.lru_cache` → plain string.
+- Lazy-loaded via `load_query(name)` → `@functools.cache` → plain string.
 - Parameter placeholders use pg8000 `:param` style.
-- Schema DDL lives in `sql/schema.sql`; migrations in `sql/migrations/`.
+- Schema DDL lives in `sql/schema.sql`; applied by `apply_schema()`.
 - `TaskRepository.save(task)` does a full-row `UPDATE` (all columns).
 
-### 4.5 `class Yascheduler` (Public API)
+### 3.6 Import Rules
 
-- Remains in `client.py` as a **facade**.
-- **No longer imports `scheduler.py`** — `queue_submit_task_async()` uses
-  `make_cli_deps()` from `di.py` and calls `CLIDeps.submit()`, which
-  delegates to the `submit_task` use case. Submitting a task no longer
-  instantiates the daemon dependency graph.
-- Query methods (`queue_get_tasks*`, `queue_get_task*`) still create a `DB`
-  instance directly — will be ported to use cases in a future phase.
-- Public API (method signatures) is preserved — no breaking change.
-- AiiDA plugin continues to import `Yascheduler` unchanged.
+```txt
+domain/       → may NOT import from yascheduler at all (stdlib only)
+application/  → may import domain/ only (via facade)
+adapters/     → may import domain/, application/ (via facades)
+di.py         → may import everything (top of dependency graph)
+config/       → may import nothing from yascheduler
+```
 
-### 4.6 GRACE-lite
+Subpackage `__init__.py` files are the sole public surface for their
+sub tree. Cross-layer consumers import from facades, not from submodules.
 
-- GRACE-lite markup rules unchanged.
-- Before each phase: update contracts in affected files, update knowledge
-  graph.
-- After implementation: validate with `grace_check.py`.
+Enforcement via tooling (e.g., `import-linter`) is out of scope for the
+architecture description; add via a separate proposal if needed.
+
+### 3.7 Public API Stability
+
+- `class Yascheduler` in `client.py` remains the public Python facade.
+  Method signatures are preserved.
+- CLI commands (`yasubmit`, `yastatus`, `yanodes`, `yasetnode`,
+  `yainit`, `yascheduler`) preserve their user-facing behavior.
+- `class Scheduler` in `scheduler.py` preserves its pre-migration surface.
+- INI config format (including `[engine.*]` sections and `%(key)s`
+  interpolation) is preserved.
+- DB schema (`schema.sql`) is preserved; schema changes require
+  migrations (see §6).
+- AiiDA plugin entry point is preserved.
+
+### 3.8 `class Yascheduler` (Public API)
+
+- `queue_submit_task_async()` → `make_cli_deps()` → `CLIDeps.submit()`
+  → `submit_task` use case → UoW. Submitting a task does not
+  instantiate the daemon graph.
+- Query methods (`queue_get_tasks*`, `queue_get_task*`) construct `DB`
+  directly (see §6, Planned).
 
 ---
 
-## 5. Project Structure
-
-Current state with planned additions marked `← planned`:
+## 4. Project Structure
 
 ```txt
 yascheduler/
-├── domain/                          ✅
-│   ├── __init__.py
+├── domain/
+│   ├── __init__.py            # facade: events, model, exceptions, ports
 │   ├── model.py
 │   ├── services.py
 │   ├── ports.py
+│   ├── events.py
 │   └── exceptions.py
 ├── adapters/
-│   ├── __init__.py
-│   └── persistence/                 ✅
-│       ├── __init__.py
-│       ├── postgres.py
-│       ├── postgres_uow.py
-│       ├── sql_loader.py
-│       └── sql/
-│           ├── schema.sql
-│           ├── task/*.sql
-│           └── node/*.sql
-├── application/                     ✅
-│   ├── __init__.py
-│   ├── submit_task.py               ✅ UoW-based
-│   ├── allocate_task.py             ✅ legacy DB/SSH
-│   ├── consume_task.py              ✅ legacy DB/SSH
-│   ├── deallocate_nodes.py          ✅ legacy DB/SSH
-│   ├── orchestrator.py              ✅
-│   └── uow.py                       ✅ AbstractUnitOfWork Protocol
-├── di.py                            ✅ composition root
-├── webhook.py                       ✅ WebhookPayload dataclass
-│
-├── adapters/
-│   ├── persistence/                 ✅ (see above)
-│   ├── ssh/                         ✅
+│   ├── __init__.py            # adapters layer facade
+│   ├── persistence/
+│   │   ├── __init__.py        # facade
+│   │   ├── postgres.py
+│   │   ├── postgres_uow.py
+│   │   ├── postgres_schema.py
+│   │   ├── sql_loader.py
+│   │   ├── exceptions.py
+│   │   └── sql/
+│   │       ├── schema.sql
+│   │       ├── task/*.sql
+│   │       └── node/*.sql
+│   ├── ssh/
+│   │   ├── __init__.py        # facade
 │   │   ├── gateway.py
 │   │   ├── helpers.py
 │   │   ├── exceptions.py
 │   │   └── platform/
-│   ├── cloud/                       ✅
-│   │   ├── manager.py
-│   │   ├── cloud_config.py
+│   ├── cloud/
+│   │   ├── __init__.py        # facade
+│   │   ├── manager.py         # CloudProvisionerImpl
 │   │   ├── adapters.py
-│   │   └── providers/
-│   ├── cli/                         ← planned (phase 5)
-│   │   └── commands.py
+│   │   ├── protocols.py
+│   │   ├── providers/
+│   │   ├── ssh_keys.py
+│   │   ├── cloud_config.py
+│   │   └── utils.py
+│   ├── cli/
+│   │   ├── __init__.py        # facade
+│   │   ├── submit.py
+│   │   ├── check_status.py
+│   │   ├── init.py
+│   │   ├── show_nodes.py
+│   │   ├── manage_node.py
+│   │   └── daemonize.py
 │   └── notifier/
+│       ├── __init__.py        # facade
 │       └── webhook.py
-│
-├── scheduler.py                     # thin wrapper → Orchestrator + DI
-├── client.py                        # facade — uses make_cli_deps (no Scheduler)
-├── aiida_plugin.py                  # unchanged
-├── db.py                            # wrapper delegating to persistence
-├── utils.py                         # CLI entry points → adapters/cli/
-├── config/                          # to merge → config.py (phase 5.6)
-├── queue.py                         # retained (no domain coupling)
-├── time.py                          # retained (utility)
-├── compat.py                        # retained (compatibility shim)
-└── variables.py                     # retained (path constants)
+├── application/
+│   ├── __init__.py            # facade: AbstractUnitOfWork, Orchestrator,
+│   │                          # MessageBus, submit_task
+│   ├── submit_task.py
+│   ├── allocate_task.py
+│   ├── consume_task.py
+│   ├── deallocate_nodes.py
+│   ├── orchestrator.py
+│   ├── uow.py
+│   └── message_bus.py
+├── di.py                      # composition root
+├── scheduler.py               # backward-compat wrapper
+├── client.py                  # Yascheduler facade
+├── aiida_plugin.py            # AiiDA plugin
+├── db.py                      # legacy wrapper → persistence adapter
+├── webhook.py                 # WebhookPayload dataclass
+├── queue.py                   # UniqueQueue
+├── config/                    # INI config (attrs)
+├── daemon_systemd.py
+├── daemon_sysv.py
+├── variables.py
+├── time.py
+└── compat.py
 ```
 
 ---
 
-## 6. Migration Plan
+## 5. Testing Strategy
 
-### Phase 3 — Application Layer & DI — ✅ done
+### 5.1 Fake Adapters (unit tests)
 
-**Achieved**: Use cases replace inline logic in `scheduler.py`. Scheduler is
-now a thin wrapper (163 LOC).
+For every port in `domain/ports.py`, an in-memory fake exists for unit
+testing:
 
-- Created `application/submit_task.py`, `allocate_task.py`,
-  `consume_task.py`, `deallocate_nodes.py`.
-- Created `application/orchestrator.py` — daemon poll loops and concurrency
-  management (extracted from `scheduler.py`).
-- Created `di.py` with `make_daemon()` and `make_cli_deps()` factories.
-- `scheduler.py` delegates to `Orchestrator.start()` and `submit_task` use case.
-- `client.py` uses `make_cli_deps()` — no longer imports `scheduler.py`.
-- `utils.py` CLI submit uses `make_cli_deps()`; daemon entry uses
-  `make_daemon()`.
-- `submit_task` is fully UoW-based; allocate/consume/deallocate use cases
-  still use legacy `DB`/`RemoteMachineRepository`/`CloudAPIManager`
-  (to be ported to domain ports in a future phase).
+| Port               | Fake                                |
+| ------------------ | ----------------------------------- |
+| `TaskRepository`   | dict-backed fake                    |
+| `NodeRepository`   | dict-backed fake                    |
+| `MachineGateway`   | stubbed SSH, returns canned results |
+| `CloudProvisioner` | stubbed cloud, returns canned IPs   |
 
-### Phase 3.5 — Domain Events (optional but recommended)
+Use cases are tested with fakes — no real DB, SSH, or cloud.
 
-**Goal**: Decouple webhook and side-effects from use cases.
+### 5.2 Integration Tests
 
-- Create `application/events.py` with event dataclasses.
-- Create `application/message_bus.py` with dispatch loop.
-- Create `adapters/notifier/webhook.py` as event handler.
-- Use cases record events; message bus dispatches after `uow.commit()`.
-- Remove scattered `do_task_webhook()` calls from use cases.
+| Layer              | Tool                            |
+| ------------------ | ------------------------------- |
+| Persistence        | `testcontainers[postgres]`      |
+| Use case + real DB | testcontainers + fake SSH/cloud |
+| SSH adapter        | Docker SSH server               |
+| Cloud adapter      | staged (manual) or mock HTTP    |
 
-### Phase 4 — SSH & Cloud Adapters — ✅ done
+### 5.3 End-to-End Tests
 
-**Achieved**: Moved `remote_machine/` and `clouds/` into `adapters/`.
+Full task lifecycle against real PostgreSQL and SSH containers via
+testcontainers: TO_DO → RUNNING → DONE transitions, node deallocation,
+webhook dispatch.
 
-- `RemoteMachine` split into `ConnectedMachine` (domain entity) +
-  `SSHMachineGateway` (adapter implementing `MachineGateway`).
-- Cloud providers moved into `adapters/cloud/providers/` with new
-  `CloudProvisionerImpl` implementing `CloudProvisioner` port.
-- Old `remote_machine/` and `clouds/` modules removed.
-- Shared SSH infrastructure extracted to `adapters/ssh/helpers.py`;
-  retry exception types to `adapters/ssh/exceptions.py`.
-- Tests updated to use adapter interfaces.
+### 5.4 Smoke Tests (Public API)
 
-### Phase 5 — CLI Decoupling
-
-**Goal**: `utils.py` becomes thin CLI wrappers in `adapters/cli/`.
-
-- Move CLI command functions to `adapters/cli/commands.py`.
-- Each command calls use cases from `di.make_cli_deps()`.
-- `utils.py` becomes re-export wrapper, then removed.
-- `Yascheduler` facade in `client.py` validated against existing API consumers.
-
-### Phase 5.5 — Connection Pool (optional)
-
-**Goal**: Replace `ThreadPoolExecutor(max_workers=1)` with a connection pool.
-
-- Implement `PgPool` (asyncio.Queue-based) in persistence adapter.
-- UoW acquires/releases connections from pool.
-- Enables parallel DB access across concurrent use cases.
-- Low priority — the single-executor design is not a proven bottleneck.
-
-### Phase 5.6 — Config attrs → dataclasses (optional)
-
-**Goal**: Remove attrs from the config package for consistency.
-
-- Replace attrs decorators and `make_default_field()` with stdlib
-  `dataclasses`.
-- No functional change, purely for dependency hygiene.
-- Lowest priority — can be done incrementally or deferred indefinitely.
-
----
-
-## 7. Testing Strategy
-
-### 7.1 Fake Adapters (unit tests)
-
-For every port in `domain/ports.py`, provide an in-memory fake:
-
-| Port               | Fake                                                       |
-| ------------------ | ---------------------------------------------------------- |
-| `TaskRepository`   | `FakeTaskRepository` (dict-backed, like current `FakeDB`)  |
-| `NodeRepository`   | `FakeNodeRepository` (dict-backed)                         |
-| `MachineGateway`   | `FakeMachineGateway` (stubbed SSH, returns canned results) |
-| `CloudProvisioner` | `FakeCloudProvisioner` (stubbed cloud, returns canned IPs) |
-
-Use cases are tested with fakes: no real DB, no real SSH, no real cloud.
-
-### 7.2 Integration Tests
-
-| Layer              | Tool                            | When    |
-| ------------------ | ------------------------------- | ------- |
-| Persistence        | `testcontainers[postgres]`      | ✅ done |
-| Use case + real DB | testcontainers + fake SSH/cloud | Phase 3 |
-| SSH adapter        | Docker SSH server               | ✅ done |
-| Cloud adapter      | Staged (manual) or mock HTTP    | ✅ done |
-
-### 7.3 Smoke Tests (Public API)
-
-Before and after each phase, run smoke tests that cover:
+Before and after any change, run smoke tests that cover:
 
 - All CLI entry points (`yasubmit`, `yastatus`, `yanodes`, `yasetnode`,
-  `yainit`, `yascheduler`)
-- `class Yascheduler` public methods (submit, get, list — sync and async)
-- AiiDA plugin scheduler entry point
+  `yainit`, `yascheduler`).
+- `class Yascheduler` public methods (submit, get, list — sync and
+  async).
+- AiiDA plugin scheduler entry point.
 
-### 7.4 Multi-Use-Case Tests
-
-Allocate → Consume → Deallocate as a full lifecycle test:
-
-- Real DB (testcontainers)
-- Faked SSH (`FakeMachineGateway` that simulates a job completing)
-- Faked cloud (`FakeCloudProvisioner`)
-- Verifies task transitions through TO_DO → RUNNING → DONE and node
-  deallocation.
+Run with `uv run pytest -m unit|integration|e2e`.
 
 ---
 
-## 8. Open Questions
+## 6. Planned
 
-| Topic                      | Status                                      |
-| -------------------------- | ------------------------------------------- |
-| AiiDA plugin evolution     | Keep importing `Yascheduler` facade for now |
-| Monitoring/metrics         | Not addressed; domain events enable it      |
-| Connection pool            | Deferred to phase 5.5 (optional)            |
-| Config attrs → dataclasses | Deferred to phase 5.6 (optional)            |
+Active OpenSpec change proposals live in `openspec/changes/`. Anything
+not listed there is intentionally out of scope.
+
+### 6.1 Schema migrations (`openspec/changes/schema-migrations/`)
+
+Replace the ad-hoc `db.migrate()` (hardcoded `ALTER TABLE ADD COLUMN IF
+NOT EXISTS`) with versioned SQL migrations:
+
+- `adapters/persistence/sql/migrations/` directory with
+  `NNN_description.sql` files.
+- `yascheduler_migrations` tracking table.
+- Sequential, transactional application of unapplied migrations.
+- `schema.sql` remains the ground truth for fresh installations.
+
+Enables schema evolution without modifying `db.py` each time.
+
+### 6.2 Config: attrs → dataclasses (`openspec/changes/config-dataclasses/`)
+
+Replace `attrs` with stdlib `dataclasses` in `config/`. No functional
+change; eliminates the last non-stdlib dependency in the configuration
+layer and unifies style with the domain.
+
+### 6.3 `make_aiida()` implementation
+
+`make_aiida()` in `di.py` currently raises `NotImplementedError`. The
+AiiDA plugin still imports the `Yascheduler` client directly. Wiring the
+plugin through DI is deferred until the plugin is ready for refactoring;
+no active proposal.
+
+### 6.4 `client.py` query methods via use cases
+
+`queue_get_tasks*` and `queue_get_task*` construct `DB` directly instead
+of going through a use case. Porting them to a query use case would let
+`db.py` shrink and eventually retire. No active proposal; deferred until
+`db.py` removal becomes a concrete goal.
+
+### 6.5 Application-layer exception hierarchy
+
+A planned `ApplicationError` / `InfrastructureError` hierarchy
+(`PersistenceError`, `MachineCommunicationError`,
+`CloudProvisioningError`) would give adapter-layer failures first-class
+types distinct from string-based status codes. Not yet proposed; capture
+in a change proposal before implementing.
+
+---
+
+## 7. Open Questions
+
+| Topic                           | Status                                               |
+| ------------------------------- | ---------------------------------------------------- |
+| AiiDA plugin evolution          | Keep importing `Yascheduler` facade until §6.3 lands |
+| `db.py` retirement              | Tied to §6.4 (client query port); no active proposal |
+| Config attrs → dataclasses      | §6.2, open proposal                                  |
+| Schema versioning               | §6.1, open proposal                                  |
+| Application exception hierarchy | §6.5, no proposal yet                                |
