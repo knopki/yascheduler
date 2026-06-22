@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 1.9.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain layer entry point — re-exports events, model entities, exception hierarchy, and port interfaces.
 #   SCOPE: Re-exports domain events from .events, domain entities from .model, exception tree from .exceptions, and port Protocols from .ports.
@@ -23,6 +23,7 @@
 #   Task - Task entity with lifecycle methods
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
+#   ProviderSelection - Selected cloud provider value object (name, username)
 #   DomainError - Base class for all domain exceptions
 #   ValidationError - Input validation errors
 #   UnsupportedEngineError - Unknown calculation engine requested
@@ -37,6 +38,8 @@
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
 #   CloudCapacityExhaustedError - Cloud provider at capacity
+#   CloudAllocateError - Cloud node allocation error
+#   CloudSetupError - Cloud node setup error
 #   TaskRepository - Async port for task persistence
 #   NodeRepository - Async port for node persistence
 #   MachineGateway - Async port for remote machine operations
@@ -46,8 +49,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Add TaskExecutionEngine export (gateway-port-cleanup scope expansion).
-#   PREVIOUS_CHANGE: v1.8.0 - Extended facade to expose model, exceptions tree, and ports alongside events; part of clean-architecture-imports.
+#   LAST_CHANGE: v2.0.0 - Add ProviderSelection, CloudAllocateError, CloudSetupError re-exports (cloud-provisioner-pure).
+#   PREVIOUS_CHANGE: v1.9.0 - Add TaskExecutionEngine export (gateway-port-cleanup scope expansion).
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -68,6 +71,7 @@ __all__ = [
     "Task",
     "Node",
     "ConnectedMachine",
+    "ProviderSelection",
     # Exceptions
     "DomainError",
     "ValidationError",
@@ -83,6 +87,8 @@ __all__ = [
     "SchedulingError",
     "NoCompatibleNodeError",
     "CloudCapacityExhaustedError",
+    "CloudAllocateError",
+    "CloudSetupError",
     # Ports
     "TaskRepository",
     "NodeRepository",
@@ -102,7 +108,9 @@ from .events import (
     TaskFailed,
 )
 from .exceptions import (
+    CloudAllocateError,
     CloudCapacityExhaustedError,
+    CloudSetupError,
     DomainError,
     MachineBusyError,
     MachineConnectionError,
@@ -123,6 +131,7 @@ from .model import (
     MachineState,
     Node,
     ProcessResult,
+    ProviderSelection,
     Task,
     TaskContext,
     TaskStatus,

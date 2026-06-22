@@ -29,6 +29,7 @@
 #   test_connected_machine_occupy - FREE->BUSY
 #   test_connected_machine_occupy_busy - raises MachineBusyError
 #   test_connected_machine_release - FREE + free_since
+#   TestProviderSelection - frozen dataclass, field access, equality
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
@@ -52,6 +53,7 @@ from yascheduler.domain.model import (
     MachineState,
     Node,
     ProcessResult,
+    ProviderSelection,
     Task,
     TaskContext,
     TaskStatus,
@@ -419,3 +421,24 @@ class TestConnectedMachine:
         # original unchanged
         assert m.state == MachineState.BUSY
         assert m.free_since is None
+
+
+class TestProviderSelection:
+    """ProviderSelection frozen dataclass."""
+
+    def test_frozen(self) -> None:
+        sel = ProviderSelection(name="aws", username="root")
+        with pytest.raises(FrozenInstanceError):
+            sel.name = "other"  # type: ignore[misc]
+
+    def test_fields(self) -> None:
+        sel = ProviderSelection(name="aws", username="ec2-user")
+        assert sel.name == "aws"
+        assert sel.username == "ec2-user"
+
+    def test_equality(self) -> None:
+        a = ProviderSelection(name="aws", username="root")
+        b = ProviderSelection(name="aws", username="root")
+        c = ProviderSelection(name="gcp", username="root")
+        assert a == b
+        assert a != c

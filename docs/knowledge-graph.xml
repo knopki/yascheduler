@@ -205,6 +205,9 @@
         <export-OccupancyConfig PURPOSE="Minimal structural contract for occupancy check configuration" />
         <export-TaskExecutionEngine PURPOSE="Engine contract for task deployment (superset of OccupancyConfig)" />
         <export-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
+        <export-ProviderSelection PURPOSE="Frozen value object (name, username) returned by CloudProvisioner.select_provider" />
+        <export-CloudAllocateError PURPOSE="Cloud node allocation failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
+        <export-CloudSetupError PURPOSE="Cloud node setup failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
       </annotations>
     </M-DOMAIN>
 
@@ -227,6 +230,8 @@
         <class-NoCompatibleNodeError PURPOSE="No matching node found for task" />
         <class-CloudCapacityExhaustedError PURPOSE="Cloud provider at capacity" />
         <class-MachineConnectionError PURPOSE="SSH connection failure carrying ip and reason" />
+        <class-CloudAllocateError PURPOSE="Cloud node allocation error — relocated from adapters/cloud (re-exported for backwards compat)" />
+        <class-CloudSetupError PURPOSE="Cloud node setup error (SSH/cloud-init) — relocated from adapters/cloud (re-exported for backwards compat)" />
       </annotations>
     </M-DOMAIN-EXCEPTIONS>
 
@@ -243,6 +248,7 @@
         <class-Task PURPOSE="Task entity with lifecycle methods and event recording (record_event, pull_events, _events tuple)" />
         <class-Node PURPOSE="Persistent compute node record" />
         <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
+        <type-ProviderSelection PURPOSE="Frozen value object (name, username) returned by CloudProvisioner.select_provider" />
       </annotations>
     </M-DOMAIN-MODEL>
 
@@ -256,7 +262,7 @@
         <class-MachineGateway PURPOSE="Async port for remote machine operations" />
         <class-OccupancyConfig PURPOSE="Minimal structural contract for occupancy check configuration" />
         <class-TaskExecutionEngine PURPOSE="Engine contract for task deployment (superset of OccupancyConfig)" />
-        <class-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
+        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider), deallocate(cloud, ip), select_provider(platforms, counts) -> ProviderSelection | None (sync)" />
       </annotations>
     </M-DOMAIN-PORTS>
 
@@ -289,14 +295,15 @@
          ═══════════════════════════════════════════════ -->
 
     <M-APPLICATION NAME="Application layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task.</purpose>
+      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task, AllocationTracker.</purpose>
       <path>yascheduler/application/__init__.py</path>
-      <depends>M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-SUBMIT</depends>
+      <depends>M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <export-AbstractUnitOfWork PURPOSE="Unit-of-work boundary for application use cases" />
         <export-Orchestrator PURPOSE="Task lifecycle orchestrator" />
         <export-MessageBus PURPOSE="In-process event bus for domain events" />
         <export-submit_task PURPOSE="Use case: register a new task in TO_DO state" />
+        <export-AllocationTracker PURPOSE="In-memory dedup of in-flight cloud allocations" />
       </annotations>
     </M-APPLICATION>
 
@@ -328,11 +335,11 @@
     </M-APPLICATION-SUBMIT>
 
     <M-APPLICATION-ALLOCATE NAME="Allocate task use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Match a TO_DO task to a free machine or request cloud provisioning.</purpose>
+      <purpose>Match a TO_DO task to a free machine or request cloud provisioning (owns cloud-fallback flow: tracker dedup, capacity, tmp-node, final persist).</purpose>
       <path>yascheduler/application/allocate_task.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-EVENTS</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
-        <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or request cloud node" />
+        <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or own full cloud-fallback flow via CloudProvisioner port" />
         <fn-_validate_engine PURPOSE="Validate task engine is configured and supported" />
         <fn-_allocate_free_machine PURPOSE="Find free machine and start task on it" />
         <fn-_find_free_machines PURPOSE="Find free compatible machines for task allocation" />
@@ -343,43 +350,55 @@
     <M-APPLICATION-CONSUME NAME="Consume task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Download outputs from remote machine and mark task DONE.</purpose>
       <path>yascheduler/application/consume_task.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-EVENTS</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG-ENGINE-REPO, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <fn-consume_task PURPOSE="Download task outputs and mark DONE or ERROR" />
         <fn-_prepare_store_folder PURPOSE="Create local output directory from domain Task context" />
-        <fn-_finalize_task PURPOSE="Apply domain lifecycle, save via UoW, record domain events (TaskCompleted/TaskFailed), notify cloud manager" />
+        <fn-_finalize_task PURPOSE="Apply domain lifecycle, save via UoW, record domain events (TaskCompleted/TaskFailed), discard tracker slot" />
         <fn-_record_finalization_event PURPOSE="Apply domain status and record corresponding event" />
       </annotations>
     </M-APPLICATION-CONSUME>
 
     <M-APPLICATION-DEALLOCATE NAME="Deallocate idle nodes use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Disable idle cloud nodes and return IPs for VM deletion.</purpose>
+      <purpose>Disable idle cloud nodes and return IPs for VM deletion; per-node wrapper owns disable+remove bracketing around pure cloud delete.</purpose>
       <path>yascheduler/application/deallocate_nodes.py</path>
       <depends>M-APPLICATION-UOW, M-CONFIG-CLOUD, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
       <annotations>
-        <fn-deallocate_node PURPOSE="Disconnect and cloud-deallocate a single node" />
-        <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and return IPs for VM deletion" />
+        <fn-deallocate_node PURPOSE="Per-node wrapper: gateway disconnect -> UoW disable+commit -> clouds.deallocate(cloud, ip) -> UoW remove+commit" />
+        <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and return IPs for VM deletion (idle-disable sweep)" />
       </annotations>
     </M-APPLICATION-DEALLOCATE>
+
+    <M-APPLICATION-ALLOCATION-TRACKER NAME="Allocation tracker" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>In-memory dedup of in-flight cloud allocations by task_id; owned by orchestrator, injected into allocate/consume use cases.</purpose>
+      <path>yascheduler/application/allocation_tracker.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-AllocationTracker PURPOSE="In-memory set tracking task_ids with in-flight cloud allocations (add/discard/__contains__)" />
+      </annotations>
+    </M-APPLICATION-ALLOCATION-TRACKER>
 
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineGateway Protocol.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-DOMAIN-EVENTS</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
         <fn-stop PURPOSE="Graceful shutdown" />
+        <const-allocation_tracker PURPOSE="Owned AllocationTracker injected into allocate/consume use cases" />
+        <const-active_clouds PURPOSE="Filtered Sequence[ConfigCloud] with max_nodes>0 and resolved adapter" />
+        <const-allocation_lock PURPOSE="Owned asyncio.Lock serializing allocate_task critical section" />
       </annotations>
     </M-APPLICATION-ORCHESTRATOR>
 
     <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Composition root with factories per entry point: daemon, CLI, AiiDA. Wires MessageBus with webhook handlers.</purpose>
       <path>yascheduler/di.py</path>
-      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS</depends>
+      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit and query" />
-        <fn-make_daemon PURPOSE="Async factory creating Orchestrator with UoW factory" />
+        <fn-make_daemon PURPOSE="Async factory creating Orchestrator with UoW factory (no DB, no auto-migration)" />
         <fn-make_cli_deps PURPOSE="Sync factory creating lightweight CLIDeps" />
         <fn-make_aiida PURPOSE="Stub for future AiiDA integration" />
       </annotations>
@@ -599,23 +618,31 @@
         <export-get_or_create_ssh_key PURPOSE="Load or generate SSH key" />
         <export-get_rnd_name PURPOSE="Generate random name with prefix (cloud-internal)" />
         <export-get_upcloud_adapter PURPOSE="Create CloudAdapter for UpCloud" />
+        <export-resolve_adapter PURPOSE="Look up cloud adapter by prefix from registry" />
       </annotations>
     </M-CLOUD>
 
     <M-CLOUD-PROVISIONER NAME="Cloud provisioner" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>CloudProvisionerImpl — implementation of CloudProvisioner port with multi-provider support.</purpose>
+      <purpose>CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, setup, SSH keys); no DB access.</purpose>
       <path>yascheduler/adapters/cloud/manager.py</path>
-      <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-SSH-KEYS, M-SSH-GATEWAY, M-CONFIG, M-CONFIG-CLOUD</depends>
+      <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-SSH-KEYS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIG, M-SSH-GATEWAY, M-CONFIG, M-CONFIG-CLOUD</depends>
       <annotations>
-        <class-CloudProvisionerImpl PURPOSE="Implementation of CloudProvisioner protocol" />
-        <fn-allocate PURPOSE="Allocate cloud node" />
-        <fn-deallocate PURPOSE="Deallocate cloud node" />
-        <fn-capacity PURPOSE="Get cloud capacity" />
-        <fn-allocate_with_tracking PURPOSE="Allocate with tracking" />
-        <fn-get_capacity PURPOSE="Get capacity" />
-        <fn-mark_task_done PURPOSE="Mark task done" />
+        <class-CloudProvisionerImpl PURPOSE="Pure cloud-API adapter implementing CloudProvisioner protocol" />
+        <fn-allocate PURPOSE="Allocate cloud node by provider name (provider: str) -> Node; no DB write" />
+        <fn-deallocate PURPOSE="Deallocate cloud node by cloud name + IP (cloud, ip) -> None; no DB read/write" />
+        <fn-select_provider PURPOSE="Sync port method: select provider by priority/capacity/platform, return ProviderSelection or None (None on throttle)" />
       </annotations>
     </M-CLOUD-PROVISIONER>
+
+    <M-CLOUD-PROVIDER-SELECTION NAME="Provider selection" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Pure function selecting best cloud provider by priority, capacity, and platform support.</purpose>
+      <path>yascheduler/adapters/cloud/provider_selection.py</path>
+      <depends>M-CLOUD-ADAPTERS-NEW</depends>
+      <annotations>
+        <fn-select_provider_pure PURPOSE="Pick highest-priority provider with capacity and platform support; called only from CloudProvisionerImpl.select_provider" />
+        <fn-_adapter_supports_any_platform PURPOSE="True iff adapter passes at least one supported_platform_check for at least one requested platform" />
+      </annotations>
+    </M-CLOUD-PROVIDER-SELECTION>
 
     <M-CLOUD-PROVIDERS NAME="Cloud providers" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Cloud provider SDK adapters (Azure, Hetzner, UpCloud) with optional import handling.</purpose>
@@ -667,7 +694,7 @@
         <fn-get_upcloud_adapter PURPOSE="Get UpCloud adapter" />
         <fn-get_vastai_adapter PURPOSE="Get VastAI adapter" />
         <const-CLOUD_ADAPTER_GETTERS PURPOSE="Registry mapping cloud prefix to adapter factory" />
-        <fn-_resolve_adapter PURPOSE="Look up cloud adapter by prefix from registry" />
+        <fn-resolve_adapter PURPOSE="Look up cloud adapter by prefix from registry (public; consumed by composition root)" />
       </annotations>
     </M-CLOUD-ADAPTERS-NEW>
 
@@ -915,10 +942,18 @@
 
     <!-- Cloud adapter cross-links -->
     <CrossLink from="M-CLOUD-PROVISIONER" to="M-CLOUD-SSH-KEYS" relation="delegates SSH key load/generate to get_or_create_ssh_key" />
+    <CrossLink from="M-CLOUD-PROVISIONER" to="M-DOMAIN-EXCEPTIONS" relation="re-exports relocated CloudAllocateError/CloudSetupError for backwards compat" />
+    <CrossLink from="M-CLOUD-PROVISIONER" to="M-CLOUD-PROVIDER-SELECTION" relation="select_provider port method delegates to select_provider_pure" />
+
+    <!-- AllocationTracker cross-links (cloud-provisioner-pure) -->
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ALLOCATION-TRACKER" relation="owns and injects tracker for in-flight allocation dedup" />
+    <CrossLink from="M-APPLICATION-ALLOCATE" to="M-APPLICATION-ALLOCATION-TRACKER" relation="dedupes in-flight cloud allocations" />
+    <CrossLink from="M-APPLICATION-CONSUME" to="M-APPLICATION-ALLOCATION-TRACKER" relation="discards completed allocations" />
+    <CrossLink from="M-DI" to="M-APPLICATION-ALLOCATION-TRACKER" relation="constructs tracker and injects into Orchestrator" />
 
     <!-- SSH adapter cross-links -->
     <CrossLink from="M-SSH-GATEWAY" to="M-PLATFORM-ADAPTERS" relation="uses platform detection and adapters" />
-    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-GATEWAY" relation="creates and passes gateway to RemoteMachine.create()" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-GATEWAY" relation="consumes MachineGateway Protocol injected via constructor" />
 
   </Project>
 </KnowledgeGraph>

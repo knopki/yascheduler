@@ -1,26 +1,26 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 3.1.0
+# VERSION: 4.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return IPs for VM deletion.
-#   SCOPE: deallocate_nodes async function.
-#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG-CLOUD
+#   SCOPE: deallocate_node, deallocate_nodes async functions.
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG-CLOUD
 #   LINKS: M-APPLICATION-UOW, M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   deallocate_node - Disconnect and cloud-deallocate a single node
+#   deallocate_node - Disconnect and cloud-deallocate a single node; logs+flags stale row if DB remove fails after successful cloud delete
 #   deallocate_nodes - Disable idle cloud nodes and return IPs for VM deletion
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v3.1.0 - Use MachineGateway Protocol and gateway.contains() instead of gateway.keys() (gateway-port-cleanup).
-#   PREVIOUS_CHANGE: v3.0.0 - Replace RemoteMachineRepository with SSHMachineGateway.
+#   LAST_CHANGE: v4.2.0 - Switch idle_machines to monotonic float timestamps (matching free_since on ConnectedMachine) and compare against time.monotonic(); eliminates wall-clock/monotonic mixing that skewed idle detection under DST/NTP clock jumps.
+#   PREVIOUS_CHANGE: v4.1.0 - Wrap deallocate_node REMOVE UoW in try/except: if DB remove fails after cloud delete succeeded, log loudly for operator reconciliation (VM is gone but row stays disabled) instead of crashing the deallocator worker (review-hardening).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+import time
 from typing import TYPE_CHECKING
 
 from yascheduler.domain import Node, TaskStatus
@@ -28,9 +28,8 @@ from yascheduler.domain import Node, TaskStatus
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from yascheduler.adapters import CloudProvisionerImpl
     from yascheduler.config import ConfigCloud
-    from yascheduler.domain import MachineGateway
+    from yascheduler.domain import CloudProvisioner, MachineGateway
 
     from .uow import AbstractUnitOfWork
 
@@ -42,21 +41,71 @@ logger = logging.getLogger(__name__)
 #   INPUTS: {
 #     node: Node - The node to deallocate,
 #     gateway: MachineGateway - SSH gateway,
-#     clouds: CloudProvisionerImpl - Cloud provider manager
+#     clouds: CloudProvisioner - Cloud provider manager,
+#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Disconnects remote machine, deletes cloud VM.
-#   LINKS: M-SSH-GATEWAY, M-CLOUD-PROVISIONER
+#   SIDE_EFFECTS: Disconnects remote machine, disables node via UoW, deletes cloud VM via port, removes node via second UoW. If the second UoW fails after cloud delete succeeded, logs loudly for manual reconciliation (row stays disabled) and does not re-raise — the cloud VM is already gone.
+#   LINKS: M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-UOW
 # END_CONTRACT: deallocate_node
 async def deallocate_node(
     node: Node,
     gateway: MachineGateway,
-    clouds: CloudProvisionerImpl,
+    clouds: CloudProvisioner,
+    uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> None:
     if gateway.contains(node.ip):
         await gateway.disconnect(node.ip)
+        logger.info(
+            "[deallocate_node][DISCONNECT] ip=%s gateway disconnected",
+            node.ip,
+        )
     if node.cloud:
-        await clouds.deallocate(node.ip)
+        # START_BLOCK_DISABLE
+        logger.info(
+            "[deallocate_node][DISABLE] ip=%s cloud=%s",
+            node.ip,
+            node.cloud,
+        )
+        async with uow_factory() as uow:
+            await uow.nodes.disable(node.ip)
+            await uow.commit()
+        # END_BLOCK_DISABLE
+
+        # START_BLOCK_CLOUD_DELETE
+        logger.info(
+            "[deallocate_node][CLOUD_DELETE] ip=%s cloud=%s",
+            node.ip,
+            node.cloud,
+        )
+        await clouds.deallocate(node.cloud, node.ip)
+        # END_BLOCK_CLOUD_DELETE
+
+        # START_BLOCK_REMOVE
+        logger.info(
+            "[deallocate_node][REMOVE] ip=%s cloud=%s",
+            node.ip,
+            node.cloud,
+        )
+        try:
+            async with uow_factory() as uow:
+                await uow.nodes.remove(node.ip)
+                await uow.commit()
+        except Exception as remove_err:
+            # Cloud VM is already gone; the disabled DB row is stale. Log
+            # loudly so operators can reconcile manually. Not re-raised: the
+            # cloud delete succeeded, and the next cycle's deallocate_node
+            # will re-attempt (cloud-SDK delete-idempotency dependent) plus
+            # this remove.
+            logger.error(
+                "[deallocate_node][REMOVE_FAILED] ip=%s cloud=%s err=%s "
+                "— VM is deleted but DB row left disabled; "
+                "manual reconciliation needed",
+                node.ip,
+                node.cloud,
+                remove_err,
+            )
+        # END_BLOCK_REMOVE
 
 
 # START_CONTRACT: deallocate_nodes
@@ -64,7 +113,7 @@ async def deallocate_node(
 #   INPUTS: {
 #     uow_factory: Callable[[], AbstractUnitOfWork] - Unit of Work factory,
 #     config_clouds: Sequence[ConfigCloud] - Cloud configuration with idle_tolerance,
-#     idle_machines: dict[str, float] - IP -> free_since monotonic timestamp
+#     idle_machines: dict[str, float] - IP -> free_since monotonic timestamp (seconds since arbitrary epoch)
 #   }
 #   OUTPUTS: { list[str] - List of disabled node IPs for orchestrator to deallocate }
 #   SIDE_EFFECTS: Disables nodes in DB.
@@ -73,7 +122,7 @@ async def deallocate_node(
 async def deallocate_nodes(
     uow_factory: Callable[[], AbstractUnitOfWork],
     config_clouds: Sequence[ConfigCloud],
-    idle_machines: dict[str, datetime],
+    idle_machines: dict[str, float],
 ) -> list[str]:
     # START_BLOCK_DISABLE_IDLE
     async with uow_factory() as uow:
@@ -83,15 +132,14 @@ async def deallocate_nodes(
             n.ip: n for n in await uow.nodes.list_enabled() if n.ip not in busy_ips
         }
 
-    now = datetime.now()
+    now = time.monotonic()
     for ccfg in config_clouds:
-        tdlim = timedelta(seconds=ccfg.idle_tolerance)
         nodes_to_disable = [
             ip
             for ip, node in all_enabled_nodes.items()
             if node.cloud == ccfg.prefix
             and ip in idle_machines
-            and (now - idle_machines[ip]) >= tdlim
+            and (now - idle_machines[ip]) >= ccfg.idle_tolerance
         ]
         for ip in nodes_to_disable:
             async with uow_factory() as uow:

@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 4.1.0
+# VERSION: 5.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and mark task DONE.
 #   SCOPE: consume_task async function.
-#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-EVENTS
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-CLOUD-PROVISIONER, M-SSH-GATEWAY
+#   DEPENDS: M-APPLICATION-UOW, M-CONFIG-ENGINE-REPO, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.1.0 - Delegate SFTP download to gateway.download_outputs(); remove _sftp_download_job and _download_task_outputs; use MachineGateway Protocol (gateway-port-cleanup).
-#   PREVIOUS_CHANGE: v4.0.2 - Remove dead new_meta in _record_finalization_event (leftover from webhook removal).
+#   LAST_CHANGE: v5.0.0 - Replace clouds: CloudProvisionerImpl with tracker: AllocationTracker; mark_task_done → tracker.discard (cloud-provisioner-pure).
+#   PREVIOUS_CHANGE: v4.1.0 - Delegate SFTP download to gateway.download_outputs(); remove _sftp_download_job and _download_task_outputs; use MachineGateway Protocol (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ from yascheduler.domain import TaskCompleted, TaskFailed
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.adapters import CloudProvisionerImpl
     from yascheduler.config import EngineRepository
     from yascheduler.domain import MachineGateway, Task
 
+    from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
 
 logger = logging.getLogger(__name__)
@@ -130,18 +130,18 @@ def _record_finalization_event(
 
 
 # START_CONTRACT: _finalize_task
-#   PURPOSE: Apply domain lifecycle (complete/fail), save via UoW, record events, and notify cloud manager.
+#   PURPOSE: Apply domain lifecycle (complete/fail), save via UoW, record events, and notify tracker.
 #   INPUTS: {
 #     task: Task - Domain task to finalize,
 #     meta_add: list[tuple[str, Any]] - Additional metadata to merge,
 #     sftp_errors: list[tuple[str | None, Exception]] - SFTP download errors,
 #     store_folder: Path - Local directory where outputs were saved,
 #     uow_factory: Callable - Factory providing AbstractUnitOfWork,
-#     clouds: CloudProvisionerImpl - Cloud provider manager
+#     tracker: AllocationTracker - In-flight allocation tracker
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Applies domain lifecycle, saves task via UoW, records TaskCompleted or TaskFailed event, marks task done in cloud manager.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-CLOUD-PROVISIONER
+#   SIDE_EFFECTS: Applies domain lifecycle, saves task via UoW, records TaskCompleted or TaskFailed event, discards in-flight allocation slot via tracker.
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _finalize_task
 async def _finalize_task(
     task: Task,
@@ -149,7 +149,7 @@ async def _finalize_task(
     sftp_errors: list[tuple[str | None, Exception]],
     store_folder: Path,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    clouds: CloudProvisionerImpl,
+    tracker: AllocationTracker,
 ) -> None:
     # START_BLOCK_SET_STATUS
     task = _record_finalization_event(task, meta_add, sftp_errors, store_folder)
@@ -162,7 +162,7 @@ async def _finalize_task(
         "task_id=%s %s done and saved in %s", task.task_id, task.label, store_folder
     )
 
-    clouds.mark_task_done(task.task_id)
+    tracker.discard(task.task_id)
     # END_BLOCK_SET_STATUS
 
 
@@ -175,11 +175,11 @@ async def _finalize_task(
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable - Factory providing AbstractUnitOfWork,
 #     local_tasks_dir: Path - Local base directory for output storage,
-#     clouds: CloudProvisionerImpl - Cloud provider manager
+#     tracker: AllocationTracker - In-flight allocation tracker
 #   }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Downloads files via SFTP, applies domain lifecycle, saves via UoW, records events.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: consume_task
 async def consume_task(
     task_id: int,
@@ -188,7 +188,7 @@ async def consume_task(
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
     local_tasks_dir: Path,
-    clouds: CloudProvisionerImpl,
+    tracker: AllocationTracker,
 ) -> None:
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
@@ -206,4 +206,6 @@ async def consume_task(
         files=output_files,
         task_id=task.task_id,
     )
-    await _finalize_task(task, meta_add, sftp_errors, store_folder, uow_factory, clouds)
+    await _finalize_task(
+        task, meta_add, sftp_errors, store_folder, uow_factory, tracker
+    )

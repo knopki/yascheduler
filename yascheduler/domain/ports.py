@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.1.0
+# VERSION: 2.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineGateway, OccupancyConfig, CloudProvisioner Protocol classes.
@@ -13,12 +13,12 @@
 #   OccupancyConfig - Minimal structural Protocol for occupancy check configuration (name, check_pname, check_cmd, check_cmd_code, sleep_interval)
 #   TaskExecutionEngine - Engine contract for task deployment (superset of OccupancyConfig: adds spawn, input_files)
 #   MachineGateway - Async port for remote machine operations (lifecycle, queries, run, run_bg, upload, download, download_outputs, occupancy, cpu_cores, start_task_on_machine)
-#   CloudProvisioner - Async port for cloud node provisioning (allocate, deallocate, capacity)
+#   CloudProvisioner - Async port for cloud node provisioning (allocate, deallocate, select_provider)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - Add TaskExecutionEngine Protocol; add start_task_on_machine to MachineGateway (gateway-port-cleanup scope expansion).
-#   PREVIOUS_CHANGE: v2.0.0 - Add OccupancyConfig Protocol; extend MachineGateway with connect/disconnect/disconnect_all, list_connected, contains, get_machine_state, update_machine, __len__, run_bg, download_outputs, start_occupancy_check, get_cpu_cores (gateway-port-cleanup).
+#   LAST_CHANGE: v2.2.0 - Update CloudProvisioner Protocol: allocate takes provider:str, deallocate takes cloud+ip, new sync select_provider, removed capacity; add ProviderSelection import (cloud-provisioner-pure).
+#   PREVIOUS_CHANGE: v2.1.0 - Add TaskExecutionEngine Protocol; add start_task_on_machine to MachineGateway (gateway-port-cleanup scope expansion).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         ConnectedMachine,
         Node,
         ProcessResult,
+        ProviderSelection,
         Task,
         TaskStatus,
     )
@@ -212,10 +213,19 @@ class MachineGateway(Protocol):
 
 @runtime_checkable
 class CloudProvisioner(Protocol):
-    """Async port for cloud node provisioning: allocate, deallocate, capacity."""
+    """Port for cloud node provisioning.
 
-    async def allocate(self, platforms: list[str]) -> Node: ...
+    Provider selection is sync (no I/O); allocate/deallocate are async.
+    select_provider returns None when no provider has capacity OR when the
+    selected provider is throttled (op semaphore locked).
+    """
 
-    async def deallocate(self, ip: str) -> None: ...
+    async def allocate(self, provider: str) -> Node: ...
 
-    async def capacity(self) -> dict[str, int]: ...
+    async def deallocate(self, cloud: str, ip: str) -> None: ...
+
+    def select_provider(
+        self, platforms: list[str], current_counts: dict[str, int]
+    ) -> ProviderSelection | None: ...
+
+    async def stop(self) -> None: ...

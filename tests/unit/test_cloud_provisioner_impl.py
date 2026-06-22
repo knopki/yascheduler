@@ -1,24 +1,27 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, capacity, provider selection.
-#   SCOPE: CloudProvisionerImpl with all provider SDKs, NodeRepository, and SSHMachineGateway mocked.
+#   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
+#   SCOPE: CloudProvisionerImpl with all provider SDKs and SSHMachineGateway mocked (no DB).
 #   DEPENDS: M-CLOUD-PROVISIONER, M-DOMAIN-PORTS, M-CLOUD-ADAPTERS-NEW
 #   LINKS: M-CLOUD-PROVISIONER, M-CLOUD-ADAPTERS-NEW
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestAllocate - allocate happy path, no provider, overloaded provider, cleanup on failure
-#   TestAllocateWithTracking - dedup, error handling, throttle passthrough
-#   TestDeallocate - happy path, node not found, unsupported cloud
-#   TestCapacity - capacity aggregation
-#   TestSelectBestProvider - priority sorting, max_nodes filtering, platform filtering
-#   TestMarkTaskDone - on_tasks set management
+#   TestBool - __bool__ reflects adapter presence
+#   TestAllocate - allocate happy path, no provider, create_node failure, setup failure
+#   TestDeallocate - happy path, unsupported cloud, no config
+#   TestStop - stop is a no-op
+#   TestIsPlatformSupported - _is_platform_supported edge cases
+#   TestSshKeyGeneration - get_or_create_ssh_key file ops
+#   TestCloudConfigGeneration - cloud-config building with engine packages
+#   TestSelectProvider - select_provider sync port: capacity, platform, throttle
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for CloudProvisionerImpl.
+#   LAST_CHANGE: v2.1.0 - Remove TestBool (vestigial __bool__ dropped from CloudProvisionerImpl v2.0.3); add test_allocate_cloud_init_timeout_cleans_up_vm covering the asyncio.wait_for bound added in manager.py v2.0.3.
+#   PREVIOUS_CHANGE: v2.0.0 - Remove node_repo, DB-dependent tests; update allocate/deallocate signatures; add select_provider tests (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -39,9 +42,8 @@ from yascheduler.adapters.cloud.manager import (
     CloudProvisionerImpl,
     CloudSetupError,
 )
-from yascheduler.adapters.cloud.protocols import CloudCapacity
 from yascheduler.adapters.cloud.ssh_keys import get_or_create_ssh_key
-from yascheduler.domain.model import Node
+from yascheduler.domain.model import Node, ProviderSelection
 
 # =============================================================================
 # Helpers
@@ -150,21 +152,6 @@ def _make_mock_gateway(**kwargs: Any) -> MagicMock:
     return gw
 
 
-def _make_mock_node_repo(**kwargs: Any) -> MagicMock:
-    """Create a mock NodeRepository with AsyncMocks for async methods."""
-    repo = MagicMock()
-    nodes = kwargs.get("nodes", [])
-    get_result = kwargs.get("get_result", _SENTINEL)
-
-    repo.list_all = AsyncMock(return_value=nodes)
-    repo.add_tmp = AsyncMock(return_value="tmp-ip")
-    repo.add = AsyncMock()
-    repo.remove = AsyncMock()
-    repo.disable = AsyncMock()
-    repo.get = AsyncMock(return_value=None if get_result is _SENTINEL else get_result)
-    return repo
-
-
 @pytest.fixture
 def mock_engines() -> MagicMock:
     """Create mock EngineRepository with filter chain."""
@@ -209,7 +196,6 @@ def mock_logger() -> MagicMock:
 def make_provisioner(
     adapters: dict[str, MagicMock] | None = None,
     configs: dict[str, MagicMock] | None = None,
-    node_repo: MagicMock | None = None,
     gateway: MagicMock | None = None,
     local_config: MagicMock | None = None,
     remote_config: MagicMock | None = None,
@@ -226,7 +212,6 @@ def make_provisioner(
     return CloudProvisionerImpl(
         adapters=adapters or {},  # type: ignore[arg-type]
         configs=configs or {},  # type: ignore[arg-type]
-        node_repo=node_repo or _make_mock_node_repo(),
         machine_gateway=gateway or _make_mock_gateway(),
         local_config=local_config or MagicMock(),
         remote_config=remote_config or MagicMock(),
@@ -240,28 +225,6 @@ def make_provisioner(
 # =============================================================================
 
 
-class TestBool:
-    """__bool__ reflects adapter presence."""
-
-    def test_true_when_adapters_present(self) -> None:
-        a, c = _make_mock_adapter()
-        prov = make_provisioner(adapters={"test": a}, configs={"test": c})
-        assert bool(prov) is True
-
-    def test_false_when_no_adapters(self) -> None:
-        prov = make_provisioner()
-        assert bool(prov) is False
-
-
-class TestApis:
-    """apis property returns adapters dict."""
-
-    def test_apis_returns_adapters(self) -> None:
-        a, c = _make_mock_adapter()
-        prov = make_provisioner(adapters={"test": a}, configs={"test": c})
-        assert prov.apis == {"test": a}
-
-
 class TestAllocate:
     """allocate() happy path and error cases."""
 
@@ -269,15 +232,13 @@ class TestAllocate:
     async def test_allocate_happy_path(
         self, mock_engines: MagicMock, mock_local_config: MagicMock
     ) -> None:
-        """Full flow: select provider -> create VM -> SSH -> cloud-init -> setup -> add node."""
+        """Full flow: create VM -> SSH -> cloud-init -> setup -> return Node."""
         adapter, config = _make_mock_adapter(name="test", priority=10)
         gw = _make_mock_gateway(ncpus=4)
-        node_repo = _make_mock_node_repo()
 
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
-            node_repo=node_repo,
             gateway=gw,
             engines=mock_engines,
             local_config=mock_local_config,
@@ -287,7 +248,7 @@ class TestAllocate:
             "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
             new=AsyncMock(return_value=MagicMock()),
         ):
-            node = await prov.allocate(["linux"])
+            node = await prov.allocate("test")
 
         assert isinstance(node, Node)
         assert node.ip == "10.0.0.1"
@@ -295,43 +256,20 @@ class TestAllocate:
         assert node.cloud == "test"
         assert node.enabled is True
         assert node.port == 22
-        node_repo.add.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_allocate_no_provider(self) -> None:
-        """Raises CloudAllocateError when no provider supports the platform."""
-        adapter, config = _make_mock_adapter(platform_support=False)
-        prov = make_provisioner(
-            adapters={"test": adapter},
-            configs={"test": config},
-        )
+        """Raises CloudAllocateError when provider name is unknown."""
+        prov = make_provisioner()
 
-        with pytest.raises(CloudAllocateError, match="No available provider"):
-            await prov.allocate(["windows"])
-
-    @pytest.mark.asyncio
-    async def test_allocate_overloaded_provider(self) -> None:
-        """Raises CloudAllocateError when provider semaphore is locked."""
-        adapter, config = _make_mock_adapter(name="test")
-        # Lock the semaphore
-        sem = adapter.get_op_semaphore()
-        await sem.acquire()
-
-        node_repo = _make_mock_node_repo()
-        prov = make_provisioner(
-            adapters={"test": adapter},
-            configs={"test": config},
-            node_repo=node_repo,
-        )
-
-        with pytest.raises(CloudAllocateError, match="overloaded"):
-            await prov.allocate(["linux"])
+        with pytest.raises(CloudAllocateError, match="Unknown provider"):
+            await prov.allocate("nonexistent")
 
     @pytest.mark.asyncio
     async def test_allocate_create_node_failure(
         self, mock_local_config: MagicMock, mock_engines: MagicMock
     ) -> None:
-        """Cleans up tmp node when VM creation fails."""
+        """Raises CloudAllocateError when VM creation fails."""
         adapter, config = _make_mock_adapter(name="test")
 
         async def _fail(*args: Any, **kwargs: Any) -> str:
@@ -339,17 +277,15 @@ class TestAllocate:
 
         adapter.create_node = _fail
 
-        node_repo = _make_mock_node_repo()
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
-            node_repo=node_repo,
             engines=mock_engines,
             local_config=mock_local_config,
         )
 
         with pytest.raises(CloudAllocateError, match="Create node error"):
-            await prov.allocate(["linux"])
+            await prov.allocate("test")
 
     @pytest.mark.asyncio
     async def test_allocate_setup_failure_cleans_up_vm(
@@ -364,11 +300,9 @@ class TestAllocate:
 
         gw.connect = _connect_fail
 
-        node_repo = _make_mock_node_repo()
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
-            node_repo=node_repo,
             gateway=gw,
             engines=mock_engines,
             local_config=mock_local_config,
@@ -383,65 +317,54 @@ class TestAllocate:
             ),
             pytest.raises(CloudSetupError, match="SSH connect to"),
         ):
-            await prov.allocate(["linux"])
+            await prov.allocate("test")
 
         adapter.delete_node.assert_awaited_once()
 
-
-class TestAllocateWithTracking:
-    """Backward-compat allocate_with_tracking()."""
-
     @pytest.mark.asyncio
-    async def test_tracking_dedup(self) -> None:
-        """Same on_task ignored if already in flight."""
-        adapter, config = _make_mock_adapter(name="test")
-        prov = make_provisioner(
-            adapters={"test": adapter},
-            configs={"test": config},
-        )
-        prov.on_tasks.add(42)
-
-        result = await prov.allocate_with_tracking(on_task=42, platforms=["linux"])
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_tracking_error_returns_none(self) -> None:
-        """Error during allocate returns None and clears tracking."""
-        adapter, config = _make_mock_adapter(name="test", platform_support=False)
-        prov = make_provisioner(
-            adapters={"test": adapter},
-            configs={"test": config},
-        )
-
-        result = await prov.allocate_with_tracking(on_task=99, platforms=["windows"])
-        assert result is None
-        assert 99 not in prov.on_tasks
-
-    @pytest.mark.asyncio
-    async def test_tracking_success_returns_ip(
+    async def test_allocate_cloud_init_timeout_cleans_up_vm(
         self, mock_local_config: MagicMock, mock_engines: MagicMock
     ) -> None:
-        """Successful allocate_with_tracking returns IP string."""
-        adapter, config = _make_mock_adapter(name="test", priority=10)
-        gw = _make_mock_gateway(ncpus=4)
-        node_repo = _make_mock_node_repo()
+        """cloud-init status --wait exceeding adapter.create_node_timeout raises CloudSetupError and deletes the VM (no infinite worker pin)."""
+        adapter, config = _make_mock_adapter(name="test")
+        # Shrink timeout so the test stays fast.
+        adapter.create_node_timeout = 0.05
+
+        gw = MagicMock()
+
+        async def _connect(**kw: Any) -> Any:
+            machine = MagicMock()
+            machine.ip = kw.get("ip", "10.0.0.1")
+            return machine
+
+        gw.connect = _connect
+
+        async def _hang(*args: Any, **kwargs: Any) -> Any:
+            await asyncio.sleep(60)
+            return MagicMock(exit_code=0, stdout="", stderr="")
+
+        gw.run = _hang
+
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
             gateway=gw,
-            node_repo=node_repo,
             engines=mock_engines,
             local_config=mock_local_config,
         )
 
-        with patch(
-            "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
-            new=AsyncMock(return_value=MagicMock()),
-        ):
-            result = await prov.allocate_with_tracking(on_task=7, platforms=["linux"])
+        adapter.delete_node = AsyncMock()
 
-        assert result == "10.0.0.1"
-        assert 7 in prov.on_tasks  # caller must call mark_task_done
+        with (
+            patch(
+                "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            pytest.raises(CloudSetupError, match="timed out"),
+        ):
+            await prov.allocate("test")
+
+        adapter.delete_node.assert_awaited_once()
 
 
 class TestDeallocate:
@@ -449,203 +372,54 @@ class TestDeallocate:
 
     @pytest.mark.asyncio
     async def test_deallocate_happy_path(self) -> None:
-        """Disable, delete VM, remove from DB."""
+        """Calls adapter.delete_node with host=ip."""
         adapter, config = _make_mock_adapter(name="test-cloud")
-        node = Node(ip="10.0.0.1", ncpus=4, cloud="test-cloud")
-        node_repo = _make_mock_node_repo(get_result=node)
         adapter.delete_node = AsyncMock()
 
         prov = make_provisioner(
             adapters={"test-cloud": adapter},
             configs={"test-cloud": config},
-            node_repo=node_repo,
         )
 
-        await prov.deallocate("10.0.0.1")
+        await prov.deallocate("test-cloud", "10.0.0.1")
 
-        node_repo.disable.assert_awaited_once_with("10.0.0.1")
         adapter.delete_node.assert_awaited_once()
-        node_repo.remove.assert_awaited_once_with("10.0.0.1")
-
-    @pytest.mark.asyncio
-    async def test_deallocate_node_not_found(self) -> None:
-        """Silent no-op when node doesn't exist."""
-        node_repo = _make_mock_node_repo()
-        node_repo.get = AsyncMock(return_value=None)
-
-        prov = make_provisioner(node_repo=node_repo)
-        await prov.deallocate("10.0.0.99")  # should not raise
-
-    @pytest.mark.asyncio
-    async def test_deallocate_no_cloud(self) -> None:
-        """Silent no-op when node has no cloud attribute."""
-        node = Node(ip="10.0.0.1", ncpus=4, cloud=None)
-        node_repo = _make_mock_node_repo(get_result=node)
-
-        prov = make_provisioner(node_repo=node_repo)
-        await prov.deallocate("10.0.0.1")
 
     @pytest.mark.asyncio
     async def test_deallocate_unsupported_cloud(self) -> None:
         """Logs warning when cloud provider is not configured."""
-        node = Node(ip="10.0.0.1", ncpus=4, cloud="unknown-cloud")
-        node_repo = _make_mock_node_repo(get_result=node)
+        adapter, config = _make_mock_adapter(name="test-cloud")
+        adapter.delete_node = AsyncMock()
         log = MagicMock()
 
-        prov = make_provisioner(node_repo=node_repo, logger=log)
-        await prov.deallocate("10.0.0.1")
+        prov = make_provisioner(
+            adapters={"test-cloud": adapter},
+            configs={"test-cloud": config},
+            logger=log,
+        )
 
+        await prov.deallocate("unknown-cloud", "10.0.0.1")
+
+        adapter.delete_node.assert_not_awaited()
         log.warning.assert_called()
 
-
-class TestCapacity:
-    """capacity() and get_capacity()."""
-
     @pytest.mark.asyncio
-    async def test_capacity_empty(self) -> None:
-        """No nodes and no adapters -> empty dict."""
-        prov = make_provisioner()
-        result = await prov.capacity()
-        assert result == {}
-
-    @pytest.mark.asyncio
-    async def test_capacity_with_nodes(self) -> None:
-        """Available = max_nodes - current_count."""
-        adapter, config = _make_mock_adapter(name="test-cloud", max_nodes=5)
-        nodes = [
-            Node(ip="10.0.0.1", ncpus=4, cloud="test-cloud"),
-            Node(ip="10.0.0.2", ncpus=4, cloud="test-cloud"),
-        ]
-        node_repo = _make_mock_node_repo(nodes=nodes)
+    async def test_deallocate_no_config(self) -> None:
+        """Logs warning when cloud is in adapters but not in configs."""
+        adapter, config = _make_mock_adapter(name="test-cloud")
+        adapter.delete_node = AsyncMock()
+        log = MagicMock()
 
         prov = make_provisioner(
             adapters={"test-cloud": adapter},
-            configs={"test-cloud": config},
-            node_repo=node_repo,
+            configs={},
+            logger=log,
         )
 
-        result = await prov.capacity()
-        assert result == {"test-cloud": 3}  # 5 - 2
+        await prov.deallocate("test-cloud", "10.0.0.1")
 
-    @pytest.mark.asyncio
-    async def test_capacity_full(self) -> None:
-        """Zero available when at max_nodes."""
-        adapter, config = _make_mock_adapter(name="test-cloud", max_nodes=2)
-        nodes = [
-            Node(ip="10.0.0.1", ncpus=4, cloud="test-cloud"),
-            Node(ip="10.0.0.2", ncpus=4, cloud="test-cloud"),
-        ]
-        node_repo = _make_mock_node_repo(nodes=nodes)
-
-        prov = make_provisioner(
-            adapters={"test-cloud": adapter},
-            configs={"test-cloud": config},
-            node_repo=node_repo,
-        )
-
-        result = await prov.capacity()
-        assert result == {"test-cloud": 0}
-
-    @pytest.mark.asyncio
-    async def test_get_capacity_returns_cloud_capacity_objects(self) -> None:
-        """get_capacity returns CloudCapacity objects."""
-        adapter, config = _make_mock_adapter(name="test-cloud", max_nodes=5)
-        node_repo = _make_mock_node_repo()
-
-        prov = make_provisioner(
-            adapters={"test-cloud": adapter},
-            configs={"test-cloud": config},
-            node_repo=node_repo,
-        )
-
-        result = await prov.get_capacity()
-        assert isinstance(result, dict)
-        assert "test-cloud" in result
-        cap = result["test-cloud"]
-        assert isinstance(cap, CloudCapacity)
-        assert cap.name == "test-cloud"
-        assert cap.max == 5
-        assert cap.current == 0
-
-
-class TestSelectBestProvider:
-    """_select_best_provider() logic."""
-
-    @pytest.mark.asyncio
-    async def test_select_by_priority(self) -> None:
-        """Higher priority provider is chosen."""
-        a1, c1 = _make_mock_adapter(name="low", priority=1)
-        a2, c2 = _make_mock_adapter(name="high", priority=10)
-
-        prov = make_provisioner(
-            adapters={"low": a1, "high": a2},
-            configs={"low": c1, "high": c2},
-        )
-
-        chosen = await prov._select_best_provider(["linux"])
-        assert chosen is not None
-        assert chosen.name == "high"
-
-    @pytest.mark.asyncio
-    async def test_select_filters_by_max_nodes(self) -> None:
-        """Provider at max_nodes capacity is excluded."""
-        a1, c1 = _make_mock_adapter(name="full", max_nodes=1)
-        a2, c2 = _make_mock_adapter(name="free", max_nodes=5)
-
-        nodes = [Node(ip="10.0.0.1", ncpus=4, cloud="full")]
-        node_repo = _make_mock_node_repo(nodes=nodes)
-
-        prov = make_provisioner(
-            adapters={"full": a1, "free": a2},
-            configs={"full": c1, "free": c2},
-            node_repo=node_repo,
-        )
-
-        chosen = await prov._select_best_provider(["linux"])
-        assert chosen is not None
-        assert chosen.name == "free"
-
-    @pytest.mark.asyncio
-    async def test_select_filters_by_platform(self) -> None:
-        """Provider that doesn't support any requested platform is excluded."""
-        a1, c1 = _make_mock_adapter(name="linux-only", priority=10)
-        a2, c2 = _make_mock_adapter(name="win-only", priority=5, platform_support=False)
-
-        prov = make_provisioner(
-            adapters={"linux-only": a1, "win-only": a2},
-            configs={"linux-only": c1, "win-only": c2},
-        )
-
-        chosen = await prov._select_best_provider(["linux"])
-        assert chosen is not None
-        assert chosen.name == "linux-only"
-
-    @pytest.mark.asyncio
-    async def test_select_returns_none_when_all_excluded(self) -> None:
-        """Returns None when no provider can satisfy request."""
-        a1, c1 = _make_mock_adapter(platform_support=False)
-
-        prov = make_provisioner(
-            adapters={"only": a1},
-            configs={"only": c1},
-        )
-
-        chosen = await prov._select_best_provider(["windows"])
-        assert chosen is None
-
-
-class TestMarkTaskDone:
-    """mark_task_done management."""
-
-    def test_removes_existing(self) -> None:
-        prov = make_provisioner()
-        prov.on_tasks.add(42)
-        prov.mark_task_done(42)
-        assert 42 not in prov.on_tasks
-
-    def test_no_error_on_missing(self) -> None:
-        prov = make_provisioner()
-        prov.mark_task_done(99)  # should not raise
+        adapter.delete_node.assert_not_awaited()
+        log.warning.assert_called()
 
 
 class TestStop:
@@ -747,3 +521,58 @@ class TestCloudConfigGeneration:
         assert "vim" in cc.packages
         assert "htop" in cc.packages
         mock_engines.filter.assert_called_once()
+
+
+class TestSelectProvider:
+    """select_provider() sync port method."""
+
+    def test_returns_provider_selection_when_capacity_available(self) -> None:
+        """Returns ProviderSelection with correct name and username."""
+        adapter, config = _make_mock_adapter(name="provider", priority=10)
+        prov = make_provisioner(
+            adapters={"provider": adapter},
+            configs={"provider": config},
+        )
+
+        result = prov.select_provider(["linux"], {"provider": 0})
+
+        assert isinstance(result, ProviderSelection)
+        assert result.name == "provider"
+        assert result.username == "root"
+
+    def test_returns_none_when_no_capacity(self) -> None:
+        """Returns None when provider is at max_nodes."""
+        adapter, config = _make_mock_adapter(name="provider", max_nodes=5)
+        prov = make_provisioner(
+            adapters={"provider": adapter},
+            configs={"provider": config},
+        )
+
+        result = prov.select_provider(["linux"], {"provider": 5})
+        assert result is None
+
+    def test_returns_none_when_no_platform_support(self) -> None:
+        """Returns None when adapter doesn't match requested platform."""
+        adapter, config = _make_mock_adapter(name="provider", platform_support=False)
+        prov = make_provisioner(
+            adapters={"provider": adapter},
+            configs={"provider": config},
+        )
+
+        result = prov.select_provider(["windows"], {"provider": 0})
+        assert result is None
+
+    def test_returns_none_when_throttled(self) -> None:
+        """Returns None when op semaphore is locked."""
+        adapter, config = _make_mock_adapter(name="provider")
+        mock_sem = MagicMock()
+        mock_sem.locked.return_value = True
+        adapter.get_op_semaphore.return_value = mock_sem
+
+        prov = make_provisioner(
+            adapters={"provider": adapter},
+            configs={"provider": config},
+        )
+
+        result = prov.select_provider(["linux"], {"provider": 0})
+        assert result is None

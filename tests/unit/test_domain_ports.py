@@ -28,6 +28,7 @@ from yascheduler.domain.model import (
     ConnectedMachine,
     Node,
     ProcessResult,
+    ProviderSelection,
     Task,
     TaskStatus,
 )
@@ -196,14 +197,19 @@ class StubMachineGateway:
 
 
 class StubCloudProvisioner:
-    async def allocate(self, platforms: list[str]) -> Node:
+    async def allocate(self, provider: str) -> Node:
         raise NotImplementedError
 
-    async def deallocate(self, ip: str) -> None:
+    async def deallocate(self, cloud: str, ip: str) -> None:
         pass
 
-    async def capacity(self) -> dict[str, int]:
-        return {}
+    def select_provider(
+        self, platforms: list[str], current_counts: dict[str, int]
+    ) -> ProviderSelection | None:
+        return None
+
+    async def stop(self) -> None:
+        pass
 
 
 # START_CONTRACT: test_task_repository_protocol

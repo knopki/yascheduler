@@ -22,7 +22,11 @@
 #   test_scheduling_error_hierarchy - SchedulingError inherits from DomainError
 #   test_no_compatible_node_error - task_id + platforms stored
 #   test_cloud_capacity_exhausted_error - task_id stored
-#   test_all_exceptions_importable - verify all 12 import from yascheduler.domain.exceptions
+#   test_cloud_allocate_error_is_exception - CloudAllocateError is catchable as Exception
+#   test_cloud_setup_error_is_exception - CloudSetupError is catchable as Exception
+#   test_cloud_errors_importable_from_domain - CloudAllocateError/CloudSetupError importable from domain
+#   test_cloud_errors_reexported_from_adapters - CloudAllocateError/CloudSetupError re-exported from adapters
+#   test_all_exceptions_importable - verify all 14 exceptions import from yascheduler.domain.exceptions
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
@@ -31,7 +35,9 @@
 # END_CHANGE_SUMMARY
 
 from yascheduler.domain.exceptions import (
+    CloudAllocateError,
     CloudCapacityExhaustedError,
+    CloudSetupError,
     DomainError,
     MachineBusyError,
     MachineConnectionError,
@@ -240,15 +246,79 @@ def test_cloud_capacity_exhausted_error() -> None:
     assert "5" in str(exc)
 
 
+# START_CONTRACT: test_cloud_allocate_error_is_exception
+#   PURPOSE: Verify CloudAllocateError is catchable as Exception.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_allocate_error_is_exception
+def test_cloud_allocate_error_is_exception() -> None:
+    err = CloudAllocateError("provider unreachable")
+    assert isinstance(err, Exception)
+    assert "provider unreachable" in str(err)
+
+
+# START_CONTRACT: test_cloud_setup_error_is_exception
+#   PURPOSE: Verify CloudSetupError is catchable as Exception.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_setup_error_is_exception
+def test_cloud_setup_error_is_exception() -> None:
+    err = CloudSetupError("cloud-init failed")
+    assert isinstance(err, Exception)
+    assert "cloud-init failed" in str(err)
+
+
+# START_CONTRACT: test_cloud_errors_importable_from_domain
+#   PURPOSE: Verify CloudAllocateError and CloudSetupError are importable from domain.exceptions.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_errors_importable_from_domain
+def test_cloud_errors_importable_from_domain() -> None:
+    from yascheduler.domain.exceptions import (
+        CloudAllocateError as DomainCAE,
+    )
+    from yascheduler.domain.exceptions import (
+        CloudSetupError as DomainCSE,
+    )
+
+    assert DomainCAE is CloudAllocateError
+    assert DomainCSE is CloudSetupError
+
+
+# START_CONTRACT: test_cloud_errors_reexported_from_adapters
+#   PURPOSE: Verify CloudAllocateError and CloudSetupError are re-exported from adapters.cloud.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_errors_reexported_from_adapters
+def test_cloud_errors_reexported_from_adapters() -> None:
+    from yascheduler.adapters.cloud import (
+        CloudAllocateError as AdapterCAE,
+    )
+    from yascheduler.adapters.cloud import (
+        CloudSetupError as AdapterCSE,
+    )
+
+    assert AdapterCAE is CloudAllocateError
+    assert AdapterCSE is CloudSetupError
+
+
 # START_CONTRACT: test_all_exceptions_importable
-#   PURPOSE: Verify all 12 exception classes are importable from yascheduler.domain.exceptions.
+#   PURPOSE: Verify all 14 exception classes are importable from yascheduler.domain.exceptions.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_all_exceptions_importable
 def test_all_exceptions_importable() -> None:
-    """Verify all 12 exception classes import correctly by instantiating each once."""
+    """Verify all 14 exception classes import correctly by instantiating each once."""
     instances = [
         DomainError(),
         ValidationError(),
@@ -262,7 +332,9 @@ def test_all_exceptions_importable() -> None:
         SchedulingError(),
         NoCompatibleNodeError(task_id=3, platforms=["a"]),
         CloudCapacityExhaustedError(task_id=4),
+        CloudAllocateError("test"),
+        CloudSetupError("test"),
     ]
-    assert len(instances) == 12
+    assert len(instances) == 14
     for inst in instances:
         assert isinstance(inst, Exception)

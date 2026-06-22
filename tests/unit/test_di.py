@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_di.py
-# VERSION: 1.0.0
+# VERSION: 2.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for di.py — dependency injection composition root.
@@ -12,14 +12,15 @@
 #   TestCLIDeps - CLIDeps dataclass: constructor, submit, query
 #   TestMakeCliDeps - make_cli_deps factory for CLI dependencies
 #   TestMakeAiida - make_aiida stub raises NotImplementedError
-#   TestMakeDaemon - make_daemon factory: default deps, overrides, logging
+#   TestMakeDaemon - make_daemon factory: no DB, AllocationTracker, allocation_lock, active_clouds; active_clouds filter applies on pre-built-clouds path too
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Stub aiohttp.ClientSession in TestMakeDaemon to prevent leaked real sessions (Orchestrator mocked, so close() never runs).
-#   PREVIOUS_CHANGE: v1.0.0 - Create unit tests for di.py
+#   LAST_CHANGE: v2.1.0 - Patch _resolve_adapter → resolve_adapter (public facade); add test_prebuilt_clouds_active_clouds_filter_verifies_adapter_resolution (review-hardening).
+#   PREVIOUS_CHANGE: v2.0.0 - Remove DB.create assertions, remove db= parameter test, add AllocationTracker/allocation_lock/active_clouds assertions, add no-DB-import check (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
+import asyncio
 from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -28,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
+from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.config import (
     Config,
     ConfigDb,
@@ -220,22 +222,19 @@ class TestMakeDaemon:
             yield session
 
     @pytest.mark.asyncio
-    async def test_creates_all_dependencies_and_returns_orchestrator(self) -> None:
-        """make_daemon calls DB.create, builds CloudProvisionerImpl, and returns Orchestrator."""
+    async def test_creates_dependencies_no_db(self) -> None:
+        """make_daemon returns Orchestrator without creating DB."""
         config = create_mock_config()
         mock_orch_instance = MagicMock()
 
         with (
-            patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
-            patch("yascheduler.di._resolve_adapter", return_value=None) as mock_resolve,
+            patch("yascheduler.di.resolve_adapter", return_value=None) as mock_resolve,
             patch("yascheduler.di.SSHMachineGateway") as mock_gateway,
             patch(
                 "yascheduler.di.Orchestrator", return_value=mock_orch_instance
             ) as mock_orch,
             patch("logging.getLogger") as mock_get_logger,
         ):
-            mock_db = AsyncMock()
-            mock_db_create.return_value = mock_db
             mock_gw = MagicMock()
             mock_gateway.return_value = mock_gw
             resolved_log = MagicMock()
@@ -246,11 +245,8 @@ class TestMakeDaemon:
         assert result is mock_orch_instance
 
         mock_get_logger.assert_called_once_with("Orchestrator")
-        mock_db_create.assert_awaited_once_with(config.db)
-        # No cloud adapters configured (mock returns None)
         mock_resolve.assert_not_called()
         mock_gateway.assert_called()
-        # Orchestrator receives a CloudProvisionerImpl
         _call_kwargs = mock_orch.call_args.kwargs
         assert "clouds" in _call_kwargs
         assert _call_kwargs["clouds"] is not None
@@ -259,41 +255,62 @@ class TestMakeDaemon:
         assert callable(_call_kwargs["uow_factory"])
         assert _call_kwargs["gateway"] is mock_gw
         assert _call_kwargs["log"] is resolved_log
-
-    @pytest.mark.asyncio
-    async def test_uses_provided_db(self) -> None:
-        """When db= keyword is passed, DB.create is not called."""
-        config = create_mock_config()
-        custom_db = AsyncMock()
-
-        with (
-            patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
-            patch("yascheduler.di._resolve_adapter", return_value=None),
-            patch("yascheduler.di.Orchestrator"),
-            patch("logging.getLogger"),
-        ):
-            await make_daemon(config, db=custom_db)
-
-        mock_db_create.assert_not_called()
+        # New: allocation_tracker, allocation_lock, active_clouds
+        assert "allocation_tracker" in _call_kwargs
+        assert isinstance(_call_kwargs["allocation_tracker"], AllocationTracker)
+        assert "allocation_lock" in _call_kwargs
+        assert isinstance(_call_kwargs["allocation_lock"], asyncio.Lock)
+        assert "active_clouds" in _call_kwargs
+        assert isinstance(_call_kwargs["active_clouds"], list)
+        # Negative: adapters/configs not passed to Orchestrator
+        assert "adapters" not in _call_kwargs
+        assert "configs" not in _call_kwargs
 
     @pytest.mark.asyncio
     async def test_uses_provided_clouds(self) -> None:
         """When clouds= keyword is passed, adapter building is skipped."""
         config = create_mock_config()
-        custom_clouds = AsyncMock()
+        custom_clouds = MagicMock()
 
         with (
-            patch("yascheduler.di.DB.create", new=AsyncMock()) as mock_db_create,
-            patch("yascheduler.di._resolve_adapter") as mock_resolve,
+            patch("yascheduler.di.resolve_adapter") as mock_resolve,
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger"),
         ):
-            mock_db_create.return_value = AsyncMock()
-
             await make_daemon(config, clouds=custom_clouds)
 
         mock_resolve.assert_not_called()
-        mock_db_create.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_prebuilt_clouds_active_clouds_filter_verifies_adapter_resolution(
+        self,
+    ) -> None:
+        """On the pre-built-clouds path, active_clouds must filter by both max_nodes>0 AND adapter resolved (clouds.configs key) — otherwise _clouds_get_capacity over-counts for unresolved providers (review-hardening)."""
+        # Two configured clouds: both max_nodes>0, but only 'hetzner' has a
+        # resolved adapter in the pre-built clouds.
+        hetzner_cfg = MagicMock(prefix="hetzner", max_nodes=5)
+        azure_cfg = MagicMock(prefix="az", max_nodes=3)
+        config = create_mock_config()
+        config.clouds = [hetzner_cfg, azure_cfg]
+
+        # Pre-built clouds whose configs dict has only 'hetzner' resolved.
+        custom_clouds = MagicMock()
+        custom_clouds.configs = {"hetzner": hetzner_cfg}
+
+        with (
+            patch("yascheduler.di.resolve_adapter") as mock_resolve,
+            patch("yascheduler.di.Orchestrator") as mock_orch,
+            patch("logging.getLogger"),
+        ):
+            await make_daemon(config, clouds=custom_clouds)
+
+        # resolve_adapter must NOT be called on the pre-built-clouds path.
+        mock_resolve.assert_not_called()
+        # active_clouds must exclude 'az' (no resolved adapter) even though
+        # its max_nodes > 0.
+        orch_kwargs = mock_orch.call_args.kwargs
+        active = orch_kwargs["active_clouds"]
+        assert [c.prefix for c in active] == ["hetzner"]
 
     @pytest.mark.asyncio
     async def test_default_logger(self) -> None:
@@ -301,8 +318,7 @@ class TestMakeDaemon:
         config = create_mock_config()
 
         with (
-            patch("yascheduler.di.DB.create", new=AsyncMock()),
-            patch("yascheduler.di._resolve_adapter", return_value=None),
+            patch("yascheduler.di.resolve_adapter", return_value=None),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger") as mock_get_logger,
         ):
@@ -317,11 +333,22 @@ class TestMakeDaemon:
         custom_log = MagicMock()
 
         with (
-            patch("yascheduler.di.DB.create", new=AsyncMock()),
-            patch("yascheduler.di._resolve_adapter", return_value=None),
+            patch("yascheduler.di.resolve_adapter", return_value=None),
             patch("yascheduler.di.Orchestrator"),
             patch("logging.getLogger") as mock_get_logger,
         ):
             await make_daemon(config, log=custom_log)
 
         mock_get_logger.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_make_daemon_does_not_import_db(self) -> None:
+        """make_daemon must not import or reference DB."""
+        import inspect
+
+        import yascheduler.di as di_module
+
+        assert not hasattr(di_module, "DB"), "di.py still imports DB"
+        src = inspect.getsource(di_module.make_daemon)
+        assert "DB.create" not in src
+        assert "node_repo" not in src

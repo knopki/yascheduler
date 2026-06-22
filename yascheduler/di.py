@@ -1,10 +1,10 @@
 # FILE: yascheduler/di.py
-# VERSION: 4.0.0
+# VERSION: 5.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
 #   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-DB, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS
+#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -16,12 +16,13 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.0.1 - Extract _setup_domain_events helper; remove webhook handler registration from CLI mode.
-#   PREVIOUS_CHANGE: v4.0.0 - Wire MessageBus with webhook handlers; pass bus to PostgresUnitOfWork.
+#   LAST_CHANGE: v5.1.0 - Import resolve_adapter via the public facade (kill private-import FIXME); apply adapter-resolution half of the active_clouds filter on the pre-built-clouds branch too, so test-only callers can't over-count max_nodes for unresolved providers (review-hardening).
+#   PREVIOUS_CHANGE: v5.0.0 - Remove DB from make_daemon (no auto-migration); construct AllocationTracker, allocation_lock, active_clouds; pass to Orchestrator; CloudProvisionerImpl constructed without node_repo (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from functools import partial
@@ -36,9 +37,14 @@ from .adapters import (
     SSHMachineGateway,
     webhook_handler,
 )
-from .adapters.cloud.adapters import _resolve_adapter  # FIXME: import of private
-from .application import AbstractUnitOfWork, MessageBus, Orchestrator, submit_task
-from .db import DB
+from .adapters.cloud import resolve_adapter
+from .application import (
+    AbstractUnitOfWork,
+    AllocationTracker,
+    MessageBus,
+    Orchestrator,
+    submit_task,
+)
 from .domain import (
     TaskAbandoned,
     TaskAllocated,
@@ -125,23 +131,19 @@ def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
 
 # START_CONTRACT: make_daemon
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
-#   INPUTS: { config: Config, log: Optional[Logger], db: Optional[DB], clouds: Optional[CloudProvisionerImpl] }
+#   INPUTS: { config: Config, log: Optional[Logger], clouds: Optional[CloudProvisionerImpl] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates DB connection for schema migration, UoW factory, CloudProvisionerImpl, SSHMachineGateway.
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-DB, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-APPLICATION-UOW
+#   SIDE_EFFECTS: Creates UoW factory, AllocationTracker, asyncio.Lock, CloudProvisionerImpl, SSHMachineGateway.
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: make_daemon
 async def make_daemon(
     config: Config,
     log: logging.Logger | None = None,
     *,
-    db: DB | None = None,
     clouds: CloudProvisionerImpl | None = None,
 ) -> Orchestrator:
     if log is None:
         log = logging.getLogger("Orchestrator")
-
-    if db is None:
-        db = await DB.create(config.db)
 
     bus, http = _setup_domain_events()
     try:
@@ -149,7 +151,11 @@ async def make_daemon(
         def uow_factory() -> AbstractUnitOfWork:
             return PostgresUnitOfWork(config.db, bus)
 
+        allocation_tracker = AllocationTracker()
+        allocation_lock = asyncio.Lock()
+
         if clouds is None:
+            active_clouds: list[ConfigCloud] = []
             _adapters: dict[str, CloudAdapter] = {}
             _configs: dict[str, ConfigCloud] = {}
             for cfg in config.clouds:
@@ -160,23 +166,37 @@ async def make_daemon(
                         cfg.max_nodes,
                     )
                     continue
-                adapter = _resolve_adapter(cfg, log)
+                adapter = resolve_adapter(cfg, log)
                 if adapter is None:
                     continue
                 _adapters[adapter.name] = adapter
                 _configs[adapter.name] = cfg
+                active_clouds.append(cfg)
 
             log.info("Active cloud APIs: %s", ", ".join(_adapters.keys()) or "-")
             clouds = CloudProvisionerImpl(
                 adapters=_adapters,
                 configs=_configs,
-                node_repo=db._node_repo,
                 machine_gateway=SSHMachineGateway(log=log),
                 local_config=config.local,
                 remote_config=config.remote,
                 engines=config.engines,
                 log=log,
             )
+        else:
+            # Caller-supplied clouds: filter by max_nodes > 0 AND adapter
+            # actually resolved (matches the primary path's contract from
+            # design D7). configs is keyed by adapter.name == cfg.prefix for
+            # every successfully resolved cloud, so its keys are the resolved
+            # set. Without this, a pre-built-clouds caller would over-count
+            # max_nodes in _clouds_get_capacity for any provider whose
+            # optional deps are missing.
+            resolved_prefixes = set(clouds.configs.keys())
+            active_clouds = [
+                cfg
+                for cfg in config.clouds
+                if cfg.max_nodes > 0 and cfg.prefix in resolved_prefixes
+            ]
         gateway = SSHMachineGateway(log=log)
 
         return Orchestrator(
@@ -189,6 +209,9 @@ async def make_daemon(
             config_clouds=config.clouds,
             local_tasks_dir=config.local.tasks_dir,
             http_session=http,
+            allocation_tracker=allocation_tracker,
+            active_clouds=active_clouds,
+            allocation_lock=allocation_lock,
         )
     except Exception:
         await http.close()

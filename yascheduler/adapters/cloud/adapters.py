@@ -1,5 +1,5 @@
 # FILE: yascheduler/adapters/cloud/adapters.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Mapping of cloud config types to create/delete callables.
 #   SCOPE: Adapter registry mapping provider config classes to their operations.
@@ -18,12 +18,12 @@
 #   get_upcloud_adapter         # (name: str) -> CloudAdapter
 #   get_vastai_adapter          # (name: str) -> CloudAdapter
 #   CLOUD_ADAPTER_GETTERS       # Registry mapping cloud prefix to adapter factory
-#   _resolve_adapter            # Look up cloud adapter by prefix from registry
+#   resolve_adapter             # Look up cloud adapter by prefix from registry (public; consumed by composition root)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Add CLOUD_ADAPTER_GETTERS and _resolve_adapter from clouds/cloud_api_manager.py.
-#   PREVIOUS_CHANGE: v1.7.0 - Added VastAI adapter.
+#   LAST_CHANGE: v1.1.0 - Rename _resolve_adapter → resolve_adapter (public) so the composition root (di.py) doesn't reach into a private symbol (review-hardening).
+#   PREVIOUS_CHANGE: v1.8.0 - Add CLOUD_ADAPTER_GETTERS and _resolve_adapter from clouds/cloud_api_manager.py.
 # END_CHANGE_SUMMARY
 
 """Cloud adapters"""
@@ -182,14 +182,14 @@ CLOUD_ADAPTER_GETTERS = {
 }
 
 
-# START_CONTRACT: _resolve_adapter
+# START_CONTRACT: resolve_adapter
 #   PURPOSE: Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry
 #   INPUTS: { cfg: ConfigCloud - cloud provider config with prefix, log: logging.Logger - logger instance }
 #   OUTPUTS: { Optional[CloudAdapter] - resolved adapter or None if prefix unknown or deps missing }
 #   SIDE_EFFECTS: Logs error on ImportError
 #   LINKS: M-CLOUD-ADAPTERS
-# END_CONTRACT: _resolve_adapter
-def _resolve_adapter(cfg: ConfigCloud, log: logging.Logger) -> CloudAdapter | None:
+# END_CONTRACT: resolve_adapter
+def resolve_adapter(cfg: ConfigCloud, log: logging.Logger) -> CloudAdapter | None:
     try:
         getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]
         return getter(cfg.prefix)

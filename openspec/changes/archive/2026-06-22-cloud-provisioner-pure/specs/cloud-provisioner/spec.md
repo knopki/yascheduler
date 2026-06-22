@@ -1,10 +1,4 @@
-# Cloud Provisioner
-
-## Purpose
-
-CloudProvisionerImpl class that manages cloud provider selection, VM provisioning (allocate/deallocate/capacity), cloud-init rendering, SSH key management, node setup after provisioning, and concurrent allocation throttling.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: CloudProvisionerImpl implements CloudProvisioner
 
@@ -19,21 +13,13 @@ The class SHALL NOT expose `capacity()`, `allocate_with_tracking`,
 `get_capacity`, `mark_task_done`, `on_tasks`, or `apis` — these are removed
 (moved to use cases, `AllocationTracker`, or deleted as dead code).
 
-#### Scenario: Allocate node on best provider
-- **WHEN** allocate(["linux"]) is called and two providers support Linux
-- **THEN** a VM is created on the provider with highest priority and available capacity
+#### Scenario: Allocate node on selected provider
+- **WHEN** `allocate("aws")` is called with a provider name that has a registered adapter
+- **THEN** a VM is created via the named provider's SDK, set up, and a Node is returned (no DB write occurs inside the adapter)
 
 #### Scenario: Allocate returns Node
 - **WHEN** a VM is successfully provisioned and set up
 - **THEN** returns a Node domain object with ip, ncpus, cloud, enabled=True — the caller is responsible for persisting the Node
-
-#### Scenario: Deallocate removes VM and DB record
-- **WHEN** deallocate("10.0.0.1") is called for a cloud node
-- **THEN** the VM is deleted via provider SDK and the node is removed from DB
-
-#### Scenario: Allocate node on selected provider
-- **WHEN** `allocate("aws")` is called with a provider name that has a registered adapter
-- **THEN** a VM is created via the named provider's SDK, set up, and a Node is returned (no DB write occurs inside the adapter)
 
 #### Scenario: Allocate raises on VM creation failure
 - **WHEN** `allocate(provider)` is called and VM creation or setup fails
@@ -84,24 +70,6 @@ current caller-visible semantics where `allocate_with_tracking` returned
 - **WHEN** `select_provider` returns a `ProviderSelection`
 - **THEN** it has `name: str` and `username: str` only — no `CloudAdapter` or `ConfigCloud` reference
 
-### Requirement: Node setup after provisioning
-
-The system SHALL run cloud-init status check and engine setup after a VM is
-created, before returning the Node. All setup logic SHALL be contained within
-`adapters/cloud/` — no imports from `clouds/` or `remote_machine/`.
-
-#### Scenario: Cloud-init must complete
-- **WHEN** a VM is created
-- **THEN** cloud-init status --wait is executed before setup
-
-#### Scenario: Engine packages installed
-- **WHEN** node setup runs on a fresh VM
-- **THEN** required packages for configured engines are installed
-
-#### Scenario: No CloudAPI dependency
-- **WHEN** CloudProvisionerImpl creates a node
-- **THEN** no code from `clouds/cloud_api.py` is invoked
-
 ### Requirement: Concurrent allocation throttling
 
 The system SHALL prevent duplicate allocation requests for the same task
@@ -119,17 +87,16 @@ reached).
 - **WHEN** the selected provider's op semaphore is locked (concurrent op limit reached)
 - **THEN** `select_provider` returns `None` and the use case's `selection is None` branch calls `tracker.discard(task_id)` and returns False
 
-### Requirement: CloudProvisionerImpl owns cloud-init rendering and SSH key management
+## REMOVED Requirements
 
-The system SHALL provide cloud-init configuration rendering and SSH key
-management within `adapters/cloud/`, without depending on `clouds/cloud_api.py`.
-SSH key generation, loading, and name extraction SHALL live in
-`adapters/cloud/ssh_keys.py`.
+### Requirement: Capacity reports available nodes
 
-#### Scenario: Cloud-init rendered without CloudAPI
-- **WHEN** `CloudConfig(bootcmd=..., packages=...).render()` is called
-- **THEN** the cloud-config YAML is produced from `adapters/cloud/cloud_config.py`
+**Reason**: `capacity()` is removed from `CloudProvisionerImpl` and the
+`CloudProvisioner` Protocol. Capacity counting (read + arithmetic) is now
+owned by the orchestrator's `_clouds_get_capacity` inline UoW read.
 
-#### Scenario: SSH key generated for cloud provisioning
-- **WHEN** a cloud provider needs an SSH key
-- **THEN** the key is generated or loaded via `adapters/cloud/ssh_keys.py`
+**Migration**: Callers that previously called `clouds.capacity()` or
+`clouds.get_capacity()` SHALL use the orchestrator's inline
+`_clouds_get_capacity` method, which reads `uow.nodes.list_all()` and
+computes `max(0, sum(max_nodes) - sum(current_counts))` over the
+filtered `_active_clouds` list.

@@ -82,7 +82,7 @@ async def test_full_cycle(
     # END_BLOCK_SUBMIT
 
     # START_BLOCK_RUN_ORCHESTRATOR
-    orchestrator = await make_daemon(config, db=db)
+    orchestrator = await make_daemon(config)
     orch_task = asyncio.create_task(orchestrator.start())
     # END_BLOCK_RUN_ORCHESTRATOR
 

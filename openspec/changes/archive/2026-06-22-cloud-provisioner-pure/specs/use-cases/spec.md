@@ -1,28 +1,4 @@
-# Use Cases
-
-## Purpose
-
-Application-layer use cases that orchestrate domain operations for task
-submission, allocation, consumption, and node deallocation.
-
-## Requirements
-
-### Requirement: SubmitTask use case
-
-The system SHALL provide a `submit_task` async function that creates a new
-task in the database after validating the engine and inputs.
-
-#### Scenario: Successful task submission
-- **WHEN** `submit_task("my-job", ctx, "fleur", engines, uow_factory)` is called with valid inputs
-- **THEN** a new Task is saved with status TO_DO and the task_id is returned
-
-#### Scenario: Unsupported engine
-- **WHEN** `submit_task(...)` is called with an engine_name not in the EngineRepository
-- **THEN** `UnsupportedEngineError` is raised
-
-#### Scenario: Missing input file
-- **WHEN** `submit_task(...)` is called with context missing a required input file
-- **THEN** `MissingInputFileError` is raised
+## MODIFIED Requirements
 
 ### Requirement: AllocateTask use case
 
@@ -125,17 +101,3 @@ cloud delete ensures the DB row is only dropped once the VM is gone).
 #### Scenario: Deallocate node brackets cloud delete with disable+remove
 - **WHEN** `deallocate_node(node, gateway, clouds, uow_factory)` is called for a cloud node
 - **THEN** the node is disabled via UoW and committed, then `clouds.deallocate(node.cloud, node.ip)` is called, then the node is removed via a second UoW and committed
-
-### Requirement: Use cases importable from application
-
-The system SHALL expose all use cases from `yascheduler.application`. No use
-case SHALL import adapter-specific types (`AllSSHRetryExc`, `SFTPRetryExc`,
-`SFTPError`) from `yascheduler.adapters` at runtime.
-
-#### Scenario: Import use case
-- **WHEN** `from yascheduler.application.submit_task import submit_task` is executed
-- **THEN** the function is available
-
-#### Scenario: No adapter runtime imports in use cases
-- **WHEN** any use case module is imported
-- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, or `SFTPError` from `yascheduler.adapters` at runtime

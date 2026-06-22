@@ -1,11 +1,4 @@
-# Dependency Injection
-
-## Purpose
-
-Factory functions that wire up entry-point-specific dependencies, ensuring
-each entry point instantiates only the adapters it needs.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: make_daemon factory
 
@@ -37,10 +30,6 @@ The function SHALL NOT pass `adapters` or `configs` dicts to the
 - **WHEN** `make_daemon(config)` is called with a valid Config
 - **THEN** returns an Orchestrator wired with `uow_factory`, `SSHMachineGateway`, `CloudProvisionerImpl`, `AllocationTracker`, `allocation_lock`, and `active_clouds` — without creating `DB`, without running schema migration, and without creating `RemoteMachineRepository`
 
-#### Scenario: make_daemon accepts pre-built dependencies
-- **WHEN** `make_daemon(config, db=my_db, clouds=my_clouds)` is called
-- **THEN** the provided `db` is used for schema migration and the provided `clouds` are wired to the orchestrator
-
 #### Scenario: make_daemon accepts pre-built clouds
 - **WHEN** `make_daemon(config, clouds=my_clouds)` is called
 - **THEN** the provided `clouds` are wired to the orchestrator; no `DB` is created and no schema migration runs
@@ -48,36 +37,3 @@ The function SHALL NOT pass `adapters` or `configs` dicts to the
 #### Scenario: No DB import in make_daemon
 - **WHEN** `di.py` is imported
 - **THEN** it does NOT import `DB` from `yascheduler.db`
-
-### Requirement: make_cli_deps factory
-
-The system SHALL provide a `make_cli_deps(config: Config) -> CLIDeps` factory
-function that creates lightweight dependencies for CLI commands.
-
-#### Scenario: CLI deps do not create SSH connections
-- **WHEN** `make_cli_deps(config)` is called
-- **THEN** no SSH connections or cloud providers are instantiated
-
-#### Scenario: CLI deps include submit and query use cases
-- **WHEN** `make_cli_deps(config)` is called
-- **THEN** the returned CLIDeps has `submit` and `query` attributes usable
-  for task submission and status checking
-
-### Requirement: DI factories in yascheduler.di
-
-The system SHALL expose DI factories from `yascheduler.di`. The module SHALL
-NOT import from `remote_machine/` or `clouds/`.
-
-#### Scenario: Import factories
-- **WHEN** `from yascheduler.di import make_daemon, make_cli_deps` is executed
-- **THEN** both functions are available
-
-### Requirement: Each factory creates only needed dependencies
-
-The system SHALL ensure each factory instantiates only the adapters required
-by that entry point's use cases.
-
-#### Scenario: CLI factory is lightweight
-- **WHEN** `make_cli_deps(config)` is compared to `make_daemon(config)`
-- **THEN** the CLI factory creates fewer dependencies (no SSH pool, no cloud
-  manager, no webhook notifier)

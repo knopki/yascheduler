@@ -1,12 +1,4 @@
-# Orchestrator
-
-## Purpose
-
-Orchestrator class that manages concurrent producer-consumer loops for
-connecting machines, allocating tasks, consuming results, and deallocating
-idle cloud nodes.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Orchestrator manages producer-consumer loops
 
@@ -52,35 +44,6 @@ to the `clouds.select_provider` port method.
 - **WHEN** the orchestrator allocates a task to a machine
 - **THEN** the orchestrator resolves `ncpus` via UoW and calls `gateway.start_task_on_machine(machine, engine, task, ncpus, self._config.remote.engines_dir)` — never touches `get_sftp`, `get_path`, or `get_quote` directly
 
-### Requirement: Allocate loop
-
-The system SHALL poll TO_DO tasks via UoW and dispatch to the
-`allocate_task` use case with configured concurrency limits. The producer
-SHALL load domain `Task` objects from `TaskRepository.list_by_status`. The
-producer SHALL compute cloud capacity via the inline `_clouds_get_capacity`
-method (UoW read of `uow.nodes.list_all()` + `Counter` over
-`active_clouds`). SSH operations SHALL use `MachineGateway`. The
-`_allocator_consumer` SHALL NOT apply `@backoff.on_exception` — retry
-logic lives in the adapter.
-
-#### Scenario: Task allocated in order
-- **WHEN** multiple TO_DO tasks exist
-- **THEN** tasks are allocated up to the configured `allocate_limit` concurrently
-
-#### Scenario: Cloud capacity computed inline
-- **WHEN** `_allocator_producer` determines the task limit
-- **THEN** `_clouds_get_capacity` opens a UoW, reads `uow.nodes.list_all()`, counts nodes per cloud, and returns `max(0, sum(max_nodes for c in active_clouds) - sum(current_counts for c in active_clouds))`
-
-### Requirement: Consume loop
-
-The system SHALL poll RUNNING tasks via UoW and dispatch to the `consume_task`
-use case when the remote machine reports completion. Queue messages SHALL
-carry domain `Task` objects. SSH operations SHALL use `MachineGateway`.
-
-#### Scenario: Completed task consumed
-- **WHEN** a RUNNING task's machine reports `state=FREE`
-- **THEN** `consume_task` is called with `task_id` to download outputs
-
 ### Requirement: Deallocate loop
 
 The system SHALL identify idle cloud nodes via UoW, call `deallocate_nodes`
@@ -104,39 +67,21 @@ of `gateway.items()` for iterating connected machines.
 - **WHEN** `_deallocator_consumer` processes a disabled node IP
 - **THEN** it reads the node via UoW, calls `deallocate_node` which disables via UoW, calls `clouds.deallocate(cloud, ip)`, then removes via a second UoW
 
-### Requirement: Connect machine loop
+### Requirement: Allocate loop
 
-The system SHALL poll enabled nodes from `NodeRepository` via UoW and establish
-SSH connections via `MachineGateway`. Connection failures SHALL be caught as
-`MachineConnectionError` (domain exception), not `asyncssh.misc.Error`.
+The system SHALL poll TO_DO tasks via UoW and dispatch to the
+`allocate_task` use case with configured concurrency limits. The producer
+SHALL load domain `Task` objects from `TaskRepository.list_by_status`. The
+producer SHALL compute cloud capacity via the inline `_clouds_get_capacity`
+method (UoW read of `uow.nodes.list_all()` + `Counter` over
+`active_clouds`). SSH operations SHALL use `MachineGateway`. The
+`_allocator_consumer` SHALL NOT apply `@backoff.on_exception` — retry
+logic lives in the adapter.
 
-#### Scenario: New node connected
-- **WHEN** a new enabled node appears in the database
-- **THEN** an SSH connection is established via gateway and the machine is registered
+#### Scenario: Task allocated in order
+- **WHEN** multiple TO_DO tasks exist
+- **THEN** tasks are allocated up to the configured `allocate_limit` concurrently
 
-#### Scenario: Connection failure caught as domain error
-- **WHEN** `gateway.connect(...)` fails
-- **THEN** the orchestrator catches `MachineConnectionError` and logs the error
-
-### Requirement: Stats logging
-
-The system SHALL periodically log queue sizes, node counts, and task counts
-at a configurable interval. The orchestrator SHALL use `gateway.list_connected()`
-instead of `gateway.items()` for iterating connected machines.
-
-#### Scenario: Stats printed every N seconds
-- **WHEN** the orchestrator is running
-- **THEN** usage statistics are logged at the configured interval
-
-#### Scenario: Stats uses list_connected
-- **WHEN** `_print_stats` iterates connected machines
-- **THEN** it uses `gateway.list_connected()` and accesses `machine.state` directly (not `state.machine.state`)
-
-### Requirement: Orchestrator concurrency limits
-
-The system SHALL enforce configurable concurrency limits for each loop:
-`conn_machine_limit`, `allocate_limit`, `consume_limit`, `deallocate_limit`.
-
-#### Scenario: Allocation concurrency respected
-- **WHEN** `allocate_limit=3` and 10 TO_DO tasks exist
-- **THEN** at most 3 allocations proceed concurrently
+#### Scenario: Cloud capacity computed inline
+- **WHEN** `_allocator_producer` determines the task limit
+- **THEN** `_clouds_get_capacity` opens a UoW, reads `uow.nodes.list_all()`, counts nodes per cloud, and returns `max(0, sum(max_nodes for c in active_clouds) - sum(current_counts for c in active_clouds))`

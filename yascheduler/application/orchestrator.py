@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 4.2.0
+# VERSION: 5.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers.
-#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS
-#   LINKS: M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-DOMAIN-PORTS
+#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -12,15 +12,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.2.0 - Move deferred helpers to gateway; type self._gateway as MachineGateway Protocol; thin _start_task_on_machine wrapper resolves ncpus and delegates (gateway-port-cleanup scope expansion).
-#   PREVIOUS_CHANGE: v4.1.0 - Remove adapter runtime imports (AllSSHRetryExc, backoff); catch MachineConnectionError; use gateway.list_connected() and new get_machine_state contract (gateway-port-cleanup).
+#   LAST_CHANGE: v5.4.0 - Add START_CONTRACT on _clouds_get_capacity (GRACE audit fix).
+#   PREVIOUS_CHANGE: v5.3.0 - Pass free_since (monotonic) straight through to deallocate_nodes; remove wall-clock conversion that could skew idle detection under DST/NTP jumps (review-hardening).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
 import logging  # noqa: TC003 — used at runtime for log calls
-import time
 from asyncio.locks import Event
 from collections import Counter
 from datetime import datetime, timedelta
@@ -28,6 +27,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from yascheduler.domain import (
+    CloudProvisioner,
     ConnectedMachine,
     MachineConnectionError,
     MachineGateway,
@@ -41,7 +41,7 @@ from yascheduler.domain import (
 from yascheduler.queue import UMessage, UniqueQueue
 from yascheduler.time import asleep_until
 
-from .allocate_task import allocate_task
+from .allocate_task import _count_nodes_by_cloud, allocate_task
 from .consume_task import consume_task
 from .deallocate_nodes import deallocate_node, deallocate_nodes
 
@@ -51,15 +51,15 @@ if TYPE_CHECKING:
 
     import aiohttp
 
-    from yascheduler.adapters import CloudProvisionerImpl
     from yascheduler.config import Config, ConfigCloud, EngineRepository
 
+    from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
 
 
 # START_CONTRACT: Orchestrator
 #   PURPOSE: Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases.
-#   INPUTS: { config, uow_factory, clouds, gateway, engines, log, config_clouds, local_tasks_dir }
+#   INPUTS: { config, uow_factory, clouds, gateway, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock }
 #   OUTPUTS: { Orchestrator instance }
 #   SIDE_EFFECTS: Creates queues, cancellation event.
 #   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
@@ -67,7 +67,7 @@ if TYPE_CHECKING:
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { config: Config, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisionerImpl, gateway: MachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path }
+    #   INPUTS: { config: Config, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisioner, gateway: MachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path, allocation_tracker: AllocationTracker, active_clouds: Sequence[ConfigCloud], allocation_lock: asyncio.Lock }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues.
     #   LINKS: M-CONFIG, M-APPLICATION-UOW, M-QUEUE, M-SSH-GATEWAY
@@ -76,12 +76,15 @@ class Orchestrator:
         self,
         config: Config,
         uow_factory: Callable[[], AbstractUnitOfWork],
-        clouds: CloudProvisionerImpl,
+        clouds: CloudProvisioner,
         gateway: MachineGateway,
         engines: EngineRepository,
         log: logging.Logger,
         config_clouds: Sequence[ConfigCloud],
         local_tasks_dir: Path,
+        allocation_tracker: AllocationTracker,
+        active_clouds: Sequence[ConfigCloud],
+        allocation_lock: asyncio.Lock,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         self._config = config
@@ -93,6 +96,9 @@ class Orchestrator:
         self._config_clouds = config_clouds
         self._local_tasks_dir = local_tasks_dir
         self._http_session = http_session
+        self._tracker = allocation_tracker
+        self._active_clouds = active_clouds
+        self._allocation_lock = allocation_lock
 
         self._bg_jobs: set[asyncio.Task[None]] = set()
         self._cancellation_event = Event()
@@ -241,16 +247,32 @@ class Orchestrator:
         for task in tasks:
             yield UMessage(task.task_id, task)
 
+    # START_CONTRACT: Orchestrator._allocator_consumer
+    #   PURPOSE: Run allocate_task for one queued task; swallow exceptions to keep the worker alive.
+    #   INPUTS: { msg: UMessage[int, Task] }
+    #   OUTPUTS: { None }
+    #   SIDE_EFFECTS: Delegates all allocation side effects to allocate_task; logs and swallows any exception so the allocator worker is not killed (mirrors _deallocator_consumer).
+    #   LINKS: M-APPLICATION-ALLOCATE
+    # END_CONTRACT: Orchestrator._allocator_consumer
     async def _allocator_consumer(self, msg: UMessage[int, Task]) -> None:
         # START_BLOCK_ALLOCATE
-        await allocate_task(
-            task_id=msg.id,
-            engines=self._engines,
-            uow_factory=self._uow_factory,
-            gateway=self._gateway,
-            clouds=self._clouds,
-            start_task_on_machine=self._start_task_on_machine,
+        self._log.debug(
+            "[Orchestrator][_allocator_consumer][ALLOCATE] task_id=%s",
+            msg.id,
         )
+        try:
+            await allocate_task(
+                task_id=msg.id,
+                engines=self._engines,
+                uow_factory=self._uow_factory,
+                gateway=self._gateway,
+                clouds=self._clouds,
+                start_task_on_machine=self._start_task_on_machine,
+                tracker=self._tracker,
+                allocation_lock=self._allocation_lock,
+            )
+        except Exception as err:
+            self._log.error("Allocator error for task %s: %s", msg.id, err)
         # END_BLOCK_ALLOCATE
 
     async def _task_consumer_producer(
@@ -296,6 +318,9 @@ class Orchestrator:
                 async with self._uow_factory() as uow:
                     await uow.tasks.save(task)
                     await uow.commit()
+                # Drop the in-flight allocation slot so the abandoned task_id
+                # can't falsely dedup a future task if task IDs ever recycle.
+                self._tracker.discard(task_id)
             # END_BLOCK_MACHINE_GONE
             return
 
@@ -322,7 +347,7 @@ class Orchestrator:
                 engines=self._engines,
                 uow_factory=self._uow_factory,
                 local_tasks_dir=self._local_tasks_dir,
-                clouds=self._clouds,
+                tracker=self._tracker,
             )
             self._occupancy_started.discard(ip)
         # END_BLOCK_CONSUME
@@ -340,11 +365,12 @@ class Orchestrator:
         self,
     ) -> AsyncGenerator[UMessage[str, str], None]:
         # START_BLOCK_COLLECT_IDLE
-        idle_machines: dict[str, datetime] = {}
+        # free_since is monotonic; pass it through unchanged so deallocate_nodes
+        # compares against time.monotonic() and stays immune to wall-clock jumps.
+        idle_machines: dict[str, float] = {}
         for m in self._gateway.list_connected():
             if m.state == MachineState.FREE and m.free_since is not None:
-                elapsed = time.monotonic() - m.free_since
-                idle_machines[m.ip] = datetime.now() - timedelta(seconds=elapsed)
+                idle_machines[m.ip] = m.free_since
         # END_BLOCK_COLLECT_IDLE
 
         # START_BLOCK_DEALLOCATE_USE_CASE
@@ -371,7 +397,9 @@ class Orchestrator:
             async with self._uow_factory() as uow:
                 node = await uow.nodes.get(ip)
             if node is not None:
-                await deallocate_node(node, self._gateway, self._clouds)
+                await deallocate_node(
+                    node, self._gateway, self._clouds, self._uow_factory
+                )
             elif self._gateway.contains(ip):
                 await self._gateway.disconnect(ip)
         except Exception as err:
@@ -379,12 +407,26 @@ class Orchestrator:
 
     # ---- Infrastructure ----
 
+    # START_CONTRACT: Orchestrator._clouds_get_capacity
+    #   PURPOSE: Compute available cloud capacity as max(0, total_max_nodes - current_count) over active clouds.
+    #   INPUTS: { None - reads self._uow_factory and self._active_clouds }
+    #   OUTPUTS: { int - available node slots across all active clouds }
+    #   SIDE_EFFECTS: Opens a short UoW to read yascheduler_nodes; no writes.
+    #   LINKS: M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL
+    # END_CONTRACT: Orchestrator._clouds_get_capacity
     async def _clouds_get_capacity(self) -> int:
-        ccap = await self._clouds.get_capacity()
-        n_busy_cloud_nodes = sum(x.current for x in ccap.values())
-        max_nodes = sum(c.max_nodes for c in self._clouds.configs.values())
-        diff = max_nodes - n_busy_cloud_nodes
+        # START_BLOCK_READ_COUNTS
+        async with self._uow_factory() as uow:
+            nodes = await uow.nodes.list_all()
+        counts = _count_nodes_by_cloud(nodes)
+        # END_BLOCK_READ_COUNTS
+
+        # START_BLOCK_COMPUTE_CAPACITY
+        max_nodes = sum(c.max_nodes for c in self._active_clouds)
+        current = sum(counts.get(c.prefix, 0) for c in self._active_clouds)
+        diff = max_nodes - current
         return max(0, diff)
+        # END_BLOCK_COMPUTE_CAPACITY
 
     async def _create_producer_consumers(
         self,

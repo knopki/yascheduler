@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.8.0
+# VERSION: 1.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext, Engine value objects; Task, Node, ConnectedMachine entities.
@@ -16,11 +16,12 @@
 #   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, pull_events
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
+#   ProviderSelection - Selected cloud provider value object (name, username)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Add _events tuple, record_event, pull_events to Task for domain event support.
-#   PREVIOUS_CHANGE: v1.7.0 - TaskContext.to_metadata/from_metadata for JSONB serialization
+#   LAST_CHANGE: v1.9.0 - Add ProviderSelection frozen dataclass (cloud-provisioner-pure).
+#   PREVIOUS_CHANGE: v1.8.0 - Add _events tuple, record_event, pull_events to Task for domain event support.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -201,10 +202,10 @@ class Task:
     # END_CONTRACT: Task.complete
     def complete(self) -> Task:
         """Mark task as DONE if currently RUNNING."""
-        # START_BLOCK_VALIDATE_RUNNING
+        # START_BLOCK_COMPLETE_VALIDATE_RUNNING
         if self.status != TaskStatus.RUNNING:
             raise TaskNotRunningError(self.task_id)
-        # END_BLOCK_VALIDATE_RUNNING
+        # END_BLOCK_COMPLETE_VALIDATE_RUNNING
         return replace(self, status=TaskStatus.DONE)
 
     # START_CONTRACT: Task.fail
@@ -217,10 +218,10 @@ class Task:
     # END_CONTRACT: Task.fail
     def fail(self, reason: str) -> Task:
         """Mark task as DONE with error reason if currently RUNNING."""
-        # START_BLOCK_VALIDATE_RUNNING
+        # START_BLOCK_FAIL_VALIDATE_RUNNING
         if self.status != TaskStatus.RUNNING:
             raise TaskNotRunningError(self.task_id)
-        # END_BLOCK_VALIDATE_RUNNING
+        # END_BLOCK_FAIL_VALIDATE_RUNNING
         # START_BLOCK_MARK_FAILED
         return replace(
             self,
@@ -333,3 +334,17 @@ class ConnectedMachine:
     def release(self) -> ConnectedMachine:
         """Transition machine state to FREE and record release timestamp."""
         return replace(self, state=MachineState.FREE, free_since=time.monotonic())
+
+
+@dataclass(frozen=True)
+class ProviderSelection:
+    """Selected cloud provider returned by CloudProvisioner.select_provider.
+
+    Primitive-only value object — keeps CloudAdapter/ConfigCloud out of the
+    application layer. `name` matches CloudAdapter.name and CloudProvisionerImpl.adapters dict key.
+    """
+
+    # FIXME: very smelly object: remove?
+
+    name: str
+    username: str  # FIXME: username is useless

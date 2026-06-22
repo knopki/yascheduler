@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
 #   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling, connection.
@@ -22,11 +22,13 @@
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
 #   CloudCapacityExhaustedError - Cloud provider at capacity
+#   CloudAllocateError - Cloud node allocation error
+#   CloudSetupError - Cloud node setup error
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Add MachineConnectionError for SSH connection failures (gateway-port-cleanup).
-#   PREVIOUS_CHANGE: v1.6.1 - Add TaskNotTodoError and TaskNotRunningError to MODULE_MAP and knowledge graph annotations.
+#   LAST_CHANGE: v1.8.0 - Add CloudAllocateError, CloudSetupError relocated from adapters/cloud/manager.py (cloud-provisioner-pure).
+#   PREVIOUS_CHANGE: v1.7.0 - Add MachineConnectionError for SSH connection failures (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 
@@ -129,3 +131,11 @@ class CloudCapacityExhaustedError(SchedulingError):
     def __init__(self, task_id: int) -> None:
         self.task_id = task_id
         super().__init__(f"cloud capacity exhausted for task {task_id}")
+
+
+class CloudAllocateError(Exception):
+    """Cloud node allocation error — provider selection or VM creation failed."""
+
+
+class CloudSetupError(Exception):
+    """Cloud node setup error — SSH / cloud-init / engine installation failed."""
