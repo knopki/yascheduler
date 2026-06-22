@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.8.0
+# VERSION: 1.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
 #   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling, connection.
@@ -22,13 +22,14 @@
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
 #   CloudCapacityExhaustedError - Cloud provider at capacity
+#   CloudError - Cloud provider operational errors
 #   CloudAllocateError - Cloud node allocation error
 #   CloudSetupError - Cloud node setup error
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Add CloudAllocateError, CloudSetupError relocated from adapters/cloud/manager.py (cloud-provisioner-pure).
-#   PREVIOUS_CHANGE: v1.7.0 - Add MachineConnectionError for SSH connection failures (gateway-port-cleanup).
+#   LAST_CHANGE: v1.9.0 - Add CloudError(DomainError) intermediate root; reparent CloudAllocateError/CloudSetupError under it (cloud-error-hierarchy).
+#   PREVIOUS_CHANGE: v1.8.0 - Add CloudAllocateError, CloudSetupError relocated from adapters/cloud/manager.py (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
 
@@ -133,9 +134,18 @@ class CloudCapacityExhaustedError(SchedulingError):
         super().__init__(f"cloud capacity exhausted for task {task_id}")
 
 
-class CloudAllocateError(Exception):
+class CloudError(DomainError):
+    """Operational cloud-provider failures: provider selection, VM creation, SSH/cloud-init/engine setup.
+
+    Cloud capacity planning is a distinct concern and lives under
+    `SchedulingError` as `CloudCapacityExhaustedError` — it is a domain
+    scheduling rule, not an operational provider failure.
+    """
+
+
+class CloudAllocateError(CloudError):
     """Cloud node allocation error — provider selection or VM creation failed."""
 
 
-class CloudSetupError(Exception):
+class CloudSetupError(CloudError):
     """Cloud node setup error — SSH / cloud-init / engine installation failed."""

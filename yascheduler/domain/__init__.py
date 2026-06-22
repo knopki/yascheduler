@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain layer entry point — re-exports events, model entities, exception hierarchy, and port interfaces.
 #   SCOPE: Re-exports domain events from .events, domain entities from .model, exception tree from .exceptions, and port Protocols from .ports.
@@ -38,6 +38,7 @@
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
 #   CloudCapacityExhaustedError - Cloud provider at capacity
+#   CloudError - Cloud provider operational errors
 #   CloudAllocateError - Cloud node allocation error
 #   CloudSetupError - Cloud node setup error
 #   TaskRepository - Async port for task persistence
@@ -49,8 +50,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Add ProviderSelection, CloudAllocateError, CloudSetupError re-exports (cloud-provisioner-pure).
-#   PREVIOUS_CHANGE: v1.9.0 - Add TaskExecutionEngine export (gateway-port-cleanup scope expansion).
+#   LAST_CHANGE: v2.1.0 - Add CloudError re-export (cloud-error-hierarchy).
+#   PREVIOUS_CHANGE: v2.0.0 - Add ProviderSelection, CloudAllocateError, CloudSetupError re-exports (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -87,6 +88,7 @@ __all__ = [
     "SchedulingError",
     "NoCompatibleNodeError",
     "CloudCapacityExhaustedError",
+    "CloudError",
     "CloudAllocateError",
     "CloudSetupError",
     # Ports
@@ -110,6 +112,7 @@ from .events import (
 from .exceptions import (
     CloudAllocateError,
     CloudCapacityExhaustedError,
+    CloudError,
     CloudSetupError,
     DomainError,
     MachineBusyError,

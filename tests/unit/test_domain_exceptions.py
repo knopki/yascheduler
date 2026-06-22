@@ -1,9 +1,9 @@
 # FILE: tests/unit/test_domain_exceptions.py
-# VERSION: 1.0.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain exception hierarchy.
-#   SCOPE: Test all 12 exception classes for inheritance, field access, and message format.
+#   SCOPE: Test all 15 exception classes for inheritance, field access, and message format.
 #   DEPENDS: none
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -22,21 +22,33 @@
 #   test_scheduling_error_hierarchy - SchedulingError inherits from DomainError
 #   test_no_compatible_node_error - task_id + platforms stored
 #   test_cloud_capacity_exhausted_error - task_id stored
+#   test_cloud_capacity_exhausted_error_stays_under_scheduling - not a CloudError, is a SchedulingError
+#   test_cloud_error_is_domain_error - CloudError is a DomainError, not a SchedulingError
+#   test_cloud_allocate_error_under_cloud_error - CloudAllocateError catchable as CloudError/DomainError/Exception
+#   test_cloud_setup_error_under_cloud_error - CloudSetupError catchable as CloudError/DomainError/Exception
+#   test_cloud_errors_no_custom_init - leaf classes have no __init__ (free-form str)
+#   test_cloud_error_free_form_message - str(CloudAllocateError(msg)) == msg
 #   test_cloud_allocate_error_is_exception - CloudAllocateError is catchable as Exception
 #   test_cloud_setup_error_is_exception - CloudSetupError is catchable as Exception
 #   test_cloud_errors_importable_from_domain - CloudAllocateError/CloudSetupError importable from domain
 #   test_cloud_errors_reexported_from_adapters - CloudAllocateError/CloudSetupError re-exported from adapters
-#   test_all_exceptions_importable - verify all 14 exceptions import from yascheduler.domain.exceptions
+#   test_cloud_error_importable_from_domain_exceptions - CloudError importable from yascheduler.domain.exceptions
+#   test_cloud_error_importable_from_domain_package - CloudError importable from yascheduler.domain and in __all__
+#   test_cloud_error_not_reexported_from_adapters - CloudError NOT importable from adapters.cloud
+#   test_all_exceptions_importable - verify all 15 exceptions import from yascheduler.domain.exceptions
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add MachineConnectionError tests (gateway-port-cleanup).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial domain exception tests
+#   LAST_CHANGE: v1.2.0 - Add CloudError hierarchy tests (cloud-error-hierarchy).
+#   PREVIOUS_CHANGE: v1.1.0 - Add MachineConnectionError tests (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
+
+import pytest
 
 from yascheduler.domain.exceptions import (
     CloudAllocateError,
     CloudCapacityExhaustedError,
+    CloudError,
     CloudSetupError,
     DomainError,
     MachineBusyError,
@@ -246,6 +258,97 @@ def test_cloud_capacity_exhausted_error() -> None:
     assert "5" in str(exc)
 
 
+# START_CONTRACT: test_cloud_capacity_exhausted_error_stays_under_scheduling
+#   PURPOSE: Verify CloudCapacityExhaustedError is a SchedulingError and NOT a CloudError (locks D2).
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_capacity_exhausted_error_stays_under_scheduling
+def test_cloud_capacity_exhausted_error_stays_under_scheduling() -> None:
+    assert issubclass(CloudCapacityExhaustedError, SchedulingError)
+    assert not issubclass(CloudCapacityExhaustedError, CloudError)
+
+
+# START_CONTRACT: test_cloud_error_is_domain_error
+#   PURPOSE: Verify CloudError is a DomainError and NOT a SchedulingError (locks D2 negative guard).
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_error_is_domain_error
+def test_cloud_error_is_domain_error() -> None:
+    assert issubclass(CloudError, DomainError)
+    assert not issubclass(CloudError, SchedulingError)
+    try:
+        raise CloudError("boom")
+    except DomainError as e:
+        assert isinstance(e, CloudError)
+        assert str(e) == "boom"
+
+
+# START_CONTRACT: test_cloud_allocate_error_under_cloud_error
+#   PURPOSE: Verify CloudAllocateError subclasses CloudError and is catchable as CloudError/DomainError/Exception.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_allocate_error_under_cloud_error
+def test_cloud_allocate_error_under_cloud_error() -> None:
+    assert issubclass(CloudAllocateError, CloudError)
+    assert issubclass(CloudAllocateError, DomainError)
+    err = CloudAllocateError("create failed")
+    with pytest.raises(CloudError):
+        raise err
+    with pytest.raises(DomainError):
+        raise err
+    with pytest.raises(Exception):  # noqa: PT011
+        raise err
+
+
+# START_CONTRACT: test_cloud_setup_error_under_cloud_error
+#   PURPOSE: Verify CloudSetupError subclasses CloudError and is catchable as CloudError/DomainError/Exception.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_setup_error_under_cloud_error
+def test_cloud_setup_error_under_cloud_error() -> None:
+    assert issubclass(CloudSetupError, CloudError)
+    assert issubclass(CloudSetupError, DomainError)
+    err = CloudSetupError("setup failed")
+    with pytest.raises(CloudError):
+        raise err
+    with pytest.raises(DomainError):
+        raise err
+    with pytest.raises(Exception):  # noqa: PT011
+        raise err
+
+
+# START_CONTRACT: test_cloud_errors_no_custom_init
+#   PURPOSE: Verify the leaf cloud classes have no custom __init__ (free-form str contract).
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_errors_no_custom_init
+def test_cloud_errors_no_custom_init() -> None:
+    assert "__init__" not in CloudAllocateError.__dict__
+    assert "__init__" not in CloudSetupError.__dict__
+
+
+# START_CONTRACT: test_cloud_error_free_form_message
+#   PURPOSE: Verify the free-form str message is preserved verbatim on cloud exceptions.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_error_free_form_message
+def test_cloud_error_free_form_message() -> None:
+    assert str(CloudAllocateError("Unknown provider: foo")) == "Unknown provider: foo"
+    assert str(CloudSetupError("Unknown provider: foo")) == "Unknown provider: foo"
+
+
 # START_CONTRACT: test_cloud_allocate_error_is_exception
 #   PURPOSE: Verify CloudAllocateError is catchable as Exception.
 #   INPUTS: { None }
@@ -310,15 +413,57 @@ def test_cloud_errors_reexported_from_adapters() -> None:
     assert AdapterCSE is CloudSetupError
 
 
+# START_CONTRACT: test_cloud_error_importable_from_domain_exceptions
+#   PURPOSE: Verify CloudError is importable from yascheduler.domain.exceptions.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_error_importable_from_domain_exceptions
+def test_cloud_error_importable_from_domain_exceptions() -> None:
+    from yascheduler.domain.exceptions import CloudError as ImportedCE
+
+    assert ImportedCE is CloudError
+
+
+# START_CONTRACT: test_cloud_error_importable_from_domain_package
+#   PURPOSE: Verify CloudError is importable from yascheduler.domain and listed in __all__.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_error_importable_from_domain_package
+def test_cloud_error_importable_from_domain_package() -> None:
+    import yascheduler.domain as domain_pkg
+    from yascheduler.domain import CloudError as PackageCE
+
+    assert PackageCE is CloudError
+    assert "CloudError" in domain_pkg.__all__
+
+
+# START_CONTRACT: test_cloud_error_not_reexported_from_adapters
+#   PURPOSE: Verify CloudError is NOT importable from yascheduler.adapters.cloud.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_cloud_error_not_reexported_from_adapters
+def test_cloud_error_not_reexported_from_adapters() -> None:
+    with pytest.raises(ImportError):
+        from yascheduler.adapters.cloud import (  # noqa: F401
+            CloudError,
+        )
+
+
 # START_CONTRACT: test_all_exceptions_importable
-#   PURPOSE: Verify all 14 exception classes are importable from yascheduler.domain.exceptions.
+#   PURPOSE: Verify all 15 exception classes are importable from yascheduler.domain.exceptions.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_all_exceptions_importable
 def test_all_exceptions_importable() -> None:
-    """Verify all 14 exception classes import correctly by instantiating each once."""
+    """Verify all 15 exception classes import correctly by instantiating each once."""
     instances = [
         DomainError(),
         ValidationError(),
@@ -332,9 +477,10 @@ def test_all_exceptions_importable() -> None:
         SchedulingError(),
         NoCompatibleNodeError(task_id=3, platforms=["a"]),
         CloudCapacityExhaustedError(task_id=4),
+        CloudError("test"),
         CloudAllocateError("test"),
         CloudSetupError("test"),
     ]
-    assert len(instances) == 14
+    assert len(instances) == 15
     for inst in instances:
         assert isinstance(inst, Exception)

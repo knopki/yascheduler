@@ -230,8 +230,9 @@
         <class-NoCompatibleNodeError PURPOSE="No matching node found for task" />
         <class-CloudCapacityExhaustedError PURPOSE="Cloud provider at capacity" />
         <class-MachineConnectionError PURPOSE="SSH connection failure carrying ip and reason" />
-        <class-CloudAllocateError PURPOSE="Cloud node allocation error — relocated from adapters/cloud (re-exported for backwards compat)" />
-        <class-CloudSetupError PURPOSE="Cloud node setup error (SSH/cloud-init) — relocated from adapters/cloud (re-exported for backwards compat)" />
+        <class-CloudError PURPOSE="Cloud provider operational errors (base for CloudAllocateError/CloudSetupError)" />
+        <class-CloudAllocateError PURPOSE="Cloud node allocation error (subclass of CloudError) — relocated from adapters/cloud (re-exported for backwards compat)" />
+        <class-CloudSetupError PURPOSE="Cloud node setup error (SSH/cloud-init) (subclass of CloudError) — relocated from adapters/cloud (re-exported for backwards compat)" />
       </annotations>
     </M-DOMAIN-EXCEPTIONS>
 
