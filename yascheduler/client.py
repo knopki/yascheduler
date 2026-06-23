@@ -1,5 +1,5 @@
 # FILE: yascheduler/client.py
-# VERSION: 2.2.1
+# VERSION: 2.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.1 - FIXME on queue_submit_task_async asymmetry (bypasses deps_factory seam; follow-up proposal).
-#   PREVIOUS_CHANGE: v2.2.0 - Swap queue_get_tasks_async to query_tasks use case via deps_factory; drop DB import; add _task_to_dict (client-query-uow).
+#   LAST_CHANGE: v2.3.0 - Route queue_submit_task_async through self._deps_factory; drop local make_cli_deps import (submit/query symmetry).
+#   PREVIOUS_CHANGE: v2.2.1 - FIXME on queue_submit_task_async asymmetry (bypasses deps_factory seam; follow-up proposal).
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -116,7 +116,7 @@ class Yascheduler:
         self._deps_factory = deps_factory or make_cli_deps
 
     # START_CONTRACT: queue_submit_task_async
-    #   PURPOSE: Submit a new task asynchronously via CLIDeps (no Scheduler import).
+    #   PURPOSE: Submit a new task asynchronously via the deps_factory seam (CLIDeps.submit).
     #   INPUTS: { label: str, metadata: Mapping[str, Any], engine_name: str, webhook_onsubmit: bool }
     #   OUTPUTS: { int - task_id }
     #   SIDE_EFFECTS: Creates a new task in the database via submit_task use case.
@@ -130,15 +130,7 @@ class Yascheduler:
         webhook_onsubmit: bool = False,
     ) -> int:
         """Submit new task"""
-        # FIXME: asymmetric with the query path — bypasses the deps_factory seam
-        # and calls make_cli_deps directly (lazy import duplicating the
-        # module-level one). Convert to deps = self._deps_factory(self.config)
-        # and drop the local import in a follow-up proposal; requires migrating
-        # tests/unit/test_characterization.py off the make_cli_deps monkeypatch.
-        # See design.md D2 ("Why not also route submit through it now").
-        from .di import make_cli_deps
-
-        deps = make_cli_deps(self.config)
+        deps = self._deps_factory(self.config)
         return await deps.submit(label, dict(metadata), engine_name)
 
     # START_CONTRACT: queue_submit_task
