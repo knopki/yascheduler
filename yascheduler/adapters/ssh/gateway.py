@@ -1,5 +1,5 @@
 # FILE: yascheduler/adapters/ssh/gateway.py
-# VERSION: 1.4.0
+# VERSION: 1.4.1
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH machine gateway implementing MachineGateway protocol via asyncssh.
 #   SCOPE: SSHMachineGateway class with connection lifecycle, command execution, SFTP, occupancy monitoring, output download.
@@ -17,11 +17,13 @@
 #   SSHMachineGateway._upload_task_data - Upload task input files to remote machine via SFTP
 #   SSHMachineGateway._exec_spawn_command - Execute spawn command on remote machine via SSH
 #   SSHMachineGateway.start_task_on_machine - Upload task inputs and spawn calculation process (port contract)
+#   SSHMachineGateway._occupancy_by_pgrep - pgrep-based occupancy check (busy-safe on SSH failure)
+#   SSHMachineGateway._occupancy_by_cmd - check_cmd-based occupancy check (busy-safe on SSH failure)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Move deferred helpers (_start_task_on_machine, _upload_task_data, _exec_spawn_command, _write_remote_file, _safe_b64decode) from orchestrator to gateway; expose as public start_task_on_machine (gateway-port-cleanup scope expansion).
-#   PREVIOUS_CHANGE: v1.3.0 - Add @my_backoff_exc on run_bg/get_cpu_cores; @my_backoff_sftp on upload/download; split connect into outer + _connect_impl; rename get_machine_state -> _get_machine_state and add new port get_machine_state returning ConnectedMachine; add list_connected; add download_outputs (gateway-port-cleanup).
+#   LAST_CHANGE: v1.4.1 - Split occupancy_check into _occupancy_by_pgrep and _occupancy_by_cmd branch helpers; drop misleading count from PGREP_FREE log (was always 0 due to early return on first match).
+#   PREVIOUS_CHANGE: v1.4.0 - Move deferred helpers (_start_task_on_machine, _upload_task_data, _exec_spawn_command, _write_remote_file, _safe_b64decode) from orchestrator to gateway; expose as public start_task_on_machine (gateway-port-cleanup scope expansion).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -675,6 +677,65 @@ class SSHMachineGateway:
         # END_BLOCK_DOWNLOAD_OUTPUTS
         return meta_add, sftp_errors
 
+    # START_CONTRACT: SSHMachineGateway._occupancy_by_pgrep
+    #   PURPOSE: Occupancy check via pgrep on check_pname. Returns True (busy)
+    #     when at least one process matches OR when SSH fails (safe default).
+    #     Returns False (free) only when pgrep succeeds and yields no process.
+    #   INPUTS: { ip: str, pattern: str - process name pattern to match }
+    #   OUTPUTS: { bool - True if busy or SSH failed, False if confirmed free }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-SSH-GATEWAY
+    # END_CONTRACT: SSHMachineGateway._occupancy_by_pgrep
+    async def _occupancy_by_pgrep(self, ip: str, pattern: str) -> bool:
+        # START_BLOCK_OCCUPANCY_PGREP
+        try:
+            async for proc in self.pgrep(ip, pattern):
+                self._log.debug(
+                    "[SSHGateway][occupancy_check][PGREP] ip=%s pid=%s name=%s cmd=%s",
+                    ip,
+                    proc.pid,
+                    proc.name,
+                    proc.command,
+                )
+                return True
+            self._log.debug(
+                "[SSHGateway][occupancy_check][PGREP_FREE] ip=%s pattern=%s",
+                ip,
+                pattern,
+            )
+            return False
+        except SSHRetryExc as exc:
+            self._log.warning("Machine %s pgrep failed, assuming busy: %s", ip, exc)
+            return True
+        # END_BLOCK_OCCUPANCY_PGREP
+
+    # START_CONTRACT: SSHMachineGateway._occupancy_by_cmd
+    #   PURPOSE: Occupancy check via check_cmd exit code. Returns True (busy)
+    #     when exit code matches expected_code OR when SSH fails (safe default).
+    #     Returns False only when the check succeeds with a non-matching exit code.
+    #   INPUTS: { ip: str, cmd: str - check command to run, expected_code: int - busy exit code }
+    #   OUTPUTS: { bool - True if busy or SSH failed, False if confirmed free }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-SSH-GATEWAY
+    # END_CONTRACT: SSHMachineGateway._occupancy_by_cmd
+    async def _occupancy_by_cmd(self, ip: str, cmd: str, expected_code: int) -> bool:
+        # START_BLOCK_OCCUPANCY_CMD
+        try:
+            state = self._machines[ip]
+            proc = await self.run_full(state.machine, cmd)
+            self._log.debug(
+                "[SSHGateway][occupancy_check][CHECK_CMD] ip=%s cmd=%s exit=%d expected=%d",
+                ip,
+                cmd,
+                proc.returncode,
+                expected_code,
+            )
+            return proc.returncode == expected_code
+        except SSHRetryExc as exc:
+            self._log.warning("Machine %s check_cmd failed, assuming busy: %s", ip, exc)
+            return True
+        # END_BLOCK_OCCUPANCY_CMD
+
     # START_CONTRACT: SSHMachineGateway.occupancy_check
     #   PURPOSE: Check if engine process is still running via pgrep or check_cmd.
     #     Returns True (busy) when process found OR when SSH fails (safe default).
@@ -690,51 +751,16 @@ class SSHMachineGateway:
         that still has a running task.
         Returns False (free) only when the check succeeds and finds no process.
         """
-        # FIXME: split to 2 branch helpers
+        # START_BLOCK_OCCUPANCY_DISPATCH
         if config.check_pname:
-            try:
-                count = 0
-                async for proc in self.pgrep(ip, config.check_pname):
-                    count += 1
-                    self._log.debug(
-                        "[SSHGateway][occupancy_check][PGREP] ip=%s pid=%s name=%s cmd=%s",
-                        ip,
-                        proc.pid,
-                        proc.name,
-                        proc.command,
-                    )
-                    return True
-                self._log.debug(
-                    "[SSHGateway][occupancy_check][PGREP_FREE] ip=%s pattern=%s count=%d",
-                    ip,
-                    config.check_pname,
-                    count,
-                )
-                return False
-            except SSHRetryExc as exc:
-                self._log.warning("Machine %s pgrep failed, assuming busy: %s", ip, exc)
-                return True
-        elif config.check_cmd:
-            try:
-                state = self._machines[ip]
-                proc = await self.run_full(state.machine, config.check_cmd)
-                self._log.debug(
-                    "[SSHGateway][occupancy_check][CHECK_CMD] ip=%s cmd=%s exit=%d expected=%d",
-                    ip,
-                    config.check_cmd,
-                    proc.returncode,
-                    config.check_cmd_code,
-                )
-                if proc.returncode == config.check_cmd_code:
-                    return True
-                return False
-            except SSHRetryExc as exc:
-                self._log.warning(
-                    "Machine %s check_cmd failed, assuming busy: %s", ip, exc
-                )
-                return True
+            return await self._occupancy_by_pgrep(ip, config.check_pname)
+        if config.check_cmd:
+            return await self._occupancy_by_cmd(
+                ip, config.check_cmd, config.check_cmd_code
+            )
         self._log.debug("[SSHGateway][occupancy_check][NO_CHECK] ip=%s", ip)
         return False
+        # END_BLOCK_OCCUPANCY_DISPATCH
 
     # START_CONTRACT: SSHMachineGateway.start_occupancy_check
     #   PURPOSE: Background task periodically checks occupancy, releases machine when done.
