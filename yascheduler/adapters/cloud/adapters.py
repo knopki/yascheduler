@@ -25,7 +25,7 @@
 #   LAST_CHANGE: v1.1.0 - Rename _resolve_adapter → resolve_adapter (public) so the composition root (di.py) doesn't reach into a private symbol (review-hardening).
 #   PREVIOUS_CHANGE: v1.8.0 - Add CLOUD_ADAPTER_GETTERS and _resolve_adapter from clouds/cloud_api_manager.py.
 # END_CHANGE_SUMMARY
-
+# FIXME: migrate from attrs to dataclasses
 """Cloud adapters"""
 
 from __future__ import annotations

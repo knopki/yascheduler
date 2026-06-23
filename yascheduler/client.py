@@ -1,21 +1,22 @@
 # FILE: yascheduler/client.py
-# VERSION: 2.0.0
+# VERSION: 2.2.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
-#   SCOPE: Task submission (via DI/CLIDeps) and status query (via DB).
-#   DEPENDS: M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-DI
-#   LINKS: M-DB, M-DI, M-AIIDA
+#   SCOPE: Task submission (via DI/CLIDeps) and status query (via query_tasks use case + UoW).
+#   DEPENDS: M-VARIABLES, M-COMPAT, M-CONFIG, M-DI, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL
+#   LINKS: M-DI, M-AIIDA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   Yascheduler - Sync/async client wrapper for task operations
 #   to_sync - Decorator wrapping async functions for sync execution
+#   _task_to_dict - Project domain Task to the public 6-key Mapping shape
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Replace Scheduler import with make_cli_deps for submit; query methods unchanged.
-#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v2.2.1 - FIXME on queue_submit_task_async asymmetry (bypasses deps_factory seam; follow-up proposal).
+#   PREVIOUS_CHANGE: v2.2.0 - Swap queue_get_tasks_async to query_tasks use case via deps_factory; drop DB import; add _task_to_dict (client-query-uow).
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -28,11 +29,11 @@ from functools import wraps
 from pathlib import PurePath
 from typing import Any, Optional, TypeVar, Union
 
-from attrs import asdict
-
+from .application import query_tasks
 from .compat import ParamSpec
 from .config import Config
-from .db import DB, TaskStatus
+from .di import CLIDeps, make_cli_deps
+from .domain import Task, TaskStatus
 from .variables import CONFIG_FILE
 
 ReturnT_co = TypeVar("ReturnT_co", covariant=True)
@@ -64,6 +65,24 @@ def to_sync(
     return outer
 
 
+# START_CONTRACT: _task_to_dict
+#   PURPOSE: Project a domain Task to the public 6-key Mapping shape returned by query methods.
+#   INPUTS: { t: Task - domain Task aggregate }
+#   OUTPUTS: { Mapping[str, Any] - {task_id, label, ip, status, metadata, cloud} }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-MODEL
+# END_CONTRACT: _task_to_dict
+def _task_to_dict(t: Task) -> Mapping[str, Any]:
+    return {
+        "task_id": t.task_id,
+        "label": t.label,
+        "ip": t.allocated_ip or "",
+        "status": t.status,
+        "metadata": t.context.to_metadata(),
+        "cloud": None,
+    }
+
+
 class Yascheduler:
     """Yascheduler client"""
 
@@ -75,19 +94,26 @@ class Yascheduler:
     _logger: Optional[logging.Logger] = None
 
     # START_CONTRACT: __init__
-    #   PURPOSE: Initialize the Yascheduler client with config path
-    #   INPUTS: { config_path: Union[PurePath, str], logger: Optional[logging.Logger] }
+    #   PURPOSE: Initialize the Yascheduler client with config path and optional DI factory.
+    #   INPUTS: {
+    #     config_path: Union[PurePath, str],
+    #     logger: Optional[logging.Logger],
+    #     deps_factory: Optional[Callable[[Config], CLIDeps]] - keyword-only test seam
+    #   }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Loads configuration from disk
-    #   LINKS: M-CLIENT, M-CONFIG
+    #   LINKS: M-CLIENT, M-CONFIG, M-DI
     # END_CONTRACT: __init__
     def __init__(
         self,
         config_path: Union[PurePath, str] = CONFIG_FILE,
         logger: Optional[logging.Logger] = None,
+        *,
+        deps_factory: Optional[Callable[[Config], CLIDeps]] = None,
     ) -> None:
         self.config = Config.from_config_parser(config_path)
         self._logger = logger
+        self._deps_factory = deps_factory or make_cli_deps
 
     # START_CONTRACT: queue_submit_task_async
     #   PURPOSE: Submit a new task asynchronously via CLIDeps (no Scheduler import).
@@ -104,6 +130,12 @@ class Yascheduler:
         webhook_onsubmit: bool = False,
     ) -> int:
         """Submit new task"""
+        # FIXME: asymmetric with the query path — bypasses the deps_factory seam
+        # and calls make_cli_deps directly (lazy import duplicating the
+        # module-level one). Convert to deps = self._deps_factory(self.config)
+        # and drop the local import in a follow-up proposal; requires migrating
+        # tests/unit/test_characterization.py off the make_cli_deps monkeypatch.
+        # See design.md D2 ("Why not also route submit through it now").
         from .di import make_cli_deps
 
         deps = make_cli_deps(self.config)
@@ -128,11 +160,12 @@ class Yascheduler:
         return fn(label, metadata, engine_name, webhook_onsubmit)
 
     # START_CONTRACT: queue_get_tasks_async
-    #   PURPOSE: Query tasks asynchronously by job IDs or statuses
+    #   PURPOSE: Query tasks asynchronously by job IDs or statuses via the query_tasks use case.
     #   INPUTS: { jobs: Optional[Sequence[int]], status: Optional[Sequence[int]] }
-    #   OUTPUTS: { Sequence[Mapping[str, Any]] - list of task dicts }
-    #   SIDE_EFFECTS: Creates a DB connection; reads task records
-    #   LINKS: M-CLIENT, M-DB
+    #   OUTPUTS: { Sequence[Mapping[str, Any]] - list of task dicts with 6 keys each }
+    #   SIDE_EFFECTS: Opens a UoW (DB connection) per call via deps_factory; reads task records
+    #   RAISES: ValueError - if both jobs and statuses are non-empty (mutual exclusivity)
+    #   LINKS: M-CLIENT, M-APPLICATION-QUERY-TASKS, M-DI
     # END_CONTRACT: queue_get_tasks_async
     async def queue_get_tasks_async(
         self,
@@ -140,27 +173,20 @@ class Yascheduler:
         status: Optional[Sequence[int]] = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Get tasks by ids or statuses"""
-        if jobs is not None and status is not None:
-            raise ValueError("jobs can be selected only by status or by task ids")
         # raise ValueError if unknown task status
         statuses: Optional[list[TaskStatus]] = (
             [TaskStatus(x) for x in status] if status else None
         )
-        db = await DB.create(self.config.db)
-        if statuses:
-            tasks = await db.get_tasks_by_status(statuses)
-        elif jobs:
-            tasks = await db.get_tasks_by_jobs(jobs)
-        else:
-            return []
-        return [asdict(t) for t in tasks]  # type: ignore[arg-type]
+        deps = self._deps_factory(self.config)
+        tasks = await query_tasks(jobs, statuses, deps.uow_factory)
+        return [_task_to_dict(t) for t in tasks]
 
     # START_CONTRACT: queue_get_tasks
     #   PURPOSE: Query tasks synchronously by job IDs or statuses
     #   INPUTS: { jobs: Optional[Sequence[int]], status: Optional[Sequence[int]] }
     #   OUTPUTS: { Sequence[Mapping[str, Any]] }
-    #   SIDE_EFFECTS: Creates a DB connection via async delegate
-    #   LINKS: M-CLIENT, M-DB
+    #   SIDE_EFFECTS: Opens a UoW via async delegate
+    #   LINKS: M-CLIENT, M-APPLICATION-QUERY-TASKS
     # END_CONTRACT: queue_get_tasks
     def queue_get_tasks(
         self,
@@ -174,8 +200,8 @@ class Yascheduler:
     #   PURPOSE: Get a single task by ID asynchronously
     #   INPUTS: { task_id: int }
     #   OUTPUTS: { Optional[Mapping[str, Any]] }
-    #   SIDE_EFFECTS: Creates a DB connection via queue_get_tasks_async
-    #   LINKS: M-CLIENT, M-DB
+    #   SIDE_EFFECTS: Opens a UoW via queue_get_tasks_async
+    #   LINKS: M-CLIENT, M-APPLICATION-QUERY-TASKS
     # END_CONTRACT: queue_get_task_async
     async def queue_get_task_async(self, task_id: int) -> Optional[Mapping[str, Any]]:
         """Get task by id"""
@@ -186,8 +212,8 @@ class Yascheduler:
     #   PURPOSE: Get a single task by ID synchronously
     #   INPUTS: { task_id: int }
     #   OUTPUTS: { Optional[Mapping[str, Any]] }
-    #   SIDE_EFFECTS: Creates a DB connection via queue_get_tasks
-    #   LINKS: M-CLIENT, M-DB
+    #   SIDE_EFFECTS: Opens a UoW via queue_get_tasks
+    #   LINKS: M-CLIENT, M-APPLICATION-QUERY-TASKS
     # END_CONTRACT: queue_get_task
     def queue_get_task(self, task_id: int) -> Optional[Mapping[str, Any]]:
         """Get task by id"""

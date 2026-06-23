@@ -64,9 +64,9 @@
     <M-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Public Python/CLI client for submitting and querying tasks.</purpose>
       <path>yascheduler/client.py</path>
-      <depends>M-DB, M-VARIABLES, M-COMPAT, M-CONFIG, M-DI</depends>
+      <depends>M-VARIABLES, M-COMPAT, M-CONFIG, M-DI, M-DOMAIN-MODEL, M-APPLICATION-QUERY-TASKS</depends>
       <annotations>
-        <class-Yascheduler PURPOSE="Sync/async client wrapper for task operations" />
+        <class-Yascheduler PURPOSE="Public client class" />
         <fn-to_sync PURPOSE="Decorator converting async function to sync" />
         <fn-queue_submit_task PURPOSE="Submit a new task (sync)" />
         <fn-queue_submit_task_async PURPOSE="Submit a new task (async)" />
@@ -74,6 +74,8 @@
         <fn-queue_get_tasks_async PURPOSE="Query tasks by jobs/status (async)" />
         <fn-queue_get_task PURPOSE="Get single task by ID (sync)" />
         <fn-queue_get_task_async PURPOSE="Get single task by ID (async)" />
+        <fn-_task_to_dict PURPOSE="Project domain Task to the public 6-key Mapping shape" />
+        <const-_deps_factory PURPOSE="Keyword-only constructor seam: Config -> CLIDeps factory (defaults to make_cli_deps)" />
       </annotations>
     </M-CLIENT>
 
@@ -296,14 +298,15 @@
          ═══════════════════════════════════════════════ -->
 
     <M-APPLICATION NAME="Application layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task, AllocationTracker.</purpose>
+      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task, query_tasks, AllocationTracker.</purpose>
       <path>yascheduler/application/__init__.py</path>
-      <depends>M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-SUBMIT, M-APPLICATION-QUERY-TASKS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <export-AbstractUnitOfWork PURPOSE="Unit-of-work boundary for application use cases" />
         <export-Orchestrator PURPOSE="Task lifecycle orchestrator" />
         <export-MessageBus PURPOSE="In-process event bus for domain events" />
         <export-submit_task PURPOSE="Use case: register a new task in TO_DO state" />
+        <export-query_tasks PURPOSE="Use case: read-only task query by statuses or job IDs" />
         <export-AllocationTracker PURPOSE="In-memory dedup of in-flight cloud allocations" />
       </annotations>
     </M-APPLICATION>
@@ -334,6 +337,15 @@
         <fn-submit_task PURPOSE="Create a new TO_DO task after validating engine and inputs" />
       </annotations>
     </M-APPLICATION-SUBMIT>
+
+    <M-APPLICATION-QUERY-TASKS NAME="Query tasks use case" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Read-only task query by statuses XOR job IDs within a single UoW; no commit.</purpose>
+      <path>yascheduler/application/query_tasks.py</path>
+      <depends>M-DOMAIN-MODEL, M-APPLICATION-UOW</depends>
+      <annotations>
+        <fn-query_tasks PURPOSE="Async read-only task query by statuses or job IDs via AbstractUnitOfWork" />
+      </annotations>
+    </M-APPLICATION-QUERY-TASKS>
 
     <M-APPLICATION-ALLOCATE NAME="Allocate task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Match a TO_DO task to a free machine or request cloud provisioning (owns cloud-fallback flow: tracker dedup, capacity, tmp-node, final persist).</purpose>
@@ -892,7 +904,8 @@
          Cross-module links
          ═══════════════════════════════════════════════ -->
 
-    <CrossLink from="M-CLIENT" to="M-DB" relation="submits tasks and queries status" />
+    <CrossLink from="M-CLIENT" to="M-APPLICATION-QUERY-TASKS" relation="delegates task queries" />
+    <CrossLink from="M-APPLICATION-QUERY-TASKS" to="M-PERSISTENCE-UOW" relation="reads via UoW" />
     <CrossLink from="M-AIIDA" to="M-CLIENT" relation="delegates task submission to client" />
     <CrossLink from="M-CONFIG" to="M-CONFIG-ENGINE-REPO" relation="provides engine collection to scheduler" />
 

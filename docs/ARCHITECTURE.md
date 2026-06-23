@@ -256,11 +256,13 @@ Failures are logged and swallowed after backoff exhausts.
 - **`client.py`** — `class Yascheduler` facade.
   `queue_submit_task_async()` uses `make_cli_deps()` → `CLIDeps.submit()`
   (no daemon graph). Query methods (`queue_get_tasks*`,
-  `queue_get_task*`) still construct a `DB` instance directly.
+  `queue_get_task*`) route through the `query_tasks` use case over a UoW
+  (no `DB` construction); see `openspec/changes/client-query-uow/`.
 - **`db.py`** — legacy wrapper (~540 LOC). Converts between
   `TaskModel`/`NodeModel` (attrs) and domain `Task`/`Node`, delegates to
-  `PostgresTaskRepository` / `PostgresNodeRepository`. Consumed by
-  `client.py` and `CloudProvisionerImpl`.
+  `PostgresTaskRepository` / `PostgresNodeRepository`. `client.py` no
+  longer constructs `DB`; the module is test-only pending a separate
+  removal proposal.
 - **`webhook.py`** — `WebhookPayload` frozen dataclass, consumed by
   `notifier/webhook.py`.
 - **`aiida_plugin.py`** — AiiDA plugin uses `Yascheduler` client
@@ -548,10 +550,11 @@ no active proposal.
 
 ### 6.4 `client.py` query methods via use cases
 
-`queue_get_tasks*` and `queue_get_task*` construct `DB` directly instead
-of going through a use case. Porting them to a query use case would let
-`db.py` shrink and eventually retire. No active proposal; deferred until
-`db.py` removal becomes a concrete goal.
+**Resolved** by `openspec/changes/client-query-uow/`: `queue_get_tasks*`
+and `queue_get_task*` now route through the `query_tasks` use case over a
+UoW instead of constructing `DB` directly. The last production caller of
+`db.py` is gone; the module is test-only and awaits a separate
+test-fixture migration + removal proposal.
 
 ### 6.5 Application-layer exception hierarchy
 
@@ -565,10 +568,10 @@ in a change proposal before implementing.
 
 ## 7. Open Questions
 
-| Topic                           | Status                                               |
-| ------------------------------- | ---------------------------------------------------- |
-| AiiDA plugin evolution          | Keep importing `Yascheduler` facade until §6.3 lands |
-| `db.py` retirement              | Tied to §6.4 (client query port); no active proposal |
-| Config attrs → dataclasses      | §6.2, open proposal                                  |
-| Schema versioning               | §6.1, open proposal                                  |
-| Application exception hierarchy | §6.5, no proposal yet                                |
+| Topic                           | Status                                                                       |
+| ------------------------------- | ---------------------------------------------------------------------------- |
+| AiiDA plugin evolution          | Keep importing `Yascheduler` facade until §6.3 lands                         |
+| `db.py` retirement              | Query port resolved by `client-query-uow`; test-fixture migration still open |
+| Config attrs → dataclasses      | §6.2, open proposal                                                          |
+| Schema versioning               | §6.1, open proposal                                                          |
+| Application exception hierarchy | §6.5, no proposal yet                                                        |

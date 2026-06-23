@@ -1,10 +1,4 @@
-# db-wrapper
-
-## Purpose
-
-DB class wraps persistence adapter repositories while preserving backward-compatible public API.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: DB provides task and node CRUD
 
@@ -47,21 +41,3 @@ a separate follow-up proposal (test-fixture migration first).
 #### Scenario: Production code does not instantiate DB
 - **WHEN** the `yascheduler/` package (excluding `yascheduler/db.py` itself) is inspected after the change lands
 - **THEN** no module calls `DB.create(...)` at runtime and no module imports `DB` or `TaskStatus` from `yascheduler.db`; only test modules under `tests/` retain such imports (pending the test-fixture migration follow-up)
-
-### Requirement: TaskModel and NodeModel are immutable attrs
-
-`TaskModel` SHALL be frozen with fields: `task_id`, `label`, `ip`, `status`
-(converted via `TaskStatus` converter), `metadata` (Mapping), `cloud`.
-It SHALL produce deterministic hashes.
-
-`NodeModel` SHALL be frozen with fields: `ip`, `ncpus`, `enabled`, `cloud`,
-`username`, `port`, with documented defaults (`enabled=True`, `cloud=None`,
-`username="root"`, `port=22`).
-
-#### Scenario: TaskModel immutability and hashing
-- **WHEN** attribute assignment is attempted on `TaskModel`
-- **THEN** an exception is raised
-
-#### Scenario: NodeModel defaults
-- **WHEN** `NodeModel` is constructed with only required fields
-- **THEN** optional fields have documented default values

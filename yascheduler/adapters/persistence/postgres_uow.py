@@ -61,6 +61,7 @@ class PostgresUnitOfWork:
     #   LINKS: ThreadPoolExecutor, ConfigDb
     # END_CONTRACT: PostgresUnitOfWork.__init__
     def __init__(self, config: ConfigDb, bus: MessageBus) -> None:
+        # FIXME: no backoff.on_exception on InterfaceError
         self._config = config
         self._bus = bus
         self._saved_tasks: list[Task] = []

@@ -102,6 +102,7 @@ class CLIDeps:
     #   SIDE_EFFECTS: Opens a DB connection via UoW.
     #   LINKS: M-APPLICATION-UOW
     # END_CONTRACT: CLIDeps.query
+    # FIXME: vestigial — zero production callers (only tests/unit/test_di.py). Remove in a cleanup sweep.
     async def query(self, task_id: int) -> object | None:
 
         async with self.uow_factory() as uow:

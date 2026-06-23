@@ -18,6 +18,7 @@
 #   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
+# FIXME: migrate from attrs to dataclasses
 """Main config module"""
 
 from collections.abc import Sequence
