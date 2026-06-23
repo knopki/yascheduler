@@ -25,8 +25,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from yascheduler.adapters.cloud.adapters import CloudAdapter
-from yascheduler.adapters.cloud.provider_selection import select_provider_pure
+from yascheduler.infra.cloud.adapters import CloudAdapter
+from yascheduler.infra.cloud.provider_selection import select_provider_pure
 
 if TYPE_CHECKING:
     from yascheduler.config.cloud import ConfigCloud

@@ -7,9 +7,9 @@ Define the package-facade import discipline for `yascheduler`: clean-architectur
 ### Requirement: Layer direction (R3)
 
 The system SHALL enforce the import direction
-`yascheduler.adapters → yascheduler.application → yascheduler.domain → yascheduler.shared`
+`yascheduler.infra → yascheduler.application → yascheduler.domain → yascheduler.shared`
 via an `import-linter` `layers` contract configured in `pyproject.toml`.
-`yascheduler.adapters` may import from `yascheduler.application`,
+`yascheduler.infra` may import from `yascheduler.application`,
 `yascheduler.domain`, and `yascheduler.shared`. `yascheduler.application`
 may import from `yascheduler.domain` and `yascheduler.shared`.
 `yascheduler.domain` may import from `yascheduler.shared`.
@@ -17,15 +17,15 @@ may import from `yascheduler.domain` and `yascheduler.shared`.
 project. Both direct and indirect imports are checked.
 
 #### Scenario: Adapter imports from domain — allowed
-- **WHEN** a module in `yascheduler.adapters` imports a symbol from `yascheduler.domain`
+- **WHEN** a module in `yascheduler.infra` imports a symbol from `yascheduler.domain`
 - **THEN** the `layers` contract reports no violation
 
 #### Scenario: Application imports from adapters at module level — violation
-- **WHEN** a module in `yascheduler.application` imports a symbol from `yascheduler.adapters` at module level (not under `TYPE_CHECKING`)
+- **WHEN** a module in `yascheduler.application` imports a symbol from `yascheduler.infra` at module level (not under `TYPE_CHECKING`)
 - **THEN** the `layers` contract reports a violation
 
 #### Scenario: Domain imports from application or adapters — violation
-- **WHEN** any module in `yascheduler.domain` imports from `yascheduler.application` or `yascheduler.adapters`
+- **WHEN** any module in `yascheduler.domain` imports from `yascheduler.application` or `yascheduler.infra`
 - **THEN** the `layers` contract reports a violation
 
 #### Scenario: Indirect imports are caught
@@ -33,7 +33,7 @@ project. Both direct and indirect imports are checked.
 - **THEN** the `layers` contract reports a violation
 
 #### Scenario: yascheduler.shared imports from adapters — violation
-- **WHEN** any module in `yascheduler.shared` imports from `yascheduler.adapters`, `yascheduler.application`, or `yascheduler.domain`
+- **WHEN** any module in `yascheduler.shared` imports from `yascheduler.infra`, `yascheduler.application`, or `yascheduler.domain`
 - **THEN** the `layers` contract reports a violation
 
 #### Scenario: yascheduler.shared imports only stdlib and third-party
@@ -79,13 +79,13 @@ Parent-traversal relative imports (`from .. import`, `from ... import`,
 package tree — they obscure the dependency direction and cross package
 boundaries silently. Imports that need to reach a parent or sibling
 package SHALL use absolute facade paths (R2). Absolute self-references
-(e.g., a module in `yascheduler.adapters.cli` importing another module
-in the same package via `from yascheduler.adapters.cli.check_status import ...`)
+(e.g., a module in `yascheduler.infra.cli` importing another module
+in the same package via `from yascheduler.infra.cli.check_status import ...`)
 SHALL NOT appear inside that package.
 
-#### Scenario: adapters/cli/__init__.py uses relative imports
-- **WHEN** `yascheduler/adapters/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`, `init`, `manage_node`, `show_nodes`, `submit`)
-- **THEN** it uses `from .check_status import check_status` style, not `from yascheduler.adapters.cli.check_status import check_status`
+#### Scenario: infra/cli/__init__.py uses relative imports
+- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`, `init`, `manage_node`, `show_nodes`, `submit`)
+- **THEN** it uses `from .check_status import check_status` style, not `from yascheduler.infra.cli.check_status import check_status`
 
 #### Scenario: Domain modules use relative imports
 - **WHEN** `yascheduler/domain/model.py` imports from another module in `yascheduler/domain/`
@@ -101,32 +101,32 @@ The system SHALL import symbols from another package via that package's
 `__init__.py` only. For the three architectural layers, the layer's
 `__init__.py` is the sole public surface for cross-layer consumers:
 
-- `yascheduler.adapters/__init__.py` — sole entry point for `application` and composition root to consume adapter symbols (gateway, cloud provisioner, schema initializer, webhook handler, retry exceptions).
+- `yascheduler.infra/__init__.py` — sole entry point for `application` and composition root to consume adapter symbols (gateway, cloud provisioner, schema initializer, webhook handler, retry exceptions).
 - `yascheduler.application/__init__.py` — sole entry point for `adapters` and composition root to consume application symbols (unit of work, orchestrator, message bus).
 - `yascheduler.domain/__init__.py` — sole entry point for `adapters`, `application`, and composition root to consume domain symbols.
 
-Subpackage facades (`yascheduler.adapters.ssh`, `yascheduler.adapters.cloud`,
-`yascheduler.adapters.persistence`, `yascheduler.adapters.notifier`) are
+Subpackage facades (`yascheduler.infra.ssh`, `yascheduler.infra.cloud`,
+`yascheduler.infra.persistence`, `yascheduler.infra.notifier`) are
 internal organization of the `adapters` layer; cross-layer consumers
 SHALL NOT import from them directly. Direct imports of submodules from
 outside the package bypass the public surface and SHALL NOT appear in
 any import.
 
 #### Scenario: Adapter imports Task via domain facade
-- **WHEN** a module in `yascheduler.adapters` is added and needs to import `Task`
+- **WHEN** a module in `yascheduler.infra` is added and needs to import `Task`
 - **THEN** it uses `from yascheduler.domain import Task`, not `from yascheduler.domain.model import Task`
 
 #### Scenario: Application imports adapter symbols via adapters layer facade
 - **WHEN** a module in `yascheduler.application` needs to import `SSHMachineGateway` or `CloudProvisionerImpl`
-- **THEN** it uses `from yascheduler.adapters import SSHMachineGateway, CloudProvisionerImpl`, not `from yascheduler.adapters.ssh import SSHMachineGateway` or `from yascheduler.adapters.ssh.gateway import SSHMachineGateway`
+- **THEN** it uses `from yascheduler.infra import SSHMachineGateway, CloudProvisionerImpl`, not `from yascheduler.infra.ssh import SSHMachineGateway` or `from yascheduler.infra.ssh.gateway import SSHMachineGateway`
 
 #### Scenario: Composition root imports use layer facades
 - **WHEN** a module in the composition root (`di.py`, `client.py`) imports a symbol from any layer
-- **THEN** the import goes through the layer's `__init__.py` (e.g. `from yascheduler.adapters import webhook_handler`), not through a subpackage facade or deep submodule path
+- **THEN** the import goes through the layer's `__init__.py` (e.g. `from yascheduler.infra import webhook_handler`), not through a subpackage facade or deep submodule path
 
 #### Scenario: Within-layer cross-subpackage imports also use the layer facade
-- **WHEN** a module in `yascheduler.adapters.cli` needs `SSHMachineGateway` (which lives in `yascheduler.adapters.ssh`)
-- **THEN** it imports via `from yascheduler.adapters import SSHMachineGateway` — the layer facade is the single public surface, even for sibling subpackages within the same layer
+- **WHEN** a module in `yascheduler.infra.cli` needs `SSHMachineGateway` (which lives in `yascheduler.infra.ssh`)
+- **THEN** it imports via `from yascheduler.infra import SSHMachineGateway` — the layer facade is the single public surface, even for sibling subpackages within the same layer
 
 ### Requirement: Package facade as public surface (lazy publication)
 
@@ -180,7 +180,7 @@ configured with:
 
 - `root_package = "yascheduler"`.
 - `exclude_type_checking_imports = true` (imports inside `if TYPE_CHECKING:` guards are not flagged as R3 violations, since they are type-only references with no runtime dependency).
-- A `layers` contract with the name `Clean architecture layers` and `layers = ["yascheduler.adapters", "yascheduler.application", "yascheduler.domain", "yascheduler.shared"]`.
+- A `layers` contract with the name `Clean architecture layers` and `layers = ["yascheduler.infra", "yascheduler.application", "yascheduler.domain", "yascheduler.shared"]`.
 - A `forbidden` contract with the name `Shared kernel has no config imports`, `source_modules = ["yascheduler.shared"]`, `forbidden_modules = ["yascheduler.config"]`.
 - Dev dependency pinned as `import-linter >=2.5,<2.6` (the upper bound is required because `import-linter 2.6+` dropped Python 3.9 support, and the project pins `python >=3.9`). Both `layers` and `forbidden` contract types are supported in this version range.
 
@@ -189,11 +189,11 @@ configured with:
 - **THEN** the `[tool.importlinter]` section contains `root_package`, `exclude_type_checking_imports`, one `[[tool.importlinter.contracts]]` entry of type `layers` with `yascheduler.shared` as the 4th layer, and one `[[tool.importlinter.contracts]]` entry of type `forbidden` with `source_modules = ["yascheduler.shared"]` and `forbidden_modules = ["yascheduler.config"]`
 
 #### Scenario: TYPE_CHECKING imports not flagged
-- **WHEN** a module in `yascheduler.application` contains an import under `if TYPE_CHECKING:` that references a symbol in `yascheduler.adapters`
+- **WHEN** a module in `yascheduler.application` contains an import under `if TYPE_CHECKING:` that references a symbol in `yascheduler.infra`
 - **THEN** the `layers` contract does NOT report a violation (the import is type-only)
 
 #### Scenario: Module-level imports still flagged
-- **WHEN** a module in `yascheduler.application` contains a module-level import (not under `TYPE_CHECKING`) from `yascheduler.adapters`
+- **WHEN** a module in `yascheduler.application` contains a module-level import (not under `TYPE_CHECKING`) from `yascheduler.infra`
 - **THEN** the `layers` contract reports a violation (unless covered by `ignore_imports`)
 
 #### Scenario: import-linter version compatible with Python 3.9
@@ -206,8 +206,8 @@ The layers contract SHALL include `ignore_imports` entries for two
 specific module-level edges that violate R3, documented as residual
 until the follow-up change `gateway-sftp-wrapping` removes them:
 
-- `"yascheduler.application.consume_task -> yascheduler.adapters"`
-- `"yascheduler.application.orchestrator -> yascheduler.adapters"`
+- `"yascheduler.application.consume_task -> yascheduler.infra"`
+- `"yascheduler.application.orchestrator -> yascheduler.infra"`
 
 These edges exist because the application code uses `backoff.on_exception(...)`
 with the SSH exception tuples (`SFTPRetryExc`, `AllSSHRetryExc`), and the
@@ -216,7 +216,7 @@ so gateway-side exception translation cannot reach the SFTP call sites.
 Properly fixing the violations requires a gateway SFTP refactor tracked
 in the follow-up change `gateway-sftp-wrapping`. These two edges are
 **R2-resolved and R3-residual**: the symbols are now reached through the
-`yascheduler.adapters` layer facade (R2-compliant), but the
+`yascheduler.infra` layer facade (R2-compliant), but the
 application→adapters layer crossing itself remains an R3 violation that
 only the follow-up change can remove.
 
@@ -262,7 +262,7 @@ the lazy publication policy in operation: each symbol is added because
 a real cross-package consumer requires it, and R2 retroactive
 enforcement demands the facade form.
 
-- **`yascheduler/adapters/__init__.py`** (the adapters LAYER facade — sole public surface for cross-layer consumers and composition root) SHALL re-export:
+- **`yascheduler/infra/__init__.py`** (the adapters LAYER facade — sole public surface for cross-layer consumers and composition root) SHALL re-export:
   - `SSHMachineGateway`, `AllSSHRetryExc`, `SFTPRetryExc` from `.ssh` (consumed by `yascheduler.application.*` at module level for backoff and under `TYPE_CHECKING` for type hints; also consumed within the `adapters` layer by `cli.*` and `cloud.manager`).
   - `CloudProvisionerImpl` from `.cloud` (consumed by `yascheduler.application.*` under `TYPE_CHECKING` and by the composition root `yascheduler.di`).
   - `CloudAdapter` from `.cloud` (consumed by the composition root `yascheduler.di` for adapter typing).
@@ -274,12 +274,12 @@ enforcement demands the facade form.
   - `Orchestrator` from `.orchestrator` (consumed by `adapters.cli.daemonize` and the composition root `yascheduler.di`).
   - `MessageBus` from `.message_bus` (consumed by `adapters.persistence.postgres_uow` and the composition root `yascheduler.di`).
   - `submit_task` from `.submit_task` (consumed by the composition root `yascheduler.di`).
-- **`yascheduler/adapters/notifier/__init__.py`** SHALL re-export:
+- **`yascheduler/infra/notifier/__init__.py`** SHALL re-export:
   - `webhook_handler` from `.webhook` (consumed by the composition root via the `adapters` layer facade).
-- **`yascheduler/adapters/cloud/__init__.py`** SHALL re-export:
+- **`yascheduler/infra/cloud/__init__.py`** SHALL re-export:
   - `get_rnd_name` from `.utils` (consumed within the `cloud` subpackage by `providers/*`).
   - (Existing re-exports `CloudProvisionerImpl`, `CloudAdapter`, `PCloudConfig`, `get_key_name`, etc. preserved.)
-- **`yascheduler/adapters/persistence/__init__.py`** SHALL re-export:
+- **`yascheduler/infra/persistence/__init__.py`** SHALL re-export:
   - `apply_schema` from `.postgres_schema` (consumed by `adapters.cli.init` via the `adapters` layer facade).
   - `PostgresUnitOfWork` from `.postgres_uow` (consumed by the composition root `yascheduler.di` via the `adapters` layer facade).
   - (Preserved existing `load_query` and `UnitOfWorkNotInitializedError`.)
@@ -291,7 +291,7 @@ every pre-existing cross-package import R2-compliant, including
 composition-root (`yascheduler.di`) wiring.
 
 #### Scenario: Adapters layer facade exposes the cross-layer surface
-- **WHEN** a consumer imports `from yascheduler.adapters import SSHMachineGateway, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
+- **WHEN** a consumer imports `from yascheduler.infra import SSHMachineGateway, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
 - **THEN** all eight symbols resolve without ImportError
 
 #### Scenario: Application facade exposes UoW, Orchestrator, MessageBus, submit_task
@@ -299,15 +299,15 @@ composition-root (`yascheduler.di`) wiring.
 - **THEN** all four symbols resolve without ImportError
 
 #### Scenario: Notifier subpackage facade exposes webhook_handler
-- **WHEN** a consumer imports `from yascheduler.adapters.notifier import webhook_handler`
+- **WHEN** a consumer imports `from yascheduler.infra.notifier import webhook_handler`
 - **THEN** the symbol resolves without ImportError
 
 #### Scenario: Cloud subpackage facade exposes get_rnd_name
-- **WHEN** a consumer imports `from yascheduler.adapters.cloud import get_rnd_name`
+- **WHEN** a consumer imports `from yascheduler.infra.cloud import get_rnd_name`
 - **THEN** the symbol resolves without ImportError
 
 #### Scenario: Persistence subpackage facade exposes apply_schema and PostgresUnitOfWork
-- **WHEN** a consumer imports `from yascheduler.adapters.persistence import apply_schema, PostgresUnitOfWork`
+- **WHEN** a consumer imports `from yascheduler.infra.persistence import apply_schema, PostgresUnitOfWork`
 - **THEN** both symbols resolve without ImportError
 
 #### Scenario: Config facade exposes AzureImageReference
@@ -329,9 +329,9 @@ be promoted to any facade:
 ### Requirement: Broad ignore_imports tradeoff
 
 The two `ignore_imports` entries in the `layers` contract SHALL use the
-**layer facade path** (`yascheduler.application.{consume_task,orchestrator} -> yascheduler.adapters`)
+**layer facade path** (`yascheduler.application.{consume_task,orchestrator} -> yascheduler.infra`)
 rather than a deep path. This is broader than a deep-path carve-out:
-any future module-level `from yascheduler.adapters import <anything>`
+any future module-level `from yascheduler.infra import <anything>`
 added to `consume_task.py` or `orchestrator.py` would be silently
 suppressed by the same edge — not just the SSH-exception tuples the
 prose justifies. The tradeoff is deliberate (matches the layer-facade
@@ -340,7 +340,7 @@ those two files until the follow-up change `gateway-sftp-wrapping`
 removes the residuals entirely.
 
 #### Scenario: Reviewer scrutinizes new adapter imports in residual files
-- **WHEN** a contributor adds a new module-level `from yascheduler.adapters import X` to `consume_task.py` or `orchestrator.py`
+- **WHEN** a contributor adds a new module-level `from yascheduler.infra import X` to `consume_task.py` or `orchestrator.py`
 - **THEN** the reviewer verifies the import is justified (same shape as the residual) or requires the contributor to fix forward
 
 ### Requirement: Public API stability

@@ -79,15 +79,15 @@
 
     <M-CLI-COMMANDS NAME="CLI commands package" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Per-command CLI adapter modules — parse args, call use cases via DI, format output.</purpose>
-      <path>yascheduler/adapters/cli/__init__.py</path>
+      <path>yascheduler/infra/cli/__init__.py</path>
       <depends>M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE</depends>
       <annotations>
-        <fn-submit PURPOSE="Submit task via AiiDA script (adapters/cli/submit.py)" />
-        <fn-check_status PURPOSE="Show status of tasks (adapters/cli/check_status.py)" />
-        <fn-init PURPOSE="Service initialization (adapters/cli/init.py)" />
-        <fn-show_nodes PURPOSE="Show enabled nodes and running tasks (adapters/cli/show_nodes.py)" />
-        <fn-manage_node PURPOSE="Add/remove nodes from daemon (adapters/cli/manage_node.py)" />
-        <fn-daemonize PURPOSE="Start yascheduler daemon (adapters/cli/daemonize.py)" />
+        <fn-submit PURPOSE="Submit task via AiiDA script (infra/cli/submit.py)" />
+        <fn-check_status PURPOSE="Show status of tasks (infra/cli/check_status.py)" />
+        <fn-init PURPOSE="Service initialization (infra/cli/init.py)" />
+        <fn-show_nodes PURPOSE="Show enabled nodes and running tasks (infra/cli/show_nodes.py)" />
+        <fn-manage_node PURPOSE="Add/remove nodes from daemon (infra/cli/manage_node.py)" />
+        <fn-daemonize PURPOSE="Start yascheduler daemon (infra/cli/daemonize.py)" />
       </annotations>
     </M-CLI-COMMANDS>
 
@@ -202,8 +202,8 @@
         <class-CloudCapacityExhaustedError PURPOSE="Cloud provider at capacity" />
         <class-MachineConnectionError PURPOSE="SSH connection failure carrying ip and reason" />
         <class-CloudError PURPOSE="Cloud provider operational errors (base for CloudAllocateError/CloudSetupError)" />
-        <class-CloudAllocateError PURPOSE="Cloud node allocation error (subclass of CloudError) — relocated from adapters/cloud (re-exported for backwards compat)" />
-        <class-CloudSetupError PURPOSE="Cloud node setup error (SSH/cloud-init) (subclass of CloudError) — relocated from adapters/cloud (re-exported for backwards compat)" />
+        <class-CloudAllocateError PURPOSE="Cloud node allocation error (subclass of CloudError) — relocated from infra/cloud (re-exported for backwards compat)" />
+        <class-CloudSetupError PURPOSE="Cloud node setup error (SSH/cloud-init) (subclass of CloudError) — relocated from infra/cloud (re-exported for backwards compat)" />
       </annotations>
     </M-DOMAIN-EXCEPTIONS>
 
@@ -392,7 +392,7 @@
 
     <M-PERSISTENCE NAME="Persistence subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Persistence subpackage facade — internal organization of the adapters layer; re-exported by M-ADAPTERS for cross-layer consumers and composition root.</purpose>
-      <path>yascheduler/adapters/persistence/__init__.py</path>
+      <path>yascheduler/infra/persistence/__init__.py</path>
       <depends>M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-POSTGRES</depends>
       <annotations>
         <export-UnitOfWorkNotInitializedError PURPOSE="Re-exported from exceptions" />
@@ -403,7 +403,7 @@
 
     <M-PERSISTENCE-SQLLOADER NAME="SQL query loader" TYPE="UTILITY" STATUS="implemented">
       <purpose>SQL query file loader — reads .sql files with @functools.cache for pg8000 repositories.</purpose>
-      <path>yascheduler/adapters/persistence/sql_loader.py</path>
+      <path>yascheduler/infra/persistence/sql_loader.py</path>
       <depends>none</depends>
       <annotations>
         <fn-load_query PURPOSE="Load SQL file contents by name with lru_cache" />
@@ -413,7 +413,7 @@
 
     <M-PERSISTENCE-EXCEPTIONS NAME="Persistence exceptions" TYPE="UTILITY" STATUS="implemented">
       <purpose>Adapter-layer exceptions for persistence UoW state-contract violations.</purpose>
-      <path>yascheduler/adapters/persistence/exceptions.py</path>
+      <path>yascheduler/infra/persistence/exceptions.py</path>
       <depends>none</depends>
       <annotations>
         <class-UnitOfWorkNotInitializedError PURPOSE="Raised when UoW methods called without entering context" />
@@ -422,7 +422,7 @@
 
     <M-PERSISTENCE-POSTGRES NAME="PostgreSQL repositories" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgresTaskRepository and PostgresNodeRepository implementing domain repository ports via pg8000.</purpose>
-      <path>yascheduler/adapters/persistence/postgres.py</path>
+      <path>yascheduler/infra/persistence/postgres.py</path>
       <depends>M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL, M-DOMAIN-PORTS</depends>
       <annotations>
         <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, list_by_status, list_by_jobs, count_by_status)" />
@@ -432,7 +432,7 @@
 
     <M-PERSISTENCE-UOW NAME="PostgreSQL Unit of Work" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgresUnitOfWork managing shared pg8000 Connection across repositories with commit/rollback and event dispatch.</purpose>
-      <path>yascheduler/adapters/persistence/postgres_uow.py</path>
+      <path>yascheduler/infra/persistence/postgres_uow.py</path>
       <depends>M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN-EVENTS</depends>
       <annotations>
         <class-PostgresUnitOfWork PURPOSE="Async context manager for transactional boundaries with shared connection and event dispatch" />
@@ -442,7 +442,7 @@
 
     <M-PERSISTENCE-SCHEMA NAME="Schema applier" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>Synchronous transactional application of schema.sql via pg8000 for CLI init and test fixtures.</purpose>
-      <path>yascheduler/adapters/persistence/postgres_schema.py</path>
+      <path>yascheduler/infra/persistence/postgres_schema.py</path>
       <depends>M-PERSISTENCE-SQLLOADER, M-CONFIG-DB</depends>
       <annotations>
         <fn-apply_schema PURPOSE="Apply schema.sql in BEGIN/COMMIT transaction, rollback on failure" />
@@ -565,7 +565,7 @@
 
     <M-ADAPTERS NAME="Adapters layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Adapters layer facade — sole public surface for cross-layer consumers (application, composition root). Re-exports gateway, retry exceptions, cloud provisioner, and webhook handler.</purpose>
-      <path>yascheduler/adapters/__init__.py</path>
+      <path>yascheduler/infra/__init__.py</path>
       <depends>M-SSH, M-CLOUD, M-PERSISTENCE, M-NOTIFIER</depends>
       <annotations>
         <export-SSHMachineGateway PURPOSE="Async SSH machine gateway implementation" />
@@ -582,7 +582,7 @@
 
     <M-CLOUD NAME="Cloud subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Cloud subpackage facade — internal organization of the adapters layer; re-exported by M-ADAPTERS for cross-layer consumers.</purpose>
-      <path>yascheduler/adapters/cloud/__init__.py</path>
+      <path>yascheduler/infra/cloud/__init__.py</path>
       <depends>M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVISIONER</depends>
       <annotations>
         <export-CloudAdapter PURPOSE="Cloud adapter wrapper class" />
@@ -606,7 +606,7 @@
 
     <M-CLOUD-PROVISIONER NAME="Cloud provisioner" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, setup, SSH keys); no DB access.</purpose>
-      <path>yascheduler/adapters/cloud/manager.py</path>
+      <path>yascheduler/infra/cloud/manager.py</path>
       <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-SSH-KEYS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIG, M-SSH-GATEWAY, M-CONFIG, M-CONFIG-CLOUD</depends>
       <annotations>
         <class-CloudProvisionerImpl PURPOSE="Pure cloud-API adapter implementing CloudProvisioner protocol" />
@@ -618,7 +618,7 @@
 
     <M-CLOUD-PROVIDER-SELECTION NAME="Provider selection" TYPE="UTILITY" STATUS="implemented">
       <purpose>Pure function selecting best cloud provider by priority, capacity, and platform support.</purpose>
-      <path>yascheduler/adapters/cloud/provider_selection.py</path>
+      <path>yascheduler/infra/cloud/provider_selection.py</path>
       <depends>M-CLOUD-ADAPTERS-NEW</depends>
       <annotations>
         <fn-select_provider_pure PURPOSE="Pick highest-priority provider with capacity and platform support; called only from CloudProvisionerImpl.select_provider" />
@@ -628,7 +628,7 @@
 
     <M-CLOUD-PROVIDERS NAME="Cloud providers" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Cloud provider SDK adapters (Azure, Hetzner, UpCloud) with optional import handling.</purpose>
-      <path>yascheduler/adapters/cloud/providers/</path>
+      <path>yascheduler/infra/cloud/providers/</path>
       <depends>M-CONFIG-CLOUD, M-CLOUD-SSH-KEYS</depends>
       <annotations>
         <fn-az_create_node PURPOSE="Create Azure node" />
@@ -642,7 +642,7 @@
 
     <M-CLOUD-PROTOCOLS NAME="Cloud protocols" TYPE="UTILITY" STATUS="implemented">
       <purpose>Protocol definitions for cloud config, node creation, deletion callables, and cloud capacity.</purpose>
-      <path>yascheduler/adapters/cloud/protocols.py</path>
+      <path>yascheduler/infra/cloud/protocols.py</path>
       <depends>M-CONFIG-CLOUD</depends>
       <annotations>
         <class-PCloudConfig PURPOSE="Cloud config init protocol" />
@@ -658,7 +658,7 @@
 
     <M-CLOUD-CONFIG NAME="Cloud config dataclass" TYPE="UTILITY" STATUS="implemented">
       <purpose>CloudConfig dataclass implementing PCloudConfig for cloud-init rendering.</purpose>
-      <path>yascheduler/adapters/cloud/cloud_config.py</path>
+      <path>yascheduler/infra/cloud/cloud_config.py</path>
       <depends>none</depends>
       <annotations>
         <class-CloudConfig PURPOSE="Cloud config dataclass" />
@@ -667,7 +667,7 @@
 
     <M-CLOUD-ADAPTERS-NEW NAME="Cloud adapter factory" TYPE="UTILITY" STATUS="implemented">
       <purpose>CloudAdapter class and adapter factory functions for provider registration.</purpose>
-      <path>yascheduler/adapters/cloud/adapters.py</path>
+      <path>yascheduler/infra/cloud/adapters.py</path>
       <depends>M-CLOUD-PROVIDERS, M-CLOUD-PROTOCOLS</depends>
       <annotations>
         <class-CloudAdapter PURPOSE="Cloud adapter wrapper class" />
@@ -682,7 +682,7 @@
 
     <M-CLOUD-SSH-KEYS NAME="SSH key management" TYPE="UTILITY" STATUS="implemented">
       <purpose>SSH key generation, loading, and name extraction for cloud provisioning.</purpose>
-      <path>yascheduler/adapters/cloud/ssh_keys.py</path>
+      <path>yascheduler/infra/cloud/ssh_keys.py</path>
       <depends>none</depends>
       <annotations>
         <fn-get_or_create_ssh_key PURPOSE="Load existing SSH key or generate a new one" />
@@ -692,7 +692,7 @@
 
     <M-NOTIFIER NAME="Notifier subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Notifier subpackage facade — re-exports webhook_handler as public surface for the adapters layer facade.</purpose>
-      <path>yascheduler/adapters/notifier/__init__.py</path>
+      <path>yascheduler/infra/notifier/__init__.py</path>
       <depends>M-NOTIFIER-WEBHOOK</depends>
       <annotations>
         <export-webhook_handler PURPOSE="Async webhook event handler dispatching domain events to configured endpoint" />
@@ -701,7 +701,7 @@
 
     <M-NOTIFIER-WEBHOOK NAME="Webhook notifier" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Webhook event handler that sends HTTP notifications for task lifecycle events.</purpose>
-      <path>yascheduler/adapters/notifier/webhook.py</path>
+      <path>yascheduler/infra/notifier/webhook.py</path>
       <depends>M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-WEBHOOK</depends>
       <annotations>
         <fn-webhook_handler PURPOSE="Async handler that sends webhooks for task lifecycle events" />
@@ -716,7 +716,7 @@
 
     <M-SSH NAME="SSH subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SSH subpackage facade — internal organization of the adapters layer; re-exports gateway class and retry exceptions for the M-ADAPTERS layer facade.</purpose>
-      <path>yascheduler/adapters/ssh/__init__.py</path>
+      <path>yascheduler/infra/ssh/__init__.py</path>
       <depends>M-SSH-GATEWAY, M-SSH-EXCEPTIONS</depends>
       <annotations>
         <export-SSHMachineGateway PURPOSE="Async SSH machine gateway implementation" />
@@ -727,7 +727,7 @@
 
     <M-SSH-GATEWAY NAME="SSH machine gateway" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>SSH machine gateway implementing MachineGateway protocol via asyncssh.</purpose>
-      <path>yascheduler/adapters/ssh/gateway.py</path>
+      <path>yascheduler/infra/ssh/gateway.py</path>
       <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL</depends>
       <annotations>
         <class-SSHMachineGateway PURPOSE="SSH implementation of MachineGateway protocol" />
@@ -754,7 +754,7 @@
 
     <M-PLATFORM-ADAPTERS NAME="Platform adapters" TYPE="UTILITY" STATUS="implemented">
       <purpose>Platform-specific adapter registry mapping OS identifiers to adapter instances.</purpose>
-      <path>yascheduler/adapters/ssh/platform/adapters.py</path>
+      <path>yascheduler/infra/ssh/platform/adapters.py</path>
       <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-CHECKS, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS, M-PLATFORM-COMMON</depends>
       <annotations>
         <class-RemoteMachineAdapter PURPOSE="Platform-specific command implementations" />
@@ -763,7 +763,7 @@
 
     <M-PLATFORM-CHECKS NAME="Platform checks" TYPE="UTILITY" STATUS="implemented">
       <purpose>SSH-based platform detection check functions for each supported OS.</purpose>
-      <path>yascheduler/adapters/ssh/platform/checks.py</path>
+      <path>yascheduler/infra/ssh/platform/checks.py</path>
       <depends>none</depends>
       <annotations>
         <fn-check_is_linux PURPOSE="Check if remote is generic Linux via uname" />
@@ -775,7 +775,7 @@
 
     <M-PLATFORM-COMMON NAME="Platform common" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared helpers for remote machine operations: process info, command execution.</purpose>
-      <path>yascheduler/adapters/ssh/platform/common.py</path>
+      <path>yascheduler/infra/ssh/platform/common.py</path>
       <depends>M-PLATFORM-PROTOCOL</depends>
       <annotations>
         <class-ProcessInfo PURPOSE="Attrs struct holding pid, name, command" />
@@ -786,7 +786,7 @@
 
     <M-PLATFORM-EXC NAME="Platform exceptions" TYPE="UTILITY" STATUS="implemented">
       <purpose>Custom exceptions for remote machine operations.</purpose>
-      <path>yascheduler/adapters/ssh/platform/exceptions.py</path>
+      <path>yascheduler/infra/ssh/platform/exceptions.py</path>
       <depends>none</depends>
       <annotations>
         <class-PlatformGuessFailedError PURPOSE="Raised when no adapter matches detected platform" />
@@ -795,7 +795,7 @@
 
     <M-PLATFORM-LINUX NAME="Linux methods" TYPE="UTILITY" STATUS="implemented">
       <purpose>Linux-specific remote commands: package install, process listing, CPU detection.</purpose>
-      <path>yascheduler/adapters/ssh/platform/linux.py</path>
+      <path>yascheduler/infra/ssh/platform/linux.py</path>
       <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON, M-CONFIG-ENGINE</depends>
       <annotations>
         <fn-linux_setup_node PURPOSE="Install packages and setup engines on Linux" />
@@ -806,7 +806,7 @@
 
     <M-PLATFORM-WINDOWS NAME="Windows methods" TYPE="UTILITY" STATUS="implemented">
       <purpose>Windows-specific remote commands: engine deployment, process listing.</purpose>
-      <path>yascheduler/adapters/ssh/platform/windows.py</path>
+      <path>yascheduler/infra/ssh/platform/windows.py</path>
       <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON, M-CONFIG-ENGINE</depends>
       <annotations>
         <fn-windows_setup_node PURPOSE="Install packages and setup engines on Windows" />
@@ -816,7 +816,7 @@
 
     <M-PLATFORM-PROTOCOL NAME="Platform protocols" TYPE="UTILITY" STATUS="implemented">
       <purpose>Protocol definitions for engines, process info, SSH checks, and adapters.</purpose>
-      <path>yascheduler/adapters/ssh/platform/protocol.py</path>
+      <path>yascheduler/infra/ssh/platform/protocol.py</path>
       <depends>M-CONFIG-ENGINE</depends>
       <annotations>
         <class-PEngine PURPOSE="Engine protocol for remote operations" />
@@ -832,7 +832,7 @@
 
     <M-SSH-HELPERS NAME="SSH helpers" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared SSH infrastructure — platform adapter registry, SSH client factory, connection options, and helper functions.</purpose>
-      <path>yascheduler/adapters/ssh/helpers.py</path>
+      <path>yascheduler/infra/ssh/helpers.py</path>
       <depends>M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL, M-PLATFORM-EXC</depends>
       <annotations>
         <const-ADAPTERS PURPOSE="Ordered platform adapter instances for platform detection" />
@@ -847,8 +847,8 @@
     </M-SSH-HELPERS>
 
     <M-SSH-EXCEPTIONS NAME="SSH exceptions" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Public SSH retry exception types — re-exports from platform protocol for adapters/ssh/ consumers.</purpose>
-      <path>yascheduler/adapters/ssh/exceptions.py</path>
+      <purpose>Public SSH retry exception types — re-exports from platform protocol for infra/ssh/ consumers.</purpose>
+      <path>yascheduler/infra/ssh/exceptions.py</path>
       <depends>M-PLATFORM-PROTOCOL</depends>
       <annotations>
         <type-SSHRetryExc PURPOSE="Tuple of retriable SSH exception types" />

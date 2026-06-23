@@ -94,7 +94,7 @@ root (`di.py`) wires the graph per entry point.
 
 ### Adapters layer facade
 
-`yascheduler/adapters/__init__.py` is the sole public surface for cross-layer
+`yascheduler/infra/__init__.py` is the sole public surface for cross-layer
 consumers. Application code and the composition root import gateway,
 cloud provisioner, persistence UoW, and webhook handler **only** through
 this facade — never through submodule paths. Subpackage `__init__.py`
@@ -105,20 +105,20 @@ the sub layer.
 
 ## 2. Component Reference
 
-| Component               | Responsibility                                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------------------------------- |
-| `domain/`               | Entities, value objects, ports, services, exceptions, events                                            |
-| `adapters/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                |
-| `adapters/ssh/`         | `SSHMachineGateway` + platform adapters                                                                 |
-| `adapters/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                          |
-| `adapters/cli/`         | 6 per-command modules                                                                                   |
-| `adapters/notifier/`    | Webhook event handler                                                                                   |
-| `application/`          | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                           |
-| `di.py`                 | Composition root: `make_daemon()`, `make_cli_deps()`                                                    |
-| `client.py`             | Public Python API (`class Yascheduler`) — uses `make_cli_deps()` for submit, routes queries through UoW |
-| `aiida_plugin.py`       | AiiDA scheduler plugin (uses `Yascheduler` client)                                                      |
-| `webhook.py`            | `WebhookPayload` frozen dataclass                                                                       |
-| `config/`               | Config tree parsed from INI (uses attrs)                                                                |
+| Component            | Responsibility                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| `domain/`            | Entities, value objects, ports, services, exceptions, events                                            |
+| `infra/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                |
+| `infra/ssh/`         | `SSHMachineGateway` + platform adapters                                                                 |
+| `infra/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                          |
+| `infra/cli/`         | 6 per-command modules                                                                                   |
+| `infra/notifier/`    | Webhook event handler                                                                                   |
+| `application/`       | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                           |
+| `di.py`              | Composition root: `make_daemon()`, `make_cli_deps()`                                                    |
+| `client.py`          | Public Python API (`class Yascheduler`) — uses `make_cli_deps()` for submit, routes queries through UoW |
+| `aiida_plugin.py`    | AiiDA scheduler plugin (uses `Yascheduler` client)                                                      |
+| `webhook.py`         | `WebhookPayload` frozen dataclass                                                                       |
+| `config/`            | Config tree parsed from INI (uses attrs)                                                                |
 
 ### 2.1 Domain (`yascheduler/domain/`)
 
@@ -143,7 +143,7 @@ hierarchy, and domain events. Pure stdlib; no yascheduler imports.
 I/O ports declare `async def`. This does not couple the domain to
 asyncio — ports only declare the contract; the domain never awaits.
 
-### 2.2 Persistence Adapter (`yascheduler/adapters/persistence/`)
+### 2.2 Persistence Adapter (`yascheduler/infra/persistence/`)
 
 - **`postgres.py`** — `PostgresTaskRepository`, `PostgresNodeRepository`
   implementing the domain ports via pg8000. Each method runs a
@@ -199,7 +199,7 @@ dependency-injected parameters. Every use case is UoW-based.
 `application/__init__.py` is the sole public surface: it re-exports
 `AbstractUnitOfWork`, `Orchestrator`, `MessageBus`, and `submit_task`.
 
-### 2.4 SSH Adapter (`yascheduler/adapters/ssh/`)
+### 2.4 SSH Adapter (`yascheduler/infra/ssh/`)
 
 `SSHMachineGateway` implements `MachineGateway` via asyncssh. Tracks
 connected machines with their occupancy state, runs commands, uploads and
@@ -209,7 +209,7 @@ adapters (Linux, Windows). `ssh/helpers.py` holds the SSH client factory,
 connection options, and platform detection glue; `ssh/exceptions.py`
 re-exports retry exception tuples.
 
-### 2.5 Cloud Adapter (`yascheduler/adapters/cloud/`)
+### 2.5 Cloud Adapter (`yascheduler/infra/cloud/`)
 
 `CloudProvisionerImpl` implements `CloudProvisioner`. Provider SDK
 integration lives in `cloud/providers/` (Azure, Hetzner, UpCloud);
@@ -217,14 +217,14 @@ integration lives in `cloud/providers/` (Azure, Hetzner, UpCloud);
 config prefix. `cloud/ssh_keys.py` loads or generates SSH keys;
 `cloud/cloud_config.py` renders cloud-init configuration.
 
-### 2.6 CLI Adapter (`yascheduler/adapters/cli/`)
+### 2.6 CLI Adapter (`yascheduler/infra/cli/`)
 
 Six per-command modules, each parsing argparse, calling use cases via DI,
 and formatting output: `submit.py`, `check_status.py`, `init.py`,
 `show_nodes.py`, `manage_node.py`, `daemonize.py`. The package
 `__init__.py` re-exports all six. There is no monolithic `commands.py`.
 
-### 2.7 Notifier (`yascheduler/adapters/notifier/`)
+### 2.7 Notifier (`yascheduler/infra/notifier/`)
 
 `webhook_handler(event, http)` is registered on the `MessageBus` for all
 five event types. It maps events to `WebhookPayload`, posts to
@@ -298,7 +298,7 @@ DomainError                              (domain/exceptions.py)
 │   └── CloudCapacityExhaustedError
 └── MachineConnectionError
 
-UnitOfWorkNotInitializedError            (adapters/persistence/exceptions.py)
+UnitOfWorkNotInitializedError            (infra/persistence/exceptions.py)
 ```
 
 `DomainError` subclasses carry domain context (task_id, engine name,
@@ -353,7 +353,7 @@ audit log) means registering a new handler — no use case changes.
 ```txt
 domain/       → may NOT import from yascheduler at all (stdlib only)
 application/  → may import domain/ only (via facade)
-adapters/     → may import domain/, application/ (via facades)
+infra/        → may import domain/, application/ (via facades)
 di.py         → may import everything (top of dependency graph)
 config/       → may import nothing from yascheduler
 ```
@@ -398,7 +398,7 @@ yascheduler/
 │   ├── ports.py
 │   ├── events.py
 │   └── exceptions.py
-├── adapters/
+├── infra/
 │   ├── __init__.py            # adapters layer facade
 │   ├── persistence/
 │   │   ├── __init__.py        # facade
@@ -517,7 +517,7 @@ not listed there is intentionally out of scope.
 Replace the ad-hoc `db.migrate()` (hardcoded `ALTER TABLE ADD COLUMN IF
 NOT EXISTS`) with versioned SQL migrations:
 
-- `adapters/persistence/sql/migrations/` directory with
+- `infra/persistence/sql/migrations/` directory with
   `NNN_description.sql` files.
 - `yascheduler_migrations` tracking table.
 - Sequential, transactional application of unapplied migrations.

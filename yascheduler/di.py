@@ -30,14 +30,6 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 
-from .adapters import (
-    CloudAdapter,
-    CloudProvisionerImpl,
-    PostgresUnitOfWork,
-    SSHMachineGateway,
-    webhook_handler,
-)
-from .adapters.cloud import resolve_adapter
 from .application import (
     AbstractUnitOfWork,
     AllocationTracker,
@@ -52,6 +44,14 @@ from .domain import (
     TaskCreated,
     TaskFailed,
 )
+from .infra import (
+    CloudAdapter,
+    CloudProvisionerImpl,
+    PostgresUnitOfWork,
+    SSHMachineGateway,
+    webhook_handler,
+)
+from .infra.cloud import resolve_adapter
 
 if TYPE_CHECKING:
     from collections.abc import Callable

@@ -26,8 +26,8 @@ import pytest
 from pg8000 import DatabaseError
 from testcontainers.postgres import PostgresContainer
 
-from yascheduler.adapters.persistence.postgres_schema import apply_schema
 from yascheduler.config.db import ConfigDb
+from yascheduler.infra.persistence.postgres_schema import apply_schema
 
 
 def _make_config(pg: PostgresContainer) -> ConfigDb:
@@ -109,7 +109,7 @@ def test_apply_schema_raises_on_existing(
         "status SMALLINT);"
     )
     monkeypatch.setattr(
-        "yascheduler.adapters.persistence.postgres_schema.load_query",
+        "yascheduler.infra.persistence.postgres_schema.load_query",
         lambda name: _strict_schema,
     )
 

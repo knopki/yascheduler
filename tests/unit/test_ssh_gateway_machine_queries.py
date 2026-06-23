@@ -28,8 +28,8 @@ from unittest.mock import MagicMock
 import pytest
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway, _MachineState
 from yascheduler.domain import ConnectedMachine, MachineState
+from yascheduler.infra.ssh.gateway import SSHMachineGateway, _MachineState
 
 
 def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:

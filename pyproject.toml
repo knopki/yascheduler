@@ -46,12 +46,12 @@ Issues = "https://github.com/tilde-lab/yascheduler/issues"
 Source = "https://github.com/tilde-lab/yascheduler"
 
 [project.scripts]
-yainit = "yascheduler.adapters.cli.init:init"
-yanodes = "yascheduler.adapters.cli.show_nodes:show_nodes"
-yascheduler = "yascheduler.adapters.cli.daemonize:daemonize"
-yasetnode = "yascheduler.adapters.cli.manage_node:manage_node"
-yastatus = "yascheduler.adapters.cli.check_status:check_status"
-yasubmit = "yascheduler.adapters.cli.submit:submit"
+yainit = "yascheduler.infra.cli.init:init"
+yanodes = "yascheduler.infra.cli.show_nodes:show_nodes"
+yascheduler = "yascheduler.infra.cli.daemonize:daemonize"
+yasetnode = "yascheduler.infra.cli.manage_node:manage_node"
+yastatus = "yascheduler.infra.cli.check_status:check_status"
+yasubmit = "yascheduler.infra.cli.submit:submit"
 
 [project.entry-points."aiida.schedulers"]
 yascheduler = "yascheduler.aiida_plugin:YaScheduler"
@@ -123,7 +123,7 @@ exclude_type_checking_imports = true
 name = "Clean architecture layers"
 type = "layers"
 layers = [
-  "yascheduler.adapters",
+  "yascheduler.infra",
   "yascheduler.application",
   "yascheduler.domain",
   "yascheduler.shared",
@@ -137,7 +137,7 @@ source_modules = ["yascheduler.shared"]
 forbidden_modules = ["yascheduler.config"]
 
 [tool.setuptools.package-data]
-"yascheduler.adapters.persistence.sql" = ["**/*.sql"]
+"yascheduler.infra.persistence.sql" = ["**/*.sql"]
 "yascheduler.data" = [
   "yascheduler.conf",
   "yascheduler.service",

@@ -2,7 +2,7 @@
 # VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yascheduler.adapters.persistence.
+#   PURPOSE: Unit tests for yascheduler.infra.persistence.
 #   SCOPE: load_query file-reading and caching behaviour; PostgresUnitOfWork lifecycle;
 #          PostgresTaskRepository and PostgresNodeRepository CRUD via fake _run.
 #   DEPENDS: none
@@ -32,13 +32,6 @@ from pathlib import Path
 import pytest
 from pytest_mock import MockerFixture
 
-from yascheduler.adapters.persistence.exceptions import UnitOfWorkNotInitializedError
-from yascheduler.adapters.persistence.postgres import (
-    PostgresNodeRepository,
-    PostgresTaskRepository,
-)
-from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
-from yascheduler.adapters.persistence.sql_loader import load_query
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
     Node,
@@ -48,6 +41,13 @@ from yascheduler.domain.model import (
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
 )
+from yascheduler.infra.persistence.exceptions import UnitOfWorkNotInitializedError
+from yascheduler.infra.persistence.postgres import (
+    PostgresNodeRepository,
+    PostgresTaskRepository,
+)
+from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
+from yascheduler.infra.persistence.sql_loader import load_query
 
 
 # START_CONTRACT: test_load_query_first_call_reads_file
@@ -70,7 +70,7 @@ def test_load_query_first_call_reads_file(
     sql_file.parent.mkdir(parents=True)
     sql_file.write_text("SELECT * FROM tasks WHERE id = :task_id")
 
-    monkeypatch.setattr("yascheduler.adapters.persistence.sql_loader._SQL_DIR", sql_dir)
+    monkeypatch.setattr("yascheduler.infra.persistence.sql_loader._SQL_DIR", sql_dir)
 
     result = load_query("task/get_by_id")
     assert result == "SELECT * FROM tasks WHERE id = :task_id"
@@ -100,7 +100,7 @@ def test_load_query_second_call_uses_cache(
     sql_file.parent.mkdir(parents=True)
     sql_file.write_text("SELECT * FROM nodes WHERE enabled = TRUE")
 
-    monkeypatch.setattr("yascheduler.adapters.persistence.sql_loader._SQL_DIR", sql_dir)
+    monkeypatch.setattr("yascheduler.infra.persistence.sql_loader._SQL_DIR", sql_dir)
 
     # First call — reads from disk.
     result_a = load_query("node/list_enabled")
@@ -126,7 +126,7 @@ async def test_uow_enter_creates_repositories(mocker: MockerFixture) -> None:
     """__aenter__ instantiates both task and node repositories."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
-        "yascheduler.adapters.persistence.postgres_uow.Connection",
+        "yascheduler.infra.persistence.postgres_uow.Connection",
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
@@ -149,7 +149,7 @@ async def test_collect_events_preserves_shared_list(mocker: MockerFixture) -> No
     """collect_events preserves shared list reference between UoW and repo."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
-        "yascheduler.adapters.persistence.postgres_uow.Connection",
+        "yascheduler.infra.persistence.postgres_uow.Connection",
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
@@ -173,7 +173,7 @@ async def test_uow_commit_called(mocker: MockerFixture) -> None:
     """commit() calls connection.run('COMMIT')."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
-        "yascheduler.adapters.persistence.postgres_uow.Connection",
+        "yascheduler.infra.persistence.postgres_uow.Connection",
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
@@ -197,7 +197,7 @@ async def test_uow_rollback_on_exception(mocker: MockerFixture) -> None:
     """Exception inside context triggers rollback and closes connection."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
-        "yascheduler.adapters.persistence.postgres_uow.Connection",
+        "yascheduler.infra.persistence.postgres_uow.Connection",
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
@@ -223,7 +223,7 @@ async def test_uow_closes_connection(mocker: MockerFixture) -> None:
     """connection.close() is called on normal exit."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
-        "yascheduler.adapters.persistence.postgres_uow.Connection",
+        "yascheduler.infra.persistence.postgres_uow.Connection",
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
@@ -247,7 +247,7 @@ async def test_uow_commit_after_exit_raises(mocker: MockerFixture) -> None:
     """commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
-        "yascheduler.adapters.persistence.postgres_uow.Connection",
+        "yascheduler.infra.persistence.postgres_uow.Connection",
         return_value=mock_conn,
     )
     config = mocker.MagicMock()
@@ -274,7 +274,7 @@ async def test_uow_double_commit(mocker: MockerFixture) -> None:
     """Second commit within the same context is accepted by pg8000 (idempotent)."""
     mock_conn = mocker.MagicMock()
     mocker.patch(
-        "yascheduler.adapters.persistence.postgres_uow.Connection",
+        "yascheduler.infra.persistence.postgres_uow.Connection",
         return_value=mock_conn,
     )
     config = mocker.MagicMock()

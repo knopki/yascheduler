@@ -86,7 +86,7 @@ Tests SHALL verify INI config parsing:
 ### Requirement: Persistence adapter with mocked pg8000
 
 Tests SHALL verify `PostgresTaskRepository`, `PostgresNodeRepository`, and
-`PostgresUnitOfWork` from `yascheduler.adapters.persistence` using mocked
+`PostgresUnitOfWork` from `yascheduler.infra.persistence` using mocked
 pg8000 connections:
 - `load_query` reads file on first call, returns cache on subsequent calls
 - UoW: enter creates repos, commit calls `conn.run("COMMIT")`, exception

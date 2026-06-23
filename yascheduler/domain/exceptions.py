@@ -29,7 +29,7 @@
 #
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.9.0 - Add CloudError(DomainError) intermediate root; reparent CloudAllocateError/CloudSetupError under it (cloud-error-hierarchy).
-#   PREVIOUS_CHANGE: v1.8.0 - Add CloudAllocateError, CloudSetupError relocated from adapters/cloud/manager.py (cloud-provisioner-pure).
+#   PREVIOUS_CHANGE: v1.8.0 - Add CloudAllocateError, CloudSetupError relocated from infra/cloud/manager.py (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
 

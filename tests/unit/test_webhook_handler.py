@@ -36,7 +36,6 @@ import aiohttp
 import backoff._async as _backoff_async
 import pytest
 
-from yascheduler.adapters.notifier.webhook import webhook_handler
 from yascheduler.domain.events import (
     DomainEvent,
     TaskAbandoned,
@@ -46,6 +45,7 @@ from yascheduler.domain.events import (
     TaskFailed,
 )
 from yascheduler.domain.model import TaskStatus
+from yascheduler.infra.notifier.webhook import webhook_handler
 from yascheduler.webhook import WebhookPayload
 
 URL = "https://example.com/hook"
@@ -114,7 +114,7 @@ async def test_event_dispatches_correct_status(
 ) -> None:
     event = event_cls(task_id=42, webhook_url=URL, webhook_custom_params={}, **extra_kw)
     with patch(
-        "yascheduler.adapters.notifier.webhook._send_webhook", new_callable=AsyncMock
+        "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
     ) as mock_send:
         await webhook_handler(event, AsyncMock())
 
@@ -133,7 +133,7 @@ async def test_skip_when_no_webhook_url() -> None:
         task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
     )
     with patch(
-        "yascheduler.adapters.notifier.webhook._send_webhook", new_callable=AsyncMock
+        "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
     ) as mock_send:
         await webhook_handler(event, AsyncMock())
     mock_send.assert_not_awaited()
@@ -145,7 +145,7 @@ async def test_custom_params_forwarded() -> None:
         task_id=7, webhook_url=URL, webhook_custom_params=params, engine_name="fleur"
     )
     with patch(
-        "yascheduler.adapters.notifier.webhook._send_webhook", new_callable=AsyncMock
+        "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
     ) as mock_send:
         await webhook_handler(event, AsyncMock())
 
@@ -175,7 +175,7 @@ async def test_send_error_logged_not_raised(caplog: pytest.LogCaptureFixture) ->
 async def test_send_webhook_retries_on_client_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from yascheduler.adapters.notifier.webhook import _send_webhook
+    from yascheduler.infra.notifier.webhook import _send_webhook
 
     payload = WebhookPayload(task_id=88, status=0, custom_params={})
     call_count = 0

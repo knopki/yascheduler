@@ -33,9 +33,9 @@
 
 from collections.abc import Callable
 
-from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.domain.model import Node, Task, TaskContext
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
+from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 # ---------------------------------------------------------------------------
 # Node CRUD

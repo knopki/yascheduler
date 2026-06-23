@@ -395,17 +395,17 @@ def test_cloud_errors_importable_from_domain() -> None:
 
 
 # START_CONTRACT: test_cloud_errors_reexported_from_adapters
-#   PURPOSE: Verify CloudAllocateError and CloudSetupError are re-exported from adapters.cloud.
+#   PURPOSE: Verify CloudAllocateError and CloudSetupError are re-exported from yascheduler.infra.cloud.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_cloud_errors_reexported_from_adapters
 def test_cloud_errors_reexported_from_adapters() -> None:
-    from yascheduler.adapters.cloud import (
+    from yascheduler.infra.cloud import (
         CloudAllocateError as AdapterCAE,
     )
-    from yascheduler.adapters.cloud import (
+    from yascheduler.infra.cloud import (
         CloudSetupError as AdapterCSE,
     )
 
@@ -442,7 +442,7 @@ def test_cloud_error_importable_from_domain_package() -> None:
 
 
 # START_CONTRACT: test_cloud_error_not_reexported_from_adapters
-#   PURPOSE: Verify CloudError is NOT importable from yascheduler.adapters.cloud.
+#   PURPOSE: Verify CloudError is NOT importable from yascheduler.infra.cloud.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
@@ -450,7 +450,7 @@ def test_cloud_error_importable_from_domain_package() -> None:
 # END_CONTRACT: test_cloud_error_not_reexported_from_adapters
 def test_cloud_error_not_reexported_from_adapters() -> None:
     with pytest.raises(ImportError):
-        from yascheduler.adapters.cloud import (  # noqa: F401
+        from yascheduler.infra.cloud import (  # noqa: F401
             CloudError,
         )
 

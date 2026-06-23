@@ -28,7 +28,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from asyncssh.sftp import SFTPClient
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway
+from yascheduler.infra.ssh.gateway import SSHMachineGateway
 
 
 def make_gateway_with_sftp(sftp_mock: AsyncMock) -> SSHMachineGateway:

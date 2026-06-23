@@ -28,7 +28,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.config import (
     Config,
@@ -45,6 +44,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
+from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 # =============================================================================
 # Helpers

@@ -3,14 +3,14 @@
 ## Purpose
 
 Provide platform-specific SSH adapters (Linux, Debian, etc.) relocated from
-remote_machine/ to adapters/ssh/platform/ with backward-compatible re-exports.
+remote_machine/ to infra/ssh/platform/ with backward-compatible re-exports.
 
 ## Requirements
 
 ### Requirement: Platform code relocated
 
 The system SHALL provide all platform-specific modules in
-`adapters/ssh/platform/` as the sole location. The `remote_machine/` package
+`infra/ssh/platform/` as the sole location. The `remote_machine/` package
 SHALL NOT exist.
 
 #### Scenario: Adapters accessible at new location

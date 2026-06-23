@@ -35,10 +35,10 @@ from yascheduler.config import Engine, EngineRepository
 from yascheduler.di import CLIDeps
 from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 
-submit_mod = importlib.import_module("yascheduler.adapters.cli.submit")
-check_status_mod = importlib.import_module("yascheduler.adapters.cli.check_status")
-show_nodes_mod = importlib.import_module("yascheduler.adapters.cli.show_nodes")
-manage_node_mod = importlib.import_module("yascheduler.adapters.cli.manage_node")
+submit_mod = importlib.import_module("yascheduler.infra.cli.submit")
+check_status_mod = importlib.import_module("yascheduler.infra.cli.check_status")
+show_nodes_mod = importlib.import_module("yascheduler.infra.cli.show_nodes")
+manage_node_mod = importlib.import_module("yascheduler.infra.cli.manage_node")
 
 # ---------------------------------------------------------------------------
 # Helpers

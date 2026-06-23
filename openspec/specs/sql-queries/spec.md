@@ -8,7 +8,7 @@ SQL query file organization and lazy-loading utility for the persistence adapter
 
 ### Requirement: SQL files organized by entity
 
-The system SHALL store all SQL queries in `adapters/persistence/sql/`
+The system SHALL store all SQL queries in `infra/persistence/sql/`
 organized as `sql/<entity>/<operation>.sql`.
 
 #### Scenario: Task query location

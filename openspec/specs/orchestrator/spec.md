@@ -20,7 +20,7 @@ the filtered cloud config list, and the lock — constructing them once and
 injecting them into use cases.
 
 The `Orchestrator` SHALL NOT import `AllSSHRetryExc` or `backoff` from
-`yascheduler.adapters` at runtime. The `Orchestrator` SHALL NOT apply
+`yascheduler.infra` at runtime. The `Orchestrator` SHALL NOT apply
 `@backoff.on_exception` decorators — all retry logic SHALL live in the
 adapter.
 
@@ -46,7 +46,7 @@ to the `clouds.select_provider` port method.
 
 #### Scenario: No adapter imports at runtime
 - **WHEN** `orchestrator.py` is imported
-- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, or `backoff` from `yascheduler.adapters` at runtime (TYPE_CHECKING imports are allowed)
+- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, or `backoff` from `yascheduler.infra` at runtime (TYPE_CHECKING imports are allowed)
 
 #### Scenario: Task deployment delegated to gateway
 - **WHEN** the orchestrator allocates a task to a machine

@@ -6,7 +6,7 @@ End-to-end test infrastructure and full-cycle tests that validate the scheduler'
 
 ### Requirement: E2E test fixtures
 The project SHALL provide session-scoped and function-scoped pytest fixtures in `tests/e2e/conftest.py` that set up a complete test environment:
-- Session-scoped PostgreSQL container (testcontainers) with schema applied via `apply_schema()` from `adapters/persistence/postgres_schema.py`
+- Session-scoped PostgreSQL container (testcontainers) with schema applied via `apply_schema()` from `infra/persistence/postgres_schema.py`
 - Session-scoped SSH container (testcontainers `openssh-server`) with generated key pair
 - Session-scoped config fixture that creates a temp directory with minimal INI file (`[db]` + `[engine.test_shell]`), test engine script (`run.sh`) in `data/engines/test_shell/`, and SSH key symlink in `data/keys/`
 - Session-scoped `Config` instance parsed from the generated INI

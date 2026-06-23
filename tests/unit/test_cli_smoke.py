@@ -62,31 +62,31 @@ class TestCLIFunctions:
 
     def test_submit_function_exists(self) -> None:
         """``submit`` exists and is decorated with @to_sync."""
-        from yascheduler.adapters.cli import submit
+        from yascheduler.infra.cli import submit
 
         _check_to_sync_decorated(submit)
 
     def test_check_status_function_exists(self) -> None:
         """``check_status`` exists and is decorated with @to_sync."""
-        from yascheduler.adapters.cli import check_status
+        from yascheduler.infra.cli import check_status
 
         _check_to_sync_decorated(check_status)
 
     def test_init_function_exists(self) -> None:
         """``init`` exists and is a plain sync function (not @to_sync)."""
-        from yascheduler.adapters.cli import init
+        from yascheduler.infra.cli import init
 
         _check_sync_function(init)
 
     def test_show_nodes_function_exists(self) -> None:
         """``show_nodes`` exists and is decorated with @to_sync."""
-        from yascheduler.adapters.cli import show_nodes
+        from yascheduler.infra.cli import show_nodes
 
         _check_to_sync_decorated(show_nodes)
 
     def test_manage_node_function_exists(self) -> None:
         """``manage_node`` exists and is decorated with @to_sync."""
-        from yascheduler.adapters.cli import manage_node
+        from yascheduler.infra.cli import manage_node
 
         _check_to_sync_decorated(manage_node)
 
@@ -94,7 +94,7 @@ class TestCLIFunctions:
 
     def test_daemonize_function_exists_and_uses_make_daemon(self) -> None:
         """``daemonize`` exists, is a plain (not @to_sync) function, and references make_daemon."""
-        from yascheduler.adapters.cli import daemonize
+        from yascheduler.infra.cli import daemonize
 
         assert callable(daemonize)
         # daemonize is NOT decorated with @to_sync — it's a plain sync function

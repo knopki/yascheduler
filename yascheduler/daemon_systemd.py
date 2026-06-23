@@ -15,7 +15,7 @@
 #
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.6.2 - Import LOG_FILE from yascheduler.shared facade (shared-kernel-extraction).
-#   PREVIOUS_CHANGE: v1.6.1 - Import daemonize from adapters.cli.daemonize instead of utils.
+#   PREVIOUS_CHANGE: v1.6.1 - Import daemonize from infra.cli.daemonize instead of utils.
 # END_CHANGE_SUMMARY
 # FIXME: move this module to adapters
 """
@@ -23,7 +23,7 @@ Yascheduler systemd daemon
 """
 
 if __name__ == "__main__":
-    from .adapters.cli import daemonize
+    from .infra.cli import daemonize
     from .shared import LOG_FILE
 
     daemonize(log_file=LOG_FILE)

@@ -3,14 +3,14 @@
 ## Purpose
 
 Relocate provider-specific VM lifecycle code and cloud support modules to
-adapters/cloud/, with graceful handling of optional provider SDKs.
+infra/cloud/, with graceful handling of optional provider SDKs.
 
 ## Requirements
 
 ### Requirement: Provider code relocated
 
 The system SHALL move provider-specific VM lifecycle code from clouds/ to
-adapters/cloud/providers/ preserving functionality.
+infra/cloud/providers/ preserving functionality.
 
 #### Scenario: Azure provider accessible
 - **WHEN** az_create_node is imported from adapters.cloud.providers.az
@@ -27,7 +27,7 @@ adapters/cloud/providers/ preserving functionality.
 ### Requirement: Support modules relocated
 
 The system SHALL move cloud support modules (adapters, protocols, utils)
-to adapters/cloud/ preserving their functionality.
+to infra/cloud/ preserving their functionality.
 
 #### Scenario: Cloud adapter registry accessible
 - **WHEN** CloudAdapter is imported from adapters.cloud.adapters

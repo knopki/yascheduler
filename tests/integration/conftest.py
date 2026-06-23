@@ -34,10 +34,10 @@ import pg8000.native
 import pytest
 from testcontainers.postgres import PostgresContainer
 
-from yascheduler.adapters.persistence.postgres_schema import apply_schema
-from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.application import MessageBus
 from yascheduler.config.db import ConfigDb
+from yascheduler.infra.persistence.postgres_schema import apply_schema
+from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

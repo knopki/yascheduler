@@ -14,7 +14,7 @@ with commit/rollback semantics, satisfying the `AbstractUnitOfWork` Protocol.
 
 Accessing `tasks` or `nodes` properties, or calling `commit()`/`rollback()`
 without entering the `async with` context SHALL raise
-`UnitOfWorkNotInitializedError` from `yascheduler.adapters.persistence.exceptions`.
+`UnitOfWorkNotInitializedError` from `yascheduler.infra.persistence.exceptions`.
 
 #### Scenario: Enter context creates connection and repositories
 - **WHEN** `async with PostgresUnitOfWork(config) as uow`

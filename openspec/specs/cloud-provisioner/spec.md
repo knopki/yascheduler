@@ -88,7 +88,7 @@ current caller-visible semantics where `allocate_with_tracking` returned
 
 The system SHALL run cloud-init status check and engine setup after a VM is
 created, before returning the Node. All setup logic SHALL be contained within
-`adapters/cloud/` — no imports from `clouds/` or `remote_machine/`.
+`infra/cloud/` — no imports from `clouds/` or `remote_machine/`.
 
 #### Scenario: Cloud-init must complete
 - **WHEN** a VM is created
@@ -122,14 +122,14 @@ reached).
 ### Requirement: CloudProvisionerImpl owns cloud-init rendering and SSH key management
 
 The system SHALL provide cloud-init configuration rendering and SSH key
-management within `adapters/cloud/`, without depending on `clouds/cloud_api.py`.
+management within `infra/cloud/`, without depending on `clouds/cloud_api.py`.
 SSH key generation, loading, and name extraction SHALL live in
-`adapters/cloud/ssh_keys.py`.
+`infra/cloud/ssh_keys.py`.
 
 #### Scenario: Cloud-init rendered without CloudAPI
 - **WHEN** `CloudConfig(bootcmd=..., packages=...).render()` is called
-- **THEN** the cloud-config YAML is produced from `adapters/cloud/cloud_config.py`
+- **THEN** the cloud-config YAML is produced from `infra/cloud/cloud_config.py`
 
 #### Scenario: SSH key generated for cloud provisioning
 - **WHEN** a cloud provider needs an SSH key
-- **THEN** the key is generated or loaded via `adapters/cloud/ssh_keys.py`
+- **THEN** the key is generated or loaded via `infra/cloud/ssh_keys.py`

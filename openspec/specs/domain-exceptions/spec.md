@@ -147,21 +147,21 @@ and the `yascheduler.domain` package (`__all__`).
 - **WHEN** a module imports `from yascheduler.domain import CloudError`
 - **THEN** the class is available and present in `yascheduler.domain.__all__`
 
-### Requirement: CloudError is not re-exported from yascheduler.adapters.cloud
+### Requirement: CloudError is not re-exported from yascheduler.infra.cloud
 
-The system SHALL NOT export `CloudError` from `yascheduler.adapters.cloud`;
+The system SHALL NOT export `CloudError` from `yascheduler.infra.cloud`;
 the new root remains accessible only via `yascheduler.domain`. The adapter
 module's existing re-exports (`CloudAllocateError`, `CloudSetupError`) are
 unchanged.
 
 #### Scenario: adapters.cloud does not re-export CloudError
 
-- **WHEN** a module attempts `from yascheduler.adapters.cloud import CloudError`
+- **WHEN** a module attempts `from yascheduler.infra.cloud import CloudError`
 - **THEN** the import raises `ImportError`
 
 #### Scenario: adapters.cloud still re-exports the leaf cloud exceptions
 
-- **WHEN** a module imports `from yascheduler.adapters.cloud import CloudAllocateError, CloudSetupError`
+- **WHEN** a module imports `from yascheduler.infra.cloud import CloudAllocateError, CloudSetupError`
 - **THEN** both classes are available
 
 ### Requirement: Domain error classes are in yascheduler.domain.exceptions

@@ -9,7 +9,7 @@ Exception class for accessing `PostgresUnitOfWork` API without entering the `asy
 ### Requirement: UnitOfWorkNotInitializedError exception class
 
 The system SHALL provide a `UnitOfWorkNotInitializedError` exception class in
-`yascheduler.adapters.persistence.exceptions` that inherits from `RuntimeError`.
+`yascheduler.infra.persistence.exceptions` that inherits from `RuntimeError`.
 It SHALL be raised when `PostgresUnitOfWork` API methods are called without
 entering the `async with` context.
 

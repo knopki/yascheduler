@@ -33,9 +33,9 @@ import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway
-from yascheduler.adapters.ssh.platform.protocol import PEngine
 from yascheduler.domain.model import ConnectedMachine, MachineState
+from yascheduler.infra.ssh.gateway import SSHMachineGateway
+from yascheduler.infra.ssh.platform.protocol import PEngine
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

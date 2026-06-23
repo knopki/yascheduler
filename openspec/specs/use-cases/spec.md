@@ -31,7 +31,7 @@ TO_DO task to a free machine or requests cloud provisioning. The function
 SHALL accept `task_id: int`, `uow_factory`, `gateway: MachineGateway`
 (Protocol type), `clouds: CloudProvisioner` (Protocol type), `tracker:
 AllocationTracker`, and `allocation_lock: asyncio.Lock`. It SHALL NOT
-import from `yascheduler.adapters` at runtime. It SHALL NOT accept
+import from `yascheduler.infra` at runtime. It SHALL NOT accept
 `adapters` or `configs` parameters — provider selection is delegated to
 the `clouds.select_provider` port method.
 
@@ -73,7 +73,7 @@ The system SHALL provide a `consume_task` async function that downloads
 outputs from a remote machine and marks the task DONE. The function SHALL
 accept `task_id: int`, `uow_factory`, `gateway: MachineGateway` (Protocol
 type), and `tracker: AllocationTracker`. It SHALL NOT import
-`SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.adapters` at
+`SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.infra` at
 runtime.
 
 The function SHALL delegate SFTP download with retry to
@@ -94,7 +94,7 @@ On successful finalization, the use case SHALL call
 
 #### Scenario: No adapter imports at runtime
 - **WHEN** `consume_task.py` is imported
-- **THEN** it does NOT import `SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.adapters` at runtime (TYPE_CHECKING imports are allowed)
+- **THEN** it does NOT import `SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.infra` at runtime (TYPE_CHECKING imports are allowed)
 
 ### Requirement: DeallocateIdleNodes use case
 
@@ -130,7 +130,7 @@ cloud delete ensures the DB row is only dropped once the VM is gone).
 
 The system SHALL expose all use cases from `yascheduler.application`. No use
 case SHALL import adapter-specific types (`AllSSHRetryExc`, `SFTPRetryExc`,
-`SFTPError`) from `yascheduler.adapters` at runtime.
+`SFTPError`) from `yascheduler.infra` at runtime.
 
 #### Scenario: Import use case
 - **WHEN** `from yascheduler.application.submit_task import submit_task` is executed
@@ -138,7 +138,7 @@ case SHALL import adapter-specific types (`AllSSHRetryExc`, `SFTPRetryExc`,
 
 #### Scenario: No adapter runtime imports in use cases
 - **WHEN** any use case module is imported
-- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, or `SFTPError` from `yascheduler.adapters` at runtime
+- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, or `SFTPError` from `yascheduler.infra` at runtime
 
 ### Requirement: QueryTasks use case
 
@@ -153,7 +153,7 @@ AbstractUnitOfWork]`. It SHALL raise `ValueError` if both `jobs` and
 return `[]` when neither is non-empty (truthiness semantics, matching
 `yascheduler.client.queue_get_tasks_async`'s existing dispatch). It SHALL
 NOT call `uow.commit` (read-only). It SHALL NOT import from
-`yascheduler.adapters` at runtime.
+`yascheduler.infra` at runtime.
 
 #### Scenario: Query by statuses dispatches to list_by_status
 - **WHEN** `query_tasks(jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=f)` is called

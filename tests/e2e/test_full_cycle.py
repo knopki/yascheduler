@@ -25,16 +25,16 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway
 from yascheduler.di import make_cli_deps, make_daemon
 from yascheduler.domain.model import MachineState, Node
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
+from yascheduler.infra.ssh.gateway import SSHMachineGateway
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
     from yascheduler.config import Config
+    from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 log = logging.getLogger("e2e.test_full_cycle")
 

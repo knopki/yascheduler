@@ -41,11 +41,11 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 from testcontainers.postgres import PostgresContainer
 
-from yascheduler.adapters.persistence.postgres_schema import apply_schema
-from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.application import MessageBus
 from yascheduler.config import Config
 from yascheduler.config.db import ConfigDb
+from yascheduler.infra.persistence.postgres_schema import apply_schema
+from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator

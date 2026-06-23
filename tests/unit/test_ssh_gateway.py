@@ -35,14 +35,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway, _MachineState
-from yascheduler.adapters.ssh.platform.protocol import (
+from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
+from yascheduler.infra.ssh.gateway import SSHMachineGateway, _MachineState
+from yascheduler.infra.ssh.platform.protocol import (
     ChannelOpenError,
     PEngine,
     PEngineRepository,
     PProcessInfo,
 )
-from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -254,15 +254,15 @@ class TestConnectionLifecycle:
         """connect() stores a _MachineState in _machines."""
         with (
             patch(
-                "yascheduler.adapters.ssh.gateway.asyncssh.connection.connect",
+                "yascheduler.infra.ssh.gateway.asyncssh.connection.connect",
                 AsyncMock(return_value=mock_conn),
             ),
             patch(
-                "yascheduler.adapters.ssh.gateway._detect_platform",
+                "yascheduler.infra.ssh.gateway._detect_platform",
                 AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
             ),
             patch(
-                "yascheduler.adapters.ssh.gateway._init_paths",
+                "yascheduler.infra.ssh.gateway._init_paths",
                 return_value=(
                     PurePosixPath("./data"),
                     PurePosixPath("./data/engines"),
@@ -287,15 +287,15 @@ class TestConnectionLifecycle:
         """connect() returns a ConnectedMachine with correct IP and platform."""
         with (
             patch(
-                "yascheduler.adapters.ssh.gateway.asyncssh.connection.connect",
+                "yascheduler.infra.ssh.gateway.asyncssh.connection.connect",
                 AsyncMock(return_value=mock_conn),
             ),
             patch(
-                "yascheduler.adapters.ssh.gateway._detect_platform",
+                "yascheduler.infra.ssh.gateway._detect_platform",
                 AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
             ),
             patch(
-                "yascheduler.adapters.ssh.gateway._init_paths",
+                "yascheduler.infra.ssh.gateway._init_paths",
                 return_value=(
                     PurePosixPath("./data"),
                     PurePosixPath("./data/engines"),
@@ -849,7 +849,7 @@ class TestOccupancy:
         mock_pengine.check_cmd = None
 
         with (
-            patch("yascheduler.adapters.ssh.gateway.asyncio.sleep", AsyncMock()),
+            patch("yascheduler.infra.ssh.gateway.asyncio.sleep", AsyncMock()),
             patch.object(gateway, "occupancy_check", AsyncMock(return_value=False)),
         ):
             gateway.start_occupancy_check(ip, mock_pengine)
@@ -873,7 +873,7 @@ class TestOccupancy:
         mock_pengine.check_cmd = None
 
         with (
-            patch("yascheduler.adapters.ssh.gateway.asyncio.sleep", AsyncMock()),
+            patch("yascheduler.infra.ssh.gateway.asyncio.sleep", AsyncMock()),
             patch.object(
                 gateway,
                 "occupancy_check",

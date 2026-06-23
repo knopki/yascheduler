@@ -36,14 +36,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.adapters.cloud.cloud_config import CloudConfig
-from yascheduler.adapters.cloud.manager import (
+from yascheduler.domain.model import Node, ProviderSelection
+from yascheduler.infra.cloud.cloud_config import CloudConfig
+from yascheduler.infra.cloud.manager import (
     CloudAllocateError,
     CloudProvisionerImpl,
     CloudSetupError,
 )
-from yascheduler.adapters.cloud.ssh_keys import get_or_create_ssh_key
-from yascheduler.domain.model import Node, ProviderSelection
+from yascheduler.infra.cloud.ssh_keys import get_or_create_ssh_key
 
 # =============================================================================
 # Helpers
@@ -245,7 +245,7 @@ class TestAllocate:
         )
 
         with patch(
-            "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
             new=AsyncMock(return_value=MagicMock()),
         ):
             node = await prov.allocate("test")
@@ -312,7 +312,7 @@ class TestAllocate:
 
         with (
             patch(
-                "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
                 new=AsyncMock(return_value=MagicMock()),
             ),
             pytest.raises(CloudSetupError, match="SSH connect to"),
@@ -357,7 +357,7 @@ class TestAllocate:
 
         with (
             patch(
-                "yascheduler.adapters.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
                 new=AsyncMock(return_value=MagicMock()),
             ),
             pytest.raises(CloudSetupError, match="timed out"),
@@ -459,11 +459,11 @@ class TestSshKeyGeneration:
 
         with (
             patch(
-                "yascheduler.adapters.cloud.ssh_keys.generate_private_key",
+                "yascheduler.infra.cloud.ssh_keys.generate_private_key",
                 return_value=mock_key,
             ) as mock_gen,
             patch(
-                "yascheduler.adapters.cloud.ssh_keys.get_rnd_name",
+                "yascheduler.infra.cloud.ssh_keys.get_rnd_name",
                 return_value="yakey-rnd123",
             ),
         ):
@@ -489,7 +489,7 @@ class TestSshKeyGeneration:
         mock_key.get_fingerprint.return_value = "md5:efgh"
 
         with patch(
-            "yascheduler.adapters.cloud.ssh_keys.read_private_key",
+            "yascheduler.infra.cloud.ssh_keys.read_private_key",
             return_value=mock_key,
         ) as mock_read:
             result = get_or_create_ssh_key(keys_dir, mock_log)

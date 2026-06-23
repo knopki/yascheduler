@@ -36,11 +36,6 @@ from concurrent.futures import ThreadPoolExecutor
 import pg8000.native
 import pytest
 
-from yascheduler.adapters.persistence.postgres import (
-    PostgresNodeRepository,
-    PostgresTaskRepository,
-)
-from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.config import ConfigDb
 from yascheduler.domain.model import (
@@ -51,6 +46,11 @@ from yascheduler.domain.model import (
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
 )
+from yascheduler.infra.persistence.postgres import (
+    PostgresNodeRepository,
+    PostgresTaskRepository,
+)
+from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 # ====================================================================
 # Task 8.2: PostgresTaskRepository CRUD

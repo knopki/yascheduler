@@ -33,9 +33,9 @@ application) directly.
 
 ### Requirement: yainit uses apply_schema adapter
 
-The `yainit` command (`init()` in `adapters/cli/init.py`) SHALL be a plain
+The `yainit` command (`init()` in `infra/cli/init.py`) SHALL be a plain
 synchronous function that calls `apply_schema(config.db)` from
-`adapters/persistence/postgres_schema.py` for database initialization.
+`infra/persistence/postgres_schema.py` for database initialization.
 
 #### Scenario: yainit initializes database
 - **WHEN** `yainit` is invoked

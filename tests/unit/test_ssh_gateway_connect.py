@@ -24,9 +24,9 @@ from unittest.mock import AsyncMock
 import asyncssh
 import pytest
 
-from yascheduler.adapters.ssh.gateway import SSHMachineGateway
 from yascheduler.domain import ConnectedMachine, MachineState
 from yascheduler.domain.exceptions import MachineConnectionError
+from yascheduler.infra.ssh.gateway import SSHMachineGateway
 
 
 # START_CONTRACT: test_connect_translates_asyncssh_error

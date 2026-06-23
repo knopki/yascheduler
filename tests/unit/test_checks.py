@@ -32,7 +32,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.adapters.ssh.platform.checks import (
+from yascheduler.infra.ssh.platform.checks import (
     check_is_debian,
     check_is_debian_11,
     check_is_debian_like,
@@ -91,7 +91,7 @@ async def test_check_is_debian_like_true() -> None:
     """check_is_debian_like returns True when ID_LIKE contains debian"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        "yascheduler.infra.ssh.platform.checks._get_os_release",
         new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("debian", "debian-like", "11")
@@ -108,7 +108,7 @@ async def test_check_is_debian_true() -> None:
     """check_is_debian returns True when ID is debian"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        "yascheduler.infra.ssh.platform.checks._get_os_release",
         new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("debian", "debian-like", "11")
@@ -125,7 +125,7 @@ async def test_check_is_debian_false_for_ubuntu() -> None:
     """check_is_debian returns False when ID is ubuntu"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        "yascheduler.infra.ssh.platform.checks._get_os_release",
         new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("ubuntu", "debian", "22.04")
@@ -142,7 +142,7 @@ async def test_check_is_debian_version_match() -> None:
     """check_is_debian_11 returns True when version matches"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        "yascheduler.infra.ssh.platform.checks._get_os_release",
         new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("debian", "debian-like", "11")
@@ -159,7 +159,7 @@ async def test_check_is_debian_version_mismatch() -> None:
     """check_is_debian_11 returns False when version differs"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.adapters.ssh.platform.checks._get_os_release",
+        "yascheduler.infra.ssh.platform.checks._get_os_release",
         new_callable=AsyncMock,
     ) as mock_get:
         mock_get.return_value = ("debian", "debian-like", "12")
@@ -202,7 +202,7 @@ async def test_check_is_windows_version_match() -> None:
     """check_is_windows10 returns True when caption contains version"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.adapters.ssh.platform.checks.get_wmi_w32_os_caption",
+        "yascheduler.infra.ssh.platform.checks.get_wmi_w32_os_caption",
         new_callable=AsyncMock,
     ) as mock_caption:
         mock_caption.return_value = "Microsoft Windows 10 Pro"
@@ -219,7 +219,7 @@ async def test_check_is_windows_version_mismatch() -> None:
     """check_is_windows10 returns False when caption lacks version"""
     mock_conn = MagicMock()
     with patch(
-        "yascheduler.adapters.ssh.platform.checks.get_wmi_w32_os_caption",
+        "yascheduler.infra.ssh.platform.checks.get_wmi_w32_os_caption",
         new_callable=AsyncMock,
     ) as mock_caption:
         mock_caption.return_value = "Microsoft Windows 11 Pro"

@@ -7,7 +7,7 @@ Integration tests for the persistence layer against a real PostgreSQL instance v
 ### Requirement: PostgreSQL testcontainer fixture
 The project SHALL provide a session-scoped pytest fixture that starts a
 PostgreSQL container via testcontainers and applies the schema using
-`apply_schema()` from `adapters/persistence/postgres_schema.py` once per
+`apply_schema()` from `infra/persistence/postgres_schema.py` once per
 session. The project SHALL provide function-scoped fixtures that yield the
 persistence primitives tests need: a raw `pg8000.native.Connection`
 (`pg_conn`), a single-worker `ThreadPoolExecutor` (`pg_executor`), and a
