@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_di.py
-# VERSION: 2.1.0
+# VERSION: 2.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for di.py — dependency injection composition root.
@@ -9,15 +9,15 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestCLIDeps - CLIDeps dataclass: constructor, submit, query
+#   TestCLIDeps - CLIDeps dataclass: constructor, submit
 #   TestMakeCliDeps - make_cli_deps factory for CLI dependencies
 #   TestMakeAiida - make_aiida stub raises NotImplementedError
 #   TestMakeDaemon - make_daemon factory: no DB, AllocationTracker, allocation_lock, active_clouds; active_clouds filter applies on pre-built-clouds path too
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - Patch _resolve_adapter → resolve_adapter (public facade); add test_prebuilt_clouds_active_clouds_filter_verifies_adapter_resolution (review-hardening).
-#   PREVIOUS_CHANGE: v2.0.0 - Remove DB.create assertions, remove db= parameter test, add AllocationTracker/allocation_lock/active_clouds assertions, add no-DB-import check (cloud-provisioner-pure).
+#   LAST_CHANGE: v2.2.0 - Remove test_query_uses_uow_factory (CLIDeps.query removed in drop-cli-deps-query).
+#   PREVIOUS_CHANGE: v2.1.0 - Patch _resolve_adapter → resolve_adapter (public facade); add test_prebuilt_clouds_active_clouds_filter_verifies_adapter_resolution (review-hardening).
 # END_CHANGE_SUMMARY
 
 import asyncio
@@ -75,7 +75,7 @@ def create_mock_config() -> MagicMock:
 
 
 class TestCLIDeps:
-    """CLIDeps dataclass: constructor, submit, query."""
+    """CLIDeps dataclass: constructor, submit."""
 
     def test_constructor_stores_fields(self) -> None:
         """CLIDeps stores engines, uow_factory, remote_tasks_dir."""
@@ -119,28 +119,6 @@ class TestCLIDeps:
             uow_factory,
             remote_tasks_dir,
         )
-
-    @pytest.mark.asyncio
-    async def test_query_uses_uow_factory(self) -> None:
-        """query() enters a UoW via uow_factory and calls tasks.get(task_id)."""
-        mock_task = MagicMock()
-        mock_uow = AsyncMock()
-        mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
-        mock_uow.__aexit__ = AsyncMock(return_value=False)
-        mock_uow.tasks.get = AsyncMock(return_value=mock_task)
-        uow_factory = MagicMock(return_value=mock_uow)
-
-        deps = CLIDeps(
-            engines=MagicMock(),
-            uow_factory=uow_factory,
-            remote_tasks_dir=PurePosixPath("/tmp/tasks"),
-        )
-
-        result = await deps.query(99)
-
-        assert result is mock_task
-        uow_factory.assert_called_once_with()
-        mock_uow.tasks.get.assert_awaited_once_with(99)
 
 
 class TestMakeCliDeps:

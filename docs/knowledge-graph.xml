@@ -410,7 +410,7 @@
       <path>yascheduler/di.py</path>
       <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
-        <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit and query" />
+        <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit" />
         <fn-make_daemon PURPOSE="Async factory creating Orchestrator with UoW factory (no DB, no auto-migration)" />
         <fn-make_cli_deps PURPOSE="Sync factory creating lightweight CLIDeps" />
         <fn-make_aiida PURPOSE="Stub for future AiiDA integration" />

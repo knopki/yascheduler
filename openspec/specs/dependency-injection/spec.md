@@ -58,10 +58,10 @@ function that creates lightweight dependencies for CLI commands.
 - **WHEN** `make_cli_deps(config)` is called
 - **THEN** no SSH connections or cloud providers are instantiated
 
-#### Scenario: CLI deps include submit and query use cases
+#### Scenario: CLI deps include submit use case
 - **WHEN** `make_cli_deps(config)` is called
-- **THEN** the returned CLIDeps has `submit` and `query` attributes usable
-  for task submission and status checking
+- **THEN** the returned CLIDeps has a `submit` attribute usable for task
+  submission
 
 ### Requirement: DI factories in yascheduler.di
 

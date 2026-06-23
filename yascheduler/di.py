@@ -1,5 +1,5 @@
 # FILE: yascheduler/di.py
-# VERSION: 5.1.0
+# VERSION: 5.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
 #   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
@@ -12,12 +12,12 @@
 #   make_cli_deps - Sync factory creating lightweight CLIDeps for CLI commands
 #   make_aiida - Stub for future AiiDA integration
 #   _setup_domain_events - Create MessageBus, HTTP session and register webhook handlers
-#   CLIDeps - Lightweight dependency container for CLI submit and query operations
+#   CLIDeps - Lightweight dependency container for CLI submit operations
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.1.0 - Import resolve_adapter via the public facade (kill private-import FIXME); apply adapter-resolution half of the active_clouds filter on the pre-built-clouds branch too, so test-only callers can't over-count max_nodes for unresolved providers (review-hardening).
-#   PREVIOUS_CHANGE: v5.0.0 - Remove DB from make_daemon (no auto-migration); construct AllocationTracker, allocation_lock, active_clouds; pass to Orchestrator; CloudProvisionerImpl constructed without node_repo (cloud-provisioner-pure).
+#   LAST_CHANGE: v5.2.0 - Remove vestigial CLIDeps.query (zero production callers; encoded as follow-up in 2026-06-23-client-query-uow).
+#   PREVIOUS_CHANGE: v5.1.0 - Import resolve_adapter via the public facade (kill private-import FIXME); apply adapter-resolution half of the active_clouds filter on the pre-built-clouds branch too, so test-only callers can't over-count max_nodes for unresolved providers (review-hardening).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 
 
 # START_CONTRACT: CLIDeps
-#   PURPOSE: Lightweight dependency container for CLI submit and query operations.
+#   PURPOSE: Lightweight dependency container for CLI submit operations.
 #   INPUTS: { engines, uow_factory, remote_tasks_dir }
 #   OUTPUTS: { CLIDeps instance }
 #   SIDE_EFFECTS: None
@@ -94,19 +94,6 @@ class CLIDeps:
             self.uow_factory,
             self.remote_tasks_dir,
         )
-
-    # START_CONTRACT: CLIDeps.query
-    #   PURPOSE: Get a single task by ID via UoW.
-    #   INPUTS: { task_id: int }
-    #   OUTPUTS: { Task | None }
-    #   SIDE_EFFECTS: Opens a DB connection via UoW.
-    #   LINKS: M-APPLICATION-UOW
-    # END_CONTRACT: CLIDeps.query
-    # FIXME: vestigial — zero production callers (only tests/unit/test_di.py). Remove in a cleanup sweep.
-    async def query(self, task_id: int) -> object | None:
-
-        async with self.uow_factory() as uow:
-            return await uow.tasks.get(task_id)
 
 
 # START_CONTRACT: _setup_domain_events

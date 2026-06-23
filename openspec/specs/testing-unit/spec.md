@@ -157,7 +157,7 @@ to producer-consumer loops, and concurrency limits are passed as `workers_num`.
 ### Requirement: Dependency injection factories
 
 Tests SHALL verify:
-- `CLIDeps` stores fields and delegates `submit`/`query`
+- `CLIDeps` stores fields and delegates `submit`
 - `make_cli_deps` returns `CLIDeps` with `PostgresUnitOfWork` factory
 - `make_daemon` creates all dependencies and accepts optional `db`/`clouds`
 - `make_aiida` raises `NotImplementedError`
