@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.4.0
+# VERSION: 1.4.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Add TestAllocatorConsumer: verify _allocator_consumer swallows CloudAllocateError so allocator worker survives (cloud-provisioner-pure hardening).
-#   PREVIOUS_CHANGE: v1.3.0 - Add _clouds_get_capacity tests; add constructor tests for 3 new params; add _deallocator_consumer tests; update make_orchestrator for AllocationTracker/active_clouds/allocation_lock (cloud-provisioner-pure).
+#   LAST_CHANGE: [v1.4.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in make_orchestrator signature).]
+#   PREVIOUS_CHANGE: [v1.4.0 - Add TestAllocatorConsumer: verify _allocator_consumer swallows CloudAllocateError so allocator worker survives (cloud-provisioner-pure hardening).]
 # END_CHANGE_SUMMARY
 #
 """Unit tests for Orchestrator lifecycle management.
@@ -38,17 +38,18 @@ Tests cover:
 - TaskAbandoned event recorded when machine is gone
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections import Counter
-from collections.abc import AsyncGenerator
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.orchestrator import Orchestrator
-from yascheduler.application.uow import AbstractUnitOfWork
 from yascheduler.config import (
     Config,
     ConfigDb,
@@ -60,6 +61,11 @@ from yascheduler.config import (
 from yascheduler.domain.events import TaskAbandoned
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
 from yascheduler.queue import UniqueQueue
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from yascheduler.application.uow import AbstractUnitOfWork
 
 # =============================================================================
 # Helpers

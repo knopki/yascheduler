@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_client_query.py
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Yascheduler queue-query methods via the deps_factory constructor seam.
@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial unit tests for client query path post-swap (client-query-uow).
+#   LAST_CHANGE: [v1.0.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in helper signatures).]
+#   PREVIOUS_CHANGE: [v1.0.0 - Initial unit tests for client query path post-swap (client-query-uow).]
 # END_CHANGE_SUMMARY
 
 """Unit tests for Yascheduler queue-query methods.
@@ -27,6 +28,8 @@ seam: a `FakeCLIDeps`-returning factory whose `uow_factory()` returns a
 `FakeUnitOfWork` carrying a `FakeTaskRepository`. The seam keeps these
 tests stable across future refactors of the query body.
 """
+
+from __future__ import annotations
 
 from pathlib import PurePath
 from types import SimpleNamespace
@@ -66,7 +69,7 @@ class FakeUnitOfWork:
         self.tasks = repo
         self.commit_calls = 0
 
-    async def __aenter__(self) -> "FakeUnitOfWork":
+    async def __aenter__(self) -> FakeUnitOfWork:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:  # noqa: ANN001

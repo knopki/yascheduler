@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.1.0
+# VERSION: 1.2.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Add test_empty_platforms_short_circuits_cloud_fallback covering the warning short-circuit added in allocate_task v5.3.0.
-#   PREVIOUS_CHANGE: v1.1.0 - Tighten step-3 test to assert clouds.deallocate(node.cloud, node.ip) and uow.nodes.remove are invoked on persist failure (verifies S1 VM-leak fix).
+#   LAST_CHANGE: [v1.2.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in signatures evaluated at import).]
+#   PREVIOUS_CHANGE: [v1.2.0 - Add test_empty_platforms_short_circuits_cloud_fallback covering the warning short-circuit added in allocate_task v5.3.0.]
 # END_CHANGE_SUMMARY
 #
 """Failure-mode tests for allocate_task cloud-fallback hardening.
@@ -24,6 +24,8 @@ Validates that the outer try/finally with success-flag correctly releases the
 tracker entry on any unhandled exception (step 1 commit, step 2 cleanup, step
 3 final persist) while preserving it on the success path.
 """
+
+from __future__ import annotations
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
