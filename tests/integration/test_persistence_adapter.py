@@ -1,9 +1,9 @@
 # FILE: tests/integration/test_persistence_adapter.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
 #   SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-UOW, M-DB, M-CONFIG-DB
+#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-UOW, M-CONFIG-DB
 #   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-UOW
 # END_MODULE_CONTRACT
 #
@@ -25,11 +25,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Integration tests for PostgresTaskRepository, PostgresNodeRepository, PostgresUnitOfWork.
+#   LAST_CHANGE: v1.1.0 - Remove DB dependency; use pg_conn/pg_executor fixtures (remove-legacy-db).
+#   PREVIOUS_CHANGE: v1.0.0 - Integration tests for PostgresTaskRepository, PostgresNodeRepository, PostgresUnitOfWork.
 # END_CHANGE_SUMMARY
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
 
+from concurrent.futures import ThreadPoolExecutor
+
+import pg8000.native
 import pytest
 
 from yascheduler.adapters.persistence.postgres import (
@@ -39,7 +43,6 @@ from yascheduler.adapters.persistence.postgres import (
 from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.config import ConfigDb
-from yascheduler.db import DB
 from yascheduler.domain.model import (
     Node,
     Task,
@@ -56,14 +59,16 @@ from yascheduler.domain.model import (
 
 # START_CONTRACT: test_repo_task_insert_and_get
 #   PURPOSE: Verify round-trip insert -> get with all TaskContext fields including JSONB roundtrip.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.get, TaskContext.to_metadata
 # END_CONTRACT: test_repo_task_insert_and_get
-async def test_repo_task_insert_and_get(db: DB) -> None:
+async def test_repo_task_insert_and_get(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """Insert a task via repo, get it back, verify all fields including JSONB roundtrip."""
-    repo = PostgresTaskRepository(db.conn, db.executor)
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
 
     ctx = TaskContext(
         engine="fleur",
@@ -96,27 +101,31 @@ async def test_repo_task_insert_and_get(db: DB) -> None:
 
 # START_CONTRACT: test_repo_task_get_none
 #   PURPOSE: Verify get() returns None for non-existent task.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.get
 # END_CONTRACT: test_repo_task_get_none
-async def test_repo_task_get_none(db: DB) -> None:
+async def test_repo_task_get_none(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """get() returns None for non-existent task."""
-    repo = PostgresTaskRepository(db.conn, db.executor)
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
     assert await repo.get(99999) is None
 
 
 # START_CONTRACT: test_repo_task_save_updates
 #   PURPOSE: Verify save() updates an existing task's fields via upsert.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.save, PostgresTaskRepository.get
 # END_CONTRACT: test_repo_task_save_updates
-async def test_repo_task_save_updates(db: DB) -> None:
+async def test_repo_task_save_updates(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """Save updates an existing task's fields via upsert."""
-    repo = PostgresTaskRepository(db.conn, db.executor)
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
     task = await repo.insert(
         Task(task_id=0, label="initial", context=ctx, status=DomainTaskStatus.TO_DO)
@@ -140,14 +149,16 @@ async def test_repo_task_save_updates(db: DB) -> None:
 
 # START_CONTRACT: test_repo_task_list_by_status
 #   PURPOSE: Verify list_by_status returns only tasks with the given statuses.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.list_by_status
 # END_CONTRACT: test_repo_task_list_by_status
-async def test_repo_task_list_by_status(db: DB) -> None:
+async def test_repo_task_list_by_status(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """list_by_status filters correctly."""
-    repo = PostgresTaskRepository(db.conn, db.executor)
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
     t1 = await repo.insert(
         Task(task_id=0, label="todo", context=ctx, status=DomainTaskStatus.TO_DO)
@@ -178,14 +189,16 @@ async def test_repo_task_list_by_status(db: DB) -> None:
 
 # START_CONTRACT: test_repo_task_count_by_status
 #   PURPOSE: Verify count_by_status returns correct aggregates.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.count_by_status
 # END_CONTRACT: test_repo_task_count_by_status
-async def test_repo_task_count_by_status(db: DB) -> None:
+async def test_repo_task_count_by_status(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """count_by_status returns correct aggregates."""
-    repo = PostgresTaskRepository(db.conn, db.executor)
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
     await repo.insert(
         Task(task_id=0, label="t1", context=ctx, status=DomainTaskStatus.TO_DO)
@@ -204,14 +217,16 @@ async def test_repo_task_count_by_status(db: DB) -> None:
 
 # START_CONTRACT: test_repo_task_update_status_atomic
 #   PURPOSE: Verify update_status only changes status, preserving other fields.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresTaskRepository.update_status
 # END_CONTRACT: test_repo_task_update_status_atomic
-async def test_repo_task_update_status_atomic(db: DB) -> None:
+async def test_repo_task_update_status_atomic(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """update_status only changes the status field."""
-    repo = PostgresTaskRepository(db.conn, db.executor)
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
     task = await repo.insert(
         Task(task_id=0, label="keep-label", context=ctx, status=DomainTaskStatus.TO_DO)
@@ -231,14 +246,16 @@ async def test_repo_task_update_status_atomic(db: DB) -> None:
 
 # START_CONTRACT: test_repo_node_crud
 #   PURPOSE: Verify full node CRUD lifecycle: add, get, enable, disable, remove.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.add, get, enable, disable, remove
 # END_CONTRACT: test_repo_node_crud
-async def test_repo_node_crud(db: DB) -> None:
+async def test_repo_node_crud(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """Full node lifecycle through repository."""
-    repo = PostgresNodeRepository(db.conn, db.executor)
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
 
     node = Node(
         ip="10.0.0.10", ncpus=4, enabled=True, cloud="aws", username="admin", port=2222
@@ -271,14 +288,16 @@ async def test_repo_node_crud(db: DB) -> None:
 
 # START_CONTRACT: test_repo_node_list_filters
 #   PURPOSE: Verify list_enabled and list_disabled return correct subsets.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.list_enabled, list_disabled, list_all
 # END_CONTRACT: test_repo_node_list_filters
-async def test_repo_node_list_filters(db: DB) -> None:
+async def test_repo_node_list_filters(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """list_enabled/disabled return correct subsets."""
-    repo = PostgresNodeRepository(db.conn, db.executor)
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
     await repo.add(Node(ip="10.0.0.1", ncpus=2, enabled=True))
     await repo.add(Node(ip="10.0.0.2", ncpus=2, enabled=False))
 
@@ -293,14 +312,16 @@ async def test_repo_node_list_filters(db: DB) -> None:
 
 # START_CONTRACT: test_repo_node_update
 #   PURPOSE: Verify update() persists all mutable node fields.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.update
 # END_CONTRACT: test_repo_node_update
-async def test_repo_node_update(db: DB) -> None:
+async def test_repo_node_update(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """update persists all mutable fields."""
-    repo = PostgresNodeRepository(db.conn, db.executor)
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
     await repo.add(Node(ip="10.0.0.1", ncpus=2, enabled=True, cloud="aws"))
 
     await repo.update(
@@ -324,14 +345,16 @@ async def test_repo_node_update(db: DB) -> None:
 
 # START_CONTRACT: test_repo_node_add_tmp
 #   PURPOSE: Verify add_tmp inserts a disabled node with generated IP and returns it.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.add_tmp
 # END_CONTRACT: test_repo_node_add_tmp
-async def test_repo_node_add_tmp(db: DB) -> None:
+async def test_repo_node_add_tmp(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """add_tmp inserts a disabled node with generated IP."""
-    repo = PostgresNodeRepository(db.conn, db.executor)
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
     ip = await repo.add_tmp("aws", "deployer")
     assert ip.startswith("prov")
 
@@ -344,14 +367,16 @@ async def test_repo_node_add_tmp(db: DB) -> None:
 
 # START_CONTRACT: test_repo_node_count
 #   PURPOSE: Verify count_by_cloud and count_by_status return correct aggregates.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.count_by_cloud, count_by_status
 # END_CONTRACT: test_repo_node_count
-async def test_repo_node_count(db: DB) -> None:
+async def test_repo_node_count(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """Count aggregations work correctly."""
-    repo = PostgresNodeRepository(db.conn, db.executor)
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
     await repo.add(Node(ip="10.0.0.1", ncpus=2, cloud="aws", enabled=True))
     await repo.add(Node(ip="10.0.0.2", ncpus=2, cloud="aws", enabled=False))
     await repo.add(Node(ip="10.0.0.3", ncpus=2, cloud="azure", enabled=True))
@@ -367,14 +392,16 @@ async def test_repo_node_count(db: DB) -> None:
 
 # START_CONTRACT: test_repo_node_get_by_ips
 #   PURPOSE: Verify batch get_by_ips returns all matching nodes.
-#   INPUTS: { db: DB - database fixture }
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: PostgresNodeRepository.get_by_ips
 # END_CONTRACT: test_repo_node_get_by_ips
-async def test_repo_node_get_by_ips(db: DB) -> None:
+async def test_repo_node_get_by_ips(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
     """Batch get_by_ips returns only matching nodes."""
-    repo = PostgresNodeRepository(db.conn, db.executor)
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
     await repo.add(Node(ip="10.0.0.1", ncpus=2, cloud="aws"))
     await repo.add(Node(ip="10.0.0.2", ncpus=2, cloud="gcp"))
     await repo.add(Node(ip="10.0.0.3", ncpus=2, cloud="azure"))

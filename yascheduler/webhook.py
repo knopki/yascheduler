@@ -15,6 +15,7 @@
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.0.0 - Extract WebhookPayload from scheduler.py and orchestrator.py; replace attrs with dataclasses.
 # END_CHANGE_SUMMARY
+# FIXME: decide: move to domain?
 
 from __future__ import annotations
 

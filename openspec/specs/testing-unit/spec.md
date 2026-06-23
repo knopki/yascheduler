@@ -1,7 +1,7 @@
 ## Purpose
 
 Unit tests for yascheduler: domain entities, domain exceptions, domain ports,
-domain services, config parsing, legacy DB models, persistence adapters (mocked),
+domain services, config parsing, persistence adapters (mocked),
 application use cases, orchestrator lifecycle, dependency injection, CLI behavior,
 remote machine management, and shared test infrastructure. All tests run without
 external dependencies (no real DB, SSH, or filesystem).
@@ -83,28 +83,6 @@ Tests SHALL verify INI config parsing:
 - **WHEN** `AzureImageReference.from_urn("bad-urn")` is called
 - **THEN** `ValueError` is raised
 
-### Requirement: Legacy DB models (TaskModel, NodeModel, TaskStatus)
-
-Tests SHALL verify legacy attrs-based models from `yascheduler.db`:
-- `TaskStatus` values: TO_DO=0, RUNNING=1, DONE=2, subclass of `int`
-- `TaskModel` frozen, `TaskStatus` converter, deterministic hash
-- `NodeModel` defaults and frozen
-
-#### Scenario: TaskModel is frozen and hashable
-- **WHEN** a `TaskModel` instance is created
-- **THEN** it is frozen (cannot mutate attributes) and has a deterministic hash
-
-### Requirement: DB facade with mocked connection
-
-Tests SHALL verify `DB` methods from `yascheduler.db` using a mocked pg8000
-connection: node CRUD (`add_node`, `get_node`, `enable_node`, `disable_node`,
-`remove_node`), task CRUD (`add_task`, `get_task`, `set_task_running`,
-`set_task_done`), and `set_task_error` with/without error message.
-
-#### Scenario: DB set_task_error with and without message
-- **WHEN** `db.set_task_error(task_id, metadata, error="crash")` then `db.set_task_error(task_id, metadata)` are called with a mocked connection
-- **THEN** the first call embeds `"error": "crash"` in metadata; the second passes metadata without adding an error key
-
 ### Requirement: Persistence adapter with mocked pg8000
 
 Tests SHALL verify `PostgresTaskRepository`, `PostgresNodeRepository`, and
@@ -159,7 +137,7 @@ to producer-consumer loops, and concurrency limits are passed as `workers_num`.
 Tests SHALL verify:
 - `CLIDeps` stores fields and delegates `submit`
 - `make_cli_deps` returns `CLIDeps` with `PostgresUnitOfWork` factory
-- `make_daemon` creates all dependencies and accepts optional `db`/`clouds`
+- `make_daemon` creates all dependencies and accepts optional `clouds`
 - `make_aiida` raises `NotImplementedError`
 
 #### Scenario: make_cli_deps returns CLIDeps with PostgresUnitOfWork factory
@@ -237,26 +215,18 @@ callables, and `debian_adapter.checks` is a superset of `debian_like_adapter.che
 - **WHEN** comparing `debian_adapter.checks` and `debian_like_adapter.checks`
 - **THEN** the debian set is a superset of the debian-like set
 
-### Requirement: FakeDB test double
-
-The project SHALL provide a `FakeDB` class implementing the same public methods
-as `DB` on in-memory data structures, returning `TaskModel`/`NodeModel` with
-auto-incrementing `task_id`.
-
-#### Scenario: FakeDB mirrors DB public methods
-- **WHEN** `FakeDB` is used in place of `DB`
-- **THEN** `add_task`, `get_task`, `add_node`, `get_all_nodes`, status transitions
-  all behave equivalently to `DB`
-
 ### Requirement: Shared test fixtures
 
-`tests/fixtures/models.py` SHALL provide `make_task` and `make_node` helpers
-with sensible defaults. `tests/fixtures/mock_remote_machine.py` and
-`tests/fixtures/mock_clouds.py` SHALL provide spec-compliant mock factories.
+The project SHALL provide spec-compliant mock factories in
+`tests/fixtures/mock_remote_machine.py` and `tests/fixtures/mock_clouds.py`.
+The `tests/fixtures/models.py` module (`make_task` / `make_node` returning
+legacy `TaskModel` / `NodeModel`) is removed; tests SHALL construct domain
+entities directly (`yascheduler.domain.Task`, `yascheduler.domain.Node`) or
+via local helpers in each test file.
 
-#### Scenario: make_task returns TaskModel with defaults
-- **WHEN** `make_task()` is called without arguments
-- **THEN** it returns a `TaskModel` with `status=TaskStatus.TO_DO`
+#### Scenario: Domain entities constructed directly in tests
+- **WHEN** a unit test needs a `Task` or `Node` instance
+- **THEN** it constructs `yascheduler.domain.Task(...)` / `yascheduler.domain.Node(...)` directly (or via a file-local helper), not via a deleted `make_task`/`make_node` fixture
 
 ### Requirement: WebhookPayload
 

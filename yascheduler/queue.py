@@ -18,7 +18,7 @@
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
-
+# FIXME: move this module to application (?)
 """Async queue with message deduplication"""
 
 import asyncio

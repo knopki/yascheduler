@@ -16,6 +16,7 @@
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.6.1 - Import daemonize from adapters.cli.daemonize instead of utils.
 # END_CHANGE_SUMMARY
+# FIXME: move this module to adapters
 """
 SystemV Daemon functions
 """

@@ -1,8 +1,4 @@
-## Purpose
-
-Integration tests for the persistence layer against a real PostgreSQL instance via testcontainers, validating SQL queries, parameter binding, and result mapping end-to-end without mocking pg8000. Tests use `PostgresUnitOfWork` + repository adapters and `yascheduler.domain.TaskStatus` (not the removed `yascheduler.db`).
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: PostgreSQL testcontainer fixture
 The project SHALL provide a session-scoped pytest fixture that starts a
@@ -106,3 +102,15 @@ or otherwise). It exercises the full facade path through real Postgres
 #### Scenario: Test asserts status against domain.TaskStatus
 - **WHEN** the integration test's `status` assertion is inspected
 - **THEN** it uses one of `int(result["status"])`, `result["status"] == 0`, `result["status"] == domain.TaskStatus.TO_DO`, or `result["status"].name == "TO_DO"` — never `isinstance(result["status"], yascheduler.db.TaskStatus)`
+
+## REMOVED Requirements
+
+### Requirement: Migration idempotency
+**Reason**: `DB.migrate()` is removed with `yascheduler/db.py`. Schema is applied
+once per session via the synchronous `apply_schema()` helper
+(`adapters/persistence/postgres_schema.py`), which is itself covered by
+`test_postgres_schema.py`. The "call migrate twice" concern no longer exists.
+**Migration**: No replacement — idempotent `ALTER ... ADD COLUMN IF NOT
+EXISTS` migration via `DB.migrate` is gone. Operators run `yainit` (which calls
+`apply_schema`) before starting the daemon; the spec's idempotency scenario is
+dropped.

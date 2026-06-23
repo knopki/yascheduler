@@ -48,6 +48,7 @@ def init() -> None:
 def _init_systemd(install_path: Path) -> None:
     print("Installing systemd service")
     src_unit_file = install_path / "data/yascheduler.service"
+    # FIXME: writable unit files should be in /etc
     unit_file = Path("/lib/systemd/system/yascheduler.service")
     if not unit_file.is_file():
         if not os.access(unit_file, os.W_OK):

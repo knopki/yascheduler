@@ -36,6 +36,7 @@
 #   PREVIOUS_CHANGE: v1.7.0 - Added ConfigCloudVastAI.
 # END_CHANGE_SUMMARY
 #
+# FIXME: move this module to adapters / reimplement in adapters
 """Configuration module"""
 
 from .cloud import (

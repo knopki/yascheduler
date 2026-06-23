@@ -16,7 +16,7 @@
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
-
+# FIXME: move this module to application (?)
 """Time utils"""
 
 import asyncio
@@ -24,6 +24,7 @@ from datetime import datetime
 from time import sleep
 
 
+# FIXME: dead code?
 def sleep_until(end: datetime) -> None:
     "Sleep until :end:"
     now = datetime.now()

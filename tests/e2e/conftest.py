@@ -1,10 +1,10 @@
 # FILE: tests/e2e/conftest.py
-# VERSION: 2.1.0
+# VERSION: 2.2.0
 # START_MODULE_CONTRACT
-#   PURPOSE: E2E test fixtures — PostgreSQL + SSH containers, config, schema, DB.
-#   SCOPE: Session-scoped containers and config, function-scoped DB with TRUNCATE.
-#   DEPENDS: M-DB, M-CONFIG, M-SSH-GATEWAY, M-PERSISTENCE-SCHEMA
-#   LINKS: M-DB, M-CONFIG, M-PERSISTENCE-SCHEMA
+#   PURPOSE: E2E test fixtures — PostgreSQL + SSH containers, config, schema, and UoW-based DB access.
+#   SCOPE: Session-scoped containers and config, function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE.
+#   DEPENDS: M-CONFIG, M-SSH-GATEWAY, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
+#   LINKS: M-CONFIG, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -14,35 +14,41 @@
 #   ssh_container - session-scoped SSH container with key pair
 #   e2e_config - session-scoped Config with temp dir, INI, engine script, SSH key
 #   _init_schema - session-scoped schema.sql application via apply_schema()
-#   db - function-scoped DB with TRUNCATE teardown
+#   _bus - session-scoped bare MessageBus for UoW event dispatch
+#   pg_executor - function-scoped ThreadPoolExecutor for pg8000
+#   pg_conn - function-scoped raw pg8000 connection with TRUNCATE teardown
+#   uow_factory - function-scoped factory returning PostgresUnitOfWork instances
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - _init_schema uses sync apply_schema() instead of legacy DB.run/migrate.
-#   PREVIOUS_CHANGE: v2.0.0 - Add E2E fixtures: postgres, SSH, config, schema, db.
+#   LAST_CHANGE: v2.2.0 - Replace DB fixture with layered pg_conn/pg_executor/uow_factory fixtures (remove-legacy-db).
+#   PREVIOUS_CHANGE: v2.1.0 - _init_schema uses sync apply_schema() instead of legacy DB.run/migrate.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import os
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import asyncssh
+import pg8000.native
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 from testcontainers.postgres import PostgresContainer
 
 from yascheduler.adapters.persistence.postgres_schema import apply_schema
+from yascheduler.adapters.persistence.postgres_uow import PostgresUnitOfWork
+from yascheduler.application import MessageBus
 from yascheduler.config import Config
 from yascheduler.config.db import ConfigDb
-from yascheduler.db import DB
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, Callable, Generator
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -173,12 +179,45 @@ def _init_schema(
     apply_schema(_db_config)
 
 
+@pytest.fixture(scope="session")
+def _bus() -> MessageBus:
+    return MessageBus()
+
+
 @pytest.fixture
-async def db(
+def pg_executor() -> Generator[ThreadPoolExecutor, None, None]:
+    executor = ThreadPoolExecutor(max_workers=1)
+    yield executor
+    executor.shutdown(wait=False)
+
+
+@pytest.fixture
+async def pg_conn(
     _db_config: ConfigDb,
     _init_schema: None,
-) -> AsyncGenerator[DB, None]:
-    instance = await DB.create(_db_config, automigrate=False)
-    yield instance
-    await instance.run("TRUNCATE yascheduler_tasks, yascheduler_nodes CASCADE")
-    await instance.close()
+    pg_executor: ThreadPoolExecutor,
+) -> AsyncGenerator[pg8000.native.Connection, None]:
+    conn = pg8000.native.Connection(
+        user=_db_config.user,
+        host=_db_config.host,
+        database=_db_config.database,
+        port=_db_config.port,
+        password=_db_config.password,
+    )
+    yield conn
+    conn.run("TRUNCATE yascheduler_tasks, yascheduler_nodes CASCADE")
+    conn.close()
+    pg_executor.shutdown(wait=False)
+
+
+@pytest.fixture
+def uow_factory(
+    _db_config: ConfigDb,
+    _init_schema: None,
+    _bus: MessageBus,
+    pg_conn: pg8000.native.Connection,
+) -> Callable[[], PostgresUnitOfWork]:
+    def _factory() -> PostgresUnitOfWork:
+        return PostgresUnitOfWork(_db_config, _bus)
+
+    return _factory

@@ -83,6 +83,7 @@ def _task_to_dict(t: Task) -> Mapping[str, Any]:
     }
 
 
+# FIXME: move to adapters/api?
 class Yascheduler:
     """Yascheduler client"""
 

@@ -4,7 +4,7 @@
 #   PURPOSE: Persistence subpackage facade — re-exports persistence symbols for the adapters layer facade.
 #   SCOPE: Re-export load_query, UnitOfWorkNotInitializedError, apply_schema, PostgresUnitOfWork; package marker.
 #   DEPENDS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-POSTGRES
-#   LINKS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SCHEMA, M-DB
+#   LINKS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

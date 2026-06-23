@@ -1,8 +1,4 @@
-## Purpose
-
-End-to-end test infrastructure and full-cycle tests that validate the scheduler's complete task lifecycle against real PostgreSQL and SSH containers.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: E2E test fixtures
 The project SHALL provide session-scoped and function-scoped pytest fixtures in `tests/e2e/conftest.py` that set up a complete test environment:
@@ -22,13 +18,6 @@ The `YASCHEDULER_CONF_PATH` environment variable SHALL be set to the generated I
 #### Scenario: Persistence fixtures provide empty database per test
 - **WHEN** two E2E tests run sequentially and the first inserts a node via `uow_factory`
 - **THEN** the second test sees zero nodes (the `pg_conn` teardown TRUNCATEs both tables)
-
-### Requirement: Test engine script
-The project SHALL provide a shell script `run.sh` as the test engine executable. The script SHALL sleep for 3 seconds then copy `1.input` to `1.input.out` in the current working directory. The script SHALL be executable and use `#!/bin/sh` shebang.
-
-#### Scenario: Test engine produces output from input
-- **WHEN** `run.sh` executes in a directory containing `1.input` with content "hello e2e"
-- **THEN** after completion, `1.input.out` exists with content "hello e2e"
 
 ### Requirement: Full cycle E2E test
 The project SHALL provide a test in `tests/e2e/test_full_cycle.py` that exercises the complete scheduler lifecycle:

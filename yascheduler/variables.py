@@ -17,7 +17,7 @@
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
-
+# FIXME: decide: move to config?
 """Variables"""
 
 from os import getenv

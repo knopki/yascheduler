@@ -82,7 +82,6 @@ root (`di.py`) wires the graph per entry point.
 ┌──────────────────────────────┼───────────────────────────────────┐
 │  ENTRY POINTS & LEGACY WRAPPERS                                  │
 │  client.py           Public API — Yascheduler facade             │
-│  db.py               Wrapper delegating to persistence adapter   │
 │  webhook.py          WebhookPayload frozen dataclass             │
 │  aiida_plugin.py     AiiDA scheduler integration                 │
 │  queue.py            UniqueQueue                                │
@@ -106,21 +105,20 @@ the sub layer.
 
 ## 2. Component Reference
 
-| Component               | Responsibility                                                                                |
-| ----------------------- | --------------------------------------------------------------------------------------------- |
-| `domain/`               | Entities, value objects, ports, services, exceptions, events                                  |
-| `adapters/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                      |
-| `adapters/ssh/`         | `SSHMachineGateway` + platform adapters                                                       |
-| `adapters/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                |
-| `adapters/cli/`         | 6 per-command modules                                                                         |
-| `adapters/notifier/`    | Webhook event handler                                                                         |
-| `application/`          | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                 |
-| `di.py`                 | Composition root: `make_daemon()`, `make_cli_deps()`                                          |
-| `db.py`                 | Legacy wrapper; delegates to `PostgresTaskRepository`/`NodeRepository`                        |
-| `client.py`             | Public Python API (`class Yascheduler`) — uses `make_cli_deps()` for submit, `DB` for queries |
-| `aiida_plugin.py`       | AiiDA scheduler plugin (uses `Yascheduler` client)                                            |
-| `webhook.py`            | `WebhookPayload` frozen dataclass                                                             |
-| `config/`               | Config tree parsed from INI (uses attrs)                                                      |
+| Component               | Responsibility                                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `domain/`               | Entities, value objects, ports, services, exceptions, events                                            |
+| `adapters/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                |
+| `adapters/ssh/`         | `SSHMachineGateway` + platform adapters                                                                 |
+| `adapters/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                          |
+| `adapters/cli/`         | 6 per-command modules                                                                                   |
+| `adapters/notifier/`    | Webhook event handler                                                                                   |
+| `application/`          | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                           |
+| `di.py`                 | Composition root: `make_daemon()`, `make_cli_deps()`                                                    |
+| `client.py`             | Public Python API (`class Yascheduler`) — uses `make_cli_deps()` for submit, routes queries through UoW |
+| `aiida_plugin.py`       | AiiDA scheduler plugin (uses `Yascheduler` client)                                                      |
+| `webhook.py`            | `WebhookPayload` frozen dataclass                                                                       |
+| `config/`               | Config tree parsed from INI (uses attrs)                                                                |
 
 ### 2.1 Domain (`yascheduler/domain/`)
 
@@ -169,11 +167,6 @@ pg8000 is synchronous. `PostgresUnitOfWork` owns a
 single UoW instance. Concurrent use cases each create their own UoW and
 therefore their own executor. This is intentional and adequate for
 current load.
-
-`db.py` wraps these repositories, converting between its legacy
-`TaskModel`/`NodeModel` (attrs) and domain `Task`/`Node` (dataclasses).
-Its public surface is unchanged from the pre-migration era; `client.py`
-and `CloudProvisionerImpl` still consume it.
 
 ### 2.3 Application (`yascheduler/application/`)
 
@@ -241,14 +234,15 @@ Failures are logged and swallowed after backoff exhausts.
 
 ### 2.8 Composition Root (`yascheduler/di.py`)
 
-- **`make_daemon(config, log, *, db, clouds)`** — creates `DB` (with
-  auto-migration), `_setup_domain_events()` (MessageBus + aiohttp
-  session + webhook handler registration), a `PostgresUnitOfWork`
-  factory, `CloudProvisionerImpl`, and `SSHMachineGateway`; returns a
-  wired `Orchestrator`. Accepts pre-built `db` / `clouds` for tests.
+- **`make_daemon(config, log=None, *, clouds=None)`** — creates
+  `_setup_domain_events()` (MessageBus + aiohttp session + webhook
+  handler registration), a `PostgresUnitOfWork` factory,
+  `CloudProvisionerImpl`, and `SSHMachineGateway`; returns a wired
+  `Orchestrator`. Accepts pre-built `clouds` for tests. Does not create
+  a `DB` or run schema migration (operator runs `yainit` first).
 - **`make_cli_deps(config)`** — returns a `CLIDeps` dataclass with
-  `engines`, `uow_factory`, `remote_tasks_dir`, and convenience
-  `submit()` / `query()` methods. No SSH/cloud/daemon dependencies.
+  `engines`, `uow_factory`, `remote_tasks_dir`, and a `submit()`
+  method. No SSH/cloud/daemon dependencies.
 - **`make_aiida(config)`** — stub, raises `NotImplementedError`.
 
 ### 2.9 Public API & Legacy Wrappers
@@ -258,11 +252,7 @@ Failures are logged and swallowed after backoff exhausts.
   (no daemon graph). Query methods (`queue_get_tasks*`,
   `queue_get_task*`) route through the `query_tasks` use case over a UoW
   (no `DB` construction); see `openspec/changes/client-query-uow/`.
-- **`db.py`** — legacy wrapper (~540 LOC). Converts between
-  `TaskModel`/`NodeModel` (attrs) and domain `Task`/`Node`, delegates to
-  `PostgresTaskRepository` / `PostgresNodeRepository`. `client.py` no
-  longer constructs `DB`; the module is test-only pending a separate
-  removal proposal.
+
 - **`webhook.py`** — `WebhookPayload` frozen dataclass, consumed by
   `notifier/webhook.py`.
 - **`aiida_plugin.py`** — AiiDA plugin uses `Yascheduler` client
@@ -391,8 +381,9 @@ architecture description; add via a separate proposal if needed.
 - `queue_submit_task_async()` → `make_cli_deps()` → `CLIDeps.submit()`
   → `submit_task` use case → UoW. Submitting a task does not
   instantiate the daemon graph.
-- Query methods (`queue_get_tasks*`, `queue_get_task*`) construct `DB`
-  directly (see §6, Planned).
+- Query methods (`queue_get_tasks*`, `queue_get_task*`) route through
+  the `query_tasks` use case over a UoW (no `DB` construction); see
+  `openspec/changes/client-query-uow/`.
 
 ---
 
@@ -459,7 +450,6 @@ yascheduler/
 ├── di.py                      # composition root
 ├── client.py                  # Yascheduler facade
 ├── aiida_plugin.py            # AiiDA plugin
-├── db.py                      # legacy wrapper → persistence adapter
 ├── webhook.py                 # WebhookPayload dataclass
 ├── queue.py                   # UniqueQueue
 ├── config/                    # INI config (attrs)
@@ -533,28 +523,20 @@ NOT EXISTS`) with versioned SQL migrations:
 - Sequential, transactional application of unapplied migrations.
 - `schema.sql` remains the ground truth for fresh installations.
 
-Enables schema evolution without modifying `db.py` each time.
+Enables schema evolution without modifying application code.
 
-### 6.2 Config: attrs → dataclasses (`openspec/changes/config-dataclasses/`)
-
-Replace `attrs` with stdlib `dataclasses` in `config/`. No functional
-change; eliminates the last non-stdlib dependency in the configuration
-layer and unifies style with the domain.
-
-### 6.3 `make_aiida()` implementation
+### 6.2 `make_aiida()` implementation
 
 `make_aiida()` in `di.py` currently raises `NotImplementedError`. The
 AiiDA plugin still imports the `Yascheduler` client directly. Wiring the
 plugin through DI is deferred until the plugin is ready for refactoring;
 no active proposal.
 
-### 6.4 `client.py` query methods via use cases
+### 6.3 `client.py` query methods via use cases
 
-**Resolved** by `openspec/changes/client-query-uow/`: `queue_get_tasks*`
-and `queue_get_task*` now route through the `query_tasks` use case over a
-UoW instead of constructing `DB` directly. The last production caller of
-`db.py` is gone; the module is test-only and awaits a separate
-test-fixture migration + removal proposal.
+**Resolved** by `openspec/changes/remove-legacy-db/`: `yascheduler/db.py` and
+its legacy models have been deleted; all test fixtures now use
+`PostgresUnitOfWork` + repos + `domain.TaskStatus`.
 
 ### 6.5 Application-layer exception hierarchy
 
@@ -568,10 +550,10 @@ in a change proposal before implementing.
 
 ## 7. Open Questions
 
-| Topic                           | Status                                                                       |
-| ------------------------------- | ---------------------------------------------------------------------------- |
-| AiiDA plugin evolution          | Keep importing `Yascheduler` facade until §6.3 lands                         |
-| `db.py` retirement              | Query port resolved by `client-query-uow`; test-fixture migration still open |
-| Config attrs → dataclasses      | §6.2, open proposal                                                          |
-| Schema versioning               | §6.1, open proposal                                                          |
-| Application exception hierarchy | §6.5, no proposal yet                                                        |
+| Topic                           | Status                                                                     |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| AiiDA plugin evolution          | Keep importing `Yascheduler` facade until §6.3 lands                       |
+| `db.py` retirement              | **Resolved** by `remove-legacy-db` — module deleted, tests migrated to UoW |
+| Config attrs → dataclasses      | §6.2, open proposal                                                        |
+| Schema versioning               | §6.1, open proposal                                                        |
+| Application exception hierarchy | §6.5, no proposal yet                                                      |

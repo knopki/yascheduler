@@ -33,21 +33,22 @@ The function SHALL NOT pass `adapters` or `configs` dicts to the
 `clouds.select_provider` port method, and `adapters`/`configs` stay on
 `CloudProvisionerImpl`.
 
+The composition root SHALL NOT introduce a DB-facade class. Persistence is
+accessed only via `PostgresUnitOfWork` and the repository ports
+(`TaskRepository`, `NodeRepository`). No module in `yascheduler.di` SHALL
+import from `yascheduler.db` (the module is removed).
+
 #### Scenario: make_daemon returns orchestrator with UoW factory
 - **WHEN** `make_daemon(config)` is called with a valid Config
 - **THEN** returns an Orchestrator wired with `uow_factory`, `SSHMachineGateway`, `CloudProvisionerImpl`, `AllocationTracker`, `allocation_lock`, and `active_clouds` — without creating `DB`, without running schema migration, and without creating `RemoteMachineRepository`
-
-#### Scenario: make_daemon accepts pre-built dependencies
-- **WHEN** `make_daemon(config, db=my_db, clouds=my_clouds)` is called
-- **THEN** the provided `db` is used for schema migration and the provided `clouds` are wired to the orchestrator
 
 #### Scenario: make_daemon accepts pre-built clouds
 - **WHEN** `make_daemon(config, clouds=my_clouds)` is called
 - **THEN** the provided `clouds` are wired to the orchestrator; no `DB` is created and no schema migration runs
 
-#### Scenario: No DB import in make_daemon
+#### Scenario: No DB-facade import in the composition root
 - **WHEN** `di.py` is imported
-- **THEN** it does NOT import `DB` from `yascheduler.db`
+- **THEN** it does NOT import `DB` from `yascheduler.db`, and no `DB`-like facade class is introduced; persistence is wired only via `PostgresUnitOfWork`
 
 ### Requirement: make_cli_deps factory
 
