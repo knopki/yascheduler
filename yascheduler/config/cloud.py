@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/config/cloud.py
-# VERSION: 1.7.0
+# VERSION: 1.7.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud, VastAI.
 #   SCOPE: Provider-specific config parsing, Azure image reference, cloud config union.
-#   DEPENDS: M-CONFIG-UTILS, M-COMPAT
+#   DEPENDS: M-CONFIG-UTILS, M-SHARED
 #   LINKS: M-CONFIG-CLOUD
 # END_MODULE_CONTRACT
 #
@@ -19,11 +19,11 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Added ConfigCloudVastAI.
-#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.1 - Import Self from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v1.7.0 - Added ConfigCloudVastAI.
 # END_CHANGE_SUMMARY
 #
-"""Cloud configurations"""
+# """Cloud configurations"""
 
 from collections.abc import Sequence
 from configparser import SectionProxy
@@ -32,7 +32,7 @@ from typing import Optional, Union
 
 from attrs import Attribute, define, field, fields, validators
 
-from yascheduler.compat import Self
+from yascheduler.shared import Self
 
 from .utils import make_default_field, opt_str_val, warn_unknown_fields
 

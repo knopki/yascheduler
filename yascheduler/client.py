@@ -1,68 +1,35 @@
 # FILE: yascheduler/client.py
-# VERSION: 2.3.0
+# VERSION: 2.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
 #   SCOPE: Task submission (via DI/CLIDeps) and status query (via query_tasks use case + UoW).
-#   DEPENDS: M-VARIABLES, M-COMPAT, M-CONFIG, M-DI, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL
+#   DEPENDS: M-SHARED, M-CONFIG, M-DI, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL
 #   LINKS: M-DI, M-AIIDA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   Yascheduler - Sync/async client wrapper for task operations
-#   to_sync - Decorator wrapping async functions for sync execution
 #   _task_to_dict - Project domain Task to the public 6-key Mapping shape
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - Route queue_submit_task_async through self._deps_factory; drop local make_cli_deps import (submit/query symmetry).
-#   PREVIOUS_CHANGE: v2.2.1 - FIXME on queue_submit_task_async asymmetry (bypasses deps_factory seam; follow-up proposal).
+#   LAST_CHANGE: v2.4.0 - Extract to_sync to yascheduler.shared.async_utils; import to_sync/CONFIG_FILE from yascheduler.shared; ParamSpec/ParamT/ReturnT_co move with to_sync.
+#   PREVIOUS_CHANGE: v2.3.0 - Route queue_submit_task_async through self._deps_factory; drop local make_cli_deps import (submit/query symmetry).
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
 
-import asyncio
 import logging
-from collections.abc import Callable, Coroutine, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from functools import wraps
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import PurePath
-from typing import Any, Optional, TypeVar, Union
+from typing import Any, Optional, Union
 
 from .application import query_tasks
-from .compat import ParamSpec
 from .config import Config
 from .di import CLIDeps, make_cli_deps
 from .domain import Task, TaskStatus
-from .variables import CONFIG_FILE
-
-ReturnT_co = TypeVar("ReturnT_co", covariant=True)
-ParamT = ParamSpec("ParamT")
-
-
-def to_sync(
-    func: Callable[ParamT, Coroutine[Any, Any, ReturnT_co]],
-) -> Callable[ParamT, ReturnT_co]:
-    """
-    Wraps async function and run it sync in thread.
-    """
-
-    @wraps(func)
-    def outer(*args: ParamT.args, **kwargs: ParamT.kwargs):  # noqa: ANN202
-        """
-        Execute the async method synchronously in sync and async runtime.
-        """
-        coro = func(*args, **kwargs)
-        try:
-            asyncio.get_running_loop()  # Triggers RuntimeError if no running event loop
-
-            # Create a separate thread so we can block before returning
-            with ThreadPoolExecutor(1) as pool:
-                return pool.submit(lambda: asyncio.run(coro)).result()
-        except RuntimeError:
-            return asyncio.run(coro)
-
-    return outer
+from .shared import CONFIG_FILE, to_sync
 
 
 # START_CONTRACT: _task_to_dict

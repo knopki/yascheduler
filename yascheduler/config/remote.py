@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/config/remote.py
-# VERSION: 1.6.0
+# VERSION: 1.6.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Remote machine defaults: data directories, SSH username, jump host.
 #   SCOPE: Remote paths, SSH user, jump host.
-#   DEPENDS: M-CONFIG-UTILS, M-COMPAT
+#   DEPENDS: M-CONFIG-UTILS, M-SHARED
 #   LINKS: none
 # END_MODULE_CONTRACT
 #
@@ -14,10 +14,11 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.6.1 - Import Self from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
-"""Remote configuration"""
+# """Remote configuration"""
 
 from collections.abc import Sequence
 from configparser import SectionProxy
@@ -26,7 +27,7 @@ from typing import Optional
 
 from attrs import define, field, fields
 
-from yascheduler.compat import Self
+from yascheduler.shared import Self
 
 from .utils import make_default_field, opt_str_val, warn_unknown_fields
 

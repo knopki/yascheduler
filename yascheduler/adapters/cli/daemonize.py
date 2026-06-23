@@ -1,9 +1,9 @@
 # FILE: yascheduler/adapters/cli/daemonize.py
-# VERSION: 1.1.0
+# VERSION: 1.1.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yascheduler CLI command — start the daemon with signal handling.
 #   SCOPE: daemonize command — creates Orchestrator via DI, runs event loop, configures yascheduler logger.
-#   DEPENDS: M-DI, M-CONFIG, M-VARIABLES, M-APPLICATION-ORCHESTRATOR
+#   DEPENDS: M-DI, M-CONFIG, M-SHARED, M-APPLICATION-ORCHESTRATOR
 #   LINKS: M-CLI-COMMANDS, M-DI
 # END_MODULE_CONTRACT
 #
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Inline _get_logger from scheduler.py prior to scheduler.py deletion.
-#   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
+#   LAST_CHANGE: v1.1.1 - Import to_sync/CONFIG_FILE from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v1.1.0 - Inline _get_logger from scheduler.py prior to scheduler.py deletion.
 # END_CHANGE_SUMMARY
 # FIXME: split adapter and application layer (business logic)
 
@@ -27,10 +27,9 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from yascheduler.application import Orchestrator
-from yascheduler.client import to_sync
 from yascheduler.config import Config
 from yascheduler.di import make_daemon
-from yascheduler.variables import CONFIG_FILE
+from yascheduler.shared import CONFIG_FILE, to_sync
 
 
 # START_CONTRACT: _get_logger

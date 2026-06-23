@@ -1,9 +1,9 @@
 # FILE: yascheduler/adapters/cli/manage_node.py
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes.
 #   SCOPE: manage_node command + arg parser, node add/remove helpers.
-#   DEPENDS: M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-VARIABLES, M-APPLICATION-UOW
+#   DEPENDS: M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW
 #   LINKS: M-CLI-COMMANDS, M-DI, M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
@@ -16,7 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
+#   LAST_CHANGE: v1.0.1 - Import to_sync/CONFIG_FILE from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
 # END_CHANGE_SUMMARY
 # FIXME: split adapter and application layer (business logic)
 
@@ -25,11 +26,10 @@ from typing import Optional
 
 from yascheduler.adapters import SSHMachineGateway
 from yascheduler.application import AbstractUnitOfWork
-from yascheduler.client import to_sync
 from yascheduler.config import Config
 from yascheduler.di import make_cli_deps
 from yascheduler.domain import Node, TaskStatus
-from yascheduler.variables import CONFIG_FILE
+from yascheduler.shared import CONFIG_FILE, to_sync
 
 
 def _parse_node_args() -> argparse.Namespace:

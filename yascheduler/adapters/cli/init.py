@@ -1,9 +1,9 @@
 # FILE: yascheduler/adapters/cli/init.py
-# VERSION: 2.0.0
+# VERSION: 2.0.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yainit CLI command — install service unit files and initialize DB schema.
 #   SCOPE: init command + systemd/sysv service install + DB schema creation.
-#   DEPENDS: M-CONFIG, M-VARIABLES, M-PERSISTENCE-SCHEMA
+#   DEPENDS: M-CONFIG, M-SHARED, M-PERSISTENCE-SCHEMA
 #   LINKS: M-CLI-COMMANDS, M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Sync init(); _init_db() calls apply_schema() instead of legacy DB class.
-#   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
+#   LAST_CHANGE: v2.0.1 - Import CONFIG_FILE from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v2.0.0 - Sync init(); _init_db() calls apply_schema() instead of legacy DB class.
 # END_CHANGE_SUMMARY
 # FIXME: split adapter and application layer (business logic)
 
@@ -25,7 +25,7 @@ from pathlib import Path
 
 from yascheduler.adapters.persistence import apply_schema
 from yascheduler.config import Config
-from yascheduler.variables import CONFIG_FILE
+from yascheduler.shared import CONFIG_FILE
 
 
 # START_CONTRACT: init

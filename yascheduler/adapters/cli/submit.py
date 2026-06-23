@@ -1,9 +1,9 @@
 # FILE: yascheduler/adapters/cli/submit.py
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yasubmit CLI command — parse AiiDA script, submit task via DI.
 #   SCOPE: submit command + script metadata and input file helpers.
-#   DEPENDS: M-DI, M-CONFIG, M-VARIABLES
+#   DEPENDS: M-DI, M-CONFIG, M-SHARED
 #   LINKS: M-CLI-COMMANDS, M-DI
 # END_MODULE_CONTRACT
 #
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
+#   LAST_CHANGE: v1.0.1 - Import to_sync/CONFIG_FILE from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
 # END_CHANGE_SUMMARY
 # FIXME: split adapter and application layer (business logic)
 
@@ -25,10 +26,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from yascheduler.client import to_sync
 from yascheduler.config import Config, Engine
 from yascheduler.di import make_cli_deps
-from yascheduler.variables import CONFIG_FILE
+from yascheduler.shared import CONFIG_FILE, to_sync
 
 
 def _parse_script_metadata(script_text: str) -> dict[str, str]:

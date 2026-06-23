@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/config/engine_repository.py
-# VERSION: 1.6.0
+# VERSION: 1.6.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Immutable collection of engines with filtering by platform.
 #   SCOPE: EngineRepository frozen dict with filter operations.
-#   DEPENDS: M-CONFIG-ENGINE, M-COMPAT
+#   DEPENDS: M-CONFIG-ENGINE, M-SHARED
 #   LINKS: M-CONFIG-ENGINE
 # END_MODULE_CONTRACT
 #
@@ -14,10 +14,11 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.6.1 - Import Self from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
-"""Repository for Engines"""
+# """Repository for Engines"""
 
 import json
 from collections import UserDict
@@ -29,7 +30,7 @@ from typing import Any
 
 from attrs import asdict, define, field, validators
 
-from yascheduler.compat import Self
+from yascheduler.shared import Self
 
 from .engine import Engine
 

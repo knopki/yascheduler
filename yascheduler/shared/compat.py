@@ -1,11 +1,11 @@
-# FILE: yascheduler/compat.py
+# FILE: yascheduler/shared/compat.py
 # VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Type compatibility shims: Self and ParamSpec for older Python versions.
 #   SCOPE: Self and ParamSpec type re-exports.
 #   DEPENDS: none
-#   LINKS: M-COMPAT
+#   LINKS: M-SHARED
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.6.0 - Moved from yascheduler/compat.py to yascheduler/shared/compat.py.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 
 import sys

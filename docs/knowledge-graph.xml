@@ -17,7 +17,7 @@
     <M-MAIN NAME="Package entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Top-level package entry: re-exports Yascheduler client and path constants.</purpose>
       <path>yascheduler/__init__.py</path>
-      <depends>M-CLIENT, M-VARIABLES</depends>
+      <depends>M-CLIENT, M-SHARED</depends>
       <annotations>
         <export-Yascheduler PURPOSE="Public client class" />
         <const-CONFIG_FILE PURPOSE="Default config file path" />
@@ -41,10 +41,9 @@
     <M-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Public Python/CLI client for submitting and querying tasks.</purpose>
       <path>yascheduler/client.py</path>
-      <depends>M-VARIABLES, M-COMPAT, M-CONFIG, M-DI, M-DOMAIN-MODEL, M-APPLICATION-QUERY-TASKS</depends>
+      <depends>M-SHARED, M-CONFIG, M-DI, M-DOMAIN-MODEL, M-APPLICATION-QUERY-TASKS</depends>
       <annotations>
         <class-Yascheduler PURPOSE="Public client class" />
-        <fn-to_sync PURPOSE="Decorator converting async function to sync" />
         <fn-queue_submit_task PURPOSE="Submit a new task (sync)" />
         <fn-queue_submit_task_async PURPOSE="Submit a new task (async)" />
         <fn-queue_get_tasks PURPOSE="Query tasks by jobs/status (sync)" />
@@ -78,21 +77,10 @@
       </annotations>
     </M-AIIDA>
 
-    <M-VARIABLES NAME="Project variables" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Global constants for config file, PID file, and log file paths.</purpose>
-      <path>yascheduler/variables.py</path>
-      <depends>none</depends>
-      <annotations>
-        <const-CONFIG_FILE PURPOSE="Default config file path" />
-        <const-PID_FILE PURPOSE="Default PID file path" />
-        <const-LOG_FILE PURPOSE="Default log file path" />
-      </annotations>
-    </M-VARIABLES>
-
     <M-CLI-COMMANDS NAME="CLI commands package" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Per-command CLI adapter modules — parse args, call use cases via DI, format output.</purpose>
       <path>yascheduler/adapters/cli/__init__.py</path>
-      <depends>M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-VARIABLES, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE</depends>
+      <depends>M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE</depends>
       <annotations>
         <fn-submit PURPOSE="Submit task via AiiDA script (adapters/cli/submit.py)" />
         <fn-check_status PURPOSE="Show status of tasks (adapters/cli/check_status.py)" />
@@ -113,20 +101,24 @@
       </annotations>
     </M-TIME>
 
-    <M-COMPAT NAME="Compatibility" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Type compatibility shims: Self and ParamSpec for older Python versions.</purpose>
-      <path>yascheduler/compat.py</path>
+    <M-SHARED NAME="Shared kernel" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Shared kernel for cross-layer utilities: typing shims, async-to-sync runtime bridge, process-global path constants.</purpose>
+      <path>yascheduler/shared/__init__.py</path>
       <depends>none</depends>
       <annotations>
-        <type-Self PURPOSE="Self type re-exported from typing_extensions" />
-        <type-ParamSpec PURPOSE="ParamSpec re-exported from typing_extensions" />
+        <fn-to_sync PURPOSE="Decorator converting async function to sync via ThreadPoolExecutor and event-loop detection" />
+        <type-Self PURPOSE="Self type re-exported from typing_extensions for older Python versions" />
+        <type-ParamSpec PURPOSE="ParamSpec re-exported from typing_extensions for older Python versions" />
+        <const-CONFIG_FILE PURPOSE="Default config file path (env-derived)" />
+        <const-PID_FILE PURPOSE="Default PID file path (env-derived)" />
+        <const-LOG_FILE PURPOSE="Default log file path (env-derived)" />
       </annotations>
-    </M-COMPAT>
+    </M-SHARED>
 
     <M-DAEMON-SYSTEMD NAME="Systemd daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Systemd service entry point for the scheduler daemon.</purpose>
       <path>yascheduler/daemon_systemd.py</path>
-      <depends>M-CLI-COMMANDS, M-VARIABLES</depends>
+      <depends>M-CLI-COMMANDS, M-SHARED</depends>
       <annotations>
       </annotations>
     </M-DAEMON-SYSTEMD>
@@ -134,7 +126,7 @@
     <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SysV init service entry point for launching the scheduler daemon.</purpose>
       <path>yascheduler/daemon_sysv.py</path>
-      <depends>M-CLI-COMMANDS, M-VARIABLES</depends>
+      <depends>M-CLI-COMMANDS, M-SHARED</depends>
       <annotations>
         <fn-start_daemon PURPOSE="SysV daemon entry point with PID file management" />
       </annotations>
@@ -492,7 +484,7 @@
     <M-CONFIG-REMOTE NAME="Remote config" TYPE="UTILITY" STATUS="implemented">
       <purpose>Remote machine defaults: data directories, SSH username, jump host.</purpose>
       <path>yascheduler/config/remote.py</path>
-      <depends>M-CONFIG-UTILS, M-COMPAT</depends>
+      <depends>M-CONFIG-UTILS, M-SHARED</depends>
       <annotations>
         <class-ConfigRemote PURPOSE="Remote machine path and SSH defaults" />
       </annotations>
@@ -501,7 +493,7 @@
     <M-CONFIG-CLOUD NAME="Cloud configs" TYPE="UTILITY" STATUS="implemented">
       <purpose>Cloud provider configuration dataclasses: Azure, Hetzner, UpCloud.</purpose>
       <path>yascheduler/config/cloud.py</path>
-      <depends>M-CONFIG-UTILS, M-COMPAT</depends>
+      <depends>M-CONFIG-UTILS, M-SHARED</depends>
       <annotations>
         <class-ConfigCloudAzure PURPOSE="Azure cloud config" />
         <class-ConfigCloudHetzner PURPOSE="Hetzner cloud config" />
@@ -527,7 +519,7 @@
     <M-CONFIG-ENGINE-REPO NAME="Engine repository" TYPE="UTILITY" STATUS="implemented">
       <purpose>Immutable collection of engines with filtering by platform.</purpose>
       <path>yascheduler/config/engine_repository.py</path>
-      <depends>M-CONFIG-ENGINE, M-COMPAT</depends>
+      <depends>M-CONFIG-ENGINE, M-SHARED</depends>
       <annotations>
         <class-EngineRepository PURPOSE="Frozen dict of engines with filtering" />
         <fn-filter PURPOSE="Filter engines by predicate" />

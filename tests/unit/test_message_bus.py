@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_message_bus.py
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the MessageBus event dispatcher.
@@ -13,7 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - MessageBus unit tests.
+#   LAST_CHANGE: v1.0.1 - Import Self from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v1.0.0 - MessageBus unit tests.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from yascheduler.domain.events import (
 from yascheduler.domain.model import Task, TaskContext
 
 if TYPE_CHECKING:
-    from yascheduler.compat import Self
+    from yascheduler.shared import Self
 
 
 class TestMessageBus:

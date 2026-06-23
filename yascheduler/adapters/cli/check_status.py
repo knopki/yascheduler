@@ -1,9 +1,9 @@
 # FILE: yascheduler/adapters/cli/check_status.py
-# VERSION: 1.0.0
+# VERSION: 1.1.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output.
 #   SCOPE: check_status command + arg parser, display formatters, remote output + convergence helpers.
-#   DEPENDS: M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-VARIABLES
+#   DEPENDS: M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED
 #   LINKS: M-CLI-COMMANDS, M-DI, M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Use _get_machine_state (adapter-internal) instead of renamed get_machine_state (gateway-port-cleanup).
-#   PREVIOUS_CHANGE: v1.0.0 - Extracted from adapters/cli/commands.py per-command split.
+#   LAST_CHANGE: v1.1.1 - Import to_sync/CONFIG_FILE from yascheduler.shared facade (shared-kernel-extraction).
+#   PREVIOUS_CHANGE: v1.1.0 - Use _get_machine_state (adapter-internal) instead of renamed get_machine_state (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 # FIXME: split adapter and application layer (business logic)
 
@@ -30,11 +30,10 @@ from pathlib import Path
 from typing import Optional
 
 from yascheduler.adapters import SSHMachineGateway
-from yascheduler.client import to_sync
 from yascheduler.config import Config
 from yascheduler.di import make_cli_deps
 from yascheduler.domain import Task, TaskStatus
-from yascheduler.variables import CONFIG_FILE
+from yascheduler.shared import CONFIG_FILE, to_sync
 
 
 def _parse_status_args() -> argparse.Namespace:

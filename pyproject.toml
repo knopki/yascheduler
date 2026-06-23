@@ -126,8 +126,15 @@ layers = [
   "yascheduler.adapters",
   "yascheduler.application",
   "yascheduler.domain",
+  "yascheduler.shared",
 ]
 ignore_imports = []
+
+[[tool.importlinter.contracts]]
+name = "Shared kernel has no config imports"
+type = "forbidden"
+source_modules = ["yascheduler.shared"]
+forbidden_modules = ["yascheduler.config"]
 
 [tool.setuptools.package-data]
 "yascheduler.adapters.persistence.sql" = ["**/*.sql"]
