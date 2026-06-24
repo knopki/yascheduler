@@ -88,20 +88,22 @@ it is a peer utility module that already depends on `yascheduler.shared`.
 
 ### Requirement: Within-package relative imports (R1)
 
-The system SHALL use single-level relative import syntax (`from .foo import Bar`)
-for imports between sibling modules inside the same package directory.
-Parent-traversal relative imports (`from .. import`, `from ... import`,
-`from .... import`, etc.) SHALL NOT appear anywhere in the `yascheduler`
-package tree — they obscure the dependency direction and cross package
-boundaries silently. Imports that need to reach a parent or sibling
-package SHALL use absolute facade paths (R2). Absolute self-references
-(e.g., a module in `yascheduler.infra.cli` importing another module
-in the same package via `from yascheduler.infra.cli.check_status import ...`)
-SHALL NOT appear inside that package.
+Modules within the same package (e.g. `yascheduler.infra.cli`) SHALL use
+relative imports (`from .xxx import yyy`) for symbols from other modules in
+the same package. Absolute cross-package imports
+(`from yascheduler.infra.cli.xxx import yyy`) of a sibling within the same
+package SHALL NOT appear inside that package. This applies to intra-package
+imports in `yascheduler.infra.cli`, `yascheduler.infra.persistence`,
+`yascheduler.entrypoints.daemon`, and all other subpackages.
 
 #### Scenario: infra/cli/__init__.py uses relative imports
-- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`, `init`, `manage_node`, `show_nodes`, `submit`)
+- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`, `manage_node`, `show_nodes`, `submit`)
 - **THEN** it uses `from .check_status import check_status` style, not `from yascheduler.infra.cli.check_status import check_status`
+- **AND** it does NOT import `init` (which has moved to `yascheduler/entrypoints/cli/init.py`)
+
+#### Scenario: entrypoints/cli/__init__.py uses relative imports
+- **WHEN** `yascheduler/entrypoints/cli/__init__.py` imports its own submodules
+- **THEN** it uses `from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`
 
 #### Scenario: Domain modules use relative imports
 - **WHEN** `yascheduler/domain/model.py` imports from another module in `yascheduler/domain/`

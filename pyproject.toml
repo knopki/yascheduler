@@ -46,7 +46,7 @@ Issues = "https://github.com/tilde-lab/yascheduler/issues"
 Source = "https://github.com/tilde-lab/yascheduler"
 
 [project.scripts]
-yainit = "yascheduler.infra.cli.init:init"
+yainit = "yascheduler.entrypoints.cli.init:init"
 yanodes = "yascheduler.infra.cli.show_nodes:show_nodes"
 yascheduler = "yascheduler.infra.cli.daemonize:daemonize"
 yasetnode = "yascheduler.infra.cli.manage_node:manage_node"

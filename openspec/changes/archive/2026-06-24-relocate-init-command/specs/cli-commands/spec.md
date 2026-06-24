@@ -1,12 +1,4 @@
-# CLI Commands
-
-## Purpose
-
-Define how CLI commands are wired to use cases via dependency injection,
-how entry points resolve to the correct module, and how backward compatibility
-is maintained through utils.py re-exports.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: CLI commands call use cases via DI
 
@@ -109,12 +101,3 @@ continue to point at `yascheduler.infra.cli.*`.
 #### Scenario: All 6 commands functional
 - **WHEN** each CLI command is invoked with `--help`
 - **THEN** usage information is displayed (commands resolve correctly)
-
-### Requirement: utils.py preserves re-exports
-
-The system SHALL keep utils.py as a re-export module importing from
-adapters.cli.commands.
-
-#### Scenario: Direct import of utils.submit still works
-- **WHEN** from yascheduler.utils import submit is executed
-- **THEN** the function from adapters.cli.commands is returned

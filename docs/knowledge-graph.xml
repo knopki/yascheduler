@@ -93,7 +93,6 @@
       <annotations>
         <fn-submit PURPOSE="Submit task via AiiDA script (infra/cli/submit.py)" />
         <fn-check_status PURPOSE="Show status of tasks (infra/cli/check_status.py)" />
-        <fn-init PURPOSE="Service initialization (infra/cli/init.py)" />
         <fn-show_nodes PURPOSE="Show enabled nodes and running tasks (infra/cli/show_nodes.py)" />
         <fn-manage_node PURPOSE="Add/remove nodes from daemon (infra/cli/manage_node.py)" />
         <fn-daemonize PURPOSE="Start yascheduler daemon (infra/cli/daemonize.py)" />
@@ -140,6 +139,18 @@
       <annotations>
       </annotations>
     </M-ENTRYPOINTS-DAEMON>
+
+    <M-ENTRYPOINTS-CLI-INIT NAME="yainit CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Bootstrap CLI command — install service unit files and/or apply DB schema with --schema/--daemon subset flags.</purpose>
+      <path>yascheduler/entrypoints/cli/init.py</path>
+      <depends>M-PERSISTENCE-SCHEMA, M-CONFIG, M-SHARED</depends>
+      <annotations>
+        <fn-init PURPOSE="Service + schema initialization (--schema/--daemon subset selectors)" />
+        <fn-_init_systemd PURPOSE="Write systemd unit file (overwrite if exists)" />
+        <fn-_init_sysv PURPOSE="Write SysV init script (overwrite + chmod 0755)" />
+        <fn-_init_schema PURPOSE="Apply schema.sql via apply_schema adapter" />
+      </annotations>
+    </M-ENTRYPOINTS-CLI-INIT>
 
     <!-- ═══════════════════════════════════════════════
          Domain layer
@@ -931,7 +942,7 @@
     <CrossLink from="M-CLIENT-SHIM" to="M-ENTRYPOINTS-CLIENT" relation="compat re-export of Yascheduler" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
-    <CrossLink from="M-CLI-COMMANDS" to="M-PERSISTENCE-SCHEMA" relation="init command calls apply_schema for DB schema initialization" />
+    <CrossLink from="M-ENTRYPOINTS-CLI-INIT" to="M-PERSISTENCE-SCHEMA" relation="calls apply_schema for DB schema initialization" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
 

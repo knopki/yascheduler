@@ -1,28 +1,30 @@
 # FILE: tests/unit/test_cli_smoke.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: CLI smoke tests — verify all 6 CLI commands are importable and structurally correct.
+#   PURPOSE: CLI smoke tests — verify 5 CLI commands are importable and structurally correct.
 #   SCOPE: Import-level smoke tests: no real DB/SSH needed, just verify function existence
 #          and decorator contracts (@to_sync for submit/check_status/show_nodes/manage_node,
-#          plain sync for init, internal make_daemon use for daemonize).
+#          internal make_daemon use for daemonize). init moved to entrypoints/cli/ and is
+#          covered by tests/unit/test_cli_init.py.
 #   DEPENDS: M-CLI-COMMANDS
 #   LINKS: M-CLI-COMMANDS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestCLIFunctions - Smoke test each of the 6 CLI entry points
+#   TestCLIFunctions - Smoke test each of the 5 CLI entry points (init covered separately)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Drop test_utils_import_does_not_import_scheduler after scheduler.py deletion (target module no longer exists).
-#   PREVIOUS_CHANGE: v1.2.0 - init is now a plain sync function (not @to_sync), test checks sync instead.
+#   LAST_CHANGE: v1.4.0 - Drop test_init_function_exists (init moved to entrypoints/cli/init.py in relocate-init-command; covered by tests/unit/test_cli_init.py).
+#   PREVIOUS_CHANGE: v1.3.0 - Drop test_utils_import_does_not_import_scheduler after scheduler.py deletion (target module no longer exists).
 # END_CHANGE_SUMMARY
 
-"""CLI smoke tests (task 7.6): verify all 6 CLI commands still functional.
+"""CLI smoke tests: verify 5 CLI commands still functional.
 
 Import-level smoke tests — verify that importing and inspecting each CLI function
-doesn't crash (no real DB/SSH needed, just mock everything).
+doesn't crash (no real DB/SSH needed, just mock everything). init moved to
+entrypoints/cli/init.py and is covered by tests/unit/test_cli_init.py.
 """
 
 import asyncio
@@ -71,12 +73,6 @@ class TestCLIFunctions:
         from yascheduler.infra.cli import check_status
 
         _check_to_sync_decorated(check_status)
-
-    def test_init_function_exists(self) -> None:
-        """``init`` exists and is a plain sync function (not @to_sync)."""
-        from yascheduler.infra.cli import init
-
-        _check_sync_function(init)
 
     def test_show_nodes_function_exists(self) -> None:
         """``show_nodes`` exists and is decorated with @to_sync."""
