@@ -21,7 +21,7 @@
 #   LAST_CHANGE: v1.6.0 - Initial extraction from top-level compat/variables/client.to_sync.
 # END_CHANGE_SUMMARY
 
-from .async_utils import to_sync
+from .async_utils import asleep_until, to_sync
 from .compat import ParamSpec, Self
 from .variables import CONFIG_FILE, LOG_FILE, PID_FILE
 
@@ -32,4 +32,5 @@ __all__ = [
     "ParamSpec",
     "Self",
     "to_sync",
+    "asleep_until",
 ]

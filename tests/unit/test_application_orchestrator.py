@@ -50,6 +50,7 @@ import pytest
 
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.orchestrator import Orchestrator
+from yascheduler.application.queue import UniqueQueue
 from yascheduler.config import (
     Config,
     ConfigDb,
@@ -60,7 +61,6 @@ from yascheduler.config import (
 )
 from yascheduler.domain.events import TaskAbandoned
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
-from yascheduler.queue import UniqueQueue
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -401,7 +401,7 @@ class TestOrchestratorTaskAbandoned:
 
     async def test_machine_gone_records_task_abandoned_event(self) -> None:
         """When a machine is gone for > broken_tasks_passes cycles, TaskAbandoned is recorded and tracker slot released."""
-        from yascheduler.queue import UMessage
+        from yascheduler.application.queue import UMessage
 
         tracker = MagicMock(spec=AllocationTracker)
         orch = make_orchestrator(allocation_tracker=tracker)
@@ -596,7 +596,7 @@ class TestDeallocatorConsumer:
         mock_uow.__aexit__ = AsyncMock(return_value=False)
         orch._uow_factory = lambda: mock_uow  # type: ignore[method-assign]
 
-        from yascheduler.queue import UMessage
+        from yascheduler.application.queue import UMessage
 
         with patch(
             "yascheduler.application.orchestrator.deallocate_node",
@@ -621,7 +621,7 @@ class TestDeallocatorConsumer:
         orch._gateway.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
         orch._gateway.disconnect = AsyncMock()  # type: ignore[method-assign]
 
-        from yascheduler.queue import UMessage
+        from yascheduler.application.queue import UMessage
 
         with patch(
             "yascheduler.application.orchestrator.deallocate_node",
@@ -639,8 +639,8 @@ class TestAllocatorConsumer:
     @pytest.mark.asyncio
     async def test_swallows_cloud_allocate_error(self) -> None:
         """CloudAllocateError from allocate_task is caught + logged; worker survives."""
+        from yascheduler.application.queue import UMessage
         from yascheduler.domain.exceptions import CloudAllocateError
-        from yascheduler.queue import UMessage
 
         orch = make_orchestrator()
 
@@ -666,7 +666,7 @@ class TestAllocatorConsumer:
     @pytest.mark.asyncio
     async def test_swallows_any_exception(self) -> None:
         """Any Exception from allocate_task is caught; worker survives."""
-        from yascheduler.queue import UMessage
+        from yascheduler.application.queue import UMessage
 
         orch = make_orchestrator()
 
@@ -690,7 +690,7 @@ class TestAllocatorConsumer:
     @pytest.mark.asyncio
     async def test_propagates_allocate_task_args(self) -> None:
         """_allocator_consumer passes all expected kwargs to allocate_task."""
-        from yascheduler.queue import UMessage
+        from yascheduler.application.queue import UMessage
 
         orch = make_orchestrator()
 

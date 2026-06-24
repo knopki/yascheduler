@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers.
-#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
+#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-SHARED, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
 # END_MODULE_CONTRACT
 #
@@ -38,12 +38,12 @@ from yascheduler.domain import (
     TaskExecutionEngine,
     TaskStatus,
 )
-from yascheduler.queue import UMessage, UniqueQueue
-from yascheduler.time import asleep_until
+from yascheduler.shared import asleep_until
 
 from .allocate_task import _count_nodes_by_cloud, allocate_task
 from .consume_task import consume_task
 from .deallocate_nodes import deallocate_node, deallocate_nodes
+from .queue import UMessage, UniqueQueue
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Sequence

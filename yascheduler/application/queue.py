@@ -1,11 +1,11 @@
-# FILE: yascheduler/queue.py
-# VERSION: 1.6.0
+# FILE: yascheduler/application/queue.py
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Deduplicating async queue for producer-consumer scheduling loops.
 #   SCOPE: UniqueQueue class, UMessage dataclass.
 #   DEPENDS: none
-#   LINKS: none
+#   LINKS: M-QUEUE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -16,9 +16,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - Relocated from yascheduler/queue.py; same contents.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
-# FIXME: move this module to application (?)
 """Async queue with message deduplication"""
 
 import asyncio

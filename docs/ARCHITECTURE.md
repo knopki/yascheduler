@@ -84,11 +84,9 @@ root (`di.py`) wires the graph per entry point.
 │  client.py           Public API — Yascheduler facade             │
 │  webhook.py          WebhookPayload frozen dataclass             │
 │  aiida_plugin.py     AiiDA scheduler integration                 │
-│  queue.py            UniqueQueue                                │
 │  config/             INI config tree (attrs)                     │
 │  daemon_systemd.py   Systemd entry point                         │
 │  daemon_sysv.py      SysV entry point                            │
-│  variables.py, time.py, compat.py   Path/time/typing utilities   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -446,18 +444,17 @@ yascheduler/
 │   ├── deallocate_nodes.py
 │   ├── orchestrator.py
 │   ├── uow.py
-│   └── message_bus.py
+│   ├── message_bus.py
+│   └── queue.py                # UniqueQueue (relocated from root)
+├── shared/
+│   └── async_utils.py          # to_sync, asleep_until (gained from time.py)
 ├── di.py                      # composition root
 ├── client.py                  # Yascheduler facade
 ├── aiida_plugin.py            # AiiDA plugin
 ├── webhook.py                 # WebhookPayload dataclass
-├── queue.py                   # UniqueQueue
 ├── config/                    # INI config (attrs)
 ├── daemon_systemd.py
-├── daemon_sysv.py
-├── variables.py
-├── time.py
-└── compat.py
+└── daemon_sysv.py
 ```
 
 ---

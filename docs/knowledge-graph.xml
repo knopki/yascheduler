@@ -57,7 +57,7 @@
 
     <M-QUEUE NAME="Unique queue" TYPE="UTILITY" STATUS="implemented">
       <purpose>Deduplicating async queue for producer-consumer scheduling loops.</purpose>
-      <path>yascheduler/queue.py</path>
+      <path>yascheduler/application/queue.py</path>
       <depends>none</depends>
       <annotations>
         <class-UniqueQueue PURPOSE="Async queue that skips duplicate messages by ID" />
@@ -91,21 +91,12 @@
       </annotations>
     </M-CLI-COMMANDS>
 
-    <M-TIME NAME="Time utilities" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Sleep utilities for sync and async contexts.</purpose>
-      <path>yascheduler/time.py</path>
-      <depends>none</depends>
-      <annotations>
-        <fn-sleep_until PURPOSE="Sleep until a given datetime" />
-        <fn-asleep_until PURPOSE="Async sleep until a given datetime" />
-      </annotations>
-    </M-TIME>
-
     <M-SHARED NAME="Shared kernel" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared kernel for cross-layer utilities: typing shims, async-to-sync runtime bridge, process-global path constants.</purpose>
       <path>yascheduler/shared/__init__.py</path>
       <depends>none</depends>
       <annotations>
+        <fn-asleep_until PURPOSE="Async sleep until a given datetime" />
         <fn-to_sync PURPOSE="Decorator converting async function to sync via ThreadPoolExecutor and event-loop detection" />
         <type-Self PURPOSE="Self type re-exported from typing_extensions for older Python versions" />
         <type-ParamSpec PURPOSE="ParamSpec re-exported from typing_extensions for older Python versions" />
@@ -363,7 +354,7 @@
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineGateway Protocol.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-TIME, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-SHARED, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
         <fn-start PURPOSE="Start all producer-consumer loops" />

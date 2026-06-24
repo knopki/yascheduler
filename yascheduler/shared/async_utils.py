@@ -1,24 +1,27 @@
 # FILE: yascheduler/shared/async_utils.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Async-to-sync runtime bridge.
-#   SCOPE: to_sync decorator.
+#   PURPOSE: Async runtime bridges.
+#   SCOPE: to_sync decorator, asleep_until helper.
 #   DEPENDS: none
 #   LINKS: M-SHARED
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   to_sync - Decorator wrapping async functions for sync execution
+#   asleep_until - Async sleep until a given datetime
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial extraction from yascheduler/client.py.
+#   LAST_CHANGE: v1.7.0 - Gained asleep_until relocated from yascheduler/time.py.
+#   PREVIOUS_CHANGE: v1.6.0 - Initial extraction from yascheduler/client.py.
 # END_CHANGE_SUMMARY
 
 import asyncio
 from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from functools import wraps
 from typing import Any, TypeVar
 
@@ -58,3 +61,18 @@ def to_sync(
             return asyncio.run(coro)
 
     return outer
+
+
+# START_CONTRACT: asleep_until
+#   PURPOSE: Sleep until a given datetime asynchronously.
+#   INPUTS: { end: datetime - target time to sleep until }
+#   OUTPUTS: { None - no return value }
+#   SIDE_EFFECTS: Awaits asyncio.sleep for the remaining interval; returns immediately if now >= end.
+#   LINKS: M-SHARED
+# END_CONTRACT: asleep_until
+async def asleep_until(end: datetime) -> None:
+    "Sleep until :end:"
+    now = datetime.now()
+    if now >= end:
+        return
+    await asyncio.sleep((end - now).total_seconds())

@@ -25,7 +25,7 @@
 import pytest
 import pytest_asyncio
 
-from yascheduler.queue import UMessage, UniqueQueue
+from yascheduler.application.queue import UMessage, UniqueQueue
 
 
 # START_CONTRACT: queue
