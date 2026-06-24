@@ -93,7 +93,6 @@
       <annotations>
         <fn-submit PURPOSE="Submit task via AiiDA script (infra/cli/submit.py)" />
         <fn-check_status PURPOSE="Show status of tasks (infra/cli/check_status.py)" />
-        <fn-show_nodes PURPOSE="Show enabled nodes and running tasks (infra/cli/show_nodes.py)" />
         <fn-manage_node PURPOSE="Add/remove nodes from daemon (infra/cli/manage_node.py)" />
         <fn-daemonize PURPOSE="Start yascheduler daemon (infra/cli/daemonize.py)" />
       </annotations>
@@ -151,6 +150,21 @@
         <fn-_init_schema PURPOSE="Apply schema.sql via apply_schema adapter" />
       </annotations>
     </M-ENTRYPOINTS-CLI-INIT>
+
+    <M-ENTRYPOINTS-CLI-SHOW-NODES NAME="yanodes CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>List nodes and their running tasks with filter flags and table/JSON output.</purpose>
+      <path>yascheduler/entrypoints/cli/show_nodes.py</path>
+      <depends>M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SHARED</depends>
+      <annotations>
+        <fn-show_nodes PURPOSE="List nodes + running tasks (--json/--enabled/--disabled/--busy/--free/--cloud/--no-cloud)" />
+        <fn-_parse_nodes_args PURPOSE="Parse yanodes argparse flags" />
+        <fn-_fetch_nodes_view PURPOSE="Read nodes+tasks within one UoW, join in memory" />
+        <fn-_filter_rows PURPOSE="AND-compose active filters" />
+        <fn-_render_nodes_table PURPOSE="Fixed-width table with display transformations" />
+        <fn-_render_nodes_json PURPOSE="Raw-domain-values JSON" />
+        <type-_NodeView PURPOSE="Private CLI-only node+task projection DTO" />
+      </annotations>
+    </M-ENTRYPOINTS-CLI-SHOW-NODES>
 
     <!-- ═══════════════════════════════════════════════
          Domain layer
@@ -943,6 +957,7 @@
     <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
     <CrossLink from="M-ENTRYPOINTS-CLI-INIT" to="M-PERSISTENCE-SCHEMA" relation="calls apply_schema for DB schema initialization" />
+    <CrossLink from="M-ENTRYPOINTS-CLI-SHOW-NODES" to="M-APPLICATION-UOW" relation="reads nodes and running tasks via UoW" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
 

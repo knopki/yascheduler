@@ -74,12 +74,6 @@ class TestCLIFunctions:
 
         _check_to_sync_decorated(check_status)
 
-    def test_show_nodes_function_exists(self) -> None:
-        """``show_nodes`` exists and is decorated with @to_sync."""
-        from yascheduler.infra.cli import show_nodes
-
-        _check_to_sync_decorated(show_nodes)
-
     def test_manage_node_function_exists(self) -> None:
         """``manage_node`` exists and is decorated with @to_sync."""
         from yascheduler.infra.cli import manage_node

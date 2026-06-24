@@ -1,8 +1,8 @@
 # FILE: tests/unit/test_cli_behavioral.py
-# VERSION: 1.0.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Behavioral CLI tests — exercise CLI function bodies with mocked DI stack.
-#   SCOPE: submit, check_status, show_nodes, manage_node function body tests with mocked Config/CLIDeps/UoW.
+#   SCOPE: submit, check_status, manage_node function body tests with mocked Config/CLIDeps/UoW (show_nodes moved to entrypoints/cli/show_nodes.py in relocate-show-nodes-command and is covered by tests/unit/test_cli_show_nodes.py).
 #   DEPENDS: M-CLI-COMMANDS, M-DI, M-DOMAIN-MODEL
 #   LINKS: M-CLI-COMMANDS, M-DI
 # END_MODULE_CONTRACT
@@ -10,13 +10,12 @@
 # START_MODULE_MAP
 #   TestSubmit - Behavioral tests for submit CLI command
 #   TestCheckStatus - Behavioral tests for check_status CLI command
-#   TestShowNodes - Behavioral tests for show_nodes CLI command
 #   TestManageNode - Behavioral tests for manage_node CLI command
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Switch patch calls to patch.object with explicit module refs (fixes mock resolution on Python 3.9-3.12 where cli.__init__ re-export shadows submodules).
-#   PREVIOUS_CHANGE: v1.1.0 - Import from adapters.cli instead of utils.
+#   LAST_CHANGE: v1.3.0 - Drop TestShowNodes (show_nodes moved to entrypoints/cli/show_nodes.py in relocate-show-nodes-command; covered by tests/unit/test_cli_show_nodes.py).
+#   PREVIOUS_CHANGE: v1.2.0 - Switch patch calls to patch.object with explicit module refs (fixes mock resolution on Python 3.9-3.12 where cli.__init__ re-export shadows submodules).
 # END_CHANGE_SUMMARY
 
 """Behavioral CLI tests — exercise CLI function bodies with mocked DI stack.
@@ -37,7 +36,6 @@ from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 
 submit_mod = importlib.import_module("yascheduler.infra.cli.submit")
 check_status_mod = importlib.import_module("yascheduler.infra.cli.check_status")
-show_nodes_mod = importlib.import_module("yascheduler.infra.cli.show_nodes")
 manage_node_mod = importlib.import_module("yascheduler.infra.cli.manage_node")
 
 # ---------------------------------------------------------------------------
@@ -293,69 +291,6 @@ class TestCheckStatus:
         uow.tasks.list_by_jobs.assert_called_once_with(job_ids=["1", "2"])
         out, _ = capsys.readouterr()
         assert "1   RUNNING" in out
-
-
-class TestShowNodes:
-    """Behavioral tests for the ``show_nodes`` CLI command."""
-
-    def test_show_nodes_with_tasks(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Show nodes with running tasks: prints formatted node lines."""
-        config = make_mock_config()
-        uow = make_mock_uow()
-        node1 = Node(ip="10.0.0.1", ncpus=4, enabled=True, port=22)
-        node2 = Node(ip="10.0.0.2", ncpus=0, enabled=False, port=2222, cloud="hetzner")
-
-        uow.tasks.list_by_status = AsyncMock(
-            return_value=[
-                make_task(
-                    task_id=1, status=TaskStatus.RUNNING, label="my_job", ip="10.0.0.1"
-                ),
-            ]
-        )
-        uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
-        deps = make_mock_deps(config, uow)
-
-        with (
-            patch("sys.argv", ["yanodes"]),
-            patch.object(
-                show_nodes_mod.Config, "from_config_parser", return_value=config
-            ),
-            patch.object(show_nodes_mod, "make_cli_deps", return_value=deps),
-        ):
-            show_nodes_mod.show_nodes()
-
-        out, _ = capsys.readouterr()
-        # node1: port 22 → no port suffix, ncpus=4, occupied by my_job
-        assert "ip=10.0.0.1" in out
-        assert "ncpus=4" in out
-        assert "occupied_by=my_job" in out
-        assert "(task_id=1)" in out
-        # node2: port 2222 → :2222, ncpus=0 → MAX, no task, cloud=hetzner
-        assert "ip=10.0.0.2:2222" in out
-        assert "ncpus=MAX" in out
-        assert "occupied_by=-" in out
-        assert "(task_id=-)" in out
-        assert "hetzner" in out
-
-    def test_show_nodes_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """No nodes and no tasks: produces no output."""
-        config = make_mock_config()
-        uow = make_mock_uow()
-        uow.tasks.list_by_status = AsyncMock(return_value=[])
-        uow.nodes.list_all = AsyncMock(return_value=[])
-        deps = make_mock_deps(config, uow)
-
-        with (
-            patch("sys.argv", ["yanodes"]),
-            patch.object(
-                show_nodes_mod.Config, "from_config_parser", return_value=config
-            ),
-            patch.object(show_nodes_mod, "make_cli_deps", return_value=deps),
-        ):
-            show_nodes_mod.show_nodes()
-
-        out, _ = capsys.readouterr()
-        assert out.strip() == ""
 
 
 class TestManageNode:
