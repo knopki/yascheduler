@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-# FILE: yascheduler/daemon_sysv.py
-# VERSION: 1.6.2
+# FILE: yascheduler/entrypoints/daemon/daemon_sysv.py
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: SysV init service entry point for launching the scheduler daemon.
@@ -14,10 +14,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.2 - Import LOG_FILE/PID_FILE from yascheduler.shared facade (shared-kernel-extraction).
-#   PREVIOUS_CHANGE: v1.6.1 - Import daemonize from infra.cli.daemonize instead of utils.
+#   LAST_CHANGE: v1.7.0 - Relocated into yascheduler/entrypoints/daemon/ subpackage (relocate-daemon-launchers); converted relative imports (.infra.cli/.shared) to absolute facade paths (yascheduler.infra.cli/yascheduler.shared) to match entrypoints convention.
+#   PREVIOUS_CHANGE: v1.6.2 - Import LOG_FILE/PID_FILE from yascheduler.shared facade (shared-kernel-extraction).
 # END_CHANGE_SUMMARY
-# FIXME: move this module to adapters
 """
 SystemV Daemon functions
 """
@@ -28,8 +27,8 @@ import os
 import daemon
 from daemon import pidfile
 
-from .infra.cli import daemonize
-from .shared import LOG_FILE, PID_FILE
+from yascheduler.infra.cli import daemonize
+from yascheduler.shared import LOG_FILE, PID_FILE
 
 
 def start_daemon(pid_file: str, log_file: str) -> None:

@@ -117,7 +117,7 @@
 
     <M-DAEMON-SYSTEMD NAME="Systemd daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Systemd service entry point for the scheduler daemon.</purpose>
-      <path>yascheduler/daemon_systemd.py</path>
+      <path>yascheduler/entrypoints/daemon/daemon_systemd.py</path>
       <depends>M-CLI-COMMANDS, M-SHARED</depends>
       <annotations>
       </annotations>
@@ -125,12 +125,20 @@
 
     <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SysV init service entry point for launching the scheduler daemon.</purpose>
-      <path>yascheduler/daemon_sysv.py</path>
+      <path>yascheduler/entrypoints/daemon/daemon_sysv.py</path>
       <depends>M-CLI-COMMANDS, M-SHARED</depends>
       <annotations>
         <fn-start_daemon PURPOSE="SysV daemon entry point with PID file management" />
       </annotations>
     </M-DAEMON-SYSV>
+
+    <M-ENTRYPOINTS-DAEMON NAME="Daemon launcher subpackage facade" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Subpackage facade for the daemon launchers; re-exports nothing (launchers are invoked by path from service templates, not imported).</purpose>
+      <path>yascheduler/entrypoints/daemon/__init__.py</path>
+      <depends>none</depends>
+      <annotations>
+      </annotations>
+    </M-ENTRYPOINTS-DAEMON>
 
     <!-- ═══════════════════════════════════════════════
          Domain layer

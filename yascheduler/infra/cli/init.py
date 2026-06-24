@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cli/init.py
-# VERSION: 2.0.2
+# VERSION: 2.0.3
 # START_MODULE_CONTRACT
 #   PURPOSE: yainit CLI command — install service unit files and initialize DB schema.
 #   SCOPE: init command + systemd/sysv service install + DB schema creation.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.2 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v2.0.1 - Import CONFIG_FILE from yascheduler.shared facade (shared-kernel-extraction).
+#   LAST_CHANGE: v2.0.3 - Update daemon-file path computation (install_path / "daemon_*.py" -> install_path / "entrypoints/daemon/daemon_*.py") to track relocated launchers (relocate-daemon-launchers).
+#   PREVIOUS_CHANGE: v2.0.2 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 # FIXME: split adapter and application layer (business logic)
 
@@ -48,13 +48,12 @@ def init() -> None:
 def _init_systemd(install_path: Path) -> None:
     print("Installing systemd service")
     src_unit_file = install_path / "data/yascheduler.service"
-    # FIXME: writable unit files should be in /etc
-    unit_file = Path("/lib/systemd/system/yascheduler.service")
+    unit_file = Path("/etc/systemd/system/yascheduler.service")
     if not unit_file.is_file():
         if not os.access(unit_file, os.W_OK):
             print(f"Error: cannot write to {unit_file}")
             return
-        daemon_file = install_path / "daemon_systemd.py"
+        daemon_file = install_path / "entrypoints/daemon/daemon_systemd.py"
         systemd_script = src_unit_file.read_text("utf-8").replace(
             "%YASCHEDULER_DAEMON_FILE%", str(daemon_file)
         )
@@ -69,7 +68,7 @@ def _init_sysv(install_path: Path) -> None:
         if not os.access(startup_file, os.W_OK):
             print(f"Error: cannot write to {startup_file}")
             return
-        daemon_file = install_path / "daemon_sysv.py"
+        daemon_file = install_path / "entrypoints/daemon/daemon_sysv.py"
         sysv_script = src_startup_file.read_text("utf-8").replace(
             "%YASCHEDULER_DAEMON_FILE%", str(daemon_file)
         )
