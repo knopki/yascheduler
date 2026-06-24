@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 5.4.0
+# VERSION: 5.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.4.0 - Add START_CONTRACT on _clouds_get_capacity (GRACE audit fix).
-#   PREVIOUS_CHANGE: v5.3.0 - Pass free_since (monotonic) straight through to deallocate_nodes; remove wall-clock conversion that could skew idle detection under DST/NTP jumps (review-hardening).
+#   LAST_CHANGE: v5.5.0 - Record TaskAbandoned via task.with_event factory (task-with-event).
+#   PREVIOUS_CHANGE: v5.4.0 - Add START_CONTRACT on _clouds_get_capacity (GRACE audit fix).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -307,14 +307,7 @@ class Orchestrator:
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:
                 task = task.fail("node is gone")
-                task = task.record_event(
-                    TaskAbandoned(
-                        task_id=task.task_id,
-                        webhook_url=task.context.webhook_url,
-                        webhook_custom_params=task.context.webhook_custom_params,
-                        node_ip=ip,
-                    )
-                )
+                task = task.with_event(TaskAbandoned, node_ip=ip)
                 async with self._uow_factory() as uow:
                     await uow.tasks.save(task)
                     await uow.commit()

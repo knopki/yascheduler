@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.9.0
+# VERSION: 1.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext, Engine value objects; Task, Node, ConnectedMachine entities.
@@ -13,15 +13,15 @@
 #   ProcessResult - Exit code and captured output from remote execution
 #   TaskContext - Typed task metadata with arbitrary extras
 #   Engine - Calculation engine specification with platform support
-#   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, pull_events
+#   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, pull_events
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
 #   ProviderSelection - Selected cloud provider value object (name, username)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Add ProviderSelection frozen dataclass (cloud-provisioner-pure).
-#   PREVIOUS_CHANGE: v1.8.0 - Add _events tuple, record_event, pull_events to Task for domain event support.
+#   LAST_CHANGE: v1.10.0 - Add Task.with_event factory (5 overloads) populating base event fields from context (task-with-event).
+#   PREVIOUS_CHANGE: v1.9.0 - Add ProviderSelection frozen dataclass (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,8 +29,16 @@ from __future__ import annotations
 import time
 from dataclasses import asdict, dataclass, field, fields, replace
 from enum import Enum, IntEnum, unique
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar, overload
 
+from .events import (
+    DomainEvent,
+    TaskAbandoned,
+    TaskAllocated,
+    TaskCompleted,
+    TaskCreated,
+    TaskFailed,
+)
 from .exceptions import (
     MachineBusyError,
     MissingInputFileError,
@@ -43,7 +51,7 @@ from .exceptions import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from .events import DomainEvent
+_E = TypeVar("_E", bound=DomainEvent)
 
 
 @unique
@@ -261,6 +269,48 @@ class Task:
     # END_CONTRACT: Task.record_event
     def record_event(self, event: DomainEvent) -> Task:
         return replace(self, _events=self._events + (event,))
+
+    # START_CONTRACT: Task.with_event
+    #   PURPOSE: Construct an event of the given type with base fields (task_id, webhook_url, webhook_custom_params) populated from self.context and subclass-specific fields from the caller, then append via record_event.
+    #   INPUTS: {
+    #     event_type: type[E] - Concrete event subclass to construct,
+    #     **fields: object - Subclass-specific fields (keyword-only via overloads); any base fields passed are silently dropped
+    #   }
+    #   OUTPUTS: { Task - New instance with the constructed event appended to _events }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-DOMAIN-EVENTS
+    # END_CONTRACT: Task.with_event
+    @overload
+    def with_event(
+        self, event_type: type[TaskCreated], *, engine_name: str
+    ) -> Task: ...
+    @overload
+    def with_event(
+        self, event_type: type[TaskAllocated], *, node_ip: str, engine_name: str
+    ) -> Task: ...
+    @overload
+    def with_event(
+        self, event_type: type[TaskCompleted], *, local_folder: str, has_errors: bool
+    ) -> Task: ...
+    @overload
+    def with_event(self, event_type: type[TaskFailed], *, reason: str) -> Task: ...
+    @overload
+    def with_event(self, event_type: type[TaskAbandoned], *, node_ip: str) -> Task: ...
+    def with_event(self, event_type: type[_E], **fields: object) -> Task:
+        # START_BLOCK_DROP_BASE_FIELDS
+        fields.pop("task_id", None)
+        fields.pop("webhook_url", None)
+        fields.pop("webhook_custom_params", None)
+        # END_BLOCK_DROP_BASE_FIELDS
+        # START_BLOCK_CONSTRUCT_AND_RECORD
+        event = event_type(
+            task_id=self.task_id,
+            webhook_url=self.context.webhook_url,
+            webhook_custom_params=self.context.webhook_custom_params,
+            **fields,
+        )
+        return self.record_event(event)
+        # END_BLOCK_CONSTRUCT_AND_RECORD
 
     # START_CONTRACT: Task.pull_events
     #   PURPOSE: Extract accumulated events, returning a clean Task and the event tuple.

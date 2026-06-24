@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.4.0
+# VERSION: 5.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.4.0 - Convert _select_and_insert_tmp return type from bare tuple[str, str] to _TmpSelection NamedTuple so call sites self-document (review-hardening).
-#   PREVIOUS_CHANGE: v5.3.0 - Short-circuit cloud-fallback with a warning when engine.platforms is empty; without this, select_provider_pure silently returns None on empty platforms and the task spins in TO_DO forever (review-hardening).
+#   LAST_CHANGE: v5.5.0 - Record TaskAllocated/TaskFailed via task.with_event factory (task-with-event).
+#   PREVIOUS_CHANGE: v5.4.0 - Convert _select_and_insert_tmp return type from bare tuple[str, str] to _TmpSelection NamedTuple so call sites self-document (review-hardening).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -83,14 +83,7 @@ async def _validate_engine(
             "Unsupported engine '%s' for task_id=%s", engine_name, task.task_id
         )
         task = task.reject("unsupported engine")
-        task = task.record_event(
-            TaskFailed(
-                task_id=task.task_id,
-                webhook_url=task.context.webhook_url,
-                webhook_custom_params=task.context.webhook_custom_params,
-                reason="unsupported engine",
-            )
-        )
+        task = task.with_event(TaskFailed, reason="unsupported engine")
         # FIXME: "Validated" but actually mutates and save in new transaction! Unacceptable.
         async with uow_factory() as uow:
             await uow.tasks.save(task)
@@ -140,14 +133,8 @@ async def _try_start_on_machine(
         machine.ip,
     )
     gateway.start_occupancy_check(machine.ip, engine)
-    task = task.record_event(
-        TaskAllocated(
-            task_id=task.task_id,
-            webhook_url=task.context.webhook_url,
-            webhook_custom_params=task.context.webhook_custom_params,
-            node_ip=machine.ip,
-            engine_name=task.context.engine,
-        )
+    task = task.with_event(
+        TaskAllocated, node_ip=machine.ip, engine_name=task.context.engine
     )
     async with uow_factory() as uow:
         await uow.tasks.save(task)

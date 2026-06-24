@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Record TaskCreated event on task submission.
-#   PREVIOUS_CHANGE: v1.0.0 - Extract submit_task use case from scheduler.create_new_task.
+#   LAST_CHANGE: v1.2.0 - Record TaskCreated via task.with_event factory (task-with-event).
+#   PREVIOUS_CHANGE: v1.1.0 - Record TaskCreated event on task submission.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -89,14 +89,7 @@ async def submit_task(
         remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")
         context = replace(task.context, remote_folder=remote_folder)
         task = replace(task, context=context)
-        task = task.record_event(
-            TaskCreated(
-                task_id=task.task_id,
-                webhook_url=task.context.webhook_url,
-                webhook_custom_params=task.context.webhook_custom_params,
-                engine_name=task.context.engine,
-            )
-        )
+        task = task.with_event(TaskCreated, engine_name=task.context.engine)
         await uow.tasks.save(task)
         await uow.commit()
     # END_BLOCK_PERSIST

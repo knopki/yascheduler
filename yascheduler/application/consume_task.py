@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 5.0.0
+# VERSION: 5.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and mark task DONE.
 #   SCOPE: consume_task async function.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.0.0 - Replace clouds: CloudProvisionerImpl with tracker: AllocationTracker; mark_task_done → tracker.discard (cloud-provisioner-pure).
-#   PREVIOUS_CHANGE: v4.1.0 - Delegate SFTP download to gateway.download_outputs(); remove _sftp_download_job and _download_task_outputs; use MachineGateway Protocol (gateway-port-cleanup).
+#   LAST_CHANGE: v5.1.0 - Record TaskCompleted/TaskFailed via task.with_event factory (task-with-event).
+#   PREVIOUS_CHANGE: v5.0.0 - Replace clouds: CloudProvisionerImpl with tracker: AllocationTracker; mark_task_done → tracker.discard (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -106,24 +106,11 @@ def _record_finalization_event(
         error_msg = str({p: str(e) for p, e in sftp_errors})
         updated_context = replace(updated_context, error=error_msg)
         task = replace(task, context=updated_context).fail(error_msg)
-        task = task.record_event(
-            TaskFailed(
-                task_id=task.task_id,
-                webhook_url=task.context.webhook_url,
-                webhook_custom_params=task.context.webhook_custom_params,
-                reason=error_msg,
-            )
-        )
+        task = task.with_event(TaskFailed, reason=error_msg)
     else:
         task = replace(task, context=updated_context).complete()
-        task = task.record_event(
-            TaskCompleted(
-                task_id=task.task_id,
-                webhook_url=task.context.webhook_url,
-                webhook_custom_params=task.context.webhook_custom_params,
-                local_folder=str(store_folder),
-                has_errors=False,
-            )
+        task = task.with_event(
+            TaskCompleted, local_folder=str(store_folder), has_errors=False
         )
 
     return task

@@ -1,95 +1,4 @@
-## Purpose
-
-Defines the in-process message bus that decouples domain event recording (in aggregates and use cases) from side-effect handlers (webhook delivery). Events are recorded on the Task aggregate via an immutable tuple, collected by the Unit of Work after a successful database commit, and dispatched to registered handlers.
-
-## Requirements
-
-### Requirement: MessageBus class dispatches events to handlers
-
-The system SHALL provide a `MessageBus` class with a `dispatch(events:
-Sequence[DomainEvent])` async method that dispatches each event to all
-registered handlers for its type.
-
-#### Scenario: Single event dispatched to matching handler
-- **WHEN** `bus.dispatch([TaskCreated(...)])` is called and a handler is registered for `TaskCreated`
-- **THEN** the handler is called with the event
-
-#### Scenario: Event with no handlers is silently ignored
-- **WHEN** `bus.dispatch([TaskCreated(...)])` is called and no handler is registered for `TaskCreated`
-- **THEN** no error is raised
-
-### Requirement: Handler registration via register method
-
-The system SHALL support registering handlers for event types via
-`MessageBus.register(event_type, handler)`. Multiple handlers per event type
-are supported. Handlers SHALL be async callables accepting a single `DomainEvent`
-argument (use `functools.partial` to bind additional dependencies).
-
-#### Scenario: Multiple handlers for one event
-- **WHEN** two handlers are registered for `TaskCompleted` via `bus.register(TaskCompleted, handler_a)` and `bus.register(TaskCompleted, handler_b)`
-- **THEN** both are called when a `TaskCompleted` event is dispatched
-
-#### Scenario: Handler registered via functools.partial
-- **WHEN** DI factory wires the message bus
-- **THEN** `bus.register(TaskCreated, functools.partial(webhook_handler, http=session))` registers a handler that receives only the event at dispatch time
-
-### Requirement: Dispatch after commit via UoW
-
-The system SHALL dispatch events in `PostgresUnitOfWork.commit()` after the
-database transaction is committed, via `collect_events()` and
-`publish_events()` methods defined on the `AbstractUnitOfWork` Protocol.
-
-#### Scenario: Events dispatched after commit
-- **WHEN** `uow.commit()` is called and aggregates have recorded events
-- **THEN** the database commit completes first, then `collect_events()` pulls events from saved aggregates, and `publish_events()` dispatches them via `MessageBus.dispatch()`
-
-#### Scenario: Events from multiple aggregates dispatched in one commit
-- **WHEN** two tasks are saved in one UoW and both have recorded events
-- **THEN** `collect_events()` pulls events from both aggregates and all events are dispatched in order
-
-#### Scenario: Rollback discards events
-- **WHEN** an exception triggers `uow.rollback()`
-- **THEN** saved aggregates are cleared, collected events are discarded without dispatch
-
-### Requirement: Events collected from aggregates via immutable tuple
-
-The system SHALL collect events from Task aggregates via `collect_events()`.
-Events are stored as `_events: tuple[DomainEvent, ...]` on the Task aggregate
-(preserving `frozen=True`). Use cases call `task.record_event(event)` which
-returns a new Task instance with the event appended. `pull_events()` returns
-a `(Task, tuple[DomainEvent, ...])` pair — a new Task with empty events and
-the collected events tuple.
-
-#### Scenario: Use case records event on aggregate
-- **WHEN** a use case does `task = task.record_event(TaskAllocated(...))`
-- **THEN** a new Task instance is returned with the event in `_events` and `uow.commit()` dispatches it
-
-#### Scenario: pull_events returns clean task and events
-- **WHEN** `pull_events()` is called on a Task with recorded events
-- **THEN** it returns `(new_task_with_empty_events, collected_events_tuple)` without mutating the original
-
-#### Scenario: pull_events on Task with no events
-- **WHEN** `pull_events()` is called on a Task with `_events=()` (default)
-- **THEN** it returns `(new_task_with_empty_events, ())` — empty events tuple, no dispatch occurs
-
-### Requirement: Task repository tracks saved aggregates
-
-`PostgresTaskRepository.save(task)` SHALL append the task to a `_saved_tasks`
-list provided by the UoW, enabling `collect_events()` to pull events from all
-aggregates touched in the transaction.
-
-#### Scenario: save() tracks task for event collection
-- **WHEN** `uow.tasks.save(task)` is called
-- **THEN** the task is persisted to DB and appended to `_saved_tasks`
-
-### Requirement: MessageBus importable from application
-
-The system SHALL expose the `MessageBus` class from
-`yascheduler.application.message_bus`.
-
-#### Scenario: Import message bus
-- **WHEN** `from yascheduler.application.message_bus import MessageBus` is executed
-- **THEN** the class is available
+## ADDED Requirements
 
 ### Requirement: Task aggregate event factory from context
 
@@ -136,6 +45,8 @@ overload signatures).
 - **WHEN** a caller constructs an event directly and calls `task.record_event(event)`
 - **THEN** the event is appended to `_events` as before; `with_event` and `record_event` coexist
 
+## MODIFIED Requirements
+
 ### Requirement: Use-case-to-event mapping
 
 The system SHALL record specific event types in each use case via
@@ -177,19 +88,3 @@ pre-constructed events; `with_event` is the preferred form in use cases.
 #### Scenario: orchestrator records TaskAbandoned when node disappears
 - **WHEN** `_task_consumer_consumer` detects the machine is gone and calls `task.fail("node is gone")`
 - **THEN** `task = task.with_event(TaskAbandoned, node_ip=ip)` is called; the recorded event carries `task_id`, `webhook_url`, and `webhook_custom_params` from `task.context` (preserved through `fail()`)
-
-### Requirement: Use case and orchestrator cleanup
-
-The system SHALL remove all direct webhook calls from use cases and orchestrator.
-
-#### Scenario: do_task_webhook parameter removed from use cases
-- **WHEN** `allocate_task()` and `consume_task()` are called
-- **THEN** they accept no `do_task_webhook` parameter; event recording replaces webhook calls
-
-#### Scenario: _do_task_webhook removed from orchestrator
-- **WHEN** `Orchestrator` is initialized
-- **THEN** no `_do_task_webhook()` method exists; no `do_task_webhook` parameter is passed to `_allocator_consumer` or `_task_consumer_consumer`
-
-#### Scenario: submit_task gains TaskCreated event recording
-- **WHEN** `submit_task` creates a new task
-- **THEN** a `TaskCreated` event is recorded (additive behavioural change: webhook now fires on task creation where it didn't before)
