@@ -1,5 +1,5 @@
-# FILE: yascheduler/aiida_plugin.py
-# VERSION: 1.6.0
+# FILE: yascheduler/entrypoints/aiida_plugin.py
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: AiiDA scheduler plugin entry point for integrating with AiiDA workflows.
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - Relocate yascheduler/aiida_plugin.py → yascheduler/entrypoints/aiida_plugin.py (fulfill add-entrypoints-layer deferred commitment). No compat shim at old path; [project.entry-points."aiida.schedulers"] object path rewritten in pyproject.toml. make_aiida stub deleted from di.py in the same change (never wired through DI; plugin talks to yascheduler over SSH transport, not via the composition root).
+#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
 

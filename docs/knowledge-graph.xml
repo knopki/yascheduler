@@ -78,7 +78,7 @@
 
     <M-AIIDA NAME="AiiDA plugin" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>AiiDA scheduler plugin entry point for integrating with AiiDA workflows.</purpose>
-      <path>yascheduler/aiida_plugin.py</path>
+      <path>yascheduler/entrypoints/aiida_plugin.py</path>
       <depends>none</depends>
       <annotations>
         <class-YaschedJobResource PURPOSE="Resource class for yascheduler jobs in AiiDA" />
@@ -375,14 +375,13 @@
     </M-APPLICATION-ORCHESTRATOR>
 
     <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Composition root with factories per entry point: daemon, CLI, AiiDA. Wires MessageBus with webhook handlers.</purpose>
+      <purpose>Composition root with factories per entry point: daemon, CLI. Wires MessageBus with webhook handlers.</purpose>
       <path>yascheduler/di.py</path>
       <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit" />
         <fn-make_daemon PURPOSE="Async factory creating Orchestrator with UoW factory (no DB, no auto-migration)" />
         <fn-make_cli_deps PURPOSE="Sync factory creating lightweight CLIDeps" />
-        <fn-make_aiida PURPOSE="Stub for future AiiDA integration" />
       </annotations>
     </M-DI>
 

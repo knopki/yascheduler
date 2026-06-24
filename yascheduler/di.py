@@ -1,8 +1,8 @@
 # FILE: yascheduler/di.py
-# VERSION: 5.2.1
+# VERSION: 5.3.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
-#   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
+#   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
+#   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
 #   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-ENTRYPOINTS-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER
 # END_MODULE_CONTRACT
@@ -10,14 +10,13 @@
 # START_MODULE_MAP
 #   make_daemon - Async factory creating Orchestrator with all daemon dependencies including MessageBus
 #   make_cli_deps - Sync factory creating lightweight CLIDeps for CLI commands
-#   make_aiida - Stub for future AiiDA integration
 #   _setup_domain_events - Create MessageBus, HTTP session and register webhook handlers
 #   CLIDeps - Lightweight dependency container for CLI submit operations
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.2.1 - Update stale M-CLIENT graph reference to M-ENTRYPOINTS-CLIENT after client relocation (add-entrypoints-layer).
-#   PREVIOUS_CHANGE: v5.2.0 - Remove vestigial CLIDeps.query (zero production callers; encoded as follow-up in 2026-06-23-client-query-uow).
+#   LAST_CHANGE: v5.3.0 - Delete make_aiida stub (function + START_CONTRACT block + MODULE_MAP line + SCOPE/PURPOSE AiiDA mention). Never wired through DI; plugin talks to yascheduler over SSH transport, not via the composition root. Relocated plugin lives at yascheduler/entrypoints/aiida_plugin.py (relocate-aiida-plugin). BREAKING for the (empty) set of external make_aiida importers; only tests/unit/test_di.py imported it, updated in the same change.
+#   PREVIOUS_CHANGE: v5.2.1 - Update stale M-CLIENT graph reference to M-ENTRYPOINTS-CLIENT after client relocation (add-entrypoints-layer).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -225,14 +224,3 @@ def make_cli_deps(config: Config) -> CLIDeps:
         uow_factory=_uow_factory,
         remote_tasks_dir=config.remote.tasks_dir,
     )
-
-
-# START_CONTRACT: make_aiida
-#   PURPOSE: Stub for future AiiDA scheduler plugin integration.
-#   INPUTS: { config: Config }
-#   OUTPUTS: { None - raises NotImplementedError }
-#   SIDE_EFFECTS: None
-#   LINKS: M-AIIDA
-# END_CONTRACT: make_aiida
-def make_aiida(config: Config) -> None:
-    raise NotImplementedError("make_aiida will be implemented in a future phase")

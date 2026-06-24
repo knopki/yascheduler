@@ -73,9 +73,8 @@ The `forbidden` contract SHALL be configured with:
 - `forbidden_modules = ["yascheduler.config"]`
 
 Other outside-layer-set modules (`yascheduler.data`, `yascheduler.di`,
-`yascheduler.client`, `yascheduler.db`, `yascheduler.aiida_plugin`) are
-NOT in `forbidden_modules`. The practical risk of `yascheduler.shared`
-importing an entry point, the legacy DB layer, or the AiiDA plugin is
+`yascheduler.client`) are NOT in `forbidden_modules`. The practical risk of
+`yascheduler.shared` importing an entry point or a compat shim is
 negligible; only `yascheduler.config` creates a real cycle risk because
 it is a peer utility module that already depends on `yascheduler.shared`.
 
@@ -178,9 +177,12 @@ appear in application, domain, infra, shared, or config modules (they are below
 `entrypoints` in the layer direction and may not import upward).
 
 Symbols are added to the `entrypoints` facade lazily — only when an external
-consumer actually needs them. As follow-up changes migrate `di.py`,
-`aiida_plugin.py`, `daemon_*.py`, and `infra/cli/*` into `entrypoints/`, their
-public symbols will be added to this facade.
+consumer actually needs them. The `AiiDA` scheduler plugin
+(`entrypoints/aiida_plugin.py`) is NOT re-exported by the facade: it is
+discovered via the `[project.entry-points."aiida.schedulers"]` registry, not via
+`from yascheduler.entrypoints import …`. As follow-up changes migrate `di.py`,
+`daemon_*.py`, and `infra/cli/*` into `entrypoints/`, their public symbols will
+be added to this facade only when a cross-layer consumer requires them.
 
 #### Scenario: Entrypoints facade re-exports Yascheduler
 - **WHEN** a consumer imports `from yascheduler.entrypoints import Yascheduler`
@@ -189,6 +191,10 @@ public symbols will be added to this facade.
 #### Scenario: Entrypoints facade is the sole public surface
 - **WHEN** a module in `yascheduler.application`, `yascheduler.domain`, `yascheduler.infra`, `yascheduler.shared`, or `yascheduler.config` imports a symbol from `yascheduler.entrypoints`
 - **THEN** the import goes through `yascheduler.entrypoints.__init__`, not a deep submodule path like `yascheduler.entrypoints.client`
+
+#### Scenario: AiiDA plugin is not re-exported by the entrypoints facade
+- **WHEN** the `entrypoints/__init__.py` facade is inspected
+- **THEN** it re-exports only `Yascheduler`; `YaScheduler` and `YaschedJobResource` from `aiida_plugin.py` are NOT re-exported (plugin discovery is via the entry-point registry, not the facade)
 
 #### Scenario: Empty facade is valid for future residents
 - **WHEN** the `entrypoints` layer has not yet received a follow-up migration (e.g., CLI, daemon launchers)
@@ -243,14 +249,13 @@ checked for layer direction by R3) but SHALL still be subject to R2
 - `yascheduler.data` — shared infrastructure, may be imported by any layer.
 - `yascheduler.di` — composition root; may import from any layer. (Scheduled for migration into `yascheduler.entrypoints` in a follow-up change; remains at the package root in the interim.)
 - `yascheduler.client` — compat shim re-exporting `Yascheduler` from `yascheduler.entrypoints.client`; preserves the deep import path `from yascheduler.client import Yascheduler` for external downstream consumers. Not a composition root (the real client implementation now lives in `yascheduler.entrypoints.client`).
-- `yascheduler.aiida_plugin` — separate stable entry point; not part of the package's main public API. (Scheduled for migration into `yascheduler.entrypoints` in a follow-up change; remains at the package root in the interim.)
 - `yascheduler.daemon_systemd`, `yascheduler.daemon_sysv` — daemon launcher entry points. (Scheduled for migration into `yascheduler.entrypoints` in follow-up changes; remain at the package root in the interim.)
 
 `yascheduler.shared` SHALL NOT contain business logic, domain types, or I/O. This clause is defense-in-depth beyond the layer-direction enforcement in the `layers` contract: the `layers` contract blocks `shared → {entrypoints, adapters, application, domain}` and the `forbidden` contract blocks `shared → config`, but neither contract can detect a contributor adding business logic or I/O that imports only stdlib/third-party. The clause gives reviewers a spec-grounded basis to reject such accretion.
 
 #### Scenario: Outside-set modules not flagged for layer direction
 - **WHEN** the `layers` contract runs
-- **THEN** modules in the outside-set list (`yascheduler.config`, `yascheduler.data`, `yascheduler.di`, `yascheduler.client`, `yascheduler.aiida_plugin`, `yascheduler.daemon_systemd`, `yascheduler.daemon_sysv`) are not checked for R3 violations
+- **THEN** modules in the outside-set list (`yascheduler.config`, `yascheduler.data`, `yascheduler.di`, `yascheduler.client`, `yascheduler.daemon_systemd`, `yascheduler.daemon_sysv`) are not checked for R3 violations
 
 #### Scenario: Outside-set modules still use facades
 - **WHEN** `yascheduler.di` imports `Task` from `yascheduler.domain`
@@ -464,9 +469,17 @@ new capability requiring explicit spec coverage.
   (which re-exports `Yascheduler` from `yascheduler.entrypoints.client`).
   The shim re-exports exactly `Yascheduler` (`__all__ = ["Yascheduler"]`);
   it does NOT re-export `Config` or other internal symbols.
-- `yascheduler.aiida_plugin` (AiiDA scheduler entrypoint) SHALL remain
-  loadable with identical behavior (the module is not moved by this
-  change; a follow-up change will relocate it into `entrypoints/`).
+- The AiiDA scheduler entrypoint SHALL remain registered under the
+  entry-point *name* `yascheduler` in the
+  `[project.entry-points."aiida.schedulers"]` group of `pyproject.toml`,
+  pointing at the object path
+  `yascheduler.entrypoints.aiida_plugin:YaScheduler`. AiiDA discovers
+  plugins by entry-point name via `importlib.metadata.entry_points`, so
+  the module relocation is transparent to `verdi` / `reentry scan` users.
+  The deep import path `from yascheduler.aiida_plugin import …` is NOT
+  preserved (no compat shim); the old module path ceases to exist. This
+  is a **BREAKING** change for downstream code that pinned the deep
+  module path (no such caller is known).
 - `yascheduler.client` (the compat shim) SHALL preserve the `Yascheduler`
   class's public constructor and method signatures: zero-arg and
   positional callsites remain valid; keyword-only optional parameters
@@ -488,9 +501,13 @@ new capability requiring explicit spec coverage.
 - **WHEN** a change adds a keyword-only optional parameter to `Yascheduler.__init__` (e.g., `deps_factory` for test injection)
 - **THEN** existing callsites `Yascheduler()`, `Yascheduler(config_path)`, `Yascheduler(config_path, logger)` remain valid without modification
 
-#### Scenario: AiiDA plugin still loads
-- **WHEN** the AiiDA scheduler plugin entrypoint is loaded
-- **THEN** it loads and behaves identically to before the change
+#### Scenario: AiiDA plugin still loads under its entry-point name
+- **WHEN** the AiiDA scheduler plugin is discovered via `importlib.metadata.entry_points(group="aiida.schedulers")`
+- **THEN** the entry-point named `yascheduler` resolves to the object path `yascheduler.entrypoints.aiida_plugin:YaScheduler` and the class loads and behaves identically to before the relocation
+
+#### Scenario: Old aiida_plugin module path is gone
+- **WHEN** a downstream consumer attempts `from yascheduler.aiida_plugin import YaScheduler`
+- **THEN** `ModuleNotFoundError` is raised (no compat shim; the old module path ceases to exist)
 
 #### Scenario: Path constants remain resolvable from package root
 - **WHEN** a downstream consumer imports `from yascheduler import CONFIG_FILE, LOG_FILE, PID_FILE`

@@ -1,9 +1,9 @@
 # FILE: tests/unit/test_di.py
-# VERSION: 2.2.0
+# VERSION: 2.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for di.py — dependency injection composition root.
-#   SCOPE: CLIDeps dataclass, make_cli_deps, make_aiida, make_daemon factories.
+#   SCOPE: CLIDeps dataclass, make_cli_deps, make_daemon factories.
 #   DEPENDS: M-DI, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-DB, M-CLOUD-PROVISIONER
 #   LINKS: M-DI, M-APPLICATION-ORCHESTRATOR
 # END_MODULE_CONTRACT
@@ -11,13 +11,12 @@
 # START_MODULE_MAP
 #   TestCLIDeps - CLIDeps dataclass: constructor, submit
 #   TestMakeCliDeps - make_cli_deps factory for CLI dependencies
-#   TestMakeAiida - make_aiida stub raises NotImplementedError
 #   TestMakeDaemon - make_daemon factory: no DB, AllocationTracker, allocation_lock, active_clouds; active_clouds filter applies on pre-built-clouds path too
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - Remove test_query_uses_uow_factory (CLIDeps.query removed in drop-cli-deps-query).
-#   PREVIOUS_CHANGE: v2.1.0 - Patch _resolve_adapter → resolve_adapter (public facade); add test_prebuilt_clouds_active_clouds_filter_verifies_adapter_resolution (review-hardening).
+#   LAST_CHANGE: v2.3.0 - Delete TestMakeAiida class + make_aiida import (function deleted from di.py in relocate-aiida-plugin; the stub was never wired through DI).
+#   PREVIOUS_CHANGE: v2.2.0 - Remove test_query_uses_uow_factory (CLIDeps.query removed in drop-cli-deps-query).
 # END_CHANGE_SUMMARY
 
 import asyncio
@@ -36,7 +35,7 @@ from yascheduler.config import (
     ConfigRemote,
     EngineRepository,
 )
-from yascheduler.di import CLIDeps, make_aiida, make_cli_deps, make_daemon
+from yascheduler.di import CLIDeps, make_cli_deps, make_daemon
 from yascheduler.domain.events import (
     TaskAbandoned,
     TaskAllocated,
@@ -167,20 +166,6 @@ class TestMakeCliDeps:
             TaskAbandoned,
         ):
             assert event_type not in bus._handlers
-
-
-class TestMakeAiida:
-    """make_aiida stub — raises NotImplementedError."""
-
-    def test_raises_not_implemented_error(self) -> None:
-        """make_aiida raises NotImplementedError with expected message."""
-        config = create_mock_config()
-
-        with pytest.raises(
-            NotImplementedError,
-            match="make_aiida will be implemented in a future phase",
-        ):
-            make_aiida(config)
 
 
 class TestMakeDaemon:

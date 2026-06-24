@@ -19,6 +19,13 @@ root (`di.py`) wires the graph per entry point.
 
 ```txt
 ┌─────────────────────────────────────────────────────────────────┐
+│  PRESENTATION (yascheduler.entrypoints)                          │
+│  client.py          Public Python client — Yascheduler facade    │
+│  aiida_plugin.py    AiiDA scheduler integration via SSH transport │
+│                  (depends on: infra, application, domain, shared) │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+┌──────────────────────────────┼───────────────────────────────────┐
 │  DOMAIN                                                          │
 │  model.py        Task, Node, ConnectedMachine, Engine,           │
 │                  TaskContext, TaskStatus, ProcessResult          │
@@ -72,20 +79,24 @@ root (`di.py`) wires the graph per entry point.
 └──────────────────────────────┬───────────────────────────────────┘
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
-│                     COMPOSITION ROOT (di.py)                     │
-│  make_daemon()      Async factory: Orchestrator with all deps    │
-│  make_cli_deps()    Sync factory: CLIDeps for CLI/AiiDA          │
-│  make_aiida()       Stub (NotImplementedError)                   │
-│                  (depends on: everything — wires the graph)      │
-└──────────────────────────────────────────────────────────────────┘
+│  SHARED (yascheduler.shared)                                     │
+│  async_utils.py     to_sync, asleep_until                         │
+│  variables.py       CONFIG_FILE, LOG_FILE, PID_FILE (constants)  │
+│  compat.py          Self, ParamSpec (typing shims)                │
+│                  (depends on: stdlib only)                        │
+└──────────────────────────────┬───────────────────────────────────┘
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
-│  ENTRY POINTS & LEGACY WRAPPERS                                  │
-│  client.py           Public API — Yascheduler facade             │
-│  aiida_plugin.py     AiiDA scheduler integration                 │
-│  config/             INI config tree (attrs)                     │
-│  daemon_systemd.py   Systemd entry point                         │
-│  daemon_sysv.py      SysV entry point                            │
+│           COMPOSITION ROOT / OUTSIDE-LAYER-SET                   │
+│  di.py              Composition root                             │
+│    make_daemon()      Async factory: Orchestrator with all deps  │
+│    make_cli_deps()    Sync factory: CLIDeps for CLI               │
+│  client.py          Compat shim re-exporting Yascheduler          │
+│  config/            INI config tree (attrs)                       │
+│  data/              Shared infrastructure                         │
+│  daemon_systemd.py  Systemd entry point (deferred → entrypoints)  │
+│  daemon_sysv.py     SysV entry point (deferred → entrypoints)     │
+│                  (outside layers contract; may import downward)  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,19 +113,21 @@ the sub layer.
 
 ## 2. Component Reference
 
-| Component            | Responsibility                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------- |
-| `domain/`            | Entities, value objects, ports, services, exceptions, events                                            |
-| `infra/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                |
-| `infra/ssh/`         | `SSHMachineGateway` + platform adapters                                                                 |
-| `infra/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                          |
-| `infra/cli/`         | 6 per-command modules                                                                                   |
-| `infra/notifier/`    | Webhook event handler                                                                                   |
-| `application/`       | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                           |
-| `di.py`              | Composition root: `make_daemon()`, `make_cli_deps()`                                                    |
-| `client.py`          | Public Python API (`class Yascheduler`) — uses `make_cli_deps()` for submit, routes queries through UoW |
-| `aiida_plugin.py`    | AiiDA scheduler plugin (uses `Yascheduler` client)                                                      |
-| `config/`            | Config tree parsed from INI (uses attrs)                                                                |
+| Component            | Responsibility                                                                                                    |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `domain/`            | Entities, value objects, ports, services, exceptions, events                                                      |
+| `infra/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                          |
+| `infra/ssh/`         | `SSHMachineGateway` + platform adapters                                                                           |
+| `infra/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                                    |
+| `infra/cli/`         | 6 per-command modules                                                                                             |
+| `infra/notifier/`    | Webhook event handler                                                                                             |
+| `application/`       | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                                     |
+| `shared/`            | Typing shims (`Self`, `ParamSpec`), async-to-sync bridge (`to_sync`), path constants                              |
+| `entrypoints/`       | Driving adapters + composition-root-facing public API: `client.py` (Yascheduler facade), `aiida_plugin.py`        |
+| `di.py`              | Composition root: `make_daemon()`, `make_cli_deps()`                                                              |
+| `client.py`          | Compat shim re-exporting `Yascheduler` from `yascheduler.entrypoints.client` (real facade lives there)            |
+| `aiida_plugin.py`    | AiiDA scheduler plugin (lives at `entrypoints/aiida_plugin.py`; uses SSH transport, not the `Yascheduler` client) |
+| `config/`            | Config tree parsed from INI (uses attrs)                                                                          |
 
 ### 2.1 Domain (`yascheduler/domain/`)
 
@@ -239,17 +252,25 @@ Failures are logged and swallowed after backoff exhausts.
 - **`make_cli_deps(config)`** — returns a `CLIDeps` dataclass with
   `engines`, `uow_factory`, `remote_tasks_dir`, and a `submit()`
   method. No SSH/cloud/daemon dependencies.
-- **`make_aiida(config)`** — stub, raises `NotImplementedError`.
 
-### 2.9 Public API & Legacy Wrappers
+### 2.9 Public API & AiiDA Plugin
 
-- **`client.py`** — `class Yascheduler` facade.
-  `queue_submit_task_async()` uses `make_cli_deps()` → `CLIDeps.submit()`
-  (no daemon graph). Query methods (`queue_get_tasks*`,
-  `queue_get_task*`) route through the `query_tasks` use case over a UoW
-  (no `DB` construction); see `openspec/changes/client-query-uow/`.
-- **`aiida_plugin.py`** — AiiDA plugin uses `Yascheduler` client
-  directly.
+- **`entrypoints/client.py`** — the real public API. `class Yascheduler`
+  facade lives here. `queue_submit_task_async()` uses `make_cli_deps()` →
+  `CLIDeps.submit()` (no daemon graph). Query methods
+  (`queue_get_tasks*`, `queue_get_task*`) route through the `query_tasks`
+  use case over a UoW (no `DB` construction).
+- **`client.py`** (at the package root) — an explicit compat shim that
+  re-exports `Yascheduler` from `yascheduler.entrypoints.client`,
+  preserving the deep import path `from yascheduler.client import
+Yascheduler` for external downstream consumers. The shim does not
+  define `class Yascheduler`; it is not the facade.
+- **`entrypoints/aiida_plugin.py`** — AiiDA scheduler plugin. Talks to
+  yascheduler over SSH transport (runs `yasubmit` / `yastatus` remotely
+  via `self.transport`); it does NOT use the `Yascheduler` client.
+  Discovered by AiiDA via the `[project.entry-points."aiida.schedulers"]`
+  registry under the entry-point name `yascheduler`, not via the package
+  facade.
 
 ### 2.10 Configuration (`yascheduler/config/`)
 
@@ -359,7 +380,8 @@ architecture description; add via a separate proposal if needed.
 
 ### 3.7 Public API Stability
 
-- `class Yascheduler` in `client.py` remains the public Python facade.
+- The facade `class Yascheduler` lives in `entrypoints/client.py`;
+  `client.py` at the package root is a compat shim re-exporting it.
   Method signatures are preserved.
 - CLI commands (`yasubmit`, `yastatus`, `yanodes`, `yasetnode`,
   `yainit`, `yascheduler`) preserve their user-facing behavior.
@@ -367,16 +389,21 @@ architecture description; add via a separate proposal if needed.
   interpolation) is preserved.
 - DB schema (`schema.sql`) is preserved; schema changes require
   migrations (see §6).
-- AiiDA plugin entry point is preserved.
+- AiiDA plugin entry point is preserved under the entry-point name
+  `yascheduler`, pointing at the object path
+  `yascheduler.entrypoints.aiida_plugin:YaScheduler`. AiiDA discovers
+  plugins by name via `importlib.metadata.entry_points`, so the module
+  relocation is transparent to `verdi` / `reentry scan` users.
 
 ### 3.8 `class Yascheduler` (Public API)
 
+- The real home of `class Yascheduler` is `entrypoints/client.py`;
+  `client.py` at the package root is a compat shim re-exporting it.
 - `queue_submit_task_async()` → `make_cli_deps()` → `CLIDeps.submit()`
   → `submit_task` use case → UoW. Submitting a task does not
   instantiate the daemon graph.
 - Query methods (`queue_get_tasks*`, `queue_get_task*`) route through
-  the `query_tasks` use case over a UoW (no `DB` construction); see
-  `openspec/changes/client-query-uow/`.
+  the `query_tasks` use case over a UoW (no `DB` construction).
 
 ---
 
@@ -384,71 +411,27 @@ architecture description; add via a separate proposal if needed.
 
 ```txt
 yascheduler/
-├── domain/
-│   ├── __init__.py            # facade: events, model, exceptions, ports
-│   ├── model.py
-│   ├── services.py
-│   ├── ports.py
-│   ├── events.py
-│   └── exceptions.py
+├── entrypoints/
+│   ├── client.py             # Yascheduler facade (real public API)
+│   └── aiida_plugin.py        # AiiDA scheduler plugin (SSH transport)
 ├── infra/
-│   ├── __init__.py            # adapters layer facade
 │   ├── persistence/
-│   │   ├── __init__.py        # facade
-│   │   ├── postgres.py
-│   │   ├── postgres_uow.py
-│   │   ├── postgres_schema.py
-│   │   ├── sql_loader.py
-│   │   ├── exceptions.py
-│   │   └── sql/
-│   │       ├── schema.sql
-│   │       ├── task/*.sql
-│   │       └── node/*.sql
 │   ├── ssh/
-│   │   ├── __init__.py        # facade
-│   │   ├── gateway.py
-│   │   ├── helpers.py
-│   │   ├── exceptions.py
-│   │   └── platform/
 │   ├── cloud/
-│   │   ├── __init__.py        # facade
-│   │   ├── manager.py         # CloudProvisionerImpl
-│   │   ├── adapters.py
-│   │   ├── protocols.py
-│   │   ├── providers/
-│   │   ├── ssh_keys.py
-│   │   ├── cloud_config.py
-│   │   └── utils.py
 │   ├── cli/
-│   │   ├── __init__.py        # facade
-│   │   ├── submit.py
-│   │   ├── check_status.py
-│   │   ├── init.py
-│   │   ├── show_nodes.py
-│   │   ├── manage_node.py
-│   │   └── daemonize.py
 │   └── notifier/
-│       ├── __init__.py        # facade
-│       └── webhook.py
 ├── application/
-│   ├── __init__.py            # facade: AbstractUnitOfWork, Orchestrator,
-│   │                          # MessageBus, submit_task
-│   ├── submit_task.py
-│   ├── allocate_task.py
-│   ├── consume_task.py
-│   ├── deallocate_nodes.py
-│   ├── orchestrator.py
-│   ├── uow.py
-│   ├── message_bus.py
-│   └── queue.py                # UniqueQueue (relocated from root)
+├── domain/
 ├── shared/
-│   └── async_utils.py          # to_sync, asleep_until (gained from time.py)
-├── di.py                      # composition root
-├── client.py                  # Yascheduler facade
-├── aiida_plugin.py            # AiiDA plugin
+│   ├── async_utils.py          # to_sync, asleep_until
+│   ├── variables.py            # CONFIG_FILE, LOG_FILE, PID_FILE
+│   └── compat.py               # Self, ParamSpec (typing shims)
 ├── config/                    # INI config (attrs)
-├── daemon_systemd.py
-└── daemon_sysv.py
+├── data/                      # shared infrastructure
+├── di.py                      # composition root
+├── client.py                  # compat shim re-exporting Yascheduler
+├── daemon_systemd.py          # systemd entry point (deferred → entrypoints)
+└── daemon_sysv.py             # sysV entry point (deferred → entrypoints)
 ```
 
 ---
@@ -516,19 +499,6 @@ NOT EXISTS`) with versioned SQL migrations:
 
 Enables schema evolution without modifying application code.
 
-### 6.2 `make_aiida()` implementation
-
-`make_aiida()` in `di.py` currently raises `NotImplementedError`. The
-AiiDA plugin still imports the `Yascheduler` client directly. Wiring the
-plugin through DI is deferred until the plugin is ready for refactoring;
-no active proposal.
-
-### 6.3 `client.py` query methods via use cases
-
-**Resolved** by `openspec/changes/remove-legacy-db/`: `yascheduler/db.py` and
-its legacy models have been deleted; all test fixtures now use
-`PostgresUnitOfWork` + repos + `domain.TaskStatus`.
-
 ### 6.5 Application-layer exception hierarchy
 
 A planned `ApplicationError` / `InfrastructureError` hierarchy
@@ -536,15 +506,3 @@ A planned `ApplicationError` / `InfrastructureError` hierarchy
 `CloudProvisioningError`) would give adapter-layer failures first-class
 types distinct from string-based status codes. Not yet proposed; capture
 in a change proposal before implementing.
-
----
-
-## 7. Open Questions
-
-| Topic                           | Status                                                                     |
-| ------------------------------- | -------------------------------------------------------------------------- |
-| AiiDA plugin evolution          | Keep importing `Yascheduler` facade until §6.3 lands                       |
-| `db.py` retirement              | **Resolved** by `remove-legacy-db` — module deleted, tests migrated to UoW |
-| Config attrs → dataclasses      | §6.2, open proposal                                                        |
-| Schema versioning               | §6.1, open proposal                                                        |
-| Application exception hierarchy | §6.5, no proposal yet                                                      |

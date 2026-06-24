@@ -54,7 +54,7 @@ yastatus = "yascheduler.infra.cli.check_status:check_status"
 yasubmit = "yascheduler.infra.cli.submit:submit"
 
 [project.entry-points."aiida.schedulers"]
-yascheduler = "yascheduler.aiida_plugin:YaScheduler"
+yascheduler = "yascheduler.entrypoints.aiida_plugin:YaScheduler"
 
 [project.optional-dependencies]
 azure = [
