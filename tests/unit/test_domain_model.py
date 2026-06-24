@@ -1,9 +1,9 @@
 # FILE: tests/unit/test_domain_model.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, TaskContext, Engine, Task, Node, ConnectedMachine.
-#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_context.
+#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_context, TaskContext.replace.
 #   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -31,11 +31,12 @@
 #   test_connected_machine_release - FREE + free_since
 #   TestProviderSelection - frozen dataclass, field access, equality
 #   TestTaskWithContext - with_context wholesale replace, immutability, event preservation, no-status-validation, chaining
+#   TestTaskContextReplace - replace typed copy-with: single/multi override, original unchanged, equal copy, drift-lock, fail integration, with_context chain
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add TestTaskWithContext suite (task-with-context).
-#   PREVIOUS_CHANGE: v1.0.0 - Domain model entity unit tests
+#   LAST_CHANGE: v1.2.0 - Add TestTaskContextReplace suite (task-context-replace).
+#   PREVIOUS_CHANGE: v1.1.0 - Add TestTaskWithContext suite (task-with-context).
 # END_CHANGE_SUMMARY
 
 import time
@@ -59,6 +60,7 @@ from yascheduler.domain.model import (
     ProviderSelection,
     Task,
     TaskContext,
+    TaskContextOverrides,
     TaskStatus,
 )
 
@@ -545,3 +547,68 @@ class TestTaskWithContext:
         result = running.with_context(new_context).complete()
         assert result.status == TaskStatus.DONE
         assert result.context is new_context
+
+
+# START_CONTRACT: test_replace
+#   PURPOSE: Verify TaskContext.replace typed copy-with: single/multi-field overrides, original unchanged, equal copy, drift-lock, fail integration, with_context chain.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-MODEL: TaskContext.replace, TaskContextOverrides, Task.fail, Task.with_context]
+# END_CONTRACT: test_replace
+class TestTaskContextReplace:
+    def test_replace_single_field_override(self) -> None:
+        ctx = TaskContext(engine="fleur")
+        new = ctx.replace(remote_folder="/r/new")
+        assert new.remote_folder == "/r/new"
+        assert new.engine == "fleur"
+        assert new.local_folder == ctx.local_folder
+        assert new.webhook_url == ctx.webhook_url
+        assert new.webhook_custom_params == ctx.webhook_custom_params
+        assert new.error == ctx.error
+        assert new.extra == ctx.extra
+
+    def test_replace_multi_field_override(self) -> None:
+        ctx = TaskContext(engine="fleur")
+        new = ctx.replace(local_folder="/l", remote_folder="/r", extra={"k": "v"})
+        assert new.local_folder == "/l"
+        assert new.remote_folder == "/r"
+        assert new.extra == {"k": "v"}
+        assert new.engine == ctx.engine
+        assert new.webhook_url == ctx.webhook_url
+        assert new.webhook_custom_params == ctx.webhook_custom_params
+        assert new.error == ctx.error
+
+    def test_replace_leaves_original_unchanged(self) -> None:
+        ctx = TaskContext(engine="fleur", error=None)
+        new = ctx.replace(error="boom")
+        assert new.error == "boom"
+        assert ctx.error is None
+
+    def test_replace_no_overrides_returns_equal_copy(self) -> None:
+        ctx = TaskContext(engine="fleur", remote_folder="/r")
+        new = ctx.replace()
+        assert new == ctx
+        assert new is not ctx
+
+    def test_replace_error_field_override_chains_into_fail(self) -> None:
+        task = Task(task_id=1, label="x", context=TaskContext(engine="fleur"))
+        running = task.allocate_to("10.0.0.1").mark_running()
+        result = running.fail("disk full")
+        assert result.status == TaskStatus.DONE
+        assert result.context.error == "disk full"
+
+    def test_taskcontext_overrides_keys_match_audited_usage(self) -> None:
+        assert set(TaskContextOverrides.__annotations__) == {
+            "remote_folder",
+            "local_folder",
+            "error",
+            "extra",
+        }
+
+    def test_replace_chains_through_with_context(self) -> None:
+        task = Task(task_id=1, label="x", context=TaskContext(engine="fleur"))
+        new_ctx = task.context.replace(remote_folder="/r")
+        new_task = task.with_context(new_ctx)
+        assert new_task.context is new_ctx
+        assert new_task.context.remote_folder == "/r"

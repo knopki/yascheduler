@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.11.0
+# VERSION: 1.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext, Engine value objects; Task, Node, ConnectedMachine entities.
@@ -11,7 +11,8 @@
 #   TaskStatus - IntEnum: TO_DO=0, RUNNING=1, DONE=2
 #   MachineState - Enum: FREE, BUSY
 #   ProcessResult - Exit code and captured output from remote execution
-#   TaskContext - Typed task metadata with arbitrary extras
+#   TaskContext - Typed task metadata with arbitrary extras; .replace() typed copy-with
+#   TaskContextOverrides - TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra
 #   Engine - Calculation engine specification with platform support
 #   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
 #   Node - Persistent compute node record
@@ -20,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.11.0 - Add Task.with_context wholesale context setter (task-with-context).
-#   PREVIOUS_CHANGE: v1.10.0 - Add Task.with_event factory (5 overloads) populating base event fields from context (task-with-event).
+#   LAST_CHANGE: v1.12.0 - Add TaskContext.replace typed copy-with + TaskContextOverrides TypedDict (task-context-replace).
+#   PREVIOUS_CHANGE: v1.11.0 - Add Task.with_context wholesale context setter (task-with-context).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import asdict, dataclass, field, fields, replace
 from enum import Enum, IntEnum, unique
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, TypedDict, TypeVar, overload
 
 from .events import (
     DomainEvent,
@@ -50,6 +51,8 @@ from .exceptions import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from yascheduler.shared import Self, Unpack
 
 _E = TypeVar("_E", bound=DomainEvent)
 
@@ -78,6 +81,18 @@ class ProcessResult:
     exit_code: int
     stdout: str = ""
     stderr: str = ""
+
+
+class TaskContextOverrides(TypedDict, total=False):
+    """Overridable TaskContext fields.
+
+    Only fields actually replaced somewhere in the codebase are listed.
+    """
+
+    remote_folder: str | None
+    local_folder: str | None
+    error: str | None
+    extra: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -125,6 +140,17 @@ class TaskContext:
             error=metadata.get("error"),  # type: ignore[arg-type]
             extra=extra,
         )
+
+    # START_CONTRACT: TaskContext.replace
+    #   PURPOSE: Typed copy-with returning a new TaskContext
+    #   INPUTS: { **overrides: Unpack[TaskContextOverrides] - subset of fields to override }
+    #   OUTPUTS: { Self - new TaskContext instance with overrides applied }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-DOMAIN-MODEL
+    # END_CONTRACT: TaskContext.replace
+    def replace(self, **overrides: Unpack[TaskContextOverrides]) -> Self:
+        """Return a new TaskContext with the given overrides applied."""
+        return replace(self, **overrides)
 
 
 @dataclass(frozen=True)
@@ -234,7 +260,7 @@ class Task:
         return replace(
             self,
             status=TaskStatus.DONE,
-            context=replace(self.context, error=reason),
+            context=self.context.replace(error=reason),
         )
         # END_BLOCK_MARK_FAILED
 
@@ -256,7 +282,7 @@ class Task:
         return replace(
             self,
             status=TaskStatus.DONE,
-            context=replace(self.context, error=reason),
+            context=self.context.replace(error=reason),
         )
         # END_BLOCK_MARK_REJECTED
 

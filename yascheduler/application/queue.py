@@ -19,6 +19,7 @@
 #   LAST_CHANGE: v1.7.0 - Relocated from yascheduler/queue.py; same contents.
 #   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
+# FIXME: use dataclasses instead of attrs
 """Async queue with message deduplication"""
 
 import asyncio

@@ -1,5 +1,5 @@
 # FILE: yascheduler/shared/__init__.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Shared kernel for cross-layer utilities (typing shims, async-to-sync bridge, path constants).
@@ -11,6 +11,7 @@
 # START_MODULE_MAP
 #   Self - Self type alias (re-exported from .compat)
 #   ParamSpec - ParamSpec type alias (re-exported from .compat)
+#   Unpack - Unpack type alias (re-exported from .compat)
 #   to_sync - Async-to-sync decorator (re-exported from .async_utils)
 #   CONFIG_FILE - Default config file path (re-exported from .variables)
 #   LOG_FILE - Default log file path (re-exported from .variables)
@@ -18,11 +19,12 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Initial extraction from top-level compat/variables/client.to_sync.
+#   LAST_CHANGE: v1.7.0 - Re-export Unpack from .compat (task-context-replace).
+#   PREVIOUS_CHANGE: v1.6.0 - Initial extraction from top-level compat/variables/client.to_sync.
 # END_CHANGE_SUMMARY
 
 from .async_utils import asleep_until, to_sync
-from .compat import ParamSpec, Self
+from .compat import ParamSpec, Self, Unpack
 from .variables import CONFIG_FILE, LOG_FILE, PID_FILE
 
 __all__ = [
@@ -31,6 +33,7 @@ __all__ = [
     "PID_FILE",
     "ParamSpec",
     "Self",
+    "Unpack",
     "to_sync",
     "asleep_until",
 ]

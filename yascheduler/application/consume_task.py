@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 5.2.0
+# VERSION: 5.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and mark task DONE.
 #   SCOPE: consume_task async function.
@@ -15,15 +15,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.2.0 - Migrate replace(task, context=...) to task.with_context; drop redundant context.error set before .fail (task-with-context).
-#   PREVIOUS_CHANGE: v5.1.0 - Record TaskCompleted/TaskFailed via task.with_event factory (task-with-event).
+#   LAST_CHANGE: v5.3.0 - Migrate replace(task.context, ...) to task.context.replace(...); drop dead dataclasses.replace import (task-context-replace).
+#   PREVIOUS_CHANGE: v5.2.0 - Migrate replace(task, context=...) to task.with_context; drop redundant context.error set before .fail (task-with-context).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -95,8 +94,7 @@ def _record_finalization_event(
         for k, v in meta_dict.items()
         if k not in ("remote_folder", "local_folder", "error")
     }
-    updated_context = replace(
-        task.context,
+    updated_context = task.context.replace(
         local_folder=meta_dict.get("local_folder") or task.context.local_folder,
         remote_folder=meta_dict.get("remote_folder") or task.context.remote_folder,
         extra={**task.context.extra, **extra_updates},

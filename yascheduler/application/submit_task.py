@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/submit_task.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Submit task use case — validates inputs, creates a domain Task, persists via UoW.
 #   SCOPE: submit_task async function.
@@ -12,14 +12,13 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Migrate replace(task, context=...) to task.with_context (task-with-context).
-#   PREVIOUS_CHANGE: v1.2.0 - Record TaskCreated via task.with_event factory (task-with-event).
+#   LAST_CHANGE: v1.3.0 - Migrate replace(task.context, ...) to task.context.replace(...); drop dead dataclasses.replace import (task-context-replace).
+#   PREVIOUS_CHANGE: v1.2.0 - Migrate replace(task, context=...) to task.with_context (task-with-context).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -87,7 +86,7 @@ async def submit_task(
         task = await uow.tasks.insert(task)
         dt_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")
-        context = replace(task.context, remote_folder=remote_folder)
+        context = task.context.replace(remote_folder=remote_folder)
         task = task.with_context(context).with_event(
             TaskCreated, engine_name=task.context.engine
         )

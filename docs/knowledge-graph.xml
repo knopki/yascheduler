@@ -109,6 +109,7 @@
         <fn-to_sync PURPOSE="Decorator converting async function to sync via ThreadPoolExecutor and event-loop detection" />
         <type-Self PURPOSE="Self type re-exported from typing_extensions for older Python versions" />
         <type-ParamSpec PURPOSE="ParamSpec re-exported from typing_extensions for older Python versions" />
+        <type-Unpack PURPOSE="Unpack re-exported from typing_extensions for older Python versions" />
         <const-CONFIG_FILE PURPOSE="Default config file path (env-derived)" />
         <const-PID_FILE PURPOSE="Default PID file path (env-derived)" />
         <const-LOG_FILE PURPOSE="Default log file path (env-derived)" />
@@ -224,6 +225,8 @@
         <class-MachineState PURPOSE="Enum: FREE, BUSY" />
         <class-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
         <class-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
+        <fn-replace PURPOSE="Typed copy-with returning new TaskContext" />
+        <type-TaskContextOverrides PURPOSE="TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs()" />
         <class-Task PURPOSE="Task entity with lifecycle methods and event recording (record_event, with_event factory, pull_events, _events tuple)" />
         <fn-with_context PURPOSE="Wholesale-replace task context, returning new Task" />
