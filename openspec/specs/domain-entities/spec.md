@@ -10,6 +10,12 @@ The system SHALL provide a `Task` domain entity as an immutable object with
 fields: `task_id: int`, `label: str`, `status: TaskStatus`, `context: TaskContext`,
 `allocated_ip: str | None`.
 
+The system SHALL provide a `Task.with_context(context: TaskContext) -> Task`
+method that returns a new `Task` with `context` replaced wholesale. The
+method SHALL perform no field merge, no validation guard, and no status
+transition — it is a pure wholesale context replacement, mirroring the
+guard-free `record_event`.
+
 #### Scenario: Task creation
 - **WHEN** a Task is instantiated with status TO_DO
 - **THEN** fields are immutable and hashable
@@ -49,6 +55,22 @@ fields: `task_id: int`, `label: str`, `status: TaskStatus`, `context: TaskContex
 #### Scenario: Fail non-running task
 - **WHEN** `task.fail("disk full")` is called on a non-RUNNING task
 - **THEN** `TaskNotRunningError` is raised
+
+#### Scenario: with_context replaces context wholesale
+- **WHEN** `task.with_context(new_context)` is called with a `TaskContext` differing from `task.context`
+- **THEN** a new Task is returned with `context is new_context` and all other fields (status, allocated_ip, _events) preserved unchanged
+
+#### Scenario: with_context preserves events
+- **WHEN** `task.with_context(new_context)` is called on a task with prior recorded events
+- **THEN** the returned Task retains the same `_events` tuple as the original
+
+#### Scenario: with_context chains with with_event
+- **WHEN** `task.with_context(new_context).with_event(TaskCreated, engine_name=new_context.engine)` is called
+- **THEN** a Task is returned with the new context and the `TaskCreated` event appended to `_events`
+
+#### Scenario: with_context performs no status validation
+- **WHEN** `task.with_context(new_context)` is called on a Task in any status (TO_DO, RUNNING, or DONE)
+- **THEN** no error is raised and a new Task with the new context is returned regardless of status
 
 ### Requirement: Node persistent record
 

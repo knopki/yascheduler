@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.10.0
+# VERSION: 1.11.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext, Engine value objects; Task, Node, ConnectedMachine entities.
@@ -13,15 +13,15 @@
 #   ProcessResult - Exit code and captured output from remote execution
 #   TaskContext - Typed task metadata with arbitrary extras
 #   Engine - Calculation engine specification with platform support
-#   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, pull_events
+#   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
 #   ProviderSelection - Selected cloud provider value object (name, username)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - Add Task.with_event factory (5 overloads) populating base event fields from context (task-with-event).
-#   PREVIOUS_CHANGE: v1.9.0 - Add ProviderSelection frozen dataclass (cloud-provisioner-pure).
+#   LAST_CHANGE: v1.11.0 - Add Task.with_context wholesale context setter (task-with-context).
+#   PREVIOUS_CHANGE: v1.10.0 - Add Task.with_event factory (5 overloads) populating base event fields from context (task-with-event).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -269,6 +269,16 @@ class Task:
     # END_CONTRACT: Task.record_event
     def record_event(self, event: DomainEvent) -> Task:
         return replace(self, _events=self._events + (event,))
+
+    # START_CONTRACT: Task.with_context
+    #   PURPOSE: Wholesale-replace the task's context, returning a new Task.
+    #   INPUTS: { context: TaskContext - new context to wholesale-replace }
+    #   OUTPUTS: { Task - new instance with context replaced, all other fields preserved }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-DOMAIN-MODEL
+    # END_CONTRACT: Task.with_context
+    def with_context(self, context: TaskContext) -> Task:
+        return replace(self, context=context)
 
     # START_CONTRACT: Task.with_event
     #   PURPOSE: Construct an event of the given type with base fields (task_id, webhook_url, webhook_custom_params) populated from self.context and subclass-specific fields from the caller, then append via record_event.

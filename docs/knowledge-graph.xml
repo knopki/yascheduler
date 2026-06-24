@@ -218,6 +218,7 @@
         <class-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs()" />
         <class-Task PURPOSE="Task entity with lifecycle methods and event recording (record_event, with_event factory, pull_events, _events tuple)" />
+        <fn-with_context PURPOSE="Wholesale-replace task context, returning new Task" />
         <class-Node PURPOSE="Persistent compute node record" />
         <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
         <type-ProviderSelection PURPOSE="Frozen value object (name, username) returned by CloudProvisioner.select_provider" />

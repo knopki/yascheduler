@@ -1,10 +1,10 @@
 # FILE: tests/unit/test_domain_model.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, TaskContext, Engine, Task, Node, ConnectedMachine.
-#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions.
-#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS
+#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_context.
+#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
 #   LINKS:
 # END_MODULE_CONTRACT
 #
@@ -30,10 +30,12 @@
 #   test_connected_machine_occupy_busy - raises MachineBusyError
 #   test_connected_machine_release - FREE + free_since
 #   TestProviderSelection - frozen dataclass, field access, equality
+#   TestTaskWithContext - with_context wholesale replace, immutability, event preservation, no-status-validation, chaining
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Domain model entity unit tests
+#   LAST_CHANGE: v1.1.0 - Add TestTaskWithContext suite (task-with-context).
+#   PREVIOUS_CHANGE: v1.0.0 - Domain model entity unit tests
 # END_CHANGE_SUMMARY
 
 import time
@@ -41,6 +43,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from yascheduler.domain.events import TaskCreated
 from yascheduler.domain.exceptions import (
     MachineBusyError,
     MissingInputFileError,
@@ -442,3 +445,103 @@ class TestProviderSelection:
         c = ProviderSelection(name="gcp", username="root")
         assert a == b
         assert a != c
+
+
+# START_CONTRACT: test_with_context
+#   PURPOSE: Verify Task.with_context wholesale context replacement, immutability, event preservation, no-status-validation, and chaining with with_event/fail/complete.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-MODEL: Task.with_context, Task.with_event, Task.fail, Task.complete]
+# END_CONTRACT: test_with_context
+class TestTaskWithContext:
+    def make_task(self, **overrides: object) -> Task:
+        ctx = TaskContext(engine="fleur")
+        base: dict[str, object] = dict(task_id=1, label="test", context=ctx)
+        base.update(overrides)
+        return Task(**base)  # type: ignore[arg-type]
+
+    def test_with_context_replaces_context_wholesale(self) -> None:
+        task = self.make_task(allocated_ip="10.0.0.1", status=TaskStatus.RUNNING)
+        new_context = TaskContext(engine="cp2k", remote_folder="/r")
+        result = task.with_context(new_context)
+        assert result.context is new_context
+        assert result.task_id == task.task_id
+        assert result.label == task.label
+        assert result.status == task.status
+        assert result.allocated_ip == task.allocated_ip
+        assert result._events == task._events
+
+    def test_with_context_preserves_events(self) -> None:
+        task = self.make_task()
+        event = TaskCreated(
+            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+        )
+        task = task.record_event(event)
+        new_context = TaskContext(engine="cp2k")
+        result = task.with_context(new_context)
+        assert result._events == task._events
+        assert result._events == (event,)
+
+    def test_with_context_leaves_original_unchanged(self) -> None:
+        task = self.make_task()
+        original_context = task.context
+        new_context = TaskContext(engine="cp2k")
+        result = task.with_context(new_context)
+        assert result.context is new_context
+        assert task.context is original_context
+        assert task.context is not new_context
+        with pytest.raises(FrozenInstanceError):
+            task.context = new_context  # type: ignore[misc]
+
+    @pytest.mark.parametrize("status", list(TaskStatus))
+    def test_with_context_no_status_validation(self, status: TaskStatus) -> None:
+        task = self.make_task(status=status)
+        new_context = TaskContext(engine="cp2k")
+        result = task.with_context(new_context)
+        assert result.context is new_context
+        assert result.status == status
+
+    def test_with_context_chains_with_with_event(self) -> None:
+        task = self.make_task()
+        new_context = TaskContext(
+            engine="cp2k",
+            remote_folder="/r",
+            webhook_url="https://hook.example.com",
+            webhook_custom_params={"k": "v"},
+        )
+        result = task.with_context(new_context).with_event(
+            TaskCreated, engine_name=new_context.engine
+        )
+        assert result.context is new_context
+        assert len(result._events) == 1
+        evt = result._events[0]
+        assert isinstance(evt, TaskCreated)
+        assert evt.engine_name == new_context.engine
+        assert evt.task_id == task.task_id
+        assert evt.webhook_url == new_context.webhook_url
+
+    def test_with_context_chains_with_fail(self) -> None:
+        task = self.make_task()
+        new_context = TaskContext(
+            engine="cp2k",
+            remote_folder="/r",
+            local_folder="/l",
+            extra={"inp": "data"},
+        )
+        running = task.allocate_to("10.0.0.1").mark_running()
+        result = running.with_context(new_context).fail("reason")
+        assert result.status == TaskStatus.DONE
+        assert result.context.error == "reason"
+        assert result.context.engine == new_context.engine
+        assert result.context.remote_folder == new_context.remote_folder
+        assert result.context.local_folder == new_context.local_folder
+        assert result.context.extra == new_context.extra
+
+    def test_with_context_chains_with_complete(self) -> None:
+        task = self.make_task()
+        new_context = TaskContext(engine="cp2k", remote_folder="/r")
+        running = task.allocate_to("10.0.0.1").mark_running()
+        result = running.with_context(new_context).complete()
+        assert result.status == TaskStatus.DONE
+        assert result.context is new_context
