@@ -5,7 +5,7 @@
 #   PURPOSE: AiiDA scheduler plugin entry point for integrating with AiiDA workflows.
 #   SCOPE: AiiDA Scheduler subclass implementation.
 #   DEPENDS: none
-#   LINKS: M-CLIENT
+#   LINKS: none
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

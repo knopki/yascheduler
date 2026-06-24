@@ -1,10 +1,10 @@
 # FILE: yascheduler/di.py
-# VERSION: 5.2.0
+# VERSION: 5.2.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI, AiiDA).
 #   SCOPE: make_daemon, make_cli_deps, make_aiida, CLIDeps dataclass.
 #   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-ENTRYPOINTS-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.2.0 - Remove vestigial CLIDeps.query (zero production callers; encoded as follow-up in 2026-06-23-client-query-uow).
-#   PREVIOUS_CHANGE: v5.1.0 - Import resolve_adapter via the public facade (kill private-import FIXME); apply adapter-resolution half of the active_clouds filter on the pre-built-clouds branch too, so test-only callers can't over-count max_nodes for unresolved providers (review-hardening).
+#   LAST_CHANGE: v5.2.1 - Update stale M-CLIENT graph reference to M-ENTRYPOINTS-CLIENT after client relocation (add-entrypoints-layer).
+#   PREVIOUS_CHANGE: v5.2.0 - Remove vestigial CLIDeps.query (zero production callers; encoded as follow-up in 2026-06-23-client-query-uow).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -49,9 +49,9 @@ from .infra import (
     CloudProvisionerImpl,
     PostgresUnitOfWork,
     SSHMachineGateway,
+    resolve_adapter,
     webhook_handler,
 )
-from .infra.cloud import resolve_adapter
 
 if TYPE_CHECKING:
     from collections.abc import Callable

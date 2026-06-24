@@ -1,11 +1,11 @@
 # FILE: tests/unit/test_characterization.py
-# VERSION: 2.1.0
+# VERSION: 2.1.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Characterization tests — verify Yascheduler client queue-submit behaviour.
 #   SCOPE: Client.queue_submit_task_async delegates to CLIDeps.submit via the deps_factory seam.
-#   DEPENDS: M-CLIENT, M-DI
-#   LINKS: M-CLIENT
+#   DEPENDS: M-ENTRYPOINTS-CLIENT, M-DI
+#   LINKS: M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - Switch submit characterization from module-patch of make_cli_deps to the deps_factory constructor seam.
-#   PREVIOUS_CHANGE: v2.0.0 - Drop Scheduler.* characterization classes after scheduler.py deletion; retain Client queue-submit coverage.
+#   LAST_CHANGE: v2.1.1 - Migrate import/patch paths from yascheduler.client to yascheduler.entrypoints.client.
+#   PREVIOUS_CHANGE: v2.1.0 - Switch submit characterization from module-patch of make_cli_deps to the deps_factory constructor seam.
 # END_CHANGE_SUMMARY
 
 """Characterization tests: verify Client.queue_submit_task_async delegates to deps.submit via deps_factory."""
@@ -28,12 +28,12 @@ class TestClientQueueSubmitTaskAsync:
     """Client.queue_submit_task_async delegates to deps.submit via the deps_factory seam."""
 
     @pytest.mark.asyncio
-    @patch("yascheduler.client.Config.from_config_parser")
+    @patch("yascheduler.entrypoints.client.Config.from_config_parser")
     async def test_queue_submit_task_async_uses_cli_deps(
         self, mock_from_cfg: MagicMock
     ) -> None:
         """queue_submit_task_async calls deps.submit() via the injected deps_factory, not Scheduler."""
-        from yascheduler.client import Yascheduler
+        from yascheduler.entrypoints.client import Yascheduler
 
         # Arrange — inject fake deps via the constructor seam
         mock_deps = MagicMock()

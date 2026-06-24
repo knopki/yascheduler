@@ -1,11 +1,11 @@
 # FILE: tests/unit/test_client_query.py
-# VERSION: 1.0.1
+# VERSION: 1.0.2
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Yascheduler queue-query methods via the deps_factory constructor seam.
 #   SCOPE: status/jobs dispatch, mutual-exclusivity ValueError, empty-in empty-out, 6-key shape, factory-per-call.
-#   DEPENDS: M-CLIENT, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL
-#   LINKS: M-CLIENT
+#   DEPENDS: M-ENTRYPOINTS-CLIENT, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL
+#   LINKS: M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.0.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in helper signatures).]
-#   PREVIOUS_CHANGE: [v1.0.0 - Initial unit tests for client query path post-swap (client-query-uow).]
+#   LAST_CHANGE: v1.0.2 - Migrate import/patch paths from yascheduler.client to yascheduler.entrypoints.client.
+#   PREVIOUS_CHANGE: v1.0.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in helper signatures).
 # END_CHANGE_SUMMARY
 
 """Unit tests for Yascheduler queue-query methods.
@@ -37,8 +37,8 @@ from unittest.mock import patch
 
 import pytest
 
-from yascheduler.client import Yascheduler
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.entrypoints.client import Yascheduler
 
 EXPECTED_KEYS = {"task_id", "label", "ip", "status", "metadata", "cloud"}
 
@@ -106,7 +106,7 @@ def _make_task(
 def _build_client(uow: FakeUnitOfWork) -> Yascheduler:
     """Construct a Yascheduler with Config.from_config_parser patched out and deps_factory wired."""
     fake_deps = FakeCLIDeps(uow)
-    with patch("yascheduler.client.Config.from_config_parser") as mock_cfg:
+    with patch("yascheduler.entrypoints.client.Config.from_config_parser") as mock_cfg:
         mock_cfg.return_value = SimpleNamespace()
         # FakeCLIDeps is a structural stand-in for CLIDeps; the seam is test-only.
         return Yascheduler(deps_factory=lambda cfg: fake_deps)  # type: ignore[arg-type]
@@ -188,7 +188,9 @@ class TestDepsFactoryInvocation:
             invocation_count += 1
             return fake_deps
 
-        with patch("yascheduler.client.Config.from_config_parser") as mock_cfg:
+        with patch(
+            "yascheduler.entrypoints.client.Config.from_config_parser"
+        ) as mock_cfg:
             mock_cfg.return_value = SimpleNamespace()
             # FakeCLIDeps is a structural stand-in for CLIDeps; the seam is test-only.
             client = Yascheduler(deps_factory=counting_factory)  # type: ignore[arg-type]

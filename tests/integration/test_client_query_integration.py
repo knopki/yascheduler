@@ -1,11 +1,11 @@
 # FILE: tests/integration/test_client_query_integration.py
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Implementation-agnostic integration test pinning the Yascheduler query-method output shape against real PostgreSQL.
 #   SCOPE: Submit a real task, query via jobs=[id] and status=[0], assert 6-key dict shape.
-#   DEPENDS: M-CLIENT, M-CONFIG, M-DB, M-PERSISTENCE-SCHEMA
-#   LINKS: M-CLIENT
+#   DEPENDS: M-ENTRYPOINTS-CLIENT, M-CONFIG, M-DB, M-PERSISTENCE-SCHEMA
+#   LINKS: M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -16,7 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial implementation-agnostic integration test for client query path (client-query-uow).
+#   LAST_CHANGE: v1.0.1 - Migrate import path from yascheduler.client to yascheduler.entrypoints.client.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial implementation-agnostic integration test for client query path (client-query-uow).
 # END_CHANGE_SUMMARY
 
 """Implementation-agnostic integration test — Yascheduler query path against real PostgreSQL.
@@ -29,7 +30,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from yascheduler.client import Yascheduler
+from yascheduler.entrypoints.client import Yascheduler
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -86,7 +87,7 @@ def _query_config(
 #   INPUTS: { _query_config: str, _init_schema: None }
 #   OUTPUTS: { int - task_id }
 #   SIDE_EFFECTS: Inserts a task row into the testcontainer PostgreSQL.
-#   LINKS: M-CLIENT
+#   LINKS: M-ENTRYPOINTS-CLIENT
 # END_CONTRACT: _submit_task
 @pytest.fixture
 def _submit_task(

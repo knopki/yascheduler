@@ -17,7 +17,7 @@
     <M-MAIN NAME="Package entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Top-level package entry: re-exports Yascheduler client and path constants.</purpose>
       <path>yascheduler/__init__.py</path>
-      <depends>M-CLIENT, M-SHARED</depends>
+      <depends>M-ENTRYPOINTS, M-SHARED</depends>
       <annotations>
         <export-Yascheduler PURPOSE="Public client class" />
         <const-CONFIG_FILE PURPOSE="Default config file path" />
@@ -29,9 +29,9 @@
 
 
 
-    <M-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
+    <M-ENTRYPOINTS-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Public Python/CLI client for submitting and querying tasks.</purpose>
-      <path>yascheduler/client.py</path>
+      <path>yascheduler/entrypoints/client.py</path>
       <depends>M-SHARED, M-CONFIG, M-DI, M-DOMAIN-MODEL, M-APPLICATION-QUERY-TASKS</depends>
       <annotations>
         <class-Yascheduler PURPOSE="Public client class" />
@@ -44,7 +44,25 @@
         <fn-_task_to_dict PURPOSE="Project domain Task to the public 6-key Mapping shape" />
         <const-_deps_factory PURPOSE="Keyword-only constructor seam: Config -> CLIDeps factory (defaults to make_cli_deps)" />
       </annotations>
-    </M-CLIENT>
+    </M-ENTRYPOINTS-CLIENT>
+
+    <M-ENTRYPOINTS NAME="Entrypoints layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Layer facade for the outermost hexagonal layer (driving adapters + composition root); re-exports Yascheduler from .client.</purpose>
+      <path>yascheduler/entrypoints/__init__.py</path>
+      <depends>M-ENTRYPOINTS-CLIENT</depends>
+      <annotations>
+        <export-Yascheduler PURPOSE="Public client class re-exported from entrypoints.client" />
+      </annotations>
+    </M-ENTRYPOINTS>
+
+    <M-CLIENT-SHIM NAME="Client compat shim" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Compat shim re-exporting Yascheduler from yascheduler.entrypoints.client; preserves the deep import path from yascheduler.client import Yascheduler.</purpose>
+      <path>yascheduler/client.py</path>
+      <depends>M-ENTRYPOINTS-CLIENT</depends>
+      <annotations>
+        <export-Yascheduler PURPOSE="Compat re-export of Yascheduler from entrypoints.client" />
+      </annotations>
+    </M-CLIENT-SHIM>
 
     <M-QUEUE NAME="Unique queue" TYPE="UTILITY" STATUS="implemented">
       <purpose>Deduplicating async queue for producer-consumer scheduling loops.</purpose>
@@ -844,10 +862,9 @@
          Data flows
          ═══════════════════════════════════════════════ -->
 
-    <DF-SUBMIT NAME="Submit task">M-CLIENT -> M-DI -> M-APPLICATION-SUBMIT -> M-APPLICATION-UOW -> M-DOMAIN-PORTS</DF-SUBMIT>
+    <DF-SUBMIT NAME="Submit task">M-ENTRYPOINTS-CLIENT -> M-DI -> M-APPLICATION-SUBMIT -> M-APPLICATION-UOW -> M-DOMAIN-PORTS</DF-SUBMIT>
     <DF-SCHEDULE NAME="Schedule task (v2.0)">M-APPLICATION-ORCHESTRATOR -> M-APPLICATION-ALLOCATE / M-APPLICATION-CONSUME / M-APPLICATION-DEALLOCATE -> M-APPLICATION-UOW</DF-SCHEDULE>
 
-    <DF-AIIDA-INTEGRATION NAME="AiiDA integration">M-AIIDA -> M-CLIENT</DF-AIIDA-INTEGRATION>
     <DF-DAEMON-START NAME="Daemon start">M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-CLI-COMMANDS</DF-DAEMON-START>
     <DF-CONFIG-LOAD NAME="Load configuration">M-CONFIG -> M-CONFIG-DB; M-CONFIG -> M-CONFIG-LOCAL; M-CONFIG -> M-CONFIG-REMOTE; M-CONFIG -> M-CONFIG-CLOUD; M-CONFIG -> M-CONFIG-ENGINE</DF-CONFIG-LOAD>
     <DF-PERSISTENCE NAME="Persistence layer">M-PERSISTENCE-POSTGRES -> M-PERSISTENCE</DF-PERSISTENCE>
@@ -856,9 +873,8 @@
          Cross-module links
          ═══════════════════════════════════════════════ -->
 
-    <CrossLink from="M-CLIENT" to="M-APPLICATION-QUERY-TASKS" relation="delegates task queries" />
+    <CrossLink from="M-ENTRYPOINTS-CLIENT" to="M-APPLICATION-QUERY-TASKS" relation="delegates task queries" />
     <CrossLink from="M-APPLICATION-QUERY-TASKS" to="M-PERSISTENCE-UOW" relation="reads via UoW" />
-    <CrossLink from="M-AIIDA" to="M-CLIENT" relation="delegates task submission to client" />
     <CrossLink from="M-CONFIG" to="M-CONFIG-ENGINE-REPO" relation="provides engine collection to scheduler" />
 
 
@@ -899,7 +915,9 @@
     <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EVENTS" relation="Task aggregate stores events and provides record_event/pull_events" />
     <CrossLink from="M-NOTIFIER-WEBHOOK" to="M-DOMAIN-EVENTS" relation="handles domain events for webhook delivery" />
 
-    <CrossLink from="M-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
+    <CrossLink from="M-ENTRYPOINTS-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
+    <CrossLink from="M-MAIN" to="M-ENTRYPOINTS" relation="re-exports Yascheduler via layer facade" />
+    <CrossLink from="M-CLIENT-SHIM" to="M-ENTRYPOINTS-CLIENT" relation="compat re-export of Yascheduler" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
     <CrossLink from="M-CLI-COMMANDS" to="M-PERSISTENCE-SCHEMA" relation="init command calls apply_schema for DB schema initialization" />

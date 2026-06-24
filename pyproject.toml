@@ -123,6 +123,7 @@ exclude_type_checking_imports = true
 name = "Clean architecture layers"
 type = "layers"
 layers = [
+  "yascheduler.entrypoints",
   "yascheduler.infra",
   "yascheduler.application",
   "yascheduler.domain",

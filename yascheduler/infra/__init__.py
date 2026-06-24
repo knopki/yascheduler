@@ -22,7 +22,7 @@
 #   PREVIOUS_CHANGE: v1.2.0 - Re-export CloudAdapter and PostgresUnitOfWork for composition root wiring (clean-architecture-imports R2).
 # END_CHANGE_SUMMARY
 
-from .cloud import CloudAdapter, CloudProvisionerImpl
+from .cloud import CloudAdapter, CloudProvisionerImpl, resolve_adapter
 from .notifier import webhook_handler
 from .persistence import PostgresUnitOfWork
 from .ssh import AllSSHRetryExc, SFTPRetryExc, SSHMachineGateway
@@ -35,4 +35,5 @@ __all__ = [
     "SSHMachineGateway",
     "SFTPRetryExc",
     "webhook_handler",
+    "resolve_adapter",
 ]

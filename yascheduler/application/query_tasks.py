@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/query_tasks.py
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Query tasks use case — read-only task queries by status or job IDs via UoW.
 #   SCOPE: query_tasks async function.
 #   DEPENDS: M-DOMAIN-MODEL, M-APPLICATION-UOW
-#   LINKS: M-DOMAIN-MODEL, M-APPLICATION-UOW, M-CLIENT
+#   LINKS: M-DOMAIN-MODEL, M-APPLICATION-UOW, M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -12,7 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extract query use case from Yascheduler.queue_get_tasks_async (client-query-uow).
+#   LAST_CHANGE: v1.0.1 - Update stale M-CLIENT graph reference to M-ENTRYPOINTS-CLIENT after client relocation (add-entrypoints-layer).
+#   PREVIOUS_CHANGE: v1.0.0 - Extract query use case from Yascheduler.queue_get_tasks_async (client-query-uow).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
