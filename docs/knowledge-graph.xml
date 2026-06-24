@@ -27,15 +27,6 @@
       </annotations>
     </M-MAIN>
 
-    <M-WEBHOOK NAME="Webhook payload" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Webhook payload frozen dataclass for webhook request serialization.</purpose>
-      <path>yascheduler/webhook.py</path>
-      <depends>none</depends>
-      <annotations>
-        <class-WebhookPayload PURPOSE="Webhook request data shape" />
-      </annotations>
-    </M-WEBHOOK>
-
 
 
     <M-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
@@ -693,10 +684,11 @@
     <M-NOTIFIER-WEBHOOK NAME="Webhook notifier" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Webhook event handler that sends HTTP notifications for task lifecycle events.</purpose>
       <path>yascheduler/infra/notifier/webhook.py</path>
-      <depends>M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-WEBHOOK</depends>
+      <depends>M-DOMAIN-EVENTS, M-DOMAIN-MODEL</depends>
       <annotations>
         <fn-webhook_handler PURPOSE="Async handler that sends webhooks for task lifecycle events" />
         <fn-_send_webhook PURPOSE="Send webhook with fibonacci backoff retry on transient failures" />
+        <class-WebhookPayload PURPOSE="Webhook request data shape" />
       </annotations>
     </M-NOTIFIER-WEBHOOK>
 
@@ -906,7 +898,7 @@
     <CrossLink from="M-APPLICATION-CONSUME" to="M-DOMAIN-EVENTS" relation="records TaskCompleted and TaskFailed events" />
     <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EVENTS" relation="Task aggregate stores events and provides record_event/pull_events" />
     <CrossLink from="M-NOTIFIER-WEBHOOK" to="M-DOMAIN-EVENTS" relation="handles domain events for webhook delivery" />
-    <CrossLink from="M-NOTIFIER-WEBHOOK" to="M-WEBHOOK" relation="uses WebhookPayload for HTTP request serialization" />
+
     <CrossLink from="M-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />

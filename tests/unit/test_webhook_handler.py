@@ -45,8 +45,7 @@ from yascheduler.domain.events import (
     TaskFailed,
 )
 from yascheduler.domain.model import TaskStatus
-from yascheduler.infra.notifier.webhook import webhook_handler
-from yascheduler.webhook import WebhookPayload
+from yascheduler.infra.notifier.webhook import WebhookPayload, webhook_handler
 
 URL = "https://example.com/hook"
 

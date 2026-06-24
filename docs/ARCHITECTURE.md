@@ -82,7 +82,6 @@ root (`di.py`) wires the graph per entry point.
 ┌──────────────────────────────┼───────────────────────────────────┐
 │  ENTRY POINTS & LEGACY WRAPPERS                                  │
 │  client.py           Public API — Yascheduler facade             │
-│  webhook.py          WebhookPayload frozen dataclass             │
 │  aiida_plugin.py     AiiDA scheduler integration                 │
 │  config/             INI config tree (attrs)                     │
 │  daemon_systemd.py   Systemd entry point                         │
@@ -115,7 +114,6 @@ the sub layer.
 | `di.py`              | Composition root: `make_daemon()`, `make_cli_deps()`                                                    |
 | `client.py`          | Public Python API (`class Yascheduler`) — uses `make_cli_deps()` for submit, routes queries through UoW |
 | `aiida_plugin.py`    | AiiDA scheduler plugin (uses `Yascheduler` client)                                                      |
-| `webhook.py`         | `WebhookPayload` frozen dataclass                                                                       |
 | `config/`            | Config tree parsed from INI (uses attrs)                                                                |
 
 ### 2.1 Domain (`yascheduler/domain/`)
@@ -250,9 +248,6 @@ Failures are logged and swallowed after backoff exhausts.
   (no daemon graph). Query methods (`queue_get_tasks*`,
   `queue_get_task*`) route through the `query_tasks` use case over a UoW
   (no `DB` construction); see `openspec/changes/client-query-uow/`.
-
-- **`webhook.py`** — `WebhookPayload` frozen dataclass, consumed by
-  `notifier/webhook.py`.
 - **`aiida_plugin.py`** — AiiDA plugin uses `Yascheduler` client
   directly.
 
@@ -451,7 +446,6 @@ yascheduler/
 ├── di.py                      # composition root
 ├── client.py                  # Yascheduler facade
 ├── aiida_plugin.py            # AiiDA plugin
-├── webhook.py                 # WebhookPayload dataclass
 ├── config/                    # INI config (attrs)
 ├── daemon_systemd.py
 └── daemon_sysv.py

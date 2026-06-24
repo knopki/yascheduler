@@ -1,27 +1,29 @@
 # FILE: yascheduler/infra/notifier/webhook.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Webhook event handler — sends HTTP notifications for task lifecycle events.
-#   SCOPE: webhook_handler async function dispatching webhooks per event type.
-#   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-WEBHOOK
+#   PURPOSE: Webhook event handler and outbound payload DTO — sends HTTP notifications for task lifecycle events.
+#   SCOPE: WebhookPayload frozen dataclass, webhook_handler async function dispatching webhooks per event type, _send_webhook retry helper.
+#   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
 #   LINKS: M-DOMAIN-EVENTS, M-NOTIFIER-WEBHOOK
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   webhook_handler - Async handler that sends webhooks for task lifecycle events
 #   _send_webhook - Send webhook payload via HTTP POST with retry and rate limiting
+#   WebhookPayload - Webhook request data shape
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.1.0 - Restore strict D4 signature (http: aiohttp.ClientSession, no | None).
+#   LAST_CHANGE: v1.1.0 - Absorb WebhookPayload from yascheduler/webhook.py (relocate-webhook-payload); root module deleted, M-WEBHOOK graph record removed.
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import logging
 from asyncio.locks import Semaphore
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import backoff
@@ -32,11 +34,20 @@ from yascheduler.domain import (
     TaskCreated,
     TaskStatus,
 )
-from yascheduler.webhook import WebhookPayload
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
 _webhook_sem: Semaphore | None = None
+
+
+@dataclass(frozen=True)
+class WebhookPayload:
+    task_id: int = field()
+    status: int = field()
+    custom_params: Mapping[str, Any] = field(default_factory=dict)
 
 
 # START_CONTRACT: _get_semaphore
@@ -90,7 +101,7 @@ async def webhook_handler(event: DomainEvent, http: aiohttp.ClientSession) -> No
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Sends HTTP POST to url; logs warning on non-ok response.
 #   RAISES: aiohttp.ClientError — propagated for backoff retry.
-#   LINKS: M-WEBHOOK
+#   LINKS: M-NOTIFIER-WEBHOOK
 # END_CONTRACT: _send_webhook
 @backoff.on_exception(backoff.fibo, aiohttp.ClientError, max_time=60)
 async def _send_webhook(
