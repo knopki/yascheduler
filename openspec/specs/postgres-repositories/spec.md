@@ -56,6 +56,12 @@ the `NodeRepository` Protocol with async methods: `get`, `list_enabled`,
 `list_disabled`, `list_all`, `add`, `add_tmp`, `update`, `enable`,
 `disable`, `remove`, `get_by_ips`, `count_by_cloud`, `count_by_status`.
 
+`add_tmp(cloud: str) -> str` inserts a tmp-node row with a generated IP,
+`enabled=FALSE`, the given cloud, and `username` left to the DB default
+(`yascheduler_nodes.username DEFAULT 'root'`). It SHALL NOT bind a
+`:username` parameter; the `node/insert_tmp.sql` query lists only
+`(ip, enabled, cloud)` columns.
+
 #### Scenario: Add and retrieve node
 - **WHEN** `add(node)` is called followed by `get(ip)`
 - **THEN** the returned Node matches the inserted values
@@ -73,8 +79,8 @@ the `NodeRepository` Protocol with async methods: `get`, `list_enabled`,
 - **THEN** returns all nodes regardless of enabled status
 
 #### Scenario: Add temporary node
-- **WHEN** `add_tmp(cloud, username)` is called
-- **THEN** a node row is inserted with generated IP, given cloud and username
+- **WHEN** `add_tmp(cloud)` is called
+- **THEN** a node row is inserted with generated IP, the given cloud, and `username` defaulting to `'root'` (from the DB column default, not a caller-supplied value)
 
 #### Scenario: Update node fields
 - **WHEN** `update(node)` is called with modified fields

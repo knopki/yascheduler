@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.1.0
+# VERSION: 4.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.1.0 - Move allocate_task failure-mode hardening tests (step1 commit, step2 cleanup, step3 final persist) to test_allocate_task_failure_modes.py (file-size hard limit 1000).
-#   PREVIOUS_CHANGE: v4.0.0 - Split event-recording test classes (TestSubmitTaskEvents, TestAllocateTaskEvents, TestConsumeTaskEvents) to test_application_events.py. Moved shared fixtures to conftest.py. (grace_check size limit).
+#   LAST_CHANGE: v4.2.0 - select_provider returns str; replace ProviderSelection(name="aws", username="root") with "aws" literal; add_tmp("aws") drops username arg (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v4.1.0 - Move allocate_task failure-mode hardening tests (step1 commit, step2 cleanup, step3 final persist) to test_allocate_task_failure_modes.py (file-size hard limit 1000).
 # END_CHANGE_SUMMARY
 #
 """Unit tests for application use cases.
@@ -57,7 +57,6 @@ from yascheduler.domain.exceptions import (
 )
 from yascheduler.domain.model import (
     Node,
-    ProviderSelection,
     Task,
     TaskContext,
     TaskStatus,
@@ -310,8 +309,7 @@ class TestAllocateTask:
         allocation_lock = asyncio.Lock()
 
         clouds = MagicMock(spec=CloudProvisioner)
-        selection = ProviderSelection(name="aws", username="root")
-        clouds.select_provider.return_value = selection
+        clouds.select_provider.return_value = "aws"
         cloud_node = Node(ip="10.0.0.100", ncpus=4, cloud="aws")
         clouds.allocate = AsyncMock(return_value=cloud_node)
 
@@ -337,7 +335,7 @@ class TestAllocateTask:
         clouds.select_provider.assert_called_once_with(["linux"], {})
 
         # tmp node inserted before cloud allocate
-        uow.nodes.add_tmp.assert_called_once_with("aws", "root")
+        uow.nodes.add_tmp.assert_called_once_with("aws")
 
         # cloud allocate called with provider name
         clouds.allocate.assert_called_once_with("aws")
@@ -388,8 +386,7 @@ class TestAllocateTask:
         allocation_lock = asyncio.Lock()
 
         clouds = MagicMock(spec=CloudProvisioner)
-        selection = ProviderSelection(name="aws", username="root")
-        clouds.select_provider.return_value = selection
+        clouds.select_provider.return_value = "aws"
         clouds.allocate = AsyncMock(side_effect=CloudAllocateError("VM create failed"))
 
         start_on_machine = AsyncMock()
@@ -407,7 +404,7 @@ class TestAllocateTask:
             )
 
         # tmp-node was inserted
-        uow.nodes.add_tmp.assert_called_once_with("aws", "root")
+        uow.nodes.add_tmp.assert_called_once_with("aws")
 
         # tmp-node removed in cleanup UoW
         uow.nodes.remove.assert_called_once_with("tmp-10.0.0.100")

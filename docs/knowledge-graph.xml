@@ -223,7 +223,6 @@
         <export-OccupancyConfig PURPOSE="Minimal structural contract for occupancy check configuration" />
         <export-TaskExecutionEngine PURPOSE="Engine contract for task deployment (superset of OccupancyConfig)" />
         <export-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
-        <export-ProviderSelection PURPOSE="Frozen value object (name, username) returned by CloudProvisioner.select_provider" />
         <export-CloudAllocateError PURPOSE="Cloud node allocation failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
         <export-CloudSetupError PURPOSE="Cloud node setup failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
       </annotations>
@@ -270,7 +269,6 @@
         <fn-with_context PURPOSE="Wholesale-replace task context, returning new Task" />
         <class-Node PURPOSE="Persistent compute node record" />
         <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
-        <type-ProviderSelection PURPOSE="Frozen value object (name, username) returned by CloudProvisioner.select_provider" />
       </annotations>
     </M-DOMAIN-MODEL>
 
@@ -284,7 +282,7 @@
         <class-MachineGateway PURPOSE="Async port for remote machine operations" />
         <class-OccupancyConfig PURPOSE="Minimal structural contract for occupancy check configuration" />
         <class-TaskExecutionEngine PURPOSE="Engine contract for task deployment (superset of OccupancyConfig)" />
-        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider), deallocate(cloud, ip), select_provider(platforms, counts) -> ProviderSelection | None (sync)" />
+        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider), deallocate(cloud, ip), select_provider(platforms, counts) -> str | None (sync)" />
       </annotations>
     </M-DOMAIN-PORTS>
 
@@ -661,7 +659,7 @@
         <class-CloudProvisionerImpl PURPOSE="Pure cloud-API adapter implementing CloudProvisioner protocol" />
         <fn-allocate PURPOSE="Allocate cloud node by provider name (provider: str) -> Node; no DB write" />
         <fn-deallocate PURPOSE="Deallocate cloud node by cloud name + IP (cloud, ip) -> None; no DB read/write" />
-        <fn-select_provider PURPOSE="Sync port method: select provider by priority/capacity/platform, return ProviderSelection or None (None on throttle)" />
+        <fn-select_provider PURPOSE="Sync port method: select provider by priority/capacity/platform, return provider name string or None (None on throttle)" />
       </annotations>
     </M-CLOUD-PROVISIONER>
 

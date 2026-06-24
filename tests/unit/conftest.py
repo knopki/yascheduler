@@ -1,26 +1,45 @@
 # FILE: tests/unit/conftest.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Auto-mark all collected tests in this directory as "unit".
-#   SCOPE: pytest_collection_modifyitems hook
-#   DEPENDS: none
-#   LINKS: none
+#   PURPOSE: Auto-mark all collected tests in this directory as "unit"; isolate global SQL query cache.
+#   SCOPE: pytest_collection_modifyitems hook, autouse cache-isolation fixture.
+#   DEPENDS: M-PERSISTENCE-SCHEMA
+#   LINKS: M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
+#   _isolate_sql_query_cache - autouse fixture: clear load_query cache around each test
 #   pytest_collection_modifyitems - auto-mark tests as "unit"
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Auto-mark unit tests via directory-level conftest hook.
+#   LAST_CHANGE: v1.1.0 - Add autouse _isolate_sql_query_cache fixture; load_query @functools.cache leaked fake SQL from cache-tests into integration/e2e suites (relation "nodes" does not exist).
+#   PREVIOUS_CHANGE: v1.0.0 - Auto-mark unit tests via directory-level conftest hook.
 # END_CHANGE_SUMMARY
 
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from yascheduler.config import Engine, EngineRepository
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.infra.persistence.sql_loader import load_query
+
+
+# START_CONTRACT: _isolate_sql_query_cache
+#   PURPOSE: Prevent @functools.cache on load_query from leaking fake SQL across tests/suites.
+#   INPUTS: { None }
+#   OUTPUTS: { Generator[None] }
+#   SIDE_EFFECTS: Clears load_query cache before and after each test.
+#   LINKS: M-PERSISTENCE-SCHEMA, load_query
+# END_CONTRACT: _isolate_sql_query_cache
+@pytest.fixture(autouse=True)
+def _isolate_sql_query_cache() -> Generator[None, None, None]:
+    """Clear load_query cache around each test to stop cross-suite cache pollution."""
+    load_query.cache_clear()
+    yield
+    load_query.cache_clear()
 
 
 @pytest.fixture

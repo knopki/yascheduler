@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.0.0
+# VERSION: 2.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - Remove TestBool (vestigial __bool__ dropped from CloudProvisionerImpl v2.0.3); add test_allocate_cloud_init_timeout_cleans_up_vm covering the asyncio.wait_for bound added in manager.py v2.0.3.
-#   PREVIOUS_CHANGE: v2.0.0 - Remove node_repo, DB-dependent tests; update allocate/deallocate signatures; add select_provider tests (cloud-provisioner-pure).
+#   LAST_CHANGE: v2.2.0 - select_provider returns provider name string (str|None); drop ProviderSelection import + isinstance/name/username assertions (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v2.1.0 - Remove TestBool (vestigial __bool__ dropped from CloudProvisionerImpl v2.0.3); add test_allocate_cloud_init_timeout_cleans_up_vm covering the asyncio.wait_for bound added in manager.py v2.0.3.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -36,7 +36,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.domain.model import Node, ProviderSelection
+from yascheduler.domain.model import Node
 from yascheduler.infra.cloud.cloud_config import CloudConfig
 from yascheduler.infra.cloud.manager import (
     CloudAllocateError,
@@ -526,8 +526,8 @@ class TestCloudConfigGeneration:
 class TestSelectProvider:
     """select_provider() sync port method."""
 
-    def test_returns_provider_selection_when_capacity_available(self) -> None:
-        """Returns ProviderSelection with correct name and username."""
+    def test_returns_provider_name_when_capacity_available(self) -> None:
+        """Returns the selected provider name as a bare string."""
         adapter, config = _make_mock_adapter(name="provider", priority=10)
         prov = make_provisioner(
             adapters={"provider": adapter},
@@ -536,9 +536,7 @@ class TestSelectProvider:
 
         result = prov.select_provider(["linux"], {"provider": 0})
 
-        assert isinstance(result, ProviderSelection)
-        assert result.name == "provider"
-        assert result.username == "root"
+        assert result == "provider"
 
     def test_returns_none_when_no_capacity(self) -> None:
         """Returns None when provider is at max_nodes."""

@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.2.0
+# VERSION: 2.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineGateway, OccupancyConfig, CloudProvisioner Protocol classes.
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - Update CloudProvisioner Protocol: allocate takes provider:str, deallocate takes cloud+ip, new sync select_provider, removed capacity; add ProviderSelection import (cloud-provisioner-pure).
-#   PREVIOUS_CHANGE: v2.1.0 - Add TaskExecutionEngine Protocol; add start_task_on_machine to MachineGateway (gateway-port-cleanup scope expansion).
+#   LAST_CHANGE: v2.3.0 - Collapse ProviderSelection: CloudProvisioner.select_provider returns str|None; NodeRepository.add_tmp drops username param (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v2.2.0 - Update CloudProvisioner Protocol: allocate takes provider:str, deallocate takes cloud+ip, new sync select_provider, removed capacity; add ProviderSelection import (cloud-provisioner-pure).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ if TYPE_CHECKING:
         ConnectedMachine,
         Node,
         ProcessResult,
-        ProviderSelection,
         Task,
         TaskStatus,
     )
@@ -76,7 +75,7 @@ class NodeRepository(Protocol):
 
     async def add(self, node: Node) -> None: ...
 
-    async def add_tmp(self, cloud: str, username: str = "root") -> str: ...
+    async def add_tmp(self, cloud: str) -> str: ...
 
     async def update(self, node: Node) -> None: ...
 
@@ -226,6 +225,6 @@ class CloudProvisioner(Protocol):
 
     def select_provider(
         self, platforms: list[str], current_counts: dict[str, int]
-    ) -> ProviderSelection | None: ...
+    ) -> str | None: ...
 
     async def stop(self) -> None: ...

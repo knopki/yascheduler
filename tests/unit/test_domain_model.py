@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_model.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, TaskContext, Engine, Task, Node, ConnectedMachine.
@@ -29,14 +29,13 @@
 #   test_connected_machine_occupy - FREE->BUSY
 #   test_connected_machine_occupy_busy - raises MachineBusyError
 #   test_connected_machine_release - FREE + free_since
-#   TestProviderSelection - frozen dataclass, field access, equality
 #   TestTaskWithContext - with_context wholesale replace, immutability, event preservation, no-status-validation, chaining
 #   TestTaskContextReplace - replace typed copy-with: single/multi override, original unchanged, equal copy, drift-lock, fail integration, with_context chain
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Add TestTaskContextReplace suite (task-context-replace).
-#   PREVIOUS_CHANGE: v1.1.0 - Add TestTaskWithContext suite (task-with-context).
+#   LAST_CHANGE: v1.3.0 - Delete TestProviderSelection suite (ProviderSelection type removed in collapse-provider-selection).
+#   PREVIOUS_CHANGE: v1.2.0 - Add TestTaskContextReplace suite (task-context-replace).
 # END_CHANGE_SUMMARY
 
 import time
@@ -57,7 +56,6 @@ from yascheduler.domain.model import (
     MachineState,
     Node,
     ProcessResult,
-    ProviderSelection,
     Task,
     TaskContext,
     TaskContextOverrides,
@@ -426,27 +424,6 @@ class TestConnectedMachine:
         # original unchanged
         assert m.state == MachineState.BUSY
         assert m.free_since is None
-
-
-class TestProviderSelection:
-    """ProviderSelection frozen dataclass."""
-
-    def test_frozen(self) -> None:
-        sel = ProviderSelection(name="aws", username="root")
-        with pytest.raises(FrozenInstanceError):
-            sel.name = "other"  # type: ignore[misc]
-
-    def test_fields(self) -> None:
-        sel = ProviderSelection(name="aws", username="ec2-user")
-        assert sel.name == "aws"
-        assert sel.username == "ec2-user"
-
-    def test_equality(self) -> None:
-        a = ProviderSelection(name="aws", username="root")
-        b = ProviderSelection(name="aws", username="root")
-        c = ProviderSelection(name="gcp", username="root")
-        assert a == b
-        assert a != c
 
 
 # START_CONTRACT: test_with_context

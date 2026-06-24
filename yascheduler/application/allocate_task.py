@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.5.0
+# VERSION: 5.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.5.0 - Record TaskAllocated/TaskFailed via task.with_event factory (task-with-event).
-#   PREVIOUS_CHANGE: v5.4.0 - Convert _select_and_insert_tmp return type from bare tuple[str, str] to _TmpSelection NamedTuple so call sites self-document (review-hardening).
+#   LAST_CHANGE: v5.6.0 - select_provider returns str|None; selected_name = selection; add_tmp(selected_name) drops username arg (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v5.5.0 - Record TaskAllocated/TaskFailed via task.with_event factory (task-with-event).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -234,7 +234,7 @@ def _count_nodes_by_cloud(nodes: Sequence[Node]) -> dict[str, int]:
 #   }
 #   OUTPUTS: { _TmpSelection | None - selected provider name + tmp-node ip, or None if no provider available }
 #   SIDE_EFFECTS: Reads uow.nodes.list_all, inserts tmp-node, commits under lock. Concurrent selectors observe the tmp-node after lock release.
-#   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
+#   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW
 # END_CONTRACT: _select_and_insert_tmp
 async def _select_and_insert_tmp(
     clouds: CloudProvisioner,
@@ -247,13 +247,10 @@ async def _select_and_insert_tmp(
         async with uow_factory() as uow:
             nodes = await uow.nodes.list_all()
             counts = _count_nodes_by_cloud(nodes)
-            selection = clouds.select_provider(list(engine.platforms), counts)
-            if selection is None:
+            selected_name = clouds.select_provider(list(engine.platforms), counts)
+            if selected_name is None:
                 return None
-            # Bind to plain str outside the lock — avoids cross-context
-            # type-narrowing of `selection` across `async with`.
-            selected_name = selection.name
-            tmp_ip = await uow.nodes.add_tmp(selected_name, selection.username)
+            tmp_ip = await uow.nodes.add_tmp(selected_name)
             await uow.commit()
             return _TmpSelection(name=selected_name, ip=tmp_ip)
     # END_BLOCK_CAPACITY_AND_SELECT

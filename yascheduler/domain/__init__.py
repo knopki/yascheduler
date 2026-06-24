@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.1.0
+# VERSION: 2.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain layer entry point — re-exports events, model entities, exception hierarchy, and port interfaces.
 #   SCOPE: Re-exports domain events from .events, domain entities from .model, exception tree from .exceptions, and port Protocols from .ports.
@@ -23,7 +23,6 @@
 #   Task - Task entity with lifecycle methods
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
-#   ProviderSelection - Selected cloud provider value object (name, username)
 #   DomainError - Base class for all domain exceptions
 #   ValidationError - Input validation errors
 #   UnsupportedEngineError - Unknown calculation engine requested
@@ -50,8 +49,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - Add CloudError re-export (cloud-error-hierarchy).
-#   PREVIOUS_CHANGE: v2.0.0 - Add ProviderSelection, CloudAllocateError, CloudSetupError re-exports (cloud-provisioner-pure).
+#   LAST_CHANGE: v2.2.0 - Remove ProviderSelection re-export (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v2.1.0 - Add CloudError re-export (cloud-error-hierarchy).
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -72,7 +71,6 @@ __all__ = [
     "Task",
     "Node",
     "ConnectedMachine",
-    "ProviderSelection",
     # Exceptions
     "DomainError",
     "ValidationError",
@@ -134,7 +132,6 @@ from .model import (
     MachineState,
     Node,
     ProcessResult,
-    ProviderSelection,
     Task,
     TaskContext,
     TaskStatus,

@@ -37,9 +37,9 @@ the `clouds.select_provider` port method.
 
 For the cloud-fallback path, the use case SHALL own the full flow:
 tracker dedup, capacity check, provider selection (via
-`clouds.select_provider` port method returning `ProviderSelection`),
-tmp-node insertion, cloud allocation (via `clouds.allocate(selection.name)`),
-final node persistence, and tmp-node cleanup on failure. The
+`clouds.select_provider` port method returning `str | None`), tmp-node
+insertion, cloud allocation (via `clouds.allocate(selection)`), final
+node persistence, and tmp-node cleanup on failure. The
 `allocation_lock` SHALL serialize the capacity-read + select + add_tmp
 critical section as a single UoW with commit before lock release.
 
@@ -49,10 +49,10 @@ critical section as a single UoW with commit before lock release.
 
 #### Scenario: No free machine — cloud fallback with full ownership
 - **WHEN** `allocate_task(...)` is called and no free machine matches
-- **THEN** the use case calls `tracker.add(task_id)` (returns False → return immediately if already in-flight). Then opens a UoW under `allocation_lock`, reads `uow.nodes.list_all()`, calls `clouds.select_provider(platforms, counts)` (port method). If `selection is None`, calls `tracker.discard(task_id)` and returns False. Otherwise inserts a tmp-node via `uow.nodes.add_tmp(selection.name, selection.username)`, commits, calls `clouds.allocate(selection.name)` outside the lock, then opens a second UoW to persist the final Node and remove the tmp-node. Returns False.
+- **THEN** the use case calls `tracker.add(task_id)` (returns False → return immediately if already in-flight). Then opens a UoW under `allocation_lock`, reads `uow.nodes.list_all()`, calls `clouds.select_provider(platforms, counts)` (port method). If `selection is None`, calls `tracker.discard(task_id)` and returns False. Otherwise inserts a tmp-node via `uow.nodes.add_tmp(selection)`, commits, calls `clouds.allocate(selection)` outside the lock, then opens a second UoW to persist the final Node and remove the tmp-node. Returns False.
 
 #### Scenario: Cloud allocation failure cleans up tmp-node
-- **WHEN** `clouds.allocate(selection.name)` raises `CloudAllocateError` or `CloudSetupError` after tmp-node insertion
+- **WHEN** `clouds.allocate(selection)` raises `CloudAllocateError` or `CloudSetupError` after tmp-node insertion
 - **THEN** the use case opens a UoW, removes the tmp-node via `uow.nodes.remove(tmp_ip)`, commits, calls `tracker.discard(task_id)`, and re-raises
 
 #### Scenario: Duplicate allocation rejected by tracker

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.2.1
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.2.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in signatures evaluated at import).]
-#   PREVIOUS_CHANGE: [v1.2.0 - Add test_empty_platforms_short_circuits_cloud_fallback covering the warning short-circuit added in allocate_task v5.3.0.]
+#   LAST_CHANGE: [v1.3.0 - select_provider returns str; _make_clouds helper signature uses str selection; replace ProviderSelection(name="aws", username="root") with "aws" literal (collapse-provider-selection).]
+#   PREVIOUS_CHANGE: [v1.2.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in signatures evaluated at import).]
 # END_CHANGE_SUMMARY
 #
 """Failure-mode tests for allocate_task cloud-fallback hardening.
@@ -38,7 +38,6 @@ from yascheduler.config import Engine, EngineRepository
 from yascheduler.domain.exceptions import CloudAllocateError
 from yascheduler.domain.model import (
     Node,
-    ProviderSelection,
     Task,
     TaskContext,
     TaskStatus,
@@ -62,7 +61,7 @@ def _make_uow(todo_task: Task) -> AsyncMock:
 
 
 def _make_clouds(
-    selection: ProviderSelection, allocate_side_effect: object | None = None
+    selection: str, allocate_side_effect: object | None = None
 ) -> MagicMock:
     clouds = MagicMock(spec=CloudProvisioner)
     clouds.select_provider.return_value = selection
@@ -118,7 +117,7 @@ class TestAllocateTaskFailureModes:
         tracker.add.return_value = True
 
         clouds = _make_clouds(
-            ProviderSelection(name="aws", username="root"),
+            "aws",
             allocate_side_effect=None,
         )
 
@@ -157,7 +156,7 @@ class TestAllocateTaskFailureModes:
         tracker.add.return_value = True
 
         clouds = _make_clouds(
-            ProviderSelection(name="aws", username="root"),
+            "aws",
             allocate_side_effect=CloudAllocateError("VM create failed"),
         )
 
@@ -208,7 +207,7 @@ class TestAllocateTaskFailureModes:
         tracker.add.return_value = True
 
         clouds = _make_clouds(
-            ProviderSelection(name="aws", username="root"),
+            "aws",
             allocate_side_effect=None,
         )
         clouds.allocate = AsyncMock(return_value=cloud_node)
@@ -257,7 +256,7 @@ class TestAllocateTaskFailureModes:
         uow = _make_uow(todo_task)
 
         tracker = MagicMock(spec=AllocationTracker)
-        clouds = _make_clouds(ProviderSelection(name="aws", username="root"))
+        clouds = _make_clouds("aws")
 
         result = await allocate_task(
             task_id=todo_task.task_id,

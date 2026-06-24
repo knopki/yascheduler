@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_persistence_adapter.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
 #   SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
@@ -25,8 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Remove DB dependency; use pg_conn/pg_executor fixtures (remove-legacy-db).
-#   PREVIOUS_CHANGE: v1.0.0 - Integration tests for PostgresTaskRepository, PostgresNodeRepository, PostgresUnitOfWork.
+#   LAST_CHANGE: v1.2.0 - add_tmp("aws") drops username arg; tmp row falls back to DB DEFAULT 'root' (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v1.1.0 - Remove DB dependency; use pg_conn/pg_executor fixtures (remove-legacy-db).
 # END_CHANGE_SUMMARY
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
@@ -355,14 +355,14 @@ async def test_repo_node_add_tmp(
 ) -> None:
     """add_tmp inserts a disabled node with generated IP."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    ip = await repo.add_tmp("aws", "deployer")
+    ip = await repo.add_tmp("aws")
     assert ip.startswith("prov")
 
     n = await repo.get(ip)
     assert n is not None
     assert n.enabled is False
     assert n.cloud == "aws"
-    assert n.username == "deployer"
+    assert n.username == "root"
 
 
 # START_CONTRACT: test_repo_node_count

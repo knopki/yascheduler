@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.12.0
+# VERSION: 1.13.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext, Engine value objects; Task, Node, ConnectedMachine entities.
@@ -17,12 +17,11 @@
 #   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
-#   ProviderSelection - Selected cloud provider value object (name, username)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - Add TaskContext.replace typed copy-with + TaskContextOverrides TypedDict (task-context-replace).
-#   PREVIOUS_CHANGE: v1.11.0 - Add Task.with_context wholesale context setter (task-with-context).
+#   LAST_CHANGE: v1.13.0 - Remove ProviderSelection value object; CloudProvisioner.select_provider now returns str|None (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v1.12.0 - Add TaskContext.replace typed copy-with + TaskContextOverrides TypedDict (task-context-replace).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -420,17 +419,3 @@ class ConnectedMachine:
     def release(self) -> ConnectedMachine:
         """Transition machine state to FREE and record release timestamp."""
         return replace(self, state=MachineState.FREE, free_since=time.monotonic())
-
-
-@dataclass(frozen=True)
-class ProviderSelection:
-    """Selected cloud provider returned by CloudProvisioner.select_provider.
-
-    Primitive-only value object — keeps CloudAdapter/ConfigCloud out of the
-    application layer. `name` matches CloudAdapter.name and CloudProvisionerImpl.adapters dict key.
-    """
-
-    # FIXME: very smelly object: remove?
-
-    name: str
-    username: str  # FIXME: username is useless

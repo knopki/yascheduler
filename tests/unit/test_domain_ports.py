@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Update StubMachineGateway to satisfy extended MachineGateway Protocol (gateway-port-cleanup).
-#   PREVIOUS_CHANGE: v1.1.0 - Add stubs for update_status, list_ids_by_ip_and_status, list_all, get_by_ips port methods.
+#   LAST_CHANGE: v1.3.0 - CloudProvisioner.select_provider returns str|None; NodeRepository.add_tmp drops username (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v1.2.0 - Update StubMachineGateway to satisfy extended MachineGateway Protocol (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from yascheduler.domain.model import (
     ConnectedMachine,
     Node,
     ProcessResult,
-    ProviderSelection,
     Task,
     TaskStatus,
 )
@@ -87,7 +86,7 @@ class StubNodeRepository:
     async def add(self, node: Node) -> None:
         pass
 
-    async def add_tmp(self, cloud: str, username: str = "root") -> str:
+    async def add_tmp(self, cloud: str) -> str:
         return "prov-tmp"
 
     async def update(self, node: Node) -> None:
@@ -205,7 +204,7 @@ class StubCloudProvisioner:
 
     def select_provider(
         self, platforms: list[str], current_counts: dict[str, int]
-    ) -> ProviderSelection | None:
+    ) -> str | None:
         return None
 
     async def stop(self) -> None:

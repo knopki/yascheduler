@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_db_integration.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
@@ -26,7 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Rewrite from DB facade to PostgresUnitOfWork + repos (remove-legacy-db).
+#   LAST_CHANGE: v2.1.0 - add_tmp("azure") drops username arg; row falls back to DB DEFAULT 'root' (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v2.0.0 - Rewrite from DB facade to PostgresUnitOfWork + repos (remove-legacy-db).
 # END_CHANGE_SUMMARY
 
 """Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL."""
@@ -568,7 +569,7 @@ async def test_get_tasks_with_cloud_by_id_status(
 async def test_add_tmp_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """add_tmp creates a disabled node with provisional IP."""
     async with uow_factory() as uow:
-        ip = await uow.nodes.add_tmp("azure", "root")
+        ip = await uow.nodes.add_tmp("azure")
         await uow.commit()
         assert ip.startswith("prov")
 

@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.0.4
+# VERSION: 2.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.4 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v2.0.3 - Bound `cloud-init status --wait` with asyncio.wait_for(adapter.create_node_timeout) so a hung cloud-init cannot pin an allocator worker forever; CloudSetupError raised on timeout.
+#   LAST_CHANGE: v2.1.0 - select_provider returns adapter.name (str|None) instead of ProviderSelection(name, username); drop config lookup + ProviderSelection import (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v2.0.4 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -33,7 +33,6 @@ from yascheduler.domain import (
     CloudSetupError,
     ConnectedMachine,
     Node,
-    ProviderSelection,
 )
 
 from .cloud_config import CloudConfig
@@ -98,20 +97,20 @@ class CloudProvisionerImpl:
         self.log.info("[CloudProvisionerImpl] stop (no-op)")
 
     # START_CONTRACT: CloudProvisionerImpl.select_provider
-    #   PURPOSE: Select best provider by priority/capacity/platform, wrap result in ProviderSelection.
+    #   PURPOSE: Select best provider by priority/capacity/platform, return its name.
     #   INPUTS: {
     #     platforms: list[str] - required platform identifiers,
     #     current_counts: dict[str, int] - provider name -> current node count
     #   }
-    #   OUTPUTS: { ProviderSelection | None - None when no capacity or throttle }
+    #   OUTPUTS: { str | None - selected provider name, or None when no capacity or throttle }
     #   SIDE_EFFECTS: None — sync, no I/O.
-    #   LINKS: M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-MODEL
+    #   LINKS: M-CLOUD-PROVIDER-SELECTION
     # END_CONTRACT: CloudProvisionerImpl.select_provider
     def select_provider(
         self,
         platforms: list[str],
         current_counts: dict[str, int],
-    ) -> ProviderSelection | None:
+    ) -> str | None:
         """Select best provider — sync port method."""
         # START_BLOCK_PURE_SELECT
         adapter = select_provider_pure(
@@ -131,8 +130,7 @@ class CloudProvisionerImpl:
             return None
         # END_BLOCK_THROTTLE_CHECK
 
-        config = self.configs[adapter.name]
-        return ProviderSelection(name=adapter.name, username=config.username)
+        return adapter.name
 
     # START_CONTRACT: CloudProvisionerImpl.allocate
     #   PURPOSE: Create VM on named provider, wait SSH, cloud-init, setup, return Node (no DB write).

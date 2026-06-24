@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.2.1
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.4.0 - Refactor _run, _row_to_task, _row_to_node to use dict-based row mapping.
+#   LAST_CHANGE: v1.3.0 - add_tmp drops username param; insert_tmp.sql binds only :cloud, username falls back to DB DEFAULT 'root' (collapse-provider-selection).
+#   PREVIOUS_CHANGE: v1.2.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -313,16 +313,14 @@ class PostgresNodeRepository(_PgRepository):
 
     # START_CONTRACT: add_tmp
     #   PURPOSE: Insert a temporary cloud node with a generated IP, return the IP.
-    #   INPUTS: { cloud: str, username: str = "root" }
+    #   INPUTS: { cloud: str }
     #   OUTPUTS: { str - the generated IP }
-    #   SIDE_EFFECTS: Inserts row into yascheduler_nodes with enabled=FALSE.
+    #   SIDE_EFFECTS: Inserts row into yascheduler_nodes with enabled=FALSE; username falls back to DB DEFAULT 'root'.
     #   LINKS: node/insert_tmp.sql
     # END_CONTRACT: add_tmp
-    async def add_tmp(self, cloud: str, username: str = "root") -> str:
+    async def add_tmp(self, cloud: str) -> str:
         """Insert a temp cloud node with generated IP, return the IP."""
-        rows = await self._run(
-            load_query("node/insert_tmp"), cloud=cloud, username=username
-        )
+        rows = await self._run(load_query("node/insert_tmp"), cloud=cloud)
         return rows[0]["ip"]
 
     # START_CONTRACT: get_by_ips
