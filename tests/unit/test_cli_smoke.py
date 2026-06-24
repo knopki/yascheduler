@@ -1,30 +1,31 @@
 # FILE: tests/unit/test_cli_smoke.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: CLI smoke tests — verify 5 CLI commands are importable and structurally correct.
+#   PURPOSE: CLI smoke tests — verify 4 CLI commands are importable and structurally correct.
 #   SCOPE: Import-level smoke tests: no real DB/SSH needed, just verify function existence
-#          and decorator contracts (@to_sync for submit/check_status/show_nodes/manage_node,
-#          internal make_daemon use for daemonize). init moved to entrypoints/cli/ and is
-#          covered by tests/unit/test_cli_init.py.
+#          and decorator contracts (@to_sync for check_status/manage_node,
+#          internal make_daemon use for daemonize). init, show_nodes, and submit moved to
+#          entrypoints/cli/ and are covered by tests/unit/test_cli_init.py,
+#          tests/unit/test_cli_show_nodes.py, tests/unit/test_cli_submit.py.
 #   DEPENDS: M-CLI-COMMANDS
 #   LINKS: M-CLI-COMMANDS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestCLIFunctions - Smoke test each of the 5 CLI entry points (init covered separately)
+#   TestCLIFunctions - Smoke test each of the 4 CLI entry points (init/show_nodes/submit covered separately)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Drop test_init_function_exists (init moved to entrypoints/cli/init.py in relocate-init-command; covered by tests/unit/test_cli_init.py).
-#   PREVIOUS_CHANGE: v1.3.0 - Drop test_utils_import_does_not_import_scheduler after scheduler.py deletion (target module no longer exists).
+#   LAST_CHANGE: v1.5.0 - Drop test_submit_function_exists (submit moved to entrypoints/cli/submit.py in relocate-submit-command; covered by tests/unit/test_cli_submit.py).
+#   PREVIOUS_CHANGE: v1.4.0 - Drop test_init_function_exists (init moved to entrypoints/cli/init.py in relocate-init-command; covered by tests/unit/test_cli_init.py).
 # END_CHANGE_SUMMARY
 
-"""CLI smoke tests: verify 5 CLI commands still functional.
+"""CLI smoke tests: verify 4 CLI commands still functional.
 
 Import-level smoke tests — verify that importing and inspecting each CLI function
-doesn't crash (no real DB/SSH needed, just mock everything). init moved to
-entrypoints/cli/init.py and is covered by tests/unit/test_cli_init.py.
+doesn't crash (no real DB/SSH needed, just mock everything). init, show_nodes, and
+submit moved to entrypoints/cli/ and are covered by dedicated test files.
 """
 
 import asyncio
@@ -61,12 +62,6 @@ class TestCLIFunctions:
     """Smoke tests for CLI command functions — import and verify structure."""
 
     # --- @to_sync-decorated commands ---
-
-    def test_submit_function_exists(self) -> None:
-        """``submit`` exists and is decorated with @to_sync."""
-        from yascheduler.infra.cli import submit
-
-        _check_to_sync_decorated(submit)
 
     def test_check_status_function_exists(self) -> None:
         """``check_status`` exists and is decorated with @to_sync."""

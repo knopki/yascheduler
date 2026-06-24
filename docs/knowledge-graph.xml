@@ -91,7 +91,6 @@
       <path>yascheduler/infra/cli/__init__.py</path>
       <depends>M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE</depends>
       <annotations>
-        <fn-submit PURPOSE="Submit task via AiiDA script (infra/cli/submit.py)" />
         <fn-check_status PURPOSE="Show status of tasks (infra/cli/check_status.py)" />
         <fn-manage_node PURPOSE="Add/remove nodes from daemon (infra/cli/manage_node.py)" />
         <fn-daemonize PURPOSE="Start yascheduler daemon (infra/cli/daemonize.py)" />
@@ -165,6 +164,20 @@
         <type-_NodeView PURPOSE="Private CLI-only node+task projection DTO" />
       </annotations>
     </M-ENTRYPOINTS-CLI-SHOW-NODES>
+
+    <M-ENTRYPOINTS-CLI-SUBMIT NAME="yasubmit CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>yasubmit CLI command — parse AiiDA script, submit task via DI</purpose>
+      <path>yascheduler/entrypoints/cli/submit.py</path>
+      <depends>M-DI, M-CONFIG, M-SHARED</depends>
+      <annotations>
+        <fn-submit PURPOSE="Submit task via AiiDA script" />
+        <fn-_parse_script_metadata PURPOSE="Parse key=value pairs from script text" />
+        <fn-_read_input_files PURPOSE="Read engine input files from disk" />
+        <fn-_build_metadata PURPOSE="Assemble task metadata dict with webhook branch" />
+        <fn-_parse_submit_args PURPOSE="argparse → Namespace" />
+        <fn-_existing_path PURPOSE="argparse type validator for existing file paths" />
+      </annotations>
+    </M-ENTRYPOINTS-CLI-SUBMIT>
 
     <!-- ═══════════════════════════════════════════════
          Domain layer
@@ -954,10 +967,11 @@
     <CrossLink from="M-ENTRYPOINTS-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
     <CrossLink from="M-MAIN" to="M-ENTRYPOINTS" relation="re-exports Yascheduler via layer facade" />
     <CrossLink from="M-CLIENT-SHIM" to="M-ENTRYPOINTS-CLIENT" relation="compat re-export of Yascheduler" />
-    <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI submit; make_daemon for daemon entry" />
+    <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_daemon for daemon entry" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
     <CrossLink from="M-ENTRYPOINTS-CLI-INIT" to="M-PERSISTENCE-SCHEMA" relation="calls apply_schema for DB schema initialization" />
     <CrossLink from="M-ENTRYPOINTS-CLI-SHOW-NODES" to="M-APPLICATION-UOW" relation="reads nodes and running tasks via UoW" />
+    <CrossLink from="M-ENTRYPOINTS-CLI-SUBMIT" to="M-DI" relation="uses make_cli_deps for CLI submit" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
 

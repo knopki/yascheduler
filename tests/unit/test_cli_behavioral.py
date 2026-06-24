@@ -1,21 +1,20 @@
 # FILE: tests/unit/test_cli_behavioral.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Behavioral CLI tests — exercise CLI function bodies with mocked DI stack.
-#   SCOPE: submit, check_status, manage_node function body tests with mocked Config/CLIDeps/UoW (show_nodes moved to entrypoints/cli/show_nodes.py in relocate-show-nodes-command and is covered by tests/unit/test_cli_show_nodes.py).
+#   SCOPE: check_status, manage_node function body tests with mocked Config/CLIDeps/UoW (show_nodes moved to entrypoints/cli/show_nodes.py in relocate-show-nodes-command and is covered by tests/unit/test_cli_show_nodes.py; submit moved to entrypoints/cli/submit.py in relocate-submit-command and is covered by tests/unit/test_cli_submit.py).
 #   DEPENDS: M-CLI-COMMANDS, M-DI, M-DOMAIN-MODEL
 #   LINKS: M-CLI-COMMANDS, M-DI
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestSubmit - Behavioral tests for submit CLI command
 #   TestCheckStatus - Behavioral tests for check_status CLI command
 #   TestManageNode - Behavioral tests for manage_node CLI command
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Drop TestShowNodes (show_nodes moved to entrypoints/cli/show_nodes.py in relocate-show-nodes-command; covered by tests/unit/test_cli_show_nodes.py).
-#   PREVIOUS_CHANGE: v1.2.0 - Switch patch calls to patch.object with explicit module refs (fixes mock resolution on Python 3.9-3.12 where cli.__init__ re-export shadows submodules).
+#   LAST_CHANGE: v1.4.0 - Drop TestSubmit (submit moved to entrypoints/cli/submit.py in relocate-submit-command; covered by tests/unit/test_cli_submit.py).
+#   PREVIOUS_CHANGE: v1.3.0 - Drop TestShowNodes (show_nodes moved to entrypoints/cli/show_nodes.py in relocate-show-nodes-command; covered by tests/unit/test_cli_show_nodes.py).
 # END_CHANGE_SUMMARY
 
 """Behavioral CLI tests — exercise CLI function bodies with mocked DI stack.
@@ -25,7 +24,7 @@ and UoW to verify output and mock call assertions without real DB/SSH.
 """
 
 import importlib
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,7 +33,6 @@ from yascheduler.config import Engine, EngineRepository
 from yascheduler.di import CLIDeps
 from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 
-submit_mod = importlib.import_module("yascheduler.infra.cli.submit")
 check_status_mod = importlib.import_module("yascheduler.infra.cli.check_status")
 manage_node_mod = importlib.import_module("yascheduler.infra.cli.manage_node")
 
@@ -114,98 +112,6 @@ def make_task(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
-
-class TestSubmit:
-    """Behavioral tests for the ``submit`` CLI command."""
-
-    def test_submit_happy_path(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Submit a valid script: prints task ID, calls deps.submit with correct args."""
-        script = tmp_path / "test.in"
-        script.write_text("LABEL = Test job\nENGINE = g09\n")
-
-        # engine.input_files = ("input",) — create it so submit can read it
-        (tmp_path / "input").write_text("dummy input")
-        monkeypatch.chdir(tmp_path)
-
-        config = make_mock_config()
-        uow = make_mock_uow()
-        deps = make_mock_deps(config, uow)
-
-        with (
-            patch("sys.argv", ["yasubmit", str(script)]),
-            patch.object(submit_mod.Config, "from_config_parser", return_value=config),
-            patch.object(submit_mod, "make_cli_deps", return_value=deps),
-        ):
-            submit_mod.submit()
-
-        out, _ = capsys.readouterr()
-        assert "42" in out.strip()
-
-        deps.submit.assert_called_once()
-        call_args = deps.submit.call_args
-        assert call_args[0][0] == "Test job"  # label
-        assert call_args[0][2] == "g09"  # engine_name
-        assert "local_folder" in call_args[0][1]  # metadata
-
-    def test_submit_missing_script(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Non-existent script raises ValueError with 'not a file'."""
-        config = make_mock_config()
-        uow = make_mock_uow()
-        deps = make_mock_deps(config, uow)
-
-        with (
-            patch("sys.argv", ["yasubmit", "/nonexistent/script.in"]),
-            patch.object(submit_mod.Config, "from_config_parser", return_value=config),
-            patch.object(submit_mod, "make_cli_deps", return_value=deps),
-        ):
-            with pytest.raises(ValueError, match="not a file"):
-                submit_mod.submit()
-
-    def test_submit_no_engine_key(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Script without ENGINE= line raises ValueError."""
-        script = tmp_path / "test.in"
-        script.write_text("LABEL = Test job\nSOMETHING = else\n")
-
-        config = make_mock_config()
-        uow = make_mock_uow()
-        deps = make_mock_deps(config, uow)
-
-        with (
-            patch("sys.argv", ["yasubmit", str(script)]),
-            patch.object(submit_mod.Config, "from_config_parser", return_value=config),
-            patch.object(submit_mod, "make_cli_deps", return_value=deps),
-        ):
-            with pytest.raises(ValueError, match="not defined an engine"):
-                submit_mod.submit()
-
-    def test_submit_unsupported_engine(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Script with unknown ENGINE= raises ValueError 'not supported'."""
-        script = tmp_path / "test.in"
-        script.write_text("LABEL = Test\nENGINE = unknown\n")
-
-        config = make_mock_config()
-        config.engines.get = MagicMock(return_value=None)  # engine not found
-
-        uow = make_mock_uow()
-        deps = make_mock_deps(config, uow)
-
-        with (
-            patch("sys.argv", ["yasubmit", str(script)]),
-            patch.object(submit_mod.Config, "from_config_parser", return_value=config),
-            patch.object(submit_mod, "make_cli_deps", return_value=deps),
-        ):
-            with pytest.raises(ValueError, match="not supported"):
-                submit_mod.submit()
 
 
 class TestCheckStatus:

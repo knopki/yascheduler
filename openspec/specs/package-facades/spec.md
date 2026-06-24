@@ -98,14 +98,13 @@ imports in `yascheduler.infra.cli`, `yascheduler.infra.persistence`,
 other subpackages.
 
 #### Scenario: infra/cli/__init__.py uses relative imports
-- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`, `manage_node`, `submit`)
+- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`, `manage_node`)
 - **THEN** it uses `from .check_status import check_status` style, not `from yascheduler.infra.cli.check_status import check_status`
-- **AND** it does NOT import `init` (which has moved to `yascheduler/entrypoints/cli/init.py`)
-- **AND** it does NOT import `show_nodes` (which has moved to `yascheduler/entrypoints/cli/show_nodes.py`)
+- **AND** it does NOT import `init`, `show_nodes`, or `submit` (which have moved to `yascheduler/entrypoints/cli/`)
 
 #### Scenario: entrypoints/cli/__init__.py uses relative imports
 - **WHEN** `yascheduler/entrypoints/cli/__init__.py` imports its own submodules
-- **THEN** it uses relative imports (`from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`); `show_nodes` is NOT re-exported by the facade (it is invoked by console_script, not imported across layers — same pattern as `init`)
+- **THEN** it uses `from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`; `show_nodes` and `submit` are NOT re-exported by the facade (they are invoked by console_script, not imported across layers — same pattern as `init`)
 
 #### Scenario: Domain modules use relative imports
 - **WHEN** `yascheduler/domain/model.py` imports from another module in `yascheduler/domain/`
