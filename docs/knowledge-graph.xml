@@ -92,7 +92,6 @@
       <depends>M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE</depends>
       <annotations>
         <fn-check_status PURPOSE="Show status of tasks (infra/cli/check_status.py)" />
-        <fn-manage_node PURPOSE="Add/remove nodes from daemon (infra/cli/manage_node.py)" />
         <fn-daemonize PURPOSE="Start yascheduler daemon (infra/cli/daemonize.py)" />
       </annotations>
     </M-CLI-COMMANDS>
@@ -178,6 +177,21 @@
         <fn-_existing_path PURPOSE="argparse type validator for existing file paths" />
       </annotations>
     </M-ENTRYPOINTS-CLI-SUBMIT>
+
+    <M-ENTRYPOINTS-CLI-MANAGE-NODE NAME="yasetnode CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>yasetnode CLI command — add, soft-remove, or hard-remove nodes via UoW (+ SSH gateway on the add path)</purpose>
+      <path>yascheduler/entrypoints/cli/manage_node.py</path>
+      <depends>M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SHARED, M-APPLICATION-UOW</depends>
+      <annotations>
+        <fn-manage_node PURPOSE="Add/soft-remove/hard-remove a node; exit 0/1/2" />
+        <fn-_parse_host_spec PURPOSE="argparse type: parse [user@]host[:port][~ncpus] grammar into HostSpec" />
+        <fn-_parse_node_args PURPOSE="argparse → Namespace (prog=yasetnode, store_true flags, --remove-soft/--remove-hard mutex)" />
+        <fn-_remove_node_hard PURPOSE="Hard-remove: mark RUNNING tasks DONE, remove node, commit, announce" />
+        <fn-_remove_node_soft PURPOSE="Soft-remove: disable (if tasks) or remove node, commit, announce" />
+        <fn-_add_node PURPOSE="Add node: connect, optional setup, insert, commit, announce; try/finally disconnect" />
+        <type-HostSpec PURPOSE="Frozen parsed host spec (host, username, port, ncpus)" />
+      </annotations>
+    </M-ENTRYPOINTS-CLI-MANAGE-NODE>
 
     <!-- ═══════════════════════════════════════════════
          Domain layer
@@ -970,6 +984,7 @@
     <CrossLink from="M-ENTRYPOINTS-CLI-INIT" to="M-PERSISTENCE-SCHEMA" relation="calls apply_schema for DB schema initialization" />
     <CrossLink from="M-ENTRYPOINTS-CLI-SHOW-NODES" to="M-APPLICATION-UOW" relation="reads nodes and running tasks via UoW" />
     <CrossLink from="M-ENTRYPOINTS-CLI-SUBMIT" to="M-DI" relation="uses make_cli_deps for CLI submit" />
+    <CrossLink from="M-ENTRYPOINTS-CLI-MANAGE-NODE" to="M-DI" relation="uses make_cli_deps for CLI manage_node" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
 

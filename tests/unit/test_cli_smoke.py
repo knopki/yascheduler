@@ -1,31 +1,33 @@
 # FILE: tests/unit/test_cli_smoke.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: CLI smoke tests — verify 4 CLI commands are importable and structurally correct.
+#   PURPOSE: CLI smoke tests — verify 2 CLI commands are importable and structurally correct.
 #   SCOPE: Import-level smoke tests: no real DB/SSH needed, just verify function existence
-#          and decorator contracts (@to_sync for check_status/manage_node,
-#          internal make_daemon use for daemonize). init, show_nodes, and submit moved to
+#          and decorator contracts (@to_sync for check_status,
+#          internal make_daemon use for daemonize). init, show_nodes, submit, and manage_node moved to
 #          entrypoints/cli/ and are covered by tests/unit/test_cli_init.py,
-#          tests/unit/test_cli_show_nodes.py, tests/unit/test_cli_submit.py.
+#          tests/unit/test_cli_show_nodes.py, tests/unit/test_cli_submit.py,
+#          tests/unit/test_cli_manage_node.py.
 #   DEPENDS: M-CLI-COMMANDS
 #   LINKS: M-CLI-COMMANDS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestCLIFunctions - Smoke test each of the 4 CLI entry points (init/show_nodes/submit covered separately)
+#   TestCLIFunctions - Smoke test each of the 2 CLI entry points (init/show_nodes/submit/manage_node covered separately)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Drop test_submit_function_exists (submit moved to entrypoints/cli/submit.py in relocate-submit-command; covered by tests/unit/test_cli_submit.py).
-#   PREVIOUS_CHANGE: v1.4.0 - Drop test_init_function_exists (init moved to entrypoints/cli/init.py in relocate-init-command; covered by tests/unit/test_cli_init.py).
+#   LAST_CHANGE: v1.6.0 - Drop test_manage_node_function_exists (manage_node moved to entrypoints/cli/manage_node.py in relocate-manage-node-command; covered by tests/unit/test_cli_manage_node.py).
+#   PREVIOUS_CHANGE: v1.5.0 - Drop test_submit_function_exists (submit moved to entrypoints/cli/submit.py in relocate-submit-command; covered by tests/unit/test_cli_submit.py).
 # END_CHANGE_SUMMARY
 
-"""CLI smoke tests: verify 4 CLI commands still functional.
+"""CLI smoke tests: verify 2 CLI commands still functional.
 
 Import-level smoke tests — verify that importing and inspecting each CLI function
-doesn't crash (no real DB/SSH needed, just mock everything). init, show_nodes, and
-submit moved to entrypoints/cli/ and are covered by dedicated test files.
+doesn't crash (no real DB/SSH needed, just mock everything). init, show_nodes,
+submit, and manage_node moved to entrypoints/cli/ and are covered by dedicated
+test files.
 """
 
 import asyncio
@@ -68,12 +70,6 @@ class TestCLIFunctions:
         from yascheduler.infra.cli import check_status
 
         _check_to_sync_decorated(check_status)
-
-    def test_manage_node_function_exists(self) -> None:
-        """``manage_node`` exists and is decorated with @to_sync."""
-        from yascheduler.infra.cli import manage_node
-
-        _check_to_sync_decorated(manage_node)
 
     # --- daemonize (NOT @to_sync; uses make_daemon internally) ---
 
