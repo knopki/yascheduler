@@ -92,17 +92,17 @@ the same package. Absolute cross-package imports
 (`from yascheduler.infra.cli.xxx import yyy`) of a sibling within the same
 package SHALL NOT appear inside that package. This applies to intra-package
 imports in `yascheduler.infra.cli`, `yascheduler.infra.persistence`,
-`yascheduler.entrypoints.daemon`, `yascheduler.entrypoints.cli`, and all
+`yascheduler.entrypoints.cli`, and all
 other subpackages.
 
 #### Scenario: infra/cli/__init__.py uses relative imports
-- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`daemonize`)
-- **THEN** it uses `from .daemonize import daemonize` style, not `from yascheduler.infra.cli.daemonize import daemonize`
-- **AND** it does NOT import `init`, `show_nodes`, `submit`, `manage_node`, or `check_status` (which have moved to `yascheduler/entrypoints/cli/`)
+- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`, `manage_node`)
+- **THEN** it uses `from .check_status import check_status` style, not `from yascheduler.infra.cli.check_status import check_status`
+- **AND** it does NOT import `init`, `show_nodes`, or `submit` (which have moved to `yascheduler/entrypoints/cli/`)
 
 #### Scenario: entrypoints/cli/__init__.py uses relative imports
 - **WHEN** `yascheduler/entrypoints/cli/__init__.py` imports its own submodules
-- **THEN** it uses `from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`; `show_nodes`, `submit`, `manage_node`, and `check_status` are NOT re-exported by the facade (they are invoked by console_script, not imported across layers — same pattern as `init`)
+- **THEN** it uses `from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`; `show_nodes` and `submit` are NOT re-exported by the facade (they are invoked by console_script, not imported across layers — same pattern as `init`)
 
 #### Scenario: Domain modules use relative imports
 - **WHEN** `yascheduler/domain/model.py` imports from another module in `yascheduler/domain/`
@@ -182,8 +182,8 @@ consumer actually needs them. The `AiiDA` scheduler plugin
 (`entrypoints/aiida_plugin.py`) is NOT re-exported by the facade: it is
 discovered via the `[project.entry-points."aiida.schedulers"]` registry, not via
 `from yascheduler.entrypoints import …`. The daemon launchers
-(`entrypoints/daemon/daemon_systemd.py` and
-`entrypoints/daemon/daemon_sysv.py`) are NOT re-exported by the facade either:
+(`entrypoints/cli/daemon_systemd.py` and
+`entrypoints/cli/daemon_sysv.py`) are NOT re-exported by the facade either:
 they are invoked by path from the systemd unit file and SysV init.d script
 templates (via `%YASCHEDULER_DAEMON_FILE%` substitution produced by `yainit`),
 not imported across layers. As follow-up changes migrate `di.py` and
@@ -204,7 +204,7 @@ facade only when a cross-layer consumer requires them.
 
 #### Scenario: Daemon launchers are not re-exported by the entrypoints facade
 - **WHEN** the `entrypoints/__init__.py` facade is inspected
-- **THEN** it re-exports only `Yascheduler`; `start_daemon` (from `entrypoints/daemon/daemon_sysv.py`) and the `__main__` blocks of both `entrypoints/daemon/daemon_systemd.py` and `entrypoints/daemon/daemon_sysv.py` are NOT re-exported (the launchers are invoked by path from service templates, not imported across layers)
+- **THEN** it re-exports only `Yascheduler`; `start_daemon` (from `entrypoints/cli/daemon_sysv.py`) and the `__main__` blocks of both `entrypoints/cli/daemon_systemd.py` and `entrypoints/cli/daemon_sysv.py` are NOT re-exported (the launchers are invoked by path from service templates, not imported across layers)
 
 #### Scenario: Empty facade is valid for future residents
 - **WHEN** the `entrypoints` layer has not yet received a follow-up migration (e.g., CLI)
@@ -280,7 +280,7 @@ checked for layer direction by R3) but SHALL still be subject to R2
 
 #### Scenario: Daemon launchers are layer-checked after migration
 - **WHEN** the `layers` contract runs
-- **THEN** `yascheduler.entrypoints.daemon.daemon_systemd` and `yascheduler.entrypoints.daemon.daemon_sysv` (now under the `yascheduler.entrypoints` layer) ARE checked for R3 violations like any other entrypoints-layer module, and pass because their imports (`yascheduler.infra.cli.daemonize`, `yascheduler.shared` constants) flow downward through the layer direction
+- **THEN** `yascheduler.entrypoints.cli.daemon_systemd` and `yascheduler.entrypoints.cli.daemon_sysv` (under the `yascheduler.entrypoints` layer) ARE checked for R3 violations like any other entrypoints-layer module, and pass because their imports (`yascheduler.infra.cli.daemonize`, `yascheduler.shared` constants) flow downward through the layer direction
 
 ### Requirement: Layers contract configuration
 

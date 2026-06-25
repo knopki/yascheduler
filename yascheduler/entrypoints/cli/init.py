@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/init.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yainit CLI command — install service unit files and/or apply DB schema, with --schema/--daemon subset-selector flags.
 #   SCOPE: init command + argparse + systemd/sysv service install + DB schema application delegation.
@@ -15,7 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-init-command: moved from infra/cli/init.py, added --schema/--daemon argparse flags, exit-code contract 0/1/2, overwrite-if-exists service files, /run/systemd/system detection, OSError handling.
+#   LAST_CHANGE: v1.1.0 - Updated daemon-file path computation (entrypoints/daemon/daemon_*.py -> entrypoints/cli/daemon_*.py) to track the relocated launchers in relocate-daemon-launchers-to-cli.
+#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-init-command: moved from infra/cli/init.py, added --schema/--daemon argparse flags, exit-code contract 0/1/2, overwrite-if-exists service files, /run/systemd/system detection, OSError handling.
 # END_CHANGE_SUMMARY
 
 import argparse
@@ -100,7 +101,7 @@ def _init_systemd(
 ) -> None:
     print("Installing systemd service")
     src_unit_file = install_path / "data/yascheduler.service"
-    daemon_file = install_path / "entrypoints/daemon/daemon_systemd.py"
+    daemon_file = install_path / "entrypoints/cli/daemon_systemd.py"
     systemd_script = src_unit_file.read_text("utf-8").replace(
         "%YASCHEDULER_DAEMON_FILE%", str(daemon_file)
     )
@@ -124,7 +125,7 @@ def _init_sysv(
 ) -> None:
     print("Installing SysV service")
     src_startup_file = install_path / "data/yascheduler.sh"
-    daemon_file = install_path / "entrypoints/daemon/daemon_sysv.py"
+    daemon_file = install_path / "entrypoints/cli/daemon_sysv.py"
     sysv_script = src_startup_file.read_text("utf-8").replace(
         "%YASCHEDULER_DAEMON_FILE%", str(daemon_file)
     )
