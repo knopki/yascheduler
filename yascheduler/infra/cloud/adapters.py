@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/adapters.py
-# VERSION: 1.1.1
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Mapping of cloud config types to create/delete callables.
 #   SCOPE: Adapter registry mapping provider config classes to their operations.
@@ -8,7 +8,7 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   CloudAdapter                # Generic[TConfigCloud_co] - Frozen attrs class wrapping create/delete callables + platform checks
+#   CloudAdapter                # Generic[TConfigCloud_co] - Frozen dataclass wrapping create/delete callables + platform checks
 #   can_debian_buster           # (platform: str) -> bool
 #   can_debian_bullseye         # (platform: str) -> bool
 #   can_win10                   # (platform: str) -> bool
@@ -22,15 +22,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.1.0 - Rename _resolve_adapter → resolve_adapter (public) so the composition root (di.py) doesn't reach into a private symbol (review-hardening).
+#   LAST_CHANGE: v1.2.0 - Migrate CloudAdapter from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); drop 4× bare field(); remove stale FIXME marker (migrate-cloud-from-attrs).
+#   PREVIOUS_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
-# FIXME: migrate from attrs to dataclasses
 """Cloud adapters"""
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from functools import cache
 from typing import TYPE_CHECKING, Generic
 
@@ -38,8 +38,6 @@ if TYPE_CHECKING:
     import logging
 
     from yascheduler.config import ConfigCloud
-
-from attrs import define, field
 
 from .protocols import (
     CreateNodeCallable,
@@ -76,14 +74,14 @@ def can_win11(platform: str) -> bool:
 #   SIDE_EFFECTS: None
 #   LINKS: M-CLOUD-ADAPTERS
 # END_CONTRACT: CloudAdapter.__init__
-@define(frozen=True)
+@dataclass(frozen=True)
 class CloudAdapter(Generic[TConfigCloud_co]):
     """Cloud adapter"""
 
-    name: str = field()
-    supported_platform_checks: tuple[SupportedPlatformChecker, ...] = field()
-    create_node: CreateNodeCallable[TConfigCloud_co] = field()
-    delete_node: DeleteNodeCallable[TConfigCloud_co] = field()
+    name: str
+    supported_platform_checks: tuple[SupportedPlatformChecker, ...]
+    create_node: CreateNodeCallable[TConfigCloud_co]
+    delete_node: DeleteNodeCallable[TConfigCloud_co]
     op_limit: int = field(default=1)
     create_node_conn_timeout: int = field(default=10)
     create_node_timeout: int = field(default=300)

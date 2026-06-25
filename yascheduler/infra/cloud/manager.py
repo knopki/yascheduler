@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.1.0
+# VERSION: 2.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - select_provider returns adapter.name (str|None) instead of ProviderSelection(name, username); drop config lookup + ProviderSelection import (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v2.0.4 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v2.2.0 - Migrate CloudProvisionerImpl from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); 7× bare field() → bare annotations; ssh_key_lock factory → default_factory (migrate-cloud-from-attrs).
+#   PREVIOUS_CHANGE: v2.1.0 - select_provider returns adapter.name (str|None) instead of ProviderSelection(name, username); drop config lookup + ProviderSelection import (collapse-provider-selection).
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -24,9 +24,8 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-
-from attrs import define, field
 
 from yascheduler.domain import (
     CloudAllocateError,
@@ -73,7 +72,7 @@ if TYPE_CHECKING:
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-PORTS, M-SSH-GATEWAY, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS
 # END_CONTRACT: CloudProvisionerImpl
-@define(frozen=True)
+@dataclass(frozen=True)
 class CloudProvisionerImpl:
     """Multi-cloud provisioner implementing CloudProvisioner port.
 
@@ -81,16 +80,16 @@ class CloudProvisionerImpl:
     installation. No DB access — all persistence is owned by use cases.
     """
 
-    adapters: dict[str, CloudAdapter] = field()
-    configs: dict[str, ConfigCloud] = field()
-    machine_gateway: SSHMachineGateway = field()
-    local_config: ConfigLocal = field()
-    remote_config: ConfigRemote = field()
-    engines: EngineRepository = field()
-    log: logging.Logger = field()
+    adapters: dict[str, CloudAdapter]
+    configs: dict[str, ConfigCloud]
+    machine_gateway: SSHMachineGateway
+    local_config: ConfigLocal
+    remote_config: ConfigRemote
+    engines: EngineRepository
+    log: logging.Logger
     # Internal lock serializing SSH key load/generate across concurrent allocations.
     # Auto-constructed (init=False); not part of constructor signature.
-    ssh_key_lock: asyncio.Lock = field(factory=asyncio.Lock, init=False)
+    ssh_key_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     async def stop(self) -> None:
         """No-op — compatibility hook."""

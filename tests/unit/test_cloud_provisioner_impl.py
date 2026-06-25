@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.2.0
+# VERSION: 2.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - select_provider returns provider name string (str|None); drop ProviderSelection import + isinstance/name/username assertions (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v2.1.0 - Remove TestBool (vestigial __bool__ dropped from CloudProvisionerImpl v2.0.3); add test_allocate_cloud_init_timeout_cleans_up_vm covering the asyncio.wait_for bound added in manager.py v2.0.3.
+#   LAST_CHANGE: v2.3.0 - Add canary test_cloud_config_render_serializes guarding CloudConfig.render() JSON output across the attrs→dataclass migration (migrate-cloud-from-attrs).
+#   PREVIOUS_CHANGE: v2.2.0 - select_provider returns provider name string (str|None); drop ProviderSelection import + isinstance/name/username assertions (collapse-provider-selection).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path, PurePath
 from typing import Any
@@ -521,6 +522,21 @@ class TestCloudConfigGeneration:
         assert "vim" in cc.packages
         assert "htop" in cc.packages
         mock_engines.filter.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cloud_config_render_serializes(self) -> None:
+        """CloudConfig.render() produces stable #cloud-config JSON (asdict canary)."""
+        cc = CloudConfig(
+            bootcmd=("echo hi", ["mkdir", "/x"]),
+            package_upgrade=True,
+            packages=["vim", "htop"],
+        )
+        rendered = cc.render()
+        assert rendered.startswith("#cloud-config\n")
+        payload = json.loads(rendered[len("#cloud-config\n") :])
+        assert payload["bootcmd"] == ["echo hi", ["mkdir", "/x"]]
+        assert payload["packages"] == ["vim", "htop"]
+        assert payload["package_upgrade"] is True
 
 
 class TestSelectProvider:

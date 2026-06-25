@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/__init__.py
-# VERSION: 1.5.1
+# VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public re-exports from infra/cloud submodules.
@@ -9,7 +9,7 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   CloudAdapter - Frozen attrs class wrapping create/delete callables + platform checks
+#   CloudAdapter - Frozen dataclass wrapping create/delete callables + platform checks
 #   CloudCapacity - Cloud capacity dataclass
 #   PCloudConfig - Cloud config init protocol
 #   CreateNodeCallable - Create node in the cloud protocol
@@ -27,8 +27,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.5.0 - Re-export resolve_adapter so di.py doesn't reach into a private symbol (review-hardening).
+#   LAST_CHANGE: v1.6.0 - Refresh MODULE_MAP wording: CloudAdapter is now a frozen dataclass, not a frozen attrs class (migrate-cloud-from-attrs).
+#   PREVIOUS_CHANGE: v1.5.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 """Cloud adapters module"""

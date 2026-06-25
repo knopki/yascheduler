@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/az.py
-# VERSION: 1.6.1
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Azure VM creation and deletion using Azure SDK.
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.6.1 - Relocated from yascheduler/clouds/az.py; optional SDK imports; updated internal imports.
+#   LAST_CHANGE: v1.7.0 - Hybrid: replace attrs.evolve(cloud_config) → dataclasses.replace(cloud_config) (CloudConfig is now a dataclass); keep attrs.asdict(vm_image) for out-of-scope AzureImageReference (migrate-cloud-from-attrs).
+#   PREVIOUS_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 #
 """Azure cloud methods"""
@@ -32,10 +32,11 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, cast
 
-from attrs import asdict, evolve
+from attrs import asdict
 
 try:
     from azure.core.exceptions import (
@@ -202,9 +203,9 @@ def _render_custom_data(
             # see https://github.com/MicrosoftDocs/azure-docs/issues/82500
             "systemctl mask waagent-apt.service",
         ]
-        custom_data = evolve(
+        custom_data = replace(
             cloud_config, bootcmd=[*my_boot_cmds, *cloud_config.bootcmd]
-        ).render_base64()
+        ).render_base64()  # type: ignore[misc]
     # END_BLOCK_RENDER_CUSTOM_DATA
     return custom_data
 

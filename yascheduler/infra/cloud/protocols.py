@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/protocols.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Protocol definitions for cloud config, node creation, deletion callables.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Relocated from yascheduler/clouds/protocols.py; updated config import.
+#   LAST_CHANGE: v1.1.0 - Migrate CloudCapacity from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); remove stale `from attr import define` typo import (migrate-cloud-from-attrs).
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 """Cloud protocols"""
@@ -29,10 +29,10 @@
 import logging
 from abc import abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Optional, Protocol, TypeVar, Union
 
 from asyncssh.public_key import SSHKey
-from attr import define
 
 from yascheduler.config import ConfigCloud
 
@@ -89,7 +89,7 @@ class DeleteNodeCallable(Protocol[TConfigCloud_contra]):
         raise NotImplementedError
 
 
-@define(frozen=True)
+@dataclass(frozen=True)
 class CloudCapacity:
     "Cloud capacity object"
 
