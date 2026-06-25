@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/init.py
-# VERSION: 1.1.0
+# VERSION: 1.1.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yainit CLI command — install service unit files and/or apply DB schema, with --schema/--daemon subset-selector flags.
 #   SCOPE: init command + argparse + systemd/sysv service install + DB schema application delegation.
@@ -15,9 +15,11 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Updated daemon-file path computation (entrypoints/daemon/daemon_*.py -> entrypoints/cli/daemon_*.py) to track the relocated launchers in relocate-daemon-launchers-to-cli.
-#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-init-command: moved from infra/cli/init.py, added --schema/--daemon argparse flags, exit-code contract 0/1/2, overwrite-if-exists service files, /run/systemd/system detection, OSError handling.
+#   LAST_CHANGE: v1.1.1 - Added `from __future__ import annotations` for Python 3.9 compatibility (init()'s `list[str] | None` annotation evaluated at import time, breaking 3.9 collection).
+#   PREVIOUS_CHANGE: v1.1.0 - Updated daemon-file path computation (entrypoints/daemon/daemon_*.py -> entrypoints/cli/daemon_*.py) to track the relocated launchers in relocate-daemon-launchers-to-cli.
 # END_CHANGE_SUMMARY
+
+from __future__ import annotations
 
 import argparse
 import os
