@@ -86,19 +86,18 @@ it is a peer utility module that already depends on `yascheduler.shared`.
 
 ### Requirement: Within-package relative imports (R1)
 
-Modules within the same package (e.g. `yascheduler.infra.cli`) SHALL use
-relative imports (`from .xxx import yyy`) for symbols from other modules in
-the same package. Absolute cross-package imports
-(`from yascheduler.infra.cli.xxx import yyy`) of a sibling within the same
-package SHALL NOT appear inside that package. This applies to intra-package
-imports in `yascheduler.infra.cli`, `yascheduler.infra.persistence`,
-`yascheduler.entrypoints.cli`, and all
-other subpackages.
+Modules within the same package (e.g. `yascheduler.infra.persistence`, `yascheduler.entrypoints.cli`) SHALL use relative imports
+(`from .xxx import yyy`) for symbols from other modules in the same package.
+Absolute cross-package imports
+(`from yascheduler.entrypoints.cli.xxx import yyy`) of a sibling within the
+same package SHALL NOT appear inside that package. This applies to
+intra-package imports in `yascheduler.infra.persistence`,
+`yascheduler.entrypoints.cli`, and all other subpackages.
 
-#### Scenario: infra/cli/__init__.py uses relative imports
-- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`, `manage_node`)
-- **THEN** it uses `from .check_status import check_status` style, not `from yascheduler.infra.cli.check_status import check_status`
-- **AND** it does NOT import `init`, `show_nodes`, or `submit` (which have moved to `yascheduler/entrypoints/cli/`)
+The `yascheduler/infra/cli/` subpackage is liquidated (both `daemonize.py`
+and `__init__.py` are deleted, and the directory is removed); no
+`yascheduler.infra.cli` package exists, so no within-package relative-import
+scenario applies to it.
 
 #### Scenario: entrypoints/cli/__init__.py uses relative imports
 - **WHEN** `yascheduler/entrypoints/cli/__init__.py` imports its own submodules
@@ -111,6 +110,10 @@ other subpackages.
 #### Scenario: No parent-traversal relative imports anywhere
 - **WHEN** any `.py` file under `yascheduler/` is inspected
 - **THEN** no `from .. import`, `from ... import`, `from .... import` (or deeper) relative imports appear — only `from .` (single-level sibling) relative imports are permitted
+
+#### Scenario: infra/cli/ does not exist
+- **WHEN** the `yascheduler/infra/cli/` directory is inspected
+- **THEN** it does not exist; the `daemonize` module has moved to `yascheduler/entrypoints/cli/daemonize.py` and the empty `infra/cli/` subpackage has been removed
 
 ### Requirement: Cross-package facade imports (R2)
 
@@ -186,9 +189,10 @@ discovered via the `[project.entry-points."aiida.schedulers"]` registry, not via
 `entrypoints/cli/daemon_sysv.py`) are NOT re-exported by the facade either:
 they are invoked by path from the systemd unit file and SysV init.d script
 templates (via `%YASCHEDULER_DAEMON_FILE%` substitution produced by `yainit`),
-not imported across layers. As follow-up changes migrate `di.py` and
-`infra/cli/*` into `entrypoints/`, their public symbols will be added to this
-facade only when a cross-layer consumer requires them.
+not imported across layers. The `daemonize` entry point
+(`entrypoints/cli/daemonize.py`) is likewise NOT re-exported by the facade: it
+is invoked by the `yascheduler` console_script, not imported across layers.
+With `infra/cli/` liquidated, no deferred `infra/cli/*` migration remains.
 
 #### Scenario: Entrypoints facade re-exports Yascheduler
 - **WHEN** a consumer imports `from yascheduler.entrypoints import Yascheduler`
@@ -204,11 +208,11 @@ facade only when a cross-layer consumer requires them.
 
 #### Scenario: Daemon launchers are not re-exported by the entrypoints facade
 - **WHEN** the `entrypoints/__init__.py` facade is inspected
-- **THEN** it re-exports only `Yascheduler`; `start_daemon` (from `entrypoints/cli/daemon_sysv.py`) and the `__main__` blocks of both `entrypoints/cli/daemon_systemd.py` and `entrypoints/cli/daemon_sysv.py` are NOT re-exported (the launchers are invoked by path from service templates, not imported across layers)
+- **THEN** it re-exports only `Yascheduler`; `start_daemon` (from `entrypoints/cli/daemon_sysv.py`), `daemonize` (from `entrypoints/cli/daemonize.py`), and the `__main__` blocks of both `entrypoints/cli/daemon_systemd.py` and `entrypoints/cli/daemon_sysv.py` are NOT re-exported (the launchers are invoked by path from service templates or by the `yascheduler` console_script, not imported across layers)
 
-#### Scenario: Empty facade is valid for future residents
-- **WHEN** the `entrypoints` layer has not yet received a follow-up migration (e.g., CLI)
-- **THEN** the `entrypoints/__init__.py` facade contains only the re-exports required by current residents (`Yascheduler`), and adding new symbols is a deliberate lazy act, not an automatic re-export
+#### Scenario: No deferred infra/cli migration remains
+- **WHEN** the `entrypoints/__init__.py` change summary is inspected
+- **THEN** it no longer mentions `infra/cli/` as a deferred follow-up; the migration is complete
 
 ### Requirement: Compat shim for yascheduler.client
 

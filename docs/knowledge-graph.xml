@@ -88,10 +88,10 @@
 
     <M-CLI-COMMANDS NAME="CLI commands package" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Per-command CLI adapter modules — parse args, call use cases via DI, format output.</purpose>
-      <path>yascheduler/infra/cli/__init__.py</path>
-      <depends>M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE</depends>
+      <path>yascheduler/entrypoints/cli/__init__.py</path>
+      <depends>M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE, M-ENTRYPOINTS-CLI-ARGS, M-DAEMON-COMMON</depends>
       <annotations>
-        <fn-daemonize PURPOSE="Start yascheduler daemon (infra/cli/daemonize.py)" />
+        <fn-daemonize PURPOSE="Start yascheduler daemon (entrypoints/cli/daemonize.py)" />
       </annotations>
     </M-CLI-COMMANDS>
 
@@ -114,24 +114,48 @@
     <M-DAEMON-SYSTEMD NAME="Systemd daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Systemd service entry point for the scheduler daemon.</purpose>
       <path>yascheduler/entrypoints/cli/daemon_systemd.py</path>
-      <depends>M-CLI-COMMANDS, M-SHARED</depends>
+      <depends>M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG</depends>
       <annotations>
+        <fn-main PURPOSE="Thin sync entry point: parse args, configure logger, load Config, asyncio.run(run_daemon); foreground under systemd (stderr → journald); no python-daemon" />
       </annotations>
     </M-DAEMON-SYSTEMD>
 
     <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SysV init service entry point for launching the scheduler daemon.</purpose>
       <path>yascheduler/entrypoints/cli/daemon_sysv.py</path>
-      <depends>M-CLI-COMMANDS, M-SHARED</depends>
+      <depends>M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG, M-SHARED</depends>
       <annotations>
-        <fn-start_daemon PURPOSE="SysV daemon entry point with PID file management" />
+        <fn-main PURPOSE="Thin sync entry point: parse args (preserves -p/-l short flags), open DaemonContext (working_directory=/), inside it configure logger + load Config + asyncio.run(run_daemon)" />
       </annotations>
     </M-DAEMON-SYSV>
+
+    <M-ENTRYPOINTS-CLI-ARGS NAME="Shared CLI argparse helpers" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Shared argparse helpers for CLI entry points — existing_path validator and add_config_arg/add_log_level_arg/add_log_file_arg flag adders consumed by all six CLI commands and the three daemon launchers.</purpose>
+      <path>yascheduler/entrypoints/cli/args.py</path>
+      <depends>M-SHARED</depends>
+      <annotations>
+        <fn-existing_path PURPOSE="argparse type validator: Path(s) if s is an existing file else ArgumentTypeError (exit 2)" />
+        <fn-add_config_arg PURPOSE="Add --config PATH (type=existing_path, default=CONFIG_FILE)" />
+        <fn-add_log_level_arg PURPOSE="Add --log-level (choices=LOG_LEVEL_CHOICES, default=WARNING); resolved via logging.getLevelName" />
+        <fn-add_log_file_arg PURPOSE="Add --log-file PATH (default=None unless caller overrides)" />
+        <const-LOG_LEVEL_CHOICES PURPOSE="Explicit list of accepted log-level names (no logging._levelToName private API)" />
+      </annotations>
+    </M-ENTRYPOINTS-CLI-ARGS>
+
+    <M-DAEMON-COMMON NAME="Shared daemon core" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Shared daemon core — configure_logger (root logger + backoff/asyncssh suppression + captureWarnings) and run_daemon (make_daemon + SIGTERM/SIGINT handlers + orch.start()), consumed by all three daemon entry points.</purpose>
+      <path>yascheduler/entrypoints/cli/daemon_common.py</path>
+      <depends>M-DI, M-CONFIG, M-APPLICATION-ORCHESTRATOR</depends>
+      <annotations>
+        <fn-configure_logger PURPOSE="Configure the ROOT logger: stderr StreamHandler always + FileHandler when log_file set; backoff/asyncssh → ERROR; captureWarnings(True); NO basicConfig" />
+        <fn-run_daemon PURPOSE="Async daemon core: await make_daemon, register SIGTERM/SIGINT handlers on the running loop, await orch.start()" />
+      </annotations>
+    </M-DAEMON-COMMON>
 
     <M-ENTRYPOINTS-CLI-INIT NAME="yainit CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Bootstrap CLI command — install service unit files and/or apply DB schema with --schema/--daemon subset flags.</purpose>
       <path>yascheduler/entrypoints/cli/init.py</path>
-      <depends>M-PERSISTENCE-SCHEMA, M-CONFIG, M-SHARED</depends>
+      <depends>M-PERSISTENCE-SCHEMA, M-CONFIG, M-SHARED, M-ENTRYPOINTS-CLI-ARGS</depends>
       <annotations>
         <fn-init PURPOSE="Service + schema initialization (--schema/--daemon subset selectors)" />
         <fn-_init_systemd PURPOSE="Write systemd unit file (overwrite if exists)" />
@@ -143,9 +167,10 @@
     <M-ENTRYPOINTS-CLI-SHOW-NODES NAME="yanodes CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>List nodes and their running tasks with filter flags and table/JSON output.</purpose>
       <path>yascheduler/entrypoints/cli/show_nodes.py</path>
-      <depends>M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SHARED</depends>
+      <depends>M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SHARED, M-ENTRYPOINTS-CLI-ARGS</depends>
       <annotations>
-        <fn-show_nodes PURPOSE="List nodes + running tasks (--json/--enabled/--disabled/--busy/--free/--cloud/--no-cloud)" />
+        <fn-show_nodes PURPOSE="Sync entry point: asyncio.run(_show_nodes_async)" />
+        <fn-_show_nodes_async PURPOSE="Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2" />
         <fn-_parse_nodes_args PURPOSE="Parse yanodes argparse flags" />
         <fn-_fetch_nodes_view PURPOSE="Read nodes+tasks within one UoW, join in memory" />
         <fn-_filter_rows PURPOSE="AND-compose active filters" />
@@ -158,23 +183,24 @@
     <M-ENTRYPOINTS-CLI-SUBMIT NAME="yasubmit CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>yasubmit CLI command — parse AiiDA script, submit task via DI</purpose>
       <path>yascheduler/entrypoints/cli/submit.py</path>
-      <depends>M-DI, M-CONFIG, M-SHARED</depends>
+      <depends>M-DI, M-CONFIG, M-SHARED, M-ENTRYPOINTS-CLI-ARGS</depends>
       <annotations>
-        <fn-submit PURPOSE="Submit task via AiiDA script" />
+        <fn-submit PURPOSE="Sync entry point: asyncio.run(_submit_async)" />
+        <fn-_submit_async PURPOSE="Parse AiiDA script, build metadata, submit task via CLIDeps; exit 0/1/2" />
         <fn-_parse_script_metadata PURPOSE="Parse key=value pairs from script text" />
         <fn-_read_input_files PURPOSE="Read engine input files from disk" />
         <fn-_build_metadata PURPOSE="Assemble task metadata dict with webhook branch" />
-        <fn-_parse_submit_args PURPOSE="argparse → Namespace" />
-        <fn-_existing_path PURPOSE="argparse type validator for existing file paths" />
+        <fn-_parse_submit_args PURPOSE="argparse → Namespace (--config/--log-level + positional script)" />
       </annotations>
     </M-ENTRYPOINTS-CLI-SUBMIT>
 
     <M-ENTRYPOINTS-CLI-MANAGE-NODE NAME="yasetnode CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>yasetnode CLI command — add, soft-remove, or hard-remove nodes via UoW (+ SSH gateway on the add path)</purpose>
       <path>yascheduler/entrypoints/cli/manage_node.py</path>
-      <depends>M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SHARED, M-APPLICATION-UOW</depends>
+      <depends>M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS</depends>
       <annotations>
-        <fn-manage_node PURPOSE="Add/soft-remove/hard-remove a node; exit 0/1/2" />
+        <fn-manage_node PURPOSE="Sync entry point: asyncio.run(_manage_node_async)" />
+        <fn-_manage_node_async PURPOSE="Add/soft-remove/hard-remove a node; validation UoW read-only, dispatch to per-helper UoW; exit 0/1/2" />
         <fn-_parse_host_spec PURPOSE="argparse type: parse [user@]host[:port][~ncpus] grammar into HostSpec" />
         <fn-_parse_node_args PURPOSE="argparse → Namespace (prog=yasetnode, store_true flags, --remove-soft/--remove-hard mutex)" />
         <fn-_remove_node_hard PURPOSE="Hard-remove: mark RUNNING tasks DONE, remove node, commit, announce" />
@@ -187,9 +213,10 @@
     <M-ENTRYPOINTS-CLI-CHECK-STATUS NAME="yastatus CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Query and display task status with default/info/json/view renderers; verbose mode tails remote OUTPUT and optional convergence.</purpose>
       <path>yascheduler/entrypoints/cli/check_status.py</path>
-      <depends>M-CONFIG, M-DI, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW</depends>
+      <depends>M-CONFIG, M-DI, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS</depends>
       <annotations>
-        <fn-check_status PURPOSE="Query tasks via DI, dispatch renderer, exit 0/1/2" />
+        <fn-check_status PURPOSE="Sync entry point: asyncio.run(_check_status_async)" />
+        <fn-_check_status_async PURPOSE="Query tasks via DI, dispatch renderer, exit 0/1/2" />
         <fn-_parse_status_args PURPOSE="argparse → Namespace (prog=yastatus, mutex renderers, -o requires -v)" />
         <fn-_query_tasks PURPOSE="Conditional task query (list_by_jobs vs list_by_status)" />
         <fn-_render_default PURPOSE="AiiDA-compatible default renderer (&lt;id&gt;   &lt;STATUS&gt;)" />
@@ -937,7 +964,7 @@
     <DF-SUBMIT NAME="Submit task">M-ENTRYPOINTS-CLIENT -> M-DI -> M-APPLICATION-SUBMIT -> M-APPLICATION-UOW -> M-DOMAIN-PORTS</DF-SUBMIT>
     <DF-SCHEDULE NAME="Schedule task (v2.0)">M-APPLICATION-ORCHESTRATOR -> M-APPLICATION-ALLOCATE / M-APPLICATION-CONSUME / M-APPLICATION-DEALLOCATE -> M-APPLICATION-UOW</DF-SCHEDULE>
 
-    <DF-DAEMON-START NAME="Daemon start">M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-CLI-COMMANDS</DF-DAEMON-START>
+    <DF-DAEMON-START NAME="Daemon start">M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-DAEMON-COMMON</DF-DAEMON-START>
     <DF-CONFIG-LOAD NAME="Load configuration">M-CONFIG -> M-CONFIG-DB; M-CONFIG -> M-CONFIG-LOCAL; M-CONFIG -> M-CONFIG-REMOTE; M-CONFIG -> M-CONFIG-CLOUD; M-CONFIG -> M-CONFIG-ENGINE</DF-CONFIG-LOAD>
     <DF-PERSISTENCE NAME="Persistence layer">M-PERSISTENCE-POSTGRES -> M-PERSISTENCE</DF-PERSISTENCE>
 
@@ -948,6 +975,7 @@
     <CrossLink from="M-ENTRYPOINTS-CLIENT" to="M-APPLICATION-QUERY-TASKS" relation="delegates task queries" />
     <CrossLink from="M-APPLICATION-QUERY-TASKS" to="M-PERSISTENCE-UOW" relation="reads via UoW" />
     <CrossLink from="M-CONFIG" to="M-CONFIG-ENGINE-REPO" relation="provides engine collection to scheduler" />
+    <CrossLink from="M-DAEMON-COMMON" to="M-DI" relation="uses make_daemon" />
 
 
     <!-- Domain layer internal links -->

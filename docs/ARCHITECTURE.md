@@ -112,21 +112,20 @@ the sub layer.
 
 ## 2. Component Reference
 
-| Component            | Responsibility                                                                                                                                              |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `domain/`            | Entities, value objects, ports, services, exceptions, events                                                                                                |
-| `infra/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                                                                    |
-| `infra/ssh/`         | `SSHMachineGateway` + platform adapters                                                                                                                     |
-| `infra/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                                                                              |
-| `infra/cli/`         | 6 per-command modules                                                                                                                                       |
-| `infra/notifier/`    | Webhook event handler                                                                                                                                       |
-| `application/`       | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                                                                               |
-| `shared/`            | Typing shims (`Self`, `ParamSpec`), async-to-sync bridge (`to_sync`), path constants                                                                        |
-| `entrypoints/`       | Driving adapters + composition-root-facing public API: `client.py` (Yascheduler facade), `aiida_plugin.py`, `daemon/` subpackage (systemd + sysv launchers) |
-| `di.py`              | Composition root: `make_daemon()`, `make_cli_deps()`                                                                                                        |
-| `client.py`          | Compat shim re-exporting `Yascheduler` from `yascheduler.entrypoints.client` (real facade lives there)                                                      |
-| `aiida_plugin.py`    | AiiDA scheduler plugin (lives at `entrypoints/aiida_plugin.py`; uses SSH transport, not the `Yascheduler` client)                                           |
-| `config/`            | Config tree parsed from INI (uses attrs)                                                                                                                    |
+| Component            | Responsibility                                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `domain/`            | Entities, value objects, ports, services, exceptions, events                                                                                                              |
+| `infra/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                                                                                  |
+| `infra/ssh/`         | `SSHMachineGateway` + platform adapters                                                                                                                                   |
+| `infra/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                                                                                            |
+| `infra/notifier/`    | Webhook event handler                                                                                                                                                     |
+| `application/`       | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                                                                                             |
+| `shared/`            | Typing shims (`Self`, `ParamSpec`), async-to-sync bridge (`to_sync`), path constants                                                                                      |
+| `entrypoints/`       | Driving adapters + composition-root-facing public API: `client.py` (Yascheduler facade), `aiida_plugin.py`, `cli/` subpackage (six CLI commands + three daemon launchers) |
+| `di.py`              | Composition root: `make_daemon()`, `make_cli_deps()`                                                                                                                      |
+| `client.py`          | Compat shim re-exporting `Yascheduler` from `yascheduler.entrypoints.client` (real facade lives there)                                                                    |
+| `aiida_plugin.py`    | AiiDA scheduler plugin (lives at `entrypoints/aiida_plugin.py`; uses SSH transport, not the `Yascheduler` client)                                                         |
+| `config/`            | Config tree parsed from INI (uses attrs)                                                                                                                                  |
 
 ### 2.1 Domain (`yascheduler/domain/`)
 
@@ -225,12 +224,20 @@ integration lives in `cloud/providers/` (Azure, Hetzner, UpCloud);
 config prefix. `cloud/ssh_keys.py` loads or generates SSH keys;
 `cloud/cloud_config.py` renders cloud-init configuration.
 
-### 2.6 CLI Adapter (`yascheduler/infra/cli/`)
+### 2.6 CLI Adapter (`yascheduler/entrypoints/cli/`)
 
 Six per-command modules, each parsing argparse, calling use cases via DI,
 and formatting output: `submit.py`, `check_status.py`, `init.py`,
-`show_nodes.py`, `manage_node.py`, `daemonize.py`. The package
-`__init__.py` re-exports all six. There is no monolithic `commands.py`.
+`show_nodes.py`, `manage_node.py`, `daemonize.py`. Three daemon launchers
+(`daemonize.py`, `daemon_systemd.py`, `daemon_sysv.py`) share the daemon
+core in `daemon_common.py` (`configure_logger` + `run_daemon`) and the
+argparse helpers in `args.py` (`existing_path`, `add_config_arg`,
+`add_log_level_arg`, `add_log_file_arg`). All six CLI commands and the
+three daemon launchers accept `--config` and `--log-level`. The package
+`__init__.py` re-exports nothing — each command is invoked by its own
+console_script and the daemon launchers by path from service templates.
+There is no monolithic `commands.py`. (The former `yascheduler/infra/cli/`
+subpackage was liquidated in `consolidate-daemon-entrypoints`.)
 
 ### 2.7 Notifier (`yascheduler/infra/notifier/`)
 

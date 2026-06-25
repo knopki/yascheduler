@@ -1,28 +1,31 @@
 # FILE: yascheduler/entrypoints/cli/submit.py
-# VERSION: 1.0.0
+# VERSION: 1.1.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yasubmit CLI command — parse AiiDA script, submit task via DI.
 #   SCOPE: submit command + argparse + script metadata/input file helpers + metadata assembly.
-#   DEPENDS: M-DI, M-CONFIG, M-SHARED
+#   DEPENDS: M-DI, M-CONFIG, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-DI
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   submit - Parse AiiDA script, build metadata, submit task via DI; exit 0/1/2
-#   _existing_path - argparse type validator for existing file paths
-#   _parse_submit_args - argparse → Namespace
+#   submit - Sync entry point: asyncio.run(_submit_async(argv))
+#   _submit_async - Parse AiiDA script, build metadata, submit task via DI; exit 0/1/2
+#   _parse_submit_args - argparse → Namespace (--config/--log-level + positional script)
 #   _parse_script_metadata - Parse key=value pairs from script text
 #   _read_input_files - Read engine input files from disk
 #   _build_metadata - Assemble task metadata dict with webhook branch
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-submit-command: moved from infra/cli/submit.py, added prog="yasubmit", argv testability param, type=_existing_path (exit 2 for missing file), 0/1/2 exit-code contract, _build_metadata encapsulates webhook branch, dropped stale FIXME.
+#   LAST_CHANGE: v1.1.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
+#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: replaced private _existing_path with existing_path from args.py; added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName; converted @to_sync async def submit to def submit(argv): asyncio.run(_submit_async(argv)) + async def _submit_async(argv).
+#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-submit-command: moved from infra/cli/submit.py, added prog="yasubmit", argv testability param, type=_existing_path (exit 2 for missing file), 0/1/2 exit-code contract, _build_metadata encapsulates webhook branch, dropped stale FIXME.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import logging
 import os
@@ -32,36 +35,28 @@ from typing import Any
 
 from yascheduler.config import Config, Engine
 from yascheduler.di import make_cli_deps
-from yascheduler.shared import CONFIG_FILE, to_sync
-
-
-# START_CONTRACT: _existing_path
-#   PURPOSE: argparse type validator — return Path(s) if s is an existing file, else raise ArgumentTypeError.
-#   INPUTS: { s: str - path string from argparse }
-#   OUTPUTS: { Path - resolved path if it points to an existing file }
-#   SIDE_EFFECTS: None — raises argparse.ArgumentTypeError on missing/non-file path (argparse converts to exit 2).
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
-# END_CONTRACT: _existing_path
-def _existing_path(s: str) -> Path:
-    p = Path(s)
-    if not p.is_file():
-        raise argparse.ArgumentTypeError(f"not a file: {s}")
-    return p
+from yascheduler.entrypoints.cli.args import (
+    add_config_arg,
+    add_log_level_arg,
+    existing_path,
+)
 
 
 # START_CONTRACT: _parse_submit_args
-#   PURPOSE: Parse yasubmit argparse — one positional script path with type=_existing_path.
+#   PURPOSE: Parse yasubmit argparse — one positional script path (type=existing_path) plus shared --config and --log-level flags.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
-#   OUTPUTS: { argparse.Namespace - parsed args with .script as Path }
+#   OUTPUTS: { argparse.Namespace - parsed args with .script as Path, .config as Path, .log_level as str }
 #   SIDE_EFFECTS: argparse may call sys.exit on --help/error (exit 0/2).
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
+#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-ENTRYPOINTS-CLI-ARGS
 # END_CONTRACT: _parse_submit_args
 def _parse_submit_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yasubmit",
         description="Submit task to yascheduler via AiiDA script",
     )
-    parser.add_argument("script", type=_existing_path)
+    parser.add_argument("script", type=existing_path)
+    add_config_arg(parser)
+    add_log_level_arg(parser, default="WARNING")
     # START_BLOCK_PARSE_ARGS
     args = parser.parse_args(argv)
     # END_BLOCK_PARSE_ARGS
@@ -130,15 +125,14 @@ def _build_metadata(
     return metadata
 
 
-# START_CONTRACT: submit
+# START_CONTRACT: _submit_async
 #   PURPOSE: Parse AiiDA script file and submit a task via CLIDeps; exit 0 on success, 1 on runtime error, 2 on argparse error.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
 #   OUTPUTS: { None - prints str(task_id) to stdout on success, Error: ... to stderr on failure, calls sys.exit(1) on failure }
 #   SIDE_EFFECTS: Reads script + input files from disk, creates DB task via deps.submit, may call sys.exit.
 #   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-DI
-# END_CONTRACT: submit
-@to_sync
-async def submit(argv: list[str] | None = None) -> None:
+# END_CONTRACT: _submit_async
+async def _submit_async(argv: list[str] | None) -> None:
     # START_BLOCK_PARSE_ARGS
     args = _parse_submit_args(argv)
     script_file: Path = args.script
@@ -148,10 +142,12 @@ async def submit(argv: list[str] | None = None) -> None:
     try:
         logging.captureWarnings(True)
         log = logging.getLogger()
-        log.setLevel(logging.WARN)
+        log.setLevel(logging.getLevelName(args.log_level))
+        if not log.handlers:
+            log.addHandler(logging.StreamHandler(sys.stderr))
 
         # START_BLOCK_CONFIGURE
-        config = Config.from_config_parser(CONFIG_FILE)
+        config = Config.from_config_parser(args.config)
         deps = make_cli_deps(config)
         # END_BLOCK_CONFIGURE
 
@@ -177,3 +173,18 @@ async def submit(argv: list[str] | None = None) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
+
+
+# START_CONTRACT: submit
+#   PURPOSE: Sync entry point — run _submit_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
+#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
+#   OUTPUTS: { None - delegates to asyncio.run }
+#   SIDE_EFFECTS: Starts a fresh event loop via asyncio.run.
+#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
+# END_CONTRACT: submit
+def submit(argv: list[str] | None = None) -> None:
+    asyncio.run(_submit_async(argv))
+
+
+if __name__ == "__main__":
+    submit()

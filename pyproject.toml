@@ -48,7 +48,7 @@ Source = "https://github.com/tilde-lab/yascheduler"
 [project.scripts]
 yainit = "yascheduler.entrypoints.cli.init:init"
 yanodes = "yascheduler.entrypoints.cli.show_nodes:show_nodes"
-yascheduler = "yascheduler.infra.cli.daemonize:daemonize"
+yascheduler = "yascheduler.entrypoints.cli.daemonize:daemonize"
 yasetnode = "yascheduler.entrypoints.cli.manage_node:manage_node"
 yastatus = "yascheduler.entrypoints.cli.check_status:check_status"
 yasubmit = "yascheduler.entrypoints.cli.submit:submit"

@@ -1,28 +1,74 @@
 #!/usr/bin/env python
 # FILE: yascheduler/entrypoints/cli/daemon_systemd.py
-# VERSION: 1.8.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Systemd service entry point for the scheduler daemon.
-#   SCOPE: Systemd daemon main function.
-#   DEPENDS: M-CLI-COMMANDS, M-SHARED
-#   LINKS: M-CLI-COMMANDS, M-SHARED
+#   PURPOSE: Systemd service entry point for the scheduler daemon — runs in the foreground under systemd's supervision (logs to stderr → journald).
+#   SCOPE: Thin sync main() that builds an argparse parser, configures the root logger, loads Config, and runs the async daemon core via asyncio.run. No python-daemon.
+#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG
+#   LINKS: M-DAEMON-SYSTEMD, M-DAEMON-COMMON
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   __main__ - launches daemonize with LOG_FILE (systemd entry point)
+#   main - Thin sync entry point: parse args, configure logger, load Config, asyncio.run(run_daemon(config, logger)); exit 0/1/2
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Relocated into yascheduler/entrypoints/cli/ subpackage (relocate-daemon-launchers-to-cli); the entrypoints/daemon/ subpackage was liquidated and the launcher is now a sibling of init/show_nodes/submit/manage_node.
-#   PREVIOUS_CHANGE: v1.7.0 - Relocated into yascheduler/entrypoints/daemon/ subpackage (relocate-daemon-launchers); converted relative imports (.infra.cli/.shared) to absolute facade paths (yascheduler.infra.cli/yascheduler.shared) to match entrypoints convention.
+#   LAST_CHANGE: v2.0.0 - Reimplemented as a thin entry point (consolidate-daemon-entrypoints): builds its own argparse parser via args.py helpers (prog=yascheduler, --config/--log-level/--log-file default None for journald); delegates to daemon_common.run_daemon; no python-daemon (foreground under systemd); --log-file default None is a BREAKING change from LOG_FILE (journald convention); uniform 0/1/2 exit-code contract.
+#   PREVIOUS_CHANGE: v1.8.0 - Relocated into yascheduler/entrypoints/cli/ subpackage (relocate-daemon-launchers-to-cli); the entrypoints/daemon/ subpackage was liquidated and the launcher is now a sibling of init/show_nodes/submit/manage_node.
 # END_CHANGE_SUMMARY
-"""
-Yascheduler systemd daemon
-"""
+"""Yascheduler systemd daemon entry point (foreground, logs to stderr → journald)."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import sys
+
+from yascheduler.config import Config
+
+from .args import (
+    add_config_arg,
+    add_log_file_arg,
+    add_log_level_arg,
+)
+from .daemon_common import configure_logger, run_daemon
+
+
+# START_CONTRACT: main
+#   PURPOSE: Start the daemon under systemd supervision (foreground, stderr → journald); exit 0/1/2.
+#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
+#   OUTPUTS: { None - runs the event loop until stopped; prints Error: ... to stderr and calls sys.exit(1) on runtime failure }
+#   SIDE_EFFECTS: Parses argv, configures the root logger, loads Config, runs the async daemon core via asyncio.run; may call sys.exit(1).
+#   LINKS: M-DAEMON-SYSTEMD, M-DAEMON-COMMON
+# END_CONTRACT: main
+def main(argv: list[str] | None = None) -> None:
+    # START_BLOCK_PARSE_ARGS
+    parser = argparse.ArgumentParser(
+        prog="yascheduler",
+        description="Start the yascheduler daemon (systemd unit)",
+    )
+    add_config_arg(parser)
+    add_log_level_arg(parser, default="INFO")
+    add_log_file_arg(parser, default=None)
+    args = parser.parse_args(argv)
+    # END_BLOCK_PARSE_ARGS
+
+    # START_BLOCK_HANDLE_FAILURE
+    try:
+        # START_BLOCK_CONFIGURE
+        logger = configure_logger(args.log_file, logging.getLevelName(args.log_level))
+        config = Config.from_config_parser(args.config)
+        # END_BLOCK_CONFIGURE
+        asyncio.run(run_daemon(config, logger))
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    # END_BLOCK_HANDLE_FAILURE
+
 
 if __name__ == "__main__":
-    from yascheduler.infra.cli import daemonize
-    from yascheduler.shared import LOG_FILE
-
-    daemonize(log_file=LOG_FILE)
+    main()

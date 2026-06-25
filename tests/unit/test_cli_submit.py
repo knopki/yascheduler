@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_submit.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yasubmit submit() argparse, content validation, exit codes, helpers, and AiiDA stdout contract.
@@ -20,7 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial unit tests for relocated yasubmit (entrypoints/cli/submit.py) in relocate-submit-command.
+#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yasubmit (entrypoints/cli/submit.py) in relocate-submit-command.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -521,3 +522,140 @@ class TestSubmitArgvInjection:
         with pytest.raises(SystemExit) as exc:
             _run([str(script), "extra.in"])
         assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# --config / --log-level scenarios (consolidate-daemon-entrypoints)
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitConfigLogLevel:
+    """--config and --log-level argparse + behavior scenarios."""
+
+    def test_help_lists_config_and_log_level(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _run(["--help"])
+        assert exc.value.code == 0
+        out, _ = capsys.readouterr()
+        assert "--config" in out
+        assert "--log-level" in out
+
+    def test_config_nonexistent_exits_two(
+        self, capsys: pytest.CaptureFixture[str], tmp_path: Path
+    ) -> None:
+        script = tmp_path / "s.in"
+        script.write_text("ENGINE = g09\n")
+        with pytest.raises(SystemExit) as exc:
+            _run([str(script), "--config", "/nonexistent.conf"])
+        assert exc.value.code == 2
+        _, err = capsys.readouterr()
+        assert "not a file" in err
+        assert "/nonexistent.conf" in err
+
+    def test_log_level_warn_rejected_exits_two(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        tmp_path: Path,
+    ) -> None:
+        script = tmp_path / "s.in"
+        script.write_text("ENGINE = g09\n")
+        with pytest.raises(SystemExit) as exc:
+            _run([str(script), "--log-level", "WARN"])
+        assert exc.value.code == 2
+
+    def test_log_level_debug_sets_root_to_debug(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_config_deps: tuple[MagicMock, MagicMock],
+    ) -> None:
+        import logging
+
+        root = logging.getLogger()
+        original_level = root.level
+        script = tmp_path / "s.in"
+        script.write_text("ENGINE = g09\n")
+        (tmp_path / "input").write_text("x")
+        monkeypatch.chdir(tmp_path)
+        try:
+            _run([str(script), "--log-level", "DEBUG"])
+            assert root.level == logging.DEBUG
+        finally:
+            root.setLevel(original_level)
+
+    def test_config_custom_passed_to_from_config_parser(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        script = tmp_path / "s.in"
+        script.write_text("ENGINE = g09\n")
+        (tmp_path / "input").write_text("x")
+        monkeypatch.chdir(tmp_path)
+        custom_conf = tmp_path / "custom.conf"
+        custom_conf.write_text("[local]")
+        from_config_spy = MagicMock(return_value=make_mock_config())
+        monkeypatch.setattr(submit_mod.Config, "from_config_parser", from_config_spy)
+        monkeypatch.setattr(
+            submit_mod,
+            "make_cli_deps",
+            MagicMock(return_value=make_mock_deps(make_mock_config())),
+        )
+        _run([str(script), "--config", str(custom_conf)])
+        from_config_spy.assert_called_once_with(custom_conf)
+
+    def test_default_config_is_config_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from yascheduler.shared import CONFIG_FILE
+
+        script = tmp_path / "s.in"
+        script.write_text("ENGINE = g09\n")
+        (tmp_path / "input").write_text("x")
+        monkeypatch.chdir(tmp_path)
+        from_config_spy = MagicMock(return_value=make_mock_config())
+        monkeypatch.setattr(submit_mod.Config, "from_config_parser", from_config_spy)
+        monkeypatch.setattr(
+            submit_mod,
+            "make_cli_deps",
+            MagicMock(return_value=make_mock_deps(make_mock_config())),
+        )
+        _run([str(script)])
+        # Default --config is CONFIG_FILE (a string path).
+        called_with = from_config_spy.call_args.args[0]
+        # existing_path returns Path; default is the CONFIG_FILE string, converted by argparse type.
+        assert str(called_with) == str(CONFIG_FILE)
+
+    def test_default_log_level_is_warning(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import logging
+
+        root = logging.getLogger()
+        original_level = root.level
+        script = tmp_path / "s.in"
+        script.write_text("ENGINE = g09\n")
+        (tmp_path / "input").write_text("x")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            submit_mod.Config,
+            "from_config_parser",
+            MagicMock(return_value=make_mock_config()),
+        )
+        monkeypatch.setattr(
+            submit_mod,
+            "make_cli_deps",
+            MagicMock(return_value=make_mock_deps(make_mock_config())),
+        )
+        try:
+            _run([str(script)])
+            assert root.level == logging.WARNING
+        finally:
+            root.setLevel(original_level)

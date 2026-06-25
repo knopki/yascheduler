@@ -1,14 +1,15 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.1.0
+# VERSION: 1.2.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path).
 #   SCOPE: manage_node command + argparse + host-spec parser + node add/remove helpers (each helper owns its UoW).
-#   DEPENDS: M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SHARED, M-APPLICATION-UOW
+#   DEPENDS: M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-GATEWAY, M-APPLICATION-UOW
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   manage_node - Add/soft-remove/hard-remove a node; validation UoW read-only, dispatch to per-helper UoW; exit 0/1/2
+#   manage_node - Sync entry point: asyncio.run(_manage_node_async(argv))
+#   _manage_node_async - Add/soft-remove/hard-remove a node; validation UoW read-only, dispatch to per-helper UoW; exit 0/1/2
 #   HostSpec - Frozen parsed host spec (host, username, port, ncpus)
 #   _parse_host_spec - argparse type: parse [user@]host[:port][~ncpus] grammar
 #   _parse_node_args - argparse → Namespace (prog="yasetnode", flags, mutex group)
@@ -18,13 +19,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Per-helper UoW (design D18): validation read uses a short read-only UoW closed before dispatch; each mutate helper opens its OWN UoW via deps.uow_factory(), commits, and prints inside it. Eliminates the double-commit footgun of a single shared async-with UoW with commits scattered across helpers. Accepted TOCTOU window between validation and dispatch (single-operator CLI; benign non-corrupting failure modes).
-#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-manage-node-command: moved from infra/cli/manage_node.py, added prog="yasetnode", argv testability param, type=_parse_host_spec grammar with mandatory bracketed IPv6, store_true flags, --remove-soft/--remove-hard mutex group, body-level --skip-setup × remove check (exit 2), 0/1/2 exit-code contract, stdout success-after-commit / stderr Error: failure discipline, try/finally gateway disconnect, gateway passed to _add_node as a parameter, dropped stale FIXME.
+#   LAST_CHANGE: v1.2.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
+#   PREVIOUS_CHANGE: v1.2.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName; converted @to_sync async def manage_node to def manage_node(argv): asyncio.run(_manage_node_async(argv)) + async def _manage_node_async(argv).
+#   PREVIOUS_CHANGE: v1.1.0 - Per-helper UoW (design D18): validation read uses a short read-only UoW closed before dispatch; each mutate helper opens its OWN UoW via deps.uow_factory(), commits, and prints inside it. Eliminates the double-commit footgun of a single shared async-with UoW with commits scattered across helpers. Accepted TOCTOU window between validation and dispatch (single-operator CLI; benign non-corrupting failure modes).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sys
 from dataclasses import dataclass
@@ -34,7 +37,8 @@ from yascheduler.config import Config
 from yascheduler.di import make_cli_deps
 from yascheduler.domain import Node, TaskStatus
 from yascheduler.infra import SSHMachineGateway
-from yascheduler.shared import CONFIG_FILE, to_sync
+
+from .args import add_config_arg, add_log_level_arg
 
 if TYPE_CHECKING:
     from yascheduler.di import CLIDeps
@@ -174,6 +178,8 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Mark associated RUNNING tasks DONE and remove the node",
     )
+    add_config_arg(parser)
+    add_log_level_arg(parser, default="WARNING")
 
     # START_BLOCK_PARSE_ARGS
     args = parser.parse_args(argv)
@@ -286,25 +292,26 @@ async def _add_node(
     # END_BLOCK_CONNECT_SETUP_ADD
 
 
-# START_CONTRACT: manage_node
+# START_CONTRACT: _manage_node_async
 #   PURPOSE: Add, soft-remove, or hard-remove a node; exit 0 on success, 1 on runtime error, 2 on argparse error.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
 #   OUTPUTS: { None - prints success messages to stdout, Error: ... to stderr on failure, calls sys.exit(1) on failure }
 #   SIDE_EFFECTS: Reads config, opens a read-only validation UoW, dispatches to a per-helper UoW that mutates+commits, optionally opens SSH; may call sys.exit.
 #   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-APPLICATION-UOW, M-SSH-GATEWAY
-# END_CONTRACT: manage_node
-@to_sync
-async def manage_node(argv: list[str] | None = None) -> None:
+# END_CONTRACT: _manage_node_async
+async def _manage_node_async(argv: list[str] | None) -> None:
     args = _parse_node_args(argv)
     spec: HostSpec = args.host
     # START_BLOCK_HANDLE_FAILURE
     try:
         logging.captureWarnings(True)
         log = logging.getLogger()
-        log.setLevel(logging.WARN)
+        log.setLevel(logging.getLevelName(args.log_level))
+        if not log.handlers:
+            log.addHandler(logging.StreamHandler(sys.stderr))
 
         # START_BLOCK_CONFIGURE
-        config = Config.from_config_parser(CONFIG_FILE)
+        config = Config.from_config_parser(args.config)
         deps = make_cli_deps(config)
         gateway = SSHMachineGateway()
         # END_BLOCK_CONFIGURE
@@ -334,3 +341,18 @@ async def manage_node(argv: list[str] | None = None) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
+
+
+# START_CONTRACT: manage_node
+#   PURPOSE: Sync entry point — run _manage_node_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
+#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
+#   OUTPUTS: { None - delegates to asyncio.run }
+#   SIDE_EFFECTS: Starts a fresh event loop via asyncio.run.
+#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
+# END_CONTRACT: manage_node
+def manage_node(argv: list[str] | None = None) -> None:
+    asyncio.run(_manage_node_async(argv))
+
+
+if __name__ == "__main__":
+    manage_node()

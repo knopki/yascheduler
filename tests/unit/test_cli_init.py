@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_init.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yainit init() flag parsing, dispatch, exit codes, and service overwrite behavior.
@@ -15,7 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial unit tests for relocated yainit (entrypoints/cli/init.py) in relocate-init-command.
+#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --config /custom.conf passed through _init_schema(config_path) to Config.from_config_parser; defaults CONFIG_FILE/WARNING). The daemon_systemd.py / daemon_sysv.py path assertions (lines 243, 259) remain unchanged.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yainit (entrypoints/cli/init.py) in relocate-init-command.
 # END_CHANGE_SUMMARY
 
 """Unit tests for yainit (entrypoints/cli/init.py).
@@ -334,3 +335,124 @@ class TestServiceInstall:
             assert exc.value.code == 0
 
         assert apply_mock.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# --config / --log-level scenarios (consolidate-daemon-entrypoints)
+# ---------------------------------------------------------------------------
+
+
+class TestInitConfigLogLevel:
+    """--config and --log-level argparse + behavior scenarios (defaults WARNING)."""
+
+    def test_help_lists_config_and_log_level(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc:
+            init(["--help"])
+        assert exc.value.code == 0
+        out, _ = capsys.readouterr()
+        assert "--config" in out
+        assert "--log-level" in out
+
+    def test_config_nonexistent_exits_two(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc:
+            init(["--schema", "--config", "/nonexistent.conf"])
+        assert exc.value.code == 2
+        _, err = capsys.readouterr()
+        assert "not a file" in err
+        assert "/nonexistent.conf" in err
+
+    def test_config_custom_passed_to_init_schema(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """--config /custom.conf is passed through _init_schema(config_path) to Config.from_config_parser."""
+        custom_conf = tmp_path / "custom.conf"
+        custom_conf.write_text("[local]")
+        from_config_spy = MagicMock(return_value=MagicMock(db=MagicMock()))
+        monkeypatch.setattr(
+            "yascheduler.entrypoints.cli.init.Config.from_config_parser",
+            from_config_spy,
+        )
+        apply_mock = MagicMock()
+        monkeypatch.setattr("yascheduler.entrypoints.cli.init.apply_schema", apply_mock)
+
+        with pytest.raises(SystemExit) as exc:
+            init(["--schema", "--config", str(custom_conf)])
+        assert exc.value.code == 0
+        apply_mock.assert_called_once()
+        # from_config_parser was called with the custom config path (via _init_schema).
+        called_paths = [call.args[0] for call in from_config_spy.call_args_list]
+        assert any(str(custom_conf) == str(p) for p in called_paths), (
+            f"Config.from_config_parser not called with {custom_conf}; got {called_paths}"
+        )
+
+    def test_default_config_is_config_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from yascheduler.shared import CONFIG_FILE
+
+        from_config_spy = MagicMock(return_value=MagicMock(db=MagicMock()))
+        monkeypatch.setattr(
+            "yascheduler.entrypoints.cli.init.Config.from_config_parser",
+            from_config_spy,
+        )
+        apply_mock = MagicMock()
+        monkeypatch.setattr("yascheduler.entrypoints.cli.init.apply_schema", apply_mock)
+
+        with pytest.raises(SystemExit) as exc:
+            init(["--schema"])
+        assert exc.value.code == 0
+        # Default --config is CONFIG_FILE; _init_schema receives it as config_path.
+        called_paths = [str(call.args[0]) for call in from_config_spy.call_args_list]
+        assert str(CONFIG_FILE) in called_paths
+
+    def test_default_log_level_is_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import logging
+
+        from_config_spy = MagicMock(return_value=MagicMock(db=MagicMock()))
+        monkeypatch.setattr(
+            "yascheduler.entrypoints.cli.init.Config.from_config_parser",
+            from_config_spy,
+        )
+        apply_mock = MagicMock()
+        monkeypatch.setattr("yascheduler.entrypoints.cli.init.apply_schema", apply_mock)
+        root = logging.getLogger()
+        original_level = root.level
+        try:
+            with pytest.raises(SystemExit) as exc:
+                init(["--schema"])
+            assert exc.value.code == 0
+            assert root.level == logging.WARNING
+        finally:
+            root.setLevel(original_level)
+
+    def test_daemon_systemd_path_assertion_unchanged(
+        self,
+        install_path: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The daemon_systemd.py path assertion (relocate-daemon-launchers-to-cli) remains valid."""
+        unit_file = tmp_path / "yascheduler.service"
+        _init_systemd(install_path, unit_file=unit_file)
+        content = unit_file.read_text("utf-8")
+        assert "daemon_systemd.py" in content
+
+    def test_daemon_sysv_path_assertion_unchanged(
+        self,
+        install_path: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The daemon_sysv.py path assertion (relocate-daemon-launchers-to-cli) remains valid."""
+        startup_file = tmp_path / "yascheduler"
+        _init_sysv(install_path, startup_file=startup_file)
+        content = startup_file.read_text("utf-8")
+        assert "daemon_sysv.py" in content

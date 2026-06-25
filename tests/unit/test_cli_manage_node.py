@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_manage_node.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yasetnode manage_node() host-spec grammar, argparse, exit codes, helpers, and add/remove paths.
@@ -18,13 +18,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial unit tests for relocated yasetnode (entrypoints/cli/manage_node.py) in relocate-manage-node-command.
+#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: deleted test_manage_node_is_to_sync_decorated (manage_node is no longer @to_sync; it's a sync def that calls asyncio.run); added --config/--log-level scenarios.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yasetnode (entrypoints/cli/manage_node.py) in relocate-manage-node-command.
 # END_CHANGE_SUMMARY
 
 import argparse
 import importlib
 import logging
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -686,19 +687,117 @@ class TestManageNodeExitCodesAndChannels:
             _run(["10.0.0.1"])
 
             capture_spy.assert_called_once_with(True)
-            assert root.level == logging.WARN
+            assert root.level == logging.WARNING
         finally:
             # Restore process-global root logger level (avoid test-order side effects).
             root.setLevel(original_level)
 
 
 # ---------------------------------------------------------------------------
-# Module structure / helpers return None (complementary smoke)
+# --config / --log-level scenarios (consolidate-daemon-entrypoints)
 # ---------------------------------------------------------------------------
 
 
-class TestManageNodeHelpersReturnNone:
-    """Helpers return None; exit codes replace bool signaling."""
+class TestManageNodeConfigLogLevel:
+    """--config and --log-level argparse + behavior scenarios (defaults WARNING)."""
 
-    def test_manage_node_is_to_sync_decorated(self) -> None:
-        assert hasattr(manage_node_mod.manage_node, "__wrapped__")
+    def test_help_lists_config_and_log_level(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _run(["--help"])
+        assert exc.value.code == 0
+        out, _ = capsys.readouterr()
+        assert "--config" in out
+        assert "--log-level" in out
+
+    def test_config_nonexistent_exits_two(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _run(["10.0.0.1", "--config", "/nonexistent.conf"])
+        assert exc.value.code == 2
+        _, err = capsys.readouterr()
+        assert "not a file" in err
+        assert "/nonexistent.conf" in err
+
+    def test_log_level_warn_rejected_exits_two(self) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _run(["10.0.0.1", "--log-level", "WARN"])
+        assert exc.value.code == 2
+
+    def test_log_level_debug_sets_root_to_debug(
+        self,
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import logging
+
+        _config, uow, _deps, _gateway = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+        root = logging.getLogger()
+        original_level = root.level
+        try:
+            _run(["10.0.0.1", "--log-level", "DEBUG"])
+            assert root.level == logging.DEBUG
+        finally:
+            root.setLevel(original_level)
+
+    def test_config_custom_passed_to_from_config_parser(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        custom_conf = tmp_path / "custom.conf"
+        custom_conf.write_text("[local]")
+        from_config_spy = MagicMock(return_value=make_mock_config())
+        monkeypatch.setattr(
+            manage_node_mod.Config, "from_config_parser", from_config_spy
+        )
+        uow = make_mock_uow()
+        uow.nodes.get = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            manage_node_mod,
+            "make_cli_deps",
+            MagicMock(return_value=make_mock_deps(make_mock_config(), uow)),
+        )
+        monkeypatch.setattr(
+            manage_node_mod,
+            "SSHMachineGateway",
+            MagicMock(return_value=make_mock_gateway()),
+        )
+        _run(["10.0.0.1", "--config", str(custom_conf)])
+        from_config_spy.assert_called_once_with(custom_conf)
+
+    def test_default_config_is_config_file(
+        self,
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from yascheduler.shared import CONFIG_FILE
+
+        _config, uow, _deps, _gateway = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+        from_config_spy = MagicMock(return_value=make_mock_config())
+        monkeypatch.setattr(
+            manage_node_mod.Config, "from_config_parser", from_config_spy
+        )
+        _run(["10.0.0.1"])
+        assert str(from_config_spy.call_args.args[0]) == str(CONFIG_FILE)
+
+    def test_default_log_level_is_warning(
+        self,
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import logging
+
+        _config, uow, _deps, _gateway = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+        root = logging.getLogger()
+        original_level = root.level
+        try:
+            _run(["10.0.0.1"])
+            assert root.level == logging.WARNING
+        finally:
+            root.setLevel(original_level)

@@ -1,14 +1,15 @@
 # FILE: yascheduler/entrypoints/cli/check_status.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
 #   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
-#   DEPENDS: M-CONFIG, M-DI, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW
+#   DEPENDS: M-CONFIG, M-DI, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   check_status - Parse flags, query tasks via DI, dispatch renderer, exit 0/1/2
+#   check_status - Sync entry point: asyncio.run(_check_status_async(argv))
+#   _check_status_async - Parse flags, query tasks via DI, dispatch renderer, exit 0/1/2
 #   _parse_status_args - Parse yastatus argparse flags (mutex renderers, -o requires -v)
 #   _query_tasks - Conditional task query within the single query-phase UoW
 #   _render_default - AiiDA-compatible default renderer (<id>   <STATUS>)
@@ -23,13 +24,16 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-check-status-command (moved from infra/cli/, added prog/argv/exit-codes/--json/full mutex/-o requires -v/connection-params bugfix/UoW lifecycle fix/tempfile).
+#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def check_status to def check_status(argv): asyncio.run(_check_status_async(argv)) + async def _check_status_async(argv).
+#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-check-status-command (moved from infra/cli/, added prog/argv/exit-codes/--json/full mutex/-o requires -v/connection-params bugfix/UoW lifecycle fix/tempfile).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -41,7 +45,8 @@ from yascheduler.config import Config
 from yascheduler.di import make_cli_deps
 from yascheduler.domain import TaskStatus
 from yascheduler.infra import SSHMachineGateway
-from yascheduler.shared import CONFIG_FILE, to_sync
+
+from .args import add_config_arg, add_log_level_arg
 
 if TYPE_CHECKING:
     from yascheduler.application import AbstractUnitOfWork
@@ -98,6 +103,8 @@ def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Download + parse a CRYSTAL convergence snippet (requires --view)",
     )
+    add_config_arg(parser)
+    add_log_level_arg(parser, default="WARNING")
     # START_BLOCK_PARSE_ARGS
     args = parser.parse_args(argv)
     if args.convergence and not args.view:
@@ -415,7 +422,7 @@ async def _render_view(
     return snippet
 
 
-# START_CONTRACT: check_status
+# START_CONTRACT: _check_status_async
 #   PURPOSE: Query and display task status (default/info/json/view), optionally tailing remote output and
 #          parsing convergence. Exit 0 on success, 1 on runtime failure, 2 on argparse error.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
@@ -423,14 +430,20 @@ async def _render_view(
 #   SIDE_EFFECTS: Opens ONE short query-phase UoW (closed before any SSH), reads config, may connect via SSH,
 #                 writes/removes a convergence tempfile in view mode.
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-APPLICATION-UOW, M-SSH-GATEWAY
-# END_CONTRACT: check_status
-@to_sync
-async def check_status(argv: list[str] | None = None) -> None:
+# END_CONTRACT: _check_status_async
+async def _check_status_async(argv: list[str] | None) -> None:
     snippet: Path | None = None
     # START_BLOCK_HANDLE_FAILURE
     try:
         args = _parse_status_args(argv)
-        config = Config.from_config_parser(CONFIG_FILE)
+        # START_BLOCK_CONFIGURE_LOGGER
+        root = logging.getLogger()
+        root.setLevel(logging.getLevelName(args.log_level))
+        if not root.handlers:
+            root.addHandler(logging.StreamHandler(sys.stderr))
+        # END_BLOCK_CONFIGURE_LOGGER
+
+        config = Config.from_config_parser(args.config)
         deps = make_cli_deps(config)
         # QUERY PHASE — one short UoW, closed before any SSH work.
         async with deps.uow_factory() as uow:
@@ -458,3 +471,18 @@ async def check_status(argv: list[str] | None = None) -> None:
     finally:
         if snippet is not None and os.path.exists(snippet):  # noqa: ASYNC240
             os.unlink(snippet)  # noqa: ASYNC230
+
+
+# START_CONTRACT: check_status
+#   PURPOSE: Sync entry point — run _check_status_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
+#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
+#   OUTPUTS: { None - delegates to asyncio.run }
+#   SIDE_EFFECTS: Starts a fresh event loop via asyncio.run.
+#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
+# END_CONTRACT: check_status
+def check_status(argv: list[str] | None = None) -> None:
+    asyncio.run(_check_status_async(argv))
+
+
+if __name__ == "__main__":
+    check_status()

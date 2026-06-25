@@ -1,0 +1,157 @@
+# FILE: tests/unit/test_cli_args.py
+# VERSION: 1.0.0
+#
+# START_MODULE_CONTRACT
+#   PURPOSE: Unit tests for yascheduler/entrypoints/cli/args.py — existing_path validator and the three add_*_arg helpers.
+#   SCOPE: Pure argparse behavior with a real ArgumentParser; no DB/SSH/config touched.
+#   DEPENDS: M-ENTRYPOINTS-CLI-ARGS
+#   LINKS: M-ENTRYPOINTS-CLI-ARGS
+# END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   TestExistingPath - happy path returns Path; missing file raises ArgumentTypeError
+#   TestAddConfigArg - default is CONFIG_FILE; missing-file exits 2 with "not a file"
+#   TestAddLogLevelArg - choices reject WARN; getLevelName resolves WARNING to int 30
+#   TestAddLogFileArg - default None (stderr); custom default passed through
+# END_MODULE_MAP
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.0.0 - Initial tests for args.py (consolidate-daemon-entrypoints).
+# END_CHANGE_SUMMARY
+
+from __future__ import annotations
+
+import argparse
+import logging
+from typing import TYPE_CHECKING
+
+import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+from yascheduler.entrypoints.cli.args import (
+    LOG_LEVEL_CHOICES,
+    add_config_arg,
+    add_log_file_arg,
+    add_log_level_arg,
+    existing_path,
+)
+from yascheduler.shared import CONFIG_FILE
+
+pytestmark = pytest.mark.unit
+
+
+def _parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(prog="test-prog")
+
+
+class TestExistingPath:
+    """existing_path: returns Path for an existing file, raises for missing."""
+
+    def test_returns_path_for_existing_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "real.txt"
+        f.write_text("x")
+        result = existing_path(str(f))
+        assert result == f
+
+    def test_raises_argument_type_error_for_missing_file(self) -> None:
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            existing_path("/nonexistent/path/to/file.conf")
+        assert "not a file" in str(exc.value)
+        assert "/nonexistent/path/to/file.conf" in str(exc.value)
+
+
+class TestAddConfigArg:
+    """add_config_arg: default=CONFIG_FILE, type=existing_path → exit 2 on missing."""
+
+    def test_default_is_config_file(self) -> None:
+        parser = _parser()
+        add_config_arg(parser)
+        args = parser.parse_args([])
+        # Default is wrapped in Path so argparse doesn't validate it (3.13+);
+        # the resolved path equals CONFIG_FILE.
+        assert str(args.config) == str(CONFIG_FILE)
+
+    def test_missing_config_exits_two(self, capsys: pytest.CaptureFixture[str]) -> None:
+        parser = _parser()
+        add_config_arg(parser)
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["--config", "/nonexistent.conf"])
+        assert exc.value.code == 2
+        _, err = capsys.readouterr()
+        assert "not a file" in err
+        assert "/nonexistent.conf" in err
+
+    def test_custom_config_passed_through(self, tmp_path: Path) -> None:
+        f = tmp_path / "custom.conf"
+        f.write_text("[local]")
+        parser = _parser()
+        add_config_arg(parser)
+        args = parser.parse_args(["--config", str(f)])
+        assert args.config == f
+
+    def test_custom_dest(self) -> None:
+        parser = _parser()
+        add_config_arg(parser, dest="cfg")
+        args = parser.parse_args([])
+        assert str(args.cfg) == str(CONFIG_FILE)
+        assert not hasattr(args, "config")
+
+
+class TestAddLogLevelArg:
+    """add_log_level_arg: explicit choices, rejects WARN, getLevelName resolves."""
+
+    def test_default_is_warning(self) -> None:
+        parser = _parser()
+        add_log_level_arg(parser)
+        args = parser.parse_args([])
+        assert args.log_level == "WARNING"
+
+    def test_warn_alias_rejected(self, capsys: pytest.CaptureFixture[str]) -> None:
+        parser = _parser()
+        add_log_level_arg(parser)
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["--log-level", "WARN"])
+        assert exc.value.code == 2
+
+    def test_all_choices_accepted(self) -> None:
+        parser = _parser()
+        add_log_level_arg(parser)
+        for level in LOG_LEVEL_CHOICES:
+            args = parser.parse_args(["--log-level", level])
+            assert args.log_level == level
+
+    def test_get_level_name_resolves_to_int(self) -> None:
+        # The spec requires resolution via logging.getLevelName (not _nameToLevel).
+        for level in LOG_LEVEL_CHOICES:
+            assert isinstance(logging.getLevelName(level), int)
+        assert logging.getLevelName("WARNING") == logging.WARNING == 30
+
+    def test_custom_default(self) -> None:
+        parser = _parser()
+        add_log_level_arg(parser, default="INFO")
+        args = parser.parse_args([])
+        assert args.log_level == "INFO"
+
+
+class TestAddLogFileArg:
+    """add_log_file_arg: default None (stderr), custom default honored."""
+
+    def test_default_is_none(self) -> None:
+        parser = _parser()
+        add_log_file_arg(parser)
+        args = parser.parse_args([])
+        assert args.log_file is None
+
+    def test_custom_default(self) -> None:
+        parser = _parser()
+        add_log_file_arg(parser, default="/var/log/yascheduler.log")
+        args = parser.parse_args([])
+        assert args.log_file == "/var/log/yascheduler.log"
+
+    def test_explicit_value_passed_through(self) -> None:
+        parser = _parser()
+        add_log_file_arg(parser)
+        args = parser.parse_args(["--log-file", "/tmp/y.log"])
+        assert args.log_file == "/tmp/y.log"

@@ -1,14 +1,15 @@
 # FILE: yascheduler/entrypoints/cli/show_nodes.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output.
 #   SCOPE: show_nodes command + argparse + in-memory node-to-task join + table/JSON renderers.
-#   DEPENDS: M-DI, M-CONFIG, M-DOMAIN-MODEL, M-SHARED
+#   DEPENDS: M-DI, M-CONFIG, M-DOMAIN-MODEL, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES, M-APPLICATION-UOW
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   show_nodes - Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2
+#   show_nodes - Sync entry point: asyncio.run(_show_nodes_async(argv))
+#   _show_nodes_async - Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2
 #   _parse_nodes_args - Parse yanodes argparse flags
 #   _fetch_nodes_view - Read nodes+tasks within one UoW, join in memory
 #   _filter_rows - AND-compose active filters
@@ -18,12 +19,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-show-nodes-command: moved from infra/cli/show_nodes.py, added --json/--enabled/--disabled/--busy/--free/--cloud/--no-cloud argparse flags, exit-code contract 0/1/2, fixed-width table + raw-values JSON renderers, in-memory O(n+m) join, _NodeView private DTO.
+#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def show_nodes to def show_nodes(argv): asyncio.run(_show_nodes_async(argv)) + async def _show_nodes_async(argv).
+#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-show-nodes-command: moved from infra/cli/show_nodes.py, added --json/--enabled/--disabled/--busy/--free/--cloud/--no-cloud argparse flags, exit-code contract 0/1/2, fixed-width table + raw-values JSON renderers, in-memory O(n+m) join, _NodeView private DTO.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import sys
@@ -33,7 +36,8 @@ from typing import TYPE_CHECKING
 from yascheduler.config import Config
 from yascheduler.di import make_cli_deps
 from yascheduler.domain import TaskStatus
-from yascheduler.shared import CONFIG_FILE, to_sync
+
+from .args import add_config_arg, add_log_level_arg
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -54,11 +58,11 @@ class _NodeView:
 
 
 # START_CONTRACT: _parse_nodes_args
-#   PURPOSE: Parse yanodes CLI flags.
+#   PURPOSE: Parse yanodes CLI flags plus shared --config and --log-level.
 #   INPUTS: { argv: list[str] | None - optional argv for argparse, None reads sys.argv }
 #   OUTPUTS: { argparse.Namespace - parsed flags }
 #   SIDE_EFFECTS: None — argparse may call sys.exit on --help/error.
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
+#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES, M-ENTRYPOINTS-CLI-ARGS
 # END_CONTRACT: _parse_nodes_args
 def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -103,6 +107,8 @@ def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Only static nodes (cloud is None)",
     )
+    add_config_arg(parser)
+    add_log_level_arg(parser, default="WARNING")
     # START_BLOCK_PARSE_ARGS
     args = parser.parse_args(argv)
     # END_BLOCK_PARSE_ARGS
@@ -243,19 +249,25 @@ def _render_nodes_json(rows: list[_NodeView]) -> str:
     # END_BLOCK_RENDER_JSON
 
 
-# START_CONTRACT: show_nodes
+# START_CONTRACT: _show_nodes_async
 #   PURPOSE: Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
 #   OUTPUTS: None - prints to stdout, calls sys.exit on failure.
 #   SIDE_EFFECTS: Opens a UoW for reading, prints output, may call sys.exit(1).
 #   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES, M-DI, M-APPLICATION-UOW
-# END_CONTRACT: show_nodes
-@to_sync
-async def show_nodes(argv: list[str] | None = None) -> None:
+# END_CONTRACT: _show_nodes_async
+async def _show_nodes_async(argv: list[str] | None) -> None:
     args = _parse_nodes_args(argv)
     # START_BLOCK_HANDLE_FAILURE
     try:
-        config = Config.from_config_parser(CONFIG_FILE)
+        # START_BLOCK_CONFIGURE_LOGGER
+        root = logging.getLogger()
+        root.setLevel(logging.getLevelName(args.log_level))
+        if not root.handlers:
+            root.addHandler(logging.StreamHandler(sys.stderr))
+        # END_BLOCK_CONFIGURE_LOGGER
+
+        config = Config.from_config_parser(args.config)
         deps = make_cli_deps(config)
         # START_BLOCK_ORCHESTRATE
         async with deps.uow_factory() as uow:
@@ -270,3 +282,18 @@ async def show_nodes(argv: list[str] | None = None) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
+
+
+# START_CONTRACT: show_nodes
+#   PURPOSE: Sync entry point — run _show_nodes_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
+#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
+#   OUTPUTS: { None - delegates to asyncio.run }
+#   SIDE_EFFECTS: Starts a fresh event loop via asyncio.run.
+#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
+# END_CONTRACT: show_nodes
+def show_nodes(argv: list[str] | None = None) -> None:
+    asyncio.run(_show_nodes_async(argv))
+
+
+if __name__ == "__main__":
+    show_nodes()
