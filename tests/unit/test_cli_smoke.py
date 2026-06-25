@@ -1,75 +1,47 @@
 # FILE: tests/unit/test_cli_smoke.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: CLI smoke tests — verify 2 CLI commands are importable and structurally correct.
+#   PURPOSE: CLI smoke tests — verify 1 CLI command is importable and structurally correct.
 #   SCOPE: Import-level smoke tests: no real DB/SSH needed, just verify function existence
-#          and decorator contracts (@to_sync for check_status,
-#          internal make_daemon use for daemonize). init, show_nodes, submit, and manage_node moved to
-#          entrypoints/cli/ and are covered by tests/unit/test_cli_init.py,
-#          tests/unit/test_cli_show_nodes.py, tests/unit/test_cli_submit.py,
-#          tests/unit/test_cli_manage_node.py.
+#          and decorator contracts (internal make_daemon use for daemonize). init, show_nodes, submit,
+#          manage_node, and check_status moved to entrypoints/cli/ and are covered by
+#          tests/unit/test_cli_init.py, tests/unit/test_cli_show_nodes.py, tests/unit/test_cli_submit.py,
+#          tests/unit/test_cli_manage_node.py, tests/unit/test_cli_check_status.py.
 #   DEPENDS: M-CLI-COMMANDS
 #   LINKS: M-CLI-COMMANDS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestCLIFunctions - Smoke test each of the 2 CLI entry points (init/show_nodes/submit/manage_node covered separately)
+#   TestCLIFunctions - Smoke test the daemonize CLI entry point (init/show_nodes/submit/manage_node/check_status covered separately)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Drop test_manage_node_function_exists (manage_node moved to entrypoints/cli/manage_node.py in relocate-manage-node-command; covered by tests/unit/test_cli_manage_node.py).
-#   PREVIOUS_CHANGE: v1.5.0 - Drop test_submit_function_exists (submit moved to entrypoints/cli/submit.py in relocate-submit-command; covered by tests/unit/test_cli_submit.py).
+#   LAST_CHANGE: v1.7.0 - Drop test_check_status_function_exists (check_status moved to entrypoints/cli/check_status.py in relocate-check-status-command; covered by tests/unit/test_cli_check_status.py).
+#   PREVIOUS_CHANGE: v1.6.0 - Drop test_manage_node_function_exists (manage_node moved to entrypoints/cli/manage_node.py in relocate-manage-node-change; covered by tests/unit/test_cli_manage_node.py).
 # END_CHANGE_SUMMARY
 
-"""CLI smoke tests: verify 2 CLI commands still functional.
+"""CLI smoke tests: verify 1 CLI command still functional.
 
-Import-level smoke tests — verify that importing and inspecting each CLI function
-doesn't crash (no real DB/SSH needed, just mock everything). init, show_nodes,
-submit, and manage_node moved to entrypoints/cli/ and are covered by dedicated
-test files.
+Import-level smoke tests — verify that importing and inspecting the daemonize CLI
+function doesn't crash (no real DB/SSH needed, just mock everything). init, show_nodes,
+submit, manage_node, and check_status moved to entrypoints/cli/ and are covered by
+dedicated test files.
 """
 
-import asyncio
 import inspect
-
-
-def _check_to_sync_decorated(func: object) -> None:
-    """Assert that *func* is decorated with ``@to_sync``.
-
-    The ``@to_sync`` decorator wraps an ``async`` function via ``functools.wraps``,
-    which sets ``__wrapped__`` pointing to the original coroutine function.
-    """
-    assert callable(func), f"{func} is not callable"
-    assert hasattr(func, "__wrapped__"), (
-        f"{func.__name__} lacks __wrapped__ — not decorated with @to_sync"
-    )
-    assert asyncio.iscoroutinefunction(func.__wrapped__), (
-        f"{func.__name__}.__wrapped__ is not a coroutine function"
-    )
 
 
 def _check_sync_function(func: object) -> None:
     """Assert that *func* is a plain synchronous callable (not async, not @to_sync)."""
     assert callable(func), f"{func} is not callable"
-    assert not asyncio.iscoroutinefunction(func), (
-        f"{func.__name__} must not be a coroutine function"
-    )
     assert not hasattr(func, "__wrapped__"), (
-        f"{func.__name__} must not be @to_sync decorated"
+        f"{getattr(func, '__name__', func)} must not be @to_sync decorated"
     )
 
 
 class TestCLIFunctions:
     """Smoke tests for CLI command functions — import and verify structure."""
-
-    # --- @to_sync-decorated commands ---
-
-    def test_check_status_function_exists(self) -> None:
-        """``check_status`` exists and is decorated with @to_sync."""
-        from yascheduler.infra.cli import check_status
-
-        _check_to_sync_decorated(check_status)
 
     # --- daemonize (NOT @to_sync; uses make_daemon internally) ---
 

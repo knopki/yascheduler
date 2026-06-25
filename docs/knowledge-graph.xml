@@ -91,7 +91,6 @@
       <path>yascheduler/infra/cli/__init__.py</path>
       <depends>M-DI, M-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE</depends>
       <annotations>
-        <fn-check_status PURPOSE="Show status of tasks (infra/cli/check_status.py)" />
         <fn-daemonize PURPOSE="Start yascheduler daemon (infra/cli/daemonize.py)" />
       </annotations>
     </M-CLI-COMMANDS>
@@ -192,6 +191,26 @@
         <type-HostSpec PURPOSE="Frozen parsed host spec (host, username, port, ncpus)" />
       </annotations>
     </M-ENTRYPOINTS-CLI-MANAGE-NODE>
+
+    <M-ENTRYPOINTS-CLI-CHECK-STATUS NAME="yastatus CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Query and display task status with default/info/json/view renderers; verbose mode tails remote OUTPUT and optional convergence.</purpose>
+      <path>yascheduler/entrypoints/cli/check_status.py</path>
+      <depends>M-CONFIG, M-DI, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW</depends>
+      <annotations>
+        <fn-check_status PURPOSE="Query tasks via DI, dispatch renderer, exit 0/1/2" />
+        <fn-_parse_status_args PURPOSE="argparse → Namespace (prog=yastatus, mutex renderers, -o requires -v)" />
+        <fn-_query_tasks PURPOSE="Conditional task query (list_by_jobs vs list_by_status)" />
+        <fn-_render_default PURPOSE="AiiDA-compatible default renderer (&lt;id&gt;   &lt;STATUS&gt;)" />
+        <fn-_render_info PURPOSE="Tab-separated one-line-per-task renderer" />
+        <fn-_render_json PURPOSE="Raw-domain-values JSON (9 fields)" />
+        <fn-_render_view PURPOSE="Verbose renderer: SSH tail of OUTPUT, optional convergence snippet" />
+        <fn-_resolve_conn_params PURPOSE="Resolve SSH conn params mirroring orchestrator._connect_machine_consumer" />
+        <fn-_display_remote_output PURPOSE="Connect via SSHMachineGateway, tail OUTPUT file" />
+        <fn-_download_convergence_snippet PURPOSE="Download OUTPUT file via SFTP" />
+        <fn-_parse_convergence PURPOSE="Parse CRYSTAL output for convergence info" />
+        <type-_ConnParams PURPOSE="Frozen SSH connection params DTO" />
+      </annotations>
+    </M-ENTRYPOINTS-CLI-CHECK-STATUS>
 
     <!-- ═══════════════════════════════════════════════
          Domain layer
@@ -979,12 +998,15 @@
     <CrossLink from="M-ENTRYPOINTS-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
     <CrossLink from="M-MAIN" to="M-ENTRYPOINTS" relation="re-exports Yascheduler via layer facade" />
     <CrossLink from="M-CLIENT-SHIM" to="M-ENTRYPOINTS-CLIENT" relation="compat re-export of Yascheduler" />
-    <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_daemon for daemon entry" />
-    <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, Task, TaskStatus for CLI status and node management" />
+    <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI node management; make_daemon for daemon entry" />
+    <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, TaskStatus for CLI node management" />
     <CrossLink from="M-ENTRYPOINTS-CLI-INIT" to="M-PERSISTENCE-SCHEMA" relation="calls apply_schema for DB schema initialization" />
     <CrossLink from="M-ENTRYPOINTS-CLI-SHOW-NODES" to="M-APPLICATION-UOW" relation="reads nodes and running tasks via UoW" />
     <CrossLink from="M-ENTRYPOINTS-CLI-SUBMIT" to="M-DI" relation="uses make_cli_deps for CLI submit" />
     <CrossLink from="M-ENTRYPOINTS-CLI-MANAGE-NODE" to="M-DI" relation="uses make_cli_deps for CLI manage_node" />
+    <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-DI" relation="uses make_cli_deps for CLI status" />
+    <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-APPLICATION-UOW" relation="reads tasks and nodes via UoW" />
+    <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-SSH-GATEWAY" relation="verbose mode connects, tails OUTPUT, downloads convergence" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
 

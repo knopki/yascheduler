@@ -1,9 +1,7 @@
 ## Purpose
 
 Define the package-facade import discipline for `yascheduler`: clean-architecture layer direction (R3, enforced via `import-linter`), within-package relative imports (R1), cross-package facade imports via the layer's `__init__.py` (R2), the lazy-publication policy, outside-layer-set exemptions, residual-edge documentation, and the extended facade contents required for R2 retroactive compliance across the codebase.
-
 ## Requirements
-
 ### Requirement: Layer direction (R3)
 
 The system SHALL enforce the import direction
@@ -98,13 +96,13 @@ imports in `yascheduler.infra.cli`, `yascheduler.infra.persistence`,
 other subpackages.
 
 #### Scenario: infra/cli/__init__.py uses relative imports
-- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`check_status`, `daemonize`)
-- **THEN** it uses `from .check_status import check_status` style, not `from yascheduler.infra.cli.check_status import check_status`
-- **AND** it does NOT import `init`, `show_nodes`, `submit`, or `manage_node` (which have moved to `yascheduler/entrypoints/cli/`)
+- **WHEN** `yascheduler/infra/cli/__init__.py` imports its own submodules (`daemonize`)
+- **THEN** it uses `from .daemonize import daemonize` style, not `from yascheduler.infra.cli.daemonize import daemonize`
+- **AND** it does NOT import `init`, `show_nodes`, `submit`, `manage_node`, or `check_status` (which have moved to `yascheduler/entrypoints/cli/`)
 
 #### Scenario: entrypoints/cli/__init__.py uses relative imports
 - **WHEN** `yascheduler/entrypoints/cli/__init__.py` imports its own submodules
-- **THEN** it uses `from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`; `show_nodes`, `submit`, and `manage_node` are NOT re-exported by the facade (they are invoked by console_script, not imported across layers — same pattern as `init`)
+- **THEN** it uses `from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`; `show_nodes`, `submit`, `manage_node`, and `check_status` are NOT re-exported by the facade (they are invoked by console_script, not imported across layers — same pattern as `init`)
 
 #### Scenario: Domain modules use relative imports
 - **WHEN** `yascheduler/domain/model.py` imports from another module in `yascheduler/domain/`
@@ -599,3 +597,4 @@ identically whether `Yascheduler` is imported via the package facade
 #### Scenario: Contract holds via each import path
 - **WHEN** `Yascheduler` is imported via `from yascheduler import Yascheduler`, `from yascheduler.entrypoints import Yascheduler`, or `from yascheduler.client import Yascheduler`
 - **THEN** all query-method scenarios above hold identically (the import path does not affect the public contract)
+
