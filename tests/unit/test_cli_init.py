@@ -25,6 +25,8 @@ systemd-vs-sysv detection. apply_schema and the service helpers are mocked
 or injected via the public unit_file/startup_file parameters.
 """
 
+from __future__ import annotations
+
 import os
 import stat
 from pathlib import Path

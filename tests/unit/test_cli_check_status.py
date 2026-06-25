@@ -26,6 +26,8 @@
 #   LAST_CHANGE: v1.0.0 - Initial unit tests for relocated yastatus (entrypoints/cli/check_status.py) in relocate-check-status-command.
 # END_CHANGE_SUMMARY
 
+from __future__ import annotations
+
 import importlib
 import json as _json
 from pathlib import PurePosixPath

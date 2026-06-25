@@ -21,6 +21,8 @@
 #   LAST_CHANGE: v1.0.0 - Initial unit tests for relocated yanodes (entrypoints/cli/show_nodes.py) in relocate-show-nodes-command.
 # END_CHANGE_SUMMARY
 
+from __future__ import annotations
+
 import importlib
 import inspect
 import sys

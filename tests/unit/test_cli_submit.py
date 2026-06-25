@@ -23,6 +23,8 @@
 #   LAST_CHANGE: v1.0.0 - Initial unit tests for relocated yasubmit (entrypoints/cli/submit.py) in relocate-submit-command.
 # END_CHANGE_SUMMARY
 
+from __future__ import annotations
+
 import base64
 import importlib
 from pathlib import Path
