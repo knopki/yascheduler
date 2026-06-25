@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/infra/ssh/platform/common.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Shared helpers for remote machine operations: process info, command execution.
@@ -10,28 +10,28 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   ProcessInfo - Attrs struct holding pid, name, command
+#   ProcessInfo - dataclass struct holding pid, name, command
 #   run - Run process on SSH connection and wait for exit
 #   run_bg - Create background process on SSH connection
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Copied from yascheduler/remote_machine/common.py with updated module ID.
+#   LAST_CHANGE: v1.1.0 - Migrated ProcessInfo from attrs.define to stdlib dataclasses.dataclass (migrate-ssh-platform-from-attrs); no behavioral change.
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 #
 
+from dataclasses import dataclass
 from subprocess import DEVNULL
 from typing import AnyStr, Optional
 
 from asyncssh.connection import SSHClientConnection
 from asyncssh.process import SSHClientProcess, SSHCompletedProcess
-from attrs import define
 
 from .protocol import QuoteCallable
 
 
-@define
+@dataclass
 class ProcessInfo:
     pid: int
     name: str
