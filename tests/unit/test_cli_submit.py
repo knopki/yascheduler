@@ -612,7 +612,7 @@ class TestSubmitConfigLogLevel:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from yascheduler.shared import CONFIG_FILE
+        from yascheduler import CONFIG_FILE
 
         script = tmp_path / "s.in"
         script.write_text("ENGINE = g09\n")

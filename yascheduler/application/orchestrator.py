@@ -1,19 +1,20 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 5.5.0
+# VERSION: 5.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers.
-#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-SHARED, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
+#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper.
+#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   Orchestrator - Daemon loop manager: connect machines, allocate, consume, deallocate
+#   _asleep_until - Private async sleep-until helper (inlined from former yascheduler.shared.async_utils)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.5.0 - Record TaskAbandoned via task.with_event factory (task-with-event).
-#   PREVIOUS_CHANGE: v5.4.0 - Add START_CONTRACT on _clouds_get_capacity (GRACE audit fix).
+#   LAST_CHANGE: v5.6.0 - Inline asleep_until from yascheduler.shared.async_utils as _asleep_until; drop yascheduler.shared dependency (prune-shared-kernel).
+#   PREVIOUS_CHANGE: v5.5.0 - Record TaskAbandoned via task.with_event factory (task-with-event).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -38,7 +39,6 @@ from yascheduler.domain import (
     TaskExecutionEngine,
     TaskStatus,
 )
-from yascheduler.shared import asleep_until
 
 from .allocate_task import _count_nodes_by_cloud, allocate_task
 from .consume_task import consume_task
@@ -55,6 +55,21 @@ if TYPE_CHECKING:
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
+
+
+# START_CONTRACT: _asleep_until
+#   PURPOSE: Sleep until a given datetime asynchronously.
+#   INPUTS: { end: datetime - target time to sleep until }
+#   OUTPUTS: { None - no return value }
+#   SIDE_EFFECTS: Awaits asyncio.sleep for the remaining interval; returns immediately if now >= end.
+#   LINKS: M-APPLICATION-ORCHESTRATOR
+# END_CONTRACT: _asleep_until
+async def _asleep_until(end: datetime) -> None:
+    "Sleep until :end:"
+    now = datetime.now()
+    if now >= end:
+        return
+    await asyncio.sleep((end - now).total_seconds())
 
 
 # START_CONTRACT: Orchestrator
@@ -188,7 +203,7 @@ class Orchestrator:
             ]
             qmsgs = [f"{q.name}: {q.psize()}/{q.qsize()}" for q in queues]
             self._log.info("QUEUES: {}".format(" ".join(qmsgs)))
-            await asleep_until(end_time)
+            await _asleep_until(end_time)
 
     # ---- Producers / Consumers ----
 
@@ -447,7 +462,7 @@ class Orchestrator:
                     async for msg in producer():
                         await queue.put(msg)
                 finally:
-                    await asleep_until(end_time)
+                    await _asleep_until(end_time)
         except asyncio.CancelledError:
             if not queue.empty():
                 self._log.info(

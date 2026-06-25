@@ -189,6 +189,13 @@ convention used by `yascheduler/infra/__init__.py` (`M-ADAPTERS`) and
 - `CLIDeps` from `.di` (consumed by `yascheduler.entrypoints.cli.{check_status,manage_node}`
   for type annotations, and by `yascheduler.entrypoints.client` which imports
   it sibling-relative as `from .di import CLIDeps`).
+- `CONFIG_FILE` from `.paths` (consumed by `yascheduler.entrypoints.cli.{args,init}`
+  via the facade, and by `yascheduler.entrypoints.client` sibling-relative as
+  `from .paths import CONFIG_FILE`).
+- `LOG_FILE` from `.paths` (consumed by `yascheduler.entrypoints.cli.daemon_sysv`
+  via the facade).
+- `PID_FILE` from `.paths` (consumed by `yascheduler.entrypoints.cli.daemon_sysv`
+  via the facade).
 
 `yascheduler/entrypoints/__init__.py` SHALL be the only public surface through
 which cross-layer consumers import symbols from the `entrypoints` layer; direct
@@ -219,9 +226,9 @@ The composition root `yascheduler.entrypoints.di` itself SHALL import
 `SSHMachineGateway`, `PostgresUnitOfWork`, `resolve_adapter`,
 `webhook_handler` from `yascheduler.infra` — all via layer facades (R2).
 
-#### Scenario: Entrypoints facade re-exports Yascheduler and composition root
-- **WHEN** a consumer imports `from yascheduler.entrypoints import Yascheduler, make_daemon, make_cli_deps, CLIDeps`
-- **THEN** all four symbols resolve without ImportError
+#### Scenario: Entrypoints facade re-exports Yascheduler, composition root, and path constants
+- **WHEN** a consumer imports `from yascheduler.entrypoints import Yascheduler, make_daemon, make_cli_deps, CLIDeps, CONFIG_FILE, LOG_FILE, PID_FILE`
+- **THEN** all seven symbols resolve without ImportError
 
 #### Scenario: Entrypoints facade is the sole public surface
 - **WHEN** a module in `yascheduler.application`, `yascheduler.domain`, `yascheduler.infra`, `yascheduler.shared`, or `yascheduler.config` imports a symbol from `yascheduler.entrypoints`
@@ -229,7 +236,7 @@ The composition root `yascheduler.entrypoints.di` itself SHALL import
 
 #### Scenario: AiiDA plugin is not re-exported by the entrypoints facade
 - **WHEN** the `entrypoints/__init__.py` facade is inspected
-- **THEN** it re-exports `Yascheduler`, `make_daemon`, `make_cli_deps`, `CLIDeps`; `YaScheduler` and `YaschedJobResource` from `aiida_plugin.py` are NOT re-exported (plugin discovery is via the entry-point registry, not the facade)
+- **THEN** it re-exports `Yascheduler`, `make_daemon`, `make_cli_deps`, `CLIDeps`, `CONFIG_FILE`, `LOG_FILE`, `PID_FILE`; `YaScheduler` and `YaschedJobResource` from `aiida_plugin.py` are NOT re-exported (plugin discovery is via the entry-point registry, not the facade)
 
 #### Scenario: Daemon launchers are not re-exported by the entrypoints facade
 - **WHEN** the `entrypoints/__init__.py` facade is inspected
@@ -243,9 +250,13 @@ The composition root `yascheduler.entrypoints.di` itself SHALL import
 - **WHEN** `yascheduler.entrypoints.cli.daemon_common` needs `make_daemon`
 - **THEN** it imports `from yascheduler.entrypoints import make_daemon` (R2 via facade), not `from ..di import make_daemon` (deep sibling-cross-subpackage)
 
-#### Scenario: Client sibling import of CLIDeps
-- **WHEN** `yascheduler.entrypoints.client` needs `CLIDeps` and `make_cli_deps`
-- **THEN** it imports `from .di import CLIDeps, make_cli_deps` (R1 sibling-relative, both residents of the flat `entrypoints` package)
+#### Scenario: CLI subpackage imports path constants via facade
+- **WHEN** `yascheduler.entrypoints.cli.args` needs `CONFIG_FILE`
+- **THEN** it imports `from yascheduler.entrypoints import CONFIG_FILE` (R2 via facade), not `from ..paths import CONFIG_FILE` (deep sibling-cross-subpackage)
+
+#### Scenario: Client sibling import of CLIDeps and path constants
+- **WHEN** `yascheduler.entrypoints.client` needs `CLIDeps`, `make_cli_deps`, and `CONFIG_FILE`
+- **THEN** it imports `from .di import CLIDeps, make_cli_deps` and `from .paths import CONFIG_FILE` (R1 sibling-relative, all residents of the flat `entrypoints` package)
 
 #### Scenario: Composition root imports via layer facades
 - **WHEN** `yascheduler.entrypoints.di` imports `Orchestrator` and `submit_task`
@@ -307,7 +318,19 @@ and is subject to R3. Its imports (`yascheduler.infra`,
 `yascheduler.application`, `yascheduler.domain`) flow in the layer
 direction and pass the contract.
 
-`yascheduler.shared` SHALL NOT contain business logic, domain types, or I/O. This clause is defense-in-depth beyond the layer-direction enforcement in the `layers` contract: the `layers` contract blocks `shared → {entrypoints, adapters, application, domain}` and the `forbidden` contract blocks `shared → config`, but neither contract can detect a contributor adding business logic or I/O that imports only stdlib/third-party. The clause gives reviewers a spec-grounded basis to reject such accretion.
+`yascheduler.shared` is the shared kernel: it SHALL contain only typing
+shims (and similar cross-cutting primitives) consumed by ≥2 architectural
+layers. A module whose consumers are all within a single architectural
+layer belongs to that layer, not to `yascheduler.shared`. This positive
+definition is the primary membership rule. As a second guardrail,
+`yascheduler.shared` SHALL NOT contain business logic, domain types, or
+SSH/DB/HTTP/cloud I/O — defense-in-depth beyond the layer-direction
+enforcement in the `layers` contract (the `layers` contract blocks
+`shared → {entrypoints, adapters, application, domain}` and the
+`forbidden` contract blocks `shared → config`, but neither contract can
+detect a contributor adding business logic or I/O that imports only
+stdlib/third-party; the clause gives reviewers a spec-grounded basis to
+reject such accretion).
 
 #### Scenario: Outside-set modules not flagged for layer direction
 - **WHEN** the `layers` contract runs
@@ -325,13 +348,17 @@ direction and pass the contract.
 - **WHEN** `yascheduler.client` (the compat shim) imports `Yascheduler`
 - **THEN** it imports via `from yascheduler.entrypoints import Yascheduler` (R2 applies), not via a deep submodule path
 
-#### Scenario: yascheduler.shared contains no business logic or I/O
+#### Scenario: yascheduler.shared contains only cross-layer typing shims
 - **WHEN** a module under `yascheduler/shared/` is inspected
-- **THEN** it contains only typing shims, pure runtime helpers, or process-global constants — no domain entities, no use-case orchestration, no SSH/DB/HTTP/cloud I/O
+- **THEN** it contains only typing shims (and similar cross-cutting primitives) consumed by ≥2 architectural layers — no domain entities, no use-case orchestration, no SSH/DB/HTTP/cloud I/O, and no module whose consumers are all within a single architectural layer
+
+#### Scenario: Single-layer utility is rejected from yascheduler.shared
+- **WHEN** a contributor proposes to add a module to `yascheduler/shared/` whose production consumers are all within one architectural layer (e.g., only `entrypoints`, or only `application`)
+- **THEN** the reviewer rejects the addition and directs the contributor to place the module in the consuming layer; the positive membership rule ("≥2 architectural layers") is the primary criterion, and the "no SSH/DB/HTTP/cloud I/O" clause is the secondary guardrail
 
 #### Scenario: Daemon launchers are layer-checked after migration
 - **WHEN** the `layers` contract runs
-- **THEN** `yascheduler.entrypoints.cli.daemon_systemd` and `yascheduler.entrypoints.cli.daemon_sysv` (under the `yascheduler.entrypoints` layer) ARE checked for R3 violations like any other entrypoints-layer module, and pass because their imports (`yascheduler.infra.cli.daemonize`, `yascheduler.shared` constants) flow downward through the layer direction
+- **THEN** `yascheduler.entrypoints.cli.daemon_systemd` and `yascheduler.entrypoints.cli.daemon_sysv` (under the `yascheduler.entrypoints` layer) ARE checked for R3 violations like any other entrypoints-layer module, and pass because their imports (`yascheduler.infra.cli.daemonize`, `yascheduler.shared` typing shims, `yascheduler.entrypoints` path constants) flow downward through the layer direction
 
 ### Requirement: Layers contract configuration
 
@@ -531,7 +558,7 @@ new capability requiring explicit spec coverage.
 - `yascheduler/__init__.py` exports (`Yascheduler`, `CONFIG_FILE`,
   `LOG_FILE`, `PID_FILE`, `__version__`) SHALL remain resolvable. The
   path constants (`CONFIG_FILE`, `LOG_FILE`, `PID_FILE`) SHALL be
-  re-exported through `yascheduler.shared.variables` — downstream
+  re-exported through `yascheduler.entrypoints.paths` — downstream
   consumers continue to import them via `from yascheduler import
   CONFIG_FILE` with no change. `Yascheduler` SHALL be re-exported via
   `yascheduler.entrypoints` (i.e., `yascheduler/__init__.py` does
@@ -557,9 +584,15 @@ new capability requiring explicit spec coverage.
   positional callsites remain valid; keyword-only optional parameters
   may be added (e.g., for test injection); internal implementation may
   change without notice. The `to_sync` function SHALL NOT be defined in
-  `yascheduler.client`; it is relocated to
-  `yascheduler.shared.async_utils` and re-exported via the
-  `yascheduler.shared` facade.
+  `yascheduler.client` (the shim) nor re-exported from
+  `yascheduler.shared`; it is a private helper in
+  `yascheduler.entrypoints.client` (inlined from the former
+  `yascheduler.shared.async_utils`). The deep import path
+  `from yascheduler.shared import to_sync` is NOT preserved (no compat
+  shim); this is a **BREAKING** change for downstream code that pinned
+  the deep module path (no such caller is known — the six CLI consumers
+  were removed by the archived `consolidate-daemon-entrypoints` change,
+  leaving `yascheduler.entrypoints.client` as the sole consumer).
 
 #### Scenario: Yascheduler symbol resolves with backward-compatible signature
 - **WHEN** a downstream consumer imports `from yascheduler import Yascheduler`
@@ -583,15 +616,31 @@ new capability requiring explicit spec coverage.
 
 #### Scenario: Path constants remain resolvable from package root
 - **WHEN** a downstream consumer imports `from yascheduler import CONFIG_FILE, LOG_FILE, PID_FILE`
-- **THEN** all three symbols resolve without ImportError (re-exported via `yascheduler.shared.variables`)
+- **THEN** all three symbols resolve without ImportError (re-exported via `yascheduler.entrypoints.paths`)
 
-#### Scenario: to_sync relocated to yascheduler.shared
-- **WHEN** a consumer needs the `to_sync` decorator
-- **THEN** it imports `from yascheduler.shared import to_sync`; the symbol is not defined in `yascheduler.client` (the shim) nor in `yascheduler.entrypoints.client` beyond its existing re-export from `yascheduler.shared`
+#### Scenario: Path constants re-exported via the entrypoints layer facade
+- **WHEN** `yascheduler/__init__.py` is inspected for the source of its `CONFIG_FILE`, `LOG_FILE`, `PID_FILE` re-exports
+- **THEN** it imports them from `yascheduler.entrypoints` (the layer facade), which in turn re-exports them from `yascheduler.entrypoints.paths`; the deep path `yascheduler.shared.variables` no longer exists
 
-#### Scenario: compat.py old path removed
-- **WHEN** `yascheduler/compat.py` is inspected
-- **THEN** the file does not exist; `Self` and `ParamSpec` are importable only via `from yascheduler.shared import Self, ParamSpec`
+#### Scenario: to_sync is a private helper in entrypoints.client
+- **WHEN** `yascheduler/entrypoints/client.py` is inspected for `to_sync`
+- **THEN** `to_sync` is defined there as a module-private helper (not re-exported via `__all__`); it is NOT defined in `yascheduler.client` (the shim) and NOT re-exported from `yascheduler.shared`
+
+#### Scenario: Old shared.async_utils path is gone
+- **WHEN** a downstream consumer attempts `from yascheduler.shared.async_utils import to_sync` or `from yascheduler.shared import to_sync`
+- **THEN** `ImportError` is raised (the module `yascheduler.shared.async_utils` no longer exists; the symbol `to_sync` is not re-exported from `yascheduler.shared`)
+
+#### Scenario: compat.py re-exports Self and Unpack only
+- **WHEN** `yascheduler/shared/compat.py` is inspected
+- **THEN** the file does not exist at `yascheduler/compat.py`; `Self` and `Unpack` are importable via `from yascheduler.shared import Self, Unpack`; `ParamSpec` is NOT re-exported from `yascheduler.shared` (the symbol was consumed only by the former `to_sync` signature and moved with it into `yascheduler.entrypoints.client`)
+
+#### Scenario: asleep_until is a private helper in application.orchestrator
+- **WHEN** `yascheduler/application/orchestrator.py` is inspected for `asleep_until`
+- **THEN** `asleep_until` is defined there as a module-private helper (e.g., `_asleep_until`); it is NOT re-exported from `yascheduler.shared`
+
+#### Scenario: Old shared.async_utils asleep_until path is gone
+- **WHEN** a downstream consumer attempts `from yascheduler.shared.async_utils import asleep_until` or `from yascheduler.shared import asleep_until`
+- **THEN** `ImportError` is raised (the module `yascheduler.shared.async_utils` no longer exists)
 
 ### Requirement: Yascheduler client query method public contract
 

@@ -1,39 +1,23 @@
 # FILE: yascheduler/shared/__init__.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Shared kernel for cross-layer utilities (typing shims, async-to-sync bridge, path constants).
-#   SCOPE: Facade re-exports only — no business logic, no I/O, no domain types.
+#   PURPOSE: Shared kernel for cross-layer typing shims.
+#   SCOPE: Typing shims consumed by ≥2 architectural layers; a module whose consumers are in a single layer belongs to that layer, not to shared. No SSH/DB/HTTP/cloud I/O.
 #   DEPENDS: none
 #   LINKS: M-SHARED
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   Self - Self type alias (re-exported from .compat)
-#   ParamSpec - ParamSpec type alias (re-exported from .compat)
 #   Unpack - Unpack type alias (re-exported from .compat)
-#   to_sync - Async-to-sync decorator (re-exported from .async_utils)
-#   CONFIG_FILE - Default config file path (re-exported from .variables)
-#   LOG_FILE - Default log file path (re-exported from .variables)
-#   PID_FILE - Default PID file path (re-exported from .variables)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Re-export Unpack from .compat (task-context-replace).
-#   PREVIOUS_CHANGE: v1.6.0 - Initial extraction from top-level compat/variables/client.to_sync.
+#   LAST_CHANGE: v1.8.0 - Prune to honest shared kernel: drop re-exports of to_sync/asleep_until/CONFIG_FILE/LOG_FILE/PID_FILE/ParamSpec (relocated or inlined per prune-shared-kernel); keep Self/Unpack.
+#   PREVIOUS_CHANGE: v1.7.0 - Re-export Unpack from .compat (task-context-replace).
 # END_CHANGE_SUMMARY
 
-from .async_utils import asleep_until, to_sync
-from .compat import ParamSpec, Self, Unpack
-from .variables import CONFIG_FILE, LOG_FILE, PID_FILE
+from .compat import Self, Unpack
 
-__all__ = [
-    "CONFIG_FILE",
-    "LOG_FILE",
-    "PID_FILE",
-    "ParamSpec",
-    "Self",
-    "Unpack",
-    "to_sync",
-    "asleep_until",
-]
+__all__ = ["Self", "Unpack"]

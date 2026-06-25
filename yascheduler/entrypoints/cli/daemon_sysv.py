@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # FILE: yascheduler/entrypoints/cli/daemon_sysv.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: SysV init service entry point for the scheduler daemon — runs detached via python-daemon with PID file management.
 #   SCOPE: Thin sync main() that builds an argparse parser (keeping -p/--pid-file and -l/--log-file short flags for yascheduler.sh compatibility), wraps the daemon runtime in a DaemonContext (working_directory="/"), and runs the async daemon core via asyncio.run INSIDE the context.
-#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG, M-SHARED
+#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG, M-ENTRYPOINTS
 #   LINKS: M-DAEMON-SYSV, M-DAEMON-COMMON
 # END_MODULE_CONTRACT
 #
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Reimplemented as a thin entry point (consolidate-daemon-entrypoints): builds its own argparse parser via args.py helpers (prog=yascheduler, --config/--log-level long-only, -p/--pid-file and -l/--log-file short flags preserved for yascheduler.sh); delegates to daemon_common.run_daemon; DaemonContext working_directory="/" (was os.path.dirname(__file__) — bug D); configure_logger called INSIDE the context so FileHandler opens the daemon's fd; uniform 0/1/2 exit-code contract; fixes the -l short-flag collision (each launcher parses once, no sys.argv re-parse).
+#   LAST_CHANGE: v2.1.0 - Import LOG_FILE/PID_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
+#   PREVIOUS_CHANGE: v2.0.0 - Reimplemented as a thin entry point (consolidate-daemon-entrypoints): builds its own argparse parser via args.py helpers (prog=yascheduler, --config/--log-level long-only, -p/--pid-file and -l/--log-file short flags preserved for yascheduler.sh); delegates to daemon_common.run_daemon; DaemonContext working_directory="/" (was os.path.dirname(__file__) — bug D); configure_logger called INSIDE the context so FileHandler opens the daemon's fd; uniform 0/1/2 exit-code contract; fixes the -l short-flag collision (each launcher parses once, no sys.argv re-parse).
 #   PREVIOUS_CHANGE: v1.8.0 - Relocated into yascheduler/entrypoints/cli/ subpackage (relocate-daemon-launchers-to-cli); the entrypoints/daemon/ subpackage was liquidated and the launcher is now a sibling of init/show_nodes/submit/manage_node.
 # END_CHANGE_SUMMARY
 """Yascheduler SysV init daemon entry point (detached via python-daemon)."""
@@ -30,7 +31,7 @@ import daemon
 from daemon import pidfile
 
 from yascheduler.config import Config
-from yascheduler.shared import LOG_FILE, PID_FILE
+from yascheduler.entrypoints import LOG_FILE, PID_FILE
 
 from .args import add_config_arg, add_log_level_arg
 from .daemon_common import configure_logger, run_daemon

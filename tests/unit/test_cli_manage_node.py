@@ -774,7 +774,7 @@ class TestManageNodeConfigLogLevel:
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from yascheduler.shared import CONFIG_FILE
+        from yascheduler import CONFIG_FILE
 
         _config, uow, _deps, _gateway = stub_env
         uow.nodes.get = AsyncMock(return_value=None)

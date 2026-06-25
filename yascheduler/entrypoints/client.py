@@ -1,36 +1,81 @@
 # FILE: yascheduler/entrypoints/client.py
-# VERSION: 2.5.0
+# VERSION: 2.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
-#   SCOPE: Task submission (via DI/CLIDeps) and status query (via query_tasks use case + UoW).
-#   DEPENDS: M-SHARED, M-CONFIG, M-DI, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL
-#   LINKS: M-DI, M-AIIDA, M-ENTRYPOINTS
+#   SCOPE: Task submission (via DI/CLIDeps) and status query (via query_tasks use case + UoW); private to_sync async-to-sync bridge helper.
+#   DEPENDS: M-CONFIG, M-DI, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL, M-ENTRYPOINTS-PATHS
+#   LINKS: M-DI, M-AIIDA, M-ENTRYPOINTS, M-ENTRYPOINTS-PATHS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   Yascheduler - Sync/async client wrapper for task operations
 #   _task_to_dict - Project domain Task to the public 6-key Mapping shape
+#   to_sync - Private async-to-sync decorator (inlined from former yascheduler.shared.async_utils; not re-exported)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.5.0 - Relocate to yascheduler/entrypoints/client.py as first resident of the entrypoints layer; switch relative imports to absolute facade paths; remove FIXME.
-#   PREVIOUS_CHANGE: v2.4.0 - Extract to_sync to yascheduler.shared.async_utils; import to_sync/CONFIG_FILE from yascheduler.shared; ParamSpec/ParamT/ReturnT_co move with to_sync.
+#   LAST_CHANGE: v2.6.0 - Inline to_sync from yascheduler.shared.async_utils; import CONFIG_FILE from .paths; drop yascheduler.shared dependency (prune-shared-kernel).
+#   PREVIOUS_CHANGE: v2.5.0 - Relocate to yascheduler/entrypoints/client.py as first resident of the entrypoints layer; switch relative imports to absolute facade paths; remove FIXME.
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
 
+import asyncio
 import logging
-from collections.abc import Callable, Mapping, Sequence
+import sys
+from collections.abc import Callable, Coroutine, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from pathlib import PurePath
-from typing import Any, Optional, Union
+from typing import Any, Optional, TypeVar, Union
 
 from yascheduler.application import query_tasks
 from yascheduler.config import Config
 from yascheduler.domain import Task, TaskStatus
-from yascheduler.shared import CONFIG_FILE, to_sync
 
 from .di import CLIDeps, make_cli_deps
+from .paths import CONFIG_FILE
+
+if sys.version_info < (3, 10):
+    from typing_extensions import ParamSpec
+else:
+    from typing import ParamSpec
+
+ReturnT_co = TypeVar("ReturnT_co", covariant=True)
+ParamT = ParamSpec("ParamT")
+
+
+# START_CONTRACT: to_sync
+#   PURPOSE: Wrap an async function so it can be called synchronously, detecting a running event loop and offloading to a worker thread when necessary.
+#   INPUTS: { func: Callable[ParamT, Coroutine[Any, Any, ReturnT_co]] - async function to wrap }
+#   OUTPUTS: { Callable[ParamT, ReturnT_co] - sync callable preserving the wrapped signature }
+#   SIDE_EFFECTS: May spawn a ThreadPoolExecutor and call asyncio.run in a worker thread when a running event loop is detected.
+#   LINKS: M-ENTRYPOINTS-CLIENT
+# END_CONTRACT: to_sync
+def to_sync(
+    func: Callable[ParamT, Coroutine[Any, Any, ReturnT_co]],
+) -> Callable[ParamT, ReturnT_co]:
+    """
+    Wraps async function and run it sync in thread.
+    """
+
+    @wraps(func)
+    def outer(*args: ParamT.args, **kwargs: ParamT.kwargs):  # noqa: ANN202
+        """
+        Execute the async method synchronously in sync and async runtime.
+        """
+        coro = func(*args, **kwargs)
+        try:
+            asyncio.get_running_loop()  # Triggers RuntimeError if no running event loop
+
+            # Create a separate thread so we can block before returning
+            with ThreadPoolExecutor(1) as pool:
+                return pool.submit(lambda: asyncio.run(coro)).result()
+        except RuntimeError:
+            return asyncio.run(coro)
+
+    return outer
 
 
 # START_CONTRACT: _task_to_dict

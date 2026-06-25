@@ -17,12 +17,12 @@
     <M-MAIN NAME="Package entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Top-level package entry: re-exports Yascheduler client and path constants.</purpose>
       <path>yascheduler/__init__.py</path>
-      <depends>M-ENTRYPOINTS, M-SHARED</depends>
+      <depends>M-ENTRYPOINTS</depends>
       <annotations>
-        <export-Yascheduler PURPOSE="Public client class" />
-        <const-CONFIG_FILE PURPOSE="Default config file path" />
-        <const-PID_FILE PURPOSE="Default PID file path" />
-        <const-LOG_FILE PURPOSE="Default log file path" />
+        <export-Yascheduler PURPOSE="Public client class (re-exported via yascheduler.entrypoints)" />
+        <const-CONFIG_FILE PURPOSE="Default config file path (re-exported via yascheduler.entrypoints)" />
+        <const-PID_FILE PURPOSE="Default PID file path (re-exported via yascheduler.entrypoints)" />
+        <const-LOG_FILE PURPOSE="Default log file path (re-exported via yascheduler.entrypoints)" />
         <const-__version__ PURPOSE="Package version from metadata" />
       </annotations>
     </M-MAIN>
@@ -32,7 +32,7 @@
     <M-ENTRYPOINTS-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Public Python/CLI client for submitting and querying tasks.</purpose>
       <path>yascheduler/entrypoints/client.py</path>
-      <depends>M-SHARED, M-CONFIG, M-DI, M-DOMAIN-MODEL, M-APPLICATION-QUERY-TASKS</depends>
+      <depends>M-CONFIG, M-DI, M-DOMAIN-MODEL, M-APPLICATION-QUERY-TASKS, M-ENTRYPOINTS-PATHS</depends>
       <annotations>
         <class-Yascheduler PURPOSE="Public client class" />
         <fn-queue_submit_task PURPOSE="Submit a new task (sync)" />
@@ -42,6 +42,7 @@
         <fn-queue_get_task PURPOSE="Get single task by ID (sync)" />
         <fn-queue_get_task_async PURPOSE="Get single task by ID (async)" />
         <fn-_task_to_dict PURPOSE="Project domain Task to the public 6-key Mapping shape" />
+        <fn-to_sync PURPOSE="Private async-to-sync decorator (inlined from former shared.async_utils; not re-exported from M-SHARED)" />
         <const-_deps_factory PURPOSE="Keyword-only constructor seam: Config -> CLIDeps factory (defaults to make_cli_deps)" />
       </annotations>
     </M-ENTRYPOINTS-CLIENT>
@@ -49,11 +50,25 @@
     <M-ENTRYPOINTS NAME="Entrypoints layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Layer facade for the outermost hexagonal layer (driving adapters + composition root); re-exports Yascheduler from .client.</purpose>
       <path>yascheduler/entrypoints/__init__.py</path>
-      <depends>M-ENTRYPOINTS-CLIENT</depends>
+      <depends>M-ENTRYPOINTS-CLIENT, M-ENTRYPOINTS-PATHS</depends>
       <annotations>
         <export-Yascheduler PURPOSE="Public client class re-exported from entrypoints.client" />
+        <const-CONFIG_FILE PURPOSE="Default config file path re-exported from entrypoints.paths" />
+        <const-LOG_FILE PURPOSE="Default log file path re-exported from entrypoints.paths" />
+        <const-PID_FILE PURPOSE="Default PID file path re-exported from entrypoints.paths" />
       </annotations>
     </M-ENTRYPOINTS>
+
+    <M-ENTRYPOINTS-PATHS NAME="Entrypoints path constants" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Process-global file-path constants (config, log, pid) consumed by the entrypoints layer.</purpose>
+      <path>yascheduler/entrypoints/paths.py</path>
+      <depends>none</depends>
+      <annotations>
+        <const-CONFIG_FILE PURPOSE="Default config file path (env-derived)" />
+        <const-LOG_FILE PURPOSE="Default log file path (env-derived)" />
+        <const-PID_FILE PURPOSE="Default PID file path (env-derived)" />
+      </annotations>
+    </M-ENTRYPOINTS-PATHS>
 
     <M-CLIENT-SHIM NAME="Client compat shim" TYPE="UTILITY" STATUS="implemented">
       <purpose>Compat shim re-exporting Yascheduler from yascheduler.entrypoints.client; preserves the deep import path from yascheduler.client import Yascheduler.</purpose>
@@ -96,18 +111,12 @@
     </M-CLI-COMMANDS>
 
     <M-SHARED NAME="Shared kernel" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Shared kernel for cross-layer utilities: typing shims, async-to-sync runtime bridge, process-global path constants.</purpose>
+      <purpose>Shared kernel: typing shims (Self, Unpack) consumed by ≥2 architectural layers.</purpose>
       <path>yascheduler/shared/__init__.py</path>
       <depends>none</depends>
       <annotations>
-        <fn-asleep_until PURPOSE="Async sleep until a given datetime" />
-        <fn-to_sync PURPOSE="Decorator converting async function to sync via ThreadPoolExecutor and event-loop detection" />
         <type-Self PURPOSE="Self type re-exported from typing_extensions for older Python versions" />
-        <type-ParamSpec PURPOSE="ParamSpec re-exported from typing_extensions for older Python versions" />
         <type-Unpack PURPOSE="Unpack re-exported from typing_extensions for older Python versions" />
-        <const-CONFIG_FILE PURPOSE="Default config file path (env-derived)" />
-        <const-PID_FILE PURPOSE="Default PID file path (env-derived)" />
-        <const-LOG_FILE PURPOSE="Default log file path (env-derived)" />
       </annotations>
     </M-SHARED>
 
@@ -123,7 +132,7 @@
     <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SysV init service entry point for launching the scheduler daemon.</purpose>
       <path>yascheduler/entrypoints/cli/daemon_sysv.py</path>
-      <depends>M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG, M-SHARED</depends>
+      <depends>M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG, M-ENTRYPOINTS</depends>
       <annotations>
         <fn-main PURPOSE="Thin sync entry point: parse args (preserves -p/-l short flags), open DaemonContext (working_directory=/), inside it configure logger + load Config + asyncio.run(run_daemon)" />
       </annotations>
@@ -132,7 +141,7 @@
     <M-ENTRYPOINTS-CLI-ARGS NAME="Shared CLI argparse helpers" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared argparse helpers for CLI entry points — existing_path validator and add_config_arg/add_log_level_arg/add_log_file_arg flag adders consumed by all six CLI commands and the three daemon launchers.</purpose>
       <path>yascheduler/entrypoints/cli/args.py</path>
-      <depends>M-SHARED</depends>
+      <depends>M-ENTRYPOINTS</depends>
       <annotations>
         <fn-existing_path PURPOSE="argparse type validator: Path(s) if s is an existing file else ArgumentTypeError (exit 2)" />
         <fn-add_config_arg PURPOSE="Add --config PATH (type=existing_path, default=CONFIG_FILE)" />
@@ -155,7 +164,7 @@
     <M-ENTRYPOINTS-CLI-INIT NAME="yainit CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Bootstrap CLI command — install service unit files and/or apply DB schema with --schema/--daemon subset flags.</purpose>
       <path>yascheduler/entrypoints/cli/init.py</path>
-      <depends>M-PERSISTENCE-SCHEMA, M-CONFIG, M-SHARED, M-ENTRYPOINTS-CLI-ARGS</depends>
+      <depends>M-PERSISTENCE-SCHEMA, M-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS</depends>
       <annotations>
         <fn-init PURPOSE="Service + schema initialization (--schema/--daemon subset selectors)" />
         <fn-_init_systemd PURPOSE="Write systemd unit file (overwrite if exists)" />
@@ -463,11 +472,12 @@
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineGateway Protocol.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-SHARED, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
         <fn-stop PURPOSE="Graceful shutdown" />
+        <fn-_asleep_until PURPOSE="Private async sleep-until helper inlined from former shared.async_utils" />
         <const-allocation_tracker PURPOSE="Owned AllocationTracker injected into allocate/consume use cases" />
         <const-active_clouds PURPOSE="Filtered Sequence[ConfigCloud] with max_nodes>0 and resolved adapter" />
         <const-allocation_lock PURPOSE="Owned asyncio.Lock serializing allocate_task critical section" />

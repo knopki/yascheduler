@@ -1,9 +1,9 @@
 # FILE: yascheduler/entrypoints/cli/init.py
-# VERSION: 1.2.1
+# VERSION: 1.2.2
 # START_MODULE_CONTRACT
 #   PURPOSE: yainit CLI command — install service unit files and/or apply DB schema, with --schema/--daemon subset-selector flags.
 #   SCOPE: init command + argparse + systemd/sysv service install + DB schema application delegation.
-#   DEPENDS: M-PERSISTENCE-SCHEMA, M-CONFIG, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
+#   DEPENDS: M-PERSISTENCE-SCHEMA, M-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-INIT, M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
@@ -15,7 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.1 - post-review fix: _init_schema signature widened to str | Path (argparse passes a Path via existing_path); MODULE_CONTRACT INPUTS aligned.
+#   LAST_CHANGE: v1.2.2 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
+#   PREVIOUS_CHANGE: v1.2.1 - post-review fix: _init_schema signature widened to str | Path (argparse passes a Path via existing_path); MODULE_CONTRACT INPUTS aligned.
 #   PREVIOUS_CHANGE: v1.2.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser in init() now reads args.config and passes it to _init_schema(config_path); _init_schema now takes a config_path: str = CONFIG_FILE parameter; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig).
 #   PREVIOUS_CHANGE: v1.1.1 - Added `from __future__ import annotations` for Python 3.9 compatibility (init()'s `list[str] | None` annotation evaluated at import time, breaking 3.9 collection).
 # END_CHANGE_SUMMARY
@@ -31,8 +32,8 @@ from pathlib import Path
 from pg8000 import DatabaseError
 
 from yascheduler.config import Config
+from yascheduler.entrypoints import CONFIG_FILE
 from yascheduler.infra import apply_schema
-from yascheduler.shared import CONFIG_FILE
 
 from .args import add_config_arg, add_log_level_arg
 

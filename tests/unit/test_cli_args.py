@@ -30,6 +30,7 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
+from yascheduler import CONFIG_FILE
 from yascheduler.entrypoints.cli.args import (
     LOG_LEVEL_CHOICES,
     add_config_arg,
@@ -37,7 +38,6 @@ from yascheduler.entrypoints.cli.args import (
     add_log_level_arg,
     existing_path,
 )
-from yascheduler.shared import CONFIG_FILE
 
 pytestmark = pytest.mark.unit
 

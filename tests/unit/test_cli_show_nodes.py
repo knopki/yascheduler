@@ -608,7 +608,7 @@ class TestShowNodesConfigLogLevel:
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from yascheduler.shared import CONFIG_FILE
+        from yascheduler import CONFIG_FILE
 
         _config, uow, _deps = stub_config_deps
         _wire(uow, [])

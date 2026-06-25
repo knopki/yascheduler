@@ -26,8 +26,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from yascheduler import LOG_FILE, PID_FILE
 from yascheduler.entrypoints.cli import daemon_sysv as sysv_mod
-from yascheduler.shared import LOG_FILE, PID_FILE
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine

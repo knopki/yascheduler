@@ -1,9 +1,9 @@
 # FILE: yascheduler/entrypoints/cli/args.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Shared argparse helpers for CLI entry points — validators and flag adders consumed by all six CLI commands and the three daemon launchers.
 #   SCOPE: argparse type validator (existing_path) and three flag adders (add_config_arg, add_log_level_arg, add_log_file_arg) plus LOG_LEVEL_CHOICES constant.
-#   DEPENDS: M-SHARED
+#   DEPENDS: M-ENTRYPOINTS
 #   LINKS: M-ENTRYPOINTS-CLI-ARGS
 # END_MODULE_CONTRACT
 #
@@ -16,7 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial module (consolidate-daemon-entrypoints): shared argparse helpers extracted from submit.py + daemonize.py; --log-level uses explicit choices resolved via logging.getLevelName (no private logging API); --config uses existing_path so missing files exit 2 with a clear message.
+#   LAST_CHANGE: v1.1.0 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial module (consolidate-daemon-entrypoints): shared argparse helpers extracted from submit.py + daemonize.py; --log-level uses explicit choices resolved via logging.getLevelName (no private logging API); --config uses existing_path so missing files exit 2 with a clear message.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from yascheduler.shared import CONFIG_FILE
+from yascheduler.entrypoints import CONFIG_FILE
 
 LOG_LEVEL_CHOICES = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 

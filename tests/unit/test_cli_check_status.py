@@ -869,7 +869,7 @@ class TestCheckStatusConfigLogLevel:
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from yascheduler.shared import CONFIG_FILE
+        from yascheduler import CONFIG_FILE
 
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(return_value=[])

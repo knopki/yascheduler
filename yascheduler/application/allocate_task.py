@@ -82,9 +82,9 @@ async def _validate_engine(
         logger.warning(
             "Unsupported engine '%s' for task_id=%s", engine_name, task.task_id
         )
-        task = task.reject("unsupported engine")
-        task = task.with_event(TaskFailed, reason="unsupported engine")
-        # FIXME: "Validated" but actually mutates and save in new transaction! Unacceptable.
+        task = task.reject("unsupported engine").with_event(
+            TaskFailed, reason="unsupported engine"
+        )
         async with uow_factory() as uow:
             await uow.tasks.save(task)
             await uow.commit()

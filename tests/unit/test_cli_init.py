@@ -395,7 +395,7 @@ class TestInitConfigLogLevel:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from yascheduler.shared import CONFIG_FILE
+        from yascheduler import CONFIG_FILE
 
         from_config_spy = MagicMock(return_value=MagicMock(db=MagicMock()))
         monkeypatch.setattr(

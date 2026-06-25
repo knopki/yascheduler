@@ -1,11 +1,11 @@
-# FILE: yascheduler/shared/variables.py
-# VERSION: 1.6.0
+# FILE: yascheduler/entrypoints/paths.py
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Global constants for config file, PID file, and log file paths.
-#   SCOPE: Path constants only.
+#   PURPOSE: Process-global file-path constants (config, log, pid) consumed by the entrypoints layer.
+#   SCOPE: Path constants only — derived from environment with filesystem defaults.
 #   DEPENDS: none
-#   LINKS: M-SHARED
+#   LINKS: M-ENTRYPOINTS-PATHS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,10 +15,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Moved from yascheduler/variables.py to yascheduler/shared/variables.py.
-#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - Relocated from yascheduler/shared/variables.py to yascheduler/entrypoints/paths.py (prune-shared-kernel).
+#   PREVIOUS_CHANGE: v1.6.0 - Moved from yascheduler/variables.py to yascheduler/shared/variables.py.
 # END_CHANGE_SUMMARY
-# FIXME: is this really shared kernel? decide
 from os import getenv
 
 CONFIG_FILE = getenv("YASCHEDULER_CONF_PATH", "/etc/yascheduler/yascheduler.conf")

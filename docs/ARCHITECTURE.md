@@ -81,9 +81,10 @@ root (`di.py`) wires the graph per entry point.
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
 │  SHARED (yascheduler.shared)                                     │
-│  async_utils.py     to_sync, asleep_until                         │
-│  variables.py       CONFIG_FILE, LOG_FILE, PID_FILE (constants)  │
-│  compat.py          Self, ParamSpec (typing shims)                │
+│  compat.py          Self, Unpack (typing shims consumed by ≥2     │
+│                     architectural layers; a module whose          │
+│                     consumers are in a single layer belongs to    │
+│                     that layer, not to shared)                    │
 │                  (depends on: stdlib only)                        │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
@@ -112,20 +113,20 @@ the sub layer.
 
 ## 2. Component Reference
 
-| Component            | Responsibility                                                                                                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `domain/`            | Entities, value objects, ports, services, exceptions, events                                                                                                              |
-| `infra/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                                                                                  |
-| `infra/ssh/`         | `SSHMachineGateway` + platform adapters                                                                                                                                   |
-| `infra/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                                                                                            |
-| `infra/notifier/`    | Webhook event handler                                                                                                                                                     |
-| `application/`       | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                                                                                             |
-| `shared/`            | Typing shims (`Self`, `ParamSpec`), async-to-sync bridge (`to_sync`), path constants                                                                                      |
-| `entrypoints/`       | Driving adapters + composition-root-facing public API: `client.py` (Yascheduler facade), `aiida_plugin.py`, `cli/` subpackage (six CLI commands + three daemon launchers) |
-| `di.py`              | Composition root: `make_daemon()`, `make_cli_deps()`                                                                                                                      |
-| `client.py`          | Compat shim re-exporting `Yascheduler` from `yascheduler.entrypoints.client` (real facade lives there)                                                                    |
-| `aiida_plugin.py`    | AiiDA scheduler plugin (lives at `entrypoints/aiida_plugin.py`; uses SSH transport, not the `Yascheduler` client)                                                         |
-| `config/`            | Config tree parsed from INI (uses attrs)                                                                                                                                  |
+| Component            | Responsibility                                                                                                                                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `domain/`            | Entities, value objects, ports, services, exceptions, events                                                                                                                                                                                                        |
+| `infra/persistence/` | PostgreSQL repositories, UoW, SQL loader, schema applier                                                                                                                                                                                                            |
+| `infra/ssh/`         | `SSHMachineGateway` + platform adapters                                                                                                                                                                                                                             |
+| `infra/cloud/`       | `CloudProvisionerImpl` + provider SDK adapters                                                                                                                                                                                                                      |
+| `infra/notifier/`    | Webhook event handler                                                                                                                                                                                                                                               |
+| `application/`       | Use cases, `Orchestrator`, `AbstractUnitOfWork`, `MessageBus`                                                                                                                                                                                                       |
+| `shared/`            | Typing shims (`Self`, `Unpack`) consumed by ≥2 architectural layers; no business logic, no I/O, no domain types                                                                                                                                                     |
+| `entrypoints/`       | Driving adapters + composition-root-facing public API: `client.py` (Yascheduler facade, private `to_sync` async-to-sync helper), `paths.py` (`CONFIG_FILE`/`LOG_FILE`/`PID_FILE`), `aiida_plugin.py`, `cli/` subpackage (six CLI commands + three daemon launchers) |
+| `di.py`              | Composition root: `make_daemon()`, `make_cli_deps()`                                                                                                                                                                                                                |
+| `client.py`          | Compat shim re-exporting `Yascheduler` from `yascheduler.entrypoints.client` (real facade lives there)                                                                                                                                                              |
+| `aiida_plugin.py`    | AiiDA scheduler plugin (lives at `entrypoints/aiida_plugin.py`; uses SSH transport, not the `Yascheduler` client)                                                                                                                                                   |
+| `config/`            | Config tree parsed from INI (uses attrs)                                                                                                                                                                                                                            |
 
 ### 2.1 Domain (`yascheduler/domain/`)
 
@@ -418,7 +419,8 @@ architecture description; add via a separate proposal if needed.
 ```txt
 yascheduler/
 ├── entrypoints/
-│   ├── client.py             # Yascheduler facade (real public API)
+│   ├── client.py             # Yascheduler facade (real public API), private to_sync helper
+│   ├── paths.py              # CONFIG_FILE, LOG_FILE, PID_FILE constants
 │   ├── aiida_plugin.py        # AiiDA scheduler plugin (SSH transport)
 │   └── daemon/                # daemon launchers (systemd + sysv)
 ├── infra/
@@ -430,9 +432,7 @@ yascheduler/
 ├── application/
 ├── domain/
 ├── shared/
-│   ├── async_utils.py          # to_sync, asleep_until
-│   ├── variables.py            # CONFIG_FILE, LOG_FILE, PID_FILE
-│   └── compat.py               # Self, ParamSpec (typing shims)
+│   └── compat.py               # Self, Unpack (typing shims consumed by ≥2 layers)
 ├── config/                    # INI config (attrs)
 ├── data/                      # shared infrastructure
 ├── di.py                      # composition root
