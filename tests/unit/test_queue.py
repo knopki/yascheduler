@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_queue.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for UniqueQueue and UMessage covering deduplication, item lifecycle, and edge cases.
 #   SCOPE: put/get, deduplication, item_done tracking, psize, task_done NotImplementedError.
@@ -16,10 +16,14 @@
 #   test_item_done_allows_requeue - after item_done the same message can be re-queued
 #   test_psize_after_get - psize reflects in-flight items
 #   test_task_done_raises - task_done raises NotImplementedError
+#   test_dedup_by_id - two messages with equal id dedup regardless of payload
+#   test_dedup_first_wins - on duplicate id the first-inserted message is retained
+#   test_unhashable_payload - unhashable payload is accepted through full lifecycle
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial queue unit tests
+#   LAST_CHANGE: v1.1.0 - Added test_dedup_by_id, test_dedup_first_wins, test_unhashable_payload pinning the id-only dedup invariant (payload excluded from __eq__/__hash__).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial queue unit tests.
 # END_CHANGE_SUMMARY
 
 import pytest
@@ -135,3 +139,44 @@ async def test_psize_after_get(queue: UniqueQueue) -> None:
 async def test_task_done_raises(queue: UniqueQueue) -> None:
     with pytest.raises(NotImplementedError, match="task_done"):
         queue.task_done()
+
+
+# START_CONTRACT: test_dedup_by_id
+#   PURPOSE: Verify that two UMessage instances with equal id dedup regardless of payload (id-only invariant).
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-QUEUE
+# END_CONTRACT: test_dedup_by_id
+async def test_dedup_by_id(queue: UniqueQueue) -> None:
+    await queue.put(UMessage(id="a", payload="x"))
+    await queue.put(UMessage(id="a", payload="y"))
+    assert queue.qsize() == 1
+
+
+# START_CONTRACT: test_dedup_first_wins
+#   PURPOSE: Verify that on a duplicate id the first-inserted message is retained (first-wins, not last-wins).
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-QUEUE
+# END_CONTRACT: test_dedup_first_wins
+async def test_dedup_first_wins(queue: UniqueQueue) -> None:
+    await queue.put(UMessage(id="a", payload="x"))
+    await queue.put(UMessage(id="a", payload="y"))
+    got = await queue.get()
+    assert got.payload == "x"
+
+
+# START_CONTRACT: test_unhashable_payload
+#   PURPOSE: Verify that an unhashable payload (dict) is accepted through construct/put/get/item_done without raising.
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-QUEUE
+# END_CONTRACT: test_unhashable_payload
+async def test_unhashable_payload(queue: UniqueQueue) -> None:
+    m = UMessage(id="a", payload={"k": "v"})
+    await queue.put(m)
+    got = await queue.get()
+    queue.item_done(got)

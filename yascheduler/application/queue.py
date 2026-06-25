@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/queue.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Deduplicating async queue for producer-consumer scheduling loops.
@@ -16,29 +16,53 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Relocated from yascheduler/queue.py; same contents.
-#   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.8.0 - Migrated UMessage from attrs to stdlib dataclasses; equality and hash are now keyed on id only via manual __eq__/__hash__ with eq=False (payload excluded; field(compare=False) was rejected because it conflicts with __slots__); manual __slots__ retained for immutability parity with prior attrs @define.
+#   PREVIOUS_CHANGE: v1.7.0 - Relocated from yascheduler/queue.py; same contents.
 # END_CHANGE_SUMMARY
-# FIXME: use dataclasses instead of attrs
 """Async queue with message deduplication"""
 
 import asyncio
 from collections import deque
 from collections.abc import Hashable
+from dataclasses import dataclass
 from typing import Generic, TypeVar
-
-from attrs import define, field
 
 TUMsgId = TypeVar("TUMsgId", bound=Hashable)
 TUMsgPayload = TypeVar("TUMsgPayload")
 
 
-@define(frozen=True)
+@dataclass(frozen=True, eq=False)
 class UMessage(Generic[TUMsgId, TUMsgPayload]):
     """Async queue message"""
 
-    id: TUMsgId = field()
-    payload: TUMsgPayload = field(hash=False)
+    __slots__ = ("id", "payload")
+    id: TUMsgId
+    payload: TUMsgPayload
+
+    # START_BLOCK_DEFINE_ID_ONLY_EQUALITY
+    # START_CONTRACT: __eq__
+    #   PURPOSE: Id-only equality — two UMessage instances are equal iff their id values are equal; payload is excluded (D2 invariant). __hash__ is keyed on id only, consistent with __eq__, so deque membership and set membership in UniqueQueue.put agree.
+    #   INPUTS: { other: object - RHS operand }
+    #   OUTPUTS: { bool - True if other is UMessage with equal id; NotImplemented if wrong type }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-QUEUE
+    # END_CONTRACT: __eq__
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, UMessage):
+            return NotImplemented
+        return self.id == other.id
+
+    # START_CONTRACT: __hash__
+    #   PURPOSE: Hash keyed on id only, consistent with id-only __eq__.
+    #   INPUTS: { None }
+    #   OUTPUTS: { int - hash of self.id }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-QUEUE
+    # END_CONTRACT: __hash__
+    def __hash__(self) -> int:
+        return hash(self.id)
+
+    # END_BLOCK_DEFINE_ID_ONLY_EQUALITY
 
 
 class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
