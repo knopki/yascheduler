@@ -34,8 +34,9 @@ from pathlib import Path
 from typing import Any
 
 from yascheduler.config import Config, Engine
-from yascheduler.di import make_cli_deps
-from yascheduler.entrypoints.cli.args import (
+from yascheduler.entrypoints import make_cli_deps
+
+from .args import (
     add_config_arg,
     add_log_level_arg,
     existing_path,

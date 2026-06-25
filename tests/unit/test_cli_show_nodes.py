@@ -33,8 +33,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.config import Engine, EngineRepository
-from yascheduler.di import CLIDeps
 from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
+from yascheduler.entrypoints.di import CLIDeps
 
 show_nodes_mod = importlib.import_module("yascheduler.entrypoints.cli.show_nodes")
 

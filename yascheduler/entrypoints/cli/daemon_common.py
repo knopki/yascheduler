@@ -25,7 +25,7 @@ import signal
 import sys
 from typing import TYPE_CHECKING, Any
 
-from yascheduler.di import make_daemon
+from yascheduler.entrypoints import make_daemon
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence

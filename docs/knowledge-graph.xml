@@ -476,7 +476,7 @@
 
     <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Composition root with factories per entry point: daemon, CLI. Wires MessageBus with webhook handlers.</purpose>
-      <path>yascheduler/di.py</path>
+      <path>yascheduler/entrypoints/di.py</path>
       <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit" />

@@ -1,5 +1,5 @@
-# FILE: yascheduler/di.py
-# VERSION: 5.3.0
+# FILE: yascheduler/entrypoints/di.py
+# VERSION: 5.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
 #   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
@@ -15,7 +15,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.3.0 - Delete make_aiida stub (function + START_CONTRACT block + MODULE_MAP line + SCOPE/PURPOSE AiiDA mention). Never wired through DI; plugin talks to yascheduler over SSH transport, not via the composition root. Relocated plugin lives at yascheduler/entrypoints/aiida_plugin.py (relocate-aiida-plugin). BREAKING for the (empty) set of external make_aiida importers; only tests/unit/test_di.py imported it, updated in the same change.
+#   LAST_CHANGE: v5.4.0 - relocate-di-to-entrypoints: move composition root into yascheduler.entrypoints; internal imports switch from relative (.application/.domain/.infra) to absolute via layer facades (yascheduler.application/.domain/.infra). PREVIOUS_CHANGE: v5.3.0 - Delete make_aiida stub (function + START_CONTRACT block + MODULE_MAP line + SCOPE/PURPOSE AiiDA mention). Never wired through DI; plugin talks to yascheduler over SSH transport, not via the composition root. Relocated plugin lives at yascheduler/entrypoints/aiida_plugin.py (relocate-aiida-plugin). BREAKING for the (empty) set of external make_aiida importers; only tests/unit/test_di.py imported it, updated in the same change.
 #   PREVIOUS_CHANGE: v5.2.1 - Update stale M-CLIENT graph reference to M-ENTRYPOINTS-CLIENT after client relocation (add-entrypoints-layer).
 # END_CHANGE_SUMMARY
 
@@ -29,21 +29,21 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 
-from .application import (
+from yascheduler.application import (
     AbstractUnitOfWork,
     AllocationTracker,
     MessageBus,
     Orchestrator,
     submit_task,
 )
-from .domain import (
+from yascheduler.domain import (
     TaskAbandoned,
     TaskAllocated,
     TaskCompleted,
     TaskCreated,
     TaskFailed,
 )
-from .infra import (
+from yascheduler.infra import (
     CloudAdapter,
     CloudProvisionerImpl,
     PostgresUnitOfWork,
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import PurePath
 
-    from .config import Config, ConfigCloud, EngineRepository
+    from yascheduler.config import Config, ConfigCloud, EngineRepository
 
 
 # START_CONTRACT: CLIDeps

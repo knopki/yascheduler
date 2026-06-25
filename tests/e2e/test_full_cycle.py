@@ -25,9 +25,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from yascheduler.di import make_cli_deps, make_daemon
 from yascheduler.domain.model import MachineState, Node
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
+from yascheduler.entrypoints.di import make_cli_deps, make_daemon
 from yascheduler.infra.ssh.gateway import SSHMachineGateway
 
 if TYPE_CHECKING:

@@ -34,8 +34,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from yascheduler.config import Config
-from yascheduler.di import make_cli_deps
 from yascheduler.domain import TaskStatus
+from yascheduler.entrypoints import make_cli_deps
 
 from .args import add_config_arg, add_log_level_arg
 

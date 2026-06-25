@@ -33,8 +33,8 @@ from pathlib import PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
 from yascheduler.config import Engine, EngineRepository
-from yascheduler.di import CLIDeps
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.entrypoints.di import CLIDeps
 
 # ---------------------------------------------------------------------------
 # Helpers

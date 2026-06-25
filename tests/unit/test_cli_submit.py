@@ -34,7 +34,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.config import Engine, EngineRepository
-from yascheduler.di import CLIDeps
+from yascheduler.entrypoints.di import CLIDeps
 
 submit_mod = importlib.import_module("yascheduler.entrypoints.cli.submit")
 

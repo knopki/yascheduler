@@ -90,7 +90,7 @@ The test SHALL assert `status` by int value, by equality with a
 class is removed). The canonical status type is
 `yascheduler.domain.TaskStatus`.
 
-The test SHALL NOT patch any internal collaborator (`yascheduler.di.make_cli_deps`
+The test SHALL NOT patch any internal collaborator (`yascheduler.entrypoints.di.make_cli_deps`
 or otherwise). It exercises the full facade path through real Postgres
 (characterization-first golden master).
 

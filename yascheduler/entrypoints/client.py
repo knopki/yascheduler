@@ -27,9 +27,10 @@ from typing import Any, Optional, Union
 
 from yascheduler.application import query_tasks
 from yascheduler.config import Config
-from yascheduler.di import CLIDeps, make_cli_deps
 from yascheduler.domain import Task, TaskStatus
 from yascheduler.shared import CONFIG_FILE, to_sync
+
+from .di import CLIDeps, make_cli_deps
 
 
 # START_CONTRACT: _task_to_dict

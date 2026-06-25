@@ -31,17 +31,13 @@ import asyncio
 import logging
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from yascheduler.config import Config
-from yascheduler.di import make_cli_deps
 from yascheduler.domain import Node, TaskStatus
+from yascheduler.entrypoints import CLIDeps, make_cli_deps
 from yascheduler.infra import SSHMachineGateway
 
 from .args import add_config_arg, add_log_level_arg
-
-if TYPE_CHECKING:
-    from yascheduler.di import CLIDeps
 
 
 @dataclass(frozen=True)

@@ -247,7 +247,7 @@ five event types. It maps events to `WebhookPayload`, posts to
 backoff (`@backoff.on_exception`) and a 10-concurrent semaphore.
 Failures are logged and swallowed after backoff exhausts.
 
-### 2.8 Composition Root (`yascheduler/di.py`)
+### 2.8 Composition Root (`yascheduler/entrypoints/di.py`)
 
 - **`make_daemon(config, log=None, *, clouds=None)`** — creates
   `_setup_domain_events()` (MessageBus + aiohttp session + webhook

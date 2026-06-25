@@ -35,7 +35,6 @@ from yascheduler.config import (
     ConfigRemote,
     EngineRepository,
 )
-from yascheduler.di import CLIDeps, make_cli_deps, make_daemon
 from yascheduler.domain.events import (
     TaskAbandoned,
     TaskAllocated,
@@ -43,6 +42,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
+from yascheduler.entrypoints.di import CLIDeps, make_cli_deps, make_daemon
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 # =============================================================================
@@ -105,7 +105,7 @@ class TestCLIDeps:
         )
 
         with patch(
-            "yascheduler.di.submit_task", new=AsyncMock(return_value=42)
+            "yascheduler.entrypoints.di.submit_task", new=AsyncMock(return_value=42)
         ) as mock_submit:
             result = await deps.submit("my-label", {"key": "val"}, "g09")
 
@@ -128,7 +128,7 @@ class TestMakeCliDeps:
         """make_cli_deps returns CLIDeps with config-derived engines and remote_tasks_dir."""
         config = create_mock_config()
 
-        with patch("yascheduler.di.aiohttp.ClientSession"):
+        with patch("yascheduler.entrypoints.di.aiohttp.ClientSession"):
             deps = make_cli_deps(config)
 
         assert isinstance(deps, CLIDeps)
@@ -140,7 +140,7 @@ class TestMakeCliDeps:
         """uow_factory callable returns a PostgresUnitOfWork initialized with config.db and bus."""
         config = create_mock_config()
 
-        with patch("yascheduler.di.aiohttp.ClientSession"):
+        with patch("yascheduler.entrypoints.di.aiohttp.ClientSession"):
             deps = make_cli_deps(config)
         uow = cast("PostgresUnitOfWork", deps.uow_factory())
 
@@ -152,7 +152,7 @@ class TestMakeCliDeps:
         """CLI mode registers no webhook handlers — bus has empty handler registry."""
         config = create_mock_config()
 
-        with patch("yascheduler.di.aiohttp.ClientSession"):
+        with patch("yascheduler.entrypoints.di.aiohttp.ClientSession"):
             deps = make_cli_deps(config)
 
         # Access the bus via the UoW factory to verify no handlers registered
@@ -181,7 +181,9 @@ class TestMakeDaemon:
         """
         session = MagicMock()
         session.close = AsyncMock()
-        with patch("yascheduler.di.aiohttp.ClientSession", return_value=session):
+        with patch(
+            "yascheduler.entrypoints.di.aiohttp.ClientSession", return_value=session
+        ):
             yield session
 
     @pytest.mark.asyncio
@@ -191,10 +193,13 @@ class TestMakeDaemon:
         mock_orch_instance = MagicMock()
 
         with (
-            patch("yascheduler.di.resolve_adapter", return_value=None) as mock_resolve,
-            patch("yascheduler.di.SSHMachineGateway") as mock_gateway,
             patch(
-                "yascheduler.di.Orchestrator", return_value=mock_orch_instance
+                "yascheduler.entrypoints.di.resolve_adapter", return_value=None
+            ) as mock_resolve,
+            patch("yascheduler.entrypoints.di.SSHMachineGateway") as mock_gateway,
+            patch(
+                "yascheduler.entrypoints.di.Orchestrator",
+                return_value=mock_orch_instance,
             ) as mock_orch,
             patch("logging.getLogger") as mock_get_logger,
         ):
@@ -236,8 +241,8 @@ class TestMakeDaemon:
         custom_clouds = MagicMock()
 
         with (
-            patch("yascheduler.di.resolve_adapter") as mock_resolve,
-            patch("yascheduler.di.Orchestrator"),
+            patch("yascheduler.entrypoints.di.resolve_adapter") as mock_resolve,
+            patch("yascheduler.entrypoints.di.Orchestrator"),
             patch("logging.getLogger"),
         ):
             await make_daemon(config, clouds=custom_clouds)
@@ -261,8 +266,8 @@ class TestMakeDaemon:
         custom_clouds.configs = {"hetzner": hetzner_cfg}
 
         with (
-            patch("yascheduler.di.resolve_adapter") as mock_resolve,
-            patch("yascheduler.di.Orchestrator") as mock_orch,
+            patch("yascheduler.entrypoints.di.resolve_adapter") as mock_resolve,
+            patch("yascheduler.entrypoints.di.Orchestrator") as mock_orch,
             patch("logging.getLogger"),
         ):
             await make_daemon(config, clouds=custom_clouds)
@@ -281,8 +286,8 @@ class TestMakeDaemon:
         config = create_mock_config()
 
         with (
-            patch("yascheduler.di.resolve_adapter", return_value=None),
-            patch("yascheduler.di.Orchestrator"),
+            patch("yascheduler.entrypoints.di.resolve_adapter", return_value=None),
+            patch("yascheduler.entrypoints.di.Orchestrator"),
             patch("logging.getLogger") as mock_get_logger,
         ):
             await make_daemon(config)
@@ -296,8 +301,8 @@ class TestMakeDaemon:
         custom_log = MagicMock()
 
         with (
-            patch("yascheduler.di.resolve_adapter", return_value=None),
-            patch("yascheduler.di.Orchestrator"),
+            patch("yascheduler.entrypoints.di.resolve_adapter", return_value=None),
+            patch("yascheduler.entrypoints.di.Orchestrator"),
             patch("logging.getLogger") as mock_get_logger,
         ):
             await make_daemon(config, log=custom_log)
@@ -309,7 +314,7 @@ class TestMakeDaemon:
         """make_daemon must not import or reference DB."""
         import inspect
 
-        import yascheduler.di as di_module
+        import yascheduler.entrypoints.di as di_module
 
         assert not hasattr(di_module, "DB"), "di.py still imports DB"
         src = inspect.getsource(di_module.make_daemon)
