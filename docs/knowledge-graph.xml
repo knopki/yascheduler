@@ -6,7 +6,7 @@
   See .agents/skills/grace-lite/SKILL.md for full rules.
 -->
 <KnowledgeGraph>
-  <Project NAME="yascheduler" VERSION="2.0.0">
+  <Project NAME="yascheduler" VERSION="2.1.0">
     <keywords>scheduler, SSH, cloud, HPC, AiiDA, orchestration</keywords>
     <annotation>Schedules scientific calculation jobs on SSH machines and cloud-created nodes.</annotation>
 
@@ -32,7 +32,7 @@
     <M-ENTRYPOINTS-CLIENT NAME="Client API" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Public Python/CLI client for submitting and querying tasks.</purpose>
       <path>yascheduler/entrypoints/client.py</path>
-      <depends>M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-APPLICATION-QUERY-TASKS, M-ENTRYPOINTS-PATHS</depends>
+      <depends>M-APPLICATION, M-DOMAIN, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS-CONFIG-PARSER, M-DI, M-ENTRYPOINTS-PATHS</depends>
       <annotations>
         <class-Yascheduler PURPOSE="Public client class" />
         <fn-queue_submit_task PURPOSE="Submit a new task (sync)" />
@@ -50,7 +50,7 @@
     <M-ENTRYPOINTS NAME="Entrypoints layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Layer facade for the outermost hexagonal layer (driving adapters + composition root); re-exports Yascheduler from .client.</purpose>
       <path>yascheduler/entrypoints/__init__.py</path>
-      <depends>M-ENTRYPOINTS-CLIENT, M-ENTRYPOINTS-PATHS</depends>
+      <depends>M-ENTRYPOINTS-CLIENT, M-ENTRYPOINTS-CONFIG, M-DI, M-ENTRYPOINTS-PATHS</depends>
       <annotations>
         <export-Yascheduler PURPOSE="Public client class re-exported from entrypoints.client" />
         <const-CONFIG_FILE PURPOSE="Default config file path re-exported from entrypoints.paths" />
@@ -73,7 +73,7 @@
     <M-CLIENT-SHIM NAME="Client compat shim" TYPE="UTILITY" STATUS="implemented">
       <purpose>Compat shim re-exporting Yascheduler from yascheduler.entrypoints.client; preserves the deep import path from yascheduler.client import Yascheduler.</purpose>
       <path>yascheduler/client.py</path>
-      <depends>M-ENTRYPOINTS-CLIENT</depends>
+      <depends>M-ENTRYPOINTS</depends>
       <annotations>
         <export-Yascheduler PURPOSE="Compat re-export of Yascheduler from entrypoints.client" />
       </annotations>
@@ -104,7 +104,7 @@
     <M-CLI-COMMANDS NAME="CLI commands package" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Per-command CLI adapter modules — parse args, call use cases via DI, format output.</purpose>
       <path>yascheduler/entrypoints/cli/__init__.py</path>
-      <depends>M-DI, M-ENTRYPOINTS-CONFIG, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE, M-ENTRYPOINTS-CLI-ARGS, M-DAEMON-COMMON</depends>
+      <depends>none</depends>
       <annotations>
         <fn-daemonize PURPOSE="Start yascheduler daemon (entrypoints/cli/daemonize.py)" />
       </annotations>
@@ -113,17 +113,27 @@
     <M-SHARED NAME="Shared kernel" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared kernel: typing shims (Self, Unpack) consumed by ≥2 architectural layers.</purpose>
       <path>yascheduler/shared/__init__.py</path>
-      <depends>none</depends>
+      <depends>M-SHARED-COMPAT</depends>
       <annotations>
         <type-Self PURPOSE="Self type re-exported from typing_extensions for older Python versions" />
         <type-Unpack PURPOSE="Unpack re-exported from typing_extensions for older Python versions" />
       </annotations>
     </M-SHARED>
 
+    <M-SHARED-COMPAT NAME="Shared compat shims" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Type compatibility shims: Self and Unpack re-exported from typing_extensions for older Python versions.</purpose>
+      <path>yascheduler/shared/compat.py</path>
+      <depends>none</depends>
+      <annotations>
+        <type-Self PURPOSE="Self type re-exported from typing_extensions" />
+        <type-Unpack PURPOSE="Unpack re-exported from typing_extensions" />
+      </annotations>
+    </M-SHARED-COMPAT>
+
     <M-DAEMON-SYSTEMD NAME="Systemd daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Systemd service entry point for the scheduler daemon.</purpose>
       <path>yascheduler/entrypoints/cli/daemon_systemd.py</path>
-      <depends>M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-ENTRYPOINTS-CONFIG</depends>
+      <depends>M-ENTRYPOINTS-CONFIG-PARSER</depends>
       <annotations>
         <fn-main PURPOSE="Thin sync entry point: parse args, configure logger, load Config, asyncio.run(run_daemon); foreground under systemd (stderr → journald); no python-daemon" />
       </annotations>
@@ -132,11 +142,20 @@
     <M-DAEMON-SYSV NAME="SysV daemon" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SysV init service entry point for launching the scheduler daemon.</purpose>
       <path>yascheduler/entrypoints/cli/daemon_sysv.py</path>
-      <depends>M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS</depends>
+      <depends>M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER</depends>
       <annotations>
         <fn-main PURPOSE="Thin sync entry point: parse args (preserves -p/-l short flags), open DaemonContext (working_directory=/), inside it configure logger + load Config + asyncio.run(run_daemon)" />
       </annotations>
     </M-DAEMON-SYSV>
+
+    <M-DAEMONIZE NAME="Daemonize CLI command" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>yascheduler CLI command — start the daemon in the foreground (manual/debug/container use) via the shared daemon core.</purpose>
+      <path>yascheduler/entrypoints/cli/daemonize.py</path>
+      <depends>M-ENTRYPOINTS-CLI-ARGS, M-DAEMON-COMMON, M-ENTRYPOINTS-CONFIG-PARSER</depends>
+      <annotations>
+        <fn-daemonize PURPOSE="argparse entry point: parse args and run the daemon in the foreground" />
+      </annotations>
+    </M-DAEMONIZE>
 
     <M-ENTRYPOINTS-CLI-ARGS NAME="Shared CLI argparse helpers" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared argparse helpers for CLI entry points — existing_path validator and add_config_arg/add_log_level_arg/add_log_file_arg flag adders consumed by all six CLI commands and the three daemon launchers.</purpose>
@@ -154,7 +173,7 @@
     <M-DAEMON-COMMON NAME="Shared daemon core" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Shared daemon core — configure_logger (root logger + backoff/asyncssh suppression + captureWarnings) and run_daemon (make_daemon + SIGTERM/SIGINT handlers + orch.start()), consumed by all three daemon entry points.</purpose>
       <path>yascheduler/entrypoints/cli/daemon_common.py</path>
-      <depends>M-DI, M-ENTRYPOINTS-CONFIG, M-APPLICATION-ORCHESTRATOR</depends>
+      <depends>M-ENTRYPOINTS</depends>
       <annotations>
         <fn-configure_logger PURPOSE="Configure the ROOT logger: stderr StreamHandler always + FileHandler when log_file set; backoff/asyncssh → ERROR; captureWarnings(True); NO basicConfig" />
         <fn-run_daemon PURPOSE="Async daemon core: await make_daemon, register SIGTERM/SIGINT handlers on the running loop, await orch.start()" />
@@ -164,7 +183,7 @@
     <M-ENTRYPOINTS-CLI-INIT NAME="yainit CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Bootstrap CLI command — install service unit files and/or apply DB schema with --schema/--daemon subset flags.</purpose>
       <path>yascheduler/entrypoints/cli/init.py</path>
-      <depends>M-PERSISTENCE-SCHEMA, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS</depends>
+      <depends>M-ADAPTERS, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-PERSISTENCE-SCHEMA</depends>
       <annotations>
         <fn-init PURPOSE="Service + schema initialization (--schema/--daemon subset selectors)" />
         <fn-_init_systemd PURPOSE="Write systemd unit file (overwrite if exists)" />
@@ -176,7 +195,7 @@
     <M-ENTRYPOINTS-CLI-SHOW-NODES NAME="yanodes CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>List nodes and their running tasks with filter flags and table/JSON output.</purpose>
       <path>yascheduler/entrypoints/cli/show_nodes.py</path>
-      <depends>M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SHARED, M-ENTRYPOINTS-CLI-ARGS</depends>
+      <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER</depends>
       <annotations>
         <fn-show_nodes PURPOSE="Sync entry point: asyncio.run(_show_nodes_async)" />
         <fn-_show_nodes_async PURPOSE="Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2" />
@@ -192,7 +211,7 @@
     <M-ENTRYPOINTS-CLI-SUBMIT NAME="yasubmit CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>yasubmit CLI command — parse AiiDA script, submit task via DI</purpose>
       <path>yascheduler/entrypoints/cli/submit.py</path>
-      <depends>M-DI, M-ENTRYPOINTS-CONFIG, M-SHARED, M-ENTRYPOINTS-CLI-ARGS</depends>
+      <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER</depends>
       <annotations>
         <fn-submit PURPOSE="Sync entry point: asyncio.run(_submit_async)" />
         <fn-_submit_async PURPOSE="Parse AiiDA script, build metadata, submit task via CLIDeps; exit 0/1/2" />
@@ -206,7 +225,7 @@
     <M-ENTRYPOINTS-CLI-MANAGE-NODE NAME="yasetnode CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>yasetnode CLI command — add, soft-remove, or hard-remove nodes via UoW (+ SSH gateway on the add path)</purpose>
       <path>yascheduler/entrypoints/cli/manage_node.py</path>
-      <depends>M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SSH-KEYS, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS</depends>
+      <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-ADAPTERS, M-SSH-KEYS, M-SSH-GATEWAY, M-PERSISTENCE-UOW</depends>
       <annotations>
         <fn-manage_node PURPOSE="Sync entry point: asyncio.run(_manage_node_async)" />
         <fn-_manage_node_async PURPOSE="Add/soft-remove/hard-remove a node; validation UoW read-only, dispatch to per-helper UoW; exit 0/1/2" />
@@ -222,7 +241,7 @@
     <M-ENTRYPOINTS-CLI-CHECK-STATUS NAME="yastatus CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Query and display task status with default/info/json/view renderers; verbose mode tails remote OUTPUT and optional convergence.</purpose>
       <path>yascheduler/entrypoints/cli/check_status.py</path>
-      <depends>M-ENTRYPOINTS-CONFIG, M-DI, M-SSH-GATEWAY, M-SSH-KEYS, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS</depends>
+      <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-ADAPTERS, M-SSH-KEYS, M-SSH-GATEWAY, M-PERSISTENCE-UOW</depends>
       <annotations>
         <fn-check_status PURPOSE="Sync entry point: asyncio.run(_check_status_async)" />
         <fn-_check_status_async PURPOSE="Query tasks via DI, dispatch renderer, exit 0/1/2" />
@@ -247,7 +266,7 @@
     <M-DOMAIN NAME="Domain layer entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Domain layer entry point — re-exports domain events, model entities, exception hierarchy, and port interfaces.</purpose>
       <path>yascheduler/domain/__init__.py</path>
-      <depends>M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS</depends>
+      <depends>M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS</depends>
       <annotations>
         <export-DomainEvent PURPOSE="Base frozen dataclass for all task lifecycle events" />
         <export-Event PURPOSE="Union type alias of all event types" />
@@ -315,7 +334,7 @@
     <M-DOMAIN-MODEL NAME="Domain entities" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Domain entities.</purpose>
       <path>yascheduler/domain/model.py</path>
-      <depends>M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE</depends>
+      <depends>M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS, M-SHARED</depends>
       <annotations>
         <class-TaskStatus PURPOSE="IntEnum: TO_DO=0, RUNNING=1, DONE=2" />
         <class-MachineState PURPOSE="Enum: FREE, BUSY" />
@@ -335,7 +354,7 @@
     <M-DOMAIN-ENGINE NAME="Engine domain types" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Engine value object, EngineRepository collection, Deploy strategies as frozen stdlib dataclasses.</purpose>
       <path>yascheduler/domain/engine.py</path>
-      <depends>M-SHARED</depends>
+      <depends>M-DOMAIN-EXCEPTIONS</depends>
       <annotations>
         <class-Engine PURPOSE="Calculation engine value object with validate_inputs()" />
         <class-EngineRepository PURPOSE="Frozen collection of engines with filter/filter_platforms/get_platform_packages" />
@@ -353,7 +372,7 @@
     <M-DOMAIN-PORTS NAME="Domain ports" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Domain port interfaces: abstract contracts for persistence, machine operations, and cloud provisioning.</purpose>
       <path>yascheduler/domain/ports.py</path>
-      <depends>M-DOMAIN-MODEL</depends>
+      <depends>M-DOMAIN-ENGINE, M-DOMAIN-MODEL</depends>
       <annotations>
         <class-TaskRepository PURPOSE="Async port for task persistence" />
         <class-NodeRepository PURPOSE="Async port for node persistence (full CRUD lifecycle)" />
@@ -394,7 +413,7 @@
     <M-APPLICATION NAME="Application layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task, query_tasks, AllocationTracker.</purpose>
       <path>yascheduler/application/__init__.py</path>
-      <depends>M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-SUBMIT, M-APPLICATION-QUERY-TASKS, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-APPLICATION-ALLOCATION-TRACKER, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-QUERY-TASKS, M-APPLICATION-SUBMIT, M-APPLICATION-UOW</depends>
       <annotations>
         <export-AbstractUnitOfWork PURPOSE="Unit-of-work boundary for application use cases" />
         <export-Orchestrator PURPOSE="Task lifecycle orchestrator" />
@@ -408,7 +427,7 @@
     <M-APPLICATION-UOW NAME="Abstract Unit of Work Protocol" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Protocol defining transactional boundary: tasks, nodes, commit, rollback, event dispatch.</purpose>
       <path>yascheduler/application/uow.py</path>
-      <depends>M-DOMAIN-PORTS, M-DOMAIN-EVENTS</depends>
+      <depends>M-DOMAIN</depends>
       <annotations>
         <class-AbstractUnitOfWork PURPOSE="Async context manager Protocol with task and node repositories and event dispatch" />
       </annotations>
@@ -417,7 +436,7 @@
     <M-APPLICATION-MESSAGE-BUS NAME="Message bus" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>In-process message bus that dispatches domain events to registered handlers.</purpose>
       <path>yascheduler/application/message_bus.py</path>
-      <depends>M-DOMAIN-EVENTS</depends>
+      <depends>M-DOMAIN</depends>
       <annotations>
         <class-MessageBus PURPOSE="Event dispatcher with type-based handler registry" />
       </annotations>
@@ -426,7 +445,7 @@
     <M-APPLICATION-SUBMIT NAME="Submit task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Validate engine/inputs, create domain Task, persist via UoW, record TaskCreated event.</purpose>
       <path>yascheduler/application/submit_task.py</path>
-      <depends>M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-APPLICATION-UOW, M-DOMAIN-EVENTS</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-UOW</depends>
       <annotations>
         <fn-submit_task PURPOSE="Create a new TO_DO task after validating engine and inputs" />
       </annotations>
@@ -435,7 +454,7 @@
     <M-APPLICATION-QUERY-TASKS NAME="Query tasks use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Read-only task query by statuses XOR job IDs within a single UoW; no commit.</purpose>
       <path>yascheduler/application/query_tasks.py</path>
-      <depends>M-DOMAIN-MODEL, M-APPLICATION-UOW</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-UOW</depends>
       <annotations>
         <fn-query_tasks PURPOSE="Async read-only task query by statuses or job IDs via AbstractUnitOfWork" />
       </annotations>
@@ -444,7 +463,7 @@
     <M-APPLICATION-ALLOCATE NAME="Allocate task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Match a TO_DO task to a free machine or request cloud provisioning (owns cloud-fallback flow: tracker dedup, capacity, tmp-node, final persist).</purpose>
       <path>yascheduler/application/allocate_task.py</path>
-      <depends>M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or own full cloud-fallback flow via CloudProvisioner port" />
         <fn-_validate_engine PURPOSE="Validate task engine is configured and supported" />
@@ -457,7 +476,7 @@
     <M-APPLICATION-CONSUME NAME="Consume task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Download outputs from remote machine and mark task DONE.</purpose>
       <path>yascheduler/application/consume_task.py</path>
-      <depends>M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <fn-consume_task PURPOSE="Download task outputs and mark DONE or ERROR" />
         <fn-_prepare_store_folder PURPOSE="Create local output directory from domain Task context" />
@@ -469,7 +488,7 @@
     <M-APPLICATION-DEALLOCATE NAME="Deallocate idle nodes use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Disable idle cloud nodes and return IPs for VM deletion; per-node wrapper owns disable+remove bracketing around pure cloud delete.</purpose>
       <path>yascheduler/application/deallocate_nodes.py</path>
-      <depends>M-APPLICATION-UOW, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
       <annotations>
         <fn-deallocate_node PURPOSE="Per-node wrapper: gateway disconnect -> UoW disable+commit -> clouds.deallocate(cloud, ip) -> UoW remove+commit" />
         <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and return IPs for VM deletion (idle-disable sweep)" />
@@ -488,7 +507,7 @@
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineGateway Protocol. Private-key discovery is injected via list_private_keys_fn (M-SSH-KEYS), keeping this module free of yascheduler.infra imports.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-KEYS</depends>
+      <depends>M-DOMAIN, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-QUEUE, M-PERSISTENCE-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
@@ -503,7 +522,7 @@
     <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Composition root with factories per entry point: daemon, CLI. Wires MessageBus with webhook handlers; injects list_private_keys into the Orchestrator.</purpose>
       <path>yascheduler/entrypoints/di.py</path>
-      <depends>M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-ENTRYPOINTS-CONFIG, M-SSH-GATEWAY, M-SSH-KEYS, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-APPLICATION, M-DOMAIN, M-ADAPTERS, M-PERSISTENCE-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-NOTIFIER-WEBHOOK, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit" />
         <fn-make_daemon PURPOSE="Async factory creating Orchestrator with UoW factory (no DB, no auto-migration)" />
@@ -514,7 +533,7 @@
     <M-ENTRYPOINTS-CONFIG-PARSER NAME="INI config parser" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>INI config parsing and assembly — parse_config assembles frozen Config aggregate; engine.* / [clouds] / [db] / [local] / [remote] section parsers; config utilities relocated to sibling _config_utils.py.</purpose>
       <path>yascheduler/entrypoints/config_parser.py</path>
-      <depends>M-DOMAIN-ENGINE, M-CLOUD-CONFIGS, M-INFRA-DB-CONFIG, M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG, M-DOMAIN-PORTS</depends>
+      <depends>M-DOMAIN-ENGINE, M-DOMAIN-SETTINGS, M-CLOUD-CONFIGS, M-PERSISTENCE, M-ENTRYPOINTS-CONFIG-UTILS</depends>
       <annotations>
         <fn-parse_config PURPOSE="Public assembly: read INI, parse all sections, return frozen Config aggregate" />
         <fn-_parse_db_section PURPOSE="Build PostgresDbConfig from a [db] INI section" />
@@ -535,6 +554,17 @@
       </annotations>
     </M-ENTRYPOINTS-CONFIG-PARSER>
 
+    <M-ENTRYPOINTS-CONFIG-UTILS NAME="Config parser helpers" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Parser-side config helpers — warning for unknown INI keys and optional-string coercion.</purpose>
+      <path>yascheduler/entrypoints/_config_utils.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-ConfigWarning PURPOSE="Warning emitted for unknown INI keys" />
+        <fn-warn_unknown_fields PURPOSE="Emit ConfigWarning for keys outside the valid set" />
+        <fn-opt_str_val PURPOSE="Coerce a ConfigParser value to an optional string" />
+      </annotations>
+    </M-ENTRYPOINTS-CONFIG-UTILS>
+
     <!-- ═══════════════════════════════════════════════
          Persistence adapters
          ═══════════════════════════════════════════════ -->
@@ -542,7 +572,7 @@
     <M-PERSISTENCE NAME="Persistence subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Persistence subpackage facade — internal organization of the adapters layer; re-exported by M-ADAPTERS for cross-layer consumers and composition root.</purpose>
       <path>yascheduler/infra/persistence/__init__.py</path>
-      <depends>M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-POSTGRES</depends>
+      <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW</depends>
       <annotations>
         <export-UnitOfWorkNotInitializedError PURPOSE="Re-exported from exceptions" />
         <export-apply_schema PURPOSE="Apply DB schema migrations" />
@@ -572,7 +602,7 @@
     <M-PERSISTENCE-POSTGRES NAME="PostgreSQL repositories" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgresTaskRepository and PostgresNodeRepository implementing domain repository ports via pg8000.</purpose>
       <path>yascheduler/infra/persistence/postgres.py</path>
-      <depends>M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL, M-DOMAIN-PORTS</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-SQLLOADER</depends>
       <annotations>
         <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, list_by_status, list_by_jobs, count_by_status)" />
         <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port (full CRUD lifecycle)" />
@@ -582,7 +612,7 @@
     <M-PERSISTENCE-UOW NAME="PostgreSQL Unit of Work" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgresUnitOfWork managing shared pg8000 Connection across repositories with commit/rollback and event dispatch.</purpose>
       <path>yascheduler/infra/persistence/postgres_uow.py</path>
-      <depends>M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN-EVENTS</depends>
+      <depends>M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN</depends>
       <annotations>
         <class-PostgresUnitOfWork PURPOSE="Async context manager for transactional boundaries with shared connection and event dispatch" />
         <fn-_require_conn PURPOSE="Guard returning Connection or raising UnitOfWorkNotInitializedError" />
@@ -592,7 +622,7 @@
     <M-PERSISTENCE-SCHEMA NAME="Schema applier" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>Synchronous transactional application of schema.sql via pg8000 for CLI init and test fixtures.</purpose>
       <path>yascheduler/infra/persistence/postgres_schema.py</path>
-      <depends>M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG</depends>
+      <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-SQLLOADER</depends>
       <annotations>
         <fn-apply_schema PURPOSE="Apply schema.sql in BEGIN/COMMIT transaction, rollback on failure" />
       </annotations>
@@ -624,7 +654,7 @@
     <M-ENTRYPOINTS-CONFIG NAME="Config aggregate" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Composition-root config aggregate bundling settings from all inner layers for delivery to the orchestrator and CLIs; only entrypoints consumes it.</purpose>
       <path>yascheduler/entrypoints/config.py</path>
-      <depends>M-DOMAIN-SETTINGS, M-INFRA-DB-CONFIG, M-CLOUD-CONFIGS, M-DOMAIN-ENGINE</depends>
+      <depends>M-DOMAIN, M-CLOUD-CONFIGS, M-PERSISTENCE</depends>
       <annotations>
         <class-Config PURPOSE="Frozen dataclass: composition-root aggregate (db, local, remote, clouds, engines); importable from yascheduler.entrypoints" />
       </annotations>
@@ -633,7 +663,7 @@
     <M-CLOUD-CONFIGS NAME="Cloud config DTOs" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>Cloud provider config DTOs (Azure, Hetzner, UpCloud, VastAI) and the ConfigCloud union — frozen stdlib dataclasses relocated from yascheduler.config.cloud.</purpose>
       <path>yascheduler/infra/cloud/cloud_configs.py</path>
-      <depends>M-CLOUD-PROTOCOLS, M-SHARED, M-DOMAIN-PORTS</depends>
+      <depends>M-DOMAIN-PORTS, M-SHARED</depends>
       <annotations>
         <class-ConfigCloudAzure PURPOSE="Azure cloud config frozen dataclass; explicitly inherits domain CloudConfig Protocol" />
         <class-ConfigCloudHetzner PURPOSE="Hetzner cloud config frozen dataclass; explicitly inherits domain CloudConfig Protocol" />
@@ -653,7 +683,7 @@
     <M-ADAPTERS NAME="Adapters layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Adapters layer facade — sole public surface for cross-layer consumers (application, composition root). Re-exports gateway, retry exceptions, cloud provisioner, and webhook handler.</purpose>
       <path>yascheduler/infra/__init__.py</path>
-      <depends>M-SSH, M-CLOUD, M-PERSISTENCE, M-NOTIFIER</depends>
+      <depends>M-CLOUD, M-NOTIFIER, M-PERSISTENCE, M-SSH, M-SSH-KEYS</depends>
       <annotations>
         <export-SSHMachineGateway PURPOSE="Async SSH machine gateway implementation" />
         <export-AllSSHRetryExc PURPOSE="Tuple of all retryable SSH exceptions" />
@@ -670,7 +700,7 @@
     <M-CLOUD NAME="Cloud subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Cloud subpackage facade — internal organization of the adapters layer; re-exported by M-ADAPTERS for cross-layer consumers.</purpose>
       <path>yascheduler/infra/cloud/__init__.py</path>
-      <depends>M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVISIONER, M-CLOUD-CONFIGS, M-CLOUD-INIT</depends>
+      <depends>M-CLOUD-ADAPTERS-NEW, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-PROTOCOLS, M-CLOUD-PROVISIONER, M-CLOUD-SSH-KEYS, M-CLOUD-UTILS</depends>
       <annotations>
         <export-CloudAdapter PURPOSE="Cloud adapter wrapper class" />
         <export-CloudAllocateError PURPOSE="Cloud node allocation error" />
@@ -698,14 +728,13 @@
     <M-CLOUD-PROVISIONER NAME="Cloud provisioner" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, setup, SSH keys); no DB access.</purpose>
       <path>yascheduler/infra/cloud/manager.py</path>
-      <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-SSH-KEYS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-INIT, M-CLOUD-CONFIGS, M-SSH-GATEWAY, M-SSH-KEYS, M-DOMAIN-SETTINGS</depends>
+      <depends>M-DOMAIN, M-SSH-KEYS, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
       <annotations>
-        <class-CloudProvisionerImpl PURPOSE="Pure cloud-API adapter implementing CloudProvisioner protocol" />
-        <fn-allocate PURPOSE="Allocate cloud node by provider name (provider: str) -> Node; no DB write" />
-        <fn-deallocate PURPOSE="Deallocate cloud node by cloud name + IP (cloud, ip) -> None; no DB read/write" />
-        <fn-select_provider PURPOSE="Sync port method: select provider by priority/capacity/platform, return provider name string or None (None on throttle)" />
+        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access)" />
+        <class-CloudAllocateError PURPOSE="Cloud allocation failure (domain exception realized via yascheduler.domain)" />
+        <class-CloudSetupError PURPOSE="Cloud setup/bootstrap failure (domain exception realized via yascheduler.domain)" />
       </annotations>
-    </M-CLOUD-PROVISIONER>
+</M-CLOUD-PROVISIONER>
 
     <M-CLOUD-PROVIDER-SELECTION NAME="Provider selection" TYPE="UTILITY" STATUS="implemented">
       <purpose>Pure function selecting best cloud provider by priority, capacity, and platform support.</purpose>
@@ -717,19 +746,61 @@
       </annotations>
     </M-CLOUD-PROVIDER-SELECTION>
 
-    <M-CLOUD-PROVIDERS NAME="Cloud providers" TYPE="INTEGRATION" STATUS="implemented">
-      <purpose>Cloud provider SDK adapters (Azure, Hetzner, UpCloud) with optional import handling.</purpose>
-      <path>yascheduler/infra/cloud/providers/</path>
-      <depends>M-CLOUD-CONFIGS, M-CLOUD-SSH-KEYS</depends>
+    <M-CLOUD-PROVIDERS NAME="Cloud providers facade" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Providers subpackage facade — re-exports provider create/delete callables (no registry logic; registry lives in M-CLOUD-ADAPTERS-NEW).</purpose>
+      <path>yascheduler/infra/cloud/providers/__init__.py</path>
+      <depends>M-CLOUD-PROVIDER-AZ, M-CLOUD-PROVIDER-HETZNER, M-CLOUD-PROVIDER-UPCLOUD, M-CLOUD-PROVIDER-VASTAI</depends>
       <annotations>
-        <fn-az_create_node PURPOSE="Create Azure node" />
-        <fn-az_delete_node PURPOSE="Delete Azure node" />
-        <fn-hetzner_create_node PURPOSE="Create Hetzner node" />
-        <fn-hetzner_delete_node PURPOSE="Delete Hetzner node" />
-        <fn-upcloud_create_node PURPOSE="Create UpCloud node" />
-        <fn-upcload_delete_node PURPOSE="Delete UpCloud node" />
+        <fn-az_create_node PURPOSE="Create Azure node (re-export)" />
+        <fn-az_delete_node PURPOSE="Delete Azure node (re-export)" />
+        <fn-hetzner_create_node PURPOSE="Create Hetzner node (re-export)" />
+        <fn-hetzner_delete_node PURPOSE="Delete Hetzner node (re-export)" />
+        <fn-upcloud_create_node PURPOSE="Create UpCloud node (re-export)" />
+        <fn-upcload_delete_node PURPOSE="Delete UpCloud node (re-export)" />
+        <fn-vastai_create_node PURPOSE="Create VastAI node (re-export)" />
+        <fn-vastai_delete_node PURPOSE="Delete VastAI node (re-export)" />
       </annotations>
     </M-CLOUD-PROVIDERS>
+
+    <M-CLOUD-PROVIDER-AZ NAME="Azure provider" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Azure VM creation and deletion using Azure SDK.</purpose>
+      <path>yascheduler/infra/cloud/providers/az.py</path>
+      <depends>M-CLOUD</depends>
+      <annotations>
+        <fn-az_create_node PURPOSE="Create Azure VM via Azure SDK" />
+        <fn-az_delete_node PURPOSE="Delete Azure VM via Azure SDK" />
+      </annotations>
+    </M-CLOUD-PROVIDER-AZ>
+
+    <M-CLOUD-PROVIDER-HETZNER NAME="Hetzner provider" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Hetzner Cloud server creation and deletion via API.</purpose>
+      <path>yascheduler/infra/cloud/providers/hetzner.py</path>
+      <depends>M-CLOUD</depends>
+      <annotations>
+        <fn-hetzner_create_node PURPOSE="Create Hetzner server" />
+        <fn-hetzner_delete_node PURPOSE="Delete Hetzner server" />
+      </annotations>
+    </M-CLOUD-PROVIDER-HETZNER>
+
+    <M-CLOUD-PROVIDER-UPCLOUD NAME="UpCloud provider" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>UpCloud server creation and deletion via API.</purpose>
+      <path>yascheduler/infra/cloud/providers/upcloud.py</path>
+      <depends>M-CLOUD</depends>
+      <annotations>
+        <fn-upcloud_create_node PURPOSE="Create UpCloud server" />
+        <fn-upcload_delete_node PURPOSE="Delete UpCloud server" />
+      </annotations>
+    </M-CLOUD-PROVIDER-UPCLOUD>
+
+    <M-CLOUD-PROVIDER-VASTAI NAME="VastAI provider" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>VastAI GPU marketplace instance creation and deletion via REST API.</purpose>
+      <path>yascheduler/infra/cloud/providers/vastai.py</path>
+      <depends>M-CLOUD</depends>
+      <annotations>
+        <fn-vastai_create_node PURPOSE="Create VastAI instance" />
+        <fn-vastai_delete_node PURPOSE="Delete VastAI instance" />
+      </annotations>
+    </M-CLOUD-PROVIDER-VASTAI>
 
     <M-CLOUD-PROTOCOLS NAME="Cloud protocols" TYPE="UTILITY" STATUS="implemented">
       <purpose>Protocol definitions for node creation and deletion callables.</purpose>
@@ -757,7 +828,7 @@
     <M-CLOUD-ADAPTERS-NEW NAME="Cloud adapter factory" TYPE="UTILITY" STATUS="implemented">
       <purpose>CloudAdapter class and adapter factory functions for provider registration.</purpose>
       <path>yascheduler/infra/cloud/adapters.py</path>
-      <depends>M-CLOUD-PROVIDERS, M-CLOUD-PROTOCOLS</depends>
+      <depends>M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-AZ, M-CLOUD-PROVIDER-HETZNER, M-CLOUD-PROVIDER-UPCLOUD, M-CLOUD-PROVIDER-VASTAI</depends>
       <annotations>
         <class-CloudAdapter PURPOSE="Cloud adapter wrapper class" />
         <fn-get_azure_adapter PURPOSE="Get Azure adapter" />
@@ -772,12 +843,21 @@
     <M-CLOUD-SSH-KEYS NAME="SSH key management" TYPE="UTILITY" STATUS="implemented">
       <purpose>SSH key generation, loading, and name extraction for cloud provisioning.</purpose>
       <path>yascheduler/infra/cloud/ssh_keys.py</path>
-      <depends>none</depends>
+      <depends>M-CLOUD-UTILS</depends>
       <annotations>
         <fn-get_or_create_ssh_key PURPOSE="Load existing SSH key or generate a new one" />
         <fn-get_key_name PURPOSE="Extract human-readable name from SSHKey" />
       </annotations>
     </M-CLOUD-SSH-KEYS>
+
+    <M-CLOUD-UTILS NAME="Cloud helpers" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Cloud helper: random node-name generation.</purpose>
+      <path>yascheduler/infra/cloud/utils.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-get_rnd_name PURPOSE="Generate a random node name" />
+      </annotations>
+    </M-CLOUD-UTILS>
 
     <M-NOTIFIER NAME="Notifier subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Notifier subpackage facade — re-exports webhook_handler as public surface for the adapters layer facade.</purpose>
@@ -791,7 +871,7 @@
     <M-NOTIFIER-WEBHOOK NAME="Webhook notifier" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Webhook event handler that sends HTTP notifications for task lifecycle events.</purpose>
       <path>yascheduler/infra/notifier/webhook.py</path>
-      <depends>M-DOMAIN-EVENTS, M-DOMAIN-MODEL</depends>
+      <depends>M-DOMAIN</depends>
       <annotations>
         <fn-webhook_handler PURPOSE="Async handler that sends webhooks for task lifecycle events" />
         <fn-_send_webhook PURPOSE="Send webhook with fibonacci backoff retry on transient failures" />
@@ -807,7 +887,7 @@
     <M-SSH NAME="SSH subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SSH subpackage facade — internal organization of the adapters layer; re-exports gateway class and retry exceptions for the M-ADAPTERS layer facade.</purpose>
       <path>yascheduler/infra/ssh/__init__.py</path>
-      <depends>M-SSH-GATEWAY, M-SSH-EXCEPTIONS</depends>
+      <depends>M-SSH-EXCEPTIONS, M-SSH-GATEWAY</depends>
       <annotations>
         <export-SSHMachineGateway PURPOSE="Async SSH machine gateway implementation" />
         <export-AllSSHRetryExc PURPOSE="Tuple of all retryable SSH exceptions" />
@@ -818,7 +898,7 @@
     <M-SSH-GATEWAY NAME="SSH machine gateway" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>SSH machine gateway implementing MachineGateway protocol via asyncssh.</purpose>
       <path>yascheduler/infra/ssh/gateway.py</path>
-      <depends>M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL</depends>
+      <depends>M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-SSH-HELPERS, M-PLATFORM</depends>
       <annotations>
         <class-SSHMachineGateway PURPOSE="SSH implementation of MachineGateway protocol" />
         <fn-connect PURPOSE="Open SSH connection, detect platform, register machine" />
@@ -842,10 +922,16 @@
       </annotations>
     </M-SSH-GATEWAY>
 
+    <M-PLATFORM NAME="SSH platform package root" TYPE="ENTRY_POINT" STATUS="implemented">
+      <purpose>Platform detection and OS-specific command adapters for SSH-connected machines; re-export hub for the platform submodules.</purpose>
+      <path>yascheduler/infra/ssh/platform/__init__.py</path>
+      <depends>M-PLATFORM-ADAPTERS, M-PLATFORM-CHECKS, M-PLATFORM-COMMON, M-PLATFORM-EXC, M-PLATFORM-LINUX, M-PLATFORM-PROTOCOL, M-PLATFORM-WINDOWS</depends>
+    </M-PLATFORM>
+
     <M-PLATFORM-ADAPTERS NAME="Platform adapters" TYPE="UTILITY" STATUS="implemented">
       <purpose>Platform-specific adapter registry mapping OS identifiers to adapter instances.</purpose>
       <path>yascheduler/infra/ssh/platform/adapters.py</path>
-      <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-CHECKS, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS, M-PLATFORM-COMMON</depends>
+      <depends>M-PLATFORM-CHECKS, M-PLATFORM-COMMON, M-PLATFORM-LINUX, M-PLATFORM-PROTOCOL, M-PLATFORM-WINDOWS</depends>
       <annotations>
         <class-RemoteMachineAdapter PURPOSE="Platform-specific command implementations" />
       </annotations>
@@ -885,7 +971,7 @@
     <M-PLATFORM-LINUX NAME="Linux methods" TYPE="UTILITY" STATUS="implemented">
       <purpose>Linux-specific remote commands: package install, process listing, CPU detection.</purpose>
       <path>yascheduler/infra/ssh/platform/linux.py</path>
-      <depends>M-PLATFORM-PROTOCOL, M-DOMAIN-ENGINE</depends>
+      <depends>M-DOMAIN, M-PLATFORM-PROTOCOL</depends>
       <annotations>
         <fn-linux_setup_node PURPOSE="Install packages and setup engines on Linux" />
         <fn-linux_get_cpu_cores PURPOSE="Read CPU count from getconf" />
@@ -896,7 +982,7 @@
     <M-PLATFORM-WINDOWS NAME="Windows methods" TYPE="UTILITY" STATUS="implemented">
       <purpose>Windows-specific remote commands: engine deployment, process listing.</purpose>
       <path>yascheduler/infra/ssh/platform/windows.py</path>
-      <depends>M-PLATFORM-PROTOCOL, M-DOMAIN-ENGINE</depends>
+      <depends>M-DOMAIN, M-PLATFORM-PROTOCOL</depends>
       <annotations>
         <fn-windows_setup_node PURPOSE="Install packages and setup engines on Windows" />
         <fn-windows_list_processes PURPOSE="Parse Get-CimInstance output into process info" />
@@ -906,7 +992,7 @@
     <M-PLATFORM-PROTOCOL NAME="Platform protocols" TYPE="UTILITY" STATUS="implemented">
       <purpose>Protocol definitions for process info, SSH checks, and adapters.</purpose>
       <path>yascheduler/infra/ssh/platform/protocol.py</path>
-      <depends>M-DOMAIN-ENGINE</depends>
+      <depends>M-DOMAIN</depends>
       <annotations>
         <class-ProcessInfo PURPOSE="Frozen dataclass holding pid, name, command for a remote process" />
         <type-SSHCheck PURPOSE="SSH check callable protocol" />
@@ -919,7 +1005,7 @@
     <M-SSH-HELPERS NAME="SSH helpers" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared SSH infrastructure — platform adapter registry, SSH client factory, connection options, and helper functions.</purpose>
       <path>yascheduler/infra/ssh/helpers.py</path>
-      <depends>M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL, M-PLATFORM-EXC</depends>
+      <depends>M-PLATFORM-ADAPTERS, M-PLATFORM-EXC, M-PLATFORM-PROTOCOL</depends>
       <annotations>
         <const-ADAPTERS PURPOSE="Ordered platform adapter instances for platform detection" />
         <const-MAX_SESSIONS PURPOSE="Default MaxSessions on OpenSSH server (10)" />
@@ -959,8 +1045,8 @@
     <DF-SUBMIT NAME="Submit task">M-ENTRYPOINTS-CLIENT -> M-DI -> M-APPLICATION-SUBMIT -> M-APPLICATION-UOW -> M-DOMAIN-PORTS</DF-SUBMIT>
     <DF-SCHEDULE NAME="Schedule task (v2.0)">M-APPLICATION-ORCHESTRATOR -> M-APPLICATION-ALLOCATE / M-APPLICATION-CONSUME / M-APPLICATION-DEALLOCATE -> M-APPLICATION-UOW</DF-SCHEDULE>
 
-    <DF-DAEMON-START NAME="Daemon start">M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-DAEMON-COMMON</DF-DAEMON-START>
-    <DF-CONFIG-LOAD NAME="Load configuration">M-ENTRYPOINTS-CONFIG-PARSER -> M-INFRA-DB-CONFIG; M-ENTRYPOINTS-CONFIG-PARSER -> M-DOMAIN-SETTINGS; M-ENTRYPOINTS-CONFIG-PARSER -> M-CLOUD-CONFIGS; M-ENTRYPOINTS-CONFIG-PARSER -> M-DOMAIN-ENGINE; M-ENTRYPOINTS-CONFIG-PARSER -> M-ENTRYPOINTS-CONFIG</DF-CONFIG-LOAD>
+    <DF-DAEMON-START NAME="Daemon start">M-DAEMONIZE / M-DAEMON-SYSTEMD / M-DAEMON-SYSV -> M-DAEMON-COMMON</DF-DAEMON-START>
+    <DF-CONFIG-LOAD NAME="Load configuration">M-ENTRYPOINTS-CONFIG-PARSER -> M-INFRA-DB-CONFIG; M-ENTRYPOINTS-CONFIG-PARSER -> M-DOMAIN-SETTINGS; M-ENTRYPOINTS-CONFIG-PARSER -> M-CLOUD-CONFIGS; M-ENTRYPOINTS-CONFIG-PARSER -> M-DOMAIN-ENGINE; M-ENTRYPOINTS-CONFIG-PARSER -> M-ENTRYPOINTS-CONFIG-UTILS</DF-CONFIG-LOAD>
     <DF-PERSISTENCE NAME="Persistence layer">M-PERSISTENCE-POSTGRES -> M-PERSISTENCE</DF-PERSISTENCE>
 
     <!-- ═══════════════════════════════════════════════
@@ -1073,6 +1159,17 @@
     <CrossLink from="M-CLOUD-PROVISIONER" to="M-SSH-KEYS" relation="calls list_private_keys(local_config.keys_dir) in _connect_to_vm" />
     <CrossLink from="M-ENTRYPOINTS-CLI-MANAGE-NODE" to="M-SSH-KEYS" relation="calls list_private_keys(config.local.keys_dir) on the add path" />
     <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-SSH-KEYS" relation="calls list_private_keys(config.local.keys_dir) in verbose view" />
+
+    <CrossLink from="M-SHARED" to="M-SHARED-COMPAT" relation="re-exports Self/Unpack from compat module" />
+    <CrossLink from="M-DAEMONIZE" to="M-DAEMON-COMMON" relation="foreground daemon launch delegates to shared daemon core" />
+    <CrossLink from="M-PLATFORM" to="M-PLATFORM-ADAPTERS" relation="package root re-exports platform adapters" />
+    <CrossLink from="M-SSH-GATEWAY" to="M-PLATFORM" relation="uses platform facade for OS detection and adapters" />
+    <CrossLink from="M-CLOUD-ADAPTERS-NEW" to="M-CLOUD-PROVIDERS" relation="lazy-imports provider callables via providers facade" />
+    <CrossLink from="M-CLOUD-PROVIDER-AZ" to="M-CLOUD" relation="imports CloudInitConfig/get_rnd_name from cloud facade" />
+    <CrossLink from="M-CLOUD-PROVIDER-HETZNER" to="M-CLOUD" relation="imports get_key_name/get_rnd_name from cloud facade" />
+    <CrossLink from="M-CLOUD-PROVIDER-UPCLOUD" to="M-CLOUD" relation="imports get_rnd_name from cloud facade" />
+    <CrossLink from="M-ENTRYPOINTS-CONFIG-PARSER" to="M-ENTRYPOINTS-CONFIG-UTILS" relation="uses ConfigWarning/warn_unknown_fields/opt_str_val helpers" />
+    <CrossLink from="M-CLOUD-SSH-KEYS" to="M-CLOUD-UTILS" relation="uses get_rnd_name" />
 
   </Project>
 </KnowledgeGraph>
