@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/infra/ssh/platform/linux.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Linux-specific remote commands: package install, process listing, CPU detection.
 #   SCOPE: Linux setup_node, get_cpu_cores, list_processes, pgrep implementations.
-#   DEPENDS: M-DOMAIN-ENGINE, M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON
+#   DEPENDS: M-DOMAIN-ENGINE, M-PLATFORM-PROTOCOL
 #   LINKS: M-PLATFORM-ADAPTERS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Switch Deploy* import from yascheduler.config to yascheduler.domain; replace PEngineRepository type hints with EngineRepository from yascheduler.domain (engine-to-domain-frozen).
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - Import ProcessInfo from .protocol (not .common); list_processes/pgrep return AsyncGenerator[ProcessInfo, None] (prune-platform-protocols).
+#   PREVIOUS_CHANGE: v1.1.0 - Switch Deploy* import from yascheduler.config to yascheduler.domain; replace PEngineRepository type hints with EngineRepository from yascheduler.domain (engine-to-domain-frozen).
 # END_CHANGE_SUMMARY
 
 import logging
@@ -44,8 +44,7 @@ from yascheduler.domain import (
     RemoteArchiveDeploy,
 )
 
-from .common import ProcessInfo
-from .protocol import OuterRunCallable, PProcessInfo, QuoteCallable
+from .protocol import OuterRunCallable, ProcessInfo, QuoteCallable
 
 
 # START_CONTRACT: linux_get_cpu_cores
@@ -70,7 +69,7 @@ async def linux_get_cpu_cores(run: OuterRunCallable) -> int:
 # START_CONTRACT: linux_list_processes
 #   PURPOSE: Yield running process info from remote Linux via ps
 #   INPUTS: { conn: SSHClientConnection - SSH connection } | { query: Optional[str] - optional pgrep query prefix }
-#   OUTPUTS: { AsyncGenerator[PProcessInfo, None] - stream of process info }
+#   OUTPUTS: { AsyncGenerator[ProcessInfo, None] - stream of process info }
 #   SIDE_EFFECTS: None
 #   LINKS: M-REMOTE-LINUX
 # END_CONTRACT: linux_list_processes
@@ -79,7 +78,7 @@ _log = logging.getLogger(__name__)
 
 async def linux_list_processes(
     conn: SSHClientConnection, query: Optional[str] = None
-) -> AsyncGenerator[PProcessInfo, None]:
+) -> AsyncGenerator[ProcessInfo, None]:
     """
     Returns information about all running processes
     :raises asyncssh.Error: An SSH error has occurred.
@@ -131,7 +130,7 @@ async def linux_list_processes(
 # START_CONTRACT: linux_pgrep
 #   PURPOSE: Find processes matching a pattern via pgrep and yield their info
 #   INPUTS: { conn: SSHClientConnection - SSH connection } | { quote: QuoteCallable - shell quoting function } | { pattern: Union[str, Pattern[str]] - match pattern } | { full: bool - match against full cmdline if True }
-#   OUTPUTS: { AsyncGenerator[PProcessInfo, None] - stream of matching process info }
+#   OUTPUTS: { AsyncGenerator[ProcessInfo, None] - stream of matching process info }
 #   SIDE_EFFECTS: None
 #   LINKS: M-REMOTE-LINUX
 # END_CONTRACT: linux_pgrep
@@ -140,7 +139,7 @@ async def linux_pgrep(
     quote: QuoteCallable,
     pattern: Union[str, Pattern[str]],
     full: bool = True,
-) -> AsyncGenerator[PProcessInfo, None]:
+) -> AsyncGenerator[ProcessInfo, None]:
     """
     Returns information about running processes, that name matches a pattern.
     If `full`, check match against name or full cmd.

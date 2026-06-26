@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway.py
-# VERSION: 1.0.1
+# VERSION: 1.0.2
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineGateway — connection lifecycle, command execution, SFTP, occupancy monitoring.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Move get_machine_state and list_connected tests to test_ssh_gateway_machine_queries.py to stay under hard size limit (gateway-port-cleanup).
-#   PREVIOUS_CHANGE: v1.0.0 - Split _make_state into _make_mock_adapter + _make_mock_connection + _make_state for GRACE func-size compliance.
+#   LAST_CHANGE: v1.0.2 - Replace PProcessInfo with ProcessInfo at 5 sites: import, two MagicMock(spec=...), two list[...] annotations (prune-platform-protocols). DEPENDS stays M-PLATFORM-PROTOCOL since ProcessInfo now lives in protocol.py.
+#   PREVIOUS_CHANGE: v1.0.1 - Move get_machine_state and list_connected tests to test_ssh_gateway_machine_queries.py to stay under hard size limit (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResu
 from yascheduler.infra.ssh.gateway import SSHMachineGateway, _MachineState
 from yascheduler.infra.ssh.platform.protocol import (
     ChannelOpenError,
-    PProcessInfo,
+    ProcessInfo,
 )
 
 if TYPE_CHECKING:
@@ -96,7 +96,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     adapter.get_cpu_cores = _get_cpu_cores
 
     def _pgrep(*args: object, **kwargs: Any) -> _AsyncIter:  # noqa: ANN401
-        proc = MagicMock(spec=PProcessInfo)
+        proc = MagicMock(spec=ProcessInfo)
         proc.pid = 1234
         proc.name = "testproc"
         proc.command = "/usr/bin/testproc"
@@ -105,7 +105,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     adapter.pgrep = _pgrep
 
     def _list_processes(*args: object, **kwargs: Any) -> _AsyncIter:  # noqa: ANN401
-        proc = MagicMock(spec=PProcessInfo)
+        proc = MagicMock(spec=ProcessInfo)
         proc.pid = 1
         proc.name = "init"
         proc.command = "/sbin/init"
@@ -927,7 +927,7 @@ class TestAdvancedOperations:
         state = _make_state()
         gateway._machines["10.0.0.1"] = state
 
-        results: list[PProcessInfo] = []
+        results: list[ProcessInfo] = []
         async for proc in gateway.pgrep("10.0.0.1", "testproc"):
             results.append(proc)
 
@@ -942,7 +942,7 @@ class TestAdvancedOperations:
         state = _make_state()
         gateway._machines["10.0.0.1"] = state
 
-        results: list[PProcessInfo] = []
+        results: list[ProcessInfo] = []
         async for proc in gateway.list_processes("10.0.0.1"):
             results.append(proc)
 

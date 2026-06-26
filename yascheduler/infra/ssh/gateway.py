@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/gateway.py
-# VERSION: 1.5.0
+# VERSION: 1.5.1
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH machine gateway implementing MachineGateway protocol via asyncssh.
 #   SCOPE: SSHMachineGateway class with connection lifecycle, command execution, SFTP, occupancy monitoring, output download.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Retype _exec_spawn_command, start_task_on_machine, occupancy_check, start_occupancy_check to Engine; runtime-import Engine instead of TaskExecutionEngine, drop OccupancyConfig TYPE_CHECKING import (resolve-engine-protocol-debt). The concrete Engine dataclass carries every field the SSH gateway reads.
-#   PREVIOUS_CHANGE: v1.4.3 - Switch PEngineRepository type hint to EngineRepository imported from yascheduler.domain (TYPE_CHECKING). The setup_node engines parameter is now typed against the domain EngineRepository (engine-to-domain-frozen).
+#   LAST_CHANGE: v1.5.1 - Replace PProcessInfo with ProcessInfo in pgrep/list_processes return annotations (prune-platform-protocols); import ProcessInfo from .platform.
+#   PREVIOUS_CHANGE: v1.5.0 - Retype _exec_spawn_command, start_task_on_machine, occupancy_check, start_occupancy_check to Engine; runtime-import Engine instead of TaskExecutionEngine, drop OccupancyConfig TYPE_CHECKING import (resolve-engine-protocol-debt). The concrete Engine dataclass carries every field the SSH gateway reads.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ if TYPE_CHECKING:
 
     from .platform import (
         OuterRunCallable,
-        PProcessInfo,
+        ProcessInfo,
         QuoteCallable,
         RemoteMachineAdapter,
     )
@@ -842,7 +842,7 @@ class SSHMachineGateway:
         ip: str,
         pattern: str | Pattern[str],
         full: bool = True,
-    ) -> AsyncGenerator[PProcessInfo, None]:
+    ) -> AsyncGenerator[ProcessInfo, None]:
         """Yield remote processes matching pattern."""
         state = self._machines[ip]
         async for proc in state.adapter.pgrep(
@@ -850,7 +850,7 @@ class SSHMachineGateway:
         ):
             yield proc
 
-    async def list_processes(self, ip: str) -> AsyncGenerator[PProcessInfo, None]:
+    async def list_processes(self, ip: str) -> AsyncGenerator[ProcessInfo, None]:
         """Yield all running processes on remote machine."""
         state = self._machines[ip]
         async for proc in state.adapter.list_processes(state.conn, None):

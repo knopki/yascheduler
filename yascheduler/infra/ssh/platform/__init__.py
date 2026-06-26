@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/platform/__init__.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Platform detection and OS-specific command adapters for SSH-connected machines.
 #   SCOPE: Re-exports from platform submodules.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Remove PEngine and PEngineRepository from .protocol re-export block and __all__ (engine-to-domain-frozen); consumers import Engine/EngineRepository from yascheduler.domain directly.
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - Relocate ProcessInfo import source to .protocol (was .common); drop PNode and PProcessInfo from re-export block and __all__ (prune-platform-protocols). ProcessInfo stays in __all__ unchanged.
+#   PREVIOUS_CHANGE: v1.1.0 - Remove PEngine and PEngineRepository from .protocol re-export block and __all__ (engine-to-domain-frozen); consumers import Engine/EngineRepository from yascheduler.domain directly.
 # END_CHANGE_SUMMARY
 
 from .adapters import (
@@ -53,7 +53,7 @@ from .checks import (
     check_is_windows11,
     check_is_windows12,
 )
-from .common import ProcessInfo, run, run_bg
+from .common import run, run_bg
 from .exceptions import PlatformGuessFailedError
 from .linux import (
     deploy_local_archive,
@@ -73,8 +73,7 @@ from .protocol import (
     ListProcessesCallable,
     OuterRunCallable,
     PgrepCallable,
-    PNode,
-    PProcessInfo,
+    ProcessInfo,
     QuoteCallable,
     RunBgCallable,
     RunCallable,
@@ -143,8 +142,6 @@ __all__ = [
     "SFTPRetryExc",
     "SSHRetryExc",
     "AllSSHRetryExc",
-    "PProcessInfo",
-    "PNode",
     "SSHCheck",
     "QuoteCallable",
     "RunCallable",

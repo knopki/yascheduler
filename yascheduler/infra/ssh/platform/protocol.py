@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/infra/ssh/platform/protocol.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Protocol definitions for process info, SSH checks, and adapters.
-#   SCOPE: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc, PProcessInfo, PNode, SSHCheck, QuoteCallable, RunCallable, RunBgCallable, OuterRunCallable, GetCPUCoresCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable protocols and type aliases.
+#   SCOPE: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc, ProcessInfo, SSHCheck, QuoteCallable, RunCallable, RunBgCallable, OuterRunCallable, GetCPUCoresCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable protocols and type aliases.
 #   DEPENDS: M-DOMAIN-ENGINE
 #   LINKS: M-PLATFORM-ADAPTERS
 # END_MODULE_CONTRACT
@@ -13,8 +13,7 @@
 #   SFTPRetryExc             - Tuple of retriable SFTP exception types.
 #   SSHRetryExc              - Tuple of retriable SSH exception types.
 #   AllSSHRetryExc           - Union of SSHRetryExc and SFTPRetryExc.
-#   PProcessInfo             - Protocol: pid, name, command fields for a process.
-#   PNode                    - Protocol: node identity (ip, username).
+#   ProcessInfo              - Frozen dataclass holding pid, name, command.
 #   SSHCheck                 - Callable alias: async SSH connection health check.
 #   QuoteCallable            - Callable alias: string quoting function.
 #   RunCallable              - Protocol: run a command via SSH and return completed process.
@@ -27,14 +26,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Delete PEngine and PEngineRepository Protocols (engine-to-domain-frozen); consumers import Engine/EngineRepository from yascheduler.domain directly. Switch Deploy* import from yascheduler.config to yascheduler.domain. SetupNodeCallable.__call__ now references EngineRepository (TYPE_CHECKING import from yascheduler.domain).
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - Consolidate ProcessInfo into protocol.py (frozen dataclass); remove PProcessInfo and PNode Protocols (prune-platform-protocols). Consumers import ProcessInfo from .protocol; ListProcessesCallable/PgrepCallable now annotate AsyncGenerator[ProcessInfo, None].
+#   PREVIOUS_CHANGE: v1.1.0 - Delete PEngine and PEngineRepository Protocols (engine-to-domain-frozen); consumers import Engine/EngineRepository from yascheduler.domain directly. Switch Deploy* import from yascheduler.config to yascheduler.domain. SetupNodeCallable.__call__ now references EngineRepository (TYPE_CHECKING import from yascheduler.domain).
 # END_CHANGE_SUMMARY
 
 import asyncio
 import logging
 from abc import abstractmethod
 from collections.abc import AsyncGenerator, Callable, Coroutine
+from dataclasses import dataclass
 from pathlib import PurePath
 from re import Pattern
 from typing import TYPE_CHECKING, Any, Optional, Protocol, Union
@@ -97,15 +97,11 @@ SSHRetryExc = (
 AllSSHRetryExc = SSHRetryExc + SFTPRetryExc
 
 
-class PProcessInfo(Protocol):
+@dataclass(frozen=True)
+class ProcessInfo:
     pid: int
     name: str
     command: str
-
-
-class PNode(Protocol):
-    ip: str
-    username: str
 
 
 SSHCheck = Callable[[SSHClientConnection], Coroutine[Any, Any, bool]]
@@ -158,7 +154,7 @@ class ListProcessesCallable(Protocol):
     @abstractmethod
     def __call__(
         self, conn: SSHClientConnection, query: Optional[str] = None
-    ) -> AsyncGenerator[PProcessInfo, None]:
+    ) -> AsyncGenerator[ProcessInfo, None]:
         pass
 
 
@@ -170,7 +166,7 @@ class PgrepCallable(Protocol):
         quote: QuoteCallable,
         pattern: Union[str, Pattern[str]],
         full: bool = True,
-    ) -> AsyncGenerator[PProcessInfo, None]:
+    ) -> AsyncGenerator[ProcessInfo, None]:
         pass
 
 

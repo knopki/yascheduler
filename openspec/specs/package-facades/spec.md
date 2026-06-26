@@ -452,8 +452,32 @@ enforcement demands the facade form.
     `yascheduler.config.cloud`; consumed by provider modules under
     `TYPE_CHECKING`, by `infra/cloud/protocols.py` at runtime, and by the
     composition root).
-  - (Existing re-exports `CloudProvisionerImpl`, `CloudAdapter`, `PCloudConfig`,
+  - `CloudInitConfig` from `.cloud_init` (cloud-init-rename-and-prune: the
+    cloud-init user-data renderer was renamed from `class CloudConfig` in
+    `cloud_config.py` to `class CloudInitConfig` in `cloud_init.py` to
+    disambiguate from the `ConfigCloud*` provider-config DTOs and from the
+    unrelated domain `CloudConfig` Protocol in `domain/ports.py`; consumed by
+    `infra/cloud/manager.py` and the cloud providers under
+    `TYPE_CHECKING`/runtime).
+  - (Existing re-exports `CloudProvisionerImpl`, `CloudAdapter`,
     `get_key_name`, `resolve_adapter`, etc. preserved.)
+  - `PCloudConfig` SHALL NO LONGER be re-exported from
+    `yascheduler.infra.cloud` (cloud-init-rename-and-prune: the
+    single-implementer Protocol was collapsed into its sole concrete class
+    `CloudInitConfig`; the Protocol is deleted from
+    `infra/cloud/protocols.py`; the canonical type for cloud-init config
+    parameters is now `CloudInitConfig`).
+  - `CloudCapacity` SHALL NO LONGER be re-exported from
+    `yascheduler.infra.cloud` (cloud-init-rename-and-prune: the dead
+    dataclass was deleted; its last consumer was removed in the archived
+    `cloud-provisioner-pure` change which rewrote `_clouds_get_capacity` to
+    return `int`; the unrelated `CloudCapacityExhaustedError` domain
+    exception in `domain/exceptions.py` is unaffected).
+  - `CloudConfig` (the cloud-init renderer, NOT the domain Protocol) SHALL
+    NO LONGER be re-exported from `yascheduler.infra.cloud`
+    (cloud-init-rename-and-prune: the class was renamed to `CloudInitConfig`;
+    the canonical import is `from yascheduler.infra.cloud import
+    CloudInitConfig`).
 - **`yascheduler/infra/persistence/__init__.py`** SHALL re-export:
   - `apply_schema` from `.postgres_schema` (consumed by `adapters.cli.init` via the `adapters` layer facade).
   - `PostgresUnitOfWork` from `.postgres_uow` (consumed by the composition root `yascheduler.entrypoints.di` via the `adapters` layer facade).
@@ -507,6 +531,36 @@ now R2-compliant via `yascheduler.domain`, not `yascheduler.config`.)
 - **WHEN** a consumer imports `from yascheduler.infra.cloud import ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference`
 - **THEN** all six symbols resolve without ImportError (the DTOs were relocated from
   `yascheduler.config.cloud`; the cloud subpackage facade is now the canonical path)
+
+#### Scenario: Cloud subpackage facade exposes CloudInitConfig
+- **WHEN** a consumer imports `from yascheduler.infra.cloud import CloudInitConfig`
+- **THEN** the symbol resolves without ImportError (the cloud-init renderer was
+  renamed from `CloudConfig` in `cloud_config.py` to `CloudInitConfig` in
+  `cloud_init.py` in the `cloud-init-rename-and-prune` change)
+
+#### Scenario: Cloud subpackage facade no longer re-exports PCloudConfig
+- **WHEN** a consumer attempts `from yascheduler.infra.cloud import PCloudConfig`
+- **THEN** `ImportError` is raised (the single-implementer Protocol was collapsed
+  into its sole concrete class `CloudInitConfig`; the Protocol is deleted from
+  `infra/cloud/protocols.py`; the canonical type for cloud-init config params is
+  `CloudInitConfig`)
+
+#### Scenario: Cloud subpackage facade no longer re-exports CloudCapacity
+- **WHEN** a consumer attempts `from yascheduler.infra.cloud import CloudCapacity`
+- **THEN** `ImportError` is raised (the dead dataclass was deleted; its last
+  consumer was removed in the archived `cloud-provisioner-pure` change; the
+  unrelated `CloudCapacityExhaustedError` domain exception in
+  `domain/exceptions.py` is NOT affected and remains importable from
+  `yascheduler.domain`)
+
+#### Scenario: Cloud subpackage facade no longer re-exports the infra CloudConfig renderer
+- **WHEN** a consumer attempts `from yascheduler.infra.cloud import CloudConfig`
+- **THEN** `ImportError` is raised for the renderer (the class was renamed to
+  `CloudInitConfig`; the canonical import is `from yascheduler.infra.cloud
+  import CloudInitConfig`). Note: `from yascheduler.domain import CloudConfig`
+  continues to resolve — that is the unrelated domain Protocol (the 6-field
+  provider-config contract in `domain/ports.py`), which this change does NOT
+  touch.
 
 #### Scenario: Persistence subpackage facade exposes apply_schema and PostgresUnitOfWork
 - **WHEN** a consumer imports `from yascheduler.infra.persistence import apply_schema, PostgresUnitOfWork`

@@ -33,6 +33,13 @@ operations SHALL remain in the orchestrator. The gateway MAY use private helpers
 (`_upload_task_data`, `_exec_spawn_command`, `_write_remote_file`,
 `_safe_b64decode`) to structure the work.
 
+The gateway SHALL provide `pgrep(ip, pattern, full=True) -> AsyncGenerator[ProcessInfo, None]`
+and `list_processes(ip) -> AsyncGenerator[ProcessInfo, None]` that delegate to
+the platform adapter. `ProcessInfo` is the frozen dataclass from
+`infra/ssh/platform/protocol.py` (re-exported via the package
+`yascheduler.infra.ssh.platform`). The gateway SHALL NOT reference the `PProcessInfo`
+Protocol.
+
 #### Scenario: Connect to machine
 - **WHEN** `gateway.connect(ip="10.0.0.1", username="root", client_keys=[...])` is called
 - **THEN** an SSH connection is established, platform is detected, and a
@@ -70,6 +77,10 @@ operations SHALL remain in the orchestrator. The gateway MAY use private helpers
 #### Scenario: Get machine state for adapter-internal use
 - **WHEN** `gateway._get_machine_state("10.0.0.1")` is called
 - **THEN** returns `_MachineState | None` (adapter-internal dataclass)
+
+#### Scenario: pgrep and list_processes return ProcessInfo
+- **WHEN** `gateway.pgrep(ip, pattern)` or `gateway.list_processes(ip)` is called on a connected machine
+- **THEN** the returned async generator yields `ProcessInfo` objects (the frozen dataclass from `infra/ssh/platform/protocol.py`), and the gateway does not reference `PProcessInfo`
 
 ### Requirement: Backoff on gateway methods
 

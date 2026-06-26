@@ -864,11 +864,10 @@
     </M-PLATFORM-CHECKS>
 
     <M-PLATFORM-COMMON NAME="Platform common" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Shared helpers for remote machine operations: process info, command execution.</purpose>
+      <purpose>Shared helpers for remote machine operations: command execution.</purpose>
       <path>yascheduler/infra/ssh/platform/common.py</path>
       <depends>M-PLATFORM-PROTOCOL</depends>
       <annotations>
-        <class-ProcessInfo PURPOSE="Attrs struct holding pid, name, command" />
         <fn-run PURPOSE="Run process on SSH connection and wait for exit" />
         <fn-run_bg PURPOSE="Create background process on SSH connection" />
       </annotations>
@@ -886,7 +885,7 @@
     <M-PLATFORM-LINUX NAME="Linux methods" TYPE="UTILITY" STATUS="implemented">
       <purpose>Linux-specific remote commands: package install, process listing, CPU detection.</purpose>
       <path>yascheduler/infra/ssh/platform/linux.py</path>
-      <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON, M-DOMAIN-ENGINE</depends>
+      <depends>M-PLATFORM-PROTOCOL, M-DOMAIN-ENGINE</depends>
       <annotations>
         <fn-linux_setup_node PURPOSE="Install packages and setup engines on Linux" />
         <fn-linux_get_cpu_cores PURPOSE="Read CPU count from getconf" />
@@ -897,7 +896,7 @@
     <M-PLATFORM-WINDOWS NAME="Windows methods" TYPE="UTILITY" STATUS="implemented">
       <purpose>Windows-specific remote commands: engine deployment, process listing.</purpose>
       <path>yascheduler/infra/ssh/platform/windows.py</path>
-      <depends>M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON, M-DOMAIN-ENGINE</depends>
+      <depends>M-PLATFORM-PROTOCOL, M-DOMAIN-ENGINE</depends>
       <annotations>
         <fn-windows_setup_node PURPOSE="Install packages and setup engines on Windows" />
         <fn-windows_list_processes PURPOSE="Parse Get-CimInstance output into process info" />
@@ -909,8 +908,7 @@
       <path>yascheduler/infra/ssh/platform/protocol.py</path>
       <depends>M-DOMAIN-ENGINE</depends>
       <annotations>
-        <class-PProcessInfo PURPOSE="Process information shape" />
-        <class-PNode PURPOSE="Node info shape" />
+        <class-ProcessInfo PURPOSE="Frozen dataclass holding pid, name, command for a remote process" />
         <type-SSHCheck PURPOSE="SSH check callable protocol" />
         <type-SSHRetryExc PURPOSE="Retryable SSH exception marker" />
         <type-SFTPRetryExc PURPOSE="Retryable SFTP exception marker" />

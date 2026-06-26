@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/infra/ssh/platform/common.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Shared helpers for remote machine operations: process info, command execution.
-#   SCOPE: ProcessInfo data class, run and run_bg command execution helpers.
+#   PURPOSE: Shared helpers for remote machine operations: command execution.
+#   SCOPE: run and run_bg command execution helpers.
 #   DEPENDS: M-PLATFORM-PROTOCOL
 #   LINKS: M-PLATFORM-ADAPTERS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   ProcessInfo - dataclass struct holding pid, name, command
 #   run - Run process on SSH connection and wait for exit
 #   run_bg - Create background process on SSH connection
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Migrated ProcessInfo from attrs.define to stdlib dataclasses.dataclass (migrate-ssh-platform-from-attrs); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - Relocate ProcessInfo dataclass to protocol.py; module now hosts only run/run_bg (prune-platform-protocols).
+#   PREVIOUS_CHANGE: v1.1.0 - Migrated ProcessInfo from attrs.define to stdlib dataclasses.dataclass (migrate-ssh-platform-from-attrs); no behavioral change.
 # END_CHANGE_SUMMARY
 #
 
-from dataclasses import dataclass
 from subprocess import DEVNULL
 from typing import AnyStr, Optional
 
@@ -29,14 +27,6 @@ from asyncssh.connection import SSHClientConnection
 from asyncssh.process import SSHClientProcess, SSHCompletedProcess
 
 from .protocol import QuoteCallable
-
-
-# FIXME: froze it?
-@dataclass
-class ProcessInfo:
-    pid: int
-    name: str
-    command: str
 
 
 # START_CONTRACT: run
