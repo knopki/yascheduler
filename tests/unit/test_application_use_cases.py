@@ -1,9 +1,9 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.2.0
+# VERSION: 4.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
-#   SCOPE: submit_task validation and success, allocate_task free/cloud/error paths, consume_task success/failure, deallocate_nodes disable/skip.
+#   SCOPE: submit_task validation and success, allocate_task free/cloud/error paths, deallocate_nodes disable/skip. (consume_task tests in test_consume_task.py.)
 #   DEPENDS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
 #   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
 # END_MODULE_CONTRACT
@@ -11,14 +11,13 @@
 # START_MODULE_MAP
 #   TestSubmitTask - submit_task: unknown engine, missing input, success path
 #   TestAllocateTask - allocate_task: unsupported engine, free machine (tracker.discard), cloud-fallback happy path, failure cleanup, dedup, throttle, step1/step2-cleanup/step3 hardening
-#   TestConsumeTask - consume_task: download success, download failure (tracker instead of clouds)
 #   TestDeallocateNodes - deallocate_nodes: idle disable, non-cloud skip
 #   TestDeallocateNodeBracketing - deallocate_node: disable+remove bracketing around cloud delete
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.2.0 - select_provider returns str; replace ProviderSelection(name="aws", username="root") with "aws" literal; add_tmp("aws") drops username arg (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v4.1.0 - Move allocate_task failure-mode hardening tests (step1 commit, step2 cleanup, step3 final persist) to test_allocate_task_failure_modes.py (file-size hard limit 1000).
+#   LAST_CHANGE: v4.4.0 - Extract TestConsumeTask to test_consume_task.py (GRACE 1000-line hard limit).
+#   PREVIOUS_CHANGE: v4.3.0 - Update TestConsumeTask for consume_task -> bool and 3-tuple download_outputs (meta_add, transient_errors, permanent_errors); add transient-only (defer, returns False, no save/event/tracker.discard) and mixed (permanent priority, returns True) branches (fix-download-rmtree-data-loss).
 # END_CHANGE_SUMMARY
 #
 """Unit tests for application use cases.
@@ -35,16 +34,14 @@ are in test_application_events.py.
 
 import asyncio
 import time
-from collections.abc import Callable
 from dataclasses import replace
-from pathlib import Path, PurePath
+from pathlib import PurePath
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from yascheduler.application.allocate_task import allocate_task
 from yascheduler.application.allocation_tracker import AllocationTracker
-from yascheduler.application.consume_task import consume_task
 from yascheduler.application.deallocate_nodes import deallocate_node, deallocate_nodes
 from yascheduler.application.submit_task import submit_task
 from yascheduler.application.uow import AbstractUnitOfWork
@@ -527,138 +524,6 @@ class TestAllocateTask:
         uow.nodes.add_tmp.assert_not_called()
         # tracker.discard called (releases the slot since no provider)
         tracker.discard.assert_called_once_with(todo_task.task_id)
-
-
-# =============================================================================
-# consume_task  (2 tests)
-# =============================================================================
-# consume_task  (2 tests)
-# =============================================================================
-
-
-class TestConsumeTask:
-    """consume_task — download outputs, mark DONE or ERROR."""
-
-    @pytest.fixture
-    def gateway_mock(self) -> MagicMock:
-        gateway = MagicMock()
-        gateway.download_outputs = AsyncMock(return_value=([], []))
-        return gateway
-
-    async def _run_consume(
-        self,
-        ip: str,
-        gateway: MagicMock,
-        task: Task,
-        uow_factory: Callable[[], AbstractUnitOfWork],
-        engines: EngineRepository,
-        local_tasks_dir: Path,
-        tracker: MagicMock,
-    ) -> None:
-        await consume_task(
-            task_id=task.task_id,
-            ip=ip,
-            gateway=gateway,
-            engines=engines,
-            uow_factory=uow_factory,
-            local_tasks_dir=local_tasks_dir,
-            tracker=tracker,
-        )
-
-    async def test_consume_task_download_success_marks_done(
-        self,
-        gateway_mock: MagicMock,
-        running_task: Task,
-        mock_engine_repo: MagicMock,
-    ) -> None:
-        """All output files downloaded -> save DONE + cloud notified."""
-        uow = AsyncMock()
-        uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=running_task)
-        uow.tasks.save = AsyncMock()
-        uow.commit = AsyncMock()
-        uow.collect_events = AsyncMock(return_value=[])
-        uow.publish_events = AsyncMock()
-        uow.__aenter__ = AsyncMock(return_value=uow)
-        uow.__aexit__ = AsyncMock(return_value=False)
-
-        def uow_factory() -> AbstractUnitOfWork:
-            return uow
-
-        tracker = MagicMock(spec=AllocationTracker)
-        local_tasks_dir = MagicMock(spec=Path)
-
-        await self._run_consume(
-            ip=running_task.allocated_ip,  # type: ignore[arg-type]
-            gateway=gateway_mock,
-            task=running_task,
-            uow_factory=uow_factory,
-            engines=mock_engine_repo,
-            local_tasks_dir=local_tasks_dir,
-            tracker=tracker,
-        )
-
-        # download_outputs called with correct params
-        gateway_mock.download_outputs.assert_called_once()
-        assert gateway_mock.download_outputs.call_args[1]["ip"] == "10.0.0.1"
-        assert (
-            gateway_mock.download_outputs.call_args[1]["remote_dir"]
-            == "/remote/tasks/20250101_120000_42"
-        )
-        assert gateway_mock.download_outputs.call_args[1]["task_id"] == 1
-        # DB saved with DONE status
-        uow.tasks.save.assert_called_once()
-        saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert saved_task.status == TaskStatus.DONE
-        assert saved_task.context.error is None
-        uow.commit.assert_called_once()
-        # tracker.discard called instead of clouds.mark_task_done
-        tracker.discard.assert_called_once_with(1)
-
-    async def test_consume_task_download_failure_marks_error(
-        self,
-        gateway_mock: MagicMock,
-        running_task: Task,
-        mock_engine_repo: MagicMock,
-    ) -> None:
-        """Download returns errors -> save DONE with error."""
-        gateway_mock.download_outputs = AsyncMock(
-            return_value=([], [("/remote/file", OSError("Connection refused"))])
-        )
-
-        uow = AsyncMock()
-        uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=running_task)
-        uow.tasks.save = AsyncMock()
-        uow.commit = AsyncMock()
-        uow.collect_events = AsyncMock(return_value=[])
-        uow.publish_events = AsyncMock()
-        uow.__aenter__ = AsyncMock(return_value=uow)
-        uow.__aexit__ = AsyncMock(return_value=False)
-
-        def uow_factory() -> AbstractUnitOfWork:
-            return uow
-
-        tracker = MagicMock(spec=AllocationTracker)
-        local_tasks_dir = MagicMock(spec=Path)
-
-        await self._run_consume(
-            ip=running_task.allocated_ip,  # type: ignore[arg-type]
-            gateway=gateway_mock,
-            task=running_task,
-            uow_factory=uow_factory,
-            engines=mock_engine_repo,
-            local_tasks_dir=local_tasks_dir,
-            tracker=tracker,
-        )
-
-        # save was called with DONE + error
-        uow.tasks.save.assert_called_once()
-        saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert saved_task.status == TaskStatus.DONE
-        assert saved_task.context.error is not None
-        # tracker.discard called on failure path too
-        tracker.discard.assert_called_once_with(1)
 
 
 # =============================================================================

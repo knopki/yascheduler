@@ -1,20 +1,20 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.2.1
+# VERSION: 6.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path).
+#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path); in-flight consume guard preventing concurrent consume of the same RUNNING task.
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   Orchestrator - Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected cloud nodes
+#   Orchestrator - Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected cloud nodes; in-flight consume guard
 #   _asleep_until - Private async sleep-until helper (inlined from former yascheduler.shared.async_utils)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.2.1 - Restrict the connect-machine producer to cloud nodes (filter `n.cloud is not None`) so the never-connected-node abandon path cannot auto-remove operator-managed static nodes during transient SSH outages. The design's scope is bounding cloud billing; static nodes were never auto-removed by the application and must stay that way. _connect_grace_for(None) is now unreachable from the producer but remains as a defensive fallback for direct callers / future use.
-#   PREVIOUS_CHANGE: v6.2.0 - Add per-IP connect-failure timer (`_connect_failures: dict[str, float]`) and abandon dispatch in `_connect_machine_consumer` (fix-never-connected-node-leak): on `MachineConnectionError` compare elapsed monotonic age against the node's cloud `connect_grace` (looked up via the new `_connect_grace_for` helper with a 120s conservative fallback for unknown clouds); within grace → log + retry, past grace → call `abandon_node` (best-effort wrapped so a failed abandon does not kill the worker), then pop the IP. Successful connect pops the IP. Timer is in-memory only — daemon restart resets grace windows.
+#   LAST_CHANGE: v6.3.0 - Add in-flight consume guard `self._consuming: set[int]`: _task_consumer_producer skips yielding a task whose id is in _consuming; _task_consumer_consumer adds task_id before await and discards in a finally. consume_task return value (bool) now gates `self._occupancy_started.discard(ip)` — only finalised (True) discards, deferred (False) keeps the ip registered so the next producer cycle re-enters the consume block for retry (fix-download-rmtree-data-loss).
+#   PREVIOUS_CHANGE: v6.2.1 - Restrict the connect-machine producer to cloud nodes (filter `n.cloud is not None`) so the never-connected-node abandon path cannot auto-remove operator-managed static nodes during transient SSH outages. The design's scope is bounding cloud billing; static nodes were never auto-removed by the application and must stay that way. _connect_grace_for(None) is now unreachable from the producer but remains as a defensive fallback for direct callers / future use.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -131,6 +131,11 @@ class Orchestrator:
         self._machine_connected_event = Event()
         self._sleep_interval: int = min(e.sleep_interval for e in engines.values())
         self._occupancy_started: set[str] = set()
+        # In-flight consume task ids — prevents two workers from concurrently
+        # consuming the same RUNNING task across overlapping producer cycles.
+        # Same-event-loop check/add/remove are atomic (no await between check
+        # and add). In-memory only; daemon restart resets the guard.
+        self._consuming: set[int] = set()
         # Per-IP first-seen monotonic timestamp of a consecutive connect
         # failure; in-memory only (daemon restart resets grace windows).
         self._connect_failures: dict[str, float] = {}
@@ -379,14 +384,23 @@ class Orchestrator:
     ) -> AsyncGenerator[UMessage[int, Task], None]:
         async with self._uow_factory() as uow:
             tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
+        # START_BLOCK_SKIP_IN_FLIGHT
+        # Skip tasks currently being consumed by another worker to prevent
+        # two workers from concurrently consuming the same RUNNING task across
+        # overlapping producer cycles (same event loop → atomic check).
         for task in tasks:
+            if task.task_id in self._consuming:
+                continue
             yield UMessage(task.task_id, task)
+        # END_BLOCK_SKIP_IN_FLIGHT
 
     # START_CONTRACT: Orchestrator._task_consumer_consumer
     #   PURPOSE: Check task machine state, record TaskAbandoned for lost nodes, or consume completed tasks.
     #   INPUTS: { msg: UMessage[int, Task], machine_not_found: Counter }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Records TaskAbandoned event for lost nodes; calls consume_task use case for free machines.
+    #   SIDE_EFFECTS: Records TaskAbandoned event for lost nodes; calls consume_task use case for free machines;
+    #     guards the task id in self._consuming around the await; discards ip from _occupancy_started only when
+    #     consume_task returns True (finalised) — deferred (False) keeps the ip registered for retry.
     #   LINKS: M-APPLICATION-CONSUME, M-DOMAIN-EVENTS
     # END_CONTRACT: Orchestrator._task_consumer_consumer
     async def _task_consumer_consumer(
@@ -432,16 +446,25 @@ class Orchestrator:
                 ip,
                 task_id,
             )
-            await consume_task(
-                task_id=task_id,
-                ip=ip,
-                gateway=self._gateway,
-                engines=self._engines,
-                uow_factory=self._uow_factory,
-                local_tasks_dir=self._local_tasks_dir,
-                tracker=self._tracker,
-            )
-            self._occupancy_started.discard(ip)
+            # Guard the task id so the next producer cycle does not re-yield it
+            # to another worker while this consume is in flight.
+            self._consuming.add(task_id)
+            try:
+                finalised = await consume_task(
+                    task_id=task_id,
+                    ip=ip,
+                    gateway=self._gateway,
+                    engines=self._engines,
+                    uow_factory=self._uow_factory,
+                    local_tasks_dir=self._local_tasks_dir,
+                    tracker=self._tracker,
+                )
+            finally:
+                self._consuming.discard(task_id)
+            # Discard the ip from _occupancy_started only when finalised so a
+            # deferred (transient-only) task is re-consumed on the next cycle.
+            if finalised:
+                self._occupancy_started.discard(ip)
         # END_BLOCK_CONSUME
 
     # ---- Deallocator producer-consumer ----

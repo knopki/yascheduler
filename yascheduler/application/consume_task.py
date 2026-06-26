@@ -1,22 +1,22 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 5.4.0
+# VERSION: 5.5.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Consume task use case — download outputs from a remote machine and mark task DONE.
-#   SCOPE: consume_task async function.
+#   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
+#   SCOPE: consume_task async function returning bool (True=finalised, False=deferred for retry).
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-GATEWAY, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   consume_task - Load task via UoW, download outputs, mark DONE or ERROR
+#   consume_task - Load task via UoW, download outputs, finalise (DONE/DONE+error) or defer (stay RUNNING); returns bool
 #   _prepare_store_folder - Create local output directory from domain Task context
-#   _finalize_task - Apply domain lifecycle, save via UoW, record events, notify cloud manager
-#   _record_finalization_event - Apply domain status and record corresponding event
+#   _finalize_task - On finalise: apply domain lifecycle, save via UoW, record events, discard tracker slot; returns True. On defer: no side effects, returns False
+#   _decide_finalisation - Decide finalise vs defer from (transient_errors, permanent_errors) and apply domain status + event when finalising
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.4.0 - TYPE_CHECKING import EngineRepository from yascheduler.domain instead of yascheduler.config (engine-to-domain-frozen).
-#   PREVIOUS_CHANGE: v5.3.0 - Migrate replace(task.context, ...) to task.context.replace(...); drop dead dataclasses.replace import (task-context-replace).
+#   LAST_CHANGE: v5.5.0 - consume_task returns bool (True=finalised, False=deferred for retry); unpacks 3-tuple (meta_add, transient_errors, permanent_errors) from gateway.download_outputs; transient-only errors defer (no status change, no save, no event, no tracker.discard) so the orchestrator re-consumes the RUNNING task; permanent errors or full success finalise (task.fail with combined msg when both lists present, or task.complete); tracker.discard moved into finalise branch only (fix-download-rmtree-data-loss). Renamed _record_finalization_event -> _decide_finalisation.
+#   PREVIOUS_CHANGE: v5.4.0 - TYPE_CHECKING import EngineRepository from yascheduler.domain instead of yascheduler.config (engine-to-domain-frozen).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -71,22 +71,42 @@ async def _prepare_store_folder(
     return store_folder, output_files, remote_folder
 
 
-# START_CONTRACT: _record_finalization_event
-#   PURPOSE: Apply domain status (complete/fail) based on SFTP errors and record corresponding event.
-#   INPUTS: { task: Task, meta_add: list, sftp_errors: list, store_folder: Path }
-#   OUTPUTS: { Task - with status applied and event recorded }
+# START_CONTRACT: _decide_finalisation
+#   PURPOSE: Decide finalise vs defer from (transient_errors, permanent_errors) and apply domain
+#     status + event when finalising. Finalise when permanent_errors non-empty OR transient_errors
+#     empty (full success, permanent-only, or mixed). Defer (return None) when transient-only.
+#   INPUTS: {
+#     task: Task - Domain task to finalise or defer,
+#     meta_add: list[tuple[str, Any]] - Additional metadata to merge,
+#     transient_errors: list[tuple[str | None, Exception]] - Retryable download errors,
+#     permanent_errors: list[tuple[str | None, Exception]] - Non-retryable download errors,
+#     store_folder: Path - Local directory where outputs were saved
+#   }
+#   OUTPUTS: { Task | None - task with status applied and event recorded when finalising; None when deferring }
 #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
-# END_CONTRACT: _record_finalization_event
-def _record_finalization_event(
+# END_CONTRACT: _decide_finalisation
+def _decide_finalisation(
     task: Task,
     meta_add: list[tuple[str, Any]],
-    sftp_errors: list[tuple[str | None, Exception]],
+    transient_errors: list[tuple[str | None, Exception]],
+    permanent_errors: list[tuple[str | None, Exception]],
     store_folder: Path,
-) -> Task:
-    if sftp_errors:
-        meta_add.append(("error", {p: str(e) for p, e in sftp_errors}))
+) -> Task | None:
+    # START_BLOCK_DECIDE
+    # Defer when transient-only: leave RUNNING, no status change, no event.
+    if transient_errors and not permanent_errors:
+        return None
+    # END_BLOCK_DECIDE
 
-    # Update task context so that save() persists download paths and extras
+    # START_BLOCK_FINALISE
+    # Finalise on success or any permanent error. When both lists are
+    # non-empty, permanent takes priority and the task fails with a combined
+    # message including both.
+    combined_errors = permanent_errors + transient_errors
+    if combined_errors:
+        error_map = {p: str(e) for p, e in combined_errors}
+        meta_add.append(("error", error_map))
+
     meta_dict = dict(meta_add)
     extra_updates = {
         k: v
@@ -99,8 +119,8 @@ def _record_finalization_event(
         extra={**task.context.extra, **extra_updates},
     )
 
-    if sftp_errors:
-        error_msg = str({p: str(e) for p, e in sftp_errors})
+    if combined_errors:
+        error_msg = str(error_map)
         task = (
             task.with_context(updated_context)
             .fail(error_msg)
@@ -112,49 +132,68 @@ def _record_finalization_event(
             .complete()
             .with_event(TaskCompleted, local_folder=str(store_folder), has_errors=False)
         )
-
+    # END_BLOCK_FINALISE
     return task
 
 
 # START_CONTRACT: _finalize_task
-#   PURPOSE: Apply domain lifecycle (complete/fail), save via UoW, record events, and notify tracker.
+#   PURPOSE: On finalise: apply domain lifecycle (complete/fail), save via UoW, record events,
+#     discard in-flight allocation slot. On defer: no side effects.
 #   INPUTS: {
-#     task: Task - Domain task to finalize,
+#     task: Task - Domain task to finalise,
 #     meta_add: list[tuple[str, Any]] - Additional metadata to merge,
-#     sftp_errors: list[tuple[str | None, Exception]] - SFTP download errors,
+#     transient_errors: list[tuple[str | None, Exception]] - Retryable download errors,
+#     permanent_errors: list[tuple[str | None, Exception]] - Non-retryable download errors,
 #     store_folder: Path - Local directory where outputs were saved,
 #     uow_factory: Callable - Factory providing AbstractUnitOfWork,
 #     tracker: AllocationTracker - In-flight allocation tracker
 #   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Applies domain lifecycle, saves task via UoW, records TaskCompleted or TaskFailed event, discards in-flight allocation slot via tracker.
+#   OUTPUTS: { bool - True when finalised (DONE applied, tracker slot discarded); False when deferred (no side effects) }
+#   SIDE_EFFECTS: On finalise: applies domain lifecycle, saves task via UoW, records TaskCompleted or
+#     TaskFailed event, discards in-flight allocation slot via tracker. On defer: none.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _finalize_task
 async def _finalize_task(
     task: Task,
     meta_add: list[tuple[str, Any]],
-    sftp_errors: list[tuple[str | None, Exception]],
+    transient_errors: list[tuple[str | None, Exception]],
+    permanent_errors: list[tuple[str | None, Exception]],
     store_folder: Path,
     uow_factory: Callable[[], AbstractUnitOfWork],
     tracker: AllocationTracker,
-) -> None:
-    # START_BLOCK_SET_STATUS
-    task = _record_finalization_event(task, meta_add, sftp_errors, store_folder)
+) -> bool:
+    # START_BLOCK_DECIDE_OR_DEFER
+    finalised_task = _decide_finalisation(
+        task, meta_add, transient_errors, permanent_errors, store_folder
+    )
+    if finalised_task is None:
+        # Defer: transient-only — stay RUNNING, no save, no event, no discard.
+        logger.info(
+            "task_id=%s download deferred (transient errors), staying RUNNING for retry",
+            task.task_id,
+        )
+        return False
+    # END_BLOCK_DECIDE_OR_DEFER
 
+    # START_BLOCK_SET_STATUS
     async with uow_factory() as uow:
-        await uow.tasks.save(task)
+        await uow.tasks.save(finalised_task)
         await uow.commit()
 
     logger.info(
-        "task_id=%s %s done and saved in %s", task.task_id, task.label, store_folder
+        "task_id=%s %s done and saved in %s",
+        finalised_task.task_id,
+        finalised_task.label,
+        store_folder,
     )
 
-    tracker.discard(task.task_id)
+    tracker.discard(finalised_task.task_id)
     # END_BLOCK_SET_STATUS
+    return True
 
 
 # START_CONTRACT: consume_task
-#   PURPOSE: Load task by id via UoW, download outputs from remote machine, apply domain lifecycle.
+#   PURPOSE: Load task by id via UoW, download outputs from remote machine, finalise or defer.
 #   INPUTS: {
 #     task_id: int - ID of the task to consume,
 #     ip: str - IP address of the machine where the task ran,
@@ -164,8 +203,8 @@ async def _finalize_task(
 #     local_tasks_dir: Path - Local base directory for output storage,
 #     tracker: AllocationTracker - In-flight allocation tracker
 #   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Downloads files via SFTP, applies domain lifecycle, saves via UoW, records events.
+#   OUTPUTS: { bool - True when finalised (DONE applied, remote dir cleaned by gateway, tracker slot discarded) or task not found in DB (vacuously finalised, tracker slot discarded); False when deferred (stay RUNNING, remote dir preserved, tracker slot retained) }
+#   SIDE_EFFECTS: Downloads files via SFTP; on finalise applies domain lifecycle, saves via UoW, records events, discards tracker slot; on task-not-found discards tracker slot; on defer none.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: consume_task
 async def consume_task(
@@ -176,23 +215,32 @@ async def consume_task(
     uow_factory: Callable[[], AbstractUnitOfWork],
     local_tasks_dir: Path,
     tracker: AllocationTracker,
-) -> None:
+) -> bool:
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
     if task is None:
         logger.warning("task_id=%s not found, skipping consume", task_id)
-        return
+        # Discard the tracker slot so a missing task row can't leak an
+        # in-flight allocation slot forever (treat as vacuously finalised).
+        tracker.discard(task_id)
+        return True
 
     store_folder, output_files, remote_folder = await _prepare_store_folder(
         task, local_tasks_dir, engines
     )
-    meta_add, sftp_errors = await gateway.download_outputs(
+    meta_add, transient_errors, permanent_errors = await gateway.download_outputs(
         ip=ip,
         remote_dir=remote_folder,
         local_dir=store_folder,
         files=output_files,
         task_id=task.task_id,
     )
-    await _finalize_task(
-        task, meta_add, sftp_errors, store_folder, uow_factory, tracker
+    return await _finalize_task(
+        task,
+        meta_add,
+        transient_errors,
+        permanent_errors,
+        store_folder,
+        uow_factory,
+        tracker,
     )

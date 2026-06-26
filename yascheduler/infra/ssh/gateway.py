@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/gateway.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH machine gateway implementing MachineGateway protocol via asyncssh.
 #   SCOPE: SSHMachineGateway class with connection lifecycle, command execution, SFTP, occupancy monitoring, output download.
@@ -22,11 +22,12 @@
 #   SSHMachineGateway.start_task_on_machine - Upload task inputs and spawn calculation process (port contract)
 #   SSHMachineGateway._occupancy_by_pgrep - pgrep-based occupancy check (busy-safe on SSH failure)
 #   SSHMachineGateway._occupancy_by_cmd - check_cmd-based occupancy check (busy-safe on SSH failure)
+#   SSHMachineGateway.download_outputs - SFTP session, per-file download with retry, error classification, conditional rmtree
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Re-key SSHMachineGateway._bg_tasks from set[asyncio.Task] to dict[str, asyncio.Task] keyed by machine IP; disconnect(ip) now pops+cancel+awaits only that IP's monitor (was cancelling every machine's monitor); start_occupancy_check cancels any prior monitor for the same IP before installing a new one, with an identity-checked done-callback so a re-registered replacement survives the prior task's completion (fix-disconnect-bg-task-leak). No public surface change; M-SSH-GATEWAY annotations unchanged.
-#   PREVIOUS_CHANGE: v1.5.1 - Replace PProcessInfo with ProcessInfo in pgrep/list_processes return annotations (prune-platform-protocols); import ProcessInfo from .platform.
+#   LAST_CHANGE: v1.7.0 - download_outputs classifies per-file exceptions into transient (SFTPRetryExc) vs permanent (all other caught) and returns (meta_add, transient_errors, permanent_errors); rmtree now gated on `if not transient_errors` so the remote dir is preserved for retry when transient errors left files undownloaded; session-level catch-all appends to transient_errors. BREAKING: return shape 2-tuple -> 3-tuple (fix-download-rmtree-data-loss).
+#   PREVIOUS_CHANGE: v1.6.0 - Re-key SSHMachineGateway._bg_tasks from set[asyncio.Task] to dict[str, asyncio.Task] keyed by machine IP; disconnect(ip) now pops+cancel+awaits only that IP's monitor (was cancelling every machine's monitor); start_occupancy_check cancels any prior monitor for the same IP before installing a new one, with an identity-checked done-callback so a re-registered replacement survives the prior task's completion (fix-disconnect-bg-task-leak). No public surface change; M-SSH-GATEWAY annotations unchanged.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -639,16 +640,16 @@ class SSHMachineGateway:
         # END_BLOCK_START_TASK
 
     # START_CONTRACT: SSHMachineGateway.download_outputs
-    #   PURPOSE: SFTP session, per-file download with retry, remote dir cleanup; catch all exceptions.
+    #   PURPOSE: SFTP session, per-file download with retry, error classification, conditional rmtree.
     #   INPUTS: {
     #     ip: str - Machine IP,
-    #     remote_dir: str - Remote directory path to clean after download,
+    #     remote_dir: str - Remote directory path to clean after download (only when transient_errors empty),
     #     local_dir: Path - Local destination directory,
     #     files: list[str] - Remote file paths to download,
     #     task_id: int | None - Optional task ID for log correlation
     #   }
-    #   OUTPUTS: { tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]] - (meta_add, sftp_errors) }
-    #   SIDE_EFFECTS: Downloads files via SFTP, removes remote directory tree.
+    #   OUTPUTS: { tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]] - (meta_add, transient_errors, permanent_errors) }
+    #   SIDE_EFFECTS: Downloads files via SFTP; removes remote directory tree ONLY when transient_errors is empty.
     #   LINKS: M-SSH-GATEWAY, M-DOMAIN-PORTS
     # END_CONTRACT: SSHMachineGateway.download_outputs
     async def download_outputs(
@@ -658,13 +659,18 @@ class SSHMachineGateway:
         local_dir: Path,
         files: list[str],
         task_id: int | None = None,
-    ) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]]:
+    ) -> tuple[
+        list[tuple[str, Any]],
+        list[tuple[str | None, Exception]],
+        list[tuple[str | None, Exception]],
+    ]:
         # START_BLOCK_DOWNLOAD_OUTPUTS
         meta_add: list[tuple[str, Any]] = [
             ("remote_folder", remote_dir),
             ("local_folder", str(local_dir)),
         ]
-        sftp_errors: list[tuple[str | None, Exception]] = []
+        transient_errors: list[tuple[str | None, Exception]] = []
+        permanent_errors: list[tuple[str | None, Exception]] = []
         path_type = self.get_path(ip)
         file_get_retry = my_backoff_sftp()
         job_retry = my_backoff_sftp()
@@ -677,23 +683,34 @@ class SSHMachineGateway:
                             out_file, local_dir, preserve=True
                         )
                     except (OSError, SFTPError) as err:
-                        sftp_errors.append((out_file, err))
+                        # START_BLOCK_CLASSIFY
+                        if isinstance(err, SFTPRetryExc):
+                            transient_errors.append((out_file, err))
+                        else:
+                            permanent_errors.append((out_file, err))
+                        # END_BLOCK_CLASSIFY
                         self._log.warning(
                             "Cannot download file for task_id=%s from %s: %s",
                             task_id,
                             out_file,
                             err,
                         )
-                await sftp.rmtree(path_type(remote_dir))
+                # START_BLOCK_RMTREE_GATE
+                # rmtree only when no transient errors left files undownloaded;
+                # otherwise preserve the remote dir for the next retry cycle.
+                if not transient_errors:
+                    await sftp.rmtree(path_type(remote_dir))
+                # END_BLOCK_RMTREE_GATE
 
         try:
             await job_retry(_session)()
         except Exception as err:
-            # Catch-all: whole-session failure (lost connection, etc.)
+            # Catch-all: whole-session failure (lost connection, etc.) is
+            # transient — the remote dir is preserved for retry.
             self._log.warning("Cannot scp from %s: %s", remote_dir, err)
-            sftp_errors.append((remote_dir, err))
+            transient_errors.append((remote_dir, err))
         # END_BLOCK_DOWNLOAD_OUTPUTS
-        return meta_add, sftp_errors
+        return meta_add, transient_errors, permanent_errors
 
     # START_CONTRACT: SSHMachineGateway._occupancy_by_pgrep
     #   PURPOSE: Occupancy check via pgrep on check_pname. Returns True (busy)

@@ -76,7 +76,7 @@ The system SHALL define a `MachineGateway` Protocol with methods:
 **File transfer:**
 - `upload(machine: ConnectedMachine, local: Path, remote: str) -> None` (async)
 - `download(machine: ConnectedMachine, remote: str, local: Path) -> None` (async)
-- `download_outputs(ip: str, remote_dir: str, local_dir: Path, files: list[str], task_id: int | None = None) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]]` (async)
+- `download_outputs(ip: str, remote_dir: str, local_dir: Path, files: list[str], task_id: int | None = None) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]]` (async) — returns `(meta_add, transient_errors, permanent_errors)` where `meta_add` contains `[("remote_folder", remote_dir), ("local_folder", str(local_dir))]`, `transient_errors` lists per-file `(file_path, exception)` tuples classified as retryable (instances of `SFTPRetryExc`), and `permanent_errors` lists per-file `(file_path, exception)` tuples classified as non-retryable (all other caught exceptions). The remote directory is removed only when `transient_errors` is empty; otherwise it is preserved for retry.
 
 **Occupancy monitoring:**
 - `start_occupancy_check(ip: str, config: Engine) -> None` (sync)
@@ -121,9 +121,17 @@ Interface-Segregation benefit (per the `engine-to-domain-frozen` D4 precedent).
 - **WHEN** `update_machine(machine)` is called with a ConnectedMachine
 - **THEN** the machine's state is replaced in the registry
 
-#### Scenario: Download task outputs
+#### Scenario: Download task outputs with classified errors
 - **WHEN** `download_outputs(ip, remote_dir, local_dir, files, task_id)` is called
-- **THEN** opens SFTP session, downloads each file with retry, removes remote directory, returns `(meta_add, sftp_errors)` tuple where `meta_add` contains `[("remote_folder", remote_dir), ("local_folder", str(local_dir))]` and `sftp_errors` contains `(file_path, exception)` tuples
+- **THEN** opens SFTP session, downloads each file with retry, classifies per-file exceptions into `transient_errors` and `permanent_errors`, removes the remote directory only when `transient_errors` is empty, and returns `(meta_add, transient_errors, permanent_errors)` where `meta_add` contains `[("remote_folder", remote_dir), ("local_folder", str(local_dir))]`
+
+#### Scenario: Download outputs preserves remote dir on transient errors
+- **WHEN** `download_outputs(...)` encounters transient per-file errors (instances of `SFTPRetryExc`)
+- **THEN** the remote directory is NOT removed and `transient_errors` is non-empty in the returned tuple
+
+#### Scenario: Download outputs removes remote dir on permanent-only or success
+- **WHEN** `download_outputs(...)` completes with `transient_errors` empty (full success or only permanent errors)
+- **THEN** the remote directory is removed and `transient_errors` is empty in the returned tuple
 
 #### Scenario: Start occupancy check
 - **WHEN** `start_occupancy_check(ip, config)` is called with an `Engine` instance

@@ -175,8 +175,12 @@ class StubMachineGateway:
         local_dir: Path,
         files: list[str],
         task_id: int | None = None,
-    ) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]]:
-        return ([], [])
+    ) -> tuple[
+        list[tuple[str, Any]],
+        list[tuple[str | None, Exception]],
+        list[tuple[str | None, Exception]],
+    ]:
+        return ([], [], [])
 
     def start_occupancy_check(self, ip: str, config: Engine) -> None:
         pass

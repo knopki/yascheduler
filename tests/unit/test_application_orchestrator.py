@@ -1,11 +1,12 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.4.1
+# VERSION: 1.5.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
 #   SCOPE: Constructor queue initialization, start/stop lifecycle, cancellation propagation, concurrency limits,
 #          _clouds_get_capacity inline UoW arithmetic, constructor stores allocation_tracker/active_clouds/allocation_lock,
-#          _deallocator_consumer passes uow_factory to deallocate_node, _allocator_consumer swallows exceptions.
+#          _deallocator_consumer passes uow_factory to deallocate_node, _allocator_consumer swallows exceptions,
+#          _task_consumer_consumer conditional _occupancy_started discard on consume_task bool, in-flight _consuming guard.
 #   DEPENDS: M-APPLICATION-ORCHESTRATOR
 #   LINKS: M-APPLICATION-ORCHESTRATOR
 # END_MODULE_CONTRACT
@@ -17,11 +18,13 @@
 #   TestOrchestratorConstructor - Constructor stores allocation_tracker, active_clouds, allocation_lock; no _adapters/_configs
 #   TestDeallocatorConsumer - _deallocator_consumer calls deallocate_node with uow_factory
 #   TestAllocatorConsumer - _allocator_consumer swallows allocate_task exceptions to keep worker alive
+#   TestConsumeConditionalDiscard - _task_consumer_consumer discards _occupancy_started only when consume_task returns True
+#   TestConsumeInFlightGuard - producer skips in-flight task ids; consumer adds/discards around consume_task await
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.5.0 - Migrate imports: ConfigDb→PostgresDbConfig, ConfigLocal→LocalSettings, ConfigRemote→RemoteDefaults; Orchestrator __init__ signature change: config=config → local_settings=config.local, remote_defaults=config.remote (config-aggregate-to-entrypoints / P4).]
-#   PREVIOUS_CHANGE: [v1.4.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in make_orchestrator signature).]
+#   LAST_CHANGE: v1.5.1 - Add TestConsumeConditionalDiscard and TestConsumeInFlightGuard for consume_task bool return + _consuming in-flight guard (fix-download-rmtree-data-loss).
+#   PREVIOUS_CHANGE: [v1.5.0 - Migrate imports: ConfigDb→PostgresDbConfig, ConfigLocal→LocalSettings, ConfigRemote→RemoteDefaults; Orchestrator __init__ signature change: config=config → local_settings=config.local, remote_defaults=config.remote (config-aggregate-to-entrypoints / P4).]
 # END_CHANGE_SUMMARY
 #
 """Unit tests for Orchestrator lifecycle management.
@@ -716,3 +719,225 @@ class TestAllocatorConsumer:
             tracker=orch._tracker,
             allocation_lock=orch._allocation_lock,
         )
+
+
+class TestConsumeConditionalDiscard:
+    """_task_consumer_consumer discards _occupancy_started only when consume_task returns True."""
+
+    @pytest.mark.asyncio
+    async def test_finalised_discards_ip(self) -> None:
+        """consume_task returns True -> _occupancy_started.discard(ip) called."""
+        from yascheduler.application.queue import UMessage
+        from yascheduler.domain.model import ConnectedMachine, MachineState
+
+        orch = make_orchestrator()
+        machine = ConnectedMachine(
+            ip="10.0.0.1",
+            platform="linux",
+            ncpus=2,
+            state=MachineState.FREE,
+            free_since=0.0,
+        )
+        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._occupancy_started.add("10.0.0.1")
+
+        task = Task(
+            task_id=5,
+            label="t",
+            context=TaskContext(engine="e"),
+            status=TaskStatus.RUNNING,
+            allocated_ip="10.0.0.1",
+        )
+        msg = UMessage(5, task)
+
+        with patch(
+            "yascheduler.application.orchestrator.consume_task",
+            new=AsyncMock(return_value=True),
+        ):
+            await orch._task_consumer_consumer(msg, Counter())
+
+        assert "10.0.0.1" not in orch._occupancy_started
+
+    @pytest.mark.asyncio
+    async def test_deferred_keeps_ip(self) -> None:
+        """consume_task returns False -> _occupancy_started.discard(ip) NOT called."""
+        from yascheduler.application.queue import UMessage
+        from yascheduler.domain.model import ConnectedMachine, MachineState
+
+        orch = make_orchestrator()
+        machine = ConnectedMachine(
+            ip="10.0.0.1",
+            platform="linux",
+            ncpus=2,
+            state=MachineState.FREE,
+            free_since=0.0,
+        )
+        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._occupancy_started.add("10.0.0.1")
+
+        task = Task(
+            task_id=5,
+            label="t",
+            context=TaskContext(engine="e"),
+            status=TaskStatus.RUNNING,
+            allocated_ip="10.0.0.1",
+        )
+        msg = UMessage(5, task)
+
+        with patch(
+            "yascheduler.application.orchestrator.consume_task",
+            new=AsyncMock(return_value=False),
+        ):
+            await orch._task_consumer_consumer(msg, Counter())
+
+        # Deferred: ip stays registered so the next producer cycle re-enters consume
+        assert "10.0.0.1" in orch._occupancy_started
+
+
+class TestConsumeInFlightGuard:
+    """In-flight _consuming guard prevents concurrent consume and is released after."""
+
+    @pytest.mark.asyncio
+    async def test_producer_skips_in_flight_task(self) -> None:
+        """A task id in _consuming is skipped by the producer."""
+        from yascheduler.application.queue import UMessage
+
+        orch = make_orchestrator()
+
+        task_a = Task(
+            task_id=1,
+            label="a",
+            context=TaskContext(engine="e"),
+            status=TaskStatus.RUNNING,
+            allocated_ip="10.0.0.1",
+        )
+        task_b = Task(
+            task_id=2,
+            label="b",
+            context=TaskContext(engine="e"),
+            status=TaskStatus.RUNNING,
+            allocated_ip="10.0.0.2",
+        )
+
+        mock_uow = AsyncMock()
+        mock_uow.tasks.list_by_status = AsyncMock(return_value=[task_a, task_b])
+        mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
+        mock_uow.__aexit__ = AsyncMock(return_value=False)
+        orch._uow_factory = lambda: mock_uow  # type: ignore[method-assign]
+
+        # Mark task_a as in-flight
+        orch._consuming.add(1)
+
+        yielded: list[UMessage[int, Task]] = []
+        async for msg in orch._task_consumer_producer():
+            yielded.append(msg)
+
+        # Only task_b (id=2) is yielded; task_a (id=1) is skipped
+        assert len(yielded) == 1
+        assert yielded[0].id == 2
+
+    @pytest.mark.asyncio
+    async def test_guard_released_after_consume_true(self) -> None:
+        """consume_task returns True -> task_id removed from _consuming in finally."""
+        from yascheduler.application.queue import UMessage
+        from yascheduler.domain.model import ConnectedMachine, MachineState
+
+        orch = make_orchestrator()
+        machine = ConnectedMachine(
+            ip="10.0.0.1",
+            platform="linux",
+            ncpus=2,
+            state=MachineState.FREE,
+            free_since=0.0,
+        )
+        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._occupancy_started.add("10.0.0.1")
+
+        task = Task(
+            task_id=5,
+            label="t",
+            context=TaskContext(engine="e"),
+            status=TaskStatus.RUNNING,
+            allocated_ip="10.0.0.1",
+        )
+        msg = UMessage(5, task)
+
+        with patch(
+            "yascheduler.application.orchestrator.consume_task",
+            new=AsyncMock(return_value=True),
+        ):
+            await orch._task_consumer_consumer(msg, Counter())
+
+        assert 5 not in orch._consuming
+
+    @pytest.mark.asyncio
+    async def test_guard_released_after_consume_false(self) -> None:
+        """consume_task returns False -> task_id still removed from _consuming in finally."""
+        from yascheduler.application.queue import UMessage
+        from yascheduler.domain.model import ConnectedMachine, MachineState
+
+        orch = make_orchestrator()
+        machine = ConnectedMachine(
+            ip="10.0.0.1",
+            platform="linux",
+            ncpus=2,
+            state=MachineState.FREE,
+            free_since=0.0,
+        )
+        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._occupancy_started.add("10.0.0.1")
+
+        task = Task(
+            task_id=5,
+            label="t",
+            context=TaskContext(engine="e"),
+            status=TaskStatus.RUNNING,
+            allocated_ip="10.0.0.1",
+        )
+        msg = UMessage(5, task)
+
+        with patch(
+            "yascheduler.application.orchestrator.consume_task",
+            new=AsyncMock(return_value=False),
+        ):
+            await orch._task_consumer_consumer(msg, Counter())
+
+        # Deferred keeps the ip in _occupancy_started but releases the in-flight guard
+        assert 5 not in orch._consuming
+        assert "10.0.0.1" in orch._occupancy_started
+
+    @pytest.mark.asyncio
+    async def test_guard_released_on_consume_exception(self) -> None:
+        """consume_task raises -> finally still removes task_id from _consuming."""
+        from yascheduler.application.queue import UMessage
+        from yascheduler.domain.model import ConnectedMachine, MachineState
+
+        orch = make_orchestrator()
+        machine = ConnectedMachine(
+            ip="10.0.0.1",
+            platform="linux",
+            ncpus=2,
+            state=MachineState.FREE,
+            free_since=0.0,
+        )
+        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._occupancy_started.add("10.0.0.1")
+
+        task = Task(
+            task_id=5,
+            label="t",
+            context=TaskContext(engine="e"),
+            status=TaskStatus.RUNNING,
+            allocated_ip="10.0.0.1",
+        )
+        msg = UMessage(5, task)
+
+        with patch(
+            "yascheduler.application.orchestrator.consume_task",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            with pytest.raises(RuntimeError):
+                await orch._task_consumer_consumer(msg, Counter())
+
+        # finally released the guard even on exception
+        assert 5 not in orch._consuming

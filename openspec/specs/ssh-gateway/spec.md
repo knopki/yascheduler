@@ -16,10 +16,23 @@ execution, and SFTP. The gateway SHALL be self-contained — it SHALL NOT import
 from `remote_machine/` or `clouds/`.
 
 The gateway SHALL provide a `download_outputs` method that encapsulates SFTP
-session management, per-file download with retry, and remote directory cleanup.
-The method SHALL return `tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]]`
-containing `(meta_add, sftp_errors)`. The method SHALL catch all exceptions
-(including non-retry) and return them in the `sftp_errors` list.
+session management, per-file download with retry, error classification, and
+remote directory cleanup. The method SHALL return
+`tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]]`
+containing `(meta_add, transient_errors, permanent_errors)`. The method SHALL
+catch all per-file exceptions (including non-retry) and classify each into
+`transient_errors` (instances of `SFTPRetryExc`) or `permanent_errors` (all
+other caught exceptions, including `SFTPNoSuchFile`, `SFTPPermissionDenied`,
+and bare `OSError` from local filesystem writes). The method SHALL catch all
+session-level exceptions and return them in `transient_errors` (a
+session-level failure is transient — the remote directory is preserved for
+retry). The method SHALL NOT raise.
+
+The method SHALL remove the remote directory tree only when `transient_errors`
+is empty after the per-file loop — i.e. on full success or when only permanent
+errors occurred. When `transient_errors` is non-empty, the method SHALL NOT
+remove the remote directory tree (the undownloaded files must remain available
+for the next retry cycle).
 
 The gateway SHALL provide a `_get_machine_state` method returning `_MachineState | None`
 for adapter-internal use (e.g., `check_status.py`), and a `get_machine_state` method
@@ -57,14 +70,28 @@ Protocol.
 - **WHEN** `gateway.download(machine, "/remote/path", local_path)` is called
 - **THEN** the file is transferred via SFTP to the local path
 
-#### Scenario: Download task outputs with retry
+#### Scenario: Download task outputs with retry and classification
 - **WHEN** `gateway.download_outputs(ip, remote_dir, local_dir, files, task_id)` is called
 - **THEN** SFTP session is opened, each file is downloaded with per-file retry,
-  remote directory is removed, and `(meta_add, sftp_errors)` is returned
+  per-file exceptions are classified into `transient_errors` (instances of
+  `SFTPRetryExc`) and `permanent_errors` (all other caught exceptions), and
+  `(meta_add, transient_errors, permanent_errors)` is returned
+
+#### Scenario: Remote directory removed on full success or permanent-only errors
+- **WHEN** `download_outputs` completes the per-file loop with `transient_errors` empty (full success or only permanent errors)
+- **THEN** the remote directory tree is removed via `sftp.rmtree`
+
+#### Scenario: Remote directory preserved on transient errors
+- **WHEN** `download_outputs` completes the per-file loop with `transient_errors` non-empty
+- **THEN** the remote directory tree is NOT removed (undownloaded files remain available for retry)
 
 #### Scenario: Download outputs catches all exceptions
-- **WHEN** `download_outputs` encounters a non-retryable exception
-- **THEN** the exception is caught and returned in `sftp_errors` list, not raised
+- **WHEN** `download_outputs` encounters a non-retryable per-file exception
+- **THEN** the exception is caught and classified into `permanent_errors`, not raised
+
+#### Scenario: Session-level failure is transient and preserves remote dir
+- **WHEN** `download_outputs` encounters a session-level failure (e.g. connection lost before the per-file loop completes)
+- **THEN** the exception is caught, recorded in `transient_errors`, the remote directory is NOT removed, and the method returns without raising
 
 #### Scenario: List connected machines
 - **WHEN** `gateway.list_connected()` is called

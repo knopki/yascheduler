@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_events.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain event recording from application use cases.
@@ -11,11 +11,12 @@
 # START_MODULE_MAP
 #   TestSubmitTaskEvents - submit_task: records TaskCreated event
 #   TestAllocateTaskEvents - allocate_task: records TaskFailed (unsupported engine) and TaskAllocated (free machine) events
-#   TestConsumeTaskEvents - consume_task: records TaskCompleted (success) and TaskFailed (download failure) events
+#   TestConsumeTaskEvents - consume_task: records TaskCompleted (success) and TaskFailed (permanent download failure) events
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from test_application_use_cases.py (size limit). Event recording tests moved to own file.
+#   LAST_CHANGE: v1.1.0 - Update TestConsumeTaskEvents for 3-tuple download_outputs (meta_add, transient_errors, permanent_errors); permanent failure now in permanent_errors list (fix-download-rmtree-data-loss).
+#   PREVIOUS_CHANGE: v1.0.0 - Extracted from test_application_use_cases.py (size limit). Event recording tests moved to own file.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for domain event recording from application use cases.
@@ -210,7 +211,7 @@ class TestConsumeTaskEvents:
     @pytest.fixture
     def gateway_mock(self) -> MagicMock:
         gateway = MagicMock()
-        gateway.download_outputs = AsyncMock(return_value=([], []))
+        gateway.download_outputs = AsyncMock(return_value=([], [], []))
         return gateway
 
     async def _run_consume(
@@ -279,7 +280,7 @@ class TestConsumeTaskEvents:
         mock_engine_repo: MagicMock,
     ) -> None:
         gateway_mock.download_outputs = AsyncMock(
-            return_value=([], [("/remote/file", OSError("Connection refused"))])
+            return_value=([], [], [("/remote/file", OSError("Connection refused"))])
         )
 
         uow = AsyncMock()
