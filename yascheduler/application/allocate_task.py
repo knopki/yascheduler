@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.6.0
+# VERSION: 5.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
-#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER
+#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.6.0 - select_provider returns str|None; selected_name = selection; add_tmp(selected_name) drops username arg (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v5.5.0 - Record TaskAllocated/TaskFailed via task.with_event factory (task-with-event).
+#   LAST_CHANGE: v5.8.0 - Retype start_task_on_machine callback signatures to Engine; remove cast("TaskExecutionEngine") and cast("OccupancyConfig") bridging calls and the unused cast import (resolve-engine-protocol-debt). The frozen Engine dataclass is now typed directly against MachineGateway methods.
+#   PREVIOUS_CHANGE: v5.7.0 - TYPE_CHECKING import Engine, EngineRepository from yascheduler.domain instead of yascheduler.config (engine-to-domain-frozen).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from yascheduler.domain import (
     Node,
     Task,
     TaskAllocated,
-    TaskExecutionEngine,
     TaskFailed,
     TaskStatus,
 )
@@ -45,8 +44,12 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Callable, Sequence
 
-    from yascheduler.config import Engine, EngineRepository
-    from yascheduler.domain import CloudProvisioner, MachineGateway
+    from yascheduler.domain import (
+        CloudProvisioner,
+        Engine,
+        EngineRepository,
+        MachineGateway,
+    )
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
@@ -68,7 +71,7 @@ class _TmpSelection(NamedTuple):
 #   }
 #   OUTPUTS: { Engine | None - The resolved engine, or None if invalid }
 #   SIDE_EFFECTS: Sets task error and records TaskFailed event if engine is unsupported.
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-CONFIG
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS
 # END_CONTRACT: _validate_engine
 async def _validate_engine(
     task: Task,
@@ -101,7 +104,7 @@ async def _validate_engine(
 #     task: Task - The task to allocate,
 #     gateway: MachineGateway - SSH gateway for occupancy checks,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     start_task_on_machine: Callable[[ConnectedMachine, TaskExecutionEngine, Task], Awaitable[bool]] - Upload+spawn callback,
+#     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
 #     tracker: AllocationTracker - In-flight cloud allocation tracker
 #   }
 #   OUTPUTS: { bool - True if task started successfully on this machine }
@@ -114,9 +117,7 @@ async def _try_start_on_machine(
     task: Task,
     gateway: MachineGateway,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    start_task_on_machine: Callable[
-        [ConnectedMachine, TaskExecutionEngine, Task], Awaitable[bool]
-    ],
+    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
 ) -> bool:
     task = task.allocate_to(machine.ip).mark_running()
@@ -185,9 +186,7 @@ async def _allocate_free_machine(
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
     gateway: MachineGateway,
-    start_task_on_machine: Callable[
-        [ConnectedMachine, TaskExecutionEngine, Task], Awaitable[bool]
-    ],
+    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
 ) -> bool:
     free_machines = await _find_free_machines(engine, uow_factory, gateway)
@@ -448,9 +447,7 @@ async def allocate_task(
     uow_factory: Callable[[], AbstractUnitOfWork],
     gateway: MachineGateway,
     clouds: CloudProvisioner,
-    start_task_on_machine: Callable[
-        [ConnectedMachine, TaskExecutionEngine, Task], Awaitable[bool]
-    ],
+    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
     allocation_lock: asyncio.Lock,
 ) -> bool:

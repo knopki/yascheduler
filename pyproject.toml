@@ -32,7 +32,6 @@ dependencies = [
   "aiohttp~=3.8",
   "asyncssh~=2.11",
   "asyncstdlib~=3.10",
-  "attrs>=22.2.0",
   "backoff~=2.1.2",
   "pg8000~=1.19",
   "python-daemon~=2.3",
@@ -129,13 +128,6 @@ layers = [
   "yascheduler.domain",
   "yascheduler.shared",
 ]
-ignore_imports = []
-
-[[tool.importlinter.contracts]]
-name = "Shared kernel has no config imports"
-type = "forbidden"
-source_modules = ["yascheduler.shared"]
-forbidden_modules = ["yascheduler.config"]
 
 [tool.setuptools.package-data]
 "yascheduler.infra.persistence.sql" = ["**/*.sql"]

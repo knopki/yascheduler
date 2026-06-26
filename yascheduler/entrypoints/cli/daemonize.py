@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: yascheduler CLI command — start the daemon (foreground, intended for manual/debug/container use) via the shared daemon core.
 #   SCOPE: daemonize command — thin sync entry point that builds an argparse parser, configures the root logger, loads Config, and runs the async daemon core via asyncio.run.
-#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG, M-SHARED
+#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-ENTRYPOINTS-CONFIG-PARSER, M-SHARED
 #   LINKS: M-CLI-COMMANDS, M-DAEMON-COMMON
 # END_MODULE_CONTRACT
 #
@@ -23,13 +23,13 @@ import asyncio
 import logging
 import sys
 
-from yascheduler.config import Config
 from yascheduler.entrypoints.cli.args import (
     add_config_arg,
     add_log_file_arg,
     add_log_level_arg,
 )
 from yascheduler.entrypoints.cli.daemon_common import configure_logger, run_daemon
+from yascheduler.entrypoints.config_parser import parse_config
 
 
 # START_CONTRACT: daemonize
@@ -55,7 +55,7 @@ def daemonize(argv: list[str] | None = None) -> None:
     try:
         # START_BLOCK_CONFIGURE
         logger = configure_logger(args.log_file, logging.getLevelName(args.log_level))
-        config = Config.from_config_parser(args.config)
+        config = parse_config(args.config)
         # END_BLOCK_CONFIGURE
         asyncio.run(run_daemon(config, logger))
     except SystemExit:

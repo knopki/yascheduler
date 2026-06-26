@@ -3,8 +3,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit of Work implementation for PostgreSQL using pg8000.
 #   SCOPE: PostgresUnitOfWork managing transactions, repositories, event dispatch, and connection lifecycle.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN-EVENTS
-#   LINKS: M-PERSISTENCE-POSTGRES, M-CONFIG-DB, M-APPLICATION-MESSAGE-BUS
+#   DEPENDS: M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN-EVENTS
+#   LINKS: M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG, M-APPLICATION-MESSAGE-BUS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.4.1 - Fix collect_events in-place mutation to preserve shared list reference with repo.
+#   LAST_CHANGE: v1.5.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config (config-aggregate-to-entrypoints / P4).
+#   PREVIOUS_CHANGE: v1.4.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -34,8 +34,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from yascheduler.application import MessageBus
-    from yascheduler.config import ConfigDb
     from yascheduler.domain import DomainEvent, Task
+
+    from .db_config import PostgresDbConfig
 
 T = TypeVar("T")
 
@@ -45,22 +46,22 @@ logger = logging.getLogger(__name__)
 # START_CONTRACT: PostgresUnitOfWork
 #   PURPOSE: Async context manager that manages a pg8000 connection and exposes
 #            task and node repositories operating on the same transaction.
-#   INPUTS: { config: ConfigDb - database connection parameters }
+#   INPUTS: { config: PostgresDbConfig - database connection parameters }
 #   OUTPUTS: { PostgresUnitOfWork - self from __aenter__ }
 #   SIDE_EFFECTS: Creates and closes pg8000 connections; manages a ThreadPoolExecutor.
-#   LINKS: PostgresTaskRepository, PostgresNodeRepository, ConfigDb, pg8000.native.Connection
+#   LINKS: PostgresTaskRepository, PostgresNodeRepository, PostgresDbConfig, pg8000.native.Connection
 # END_CONTRACT: PostgresUnitOfWork
 class PostgresUnitOfWork:
     """Async context manager for PostgreSQL transactional boundaries."""
 
     # START_CONTRACT: PostgresUnitOfWork.__init__
     #   PURPOSE: Initialise UoW with config and a single-worker thread pool.
-    #   INPUTS: { config: ConfigDb - database connection parameters }
+    #   INPUTS: { config: PostgresDbConfig - database connection parameters }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates a ThreadPoolExecutor(max_workers=1).
-    #   LINKS: ThreadPoolExecutor, ConfigDb
+    #   LINKS: ThreadPoolExecutor, PostgresDbConfig
     # END_CONTRACT: PostgresUnitOfWork.__init__
-    def __init__(self, config: ConfigDb, bus: MessageBus) -> None:
+    def __init__(self, config: PostgresDbConfig, bus: MessageBus) -> None:
         # FIXME: no backoff.on_exception on InterfaceError
         self._config = config
         self._bus = bus
@@ -222,7 +223,7 @@ class PostgresUnitOfWork:
     #   INPUTS: { None }
     #   OUTPUTS: { Connection - a new pg8000 native connection }
     #   SIDE_EFFECTS: Opens a TCP connection to PostgreSQL.
-    #   LINKS: pg8000.native.Connection, ConfigDb
+    #   LINKS: pg8000.native.Connection, PostgresDbConfig
     # END_CONTRACT: _create_connection
     def _create_connection(self) -> Connection:
         """Create a new pg8000 connection from config."""

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/infra/ssh/platform/windows.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Windows-specific remote commands: engine deployment, process listing.
 #   SCOPE: Windows setup_node, list_processes implementations.
-#   DEPENDS: M-CONFIG-ENGINE, M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON
-#   LINKS: M-PLATFORM-ADAPTERS, M-CONFIG-ENGINE
+#   DEPENDS: M-DOMAIN-ENGINE, M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON
+#   LINKS: M-PLATFORM-ADAPTERS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial copy from yascheduler/remote_machine/windows_methods.py.
+#   LAST_CHANGE: v1.1.0 - Switch Deploy* import from yascheduler.config to yascheduler.domain; replace PEngineRepository type hints with EngineRepository from yascheduler.domain (engine-to-domain-frozen).
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 import asyncio
@@ -39,10 +39,15 @@ from typing import Optional, Union
 from asyncssh.connection import SSHClientConnection
 from asyncssh.sftp import SFTPClient
 
-from yascheduler.config import LocalArchiveDeploy, LocalFilesDeploy, RemoteArchiveDeploy
+from yascheduler.domain import (
+    EngineRepository,
+    LocalArchiveDeploy,
+    LocalFilesDeploy,
+    RemoteArchiveDeploy,
+)
 
 from .common import ProcessInfo
-from .protocol import OuterRunCallable, PEngineRepository, PProcessInfo, QuoteCallable
+from .protocol import OuterRunCallable, PProcessInfo, QuoteCallable
 
 
 class MyPureWindowsPath(PureWindowsPath):
@@ -274,7 +279,7 @@ async def deploy_remote_archive(
 
 # START_CONTRACT: windows_deploy_engines
 #   PURPOSE: Deploy all engines for a Windows node by iterating engine repository and dispatching deploy strategies
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: PEngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates engine directories, uploads files/archives, downloads remote archives
 #   LINKS: M-REMOTE-WINDOWS
@@ -283,7 +288,7 @@ async def windows_deploy_engines(
     run: OuterRunCallable,
     quote: QuoteCallable,
     sftp: SFTPClient,
-    engines: PEngineRepository,
+    engines: EngineRepository,
     engines_dir: PurePath,
     log: Optional[logging.Logger] = None,
 ) -> None:
@@ -317,7 +322,7 @@ async def windows_deploy_engines(
 
 # START_CONTRACT: windows_setup_node
 #   PURPOSE: Setup Windows node by deploying engines via SFTP
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { engines: PEngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates SFTP client, deploys all engines on Windows
 #   LINKS: M-REMOTE-WINDOWS
@@ -326,7 +331,7 @@ async def windows_setup_node(
     conn: SSHClientConnection,
     run: OuterRunCallable,
     quote: QuoteCallable,
-    engines: PEngineRepository,
+    engines: EngineRepository,
     engines_dir: PurePath,
     log: Optional[logging.Logger] = None,
 ) -> None:

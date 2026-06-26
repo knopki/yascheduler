@@ -1,11 +1,11 @@
 # FILE: yascheduler/infra/cloud/providers/az.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Azure VM creation and deletion using Azure SDK.
 #   SCOPE: Azure create/delete node functions.
-#   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CONFIG-CLOUD
+#   DEPENDS: M-CLOUD-CONFIGS, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-CONFIGS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Hybrid: replace attrs.evolve(cloud_config) → dataclasses.replace(cloud_config) (CloudConfig is now a dataclass); keep attrs.asdict(vm_image) for out-of-scope AzureImageReference (migrate-cloud-from-attrs).
-#   PREVIOUS_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.9.0 - Retype _render_custom_data, create_vm_params, create_node cloud_config params from PCloudConfig | None to CloudConfig | None (concrete infra/cloud/cloud_config.CloudConfig); add isinstance boundary guard in az_create_node (public signature stays PCloudConfig | None for CreateNodeCallable assignability); drop # type: ignore[misc] on render_base64() (replace now returns CloudConfig with concrete render_base64); fix bootcmd list→tuple literal (resolve-type-bridge-debt / D3a).
+#   PREVIOUS_CHANGE: v1.8.0 - TYPE_CHECKING import AzureImageReference, ConfigCloudAzure from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTOs relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
 # END_CHANGE_SUMMARY
 #
 """Azure cloud methods"""
@@ -32,11 +32,10 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict as dataclass_asdict
 from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, cast
-
-from attrs import asdict
 
 try:
     from azure.core.exceptions import (
@@ -76,14 +75,17 @@ try:
 except ImportError:
     _AZURE_AVAILABLE = False
 
-from yascheduler.infra.cloud import get_rnd_name
+from yascheduler.infra.cloud import CloudConfig, get_rnd_name
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
     from azure.core.credentials_async import AsyncTokenCredential
 
-    from yascheduler.config import AzureImageReference, ConfigCloudAzure
-    from yascheduler.infra.cloud import PCloudConfig
+    from yascheduler.infra.cloud import (
+        AzureImageReference,
+        ConfigCloudAzure,
+        PCloudConfig,
+    )
 
 # Azure SDK is too noisy
 for logger_name in [
@@ -187,13 +189,13 @@ async def create_nic(
 
 # START_CONTRACT: _render_custom_data
 #   PURPOSE: Render custom_data from cloud_config with boot commands
-#   INPUTS: { cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   INPUTS: { cloud_config: Optional[CloudConfig] - optional cloud-config (concrete infra/cloud/cloud_config.CloudConfig, not the domain Protocol) }
 #   OUTPUTS: { Optional[str] - base64-encoded cloud-config or None }
 #   SIDE_EFFECTS: None
 #   LINKS: M-CLOUD-AZ
 # END_CONTRACT: _render_custom_data
 def _render_custom_data(
-    cloud_config: PCloudConfig | None = None,
+    cloud_config: CloudConfig | None = None,
 ) -> str | None:
     """Render cloud-config custom data with Azure-specific boot commands"""
     # START_BLOCK_RENDER_CUSTOM_DATA
@@ -204,15 +206,15 @@ def _render_custom_data(
             "systemctl mask waagent-apt.service",
         ]
         custom_data = replace(
-            cloud_config, bootcmd=[*my_boot_cmds, *cloud_config.bootcmd]
-        ).render_base64()  # type: ignore[misc]
+            cloud_config, bootcmd=(*my_boot_cmds, *cloud_config.bootcmd)
+        ).render_base64()
     # END_BLOCK_RENDER_CUSTOM_DATA
     return custom_data
 
 
 # START_CONTRACT: create_vm_params
 #   PURPOSE: Build VirtualMachine parameter object with SSH key and cloud-config
-#   INPUTS: { location: str - Azure region, vm_name: str - VM name, vm_image: AzureImageReference - image reference, vm_size: str - VM size, nic: NetworkInterface - network interface, username: str - admin username, ssh_key: SSHKey - SSH key, tags: dict[str,str] - resource tags, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   INPUTS: { location: str - Azure region, vm_name: str - VM name, vm_image: AzureImageReference - image reference, vm_size: str - VM size, nic: NetworkInterface - network interface, username: str - admin username, ssh_key: SSHKey - SSH key, tags: dict[str,str] - resource tags, cloud_config: Optional[CloudConfig] - optional cloud-config (concrete infra/cloud/cloud_config.CloudConfig) }
 #   OUTPUTS: { VirtualMachine - Azure VirtualMachine parameters }
 #   SIDE_EFFECTS: None
 #   LINKS: M-CLOUD-AZ
@@ -226,10 +228,12 @@ def create_vm_params(
     username: str,
     ssh_key: SSHKey,
     tags: dict[str, str],
-    cloud_config: PCloudConfig | None = None,
+    cloud_config: CloudConfig | None = None,
 ) -> VirtualMachine:
     """Create VirtualMachine params"""
-    img_ref = ImageReference.from_dict(asdict(vm_image))  # type: ignore[arg-type]
+    img_ref = ImageReference.from_dict(
+        dataclass_asdict(vm_image)  # type: ignore[arg-type]
+    )
     pub_key = SshPublicKey(
         path=str(PurePosixPath("/home", username, ".ssh/authorized_keys")),
         key_data=ssh_key.export_public_key("openssh").decode("utf-8"),
@@ -265,7 +269,7 @@ def create_vm_params(
 
 # START_CONTRACT: create_node
 #   PURPOSE: Create Azure VM with NIC, private IP, and SSH key (internal)
-#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[CloudConfig] - optional cloud-config (concrete infra/cloud/cloud_config.CloudConfig) }
 #   OUTPUTS: { str - private IP address of created VM }
 #   SIDE_EFFECTS: Creates Azure VM and NIC resources
 #   LINKS: M-CLOUD-AZ, create_nic, create_vm_params
@@ -276,7 +280,7 @@ async def create_node(
     log: logging.Logger,
     cfg: ConfigCloudAzure,
     key: SSHKey,
-    cloud_config: PCloudConfig | None = None,
+    cloud_config: CloudConfig | None = None,
 ) -> str:
     """Create virtual machine with nic"""
     vm_name = get_rnd_name("yascheduler-vm")
@@ -306,7 +310,7 @@ async def create_node(
 
 # START_CONTRACT: az_create_node
 #   PURPOSE: Create Azure VM with NIC (public entry point for adapter)
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config (public signature stays PCloudConfig for CreateNodeCallable assignability; narrowed to concrete CloudConfig at the boundary) }
 #   OUTPUTS: { str - IP address of created VM }
 #   SIDE_EFFECTS: Creates Azure VM, NIC, and credentials; acquires cloud resources
 #   LINKS: M-CLOUD-AZ, create_node
@@ -321,6 +325,15 @@ async def az_create_node(
     if not _AZURE_AVAILABLE:
         raise ImportError(
             "Azure SDK not installed. Install azure-identity and azure-mgmt-* packages."
+        )
+    # Boundary guard: narrow the public PCloudConfig-typed parameter to the
+    # concrete infra CloudConfig that create_node/_render_custom_data expect.
+    # Azure never sees a non-CloudConfig PCloudConfig impl in this codebase;
+    # the guard is defense-in-depth (rejects a foreign impl with a clear error).
+    if cloud_config is not None and not isinstance(cloud_config, CloudConfig):
+        raise TypeError(
+            f"az_create_node expects infra CloudConfig, got "
+            f"{type(cloud_config).__name__}"
         )
     async with ClientSecretCredential(
         cfg.tenant_id, cfg.client_id, cfg.client_secret

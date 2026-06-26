@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Generic
 if TYPE_CHECKING:
     import logging
 
-    from yascheduler.config import ConfigCloud
+    from .cloud_configs import ConfigCloud
 
 from .protocols import (
     CreateNodeCallable,

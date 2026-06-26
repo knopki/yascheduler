@@ -1,10 +1,10 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.13.0
+# VERSION: 1.14.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
-#   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext, Engine value objects; Task, Node, ConnectedMachine entities.
-#   DEPENDS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
-#   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
+#   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; Task, Node, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
+#   DEPENDS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
+#   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,15 +13,17 @@
 #   ProcessResult - Exit code and captured output from remote execution
 #   TaskContext - Typed task metadata with arbitrary extras; .replace() typed copy-with
 #   TaskContextOverrides - TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra
-#   Engine - Calculation engine specification with platform support
 #   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
+#   Engine - Calculation engine value object (re-exported from M-DOMAIN-ENGINE; see domain/engine.py)
+#   EngineRepository - Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)
+#   LocalFilesDeploy / LocalArchiveDeploy / RemoteArchiveDeploy / Deploy - Deploy strategies (re-exported from M-DOMAIN-ENGINE)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.13.0 - Remove ProviderSelection value object; CloudProvisioner.select_provider now returns str|None (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v1.12.0 - Add TaskContext.replace typed copy-with + TaskContextOverrides TypedDict (task-context-replace).
+#   LAST_CHANGE: v1.15.0 - Add _get_opt_str helper for TaskContext.from_metadata JSONB boundary; route 4 str|None field assignments (remote_folder, local_folder, webhook_url, error) through it (raises TypeError on non-str/non-None); drop 5 # type: ignore[arg-type] (4 routed through helper, 1 dropped as over-cautious on webhook_custom_params) (resolve-type-bridge-debt / D5).
+#   PREVIOUS_CHANGE: v1.14.0 - Relocate Engine, EngineRepository, Deploy* to domain/engine.py (M-DOMAIN-ENGINE); re-export them here for backward compatibility with `from yascheduler.domain.model import Engine` imports. Engine merged from 7-field domain.Engine + 4 fields from config.Engine (deployable, platform_packages, check_cmd_code, sleep_interval); validate_inputs preserved (engine-to-domain-frozen).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,6 +33,14 @@ from dataclasses import asdict, dataclass, field, fields, replace
 from enum import Enum, IntEnum, unique
 from typing import TYPE_CHECKING, TypedDict, TypeVar, overload
 
+from .engine import (
+    Deploy,
+    Engine,
+    EngineRepository,
+    LocalArchiveDeploy,
+    LocalFilesDeploy,
+    RemoteArchiveDeploy,
+)
 from .events import (
     DomainEvent,
     TaskAbandoned,
@@ -41,12 +51,22 @@ from .events import (
 )
 from .exceptions import (
     MachineBusyError,
-    MissingInputFileError,
     TaskAlreadyAllocatedError,
     TaskNotAllocatedError,
     TaskNotRunningError,
     TaskNotTodoError,
 )
+
+# Re-exports from .engine for backward compatibility with
+# `from yascheduler.domain.model import Engine` / EngineRepository / Deploy*.
+__all__ = [
+    "Deploy",
+    "Engine",
+    "EngineRepository",
+    "LocalArchiveDeploy",
+    "LocalFilesDeploy",
+    "RemoteArchiveDeploy",
+]
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -94,6 +114,24 @@ class TaskContextOverrides(TypedDict, total=False):
     extra: dict[str, object]
 
 
+# START_CONTRACT: _get_opt_str
+#   PURPOSE: Narrow a JSONB metadata value to str | None at the deserialization boundary; raise TypeError on any other type.
+#   INPUTS: { metadata: Mapping[str, object] - JSONB flat dict, key: str - the str|None field name }
+#   OUTPUTS: { str | None - the str value, or None if the key is missing/None }
+#   SIDE_EFFECTS: None
+#   RAISES: TypeError - if the value is neither str nor None (upstream JSONB corruption)
+#   LINKS: M-DOMAIN-MODEL
+# END_CONTRACT: _get_opt_str
+def _get_opt_str(metadata: Mapping[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    if value is None or isinstance(value, str):
+        return value
+    raise TypeError(
+        f"TaskContext JSONB field {key!r} expected str or None, "
+        f"got {type(value).__name__}"
+    )
+
+
 @dataclass(frozen=True)
 class TaskContext:
     """Typed task metadata with engine name, paths, webhook, and arbitrary extras."""
@@ -132,11 +170,11 @@ class TaskContext:
         webhook_custom_params = wcp if isinstance(wcp, dict) else {}
         return cls(
             engine=str(metadata.get("engine", "")),
-            remote_folder=metadata.get("remote_folder"),  # type: ignore[arg-type]
-            local_folder=metadata.get("local_folder"),  # type: ignore[arg-type]
-            webhook_url=metadata.get("webhook_url"),  # type: ignore[arg-type]
-            webhook_custom_params=webhook_custom_params,  # type: ignore[arg-type]
-            error=metadata.get("error"),  # type: ignore[arg-type]
+            remote_folder=_get_opt_str(metadata, "remote_folder"),
+            local_folder=_get_opt_str(metadata, "local_folder"),
+            webhook_url=_get_opt_str(metadata, "webhook_url"),
+            webhook_custom_params=webhook_custom_params,
+            error=_get_opt_str(metadata, "error"),
             extra=extra,
         )
 
@@ -150,33 +188,6 @@ class TaskContext:
     def replace(self, **overrides: Unpack[TaskContextOverrides]) -> Self:
         """Return a new TaskContext with the given overrides applied."""
         return replace(self, **overrides)
-
-
-@dataclass(frozen=True)
-class Engine:
-    """Calculation engine specification with spawn command and platform support."""
-
-    name: str
-    spawn: str
-    input_files: tuple[str, ...] = ()
-    output_files: tuple[str, ...] = ()
-    platforms: tuple[str, ...] = ()
-    check_cmd: str | None = None
-    check_pname: str | None = None
-
-    # START_CONTRACT: Engine.validate_inputs
-    #   PURPOSE: Validate that all required input files exist in the task context.
-    #   INPUTS: { ctx: TaskContext - Task metadata containing input file data in ctx.extra }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: None
-    #   RAISES: MissingInputFileError - if any input_file is missing from ctx.extra
-    #   LINKS: M-DOMAIN-EXCEPTIONS: MissingInputFileError
-    # END_CONTRACT: Engine.validate_inputs
-    def validate_inputs(self, ctx: TaskContext) -> None:
-        """Verify all required engine input files exist in the task context."""
-        for filename in self.input_files:
-            if filename not in ctx.extra:
-                raise MissingInputFileError(self.name, filename)
 
 
 @dataclass(frozen=True)

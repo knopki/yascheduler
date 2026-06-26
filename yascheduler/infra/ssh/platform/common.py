@@ -31,6 +31,7 @@ from asyncssh.process import SSHClientProcess, SSHCompletedProcess
 from .protocol import QuoteCallable
 
 
+# FIXME: froze it?
 @dataclass
 class ProcessInfo:
     pid: int

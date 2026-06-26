@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output.
 #   SCOPE: show_nodes command + argparse + in-memory node-to-task join + table/JSON renderers.
-#   DEPENDS: M-DI, M-CONFIG, M-DOMAIN-MODEL, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
+#   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG, M-DOMAIN-MODEL, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES, M-APPLICATION-UOW
 # END_MODULE_CONTRACT
 #
@@ -33,9 +33,9 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from yascheduler.config import Config
 from yascheduler.domain import TaskStatus
 from yascheduler.entrypoints import make_cli_deps
+from yascheduler.entrypoints.config_parser import parse_config
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -267,7 +267,7 @@ async def _show_nodes_async(argv: list[str] | None) -> None:
             root.addHandler(logging.StreamHandler(sys.stderr))
         # END_BLOCK_CONFIGURE_LOGGER
 
-        config = Config.from_config_parser(args.config)
+        config = parse_config(args.config)
         deps = make_cli_deps(config)
         # START_BLOCK_ORCHESTRATE
         async with deps.uow_factory() as uow:

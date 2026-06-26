@@ -33,9 +33,9 @@ import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+from yascheduler.domain import Engine
 from yascheduler.domain.model import ConnectedMachine, MachineState
 from yascheduler.infra.ssh.gateway import SSHMachineGateway
-from yascheduler.infra.ssh.platform.protocol import PEngine
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -297,8 +297,8 @@ def _make_pengine(
     check_cmd_code: int = 0,
     sleep_interval: int = 1,
 ) -> MagicMock:
-    """Create a PEngine-like mock for occupancy checks."""
-    engine = MagicMock(spec=PEngine)
+    """Create an Engine-like mock for occupancy checks."""
+    engine = MagicMock(spec=Engine)
     engine.name = "test_engine"
     engine.check_pname = check_pname
     engine.check_cmd = check_cmd

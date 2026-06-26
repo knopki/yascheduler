@@ -30,7 +30,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from yascheduler.config import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.model import Node, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
@@ -46,8 +46,7 @@ pytestmark = pytest.mark.unit
 
 def make_mock_config() -> MagicMock:
     """Return a MagicMock Config with a known g09 engine and remote.username='root'."""
-    engine = MagicMock(spec=Engine)
-    engine.name = "g09"
+    engine = Engine(name="g09", spawn="run.sh")
 
     engines = MagicMock(spec=EngineRepository)
     engines.get = MagicMock(return_value=engine)
@@ -57,7 +56,6 @@ def make_mock_config() -> MagicMock:
     config.clouds = []
     config.remote.username = "root"
     config.remote.engines_dir = PurePosixPath("/opt/engines")
-    config.local.get_private_keys = MagicMock(return_value=[])
     config.db = MagicMock()
     return config
 
@@ -100,9 +98,7 @@ def stub_env(
     uow = make_mock_uow()
     deps = make_mock_deps(config, uow)
     gateway = make_mock_gateway()
-    monkeypatch.setattr(
-        manage_node_mod.Config, "from_config_parser", MagicMock(return_value=config)
-    )
+    monkeypatch.setattr(manage_node_mod, "parse_config", MagicMock(return_value=config))
     monkeypatch.setattr(manage_node_mod, "make_cli_deps", MagicMock(return_value=deps))
     monkeypatch.setattr(
         manage_node_mod, "SSHMachineGateway", MagicMock(return_value=gateway)
@@ -644,8 +640,8 @@ class TestManageNodeExitCodesAndChannels:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(
-            manage_node_mod.Config,
-            "from_config_parser",
+            manage_node_mod,
+            "parse_config",
             MagicMock(side_effect=RuntimeError("bad config")),
         )
 
@@ -751,9 +747,7 @@ class TestManageNodeConfigLogLevel:
         custom_conf = tmp_path / "custom.conf"
         custom_conf.write_text("[local]")
         from_config_spy = MagicMock(return_value=make_mock_config())
-        monkeypatch.setattr(
-            manage_node_mod.Config, "from_config_parser", from_config_spy
-        )
+        monkeypatch.setattr(manage_node_mod, "parse_config", from_config_spy)
         uow = make_mock_uow()
         uow.nodes.get = AsyncMock(return_value=None)
         monkeypatch.setattr(
@@ -779,9 +773,7 @@ class TestManageNodeConfigLogLevel:
         _config, uow, _deps, _gateway = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
         from_config_spy = MagicMock(return_value=make_mock_config())
-        monkeypatch.setattr(
-            manage_node_mod.Config, "from_config_parser", from_config_spy
-        )
+        monkeypatch.setattr(manage_node_mod, "parse_config", from_config_spy)
         _run(["10.0.0.1"])
         assert str(from_config_spy.call_args.args[0]) == str(CONFIG_FILE)
 

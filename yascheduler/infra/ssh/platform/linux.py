@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/infra/ssh/platform/linux.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Linux-specific remote commands: package install, process listing, CPU detection.
 #   SCOPE: Linux setup_node, get_cpu_cores, list_processes, pgrep implementations.
-#   DEPENDS: M-CONFIG-ENGINE, M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON
-#   LINKS: M-PLATFORM-ADAPTERS, M-CONFIG-ENGINE
+#   DEPENDS: M-DOMAIN-ENGINE, M-PLATFORM-PROTOCOL, M-PLATFORM-COMMON
+#   LINKS: M-PLATFORM-ADAPTERS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial GRACE-lite markup.
+#   LAST_CHANGE: v1.1.0 - Switch Deploy* import from yascheduler.config to yascheduler.domain; replace PEngineRepository type hints with EngineRepository from yascheduler.domain (engine-to-domain-frozen).
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 import logging
@@ -37,10 +37,15 @@ from typing import Optional, Union
 from asyncssh.connection import SSHClientConnection
 from asyncssh.sftp import SFTPClient
 
-from yascheduler.config import LocalArchiveDeploy, LocalFilesDeploy, RemoteArchiveDeploy
+from yascheduler.domain import (
+    EngineRepository,
+    LocalArchiveDeploy,
+    LocalFilesDeploy,
+    RemoteArchiveDeploy,
+)
 
 from .common import ProcessInfo
-from .protocol import OuterRunCallable, PEngineRepository, PProcessInfo, QuoteCallable
+from .protocol import OuterRunCallable, PProcessInfo, QuoteCallable
 
 
 # START_CONTRACT: linux_get_cpu_cores
@@ -238,7 +243,7 @@ async def deploy_remote_archive(
 
 # START_CONTRACT: linux_deploy_engines
 #   PURPOSE: Deploy all engines for a node by iterating engine repository and dispatching deploy strategies
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: PEngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates engine directories, uploads files/archives, downloads remote archives
 #   LINKS: M-REMOTE-LINUX
@@ -247,7 +252,7 @@ async def linux_deploy_engines(
     run: OuterRunCallable,
     quote: QuoteCallable,
     sftp: SFTPClient,
-    engines: PEngineRepository,
+    engines: EngineRepository,
     engines_dir: PurePath,
     log: Optional[logging.Logger] = None,
 ) -> None:
@@ -295,7 +300,7 @@ async def log_mpi_version(
 
 # START_CONTRACT: linux_setup_node
 #   PURPOSE: Setup generic Linux node by deploying engines via SFTP
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { engines: PEngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates SFTP client, deploys all engines
 #   LINKS: M-REMOTE-LINUX
@@ -304,7 +309,7 @@ async def linux_setup_node(
     conn: SSHClientConnection,
     run: OuterRunCallable,
     quote: QuoteCallable,
-    engines: PEngineRepository,
+    engines: EngineRepository,
     engines_dir: PurePath,
     log: Optional[logging.Logger] = None,
 ) -> None:
@@ -315,7 +320,7 @@ async def linux_setup_node(
 
 # START_CONTRACT: linux_setup_deb_node
 #   PURPOSE: Setup Debian-like node with apt package installation and engine deployment
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { engines: PEngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Runs apt update/upgrade/install, logs MPI version, deploys engines via SFTP
 #   LINKS: M-REMOTE-LINUX
@@ -324,7 +329,7 @@ async def linux_setup_deb_node(
     conn: SSHClientConnection,
     run: OuterRunCallable,
     quote: QuoteCallable,
-    engines: PEngineRepository,
+    engines: EngineRepository,
     engines_dir: PurePath,
     log: Optional[logging.Logger] = None,
 ) -> None:

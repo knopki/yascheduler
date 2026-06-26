@@ -1,9 +1,9 @@
 # FILE: yascheduler/infra/ssh/gateway.py
-# VERSION: 1.4.2
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH machine gateway implementing MachineGateway protocol via asyncssh.
 #   SCOPE: SSHMachineGateway class with connection lifecycle, command execution, SFTP, occupancy monitoring, output download.
-#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL
+#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL
 #   LINKS: M-SSH-GATEWAY
 # END_MODULE_CONTRACT
 #
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.2 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.4.1 - Split occupancy_check into _occupancy_by_pgrep and _occupancy_by_cmd branch helpers; drop misleading count from PGREP_FREE log (was always 0 due to early return on first match).
+#   LAST_CHANGE: v1.5.0 - Retype _exec_spawn_command, start_task_on_machine, occupancy_check, start_occupancy_check to Engine; runtime-import Engine instead of TaskExecutionEngine, drop OccupancyConfig TYPE_CHECKING import (resolve-engine-protocol-debt). The concrete Engine dataclass carries every field the SSH gateway reads.
+#   PREVIOUS_CHANGE: v1.4.3 - Switch PEngineRepository type hint to EngineRepository imported from yascheduler.domain (TYPE_CHECKING). The setup_node engines parameter is now typed against the domain EngineRepository (engine-to-domain-frozen).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -45,10 +45,10 @@ from asyncssh.sftp import SFTPError
 
 from yascheduler.domain import (
     ConnectedMachine,
+    Engine,
     MachineState,
     ProcessResult,
     Task,
-    TaskExecutionEngine,
 )
 from yascheduler.domain.exceptions import MachineConnectionError
 
@@ -69,11 +69,10 @@ if TYPE_CHECKING:
     from asyncssh.process import SSHCompletedProcess
     from asyncssh.sftp import SFTPClient
 
-    from yascheduler.domain import OccupancyConfig
+    from yascheduler.domain import EngineRepository
 
     from .platform import (
         OuterRunCallable,
-        PEngineRepository,
         PProcessInfo,
         QuoteCallable,
         RemoteMachineAdapter,
@@ -539,7 +538,7 @@ class SSHMachineGateway:
     async def _exec_spawn_command(
         self,
         machine: ConnectedMachine,
-        engine: TaskExecutionEngine,
+        engine: Engine,
         task: Task,
         task_dir: PurePath,
         eng_path: PurePath,
@@ -562,7 +561,7 @@ class SSHMachineGateway:
     #   PURPOSE: Upload task inputs and spawn calculation process on remote machine.
     #   INPUTS: {
     #     machine: ConnectedMachine - Target machine,
-    #     engine: TaskExecutionEngine - Engine metadata (spawn template, input files),
+    #     engine: Engine - Engine metadata (spawn template, input files),
     #     task: Task - Task being deployed,
     #     ncpus: int - CPU cores for spawn command formatting,
     #     engines_dir: PurePath - Remote engines directory for engine path resolution
@@ -574,7 +573,7 @@ class SSHMachineGateway:
     async def start_task_on_machine(
         self,
         machine: ConnectedMachine,
-        engine: TaskExecutionEngine,
+        engine: Engine,
         task: Task,
         ncpus: int,
         engines_dir: PurePath,
@@ -740,10 +739,10 @@ class SSHMachineGateway:
     #   PURPOSE: Check if engine process is still running via pgrep or check_cmd.
     #     Returns True (busy) when process found OR when SSH fails (safe default).
     #     Returns False (free) only when check succeeds and finds no process.
-    #   INPUTS: { ip: str, config: OccupancyConfig - engine metadata for checks }
+    #   INPUTS: { ip: str, config: Engine - engine metadata for checks }
     #   LINKS: M-SSH-GATEWAY
     # END_CONTRACT: SSHMachineGateway.occupancy_check
-    async def occupancy_check(self, ip: str, config: OccupancyConfig) -> bool:
+    async def occupancy_check(self, ip: str, config: Engine) -> bool:
         """Check if engine process is still running.
 
         Returns True (busy) when the engine process is found OR when the SSH
@@ -764,11 +763,11 @@ class SSHMachineGateway:
 
     # START_CONTRACT: SSHMachineGateway.start_occupancy_check
     #   PURPOSE: Background task periodically checks occupancy, releases machine when done.
-    #   INPUTS: { ip: str, config: OccupancyConfig - engine metadata for occupancy checks }
+    #   INPUTS: { ip: str, config: Engine - engine metadata for occupancy checks }
     #   SIDE_EFFECTS: Creates asyncio task
     #   LINKS: M-SSH-GATEWAY
     # END_CONTRACT: SSHMachineGateway.start_occupancy_check
-    def start_occupancy_check(self, ip: str, config: OccupancyConfig) -> None:
+    def start_occupancy_check(self, ip: str, config: Engine) -> None:
         """Start background occupancy monitoring.
 
         Occupies the ConnectedMachine at the gateway level so that
@@ -816,7 +815,7 @@ class SSHMachineGateway:
     #   SIDE_EFFECTS: Installs software
     #   LINKS: M-SSH-GATEWAY
     # END_CONTRACT: SSHMachineGateway.setup_node
-    async def setup_node(self, ip: str, engines: PEngineRepository) -> None:
+    async def setup_node(self, ip: str, engines: EngineRepository) -> None:
         """Install engine dependencies on remote node."""
         state = self._machines[ip]
         self._log.info("CPUs count: %s", state.machine.ncpus)

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.3.0
+# VERSION: 2.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - Add canary test_cloud_config_render_serializes guarding CloudConfig.render() JSON output across the attrs→dataclass migration (migrate-cloud-from-attrs).
-#   PREVIOUS_CHANGE: v2.2.0 - select_provider returns provider name string (str|None); drop ProviderSelection import + isinstance/name/username assertions (collapse-provider-selection).
+#   LAST_CHANGE: v2.4.0 - Note that test_cloud_config_render_serializes is now complemented by the package-wide test_no_attrs_dependency canary (drop-attrs-dependency / P5); no longer the sole guard.
+#   PREVIOUS_CHANGE: v2.3.0 - Add canary test_cloud_config_render_serializes guarding CloudConfig.render() JSON output across the attrs→dataclass migration (migrate-cloud-from-attrs).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -164,18 +164,21 @@ def mock_engines() -> MagicMock:
 
 @pytest.fixture
 def mock_local_config() -> MagicMock:
-    """Create mock ConfigLocal with fake keys_dir."""
+    """Create mock LocalSettings with fake keys_dir.
+
+    list_private_keys(cfg.keys_dir) calls keys_dir.iterdir() and filters
+    is_file(); mock_keys_dir.iterdir returns [] so the result is an empty list.
+    """
     cfg = MagicMock()
     mock_keys_dir = MagicMock(spec=Path)
     mock_keys_dir.iterdir.return_value = []
     cfg.keys_dir = mock_keys_dir
-    cfg.get_private_keys.return_value = []
     return cfg
 
 
 @pytest.fixture
 def mock_remote_config() -> MagicMock:
-    """Create mock ConfigRemote."""
+    """Create mock RemoteDefaults."""
     cfg = MagicMock()
     cfg.data_dir = PurePath("./data")
     cfg.engines_dir = PurePath("./data/engines")

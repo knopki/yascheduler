@@ -63,7 +63,7 @@ class TestCLIFunctions:
 
         mod_source = inspect.getsource(init_mod)
         assert "apply_schema" in mod_source, "init module must reference apply_schema"
-        assert "Config.from_config_parser" in mod_source, (
+        assert "parse_config" in mod_source, (
             "init module must reference Config.from_config_parser"
         )
 

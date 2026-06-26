@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/cloud_config.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudConfig class — renders cloud-init user-data format.
@@ -13,9 +13,10 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Migrate CloudConfig from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); render() now uses dataclasses.asdict (migrate-cloud-from-attrs).
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - attrs is no longer a direct dependency of yascheduler (drop-attrs-dependency).
+#   PREVIOUS_CHANGE: v1.1.0 - Migrate CloudConfig from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); render() now uses dataclasses.asdict (migrate-cloud-from-attrs).
 # END_CHANGE_SUMMARY
+# FIXME: very bad naming of module and class (we already have cloud configs)
 
 """Cloud config module"""
 

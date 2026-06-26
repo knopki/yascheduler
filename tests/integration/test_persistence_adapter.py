@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
 #   SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-UOW, M-CONFIG-DB
+#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-UOW, M-INFRA-DB-CONFIG
 #   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-UOW
 # END_MODULE_CONTRACT
 #
@@ -37,7 +37,6 @@ import pg8000.native
 import pytest
 
 from yascheduler.application.message_bus import MessageBus
-from yascheduler.config import ConfigDb
 from yascheduler.domain.model import (
     Node,
     Task,
@@ -46,6 +45,7 @@ from yascheduler.domain.model import (
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
 )
+from yascheduler.infra.persistence import PostgresDbConfig
 from yascheduler.infra.persistence.postgres import (
     PostgresNodeRepository,
     PostgresTaskRepository,
@@ -420,15 +420,17 @@ async def test_repo_node_get_by_ips(
 
 # START_CONTRACT: test_uow_integration
 #   PURPOSE: Verify UoW creates repos and allows commit.
-#   INPUTS: { _db_config: ConfigDb - session database config, _init_schema: None - schema initialized }
+#   INPUTS: { _db_config: PostgresDbConfig - session database config, _init_schema: None - schema initialized }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: Creates and closes pg8000 connections; commits a node insert.
 #   LINKS: PostgresUnitOfWork
 # END_CONTRACT: test_uow_integration
-async def test_uow_integration(_db_config: ConfigDb, _init_schema: None) -> None:
+async def test_uow_integration(
+    _db_config: PostgresDbConfig, _init_schema: None
+) -> None:
     """UoW creates repos from config, commit persists, exit closes."""
 
-    config: ConfigDb = _db_config
+    config: PostgresDbConfig = _db_config
 
     async with PostgresUnitOfWork(config, MessageBus()) as uow:
         assert uow.tasks is not None
@@ -447,17 +449,17 @@ async def test_uow_integration(_db_config: ConfigDb, _init_schema: None) -> None
 
 # START_CONTRACT: test_uow_rollback_integration
 #   PURPOSE: Verify rollback on exception discards uncommitted changes.
-#   INPUTS: { _db_config: ConfigDb - session database config, _init_schema: None - schema initialized }
+#   INPUTS: { _db_config: PostgresDbConfig - session database config, _init_schema: None - schema initialized }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: Creates and closes pg8000 connections; rolls back on exception.
 #   LINKS: PostgresUnitOfWork
 # END_CONTRACT: test_uow_rollback_integration
 async def test_uow_rollback_integration(
-    _db_config: ConfigDb, _init_schema: None
+    _db_config: PostgresDbConfig, _init_schema: None
 ) -> None:
     """Uncommitted changes are lost on rollback."""
 
-    config: ConfigDb = _db_config
+    config: PostgresDbConfig = _db_config
 
     with pytest.raises(ValueError):
         async with PostgresUnitOfWork(config, MessageBus()) as uow:

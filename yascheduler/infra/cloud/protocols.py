@@ -1,11 +1,11 @@
 # FILE: yascheduler/infra/cloud/protocols.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Protocol definitions for cloud config, node creation, deletion callables.
 #   SCOPE: PCloudConfig, CreateNodeCallable, DeleteNodeCallable, SupportedPlatformChecker, CloudCapacity, TypeVars.
-#   DEPENDS: M-CONFIG-CLOUD
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS
+#   DEPENDS: M-CLOUD-CONFIGS
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-CONFIGS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Migrate CloudCapacity from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); remove stale `from attr import define` typo import (migrate-cloud-from-attrs).
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - Import ConfigCloud from .cloud_configs (intra-package) instead of yascheduler.config (cloud-configs-to-infra-registry); removes the only runtime `infra -> yascheduler.config` edge in the cloud subpackage, shrinking the outside-layer-set exemption surface by one edge.
+#   PREVIOUS_CHANGE: v1.1.0 - Migrate CloudCapacity from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); remove stale `from attr import define` typo import (migrate-cloud-from-attrs).
 # END_CHANGE_SUMMARY
 
 """Cloud protocols"""
@@ -34,7 +34,7 @@ from typing import Optional, Protocol, TypeVar, Union
 
 from asyncssh.public_key import SSHKey
 
-from yascheduler.config import ConfigCloud
+from .cloud_configs import ConfigCloud
 
 SupportedPlatformChecker = Callable[[str], bool]
 
@@ -45,6 +45,7 @@ TConfigCloud_contra = TypeVar(
 )
 
 
+# FIXME: is this really needed? how many consumers?
 class PCloudConfig(Protocol):
     "Cloud config init protocol"
 
@@ -89,6 +90,7 @@ class DeleteNodeCallable(Protocol[TConfigCloud_contra]):
         raise NotImplementedError
 
 
+# FIXME: dead code?
 @dataclass(frozen=True)
 class CloudCapacity:
     "Cloud capacity object"

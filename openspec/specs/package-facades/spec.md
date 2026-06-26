@@ -62,35 +62,6 @@ layer in the project. Both direct and indirect imports are checked.
 - **WHEN** `yascheduler.entrypoints.di` imports `PostgresUnitOfWork`, `SSHMachineGateway`, `CloudProvisionerImpl`, `resolve_adapter`, and `webhook_handler` from `yascheduler.infra`
 - **THEN** the `layers` contract reports no violation (composition root is a resident of `yascheduler.entrypoints` and its imports flow in the layer direction)
 
-### Requirement: Shared kernel config-import prohibition
-
-The system SHALL enforce, via an `import-linter` `forbidden` contract
-configured in `pyproject.toml`, that no module in `yascheduler.shared`
-imports from `yascheduler.config`. This prevents an import cycle:
-`yascheduler.config` already imports `yascheduler.shared.Self` (in
-`config/{cloud,remote,engine_repository}.py`), so a reverse edge
-`yascheduler.shared → yascheduler.config` would close a cycle.
-
-The `forbidden` contract SHALL be configured with:
-- `name = "Shared kernel has no config imports"`
-- `type = "forbidden"`
-- `source_modules = ["yascheduler.shared"]`
-- `forbidden_modules = ["yascheduler.config"]`
-
-Other outside-layer-set modules (`yascheduler.data`, `yascheduler.client`)
-are NOT in `forbidden_modules`. The practical risk of `yascheduler.shared`
-importing an entry point or a compat shim is negligible; only
-`yascheduler.config` creates a real cycle risk because it is a peer
-utility module that already depends on `yascheduler.shared`.
-
-#### Scenario: yascheduler.shared imports from yascheduler.config — violation
-- **WHEN** a module in `yascheduler.shared` imports a symbol from `yascheduler.config`
-- **THEN** the `forbidden` contract reports a violation
-
-#### Scenario: yascheduler.config imports from yascheduler.shared — allowed
-- **WHEN** a module in `yascheduler.config` imports `Self` from `yascheduler.shared`
-- **THEN** no contract reports a violation (the `layers` contract does not cover `config` since it is outside-layer-set; the `forbidden` contract is directional and only blocks the reverse edge)
-
 ### Requirement: Within-package relative imports (R1)
 
 Modules within the same package (e.g. `yascheduler.infra.persistence`, `yascheduler.entrypoints.cli`) SHALL use relative imports
@@ -307,9 +278,12 @@ The following modules SHALL be outside the `layers` contract (not
 checked for layer direction by R3) but SHALL still be subject to R2
 (must use facades for cross-package imports):
 
-- `yascheduler.config` — shared infrastructure, may be imported by any layer above `yascheduler.shared` in the `layers` contract. SHALL NOT be imported by `yascheduler.shared` (enforced by the separate `forbidden` contract).
 - `yascheduler.data` — shared infrastructure, may be imported by any layer.
-- `yascheduler.client` — compat shim re-exporting `Yascheduler` from `yascheduler.entrypoints.client`; preserves the deep import path `from yascheduler.client import Yascheduler` for external downstream consumers. Not a composition root (the real client implementation now lives in `yascheduler.entrypoints.client`).
+- `yascheduler.client` — compat shim re-exporting `Yascheduler` from
+  `yascheduler.entrypoints.client`; preserves the deep import path
+  `from yascheduler.client import Yascheduler` for external downstream
+  consumers. Not a composition root (the real client implementation now
+  lives in `yascheduler.entrypoints.client`).
 
 The composition root formerly at `yascheduler.di` (package root) now lives
 at `yascheduler.entrypoints.di` and is therefore inside the
@@ -334,7 +308,11 @@ reject such accretion).
 
 #### Scenario: Outside-set modules not flagged for layer direction
 - **WHEN** the `layers` contract runs
-- **THEN** modules in the outside-set list (`yascheduler.config`, `yascheduler.data`, `yascheduler.client`) are not checked for R3 violations
+- **THEN** modules in the outside-set list (`yascheduler.data`, `yascheduler.client`) are not checked for R3 violations
+
+#### Scenario: yascheduler.config no longer in outside-set
+- **WHEN** the `layers` contract runs
+- **THEN** `yascheduler.config` is not present in the outside-set list (the package is deleted; the exemption is removed)
 
 #### Scenario: Composition root is layer-checked after migration
 - **WHEN** the `layers` contract runs
@@ -368,12 +346,14 @@ configured with:
 - `root_package = "yascheduler"`.
 - `exclude_type_checking_imports = true` (imports inside `if TYPE_CHECKING:` guards are not flagged as R3 violations, since they are type-only references with no runtime dependency).
 - A `layers` contract with the name `Clean architecture layers` and `layers = ["yascheduler.entrypoints", "yascheduler.infra", "yascheduler.application", "yascheduler.domain", "yascheduler.shared"]`.
-- A `forbidden` contract with the name `Shared kernel has no config imports`, `source_modules = ["yascheduler.shared"]`, `forbidden_modules = ["yascheduler.config"]`.
-- Dev dependency pinned as `import-linter >=2.5,<2.6` (the upper bound is required because `import-linter 2.6+` dropped Python 3.9 support, and the project pins `python >=3.9`). Both `layers` and `forbidden` contract types are supported in this version range.
+- Dev dependency pinned as `import-linter >=2.5,<2.6` (the upper bound is required because `import-linter 2.6+` dropped Python 3.9 support, and the project pins `python >=3.9`).
+
+The `forbidden` contract (`Shared kernel has no config imports`) is removed
+— `yascheduler.config` no longer exists, so the contract is vacuous.
 
 #### Scenario: pyproject.toml contains required keys
 - **WHEN** `pyproject.toml` is parsed
-- **THEN** the `[tool.importlinter]` section contains `root_package`, `exclude_type_checking_imports`, one `[[tool.importlinter.contracts]]` entry of type `layers` with `yascheduler.entrypoints` as the 1st layer and `yascheduler.shared` as the 5th layer, and one `[[tool.importlinter.contracts]]` entry of type `forbidden` with `source_modules = ["yascheduler.shared"]` and `forbidden_modules = ["yascheduler.config"]`
+- **THEN** the `[tool.importlinter]` section contains `root_package`, `exclude_type_checking_imports`, and one `[[tool.importlinter.contracts]]` entry of type `layers` with `yascheduler.entrypoints` as the 1st layer and `yascheduler.shared` as the 5th layer; no `forbidden` contract entry exists
 
 #### Scenario: TYPE_CHECKING imports not flagged
 - **WHEN** a module in `yascheduler.application` contains an import under `if TYPE_CHECKING:` that references a symbol in `yascheduler.infra`
@@ -385,7 +365,7 @@ configured with:
 
 #### Scenario: import-linter version compatible with Python 3.9
 - **WHEN** the dev environment installs with `python >=3.9`
-- **THEN** `import-linter >=2.5,<2.6` is installed and `lint-imports` runs without Python-version errors, and both `layers` and `forbidden` contract types are recognized
+- **THEN** `import-linter >=2.5,<2.6` is installed and `lint-imports` runs without Python-version errors, and the `layers` contract type is recognized
 
 ### Requirement: Documented residual edges
 
@@ -426,6 +406,7 @@ categories of symbols as the public surface of the domain layer:
 
 - **Events** (already exported today; no regression): `DomainEvent`, `Event`, `TaskAbandoned`, `TaskAllocated`, `TaskCompleted`, `TaskCreated`, `TaskFailed`.
 - **Model**: `Task` and related domain entities defined in `yascheduler.domain.model`.
+- **Engine types**: `Engine`, `EngineRepository`, `LocalFilesDeploy`, `LocalArchiveDeploy`, `RemoteArchiveDeploy`, `Deploy` from `yascheduler.domain.engine` (re-exported via `yascheduler.domain.model`).
 - **Exceptions**: the existing `DomainError` tree from `yascheduler.domain.exceptions` (no new symbols added by this change).
 - **Ports**: `TaskRepository`, `NodeRepository`, `MachineGateway`, `CloudProvisioner` Protocols from `yascheduler.domain.ports`.
 
@@ -433,13 +414,13 @@ categories of symbols as the public surface of the domain layer:
 - **WHEN** a consumer imports `from yascheduler.domain import Task, TaskCreated, DomainError, TaskRepository, NodeRepository, MachineGateway, CloudProvisioner`
 - **THEN** all symbols resolve without ImportError
 
+#### Scenario: Domain facade exposes Engine types
+- **WHEN** a consumer imports `from yascheduler.domain import Engine, EngineRepository, Deploy, LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy`
+- **THEN** all six symbols resolve without ImportError
+
 #### Scenario: Domain exception tree unchanged
 - **WHEN** the existing `DomainError` tree in `yascheduler/domain/exceptions.py` is inspected after the change
 - **THEN** no new exception classes are added by this change (existing hierarchy preserved)
-
-#### Scenario: Events regression check
-- **WHEN** a consumer imports the events previously available via `yascheduler.domain.__init__`
-- **THEN** all event symbols still resolve
 
 ### Requirement: Extended facade contents (lazy publication driven by consumers)
 
@@ -465,17 +446,46 @@ enforcement demands the facade form.
   - `webhook_handler` from `.webhook` (consumed by the composition root via the `adapters` layer facade).
 - **`yascheduler/infra/cloud/__init__.py`** SHALL re-export:
   - `get_rnd_name` from `.utils` (consumed within the `cloud` subpackage by `providers/*`).
-  - (Existing re-exports `CloudProvisionerImpl`, `CloudAdapter`, `PCloudConfig`, `get_key_name`, etc. preserved.)
+  - `ConfigCloud`, `ConfigCloudAzure`, `ConfigCloudHetzner`, `ConfigCloudUpcloud`,
+    `ConfigCloudVastAI`, `AzureImageReference` from `.cloud_configs`
+    (cloud-configs-to-infra-registry: the cloud config DTOs relocated from
+    `yascheduler.config.cloud`; consumed by provider modules under
+    `TYPE_CHECKING`, by `infra/cloud/protocols.py` at runtime, and by the
+    composition root).
+  - (Existing re-exports `CloudProvisionerImpl`, `CloudAdapter`, `PCloudConfig`,
+    `get_key_name`, `resolve_adapter`, etc. preserved.)
 - **`yascheduler/infra/persistence/__init__.py`** SHALL re-export:
   - `apply_schema` from `.postgres_schema` (consumed by `adapters.cli.init` via the `adapters` layer facade).
   - `PostgresUnitOfWork` from `.postgres_uow` (consumed by the composition root `yascheduler.entrypoints.di` via the `adapters` layer facade).
   - (Preserved existing `load_query` and `UnitOfWorkNotInitializedError`.)
 - **`yascheduler/config/__init__.py`** SHALL re-export:
-  - `AzureImageReference` from `.cloud` (consumed by `adapters.cloud.providers.az` under `TYPE_CHECKING`).
+  - `Config` from `.config` (consumed by daemon/CLI entry points until P4).
+  - `ConfigDb` from `.db` (consumed by `infra/persistence/*` until P4).
+  - `ConfigLocal` from `.local` (consumed by orchestrator/cloud manager until P4).
+  - `ConfigRemote` from `.remote` (consumed by orchestrator/cloud manager until P4).
+  - `AzureImageReference` SHALL NO LONGER be re-exported from `yascheduler.config`
+    (cloud-configs-to-infra-registry: the symbol moved to
+    `yascheduler.infra.cloud`; the canonical import is
+    `from yascheduler.infra.cloud import AzureImageReference`).
+  - `ConfigCloud`, `ConfigCloudAzure`, `ConfigCloudHetzner`, `ConfigCloudUpcloud`,
+    `ConfigCloudVastAI` SHALL NO LONGER be re-exported from `yascheduler.config`
+    (cloud-configs-to-infra-registry: the symbols moved to
+    `yascheduler.infra.cloud`; the canonical import is
+    `from yascheduler.infra.cloud import ...`).
+
+`yascheduler/config/__init__.py` SHALL NOT re-export `Engine`,
+`EngineRepository`, `Deploy`, `LocalFilesDeploy`, `LocalArchiveDeploy`, or
+`RemoteArchiveDeploy` — these symbols move to `yascheduler.domain` in the
+`engine-to-domain-frozen` change. The physical files
+`yascheduler/config/engine.py` and `yascheduler/config/engine_repository.py`
+SHALL NOT exist after this change; engine domain types live in
+`yascheduler/domain/engine.py` and are re-exported via
+`yascheduler.domain.model` and `yascheduler.domain`.
 
 The re-exports enumerated here are the complete set required to make
 every pre-existing cross-package import R2-compliant, including
-composition-root (`yascheduler.entrypoints.di`) wiring.
+composition-root (`yascheduler.entrypoints.di`) wiring. (Engine types are
+now R2-compliant via `yascheduler.domain`, not `yascheduler.config`.)
 
 #### Scenario: Adapters layer facade exposes the cross-layer surface
 - **WHEN** a consumer imports `from yascheduler.infra import SSHMachineGateway, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
@@ -493,13 +503,27 @@ composition-root (`yascheduler.entrypoints.di`) wiring.
 - **WHEN** a consumer imports `from yascheduler.infra.cloud import get_rnd_name`
 - **THEN** the symbol resolves without ImportError
 
+#### Scenario: Cloud subpackage facade exposes cloud config DTOs
+- **WHEN** a consumer imports `from yascheduler.infra.cloud import ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference`
+- **THEN** all six symbols resolve without ImportError (the DTOs were relocated from
+  `yascheduler.config.cloud`; the cloud subpackage facade is now the canonical path)
+
 #### Scenario: Persistence subpackage facade exposes apply_schema and PostgresUnitOfWork
 - **WHEN** a consumer imports `from yascheduler.infra.persistence import apply_schema, PostgresUnitOfWork`
 - **THEN** both symbols resolve without ImportError
 
-#### Scenario: Config facade exposes AzureImageReference
-- **WHEN** a consumer imports `from yascheduler.config import AzureImageReference`
-- **THEN** the symbol resolves without ImportError
+#### Scenario: Config facade no longer re-exports cloud config DTOs
+- **WHEN** a consumer imports `from yascheduler.config import ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference`
+- **THEN** ImportError is raised (the symbols moved to `yascheduler.infra.cloud`; the
+  canonical import path is `from yascheduler.infra.cloud import ...`)
+
+#### Scenario: Config facade no longer exposes Engine types
+- **WHEN** a consumer attempts `from yascheduler.config import Engine, EngineRepository, Deploy, LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy`
+- **THEN** `ImportError` is raised (the symbols are re-exported by `yascheduler.domain`, not `yascheduler.config`)
+
+#### Scenario: Config engine modules removed
+- **WHEN** the `yascheduler/config/` directory is inspected for `engine.py` and `engine_repository.py`
+- **THEN** neither file exists; the engine domain types live in `yascheduler/domain/engine.py`
 
 ### Requirement: Documented private-symbol carve-outs
 

@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 5.6.0
+# VERSION: 6.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper.
-#   DEPENDS: M-APPLICATION-UOW, M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-CONFIG, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.6.0 - Inline asleep_until from yascheduler.shared.async_utils as _asleep_until; drop yascheduler.shared dependency (prune-shared-kernel).
-#   PREVIOUS_CHANGE: v5.5.0 - Record TaskAbandoned via task.with_event factory (task-with-event).
+#   LAST_CHANGE: v6.1.0 - Retype _start_task_on_machine to Engine; remove cast("OccupancyConfig") bridging call and the unused cast import (resolve-engine-protocol-debt). MachineGateway.start_occupancy_check now accepts the concrete Engine directly.
+#   PREVIOUS_CHANGE: v6.0.0 - Drop config: Config from __init__; accept local_settings: LocalSettings and remote_defaults: RemoteDefaults from yascheduler.domain (config-aggregate-to-entrypoints / P4); self._config replaced with self._local_settings / self._remote_defaults; self._config.clouds iteration collapsed into self._config_clouds; application no longer imports yascheduler.config.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from yascheduler.domain import (
     Node,
     Task,
     TaskAbandoned,
-    TaskExecutionEngine,
     TaskStatus,
 )
 
@@ -47,11 +46,17 @@ from .queue import UMessage, UniqueQueue
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Sequence
-    from pathlib import Path
+    from pathlib import Path, PurePath
 
     import aiohttp
 
-    from yascheduler.config import Config, ConfigCloud, EngineRepository
+    from yascheduler.domain import (
+        CloudConfig,
+        Engine,
+        EngineRepository,
+        LocalSettings,
+        RemoteDefaults,
+    )
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
@@ -74,7 +79,7 @@ async def _asleep_until(end: datetime) -> None:
 
 # START_CONTRACT: Orchestrator
 #   PURPOSE: Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases.
-#   INPUTS: { config, uow_factory, clouds, gateway, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock }
+#   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, gateway, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock }
 #   OUTPUTS: { Orchestrator instance }
 #   SIDE_EFFECTS: Creates queues, cancellation event.
 #   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
@@ -82,27 +87,30 @@ async def _asleep_until(end: datetime) -> None:
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { config: Config, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisioner, gateway: MachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[ConfigCloud], local_tasks_dir: Path, allocation_tracker: AllocationTracker, active_clouds: Sequence[ConfigCloud], allocation_lock: asyncio.Lock }
+    #   INPUTS: { local_settings: LocalSettings, remote_defaults: RemoteDefaults, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisioner, gateway: MachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[CloudConfig], local_tasks_dir: Path, allocation_tracker: AllocationTracker, active_clouds: Sequence[CloudConfig], allocation_lock: asyncio.Lock, list_private_keys_fn: Callable[[Path], Sequence[PurePath]], http_session: aiohttp.ClientSession | None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues.
-    #   LINKS: M-CONFIG, M-APPLICATION-UOW, M-QUEUE, M-SSH-GATEWAY
+    #   LINKS: M-APPLICATION-UOW, M-QUEUE, M-SSH-GATEWAY, M-SSH-KEYS
     # END_CONTRACT: Orchestrator.__init__
     def __init__(
         self,
-        config: Config,
+        local_settings: LocalSettings,
+        remote_defaults: RemoteDefaults,
         uow_factory: Callable[[], AbstractUnitOfWork],
         clouds: CloudProvisioner,
         gateway: MachineGateway,
         engines: EngineRepository,
         log: logging.Logger,
-        config_clouds: Sequence[ConfigCloud],
+        config_clouds: Sequence[CloudConfig],
         local_tasks_dir: Path,
         allocation_tracker: AllocationTracker,
-        active_clouds: Sequence[ConfigCloud],
+        active_clouds: Sequence[CloudConfig],
         allocation_lock: asyncio.Lock,
+        list_private_keys_fn: Callable[[Path], Sequence[PurePath]],
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        self._config = config
+        self._local_settings = local_settings
+        self._remote_defaults = remote_defaults
         self._uow_factory = uow_factory
         self._clouds = clouds
         self._gateway = gateway
@@ -114,6 +122,7 @@ class Orchestrator:
         self._tracker = allocation_tracker
         self._active_clouds = active_clouds
         self._allocation_lock = allocation_lock
+        self._list_private_keys_fn = list_private_keys_fn
 
         self._bg_jobs: set[asyncio.Task[None]] = set()
         self._cancellation_event = Event()
@@ -121,7 +130,7 @@ class Orchestrator:
         self._sleep_interval: int = min(e.sleep_interval for e in engines.values())
         self._occupancy_started: set[str] = set()
 
-        lcfg = config.local
+        lcfg = local_settings
         self._conn_machine_q: UniqueQueue[str, Node] = UniqueQueue(
             "conn_machine", maxsize=lcfg.conn_machine_pending
         )
@@ -139,7 +148,7 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._start_task_on_machine
     #   PURPOSE: Thin wrapper — resolve ncpus via UoW, delegate to gateway.start_task_on_machine.
-    #   INPUTS: { machine: ConnectedMachine, engine: TaskExecutionEngine, task: Task }
+    #   INPUTS: { machine: ConnectedMachine, engine: Engine, task: Task }
     #   OUTPUTS: { bool - True on successful spawn }
     #   SIDE_EFFECTS: Reads node from DB, calls gateway.start_task_on_machine.
     #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
@@ -147,7 +156,7 @@ class Orchestrator:
     async def _start_task_on_machine(
         self,
         machine: ConnectedMachine,
-        engine: TaskExecutionEngine,
+        engine: Engine,
         task: Task,
     ) -> bool:
         # START_BLOCK_RESOLVE_NCPUS
@@ -156,7 +165,7 @@ class Orchestrator:
         ncpus = (node and node.ncpus) or await self._gateway.get_cpu_cores(machine.ip)
         # END_BLOCK_RESOLVE_NCPUS
         return await self._gateway.start_task_on_machine(
-            machine, engine, task, ncpus, self._config.remote.engines_dir
+            machine, engine, task, ncpus, self._remote_defaults.engines_dir
         )
 
     # ---- Stats ----
@@ -219,11 +228,11 @@ class Orchestrator:
     async def _connect_machine_consumer(self, msg: UMessage[str, Node]) -> None:
         node = msg.payload
         keys = await asyncio.get_running_loop().run_in_executor(
-            None, self._config.local.get_private_keys
+            None, self._list_private_keys_fn, self._local_settings.keys_dir
         )
-        jump_host = self._config.remote.jump_host
-        jump_username = self._config.remote.jump_username
-        for cloud in self._config.clouds:
+        jump_host = self._remote_defaults.jump_host
+        jump_username = self._remote_defaults.jump_username
+        for cloud in self._config_clouds:
             if cloud.prefix == node.cloud:
                 if cloud.jump_host and cloud.jump_username:
                     jump_host, jump_username = cloud.jump_host, cloud.jump_username
@@ -234,9 +243,9 @@ class Orchestrator:
                 username=node.username,
                 client_keys=keys,
                 connect_timeout=10,
-                data_dir=self._config.remote.data_dir,
-                engines_dir=self._config.remote.engines_dir,
-                tasks_dir=self._config.remote.tasks_dir,
+                data_dir=self._remote_defaults.data_dir,
+                engines_dir=self._remote_defaults.engines_dir,
+                tasks_dir=self._remote_defaults.tasks_dir,
                 jump_username=jump_username,
                 jump_host=jump_host,
                 port=node.port,
@@ -420,7 +429,7 @@ class Orchestrator:
     #   INPUTS: { None - reads self._uow_factory and self._active_clouds }
     #   OUTPUTS: { int - available node slots across all active clouds }
     #   SIDE_EFFECTS: Opens a short UoW to read yascheduler_nodes; no writes.
-    #   LINKS: M-APPLICATION-UOW, M-CONFIG, M-DOMAIN-MODEL
+    #   LINKS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-DOMAIN-MODEL
     # END_CONTRACT: Orchestrator._clouds_get_capacity
     async def _clouds_get_capacity(self) -> int:
         # START_BLOCK_READ_COUNTS
@@ -524,7 +533,7 @@ class Orchestrator:
     async def start(self) -> None:
         self._log.debug(
             "[Orchestrator][start] engines=%s",
-            ", ".join(self._engines.keys()),
+            ", ".join(e.name for e in self._engines.values()),
         )
 
         self._bg_jobs.add(asyncio.create_task(self._print_stats()))
@@ -533,7 +542,7 @@ class Orchestrator:
             queue=self._conn_machine_q,
             producer=self._connect_machine_producer,
             consumer=self._connect_machine_consumer,
-            workers_num=self._config.local.conn_machine_limit,
+            workers_num=self._local_settings.conn_machine_limit,
         )
         self._bg_jobs.add(asyncio.create_task(conn_machine_co))
 
@@ -543,7 +552,7 @@ class Orchestrator:
             queue=self._allocate_q,
             producer=self._allocator_producer,
             consumer=self._allocator_consumer,
-            workers_num=self._config.local.allocate_limit,
+            workers_num=self._local_settings.allocate_limit,
         )
         self._bg_jobs.add(asyncio.create_task(allocate_co))
 
@@ -555,7 +564,7 @@ class Orchestrator:
                 self._task_consumer_consumer,
                 machine_not_found=machine_not_found,
             ),
-            workers_num=self._config.local.consume_limit,
+            workers_num=self._local_settings.consume_limit,
         )
         self._bg_jobs.add(asyncio.create_task(consume_co))
 
@@ -563,7 +572,7 @@ class Orchestrator:
             queue=self._deallocate_q,
             producer=self._deallocator_producer,
             consumer=self._deallocator_consumer,
-            workers_num=self._config.local.deallocate_limit,
+            workers_num=self._local_settings.deallocate_limit,
         )
         self._bg_jobs.add(asyncio.create_task(deallocate_co))
 

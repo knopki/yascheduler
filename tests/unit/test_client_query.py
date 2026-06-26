@@ -106,7 +106,7 @@ def _make_task(
 def _build_client(uow: FakeUnitOfWork) -> Yascheduler:
     """Construct a Yascheduler with Config.from_config_parser patched out and deps_factory wired."""
     fake_deps = FakeCLIDeps(uow)
-    with patch("yascheduler.entrypoints.client.Config.from_config_parser") as mock_cfg:
+    with patch("yascheduler.entrypoints.client.parse_config") as mock_cfg:
         mock_cfg.return_value = SimpleNamespace()
         # FakeCLIDeps is a structural stand-in for CLIDeps; the seam is test-only.
         return Yascheduler(deps_factory=lambda cfg: fake_deps)  # type: ignore[arg-type]
@@ -188,9 +188,7 @@ class TestDepsFactoryInvocation:
             invocation_count += 1
             return fake_deps
 
-        with patch(
-            "yascheduler.entrypoints.client.Config.from_config_parser"
-        ) as mock_cfg:
+        with patch("yascheduler.entrypoints.client.parse_config") as mock_cfg:
             mock_cfg.return_value = SimpleNamespace()
             # FakeCLIDeps is a structural stand-in for CLIDeps; the seam is test-only.
             client = Yascheduler(deps_factory=counting_factory)  # type: ignore[arg-type]

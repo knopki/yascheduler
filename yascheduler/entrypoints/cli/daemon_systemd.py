@@ -5,7 +5,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Systemd service entry point for the scheduler daemon — runs in the foreground under systemd's supervision (logs to stderr → journald).
 #   SCOPE: Thin sync main() that builds an argparse parser, configures the root logger, loads Config, and runs the async daemon core via asyncio.run. No python-daemon.
-#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG
+#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-ENTRYPOINTS-CONFIG-PARSER
 #   LINKS: M-DAEMON-SYSTEMD, M-DAEMON-COMMON
 # END_MODULE_CONTRACT
 #
@@ -26,7 +26,7 @@ import asyncio
 import logging
 import sys
 
-from yascheduler.config import Config
+from yascheduler.entrypoints.config_parser import parse_config
 
 from .args import (
     add_config_arg,
@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         # START_BLOCK_CONFIGURE
         logger = configure_logger(args.log_file, logging.getLevelName(args.log_level))
-        config = Config.from_config_parser(args.config)
+        config = parse_config(args.config)
         # END_BLOCK_CONFIGURE
         asyncio.run(run_daemon(config, logger))
     except SystemExit:

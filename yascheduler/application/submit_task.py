@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/submit_task.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Submit task use case — validates inputs, creates a domain Task, persists via UoW.
 #   SCOPE: submit_task async function.
-#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS, M-CONFIG, M-APPLICATION-UOW
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW
+#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-APPLICATION-UOW
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Migrate replace(task.context, ...) to task.context.replace(...); drop dead dataclasses.replace import (task-context-replace).
-#   PREVIOUS_CHANGE: v1.2.0 - Migrate replace(task, context=...) to task.with_context (task-with-context).
+#   LAST_CHANGE: v1.4.0 - TYPE_CHECKING import EngineRepository from yascheduler.domain instead of yascheduler.config (engine-to-domain-frozen).
+#   PREVIOUS_CHANGE: v1.3.0 - Migrate replace(task.context, ...) to task.context.replace(...); drop dead dataclasses.replace import (task-context-replace).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from pathlib import PurePath
 
-    from yascheduler.config import EngineRepository
+    from yascheduler.domain import EngineRepository
 
     from .uow import AbstractUnitOfWork
 

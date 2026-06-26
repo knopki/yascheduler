@@ -4,13 +4,13 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Pytest fixtures for PostgreSQL integration tests via testcontainers.
 #   SCOPE: Session-scoped PostgresContainer + schema init, function-scoped raw pg8000 connection with TRUNCATE teardown, UoW factory.
-#   DEPENDS: M-CONFIG-DB, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS, M-PERSISTENCE-POSTGRES
+#   DEPENDS: M-INFRA-DB-CONFIG, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS, M-PERSISTENCE-POSTGRES
 #   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS, M-PERSISTENCE-POSTGRES
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   postgres_container - session-scoped fixture: starts postgres:16-alpine container
-#   _db_config - session-scoped fixture: parses container URL into ConfigDb
+#   _db_config - session-scoped fixture: parses container URL into PostgresDbConfig
 #   _init_schema - session-scoped fixture: applies schema.sql via apply_schema() once
 #   _bus - session-scoped fixture: bare MessageBus (no-op dispatch)
 #   pg_executor - function-scoped fixture: ThreadPoolExecutor(max_workers=1)
@@ -35,7 +35,7 @@ import pytest
 from testcontainers.postgres import PostgresContainer
 
 from yascheduler.application import MessageBus
-from yascheduler.config.db import ConfigDb
+from yascheduler.infra.persistence import PostgresDbConfig
 from yascheduler.infra.persistence.postgres_schema import apply_schema
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
@@ -61,10 +61,10 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 
 
 @pytest.fixture(scope="session")
-def _db_config(postgres_container: PostgresContainer) -> ConfigDb:
-    """Parse container connection URL into ConfigDb (session-scoped)."""
+def _db_config(postgres_container: PostgresContainer) -> PostgresDbConfig:
+    """Parse container connection URL into PostgresDbConfig (session-scoped)."""
     url = urlparse(postgres_container.get_connection_url())
-    return ConfigDb(
+    return PostgresDbConfig(
         user=url.username or "test",
         password=url.password or "test",
         database=url.path.lstrip("/"),
@@ -75,14 +75,14 @@ def _db_config(postgres_container: PostgresContainer) -> ConfigDb:
 
 # START_CONTRACT: _init_schema
 #   PURPOSE: Apply schema.sql once per session so per-test DB connections start with ready tables.
-#   INPUTS: { _db_config: ConfigDb }
+#   INPUTS: { _db_config: PostgresDbConfig }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates yascheduler_nodes/yascheduler_tasks tables
 #   LINKS: M-PERSISTENCE-SCHEMA
 # END_CONTRACT: _init_schema
 @pytest.fixture(scope="session")
 def _init_schema(
-    _db_config: ConfigDb,
+    _db_config: PostgresDbConfig,
 ) -> None:
     """Apply schema once per session via apply_schema()."""
     apply_schema(_db_config)
@@ -110,14 +110,14 @@ def pg_executor() -> Generator[ThreadPoolExecutor, None, None]:
 
 # START_CONTRACT: pg_conn
 #   PURPOSE: Provide a function-scoped raw pg8000 connection; TRUNCATE + close on teardown.
-#   INPUTS: { _db_config: ConfigDb, _init_schema: None, pg_executor: ThreadPoolExecutor }
+#   INPUTS: { _db_config: PostgresDbConfig, _init_schema: None, pg_executor: ThreadPoolExecutor }
 #   OUTPUTS: { AsyncGenerator[pg8000.native.Connection] - raw connection }
 #   SIDE_EFFECTS: Opens per-test pg8000 connection, TRUNCATEs tables, closes connection and shuts down executor on teardown
 #   LINKS: M-CONFIG-DB
 # END_CONTRACT: pg_conn
 @pytest.fixture
 async def pg_conn(
-    _db_config: ConfigDb,
+    _db_config: PostgresDbConfig,
     _init_schema: None,
     pg_executor: ThreadPoolExecutor,
 ) -> AsyncGenerator[pg8000.native.Connection, None]:
@@ -137,14 +137,14 @@ async def pg_conn(
 
 # START_CONTRACT: uow_factory
 #   PURPOSE: Provide a function-scoped factory for PostgresUnitOfWork instances.
-#   INPUTS: { _db_config: ConfigDb, _init_schema: None, _bus: MessageBus }
+#   INPUTS: { _db_config: PostgresDbConfig, _init_schema: None, _bus: MessageBus }
 #   OUTPUTS: { Callable[[], PostgresUnitOfWork] }
 #   SIDE_EFFECTS: None
 #   LINKS: M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
 # END_CONTRACT: uow_factory
 @pytest.fixture
 def uow_factory(
-    _db_config: ConfigDb,
+    _db_config: PostgresDbConfig,
     _init_schema: None,
     _bus: MessageBus,
     pg_conn: pg8000.native.Connection,

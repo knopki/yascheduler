@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.4.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in make_orchestrator signature).]
-#   PREVIOUS_CHANGE: [v1.4.0 - Add TestAllocatorConsumer: verify _allocator_consumer swallows CloudAllocateError so allocator worker survives (cloud-provisioner-pure hardening).]
+#   LAST_CHANGE: [v1.5.0 - Migrate imports: ConfigDb→PostgresDbConfig, ConfigLocal→LocalSettings, ConfigRemote→RemoteDefaults; Orchestrator __init__ signature change: config=config → local_settings=config.local, remote_defaults=config.remote (config-aggregate-to-entrypoints / P4).]
+#   PREVIOUS_CHANGE: [v1.4.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in make_orchestrator signature).]
 # END_CHANGE_SUMMARY
 #
 """Unit tests for Orchestrator lifecycle management.
@@ -51,16 +51,11 @@ import pytest
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UniqueQueue
-from yascheduler.config import (
-    Config,
-    ConfigDb,
-    ConfigLocal,
-    ConfigRemote,
-    Engine,
-    EngineRepository,
-)
+from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.domain.events import TaskAbandoned
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.entrypoints import Config
+from yascheduler.infra.persistence import PostgresDbConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -79,7 +74,7 @@ def create_mock_config(
     deallocate_limit: int = 1,
 ) -> MagicMock:
     """Create a mocked Config with local/remote sub-configs."""
-    local = MagicMock(spec=ConfigLocal)
+    local = MagicMock(spec=LocalSettings)
     local.conn_machine_pending = 10
     local.allocate_pending = 5
     local.consume_pending = 3
@@ -90,7 +85,7 @@ def create_mock_config(
     local.consume_limit = consume_limit
     local.deallocate_limit = deallocate_limit
 
-    remote = MagicMock(spec=ConfigRemote)
+    remote = MagicMock(spec=RemoteDefaults)
     remote.tasks_dir = PurePosixPath("/tmp/tasks")
     remote.data_dir = PurePosixPath("/tmp/data")
     remote.engines_dir = PurePosixPath("/tmp/engines")
@@ -100,7 +95,7 @@ def create_mock_config(
     config.local = local
     config.remote = remote
     config.clouds = []
-    config.db = MagicMock(spec=ConfigDb)
+    config.db = MagicMock(spec=PostgresDbConfig)
 
     return config
 
@@ -142,6 +137,7 @@ def make_orchestrator(
     # EngineRepository.values() must yield at least one Engine so
     # Orchestrator.__init__ can compute min(sleep_interval).
     engine = MagicMock(spec=Engine, sleep_interval=sleep_interval)
+    engine.name = "test_engine"
     engines = MagicMock(spec=EngineRepository)
     engines.values.return_value = [engine]
 
@@ -155,7 +151,8 @@ def make_orchestrator(
         allocation_lock = asyncio.Lock()
 
     orch = Orchestrator(
-        config=config,
+        local_settings=config.local,
+        remote_defaults=config.remote,
         uow_factory=uow_factory,
         clouds=clouds,
         gateway=gateway,
@@ -166,6 +163,7 @@ def make_orchestrator(
         allocation_tracker=allocation_tracker,
         active_clouds=active_clouds,
         allocation_lock=allocation_lock,
+        list_private_keys_fn=lambda _keys_dir: [],
     )
     return orch
 

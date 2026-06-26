@@ -75,8 +75,8 @@ class TestDaemonizeParsing:
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(daemonize_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            daemonize_mod.Config,
-            "from_config_parser",
+            daemonize_mod,
+            "parse_config",
             MagicMock(return_value=MagicMock()),
         )
 
@@ -98,8 +98,8 @@ class TestDaemonizeParsing:
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(daemonize_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            daemonize_mod.Config,
-            "from_config_parser",
+            daemonize_mod,
+            "parse_config",
             MagicMock(return_value=MagicMock()),
         )
 
@@ -124,8 +124,8 @@ class TestDaemonizeRuntime:
             daemonize_mod, "configure_logger", MagicMock(return_value=MagicMock())
         )
         monkeypatch.setattr(
-            daemonize_mod.Config,
-            "from_config_parser",
+            daemonize_mod,
+            "parse_config",
             MagicMock(side_effect=RuntimeError("db connection refused")),
         )
 
@@ -146,7 +146,7 @@ class TestDaemonizeRuntime:
         cfg = tmp_path / "yascheduler.conf"
         cfg.write_text("[local]")
         cfg_spy = MagicMock(return_value=MagicMock())
-        monkeypatch.setattr(daemonize_mod.Config, "from_config_parser", cfg_spy)
+        monkeypatch.setattr(daemonize_mod, "parse_config", cfg_spy)
         monkeypatch.setattr(
             daemonize_mod, "configure_logger", MagicMock(return_value=MagicMock())
         )

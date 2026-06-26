@@ -32,7 +32,7 @@ Shared mock factories for Config/CLIDeps/UoW/Task. Each behavioral test subject
 from pathlib import PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
-from yascheduler.config import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
@@ -43,14 +43,15 @@ from yascheduler.entrypoints.di import CLIDeps
 
 def make_mock_config() -> MagicMock:
     """Return a MagicMock Config with all expected attributes."""
-    engine = MagicMock(spec=Engine)
-    engine.name = "g09"
-    engine.spawn = "run.sh"
-    engine.input_files = ("input",)
-    engine.output_files = ("OUTPUT",)
-    engine.platforms = ("linux",)
-    engine.check_cmd = "echo"
-    engine.check_pname = None
+    engine = Engine(
+        name="g09",
+        spawn="run.sh",
+        input_files=("input",),
+        output_files=("OUTPUT",),
+        platforms=("linux",),
+        check_cmd="echo",
+        check_pname=None,
+    )
 
     engines = MagicMock(spec=EngineRepository)
     engines.get = MagicMock(return_value=engine)
@@ -61,7 +62,6 @@ def make_mock_config() -> MagicMock:
     config.remote.username = "root"
     config.remote.engines_dir = "/opt/engines"
     config.remote.tasks_dir = PurePosixPath("/tmp/tasks")
-    config.local.get_private_keys = MagicMock(return_value=[])
     config.local.webhook_url = None
     config.local.data_dir = "/tmp"
     config.db = MagicMock()

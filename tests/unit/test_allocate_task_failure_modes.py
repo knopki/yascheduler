@@ -34,7 +34,7 @@ import pytest
 
 from yascheduler.application.allocate_task import allocate_task
 from yascheduler.application.allocation_tracker import AllocationTracker
-from yascheduler.config import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.exceptions import CloudAllocateError
 from yascheduler.domain.model import (
     Node,

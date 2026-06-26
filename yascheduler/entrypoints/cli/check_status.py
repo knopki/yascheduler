@@ -1,10 +1,10 @@
 # FILE: yascheduler/entrypoints/cli/check_status.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
 #   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
-#   DEPENDS: M-CONFIG, M-DI, M-SSH-GATEWAY, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-SSH-GATEWAY
+#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-SSH-GATEWAY, M-SSH-KEYS, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
+#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-SSH-GATEWAY, M-SSH-KEYS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -24,7 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def check_status to def check_status(argv): asyncio.run(_check_status_async(argv)) + async def _check_status_async(argv).
+#   LAST_CHANGE: v1.2.0 - _display_remote_output calls list_private_keys(config.local.keys_dir) from M-SSH-KEYS instead of config.local.get_private_keys() (ssh-keys-extraction-vastai-parser-fix).
+#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def check_status to def check_status(argv): asyncio.run(_check_status_async(argv)) + async def _check_status_async(argv).
 #   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-check-status-command (moved from infra/cli/, added prog/argv/exit-codes/--json/full mutex/-o requires -v/connection-params bugfix/UoW lifecycle fix/tempfile).
 # END_CHANGE_SUMMARY
 
@@ -41,10 +42,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from yascheduler.config import Config
 from yascheduler.domain import TaskStatus
-from yascheduler.entrypoints import CLIDeps, make_cli_deps
+from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
+from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.infra import SSHMachineGateway
+from yascheduler.infra.ssh.keys import list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -205,7 +207,7 @@ class _ConnParams:
 #   INPUTS: { node: Node, config: Config }
 #   OUTPUTS: { _ConnParams - (username, port, jump_host, jump_username) }
 #   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-GATEWAY, M-CONFIG
+#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-GATEWAY, M-ENTRYPOINTS-CONFIG
 #   NOTE: Mirrors orchestrator._connect_machine_consumer:209-214; duplicated (not shared) because the shape
 #         differs (orchestrator connects inline; check_status returns a params object for the gateway call).
 #         Promotion to a shared helper awaits a third consumer. The `break` below stops at the first matching
@@ -316,7 +318,7 @@ async def _display_remote_output(
         await gateway.connect(
             ip=ip,
             username=conn_params.username,
-            client_keys=config.local.get_private_keys(),
+            client_keys=list_private_keys(config.local.keys_dir),
             port=conn_params.port,
             jump_host=conn_params.jump_host,
             jump_username=conn_params.jump_username,
@@ -354,7 +356,7 @@ async def _display_remote_output(
 #   INPUTS: { tasks: list[Task], nodes_by_ip: dict[str, Node], config: Config, fetch_convergence: bool, deps: CLIDeps }
 #   OUTPUTS: { Path | None - path to the convergence snippet tempfile (cleaned by the caller), or None }
 #   SIDE_EFFECTS: Connects to remote machines via SSH, writes a tempfile, prints to stdout.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-GATEWAY, M-CONFIG
+#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-GATEWAY, M-ENTRYPOINTS-CONFIG
 # END_CONTRACT: _render_view
 async def _render_view(
     tasks: list[Task],
@@ -442,7 +444,7 @@ async def _check_status_async(argv: list[str] | None) -> None:
             root.addHandler(logging.StreamHandler(sys.stderr))
         # END_BLOCK_CONFIGURE_LOGGER
 
-        config = Config.from_config_parser(args.config)
+        config = parse_config(args.config)
         deps = make_cli_deps(config)
         # QUERY PHASE — one short UoW, closed before any SSH work.
         async with deps.uow_factory() as uow:

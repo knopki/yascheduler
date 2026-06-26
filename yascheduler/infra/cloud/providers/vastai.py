@@ -1,11 +1,11 @@
 # FILE: yascheduler/infra/cloud/providers/vastai.py
-# VERSION: 1.6.1
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: VastAI GPU marketplace instance creation and deletion via REST API.
 #   SCOPE: VastAI create/delete node functions.
-#   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CONFIG-CLOUD
+#   DEPENDS: M-CLOUD-CONFIGS, M-CLOUD-PROTOCOLS
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-CONFIGS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.6.0 - Imported from PR-154; relocated to infra/cloud/providers/; updated imports; added GRACE-lite markup.
+#   LAST_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudVastAI from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
+#   PREVIOUS_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 """VastAI cloud methods"""
@@ -45,8 +45,7 @@ if TYPE_CHECKING:
 
     from asyncssh.public_key import SSHKey
 
-    from yascheduler.config import ConfigCloudVastAI
-    from yascheduler.infra.cloud import PCloudConfig
+    from yascheduler.infra.cloud import ConfigCloudVastAI, PCloudConfig
 
 BASE_URL = "https://console.vast.ai/api/v0"
 

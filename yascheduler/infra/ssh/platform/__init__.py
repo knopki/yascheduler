@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/platform/__init__.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Platform detection and OS-specific command adapters for SSH-connected machines.
 #   SCOPE: Re-exports from platform submodules.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial platform adapters package.
+#   LAST_CHANGE: v1.1.0 - Remove PEngine and PEngineRepository from .protocol re-export block and __all__ (engine-to-domain-frozen); consumers import Engine/EngineRepository from yascheduler.domain directly.
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 from .adapters import (
@@ -72,8 +72,6 @@ from .protocol import (
     GetCPUCoresCallable,
     ListProcessesCallable,
     OuterRunCallable,
-    PEngine,
-    PEngineRepository,
     PgrepCallable,
     PNode,
     PProcessInfo,
@@ -146,8 +144,6 @@ __all__ = [
     "SSHRetryExc",
     "AllSSHRetryExc",
     "PProcessInfo",
-    "PEngine",
-    "PEngineRepository",
     "PNode",
     "SSHCheck",
     "QuoteCallable",

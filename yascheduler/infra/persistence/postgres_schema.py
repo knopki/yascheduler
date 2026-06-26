@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Synchronous, transactional application of schema.sql via pg8000.
 #   SCOPE: apply_schema() — one-shot schema init for CLI and test fixtures.
-#   DEPENDS: M-PERSISTENCE-SQLLOADER, M-CONFIG-DB
+#   DEPENDS: M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG
 #   LINKS: M-PERSISTENCE, M-CLI-COMMANDS
 # END_MODULE_CONTRACT
 #
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial creation: sync schema application replacing legacy async DB path.
+#   LAST_CHANGE: v1.1.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config (config-aggregate-to-entrypoints / P4).
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 import logging
@@ -21,8 +21,7 @@ import logging
 from pg8000 import DatabaseError
 from pg8000.native import Connection
 
-from yascheduler.config import ConfigDb
-
+from .db_config import PostgresDbConfig
 from .sql_loader import load_query
 
 logger = logging.getLogger(__name__)
@@ -30,12 +29,12 @@ logger = logging.getLogger(__name__)
 
 # START_CONTRACT: apply_schema
 #   PURPOSE: Apply schema.sql to a PostgreSQL database in a single transaction.
-#   INPUTS: { config: ConfigDb - database connection parameters }
+#   INPUTS: { config: PostgresDbConfig - database connection parameters }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates tables; opens/closes a pg8000 connection; prints on "already exists".
-#   LINKS: M-PERSISTENCE-SQLLOADER, M-CONFIG-DB, pg8000.native.Connection
+#   LINKS: M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG, pg8000.native.Connection
 # END_CONTRACT: apply_schema
-def apply_schema(config: ConfigDb) -> None:
+def apply_schema(config: PostgresDbConfig) -> None:
     conn: Connection | None = None
     try:
         # START_BLOCK_OPEN_CONNECTION

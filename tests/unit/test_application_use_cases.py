@@ -48,8 +48,7 @@ from yascheduler.application.consume_task import consume_task
 from yascheduler.application.deallocate_nodes import deallocate_node, deallocate_nodes
 from yascheduler.application.submit_task import submit_task
 from yascheduler.application.uow import AbstractUnitOfWork
-from yascheduler.config import Engine, EngineRepository
-from yascheduler.config.cloud import ConfigCloudAzure
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.exceptions import (
     CloudAllocateError,
     MissingInputFileError,
@@ -62,6 +61,7 @@ from yascheduler.domain.model import (
     TaskStatus,
 )
 from yascheduler.domain.ports import CloudProvisioner
+from yascheduler.infra.cloud import ConfigCloudAzure
 
 # =============================================================================
 # submit_task  (3 tests)

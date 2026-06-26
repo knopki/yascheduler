@@ -112,7 +112,7 @@ class TestDaemonSysvParsing:
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(sysv_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            sysv_mod.Config, "from_config_parser", MagicMock(return_value=MagicMock())
+            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -139,7 +139,7 @@ class TestDaemonSysvParsing:
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(sysv_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            sysv_mod.Config, "from_config_parser", MagicMock(return_value=MagicMock())
+            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -167,7 +167,7 @@ class TestDaemonSysvParsing:
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(sysv_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            sysv_mod.Config, "from_config_parser", MagicMock(return_value=MagicMock())
+            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -189,7 +189,7 @@ class TestDaemonSysvParsing:
             sysv_mod, "configure_logger", MagicMock(return_value=MagicMock())
         )
         monkeypatch.setattr(
-            sysv_mod.Config, "from_config_parser", MagicMock(return_value=MagicMock())
+            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -217,7 +217,7 @@ class TestDaemonSysvContext:
             sysv_mod, "configure_logger", MagicMock(return_value=MagicMock())
         )
         monkeypatch.setattr(
-            sysv_mod.Config, "from_config_parser", MagicMock(return_value=MagicMock())
+            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -244,7 +244,7 @@ class TestDaemonSysvContext:
 
         monkeypatch.setattr(sysv_mod, "configure_logger", spy_configure_logger)
         monkeypatch.setattr(
-            sysv_mod.Config, "from_config_parser", MagicMock(return_value=MagicMock())
+            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
         )
 
         def fake_run(coro: Coroutine) -> None:

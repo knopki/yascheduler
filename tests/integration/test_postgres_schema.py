@@ -4,7 +4,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for apply_schema() against real PostgreSQL via testcontainers.
 #   SCOPE: Schema application, idempotency error, connection lifecycle.
-#   DEPENDS: M-PERSISTENCE-SCHEMA, M-CONFIG-DB
+#   DEPENDS: M-PERSISTENCE-SCHEMA, M-INFRA-DB-CONFIG
 #   LINKS: M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
@@ -26,13 +26,13 @@ import pytest
 from pg8000 import DatabaseError
 from testcontainers.postgres import PostgresContainer
 
-from yascheduler.config.db import ConfigDb
+from yascheduler.infra.persistence import PostgresDbConfig
 from yascheduler.infra.persistence.postgres_schema import apply_schema
 
 
-def _make_config(pg: PostgresContainer) -> ConfigDb:
+def _make_config(pg: PostgresContainer) -> PostgresDbConfig:
     url = urlparse(pg.get_connection_url())
-    return ConfigDb(
+    return PostgresDbConfig(
         user=url.username or "test",
         password=url.password or "test",
         database=url.path.lstrip("/"),

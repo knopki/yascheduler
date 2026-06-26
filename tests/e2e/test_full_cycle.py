@@ -33,7 +33,7 @@ from yascheduler.infra.ssh.gateway import SSHMachineGateway
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.config import Config
+    from yascheduler.entrypoints import Config
     from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 log = logging.getLogger("e2e.test_full_cycle")

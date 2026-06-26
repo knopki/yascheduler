@@ -39,7 +39,7 @@ from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.consume_task import consume_task
 from yascheduler.application.submit_task import submit_task
 from yascheduler.application.uow import AbstractUnitOfWork
-from yascheduler.config import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.events import (
     TaskAllocated,
     TaskCompleted,

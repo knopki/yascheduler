@@ -4,7 +4,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
 #   SCOPE: Task submission (via DI/CLIDeps) and status query (via query_tasks use case + UoW); private to_sync async-to-sync bridge helper.
-#   DEPENDS: M-CONFIG, M-DI, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL, M-ENTRYPOINTS-PATHS
+#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL, M-ENTRYPOINTS-PATHS
 #   LINKS: M-DI, M-AIIDA, M-ENTRYPOINTS, M-ENTRYPOINTS-PATHS
 # END_MODULE_CONTRACT
 #
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.6.0 - Inline to_sync from yascheduler.shared.async_utils; import CONFIG_FILE from .paths; drop yascheduler.shared dependency (prune-shared-kernel).
-#   PREVIOUS_CHANGE: v2.5.0 - Relocate to yascheduler/entrypoints/client.py as first resident of the entrypoints layer; switch relative imports to absolute facade paths; remove FIXME.
+#   LAST_CHANGE: v2.7.0 - Import Config from yascheduler.entrypoints.config (not yascheduler.config, deleted); replace Config.from_config_parser with parse_config from entrypoints.config_parser (config-aggregate-to-entrypoints / P4).
+#   PREVIOUS_CHANGE: v2.6.0 - Inline to_sync from yascheduler.shared.async_utils; import CONFIG_FILE from .paths; drop yascheduler.shared dependency (prune-shared-kernel).
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -31,8 +31,9 @@ from pathlib import PurePath
 from typing import Any, Optional, TypeVar, Union
 
 from yascheduler.application import query_tasks
-from yascheduler.config import Config
 from yascheduler.domain import Task, TaskStatus
+from yascheduler.entrypoints.config import Config
+from yascheduler.entrypoints.config_parser import parse_config
 
 from .di import CLIDeps, make_cli_deps
 from .paths import CONFIG_FILE
@@ -115,7 +116,7 @@ class Yascheduler:
     #   }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Loads configuration from disk
-    #   LINKS: M-ENTRYPOINTS-CLIENT, M-CONFIG, M-DI
+    #   LINKS: M-ENTRYPOINTS-CLIENT, M-ENTRYPOINTS-CONFIG, M-DI
     # END_CONTRACT: __init__
     def __init__(
         self,
@@ -124,7 +125,7 @@ class Yascheduler:
         *,
         deps_factory: Optional[Callable[[Config], CLIDeps]] = None,
     ) -> None:
-        self.config = Config.from_config_parser(config_path)
+        self.config = parse_config(config_path)
         self._logger = logger
         self._deps_factory = deps_factory or make_cli_deps
 

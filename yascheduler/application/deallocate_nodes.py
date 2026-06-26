@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 4.2.0
+# VERSION: 4.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return IPs for VM deletion.
 #   SCOPE: deallocate_node, deallocate_nodes async functions.
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-CONFIG-CLOUD
-#   LINKS: M-APPLICATION-UOW, M-CONFIG-CLOUD
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.2.0 - Switch idle_machines to monotonic float timestamps (matching free_since on ConnectedMachine) and compare against time.monotonic(); eliminates wall-clock/monotonic mixing that skewed idle detection under DST/NTP clock jumps.
-#   PREVIOUS_CHANGE: v4.1.0 - Wrap deallocate_node REMOVE UoW in try/except: if DB remove fails after cloud delete succeeded, log loudly for operator reconciliation (VM is gone but row stays disabled) instead of crashing the deallocator worker (review-hardening).
+#   LAST_CHANGE: v4.3.0 - TYPE_CHECKING import CloudConfig from yascheduler.domain instead of ConfigCloud from yascheduler.config (cloud-configs-to-infra-registry); config_clouds parameter typed as Sequence[CloudConfig] (domain Protocol) — application stays free of infra DTO imports via TYPE_CHECKING.
+#   PREVIOUS_CHANGE: v4.2.0 - Switch idle_machines to monotonic float timestamps (matching free_since on ConnectedMachine) and compare against time.monotonic(); eliminates wall-clock/monotonic mixing that skewed idle detection under DST/NTP clock jumps.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -28,8 +28,7 @@ from yascheduler.domain import Node, TaskStatus
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from yascheduler.config import ConfigCloud
-    from yascheduler.domain import CloudProvisioner, MachineGateway
+    from yascheduler.domain import CloudConfig, CloudProvisioner, MachineGateway
 
     from .uow import AbstractUnitOfWork
 
@@ -112,16 +111,16 @@ async def deallocate_node(
 #   PURPOSE: Disable idle cloud nodes exceeding tolerance and return their IPs for VM deletion.
 #   INPUTS: {
 #     uow_factory: Callable[[], AbstractUnitOfWork] - Unit of Work factory,
-#     config_clouds: Sequence[ConfigCloud] - Cloud configuration with idle_tolerance,
+#     config_clouds: Sequence[CloudConfig] - Cloud configuration with idle_tolerance,
 #     idle_machines: dict[str, float] - IP -> free_since monotonic timestamp (seconds since arbitrary epoch)
 #   }
 #   OUTPUTS: { list[str] - List of disabled node IPs for orchestrator to deallocate }
 #   SIDE_EFFECTS: Disables nodes in DB.
-#   LINKS: M-APPLICATION-UOW, M-CONFIG-CLOUD
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
 # END_CONTRACT: deallocate_nodes
 async def deallocate_nodes(
     uow_factory: Callable[[], AbstractUnitOfWork],
-    config_clouds: Sequence[ConfigCloud],
+    config_clouds: Sequence[CloudConfig],
     idle_machines: dict[str, float],
 ) -> list[str]:
     # START_BLOCK_DISABLE_IDLE

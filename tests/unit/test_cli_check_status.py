@@ -37,7 +37,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from yascheduler.config import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
@@ -72,14 +72,15 @@ def make_mock_config(
     remote_jump_username: str | None = None,
 ) -> MagicMock:
     """Return a MagicMock Config with all expected attributes."""
-    engine = MagicMock(spec=Engine)
-    engine.name = "g09"
-    engine.spawn = "run.sh"
-    engine.input_files = ("input",)
-    engine.output_files = ("OUTPUT",)
-    engine.platforms = ("linux",)
-    engine.check_cmd = "echo"
-    engine.check_pname = None
+    engine = Engine(
+        name="g09",
+        spawn="run.sh",
+        input_files=("input",),
+        output_files=("OUTPUT",),
+        platforms=("linux",),
+        check_cmd="echo",
+        check_pname=None,
+    )
 
     engines = MagicMock(spec=EngineRepository)
     engines.get = MagicMock(return_value=engine)
@@ -92,7 +93,6 @@ def make_mock_config(
     config.remote.jump_username = remote_jump_username
     config.remote.engines_dir = "/opt/engines"
     config.remote.tasks_dir = PurePosixPath("/tmp/tasks")
-    config.local.get_private_keys = MagicMock(return_value=[])
     config.local.webhook_url = None
     config.local.data_dir = "/tmp"
     config.db = MagicMock()
@@ -168,7 +168,7 @@ def stub_config_deps(
     uow = make_mock_uow()
     deps = make_mock_deps(config, uow)
     monkeypatch.setattr(
-        check_status_mod.Config, "from_config_parser", MagicMock(return_value=config)
+        check_status_mod, "parse_config", MagicMock(return_value=config)
     )
     monkeypatch.setattr(check_status_mod, "make_cli_deps", MagicMock(return_value=deps))
     return config, uow, deps
@@ -517,8 +517,8 @@ class TestCheckStatusExitCodes:
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            check_status_mod.Config,
-            "from_config_parser",
+            check_status_mod,
+            "parse_config",
             MagicMock(side_effect=RuntimeError("bad config")),
         )
         with pytest.raises(SystemExit) as exc:
@@ -851,9 +851,7 @@ class TestCheckStatusConfigLogLevel:
         custom_conf = tmp_path / "custom.conf"
         custom_conf.write_text("[local]")
         from_config_spy = MagicMock(return_value=make_mock_config())
-        monkeypatch.setattr(
-            check_status_mod.Config, "from_config_parser", from_config_spy
-        )
+        monkeypatch.setattr(check_status_mod, "parse_config", from_config_spy)
         uow = make_mock_uow()
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         monkeypatch.setattr(
@@ -874,9 +872,7 @@ class TestCheckStatusConfigLogLevel:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         from_config_spy = MagicMock(return_value=make_mock_config())
-        monkeypatch.setattr(
-            check_status_mod.Config, "from_config_parser", from_config_spy
-        )
+        monkeypatch.setattr(check_status_mod, "parse_config", from_config_spy)
         _run([])
         assert str(from_config_spy.call_args.args[0]) == str(CONFIG_FILE)
 

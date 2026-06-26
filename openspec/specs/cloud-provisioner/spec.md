@@ -19,6 +19,14 @@ The class SHALL NOT expose `capacity()`, `allocate_with_tracking`,
 `get_capacity`, `mark_task_done`, `on_tasks`, or `apis` — these are removed
 (moved to use cases, `AllocationTracker`, or deleted as dead code).
 
+The `configs: dict[str, ConfigCloud]` field SHALL be typed against the relocated
+`ConfigCloud` Union (imported from `yascheduler.infra.cloud` or intra-package
+`from .cloud_configs import ConfigCloud`), not from `yascheduler.config`. The
+`_connect_to_vm` method SHALL access `config.jump_host` and
+`config.jump_username` as direct attribute access (all four DTOs declare these
+fields), replacing the prior `getattr(config, "jump_host", None) or None` defensive
+fallbacks with `config.jump_host or None` / `config.jump_username or None`.
+
 #### Scenario: Allocate node on best provider
 - **WHEN** allocate(["linux"]) is called and two providers support Linux
 - **THEN** a VM is created on the provider with highest priority and available capacity
@@ -46,6 +54,19 @@ The class SHALL NOT expose `capacity()`, `allocate_with_tracking`,
 #### Scenario: No DB access from adapter
 - **WHEN** any method on `CloudProvisionerImpl` is invoked
 - **THEN** no `NodeRepository`, `PostgresUnitOfWork`, or `db.py` import is touched
+
+#### Scenario: configs dict typed against relocated ConfigCloud union
+- **WHEN** `CloudProvisionerImpl.configs` is introspected for its type annotation
+- **THEN** it is `dict[str, ConfigCloud]` where `ConfigCloud` is imported from
+  `yascheduler.infra.cloud` (or intra-package `.cloud_configs`), not from
+  `yascheduler.config`
+
+#### Scenario: _connect_to_vm uses direct attribute access for jump fields
+- **WHEN** `CloudProvisionerImpl._connect_to_vm` is inspected for how it reads
+  `jump_host` / `jump_username` from the config DTO
+- **THEN** it uses `config.jump_host or None` / `config.jump_username or None` (direct
+  attribute access), not `getattr(config, "jump_host", None) or None` (the defensive
+  fallback is removed because all four DTOs declare the fields)
 
 ### Requirement: Provider selection by priority and capacity
 

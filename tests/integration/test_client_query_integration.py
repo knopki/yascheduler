@@ -4,7 +4,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Implementation-agnostic integration test pinning the Yascheduler query-method output shape against real PostgreSQL.
 #   SCOPE: Submit a real task, query via jobs=[id] and status=[0], assert 6-key dict shape.
-#   DEPENDS: M-ENTRYPOINTS-CLIENT, M-CONFIG, M-DB, M-PERSISTENCE-SCHEMA
+#   DEPENDS: M-ENTRYPOINTS-CLIENT, M-ENTRYPOINTS-CONFIG, M-INFRA-DB-CONFIG, M-PERSISTENCE-SCHEMA
 #   LINKS: M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT
 #
@@ -35,21 +35,21 @@ from yascheduler.entrypoints.client import Yascheduler
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from yascheduler.config import ConfigDb
+    from yascheduler.infra.persistence import PostgresDbConfig
 
 EXPECTED_KEYS = {"task_id", "label", "ip", "status", "metadata", "cloud"}
 
 
 # START_CONTRACT: _query_config
 #   PURPOSE: Build an INI config pointing at the testcontainer DB with a minimal engine.
-#   INPUTS: { _db_config: ConfigDb, tmp_path_factory: TempPathFactory }
+#   INPUTS: { _db_config: PostgresDbConfig, tmp_path_factory: TempPathFactory }
 #   OUTPUTS: { Iterator[str] - path to the written INI file }
 #   SIDE_EFFECTS: Writes a temp INI file and engine directories.
 #   LINKS: M-CONFIG
 # END_CONTRACT: _query_config
 @pytest.fixture(scope="session")
 def _query_config(
-    _db_config: "ConfigDb",
+    _db_config: "PostgresDbConfig",
     tmp_path_factory: pytest.TempPathFactory,
 ) -> "Iterator[str]":
     tmp = tmp_path_factory.mktemp("query_config")

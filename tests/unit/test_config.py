@@ -1,11 +1,11 @@
 # FILE: tests/unit/test_config.py
-# VERSION: 1.0.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for INI → config parsing across all yascheduler config sub-modules.
-#   SCOPE: ConfigDb, ConfigLocal, ConfigRemote, cloud configs, Engine, EngineRepository, warn_unknown_fields, Config top-level.
-#   DEPENDS: M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE, M-CONFIG-ENGINE-REPO, M-CONFIG-UTILS, M-CONFIG
-#   LINKS: M-CONFIG, M-CONFIG-DB, M-CONFIG-LOCAL, M-CONFIG-REMOTE, M-CONFIG-CLOUD, M-CONFIG-ENGINE, M-CONFIG-ENGINE-REPO, M-CONFIG-UTILS
+#   SCOPE: PostgresDbConfig, LocalSettings, RemoteDefaults, cloud configs, Engine, EngineRepository, warn_unknown_fields, Config top-level.
+#   DEPENDS: M-INFRA-DB-CONFIG, M-DOMAIN-SETTINGS, M-CLOUD-CONFIGS, M-DOMAIN-ENGINE, M-ENTRYPOINTS-CONFIG-PARSER, M-ENTRYPOINTS-CONFIG
+#   LINKS: M-INFRA-DB-CONFIG, M-DOMAIN-SETTINGS, M-CLOUD-CONFIGS, M-DOMAIN-ENGINE, M-ENTRYPOINTS-CONFIG-PARSER, M-ENTRYPOINTS-CONFIG
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,55 +15,68 @@
 #   test_config_local_defaults - applies numeric defaults for empty section
 #   test_config_remote_with_jump_host - parses jump host fields
 #   test_config_remote_without_jump_host - jump host defaults to None
-#   test_config_cloud_hetzner_parsing - parses hetzner token/username
-#   test_config_cloud_upcloud_parsing - parses upcloud login/password
+#   test_config_cloud_hetzner_parsing - parses hetzner token/username via parse_cloud_section
+#   test_config_cloud_upcloud_parsing - parses upcloud login/password via parse_cloud_section
 #   test_azure_image_reference_from_urn - parses colon-separated URN
 #   test_azure_image_reference_invalid_urn - raises ValueError for short URN
-#   test_config_cloud_azure_rejects_root - raises ValueError for root user
+#   test_config_cloud_azure_rejects_root - parse_cloud_section raises ValueError for root user (parser-side)
 #   test_engine_valid_parsing - parses complete valid engine section
 #   test_engine_invalid_spawn_template - raises ValueError for unknown placeholder
 #   test_engine_missing_check_methods - raises ValueError when no check method
 #   test_engine_empty_input_files - raises ValueError for empty input_files
 #   test_engine_repository_filter - filter returns matching engines
 #   test_engine_repository_filter_platforms - filter_platforms returns platform matches
-#   test_engine_repository_immutable - raises NotImplementedError on mutation
+#   test_engine_repository_immutable - raises TypeError on mutation (frozen dataclass, no __setitem__/__delitem__)
 #   test_warn_unknown_fields - emits ConfigWarning for unknown keys
 #   test_config_remote_no_warnings_known_keys - no warnings for known INI keys
 #   test_config_remote_warns_unknown_keys - warns for truly unknown keys
 #   test_config_top_level_full_ini - assembles all sub-configs from full INI
 #   test_config_top_level_empty_sections - handles empty sections with defaults
+#   test_vastai_cloud_section_round_trips - [cloud.vastai] round-trips into ConfigCloudVastAI via parse_clouds registry
+#   test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods - ConfigCloud* are stdlib frozen dataclasses, no from_config_parser_section/get_valid_config_parser_fields
+#   test_config_local_is_frozen_dataclass_without_get_private_keys - LocalSettings is stdlib frozen dataclass, no get_private_keys, retains keys_dir
+#   test_config_local_post_init_rejects_zero_limit - __post_init__ raises ValueError for ge(1) violation
+#   test_config_local_parser_passes_zero_through_to_post_init - parser does not falsy-coerce a 0 limit
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial config parsing unit tests
+#   LAST_CHANGE: v1.4.0 - Migrate config DTO imports to new homes per config-aggregate-to-entrypoints (P4): ConfigDb→PostgresDbConfig (yascheduler.infra.persistence), ConfigLocal→LocalSettings (yascheduler.domain), ConfigRemote→RemoteDefaults (yascheduler.domain), Config→yascheduler.entrypoints, ConfigWarning/warn_unknown_fields→yascheduler.entrypoints._config_utils; X.from_config_parser_section calls → _parse_*_section free functions; Config.from_config_parser → parse_config; GRACE LINKS updated.
+#   PREVIOUS_CHANGE: v1.3.0 - Migrate cloud DTO imports to yascheduler.infra.cloud (cloud-configs-to-infra-registry); ConfigCloudX.from_config_parser_section calls → parse_cloud_section from entrypoints.config_parser; test_config_cloud_azure_rejects_root now asserts parser-side ValueError (not DTO __post_init__); add test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods asserting the DTOs have no parser methods and are stdlib frozen dataclasses; GRACE LINKS updated to M-CLOUD-CONFIGS.
 # END_CHANGE_SUMMARY
 
 from configparser import ConfigParser
-from pathlib import PurePath
+from dataclasses import FrozenInstanceError, is_dataclass
+from pathlib import Path, PurePath
+from typing import cast
 
 import pytest
 
-from yascheduler.config.cloud import (
+from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
+from yascheduler.entrypoints._config_utils import ConfigWarning, warn_unknown_fields
+from yascheduler.entrypoints.config_parser import (
+    _parse_db_section,
+    _parse_local_section,
+    _parse_remote_section,
+    parse_cloud_section,
+    parse_config,
+    parse_engine_section,
+)
+from yascheduler.infra.cloud import (
     AzureImageReference,
     ConfigCloudAzure,
     ConfigCloudHetzner,
     ConfigCloudUpcloud,
+    ConfigCloudVastAI,
 )
-from yascheduler.config.config import Config
-from yascheduler.config.db import ConfigDb
-from yascheduler.config.engine import Engine
-from yascheduler.config.engine_repository import EngineRepository
-from yascheduler.config.local import ConfigLocal
-from yascheduler.config.remote import ConfigRemote
-from yascheduler.config.utils import ConfigWarning, warn_unknown_fields
+from yascheduler.infra.persistence import PostgresDbConfig
 
 
 # START_CONTRACT: test_config_db_full_overrides
-#   PURPOSE: Verify ConfigDb from_config_parser_section parses full INI section with all values overridden from defaults
+#   PURPOSE: Verify PostgresDbConfig from_config_parser_section parses full INI section with all values overridden from defaults
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-DB]
+#   LINKS: [M-INFRA-DB-CONFIG]
 # END_CONTRACT: test_config_db_full_overrides
 def test_config_db_full_overrides() -> None:
     """parses full INI section with overrides"""
@@ -71,7 +84,7 @@ def test_config_db_full_overrides() -> None:
     cfg.read_string(
         "[db]\nuser=myuser\npassword=secret\ndatabase=mydb\nhost=db.example.com\nport=5433\n"
     )
-    db = ConfigDb.from_config_parser_section(cfg["db"])
+    db = _parse_db_section(cfg["db"])
     assert db.user == "myuser"
     assert db.password == "secret"
     assert db.database == "mydb"
@@ -80,17 +93,17 @@ def test_config_db_full_overrides() -> None:
 
 
 # START_CONTRACT: test_config_db_defaults
-#   PURPOSE: Verify ConfigDb from_config_parser_section applies all defaults when section is empty
+#   PURPOSE: Verify PostgresDbConfig from_config_parser_section applies all defaults when section is empty
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-DB]
+#   LINKS: [M-INFRA-DB-CONFIG]
 # END_CONTRACT: test_config_db_defaults
 def test_config_db_defaults() -> None:
     """applies defaults when section has no keys"""
     cfg = ConfigParser()
     cfg.read_string("[db]\n")
-    db = ConfigDb.from_config_parser_section(cfg["db"])
+    db = _parse_db_section(cfg["db"])
     assert db.user == "yascheduler"
     assert db.password == "password"
     assert db.database == "database"
@@ -99,32 +112,32 @@ def test_config_db_defaults() -> None:
 
 
 # START_CONTRACT: test_config_local_custom_data_dir
-#   PURPOSE: Verify ConfigLocal resolves derived paths under custom data_dir
+#   PURPOSE: Verify LocalSettings resolves derived paths under custom data_dir
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-LOCAL]
+#   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_local_custom_data_dir
 def test_config_local_custom_data_dir() -> None:
     """derived paths resolve under custom data_dir"""
     cfg = ConfigParser()
     cfg.read_string("[local]\ndata_dir=/opt/data\n")
-    local = ConfigLocal.from_config_parser_section(cfg["local"])
+    local = _parse_local_section(cfg["local"])
     assert str(local.data_dir).endswith("data") or "/opt/data" in str(local.data_dir)
 
 
 # START_CONTRACT: test_config_local_defaults
-#   PURPOSE: Verify ConfigLocal applies all numeric defaults when section is empty
+#   PURPOSE: Verify LocalSettings applies all numeric defaults when section is empty
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-LOCAL]
+#   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_local_defaults
 def test_config_local_defaults() -> None:
     """applies numeric defaults for empty section"""
     cfg = ConfigParser()
     cfg.read_string("[local]\n")
-    local = ConfigLocal.from_config_parser_section(cfg["local"])
+    local = _parse_local_section(cfg["local"])
     assert local.webhook_reqs_limit == 5
     assert local.conn_machine_limit == 10
     assert local.allocate_limit == 20
@@ -134,11 +147,11 @@ def test_config_local_defaults() -> None:
 
 
 # START_CONTRACT: test_config_remote_with_jump_host
-#   PURPOSE: Verify ConfigRemote parses jump host fields from INI section
+#   PURPOSE: Verify RemoteDefaults parses jump host fields from INI section
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-REMOTE]
+#   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_remote_with_jump_host
 def test_config_remote_with_jump_host() -> None:
     """parses jump host fields"""
@@ -146,41 +159,41 @@ def test_config_remote_with_jump_host() -> None:
     cfg.read_string(
         "[remote]\nuser=admin\njump_user=jumper\njump_host=bastion.example.com\n"
     )
-    remote = ConfigRemote.from_config_parser_section(cfg["remote"])
+    remote = _parse_remote_section(cfg["remote"])
     assert remote.username == "admin"
     assert remote.jump_username == "jumper"
     assert remote.jump_host == "bastion.example.com"
 
 
 # START_CONTRACT: test_config_remote_without_jump_host
-#   PURPOSE: Verify ConfigRemote sets jump host fields to None when not specified
+#   PURPOSE: Verify RemoteDefaults sets jump host fields to None when not specified
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-REMOTE]
+#   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_remote_without_jump_host
 def test_config_remote_without_jump_host() -> None:
     """jump host fields default to None"""
     cfg = ConfigParser()
     cfg.read_string("[remote]\nuser=root\n")
-    remote = ConfigRemote.from_config_parser_section(cfg["remote"])
+    remote = _parse_remote_section(cfg["remote"])
     assert remote.username == "root"
     assert remote.jump_username is None
     assert remote.jump_host is None
 
 
 # START_CONTRACT: test_config_cloud_hetzner_parsing
-#   PURPOSE: Verify ConfigCloudHetzner from_config_parser_section parses token and username
+#   PURPOSE: Verify parse_cloud_section parses hetzner token and username
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-CLOUD]
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: test_config_cloud_hetzner_parsing
 def test_config_cloud_hetzner_parsing() -> None:
-    """parses hetzner token and username"""
+    """parses hetzner token and username via parse_cloud_section"""
     cfg = ConfigParser()
     cfg.read_string("[clouds]\nhetzner_token=abc123\nhetzner_user=root\n")
-    hetzner = ConfigCloudHetzner.from_config_parser_section(cfg["clouds"])
+    hetzner = cast("ConfigCloudHetzner", parse_cloud_section(cfg["clouds"], "hetzner"))
     assert hetzner.token == "abc123"
     assert hetzner.username == "root"
     assert hetzner.server_type == "cx52"  # default
@@ -188,17 +201,17 @@ def test_config_cloud_hetzner_parsing() -> None:
 
 
 # START_CONTRACT: test_config_cloud_upcloud_parsing
-#   PURPOSE: Verify ConfigCloudUpcloud from_config_parser_section parses login/password
+#   PURPOSE: Verify parse_cloud_section parses upcloud login and password
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-CLOUD]
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: test_config_cloud_upcloud_parsing
 def test_config_cloud_upcloud_parsing() -> None:
-    """parses upcloud login and password"""
+    """parses upcloud login and password via parse_cloud_section"""
     cfg = ConfigParser()
     cfg.read_string("[clouds]\nupcloud_login=user\nupcloud_password=pass\n")
-    upcloud = ConfigCloudUpcloud.from_config_parser_section(cfg["clouds"])
+    upcloud = cast("ConfigCloudUpcloud", parse_cloud_section(cfg["clouds"], "upcloud"))
     assert upcloud.login == "user"
     assert upcloud.password == "pass"
     assert upcloud.username == "root"  # default
@@ -209,7 +222,7 @@ def test_config_cloud_upcloud_parsing() -> None:
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-CLOUD]
+#   LINKS: [M-CLOUD-CONFIGS]
 # END_CONTRACT: test_azure_image_reference_from_urn
 def test_azure_image_reference_from_urn() -> None:
     """parses URN into publisher, offer, sku, version"""
@@ -225,7 +238,7 @@ def test_azure_image_reference_from_urn() -> None:
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-CLOUD]
+#   LINKS: [M-CLOUD-CONFIGS]
 # END_CONTRACT: test_azure_image_reference_invalid_urn
 def test_azure_image_reference_invalid_urn() -> None:
     """raises ValueError for too-short URN"""
@@ -234,30 +247,26 @@ def test_azure_image_reference_invalid_urn() -> None:
 
 
 # START_CONTRACT: test_config_cloud_azure_rejects_root
-#   PURPOSE: Verify ConfigCloudAzure raises ValueError when username is "root"
+#   PURPOSE: Verify parse_cloud_section raises ValueError when az_user is "root" (parser-side _check_az_user, not DTO __post_init__)
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-CLOUD]
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: test_config_cloud_azure_rejects_root
 def test_config_cloud_azure_rejects_root() -> None:
-    """raises ValueError for root user on Azure"""
-    with pytest.raises(ValueError):
-        ConfigCloudAzure(
-            tenant_id="tid",
-            client_id="cid",
-            client_secret="secret",
-            subscription_id="sid",
-            username="root",
-        )
+    """parse_cloud_section raises ValueError for root user on Azure (parser-side)"""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\naz_tenant_id=tid\naz_user=root\n")
+    with pytest.raises(ValueError, match="Root user is forbidden on Azure"):
+        parse_cloud_section(cfg["clouds"], "az")
 
 
 # START_CONTRACT: test_engine_valid_parsing
-#   PURPOSE: Verify Engine.from_config_parser_section parses a complete valid engine section
+#   PURPOSE: Verify parse_engine_section parses a complete valid engine section
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-ENGINE]
+#   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_valid_parsing
 def test_engine_valid_parsing() -> None:
     """parses a valid engine section"""
@@ -269,7 +278,7 @@ def test_engine_valid_parsing() -> None:
         "input_files=input.txt\n"
         "output_files=output.txt\n"
     )
-    engine = Engine.from_config_parser_section(cfg["engine.test"], PurePath("."))
+    engine = parse_engine_section(cfg["engine.test"], PurePath("."))
     assert engine.name == "test"
     assert engine.spawn == "{task_path} {engine_path} {ncpus}"
     assert engine.check_cmd == "echo ok"
@@ -278,11 +287,11 @@ def test_engine_valid_parsing() -> None:
 
 
 # START_CONTRACT: test_engine_invalid_spawn_template
-#   PURPOSE: Verify Engine raises ValueError when spawn contains unknown template placeholder
+#   PURPOSE: Verify parse_engine_section raises ValueError when spawn contains unknown template placeholder
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-ENGINE]
+#   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_invalid_spawn_template
 def test_engine_invalid_spawn_template() -> None:
     """raises ValueError for unknown template placeholder in spawn"""
@@ -295,15 +304,15 @@ def test_engine_invalid_spawn_template() -> None:
             "input_files=input.txt\n"
             "output_files=out.txt\n"
         )
-        Engine.from_config_parser_section(cfg["engine.test"], PurePath("."))
+        parse_engine_section(cfg["engine.test"], PurePath("."))
 
 
 # START_CONTRACT: test_engine_missing_check_methods
-#   PURPOSE: Verify Engine raises ValueError when neither check_cmd nor check_pname is set
+#   PURPOSE: Verify parse_engine_section raises ValueError when neither check_cmd nor check_pname is set
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-ENGINE]
+#   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_missing_check_methods
 def test_engine_missing_check_methods() -> None:
     """raises ValueError when no check method is set"""
@@ -315,7 +324,7 @@ def test_engine_missing_check_methods() -> None:
             "input_files=input.txt\n"
             "output_files=out.txt\n"
         )
-        Engine.from_config_parser_section(cfg["engine.test"], PurePath("."))
+        parse_engine_section(cfg["engine.test"], PurePath("."))
 
 
 # START_CONTRACT: test_engine_empty_input_files
@@ -323,18 +332,16 @@ def test_engine_missing_check_methods() -> None:
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-ENGINE]
+#   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_empty_input_files
 def test_engine_empty_input_files() -> None:
-    """direct construction raises ValueError when input_files is empty"""
+    """parse_engine_section raises ValueError when input_files is empty"""
+    cfg = ConfigParser()
+    cfg.read_string(
+        "[engine.test]\nspawn={task_path}\ncheck_cmd=echo ok\noutput_files=output.txt\n"
+    )
     with pytest.raises(ValueError):
-        Engine(
-            name="test",
-            spawn="{task_path}",
-            check_cmd="echo ok",
-            check_pname=None,
-            input_files=(),
-        )
+        parse_engine_section(cfg["engine.test"], PurePath("."))
 
 
 # START_CONTRACT: test_engine_repository_filter
@@ -342,7 +349,7 @@ def test_engine_empty_input_files() -> None:
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-ENGINE-REPO]
+#   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_repository_filter
 def test_engine_repository_filter() -> None:
     """filter returns new repo with matching engines only"""
@@ -362,7 +369,7 @@ def test_engine_repository_filter() -> None:
         input_files=("f",),
         output_files=("o",),
     )
-    repo = EngineRepository(data={"a": e1, "b": e2}, engines_dir=PurePath("."))
+    repo = EngineRepository(data={"a": e1, "b": e2})
     filtered = repo.filter(lambda e: e.name == "a")
     assert "a" in filtered
     assert "b" not in filtered
@@ -374,7 +381,7 @@ def test_engine_repository_filter() -> None:
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-ENGINE-REPO]
+#   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_repository_filter_platforms
 def test_engine_repository_filter_platforms() -> None:
     """filter_platforms returns engines for matching platforms"""
@@ -396,21 +403,21 @@ def test_engine_repository_filter_platforms() -> None:
         output_files=("o",),
         platforms=("windows",),
     )
-    repo = EngineRepository(data={"a": e1, "b": e2}, engines_dir=PurePath("."))
+    repo = EngineRepository(data={"a": e1, "b": e2})
     filtered = repo.filter_platforms(["linux"])
     assert "a" in filtered
     assert "b" not in filtered
 
 
 # START_CONTRACT: test_engine_repository_immutable
-#   PURPOSE: Verify EngineRepository raises NotImplementedError on mutation
+#   PURPOSE: Verify EngineRepository raises TypeError on mutation (no UserDict)
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-ENGINE-REPO]
+#   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_repository_immutable
 def test_engine_repository_immutable() -> None:
-    """__setitem__ and __delitem__ raise NotImplementedError"""
+    """__setitem__ and __delitem__ raise TypeError"""
     e1 = Engine(
         name="a",
         spawn="{task_path}",
@@ -419,11 +426,11 @@ def test_engine_repository_immutable() -> None:
         input_files=("f",),
         output_files=("o",),
     )
-    repo = EngineRepository(data={"a": e1}, engines_dir=PurePath("."))
-    with pytest.raises(NotImplementedError):
-        repo["b"] = e1
-    with pytest.raises(NotImplementedError):
-        del repo["a"]
+    repo = EngineRepository(data={"a": e1})
+    with pytest.raises(TypeError):
+        repo["b"] = e1  # type: ignore[index]  # intentional mutation of frozen dataclass
+    with pytest.raises(TypeError):
+        del repo["a"]  # type: ignore[attr-defined]  # intentional mutation of frozen dataclass
 
 
 # START_CONTRACT: test_warn_unknown_fields
@@ -431,7 +438,7 @@ def test_engine_repository_immutable() -> None:
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-UTILS]
+#   LINKS: [M-ENTRYPOINTS-CONFIG-PARSER]
 # END_CONTRACT: test_warn_unknown_fields
 def test_warn_unknown_fields() -> None:
     """emits ConfigWarning for unknown config keys"""
@@ -442,66 +449,172 @@ def test_warn_unknown_fields() -> None:
 
 
 # START_CONTRACT: test_config_remote_no_warnings_known_keys
-#   PURPOSE: Verify ConfigRemote does not warn for valid INI key names (user, jump_user)
+#   PURPOSE: Verify RemoteDefaults does not warn for valid INI key names (user, jump_user)
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-REMOTE]
+#   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_remote_no_warnings_known_keys
-@pytest.mark.filterwarnings("error::yascheduler.config.utils.ConfigWarning")
+@pytest.mark.filterwarnings(
+    "error::yascheduler.entrypoints._config_utils.ConfigWarning"
+)
 def test_config_remote_no_warnings_known_keys() -> None:
     """no warnings for known INI keys user and jump_user"""
     cfg = ConfigParser()
     cfg.read_string("[remote]\nuser=admin\njump_user=jumper\njump_host=bastion\n")
-    remote = ConfigRemote.from_config_parser_section(cfg["remote"])
+    remote = _parse_remote_section(cfg["remote"])
     assert remote.username == "admin"
     assert remote.jump_username == "jumper"
 
 
 # START_CONTRACT: test_config_remote_warns_unknown_keys
-#   PURPOSE: Verify ConfigRemote warns for truly unknown INI keys
+#   PURPOSE: Verify RemoteDefaults warns for truly unknown INI keys
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG-REMOTE]
+#   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_remote_warns_unknown_keys
 def test_config_remote_warns_unknown_keys() -> None:
     """emits ConfigWarning for unknown keys in remote section"""
     cfg = ConfigParser()
     cfg.read_string("[remote]\nuser=root\nbogus=yes\n")
     with pytest.warns(ConfigWarning, match="unknown fields"):
-        ConfigRemote.from_config_parser_section(cfg["remote"])
+        _parse_remote_section(cfg["remote"])
 
 
 # START_CONTRACT: test_config_top_level_full_ini
-#   PURPOSE: Verify Config.from_config_parser assembles all sub-configs from full INI
-#   INPUTS: { None }
+#   PURPOSE: Verify parse_config assembles all sub-configs from full INI
+#   INPUTS: { tmp_path: Path - temporary directory for INI file }
 #   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG]
+#   SIDE_EFFECTS: Writes a temp INI file under tmp_path
+#   LINKS: [M-ENTRYPOINTS-CONFIG]
 # END_CONTRACT: test_config_top_level_full_ini
-def test_config_top_level_full_ini() -> None:
+def test_config_top_level_full_ini(tmp_path: Path) -> None:
     """assembles all sub-configs from full INI"""
     ini = "[db]\nuser=myuser\n[local]\n[remote]\nuser=root\n[clouds]\n"
-    config = Config.from_config_parser(ini)
-    assert isinstance(config.db, ConfigDb)
-    assert isinstance(config.local, ConfigLocal)
-    assert isinstance(config.remote, ConfigRemote)
+    cfg_file = tmp_path / "full.ini"
+    cfg_file.write_text(ini)
+    config = parse_config(str(cfg_file))
+    assert isinstance(config.db, PostgresDbConfig)
+    assert isinstance(config.local, LocalSettings)
+    assert isinstance(config.remote, RemoteDefaults)
     # engines must be an EngineRepository
     assert isinstance(config.engines, EngineRepository)
 
 
 # START_CONTRACT: test_config_top_level_empty_sections
-#   PURPOSE: Verify Config.from_config_parser produces valid config from INI with empty sections only
-#   INPUTS: { None }
+#   PURPOSE: Verify parse_config produces valid config from INI with empty sections only
+#   INPUTS: { tmp_path: Path - temporary directory for INI file }
 #   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-CONFIG]
+#   SIDE_EFFECTS: Writes a temp INI file under tmp_path
+#   LINKS: [M-ENTRYPOINTS-CONFIG]
 # END_CONTRACT: test_config_top_level_empty_sections
-def test_config_top_level_empty_sections() -> None:
+def test_config_top_level_empty_sections(tmp_path: Path) -> None:
     """handles empty sections with defaults"""
     ini = "[db]\n[local]\n[remote]\n[clouds]\n"
-    config = Config.from_config_parser(ini)
+    cfg_file = tmp_path / "empty.ini"
+    cfg_file.write_text(ini)
+    config = parse_config(str(cfg_file))
     assert config.db.user == "yascheduler"  # default
     assert config.local.webhook_reqs_limit == 5  # default
     assert config.remote.username == "root"  # default
+
+
+# START_CONTRACT: test_vastai_cloud_section_round_trips
+#   PURPOSE: Verify parse_config produces a ConfigCloudVastAI entry for a [cloud.vastai] section
+#   INPUTS: { None - uses tmp_path fixture }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: Writes a temp INI file under tmp_path
+#   LINKS: [M-ENTRYPOINTS-CONFIG], [M-CLOUD-CONFIGS]
+# END_CONTRACT: test_vastai_cloud_section_round_trips
+def test_vastai_cloud_section_round_trips(tmp_path: Path) -> None:
+    """parse_config recognises [cloud.vastai] and produces a ConfigCloudVastAI entry.
+
+    parse_config delegates to ConfigParser.read, which expects a file
+    path (not INI contents), so the INI is written to a temp file and the path is
+    passed. This exercises the real production parsing path.
+    """
+    ini = "[db]\n[local]\n[remote]\nuser=root\n[clouds]\nvastai_api_key=secretkey\n"
+    cfg_file = tmp_path / "vastai.ini"
+    cfg_file.write_text(ini)
+    config = parse_config(str(cfg_file))
+    vastai_entries = [c for c in config.clouds if isinstance(c, ConfigCloudVastAI)]
+    assert len(vastai_entries) == 1
+    assert vastai_entries[0].prefix == "vastai"
+    assert vastai_entries[0].api_key == "secretkey"
+
+
+# START_CONTRACT: test_config_local_is_frozen_dataclass_without_get_private_keys
+#   PURPOSE: Verify LocalSettings is a stdlib @dataclass(frozen=True), has no get_private_keys, retains keys_dir
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS], [M-SSH-KEYS]
+# END_CONTRACT: test_config_local_is_frozen_dataclass_without_get_private_keys
+def test_config_local_is_frozen_dataclass_without_get_private_keys() -> None:
+    """LocalSettings is a stdlib frozen dataclass with keys_dir and no get_private_keys method"""
+    assert is_dataclass(LocalSettings)
+    # frozen: assigning to a field must raise FrozenInstanceError
+    instance = LocalSettings()
+    with pytest.raises(FrozenInstanceError):
+        instance.data_dir = PurePath("/x")  # type: ignore[misc,assignment]
+    # get_private_keys is gone (extracted to M-SSH-KEYS as list_private_keys)
+    assert not hasattr(instance, "get_private_keys")
+    # keys_dir field retained
+    assert hasattr(instance, "keys_dir")
+
+
+# START_CONTRACT: test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods
+#   PURPOSE: Verify ConfigCloud* DTOs are stdlib @dataclass(frozen=True) with no from_config_parser_section / get_valid_config_parser_fields methods
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-CLOUD-CONFIGS]
+# END_CONTRACT: test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods
+def test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods() -> None:
+    """ConfigCloud* DTOs are stdlib frozen dataclasses with no parser methods (relocated to infra.cloud)"""
+    for dto_cls in (
+        ConfigCloudAzure,
+        ConfigCloudHetzner,
+        ConfigCloudUpcloud,
+        ConfigCloudVastAI,
+        AzureImageReference,
+    ):
+        assert is_dataclass(dto_cls), f"{dto_cls.__name__} is not a dataclass"
+        instance = dto_cls()
+        # frozen: assigning to a declared field must raise FrozenInstanceError
+        first_field = next(iter(dto_cls.__dataclass_fields__))
+        with pytest.raises(FrozenInstanceError):
+            setattr(instance, first_field, getattr(instance, first_field))
+        # parser methods removed (moved to entrypoints.config_parser free functions);
+        # only ConfigCloud* DTOs ever had them, but assert on all for consistency.
+        assert not hasattr(dto_cls, "from_config_parser_section")
+        assert not hasattr(dto_cls, "get_valid_config_parser_fields")
+
+
+# START_CONTRACT: test_config_local_post_init_rejects_zero_limit
+#   PURPOSE: Verify LocalSettings.__post_init__ raises ValueError when a ge(1) field is 0
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS]
+# END_CONTRACT: test_config_local_post_init_rejects_zero_limit
+def test_config_local_post_init_rejects_zero_limit() -> None:
+    """__post_init__ raises ValueError for allocate_limit=0 (preserving attrs ge(1))"""
+    with pytest.raises(ValueError):
+        LocalSettings(allocate_limit=0)
+
+
+# START_CONTRACT: test_config_local_parser_passes_zero_through_to_post_init
+#   PURPOSE: Verify the INI parser path does not silently coerce a 0 limit to the default
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS]
+# END_CONTRACT: test_config_local_parser_passes_zero_through_to_post_init
+def test_config_local_parser_passes_zero_through_to_post_init() -> None:
+    """vastai parser fix companion: a 0 in INI reaches __post_init__ (no falsy 'or' coercion)"""
+    cfg = ConfigParser()
+    cfg.read_string("[local]\nallocate_limit=0\n")
+    with pytest.raises(ValueError):
+        _parse_local_section(cfg["local"])

@@ -69,8 +69,8 @@ class TestDaemonSystemdParsing:
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(systemd_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            systemd_mod.Config,
-            "from_config_parser",
+            systemd_mod,
+            "parse_config",
             MagicMock(return_value=MagicMock()),
         )
 
@@ -93,8 +93,8 @@ class TestDaemonSystemdParsing:
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(systemd_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            systemd_mod.Config,
-            "from_config_parser",
+            systemd_mod,
+            "parse_config",
             MagicMock(return_value=MagicMock()),
         )
 

@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: yainit CLI command — install service unit files and/or apply DB schema, with --schema/--daemon subset-selector flags.
 #   SCOPE: init command + argparse + systemd/sysv service install + DB schema application delegation.
-#   DEPENDS: M-PERSISTENCE-SCHEMA, M-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS
+#   DEPENDS: M-PERSISTENCE-SCHEMA, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-INIT, M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
 #
@@ -31,8 +31,8 @@ from pathlib import Path
 
 from pg8000 import DatabaseError
 
-from yascheduler.config import Config
 from yascheduler.entrypoints import CONFIG_FILE
+from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.infra import apply_schema
 
 from .args import add_config_arg, add_log_level_arg
@@ -95,7 +95,7 @@ def _init_sysv(
 #   LINKS: M-PERSISTENCE-SCHEMA
 # END_CONTRACT: _init_schema
 def _init_schema(config_path: str | Path = CONFIG_FILE) -> None:
-    config = Config.from_config_parser(config_path)
+    config = parse_config(config_path)
     try:
         # START_BLOCK_APPLY_SCHEMA
         apply_schema(config.db)

@@ -35,14 +35,14 @@ from yascheduler.domain.ports import (
     CloudProvisioner,
     MachineGateway,
     NodeRepository,
-    OccupancyConfig,
-    TaskExecutionEngine,
     TaskRepository,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path, PurePath
+
+    from yascheduler.domain import Engine
 
 
 class StubTaskRepository:
@@ -178,13 +178,13 @@ class StubMachineGateway:
     ) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]]]:
         return ([], [])
 
-    def start_occupancy_check(self, ip: str, config: OccupancyConfig) -> None:
+    def start_occupancy_check(self, ip: str, config: Engine) -> None:
         pass
 
     async def start_task_on_machine(
         self,
         machine: ConnectedMachine,
-        engine: TaskExecutionEngine,
+        engine: Engine,
         task: Task,
         ncpus: int,
         engines_dir: PurePath,

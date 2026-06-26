@@ -3,14 +3,14 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test fixtures — PostgreSQL + SSH containers, config, schema, and UoW-based DB access.
 #   SCOPE: Session-scoped containers and config, function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE.
-#   DEPENDS: M-CONFIG, M-SSH-GATEWAY, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
-#   LINKS: M-CONFIG, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
+#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-SSH-GATEWAY, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
+#   LINKS: M-ENTRYPOINTS-CONFIG, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   pytest_collection_modifyitems - auto-mark tests as "e2e"
 #   postgres_container - session-scoped PostgreSQL container
-#   _db_config - session-scoped ConfigDb from container URL
+#   _db_config - session-scoped PostgresDbConfig from container URL
 #   ssh_container - session-scoped SSH container with key pair
 #   e2e_config - session-scoped Config with temp dir, INI, engine script, SSH key
 #   _init_schema - session-scoped schema.sql application via apply_schema()
@@ -42,13 +42,15 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 from testcontainers.postgres import PostgresContainer
 
 from yascheduler.application import MessageBus
-from yascheduler.config import Config
-from yascheduler.config.db import ConfigDb
+from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.infra.persistence import PostgresDbConfig
 from yascheduler.infra.persistence.postgres_schema import apply_schema
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
+
+    from yascheduler.entrypoints import Config
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -64,9 +66,9 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 
 
 @pytest.fixture(scope="session")
-def _db_config(postgres_container: PostgresContainer) -> ConfigDb:
+def _db_config(postgres_container: PostgresContainer) -> PostgresDbConfig:
     url = urlparse(postgres_container.get_connection_url())
-    return ConfigDb(
+    return PostgresDbConfig(
         user=url.username or "test",
         password=url.password or "test",
         database=url.path.lstrip("/"),
@@ -114,7 +116,7 @@ async def ssh_container(
 @pytest.fixture(scope="session")
 def e2e_config(
     tmp_path_factory: Any,  # noqa: ANN401
-    _db_config: ConfigDb,
+    _db_config: PostgresDbConfig,
     ssh_container: dict[str, Any],
 ) -> Config:
     tmp = tmp_path_factory.mktemp("e2e_config")
@@ -165,7 +167,7 @@ def e2e_config(
 
     # START_BLOCK_ENV_CONFIG
     os.environ["YASCHEDULER_CONF_PATH"] = str(ini_path)
-    config = Config.from_config_parser(str(ini_path))
+    config = parse_config(str(ini_path))
     # END_BLOCK_ENV_CONFIG
 
     return config
@@ -173,7 +175,7 @@ def e2e_config(
 
 @pytest.fixture(scope="session")
 def _init_schema(
-    _db_config: ConfigDb,
+    _db_config: PostgresDbConfig,
 ) -> None:
     """Apply schema once per session via apply_schema()."""
     apply_schema(_db_config)
@@ -193,7 +195,7 @@ def pg_executor() -> Generator[ThreadPoolExecutor, None, None]:
 
 @pytest.fixture
 async def pg_conn(
-    _db_config: ConfigDb,
+    _db_config: PostgresDbConfig,
     _init_schema: None,
     pg_executor: ThreadPoolExecutor,
 ) -> AsyncGenerator[pg8000.native.Connection, None]:
@@ -212,7 +214,7 @@ async def pg_conn(
 
 @pytest.fixture
 def uow_factory(
-    _db_config: ConfigDb,
+    _db_config: PostgresDbConfig,
     _init_schema: None,
     _bus: MessageBus,
     pg_conn: pg8000.native.Connection,

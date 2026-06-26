@@ -1,10 +1,10 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.2.0
+# VERSION: 2.6.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Domain layer entry point — re-exports events, model entities, exception hierarchy, and port interfaces.
-#   SCOPE: Re-exports domain events from .events, domain entities from .model, exception tree from .exceptions, and port Protocols from .ports.
-#   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS
-#   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS
+#   PURPOSE: Domain layer entry point — re-exports events, model entities, engine types, exception hierarchy, port interfaces, and cross-layer settings.
+#   SCOPE: Re-exports domain events from .events, domain entities from .model, engine types from .engine (via .model), exception tree from .exceptions, port Protocols from .ports (including CloudConfig), and LocalSettings/RemoteDefaults from .settings.
+#   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-ENGINE, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS
+#   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-ENGINE, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -19,7 +19,9 @@
 #   MachineState - Enum: FREE, BUSY
 #   ProcessResult - Exit code and captured output from remote execution
 #   TaskContext - Typed task metadata with arbitrary extras
-#   Engine - Calculation engine specification with platform support
+#   Engine - Calculation engine value object (from M-DOMAIN-ENGINE)
+#   EngineRepository - Frozen collection of engines (from M-DOMAIN-ENGINE)
+#   LocalFilesDeploy / LocalArchiveDeploy / RemoteArchiveDeploy / Deploy - Deploy strategies (from M-DOMAIN-ENGINE)
 #   Task - Task entity with lifecycle methods
 #   Node - Persistent compute node record
 #   ConnectedMachine - Runtime connected machine with state transitions
@@ -43,14 +45,15 @@
 #   TaskRepository - Async port for task persistence
 #   NodeRepository - Async port for node persistence
 #   MachineGateway - Async port for remote machine operations
-#   OccupancyConfig - Minimal structural contract for occupancy check configuration
-#   TaskExecutionEngine - Engine contract for task deployment (superset of OccupancyConfig)
+#   CloudConfig - Structural contract for cloud provider config (6-field surface application consumers read)
 #   CloudProvisioner - Async port for cloud node provisioning
+#   LocalSettings - Frozen dataclass: local daemon settings (paths, webhook, concurrency limits)
+#   RemoteDefaults - Frozen dataclass: remote SSH defaults (paths, username, jump host)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - Remove ProviderSelection re-export (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v2.1.0 - Add CloudError re-export (cloud-error-hierarchy).
+#   LAST_CHANGE: v2.6.0 - Drop OccupancyConfig and TaskExecutionEngine from __all__, .ports re-export, and MODULE_MAP (resolve-engine-protocol-debt); the Protocols were deleted from ports.py and the MachineGateway methods now type against the concrete Engine.
+#   PREVIOUS_CHANGE: v2.5.0 - Re-export LocalSettings, RemoteDefaults from .settings (config-aggregate-to-entrypoints / P4); cross-layer application settings relocated from yascheduler.config to yascheduler.domain.
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -68,6 +71,11 @@ __all__ = [
     "ProcessResult",
     "TaskContext",
     "Engine",
+    "EngineRepository",
+    "LocalFilesDeploy",
+    "LocalArchiveDeploy",
+    "RemoteArchiveDeploy",
+    "Deploy",
     "Task",
     "Node",
     "ConnectedMachine",
@@ -93,11 +101,21 @@ __all__ = [
     "TaskRepository",
     "NodeRepository",
     "MachineGateway",
-    "OccupancyConfig",
-    "TaskExecutionEngine",
+    "CloudConfig",
     "CloudProvisioner",
+    # Settings
+    "LocalSettings",
+    "RemoteDefaults",
 ]
 
+from .engine import (
+    Deploy,
+    Engine,
+    EngineRepository,
+    LocalArchiveDeploy,
+    LocalFilesDeploy,
+    RemoteArchiveDeploy,
+)
 from .events import (
     DomainEvent,
     Event,
@@ -128,7 +146,6 @@ from .exceptions import (
 )
 from .model import (
     ConnectedMachine,
-    Engine,
     MachineState,
     Node,
     ProcessResult,
@@ -137,10 +154,10 @@ from .model import (
     TaskStatus,
 )
 from .ports import (
+    CloudConfig,
     CloudProvisioner,
     MachineGateway,
     NodeRepository,
-    OccupancyConfig,
-    TaskExecutionEngine,
     TaskRepository,
 )
+from .settings import LocalSettings, RemoteDefaults

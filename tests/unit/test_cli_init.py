@@ -51,7 +51,7 @@ def install_path() -> Path:
 def _stub_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """Avoid touching the real CONFIG_FILE: stub Config.from_config_parser."""
     monkeypatch.setattr(
-        "yascheduler.entrypoints.cli.init.Config.from_config_parser",
+        "yascheduler.entrypoints.cli.init.parse_config",
         MagicMock(return_value=MagicMock(db=MagicMock())),
     )
 
@@ -370,12 +370,12 @@ class TestInitConfigLogLevel:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """--config /custom.conf is passed through _init_schema(config_path) to Config.from_config_parser."""
+        """--config /custom.conf is passed through _init_schema(config_path) to parse_config."""
         custom_conf = tmp_path / "custom.conf"
         custom_conf.write_text("[local]")
         from_config_spy = MagicMock(return_value=MagicMock(db=MagicMock()))
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Config.from_config_parser",
+            "yascheduler.entrypoints.cli.init.parse_config",
             from_config_spy,
         )
         apply_mock = MagicMock()
@@ -385,10 +385,10 @@ class TestInitConfigLogLevel:
             init(["--schema", "--config", str(custom_conf)])
         assert exc.value.code == 0
         apply_mock.assert_called_once()
-        # from_config_parser was called with the custom config path (via _init_schema).
+        # parse_config was called with the custom config path (via _init_schema).
         called_paths = [call.args[0] for call in from_config_spy.call_args_list]
         assert any(str(custom_conf) == str(p) for p in called_paths), (
-            f"Config.from_config_parser not called with {custom_conf}; got {called_paths}"
+            f"parse_config not called with {custom_conf}; got {called_paths}"
         )
 
     def test_default_config_is_config_file(
@@ -399,7 +399,7 @@ class TestInitConfigLogLevel:
 
         from_config_spy = MagicMock(return_value=MagicMock(db=MagicMock()))
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Config.from_config_parser",
+            "yascheduler.entrypoints.cli.init.parse_config",
             from_config_spy,
         )
         apply_mock = MagicMock()
@@ -420,7 +420,7 @@ class TestInitConfigLogLevel:
 
         from_config_spy = MagicMock(return_value=MagicMock(db=MagicMock()))
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Config.from_config_parser",
+            "yascheduler.entrypoints.cli.init.parse_config",
             from_config_spy,
         )
         apply_mock = MagicMock()

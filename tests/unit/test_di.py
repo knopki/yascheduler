@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - Delete TestMakeAiida class + make_aiida import (function deleted from di.py in relocate-aiida-plugin; the stub was never wired through DI).
-#   PREVIOUS_CHANGE: v2.2.0 - Remove test_query_uses_uow_factory (CLIDeps.query removed in drop-cli-deps-query).
+#   LAST_CHANGE: v2.4.0 - Migrate imports: ConfigDb→PostgresDbConfig, ConfigLocal→LocalSettings, ConfigRemote→RemoteDefaults; make_daemon no longer passes config=config, assertions updated to local_settings/remote_defaults (config-aggregate-to-entrypoints / P4).
+#   PREVIOUS_CHANGE: v2.3.0 - Delete TestMakeAiida class + make_aiida import (function deleted from di.py in relocate-aiida-plugin; the stub was never wired through DI).
 # END_CHANGE_SUMMARY
 
 import asyncio
@@ -28,13 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from yascheduler.application.allocation_tracker import AllocationTracker
-from yascheduler.config import (
-    Config,
-    ConfigDb,
-    ConfigLocal,
-    ConfigRemote,
-    EngineRepository,
-)
+from yascheduler.domain import EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.domain.events import (
     TaskAbandoned,
     TaskAllocated,
@@ -42,7 +36,9 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
+from yascheduler.entrypoints import Config
 from yascheduler.entrypoints.di import CLIDeps, make_cli_deps, make_daemon
+from yascheduler.infra.persistence import PostgresDbConfig
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 # =============================================================================
@@ -53,10 +49,10 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 def create_mock_config() -> MagicMock:
     """Create a mocked Config with sub-config mocks needed by DI factories."""
     engines = MagicMock(spec=EngineRepository)
-    db = MagicMock(spec=ConfigDb)
-    remote = MagicMock(spec=ConfigRemote)
+    db = MagicMock(spec=PostgresDbConfig)
+    remote = MagicMock(spec=RemoteDefaults)
     remote.tasks_dir = PurePosixPath("/tmp/tasks")
-    local = MagicMock(spec=ConfigLocal)
+    local = MagicMock(spec=LocalSettings)
     local.tasks_dir = Path("/tmp")
 
     config = MagicMock(spec=Config)
@@ -218,7 +214,8 @@ class TestMakeDaemon:
         _call_kwargs = mock_orch.call_args.kwargs
         assert "clouds" in _call_kwargs
         assert _call_kwargs["clouds"] is not None
-        assert _call_kwargs["config"] is config
+        assert _call_kwargs["local_settings"] is config.local
+        assert _call_kwargs["remote_defaults"] is config.remote
         assert "uow_factory" in _call_kwargs
         assert callable(_call_kwargs["uow_factory"])
         assert _call_kwargs["gateway"] is mock_gw

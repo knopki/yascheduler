@@ -1,10 +1,10 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.2.1
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path).
 #   SCOPE: manage_node command + argparse + host-spec parser + node add/remove helpers (each helper owns its UoW).
-#   DEPENDS: M-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-GATEWAY, M-APPLICATION-UOW
+#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SSH-KEYS, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
+#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-GATEWAY, M-APPLICATION-UOW, M-SSH-KEYS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -19,7 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
+#   LAST_CHANGE: v1.3.0 - _add_node calls list_private_keys(config.local.keys_dir) from M-SSH-KEYS instead of config.local.get_private_keys() (ssh-keys-extraction-vastai-parser-fix).
+#   PREVIOUS_CHANGE: v1.2.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
 #   PREVIOUS_CHANGE: v1.2.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName; converted @to_sync async def manage_node to def manage_node(argv): asyncio.run(_manage_node_async(argv)) + async def _manage_node_async(argv).
 #   PREVIOUS_CHANGE: v1.1.0 - Per-helper UoW (design D18): validation read uses a short read-only UoW closed before dispatch; each mutate helper opens its OWN UoW via deps.uow_factory(), commits, and prints inside it. Eliminates the double-commit footgun of a single shared async-with UoW with commits scattered across helpers. Accepted TOCTOU window between validation and dispatch (single-operator CLI; benign non-corrupting failure modes).
 # END_CHANGE_SUMMARY
@@ -32,10 +33,11 @@ import logging
 import sys
 from dataclasses import dataclass
 
-from yascheduler.config import Config
 from yascheduler.domain import Node, TaskStatus
-from yascheduler.entrypoints import CLIDeps, make_cli_deps
+from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
+from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.infra import SSHMachineGateway
+from yascheduler.infra.ssh.keys import list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -248,7 +250,7 @@ async def _remove_node_soft(deps: CLIDeps, spec: HostSpec) -> None:
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Opens its own UoW; opens SSH, optionally sets up the remote node, inserts a Node, commits, prints to stdout;
 #                ALWAYS calls gateway.disconnect(host) via try/finally (resource-leak fix).
-#   LINKS: M-SSH-GATEWAY, M-APPLICATION-UOW, M-DOMAIN-MODEL, M-CONFIG, M-DI
+#   LINKS: M-SSH-GATEWAY, M-APPLICATION-UOW, M-DOMAIN-MODEL, M-ENTRYPOINTS-CONFIG, M-DI
 # END_CONTRACT: _add_node
 async def _add_node(
     deps: CLIDeps,
@@ -264,7 +266,7 @@ async def _add_node(
         await gateway.connect(
             ip=spec.host,
             username=username,
-            client_keys=config.local.get_private_keys(),
+            client_keys=list_private_keys(config.local.keys_dir),
             engines_dir=config.remote.engines_dir,
             port=spec.port,
         )
@@ -307,7 +309,7 @@ async def _manage_node_async(argv: list[str] | None) -> None:
             log.addHandler(logging.StreamHandler(sys.stderr))
 
         # START_BLOCK_CONFIGURE
-        config = Config.from_config_parser(args.config)
+        config = parse_config(args.config)
         deps = make_cli_deps(config)
         gateway = SSHMachineGateway()
         # END_BLOCK_CONFIGURE

@@ -1,10 +1,10 @@
 # FILE: yascheduler/entrypoints/cli/submit.py
-# VERSION: 1.1.1
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasubmit CLI command — parse AiiDA script, submit task via DI.
 #   SCOPE: submit command + argparse + script metadata/input file helpers + metadata assembly.
-#   DEPENDS: M-DI, M-CONFIG, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-DI
+#   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG, M-DOMAIN-ENGINE, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
+#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-DI, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -17,9 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: replaced private _existing_path with existing_path from args.py; added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName; converted @to_sync async def submit to def submit(argv): asyncio.run(_submit_async(argv)) + async def _submit_async(argv).
-#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-submit-command: moved from infra/cli/submit.py, added prog="yasubmit", argv testability param, type=_existing_path (exit 2 for missing file), 0/1/2 exit-code contract, _build_metadata encapsulates webhook branch, dropped stale FIXME.
+#   LAST_CHANGE: v1.2.0 - Runtime import Engine from yascheduler.domain (split from Config which stays from yascheduler.config) (engine-to-domain-frozen).
+#   PREVIOUS_CHANGE: v1.1.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,16 +30,19 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from yascheduler.config import Config, Engine
-from yascheduler.entrypoints import make_cli_deps
+from yascheduler.entrypoints import Config, make_cli_deps
+from yascheduler.entrypoints.config_parser import parse_config
 
 from .args import (
     add_config_arg,
     add_log_level_arg,
     existing_path,
 )
+
+if TYPE_CHECKING:
+    from yascheduler.domain import Engine
 
 
 # START_CONTRACT: _parse_submit_args
@@ -148,7 +150,7 @@ async def _submit_async(argv: list[str] | None) -> None:
             log.addHandler(logging.StreamHandler(sys.stderr))
 
         # START_BLOCK_CONFIGURE
-        config = Config.from_config_parser(args.config)
+        config = parse_config(args.config)
         deps = make_cli_deps(config)
         # END_BLOCK_CONFIGURE
 

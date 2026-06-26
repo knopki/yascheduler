@@ -26,6 +26,7 @@ from .cloud import CloudAdapter, CloudProvisionerImpl, resolve_adapter
 from .notifier import webhook_handler
 from .persistence import PostgresUnitOfWork, apply_schema
 from .ssh import AllSSHRetryExc, SFTPRetryExc, SSHMachineGateway
+from .ssh.keys import list_private_keys
 
 __all__ = [
     "AllSSHRetryExc",
@@ -37,4 +38,5 @@ __all__ = [
     "webhook_handler",
     "resolve_adapter",
     "apply_schema",
+    "list_private_keys",
 ]

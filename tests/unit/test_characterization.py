@@ -28,7 +28,7 @@ class TestClientQueueSubmitTaskAsync:
     """Client.queue_submit_task_async delegates to deps.submit via the deps_factory seam."""
 
     @pytest.mark.asyncio
-    @patch("yascheduler.entrypoints.client.Config.from_config_parser")
+    @patch("yascheduler.entrypoints.client.parse_config")
     async def test_queue_submit_task_async_uses_cli_deps(
         self, mock_from_cfg: MagicMock
     ) -> None:

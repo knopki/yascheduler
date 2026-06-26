@@ -1,11 +1,11 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.2.0
+# VERSION: 2.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
 #   SCOPE: CloudProvisionerImpl class implementing allocate, deallocate, select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineGateway.
-#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIG, M-CLOUD-SSH-KEYS, M-SSH-GATEWAY, M-CONFIG, M-CONFIG-CLOUD
-#   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS
+#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-SSH-KEYS, M-SSH-GATEWAY, M-SSH-KEYS, M-DOMAIN-SETTINGS
+#   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - Migrate CloudProvisionerImpl from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); 7× bare field() → bare annotations; ssh_key_lock factory → default_factory (migrate-cloud-from-attrs).
-#   PREVIOUS_CHANGE: v2.1.0 - select_provider returns adapter.name (str|None) instead of ProviderSelection(name, username); drop config lookup + ProviderSelection import (collapse-provider-selection).
+#   LAST_CHANGE: v2.6.0 - TYPE_CHECKING import LocalSettings/RemoteDefaults from yascheduler.domain instead of ConfigLocal/ConfigRemote from yascheduler.config; field annotations updated (config-aggregate-to-entrypoints / P4).
+#   PREVIOUS_CHANGE: v2.5.0 - TYPE_CHECKING import ConfigCloud from .cloud_configs (intra-package) instead of yascheduler.config (cloud-configs-to-infra-registry); _connect_to_vm uses direct attribute access `config.jump_host or None` / `config.jump_username or None` instead of `getattr(config, "...", None) or None` (all four DTOs now declare those fields as frozen dataclass fields, so the defensive fallback is unnecessary).
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -33,6 +33,7 @@ from yascheduler.domain import (
     ConnectedMachine,
     Node,
 )
+from yascheduler.infra.ssh.keys import list_private_keys
 
 from .cloud_config import CloudConfig
 from .provider_selection import select_provider_pure
@@ -45,15 +46,11 @@ if TYPE_CHECKING:
 
     from asyncssh.public_key import SSHKey
 
-    from yascheduler.config import (
-        ConfigCloud,
-        ConfigLocal,
-        ConfigRemote,
-        EngineRepository,
-    )
+    from yascheduler.domain import EngineRepository, LocalSettings, RemoteDefaults
     from yascheduler.infra import SSHMachineGateway
 
     from .adapters import CloudAdapter
+    from .cloud_configs import ConfigCloud
     from .protocols import PCloudConfig
 
 
@@ -63,8 +60,8 @@ if TYPE_CHECKING:
 #     adapters: dict[str, CloudAdapter] - provider name to adapter,
 #     configs: dict[str, ConfigCloud] - provider name to config,
 #     machine_gateway: SSHMachineGateway - SSH connections,
-#     local_config: ConfigLocal - local daemon config (keys),
-#     remote_config: ConfigRemote - remote machine defaults,
+#     local_config: LocalSettings - local daemon config (keys),
+#     remote_config: RemoteDefaults - remote machine defaults,
 #     engines: EngineRepository - engine definitions for cloud-config,
 #     log: logging.Logger - logger
 #   }
@@ -83,8 +80,8 @@ class CloudProvisionerImpl:
     adapters: dict[str, CloudAdapter]
     configs: dict[str, ConfigCloud]
     machine_gateway: SSHMachineGateway
-    local_config: ConfigLocal
-    remote_config: ConfigRemote
+    local_config: LocalSettings
+    remote_config: RemoteDefaults
     engines: EngineRepository
     log: logging.Logger
     # Internal lock serializing SSH key load/generate across concurrent allocations.
@@ -265,7 +262,7 @@ class CloudProvisionerImpl:
     #   INPUTS: { adapter: CloudAdapter - target provider adapter }
     #   OUTPUTS: { PCloudConfig - cloud-config data with packages }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-CONFIG-CLOUD
+    #   LINKS: M-CLOUD-CONFIG
     # END_CONTRACT: CloudProvisionerImpl._get_cloud_config_data
     async def _get_cloud_config_data(self, adapter: CloudAdapter) -> PCloudConfig:
         """Build cloud-config with engine packages for this adapter's platforms."""
@@ -383,7 +380,7 @@ class CloudProvisionerImpl:
         """Connect to VM via SSH gateway with retry-friendly error wrapping."""
         # START_BLOCK_GET_KEYS
         keys: Sequence[PurePath] = await asyncio.get_running_loop().run_in_executor(
-            None, self.local_config.get_private_keys
+            None, list_private_keys, self.local_config.keys_dir
         )
         # END_BLOCK_GET_KEYS
 
@@ -402,8 +399,8 @@ class CloudProvisionerImpl:
                 data_dir=self.remote_config.data_dir,
                 engines_dir=self.remote_config.engines_dir,
                 tasks_dir=self.remote_config.tasks_dir,
-                jump_host=getattr(config, "jump_host", None) or None,
-                jump_username=getattr(config, "jump_username", None) or None,
+                jump_host=config.jump_host or None,
+                jump_username=config.jump_username or None,
             )
         except Exception as err:
             raise CloudSetupError(f"SSH connect to {ip_addr} failed: {err}") from err

@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from yascheduler.config import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.model import Task, TaskContext, TaskStatus
 from yascheduler.infra.persistence.sql_loader import load_query
 

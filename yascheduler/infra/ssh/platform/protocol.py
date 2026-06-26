@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/infra/ssh/platform/protocol.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Protocol definitions for engines, process info, SSH checks, and adapters.
-#   SCOPE: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc, PProcessInfo, PEngine, PEngineRepository, PNode, SSHCheck, QuoteCallable, RunCallable, RunBgCallable, OuterRunCallable, GetCPUCoresCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable protocols and type aliases.
-#   DEPENDS: M-CONFIG-ENGINE
+#   PURPOSE: Protocol definitions for process info, SSH checks, and adapters.
+#   SCOPE: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc, PProcessInfo, PNode, SSHCheck, QuoteCallable, RunCallable, RunBgCallable, OuterRunCallable, GetCPUCoresCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable protocols and type aliases.
+#   DEPENDS: M-DOMAIN-ENGINE
 #   LINKS: M-PLATFORM-ADAPTERS
 # END_MODULE_CONTRACT
 #
@@ -14,8 +14,6 @@
 #   SSHRetryExc              - Tuple of retriable SSH exception types.
 #   AllSSHRetryExc           - Union of SSHRetryExc and SFTPRetryExc.
 #   PProcessInfo             - Protocol: pid, name, command fields for a process.
-#   PEngine                  - Protocol: engine metadata (name, deployable, platforms, checks).
-#   PEngineRepository        - Protocol: query interface for engine packages and platforms.
 #   PNode                    - Protocol: node identity (ip, username).
 #   SSHCheck                 - Callable alias: async SSH connection health check.
 #   QuoteCallable            - Callable alias: string quoting function.
@@ -29,17 +27,17 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Copied from yascheduler/remote_machine/protocol.py for platform adapters.
+#   LAST_CHANGE: v1.1.0 - Delete PEngine and PEngineRepository Protocols (engine-to-domain-frozen); consumers import Engine/EngineRepository from yascheduler.domain directly. Switch Deploy* import from yascheduler.config to yascheduler.domain. SetupNodeCallable.__call__ now references EngineRepository (TYPE_CHECKING import from yascheduler.domain).
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 
 import asyncio
 import logging
 from abc import abstractmethod
-from collections.abc import AsyncGenerator, Callable, Coroutine, Sequence, ValuesView
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from pathlib import PurePath
 from re import Pattern
-from typing import Any, Optional, Protocol, Union
+from typing import TYPE_CHECKING, Any, Optional, Protocol, Union
 
 from asyncssh.connection import SSHClientConnection
 from asyncssh.misc import (
@@ -67,11 +65,8 @@ from asyncssh.sftp import (
     SFTPNoMatchingByteRangeLock,
 )
 
-from yascheduler.config import (
-    LocalArchiveDeploy,
-    LocalFilesDeploy,
-    RemoteArchiveDeploy,
-)
+if TYPE_CHECKING:
+    from yascheduler.domain import EngineRepository
 
 SFTPRetryExc = (
     asyncio.TimeoutError,
@@ -106,32 +101,6 @@ class PProcessInfo(Protocol):
     pid: int
     name: str
     command: str
-
-
-class PEngine(Protocol):
-    name: str
-    deployable: tuple[
-        Union[LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy], ...
-    ]
-    platforms: tuple[str, ...]
-    check_pname: Optional[str]
-    check_cmd: Optional[str]
-    check_cmd_code: int
-    sleep_interval: int
-
-
-class PEngineRepository(Protocol):
-    @abstractmethod
-    def get_platform_packages(self) -> Sequence[str]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def filter_platforms(self, platforms: Sequence[str]) -> "PEngineRepository":
-        raise NotImplementedError
-
-    @abstractmethod
-    def values(self) -> ValuesView[PEngine]:
-        raise NotImplementedError
 
 
 class PNode(Protocol):
@@ -212,7 +181,7 @@ class SetupNodeCallable(Protocol):
         conn: SSHClientConnection,
         run: OuterRunCallable,
         quote: QuoteCallable,
-        engines: PEngineRepository,
+        engines: "EngineRepository",
         engines_dir: PurePath,
         log: Optional[logging.Logger] = None,
     ) -> Coroutine[Any, Any, None]:

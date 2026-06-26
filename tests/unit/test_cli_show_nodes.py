@@ -32,7 +32,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from yascheduler.config import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
@@ -48,14 +48,15 @@ pytestmark = pytest.mark.unit
 
 def make_mock_config() -> MagicMock:
     """Return a MagicMock Config with all expected attributes."""
-    engine = MagicMock(spec=Engine)
-    engine.name = "g09"
-    engine.spawn = "run.sh"
-    engine.input_files = ("input",)
-    engine.output_files = ("OUTPUT",)
-    engine.platforms = ("linux",)
-    engine.check_cmd = "echo"
-    engine.check_pname = None
+    engine = Engine(
+        name="g09",
+        spawn="run.sh",
+        input_files=("input",),
+        output_files=("OUTPUT",),
+        platforms=("linux",),
+        check_cmd="echo",
+        check_pname=None,
+    )
 
     engines = MagicMock(spec=EngineRepository)
     engines.get = MagicMock(return_value=engine)
@@ -66,7 +67,6 @@ def make_mock_config() -> MagicMock:
     config.remote.username = "root"
     config.remote.engines_dir = "/opt/engines"
     config.remote.tasks_dir = PurePosixPath("/tmp/tasks")
-    config.local.get_private_keys = MagicMock(return_value=[])
     config.local.webhook_url = None
     config.local.data_dir = "/tmp"
     config.db = MagicMock()
@@ -125,9 +125,7 @@ def stub_config_deps(
     config = make_mock_config()
     uow = make_mock_uow()
     deps = make_mock_deps(config, uow)
-    monkeypatch.setattr(
-        show_nodes_mod.Config, "from_config_parser", MagicMock(return_value=config)
-    )
+    monkeypatch.setattr(show_nodes_mod, "parse_config", MagicMock(return_value=config))
     monkeypatch.setattr(show_nodes_mod, "make_cli_deps", MagicMock(return_value=deps))
     return config, uow, deps
 
@@ -485,8 +483,8 @@ class TestShowNodesErrors:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(
-            show_nodes_mod.Config,
-            "from_config_parser",
+            show_nodes_mod,
+            "parse_config",
             MagicMock(side_effect=RuntimeError("bad config")),
         )
         with pytest.raises(SystemExit) as exc:
@@ -591,9 +589,7 @@ class TestShowNodesConfigLogLevel:
         custom_conf = tmp_path / "custom.conf"
         custom_conf.write_text("[local]")
         from_config_spy = MagicMock(return_value=make_mock_config())
-        monkeypatch.setattr(
-            show_nodes_mod.Config, "from_config_parser", from_config_spy
-        )
+        monkeypatch.setattr(show_nodes_mod, "parse_config", from_config_spy)
         uow = make_mock_uow()
         _wire(uow, [])
         deps = make_mock_deps(make_mock_config(), uow)
@@ -613,9 +609,7 @@ class TestShowNodesConfigLogLevel:
         _config, uow, _deps = stub_config_deps
         _wire(uow, [])
         from_config_spy = MagicMock(return_value=make_mock_config())
-        monkeypatch.setattr(
-            show_nodes_mod.Config, "from_config_parser", from_config_spy
-        )
+        monkeypatch.setattr(show_nodes_mod, "parse_config", from_config_spy)
         fresh_uow = make_mock_uow()
         _wire(fresh_uow, [])
         monkeypatch.setattr(

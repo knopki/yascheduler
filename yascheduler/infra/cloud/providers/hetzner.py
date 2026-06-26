@@ -1,11 +1,11 @@
 # FILE: yascheduler/infra/cloud/providers/hetzner.py
-# VERSION: 1.6.1
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Hetzner Cloud server creation and deletion via API.
 #   SCOPE: Hetzner create/delete node functions.
-#   DEPENDS: M-CONFIG-CLOUD, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CONFIG-CLOUD
+#   DEPENDS: M-CLOUD-CONFIGS, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
+#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-CONFIGS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.6.1 - Relocated from yascheduler/clouds/hetzner.py; optional SDK imports; updated internal imports.
+#   LAST_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudHetzner from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
+#   PREVIOUS_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
 # END_CHANGE_SUMMARY
 #
 """Hetzner cloud methods"""
@@ -50,8 +50,7 @@ if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
     from hcloud.servers.client import BoundServer
 
-    from yascheduler.config import ConfigCloudHetzner
-    from yascheduler.infra.cloud import PCloudConfig
+    from yascheduler.infra.cloud import ConfigCloudHetzner, PCloudConfig
 
 executor = ThreadPoolExecutor(max_workers=5)
 

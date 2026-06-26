@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: Shared daemon core — configure_logger and run_daemon, consumed by all three daemon entry points (daemonize, daemon_systemd, daemon_sysv).
 #   SCOPE: Root-logger configuration (StreamHandler→stderr always + FileHandler when set; backoff/asyncssh suppressed; captureWarnings) and the async daemon runtime (make_daemon + SIGTERM/SIGINT handlers + orch.start()).
-#   DEPENDS: M-DI, M-CONFIG, M-APPLICATION-ORCHESTRATOR
+#   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG-PARSER, M-APPLICATION-ORCHESTRATOR
 #   LINKS: M-DAEMON-COMMON
 # END_MODULE_CONTRACT
 #
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from yascheduler.application import Orchestrator
-    from yascheduler.config import Config
+    from yascheduler.entrypoints import Config
 
 
 # START_CONTRACT: configure_logger

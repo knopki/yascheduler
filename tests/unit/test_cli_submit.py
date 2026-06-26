@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from yascheduler.config import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.entrypoints.di import CLIDeps
 
 submit_mod = importlib.import_module("yascheduler.entrypoints.cli.submit")
@@ -48,14 +48,15 @@ pytestmark = pytest.mark.unit
 
 def make_mock_config(webhook_url: str | None = None) -> MagicMock:
     """Return a MagicMock Config with a known g09 engine and optional webhook_url."""
-    engine = MagicMock(spec=Engine)
-    engine.name = "g09"
-    engine.spawn = "run.sh"
-    engine.input_files = ("input",)
-    engine.output_files = ("OUTPUT",)
-    engine.platforms = ("linux",)
-    engine.check_cmd = "echo"
-    engine.check_pname = None
+    engine = Engine(
+        name="g09",
+        spawn="run.sh",
+        input_files=("input",),
+        output_files=("OUTPUT",),
+        platforms=("linux",),
+        check_cmd="echo",
+        check_pname=None,
+    )
 
     engines = MagicMock(spec=EngineRepository)
     engines.get = MagicMock(return_value=engine)
@@ -66,7 +67,6 @@ def make_mock_config(webhook_url: str | None = None) -> MagicMock:
     config.remote.username = "root"
     config.remote.engines_dir = "/opt/engines"
     config.remote.tasks_dir = Path("/tmp/tasks")
-    config.local.get_private_keys = MagicMock(return_value=[])
     config.local.webhook_url = webhook_url
     config.local.data_dir = "/tmp"
     config.db = MagicMock()
@@ -89,9 +89,7 @@ def stub_config_deps(
     """Patch Config.from_config_parser and make_cli_deps; return (config, deps)."""
     config = make_mock_config()
     deps = make_mock_deps(config)
-    monkeypatch.setattr(
-        submit_mod.Config, "from_config_parser", MagicMock(return_value=config)
-    )
+    monkeypatch.setattr(submit_mod, "parse_config", MagicMock(return_value=config))
     monkeypatch.setattr(submit_mod, "make_cli_deps", MagicMock(return_value=deps))
     return config, deps
 
@@ -350,8 +348,7 @@ class TestSubmitHelpers:
     def test_read_input_files_utf8(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        engine = MagicMock(spec=Engine)
-        engine.input_files = ("input",)
+        engine = Engine(name="g09", spawn="run.sh", input_files=("input",))
         (tmp_path / "input").write_text("hello", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
 
@@ -361,8 +358,7 @@ class TestSubmitHelpers:
     def test_read_input_files_base64_fallback(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        engine = MagicMock(spec=Engine)
-        engine.input_files = ("binary.dat",)
+        engine = Engine(name="g09", spawn="run.sh", input_files=("binary.dat",))
         # Bytes that are not valid UTF-8 (0xFF is invalid alone)
         (tmp_path / "binary.dat").write_bytes(b"\xff\xfe\x00\x01")
         monkeypatch.chdir(tmp_path)
@@ -443,8 +439,8 @@ class TestSubmitExitCodes:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(
-            submit_mod.Config,
-            "from_config_parser",
+            submit_mod,
+            "parse_config",
             MagicMock(side_effect=RuntimeError("bad config")),
         )
         script = tmp_path / "test.in"
@@ -598,7 +594,7 @@ class TestSubmitConfigLogLevel:
         custom_conf = tmp_path / "custom.conf"
         custom_conf.write_text("[local]")
         from_config_spy = MagicMock(return_value=make_mock_config())
-        monkeypatch.setattr(submit_mod.Config, "from_config_parser", from_config_spy)
+        monkeypatch.setattr(submit_mod, "parse_config", from_config_spy)
         monkeypatch.setattr(
             submit_mod,
             "make_cli_deps",
@@ -619,7 +615,7 @@ class TestSubmitConfigLogLevel:
         (tmp_path / "input").write_text("x")
         monkeypatch.chdir(tmp_path)
         from_config_spy = MagicMock(return_value=make_mock_config())
-        monkeypatch.setattr(submit_mod.Config, "from_config_parser", from_config_spy)
+        monkeypatch.setattr(submit_mod, "parse_config", from_config_spy)
         monkeypatch.setattr(
             submit_mod,
             "make_cli_deps",
@@ -645,8 +641,8 @@ class TestSubmitConfigLogLevel:
         (tmp_path / "input").write_text("x")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(
-            submit_mod.Config,
-            "from_config_parser",
+            submit_mod,
+            "parse_config",
             MagicMock(return_value=make_mock_config()),
         )
         monkeypatch.setattr(

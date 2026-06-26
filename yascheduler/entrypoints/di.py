@@ -1,10 +1,10 @@
 # FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.4.0
+# VERSION: 5.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
 #   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-CONFIG, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-ENTRYPOINTS-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER
+#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-ENTRYPOINTS-CONFIG, M-SSH-GATEWAY, M-SSH-KEYS, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-ENTRYPOINTS-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-KEYS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.4.0 - relocate-di-to-entrypoints: move composition root into yascheduler.entrypoints; internal imports switch from relative (.application/.domain/.infra) to absolute via layer facades (yascheduler.application/.domain/.infra). PREVIOUS_CHANGE: v5.3.0 - Delete make_aiida stub (function + START_CONTRACT block + MODULE_MAP line + SCOPE/PURPOSE AiiDA mention). Never wired through DI; plugin talks to yascheduler over SSH transport, not via the composition root. Relocated plugin lives at yascheduler/entrypoints/aiida_plugin.py (relocate-aiida-plugin). BREAKING for the (empty) set of external make_aiida importers; only tests/unit/test_di.py imported it, updated in the same change.
-#   PREVIOUS_CHANGE: v5.2.1 - Update stale M-CLIENT graph reference to M-ENTRYPOINTS-CLIENT after client relocation (add-entrypoints-layer).
+#   LAST_CHANGE: v5.9.0 - Remove 2 upcast bridges cast("Sequence[CloudConfig]", config.clouds) and cast("Sequence[CloudConfig]", active_clouds) (D1: DTOs explicitly inherit CloudConfig Protocol → list[ConfigCloud] assignable to Sequence[CloudConfig] via covariance+inheritance); retain 2 Protocol→Union downcasts cast("ConfigCloud", cfg) and cast("list[ConfigCloud]", [...]) at the entrypoints→infra boundary with corrected comments (resolve-type-bridge-debt).
+#   PREVIOUS_CHANGE: v5.8.0 - Import Config from yascheduler.entrypoints.config (not yascheduler.config); make_daemon unpacks config.local/config.remote into Orchestrator as local_settings/remote_defaults (config-aggregate-to-entrypoints / P4).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import aiohttp
 
@@ -48,6 +48,7 @@ from yascheduler.infra import (
     CloudProvisionerImpl,
     PostgresUnitOfWork,
     SSHMachineGateway,
+    list_private_keys,
     resolve_adapter,
     webhook_handler,
 )
@@ -56,7 +57,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import PurePath
 
-    from yascheduler.config import Config, ConfigCloud, EngineRepository
+    from yascheduler.domain import EngineRepository
+    from yascheduler.infra.cloud import ConfigCloud
+
+    from .config import Config
 
 
 # START_CONTRACT: CLIDeps
@@ -120,8 +124,8 @@ def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
 #   INPUTS: { config: Config, log: Optional[Logger], clouds: Optional[CloudProvisionerImpl] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates UoW factory, AllocationTracker, asyncio.Lock, CloudProvisionerImpl, SSHMachineGateway.
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
+#   SIDE_EFFECTS: Creates UoW factory, AllocationTracker, asyncio.Lock, CloudProvisionerImpl, SSHMachineGateway; injects list_private_keys_fn.
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-SSH-KEYS, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: make_daemon
 async def make_daemon(
     config: Config,
@@ -153,6 +157,12 @@ async def make_daemon(
                         cfg.max_nodes,
                     )
                     continue
+                # config.clouds is typed Sequence[CloudConfig] (domain Protocol);
+                # the infra sinks (resolve_adapter, _configs, active_clouds)
+                # expect the concrete ConfigCloud Union. This is a Protocol→Union
+                # downcast: D1 (DTOs inherit Protocol) makes the reverse
+                # (Union→Protocol) direction typecheck, but not this one.
+                cfg = cast("ConfigCloud", cfg)
                 adapter = resolve_adapter(cfg, log)
                 if adapter is None:
                     continue
@@ -179,15 +189,24 @@ async def make_daemon(
             # max_nodes in _clouds_get_capacity for any provider whose
             # optional deps are missing.
             resolved_prefixes = set(clouds.configs.keys())
-            active_clouds = [
-                cfg
-                for cfg in config.clouds
-                if cfg.max_nodes > 0 and cfg.prefix in resolved_prefixes
-            ]
+            # Protocol→Union downcast: config.clouds yields CloudConfig, the
+            # infra-typed active_clouds expects ConfigCloud. See note above.
+            active_clouds = cast(
+                "list[ConfigCloud]",
+                [
+                    cfg
+                    for cfg in config.clouds
+                    if cfg.max_nodes > 0 and cfg.prefix in resolved_prefixes
+                ],
+            )
         gateway = SSHMachineGateway(log=log)
 
+        # The concrete ConfigCloud* DTOs explicitly inherit the domain
+        # CloudConfig Protocol (D1), so list[ConfigCloud] is assignable to
+        # Sequence[CloudConfig] (covariance + inheritance) without a cast.
         return Orchestrator(
-            config=config,
+            local_settings=config.local,
+            remote_defaults=config.remote,
             uow_factory=uow_factory,
             clouds=clouds,
             gateway=gateway,
@@ -199,6 +218,7 @@ async def make_daemon(
             allocation_tracker=allocation_tracker,
             active_clouds=active_clouds,
             allocation_lock=allocation_lock,
+            list_private_keys_fn=list_private_keys,
         )
     except Exception:
         await http.close()

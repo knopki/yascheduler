@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-12T17:19:19.633498492Z"
+exclude-newer = "2026-06-19T12:26:07.37343891Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -4114,7 +4114,6 @@ dependencies = [
     { name = "asyncssh", version = "2.21.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "asyncssh", version = "2.23.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "asyncstdlib" },
-    { name = "attrs" },
     { name = "backoff" },
     { name = "pg8000" },
     { name = "python-daemon" },
@@ -4161,7 +4160,6 @@ requires-dist = [
     { name = "aiohttp", specifier = "~=3.8" },
     { name = "asyncssh", specifier = "~=2.11" },
     { name = "asyncstdlib", specifier = "~=3.10" },
-    { name = "attrs", specifier = ">=22.2.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = "~=1.10.0" },
     { name = "azure-mgmt-compute", marker = "extra == 'azure'", specifier = "~=27.2.0" },
     { name = "azure-mgmt-network", marker = "extra == 'azure'", specifier = "~=20.0.0" },

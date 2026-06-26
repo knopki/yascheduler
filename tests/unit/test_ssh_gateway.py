@@ -35,12 +35,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
 from yascheduler.infra.ssh.gateway import SSHMachineGateway, _MachineState
 from yascheduler.infra.ssh.platform.protocol import (
     ChannelOpenError,
-    PEngine,
-    PEngineRepository,
     PProcessInfo,
 )
 
@@ -229,8 +228,8 @@ def mock_adapter() -> MagicMock:
 
 @pytest.fixture
 def mock_pengine() -> MagicMock:
-    """Mock PEngine for occupancy checks."""
-    engine = MagicMock(spec=PEngine)
+    """Mock Engine for occupancy checks."""
+    engine = MagicMock(spec=Engine)
     engine.name = "test_engine"
     engine.check_pname = None
     engine.check_cmd = None
@@ -905,7 +904,7 @@ class TestAdvancedOperations:
         state = _make_state()
         gateway._machines["10.0.0.1"] = state
 
-        engine_repo = MagicMock(spec=PEngineRepository)
+        engine_repo = MagicMock(spec=EngineRepository)
         engine_repo.filter_platforms.return_value = engine_repo
 
         await gateway.setup_node("10.0.0.1", engine_repo)
@@ -966,7 +965,7 @@ class TestAdvancedOperations:
     @pytest.mark.asyncio
     async def test_setup_node_unknown_ip(self, gateway: SSHMachineGateway) -> None:
         """setup_node raises KeyError for unknown IP."""
-        engine_repo = MagicMock(spec=PEngineRepository)
+        engine_repo = MagicMock(spec=EngineRepository)
         with pytest.raises(KeyError):
             await gateway.setup_node("10.0.0.99", engine_repo)
 

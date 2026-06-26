@@ -5,7 +5,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: SysV init service entry point for the scheduler daemon — runs detached via python-daemon with PID file management.
 #   SCOPE: Thin sync main() that builds an argparse parser (keeping -p/--pid-file and -l/--log-file short flags for yascheduler.sh compatibility), wraps the daemon runtime in a DaemonContext (working_directory="/"), and runs the async daemon core via asyncio.run INSIDE the context.
-#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-CONFIG, M-ENTRYPOINTS
+#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-ENTRYPOINTS-CONFIG-PARSER, M-ENTRYPOINTS
 #   LINKS: M-DAEMON-SYSV, M-DAEMON-COMMON
 # END_MODULE_CONTRACT
 #
@@ -30,8 +30,8 @@ import sys
 import daemon
 from daemon import pidfile
 
-from yascheduler.config import Config
 from yascheduler.entrypoints import LOG_FILE, PID_FILE
+from yascheduler.entrypoints.config_parser import parse_config
 
 from .args import add_config_arg, add_log_level_arg
 from .daemon_common import configure_logger, run_daemon
@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> None:
             logger = configure_logger(
                 args.log_file, logging.getLevelName(args.log_level)
             )
-            config = Config.from_config_parser(args.config)
+            config = parse_config(args.config)
             asyncio.run(run_daemon(config, logger))
         # END_BLOCK_DAEMON_CONTEXT
     except SystemExit:

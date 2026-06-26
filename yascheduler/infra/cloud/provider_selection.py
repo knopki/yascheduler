@@ -24,9 +24,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import logging
 
-    from yascheduler.config import ConfigCloud
-
     from .adapters import CloudAdapter
+    from .cloud_configs import ConfigCloud
 
 
 # START_CONTRACT: select_provider_pure

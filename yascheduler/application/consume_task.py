@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 5.3.0
+# VERSION: 5.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and mark task DONE.
 #   SCOPE: consume_task async function.
-#   DEPENDS: M-APPLICATION-UOW, M-CONFIG-ENGINE-REPO, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-GATEWAY
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-GATEWAY, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.3.0 - Migrate replace(task.context, ...) to task.context.replace(...); drop dead dataclasses.replace import (task-context-replace).
-#   PREVIOUS_CHANGE: v5.2.0 - Migrate replace(task, context=...) to task.with_context; drop redundant context.error set before .fail (task-with-context).
+#   LAST_CHANGE: v5.4.0 - TYPE_CHECKING import EngineRepository from yascheduler.domain instead of yascheduler.config (engine-to-domain-frozen).
+#   PREVIOUS_CHANGE: v5.3.0 - Migrate replace(task.context, ...) to task.context.replace(...); drop dead dataclasses.replace import (task-context-replace).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,8 +31,7 @@ from yascheduler.domain import TaskCompleted, TaskFailed
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.config import EngineRepository
-    from yascheduler.domain import MachineGateway, Task
+    from yascheduler.domain import EngineRepository, MachineGateway, Task
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork

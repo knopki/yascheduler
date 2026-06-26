@@ -29,7 +29,7 @@ from yascheduler.infra.cloud.adapters import CloudAdapter
 from yascheduler.infra.cloud.provider_selection import select_provider_pure
 
 if TYPE_CHECKING:
-    from yascheduler.config.cloud import ConfigCloud
+    from yascheduler.infra.cloud import ConfigCloud
 
 
 def _make_adapter(name: str, supports_platforms: list[str]) -> CloudAdapter:
