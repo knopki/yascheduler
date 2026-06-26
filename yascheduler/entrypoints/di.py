@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.7.0
+# VERSION: 5.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
 #   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.9.0 - Remove 2 upcast bridges cast("Sequence[CloudConfig]", config.clouds) and cast("Sequence[CloudConfig]", active_clouds) (D1: DTOs explicitly inherit CloudConfig Protocol → list[ConfigCloud] assignable to Sequence[CloudConfig] via covariance+inheritance); retain 2 Protocol→Union downcasts cast("ConfigCloud", cfg) and cast("list[ConfigCloud]", [...]) at the entrypoints→infra boundary with corrected comments (resolve-type-bridge-debt).
-#   PREVIOUS_CHANGE: v5.8.0 - Import Config from yascheduler.entrypoints.config (not yascheduler.config); make_daemon unpacks config.local/config.remote into Orchestrator as local_settings/remote_defaults (config-aggregate-to-entrypoints / P4).
+#   LAST_CHANGE: v5.10.0 - Remove the 2 Protocol→Union downcasts (cast("ConfigCloud", cfg) and cast("list[ConfigCloud]", [...])) and drop the unused typing.cast import (narrow-config-clouds-type). Config.clouds is now typed Sequence[ConfigCloud], so iterating config.clouds yields ConfigCloud directly and feeds the infra sinks without a cast; the application-side Orchestrator(config_clouds=..., active_clouds=...) assignment still typechecks via covariance + explicit DTO→Protocol inheritance.
+#   PREVIOUS_CHANGE: v5.9.0 - Remove 2 upcast bridges cast("Sequence[CloudConfig]", config.clouds) and cast("Sequence[CloudConfig]", active_clouds) (D1: DTOs explicitly inherit CloudConfig Protocol → list[ConfigCloud] assignable to Sequence[CloudConfig] via covariance+inheritance); retain 2 Protocol→Union downcasts cast("ConfigCloud", cfg) and cast("list[ConfigCloud]", [...]) at the entrypoints→infra boundary with corrected comments (resolve-type-bridge-debt).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import aiohttp
 
@@ -157,12 +157,6 @@ async def make_daemon(
                         cfg.max_nodes,
                     )
                     continue
-                # config.clouds is typed Sequence[CloudConfig] (domain Protocol);
-                # the infra sinks (resolve_adapter, _configs, active_clouds)
-                # expect the concrete ConfigCloud Union. This is a Protocol→Union
-                # downcast: D1 (DTOs inherit Protocol) makes the reverse
-                # (Union→Protocol) direction typecheck, but not this one.
-                cfg = cast("ConfigCloud", cfg)
                 adapter = resolve_adapter(cfg, log)
                 if adapter is None:
                     continue
@@ -189,16 +183,11 @@ async def make_daemon(
             # max_nodes in _clouds_get_capacity for any provider whose
             # optional deps are missing.
             resolved_prefixes = set(clouds.configs.keys())
-            # Protocol→Union downcast: config.clouds yields CloudConfig, the
-            # infra-typed active_clouds expects ConfigCloud. See note above.
-            active_clouds = cast(
-                "list[ConfigCloud]",
-                [
-                    cfg
-                    for cfg in config.clouds
-                    if cfg.max_nodes > 0 and cfg.prefix in resolved_prefixes
-                ],
-            )
+            active_clouds = [
+                cfg
+                for cfg in config.clouds
+                if cfg.max_nodes > 0 and cfg.prefix in resolved_prefixes
+            ]
         gateway = SSHMachineGateway(log=log)
 
         # The concrete ConfigCloud* DTOs explicitly inherit the domain

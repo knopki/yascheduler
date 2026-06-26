@@ -1,11 +1,6 @@
-# Config Aggregate
+# Config Aggregate — Delta
 
-## Purpose
-
-The `Config` frozen aggregate that composes the DB, local, remote, cloud, and
-engine value objects, consumed only by the composition root (entrypoints layer).
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Config aggregate
 
