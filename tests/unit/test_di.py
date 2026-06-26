@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_di.py
-# VERSION: 2.3.0
+# VERSION: 2.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for di.py — dependency injection composition root.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.4.0 - Migrate imports: ConfigDb→PostgresDbConfig, ConfigLocal→LocalSettings, ConfigRemote→RemoteDefaults; make_daemon no longer passes config=config, assertions updated to local_settings/remote_defaults (config-aggregate-to-entrypoints / P4).
-#   PREVIOUS_CHANGE: v2.3.0 - Delete TestMakeAiida class + make_aiida import (function deleted from di.py in relocate-aiida-plugin; the stub was never wired through DI).
+#   LAST_CHANGE: v2.5.0 - Tighten test_creates_dependencies_no_db to assert exactly one SSHMachineGateway and that the same instance is shared by CloudProvisionerImpl.machine_gateway and Orchestrator.gateway; patch SSHMachineGateway in test_uses_provided_clouds and assert the pre-built-clouds path keeps its own gateway (share-ssh-gateway).
+#   PREVIOUS_CHANGE: v2.4.0 - Migrate imports: ConfigDb→PostgresDbConfig, ConfigLocal→LocalSettings, ConfigRemote→RemoteDefaults; make_daemon no longer passes config=config, assertions updated to local_settings/remote_defaults (config-aggregate-to-entrypoints / P4).
 # END_CHANGE_SUMMARY
 
 import asyncio
@@ -194,6 +194,9 @@ class TestMakeDaemon:
             ) as mock_resolve,
             patch("yascheduler.entrypoints.di.SSHMachineGateway") as mock_gateway,
             patch(
+                "yascheduler.entrypoints.di.CloudProvisionerImpl"
+            ) as mock_clouds_ctor,
+            patch(
                 "yascheduler.entrypoints.di.Orchestrator",
                 return_value=mock_orch_instance,
             ) as mock_orch,
@@ -210,26 +213,32 @@ class TestMakeDaemon:
 
         mock_get_logger.assert_called_once_with("Orchestrator")
         mock_resolve.assert_not_called()
-        mock_gateway.assert_called()
-        _call_kwargs = mock_orch.call_args.kwargs
-        assert "clouds" in _call_kwargs
-        assert _call_kwargs["clouds"] is not None
-        assert _call_kwargs["local_settings"] is config.local
-        assert _call_kwargs["remote_defaults"] is config.remote
-        assert "uow_factory" in _call_kwargs
-        assert callable(_call_kwargs["uow_factory"])
-        assert _call_kwargs["gateway"] is mock_gw
-        assert _call_kwargs["log"] is resolved_log
+        # share-ssh-gateway: exactly one SSHMachineGateway on the clouds is
+        # None path, shared by CloudProvisionerImpl.machine_gateway and
+        # Orchestrator.gateway.
+        mock_gateway.assert_called_once()
+        clouds_kwargs = mock_clouds_ctor.call_args.kwargs
+        orch_kwargs = mock_orch.call_args.kwargs
+        assert clouds_kwargs["machine_gateway"] is mock_gw
+        assert orch_kwargs["gateway"] is mock_gw
+        assert orch_kwargs["gateway"] is clouds_kwargs["machine_gateway"]
+        assert "clouds" in orch_kwargs
+        assert orch_kwargs["clouds"] is not None
+        assert orch_kwargs["local_settings"] is config.local
+        assert orch_kwargs["remote_defaults"] is config.remote
+        assert "uow_factory" in orch_kwargs
+        assert callable(orch_kwargs["uow_factory"])
+        assert orch_kwargs["log"] is resolved_log
         # New: allocation_tracker, allocation_lock, active_clouds
-        assert "allocation_tracker" in _call_kwargs
-        assert isinstance(_call_kwargs["allocation_tracker"], AllocationTracker)
-        assert "allocation_lock" in _call_kwargs
-        assert isinstance(_call_kwargs["allocation_lock"], asyncio.Lock)
-        assert "active_clouds" in _call_kwargs
-        assert isinstance(_call_kwargs["active_clouds"], list)
+        assert "allocation_tracker" in orch_kwargs
+        assert isinstance(orch_kwargs["allocation_tracker"], AllocationTracker)
+        assert "allocation_lock" in orch_kwargs
+        assert isinstance(orch_kwargs["allocation_lock"], asyncio.Lock)
+        assert "active_clouds" in orch_kwargs
+        assert isinstance(orch_kwargs["active_clouds"], list)
         # Negative: adapters/configs not passed to Orchestrator
-        assert "adapters" not in _call_kwargs
-        assert "configs" not in _call_kwargs
+        assert "adapters" not in orch_kwargs
+        assert "configs" not in orch_kwargs
 
     @pytest.mark.asyncio
     async def test_uses_provided_clouds(self) -> None:
@@ -239,12 +248,22 @@ class TestMakeDaemon:
 
         with (
             patch("yascheduler.entrypoints.di.resolve_adapter") as mock_resolve,
-            patch("yascheduler.entrypoints.di.Orchestrator"),
+            patch("yascheduler.entrypoints.di.SSHMachineGateway") as mock_gateway,
+            patch("yascheduler.entrypoints.di.Orchestrator") as mock_orch,
             patch("logging.getLogger"),
         ):
+            mock_gw = MagicMock()
+            mock_gateway.return_value = mock_gw
+
             await make_daemon(config, clouds=custom_clouds)
 
         mock_resolve.assert_not_called()
+        # share-ssh-gateway: pre-built-clouds path keeps its own gateway —
+        # the orchestrator gets a fresh SSHMachineGateway, NOT the one on
+        # custom_clouds.machine_gateway.
+        orch_gateway = mock_orch.call_args.kwargs["gateway"]
+        assert orch_gateway is mock_gw
+        assert orch_gateway is not custom_clouds.machine_gateway
 
     @pytest.mark.asyncio
     async def test_prebuilt_clouds_active_clouds_filter_verifies_adapter_resolution(

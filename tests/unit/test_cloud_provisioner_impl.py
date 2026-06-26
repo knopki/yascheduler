@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.5.0
+# VERSION: 2.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -12,7 +12,7 @@
 #   TestBool - __bool__ reflects adapter presence
 #   TestAllocate - allocate happy path, no provider, create_node failure, setup failure
 #   TestDeallocate - happy path, unsupported cloud, no config
-#   TestStop - stop is a no-op
+#   TestStop - stop drains machine_gateway via disconnect_all (happy path + idempotency)
 #   TestIsPlatformSupported - _is_platform_supported edge cases
 #   TestSshKeyGeneration - get_or_create_ssh_key file ops
 #   TestCloudConfigGeneration - cloud-config building with engine packages
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.5.0 - Update import from yascheduler.infra.cloud.cloud_config.CloudConfig → yascheduler.infra.cloud.cloud_init.CloudInitConfig; rename CloudConfig(...) constructor and isinstance checks accordingly (cloud-init-rename-and-prune / D2).
-#   PREVIOUS_CHANGE: v2.4.0 - Note that test_cloud_config_render_serializes is now complemented by the package-wide test_no_attrs_dependency canary (drop-attrs-dependency / P5); no longer the sole guard.
+#   LAST_CHANGE: v2.6.0 - Rewrite TestStop.test_stop to inject a mock gateway and assert disconnect_all is awaited exactly once; add test_stop_idempotent_under_repeated_calls (share-ssh-gateway: stop now drains machine_gateway instead of being a no-op).
+#   PREVIOUS_CHANGE: v2.5.0 - Update import from yascheduler.infra.cloud.cloud_config.CloudConfig → yascheduler.infra.cloud.cloud_init.CloudInitConfig; rename CloudConfig(...) constructor and isinstance checks accordingly (cloud-init-rename-and-prune / D2).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -427,12 +427,32 @@ class TestDeallocate:
 
 
 class TestStop:
-    """stop() is a no-op."""
+    """stop() drains machine_gateway via disconnect_all."""
 
     @pytest.mark.asyncio
     async def test_stop(self) -> None:
-        prov = make_provisioner()
+        """stop() awaits machine_gateway.disconnect_all exactly once."""
+        gw = MagicMock()
+        gw.disconnect_all = AsyncMock()
+
+        prov = make_provisioner(gateway=gw)
+
         await prov.stop()
+
+        gw.disconnect_all.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_idempotent_under_repeated_calls(self) -> None:
+        """Calling stop() twice does not raise; disconnect_all is awaited on the second call too (spec: idempotency guard)."""
+        gw = MagicMock()
+        gw.disconnect_all = AsyncMock()
+
+        prov = make_provisioner(gateway=gw)
+
+        await prov.stop()
+        await prov.stop()
+
+        assert gw.disconnect_all.await_count == 2
 
 
 class TestIsPlatformSupported:

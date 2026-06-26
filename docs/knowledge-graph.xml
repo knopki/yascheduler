@@ -728,7 +728,7 @@
     <M-CLOUD-PROVISIONER NAME="Cloud provisioner" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, setup, SSH keys); no DB access.</purpose>
       <path>yascheduler/infra/cloud/manager.py</path>
-      <depends>M-DOMAIN, M-SSH-KEYS, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
+      <depends>M-DOMAIN, M-SSH-KEYS, M-SSH-GATEWAY, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
       <annotations>
         <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access)" />
         <class-CloudAllocateError PURPOSE="Cloud allocation failure (domain exception realized via yascheduler.domain)" />
@@ -1156,6 +1156,7 @@
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-GATEWAY" relation="consumes MachineGateway Protocol injected via constructor" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-KEYS" relation="consumes injected list_private_keys_fn to enumerate client keys without importing yascheduler.infra" />
     <CrossLink from="M-DI" to="M-SSH-KEYS" relation="imports list_private_keys and injects it as list_private_keys_fn into Orchestrator" />
+    <CrossLink from="M-DI" to="M-SSH-GATEWAY" relation="make_daemon constructs one SSHMachineGateway on the clouds is None branch and injects the same instance into CloudProvisionerImpl.machine_gateway and Orchestrator.gateway (shared registry spans cloud setup and orchestrator runtime)" />
     <CrossLink from="M-CLOUD-PROVISIONER" to="M-SSH-KEYS" relation="calls list_private_keys(local_config.keys_dir) in _connect_to_vm" />
     <CrossLink from="M-ENTRYPOINTS-CLI-MANAGE-NODE" to="M-SSH-KEYS" relation="calls list_private_keys(config.local.keys_dir) on the add path" />
     <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-SSH-KEYS" relation="calls list_private_keys(config.local.keys_dir) in verbose view" />

@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.10.0
+# VERSION: 5.11.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
 #   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.10.0 - Remove the 2 Protocol→Union downcasts (cast("ConfigCloud", cfg) and cast("list[ConfigCloud]", [...])) and drop the unused typing.cast import (narrow-config-clouds-type). Config.clouds is now typed Sequence[ConfigCloud], so iterating config.clouds yields ConfigCloud directly and feeds the infra sinks without a cast; the application-side Orchestrator(config_clouds=..., active_clouds=...) assignment still typechecks via covariance + explicit DTO→Protocol inheritance.
-#   PREVIOUS_CHANGE: v5.9.0 - Remove 2 upcast bridges cast("Sequence[CloudConfig]", config.clouds) and cast("Sequence[CloudConfig]", active_clouds) (D1: DTOs explicitly inherit CloudConfig Protocol → list[ConfigCloud] assignable to Sequence[CloudConfig] via covariance+inheritance); retain 2 Protocol→Union downcasts cast("ConfigCloud", cfg) and cast("list[ConfigCloud]", [...]) at the entrypoints→infra boundary with corrected comments (resolve-type-bridge-debt).
+#   LAST_CHANGE: v5.11.0 - make_daemon now constructs one SSHMachineGateway on the clouds is None branch and injects the same instance into both CloudProvisionerImpl.machine_gateway and Orchestrator.gateway (share-ssh-gateway). Merges the cloud-setup and orchestrator-runtime _machines registries so cloud-allocation connections are visible to the orchestrator (no double-connect) and reaped at shutdown. The pre-built-clouds branch keeps creating a fresh gateway for the orchestrator.
+#   PREVIOUS_CHANGE: v5.10.0 - Remove the 2 Protocol→Union downcasts (cast("ConfigCloud", cfg) and cast("list[ConfigCloud]", [...])) and drop the unused typing.cast import (narrow-config-clouds-type). Config.clouds is now typed Sequence[ConfigCloud], so iterating config.clouds yields ConfigCloud directly and feeds the infra sinks without a cast; the application-side Orchestrator(config_clouds=..., active_clouds=...) assignment still typechecks via covariance + explicit DTO→Protocol inheritance.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -145,6 +145,14 @@ async def make_daemon(
         allocation_tracker = AllocationTracker()
         allocation_lock = asyncio.Lock()
 
+        # Single SSHMachineGateway for the production path (clouds is None):
+        # shared between CloudProvisionerImpl.machine_gateway and
+        # Orchestrator.gateway so _setup_vm connections are visible to the
+        # orchestrator (no double-connect) and reaped at shutdown. The
+        # pre-built-clouds branch still wires this fresh gateway to the
+        # orchestrator; caller-supplied clouds keep their own gateway.
+        gateway = SSHMachineGateway(log=log)
+
         if clouds is None:
             active_clouds: list[ConfigCloud] = []
             _adapters: dict[str, CloudAdapter] = {}
@@ -168,7 +176,7 @@ async def make_daemon(
             clouds = CloudProvisionerImpl(
                 adapters=_adapters,
                 configs=_configs,
-                machine_gateway=SSHMachineGateway(log=log),
+                machine_gateway=gateway,
                 local_config=config.local,
                 remote_config=config.remote,
                 engines=config.engines,
@@ -188,7 +196,6 @@ async def make_daemon(
                 for cfg in config.clouds
                 if cfg.max_nodes > 0 and cfg.prefix in resolved_prefixes
             ]
-        gateway = SSHMachineGateway(log=log)
 
         # The concrete ConfigCloud* DTOs explicitly inherit the domain
         # CloudConfig Protocol (D1), so list[ConfigCloud] is assignable to

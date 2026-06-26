@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.7.0
+# VERSION: 2.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.7.0 - Retype _get_cloud_config_data return annotation PCloudConfig → CloudInitConfig and return constructor CloudConfig(...) → CloudInitConfig(...); drop TYPE_CHECKING PCloudConfig import (cloud-init-rename-and-prune / D2). Runtime import switched from .cloud_config to .cloud_init.
-#   PREVIOUS_CHANGE: v2.6.0 - TYPE_CHECKING import LocalSettings/RemoteDefaults from yascheduler.domain instead of ConfigLocal/ConfigRemote from yascheduler.config; field annotations updated (config-aggregate-to-entrypoints / P4).
+#   LAST_CHANGE: v2.8.0 - stop() now delegates to machine_gateway.disconnect_all() instead of being a no-op (share-ssh-gateway). Closes SSH connections opened by _setup_vm during cloud allocation; safe with the shared gateway because disconnect_all is idempotent (the orchestrator's subsequent disconnect_all is a no-op on the drained registry).
+#   PREVIOUS_CHANGE: v2.7.0 - Retype _get_cloud_config_data return annotation PCloudConfig → CloudInitConfig and return constructor CloudConfig(...) → CloudInitConfig(...); drop TYPE_CHECKING PCloudConfig import (cloud-init-rename-and-prune / D2). Runtime import switched from .cloud_config to .cloud_init.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -87,9 +87,17 @@ class CloudProvisionerImpl:
     # Auto-constructed (init=False); not part of constructor signature.
     ssh_key_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
+    # START_CONTRACT: CloudProvisionerImpl.stop
+    #   PURPOSE: Drain all SSH connections held by machine_gateway (cloud-setup connections opened by _setup_vm).
+    #   INPUTS: { None }
+    #   OUTPUTS: { None }
+    #   SIDE_EFFECTS: Awaits machine_gateway.disconnect_all(), closing every connection in the gateway's _machines registry.
+    #   LINKS: M-SSH-GATEWAY
+    # END_CONTRACT: CloudProvisionerImpl.stop
     async def stop(self) -> None:
-        """No-op — compatibility hook."""
-        self.log.info("[CloudProvisionerImpl] stop (no-op)")
+        """Drain machine_gateway connections opened during cloud allocation."""
+        self.log.info("[CloudProvisionerImpl] stop — draining machine_gateway")
+        await self.machine_gateway.disconnect_all()
 
     # START_CONTRACT: CloudProvisionerImpl.select_provider
     #   PURPOSE: Select best provider by priority/capacity/platform, return its name.
