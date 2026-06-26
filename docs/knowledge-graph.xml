@@ -377,8 +377,9 @@
         <class-TaskRepository PURPOSE="Async port for task persistence" />
         <class-NodeRepository PURPOSE="Async port for node persistence (full CRUD lifecycle)" />
         <class-MachineGateway PURPOSE="Async port for remote machine operations" />
-        <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (prefix, max_nodes, idle_tolerance, username, jump_username, jump_host) — 6-field surface application consumers read" />
+        <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host) — 7-field surface application consumers read" />
         <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider), deallocate(cloud, ip), select_provider(platforms, counts) -> str | None (sync)" />
+        <type-connect_grace PURPOSE="Per-cloud SSH connect-failure deadline in seconds (declared on CloudConfig Protocol + each ConfigCloud* DTO with provider-specific default)" />
       </annotations>
     </M-DOMAIN-PORTS>
 
@@ -411,15 +412,16 @@
          ═══════════════════════════════════════════════ -->
 
     <M-APPLICATION NAME="Application layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task, query_tasks, AllocationTracker.</purpose>
+      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task, query_tasks, abandon_node, AllocationTracker.</purpose>
       <path>yascheduler/application/__init__.py</path>
-      <depends>M-APPLICATION-ALLOCATION-TRACKER, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-QUERY-TASKS, M-APPLICATION-SUBMIT, M-APPLICATION-UOW</depends>
+      <depends>M-APPLICATION-ABANDON-NODE, M-APPLICATION-ALLOCATION-TRACKER, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-QUERY-TASKS, M-APPLICATION-SUBMIT, M-APPLICATION-UOW</depends>
       <annotations>
         <export-AbstractUnitOfWork PURPOSE="Unit-of-work boundary for application use cases" />
         <export-Orchestrator PURPOSE="Task lifecycle orchestrator" />
         <export-MessageBus PURPOSE="In-process event bus for domain events" />
         <export-submit_task PURPOSE="Use case: register a new task in TO_DO state" />
         <export-query_tasks PURPOSE="Use case: read-only task query by statuses or job IDs" />
+        <export-abandon_node PURPOSE="Use case: clean up never-connected cloud node + release stuck TO_DO task" />
         <export-AllocationTracker PURPOSE="In-memory dedup of in-flight cloud allocations" />
       </annotations>
     </M-APPLICATION>
@@ -495,6 +497,15 @@
       </annotations>
     </M-APPLICATION-DEALLOCATE>
 
+    <M-APPLICATION-ABANDON-NODE NAME="Abandon never-connected node use case" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Clean up a cloud node that never established its SSH connection: best-effort cloud VM delete, remove yascheduler_nodes row, discard the stuck TO_DO task from AllocationTracker so it re-allocates next cycle.</purpose>
+      <path>yascheduler/application/abandon_node.py</path>
+      <depends>M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <annotations>
+        <fn-abandon_node PURPOSE="Clean up never-connected cloud node + release stuck task (best-effort VM delete -> DB remove -> tracker discard)" />
+      </annotations>
+    </M-APPLICATION-ABANDON-NODE>
+
     <M-APPLICATION-ALLOCATION-TRACKER NAME="Allocation tracker" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>In-memory dedup of in-flight cloud allocations by task_id; owned by orchestrator, injected into allocate/consume use cases.</purpose>
       <path>yascheduler/application/allocation_tracker.py</path>
@@ -507,15 +518,17 @@
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineGateway Protocol. Private-key discovery is injected via list_private_keys_fn (M-SSH-KEYS), keeping this module free of yascheduler.infra imports.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-DOMAIN, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-QUEUE, M-PERSISTENCE-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
+      <depends>M-DOMAIN, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-QUEUE, M-PERSISTENCE-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER</depends>
       <annotations>
-        <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate" />
+        <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected nodes" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
         <fn-stop PURPOSE="Graceful shutdown" />
         <fn-_asleep_until PURPOSE="Private async sleep-until helper inlined from former shared.async_utils" />
+        <fn-_connect_grace_for PURPOSE="Resolve per-cloud connect grace (cfg.connect_grace by prefix match) with conservative 120s fallback for unknown clouds" />
         <const-allocation_tracker PURPOSE="Owned AllocationTracker injected into allocate/consume use cases" />
         <const-active_clouds PURPOSE="Filtered Sequence[ConfigCloud] with max_nodes>0 and resolved adapter" />
         <const-allocation_lock PURPOSE="Owned asyncio.Lock serializing allocate_task critical section" />
+        <const-_connect_failures PURPOSE="Per-IP monotonic first-seen failure timestamp (in-memory only; daemon restart resets grace windows)" />
       </annotations>
     </M-APPLICATION-ORCHESTRATOR>
 
@@ -1082,6 +1095,7 @@
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ALLOCATE" relation="calls allocate_task use case in consumer loop" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-CONSUME" relation="calls consume_task use case in consumer loop" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-DEALLOCATE" relation="calls deallocate_node per node in producer-consumer loop with deallocate_limit concurrency" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ABANDON-NODE" relation="delegates never-connected node cleanup when connect-grace window is exceeded" />
     <CrossLink from="M-DI" to="M-APPLICATION-ORCHESTRATOR" relation="creates Orchestrator with wired dependencies" />
     <CrossLink from="M-DI" to="M-PERSISTENCE-UOW" relation="creates UoW factory from PostgresUnitOfWork with MessageBus" />
     <CrossLink from="M-DI" to="M-APPLICATION-MESSAGE-BUS" relation="creates MessageBus and registers webhook handlers" />

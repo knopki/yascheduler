@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/gateway.py
-# VERSION: 1.5.1
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH machine gateway implementing MachineGateway protocol via asyncssh.
 #   SCOPE: SSHMachineGateway class with connection lifecycle, command execution, SFTP, occupancy monitoring, output download.
@@ -14,6 +14,9 @@
 #   _open_connection - Build SSH options and open a connection
 #   my_backoff_sftp - Partial backoff decorator for SFTPRetryExc
 #   SSHMachineGateway - SSH implementation of MachineGateway protocol
+#   SSHMachineGateway.disconnect - Close SSH for ip, cancel only that machine's monitor, remove state
+#   SSHMachineGateway.disconnect_all - Disconnect every connected machine
+#   SSHMachineGateway.start_occupancy_check - Background occupancy monitor keyed by IP; replaces prior monitor for the same IP
 #   SSHMachineGateway._upload_task_data - Upload task input files to remote machine via SFTP
 #   SSHMachineGateway._exec_spawn_command - Execute spawn command on remote machine via SSH
 #   SSHMachineGateway.start_task_on_machine - Upload task inputs and spawn calculation process (port contract)

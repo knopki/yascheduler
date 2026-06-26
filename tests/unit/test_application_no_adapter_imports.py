@@ -30,6 +30,7 @@ import pytest
 FORBIDDEN_NAMES = {"AllSSHRetryExc", "SFTPRetryExc", "SFTPError", "backoff"}
 
 APPLICATION_MODULES = [
+    "yascheduler.application.abandon_node",
     "yascheduler.application.consume_task",
     "yascheduler.application.allocate_task",
     "yascheduler.application.deallocate_nodes",

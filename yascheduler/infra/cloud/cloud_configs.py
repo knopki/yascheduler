@@ -1,11 +1,11 @@
 # FILE: yascheduler/infra/cloud/cloud_configs.py
-# VERSION: 1.0.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Cloud provider config DTOs + ConfigCloud union.
 #   SCOPE: ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference, ConfigCloud union.
 #   DEPENDS: M-SHARED, M-DOMAIN-PORTS
-#   LINKS: M-CLOUD-PROTOCOLS, M-ENTRYPOINTS-CONFIG-PARSER, M-DOMAIN-PORTS
+#   LINKS: M-CLOUD-PROTOCOLS, M-ENTRYPOINTS-CONFIG-PARSER, M-DOMAIN-PORTS, M-APPLICATION-ORCHESTRATOR
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - 4 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol via a runtime `from yascheduler.domain import CloudConfig` import (resolve-type-bridge-debt); removes the writable-vs-frozen mismatch that forced cast bridges in di.py and config_parser.py. AzureImageReference unchanged (not a CloudConfig).
-#   PREVIOUS_CHANGE: v1.0.0 - Relocate cloud config DTOs from yascheduler/config/cloud.py (cloud-configs-to-infra-registry); frozen stdlib dataclasses; no parser methods (validation moved to entrypoints.config_parser); AzureImageReference.from_urn retained (pure URN parser, no INI dependency).
+#   LAST_CHANGE: v1.2.0 - Add connect_grace field (next to idle_tolerance) on all 4 ConfigCloud* DTOs (fix-never-connected-node-leak): Hetzner/Upcloud=60, Azure/VastAI=120. INI parsing is intentionally not added in this change — DTO defaults are the sole source.
+#   PREVIOUS_CHANGE: v1.1.0 - 4 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol via a runtime `from yascheduler.domain import CloudConfig` import (resolve-type-bridge-debt); removes the writable-vs-frozen mismatch that forced cast bridges in di.py and config_parser.py. AzureImageReference unchanged (not a CloudConfig).
 # END_CHANGE_SUMMARY
 #
 """Cloud provider config DTOs (relocated from yascheduler.config.cloud)."""
@@ -80,6 +80,7 @@ class ConfigCloudAzure(CloudConfig):
     username: str = "yascheduler"
     priority: int = 0
     idle_tolerance: int = 300
+    connect_grace: int = 120
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
 
@@ -98,6 +99,7 @@ class ConfigCloudHetzner(CloudConfig):
     location: Optional[str] = None
     image_name: str = "debian-11"
     idle_tolerance: int = 120
+    connect_grace: int = 60
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
 
@@ -114,6 +116,7 @@ class ConfigCloudUpcloud(CloudConfig):
     username: str = "root"
     priority: int = 0
     idle_tolerance: int = 120
+    connect_grace: int = 60
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
 
@@ -134,6 +137,7 @@ class ConfigCloudVastAI(CloudConfig):
     username: str = "root"
     priority: int = 0
     idle_tolerance: int = 300
+    connect_grace: int = 120
     onstart_script: str = ""
     docker_options: str = ""
     env: dict = field(default_factory=dict)

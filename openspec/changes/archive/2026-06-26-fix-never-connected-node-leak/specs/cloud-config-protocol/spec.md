@@ -1,10 +1,4 @@
-# Cloud Config Protocol
-
-## Purpose
-
-The CloudConfig structural Protocol in `yascheduler/domain/ports.py` capturing the 7-field surface application-layer consumers read from cloud provider configs.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: CloudConfig structural Protocol
 

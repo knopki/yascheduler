@@ -1,26 +1,27 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.1.0
+# VERSION: 6.2.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper.
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
+#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path).
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   Orchestrator - Daemon loop manager: connect machines, allocate, consume, deallocate
+#   Orchestrator - Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected cloud nodes
 #   _asleep_until - Private async sleep-until helper (inlined from former yascheduler.shared.async_utils)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.1.0 - Retype _start_task_on_machine to Engine; remove cast("OccupancyConfig") bridging call and the unused cast import (resolve-engine-protocol-debt). MachineGateway.start_occupancy_check now accepts the concrete Engine directly.
-#   PREVIOUS_CHANGE: v6.0.0 - Drop config: Config from __init__; accept local_settings: LocalSettings and remote_defaults: RemoteDefaults from yascheduler.domain (config-aggregate-to-entrypoints / P4); self._config replaced with self._local_settings / self._remote_defaults; self._config.clouds iteration collapsed into self._config_clouds; application no longer imports yascheduler.config.
+#   LAST_CHANGE: v6.2.1 - Restrict the connect-machine producer to cloud nodes (filter `n.cloud is not None`) so the never-connected-node abandon path cannot auto-remove operator-managed static nodes during transient SSH outages. The design's scope is bounding cloud billing; static nodes were never auto-removed by the application and must stay that way. _connect_grace_for(None) is now unreachable from the producer but remains as a defensive fallback for direct callers / future use.
+#   PREVIOUS_CHANGE: v6.2.0 - Add per-IP connect-failure timer (`_connect_failures: dict[str, float]`) and abandon dispatch in `_connect_machine_consumer` (fix-never-connected-node-leak): on `MachineConnectionError` compare elapsed monotonic age against the node's cloud `connect_grace` (looked up via the new `_connect_grace_for` helper with a 120s conservative fallback for unknown clouds); within grace → log + retry, past grace → call `abandon_node` (best-effort wrapped so a failed abandon does not kill the worker), then pop the IP. Successful connect pops the IP. Timer is in-memory only — daemon restart resets grace windows.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
 import logging  # noqa: TC003 — used at runtime for log calls
+import time
 from asyncio.locks import Event
 from collections import Counter
 from datetime import datetime, timedelta
@@ -39,6 +40,7 @@ from yascheduler.domain import (
     TaskStatus,
 )
 
+from .abandon_node import abandon_node
 from .allocate_task import _count_nodes_by_cloud, allocate_task
 from .consume_task import consume_task
 from .deallocate_nodes import deallocate_node, deallocate_nodes
@@ -129,6 +131,9 @@ class Orchestrator:
         self._machine_connected_event = Event()
         self._sleep_interval: int = min(e.sleep_interval for e in engines.values())
         self._occupancy_started: set[str] = set()
+        # Per-IP first-seen monotonic timestamp of a consecutive connect
+        # failure; in-memory only (daemon restart resets grace windows).
+        self._connect_failures: dict[str, float] = {}
 
         lcfg = local_settings
         self._conn_machine_q: UniqueQueue[str, Node] = UniqueQueue(
@@ -221,7 +226,19 @@ class Orchestrator:
     ) -> AsyncGenerator[UMessage[str, Node], None]:
         async with self._uow_factory() as uow:
             enabled_nodes = await uow.nodes.list_enabled()
-        new_nodes = [n for n in enabled_nodes if not self._gateway.contains(n.ip)]
+        # START_BLOCK_FILTER_CLOUD_ONLY
+        # The never-connected-node abandon path bounds cloud billing only
+        # (design.md Goals). Static operator-managed nodes (cloud is None) are
+        # excluded: the application has never auto-removed them, and a
+        # transient SSH outage after a daemon restart must not silently delete
+        # an operator's node row. Only cloud nodes reach the connect consumer
+        # and therefore the abandon dispatch.
+        new_nodes = [
+            n
+            for n in enabled_nodes
+            if n.cloud is not None and not self._gateway.contains(n.ip)
+        ]
+        # END_BLOCK_FILTER_CLOUD_ONLY
         for node in new_nodes:
             yield UMessage(node.ip, node)
 
@@ -250,11 +267,69 @@ class Orchestrator:
                 jump_host=jump_host,
                 port=node.port,
             )
+            # START_BLOCK_CONNECT_RESET_FAILURE_TIMER
+            self._connect_failures.pop(node.ip, None)
+            # END_BLOCK_CONNECT_RESET_FAILURE_TIMER
             self._machine_connected_event.set()
         except MachineConnectionError as err:
-            self._log.error("Can't connect to machine with error: %s", err)
+            # START_BLOCK_CONNECT_GRACE_CHECK
+            first_seen = self._connect_failures.setdefault(node.ip, time.monotonic())
+            age = time.monotonic() - first_seen
+            grace = self._connect_grace_for(node.cloud)
+            if age < grace:
+                self._log.warning(
+                    "[Orchestrator][_connect_machine_consumer][CONNECT_RETRY] "
+                    "ip=%s age=%.1fs grace=%ds err=%s",
+                    node.ip,
+                    age,
+                    grace,
+                    err,
+                )
+                return
+            # END_BLOCK_CONNECT_GRACE_CHECK
+
+            # START_BLOCK_CONNECT_ABANDON
+            self._log.error(
+                "[Orchestrator][_connect_machine_consumer][CONNECT_ABANDON] "
+                "ip=%s age=%.1fs grace=%ds — abandoning node",
+                node.ip,
+                age,
+                grace,
+            )
+            try:
+                await abandon_node(
+                    node,
+                    self._gateway,
+                    self._clouds,
+                    self._uow_factory,
+                    self._tracker,
+                )
+            except Exception as abandon_err:
+                self._log.error(
+                    "[Orchestrator][_connect_machine_consumer][ABANDON_FAILED] "
+                    "ip=%s err=%s",
+                    node.ip,
+                    abandon_err,
+                )
+            self._connect_failures.pop(node.ip, None)
+            # END_BLOCK_CONNECT_ABANDON
         except Exception as err:
             self._log.error("An error occuried on remote machine creation: %s", err)
+
+    # START_CONTRACT: Orchestrator._connect_grace_for
+    #   PURPOSE: Resolve the per-cloud connect-failure grace window for a node, with a conservative fallback.
+    #   INPUTS: { cloud: str | None - the node's cloud prefix (matches ConfigCloud.prefix) }
+    #   OUTPUTS: { int - connect_grace seconds from the matching CloudConfig, or 120 if no match (covers misconfigured/unknown clouds; matches the slowest cloud default) }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-DOMAIN-PORTS, M-APPLICATION-ORCHESTRATOR
+    # END_CONTRACT: Orchestrator._connect_grace_for
+    def _connect_grace_for(self, cloud: str | None) -> int:
+        if cloud is None:
+            return 120
+        for cfg in self._config_clouds:
+            if cfg.prefix == cloud:
+                return cfg.connect_grace
+        return 120
 
     async def _allocator_producer(
         self,
