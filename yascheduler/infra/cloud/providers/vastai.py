@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/vastai.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: VastAI GPU marketplace instance creation and deletion via REST API.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudVastAI from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
-#   PREVIOUS_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.8.0 - Retype vastai_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
+#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudVastAI from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
 # END_CHANGE_SUMMARY
 
 """VastAI cloud methods"""
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     from asyncssh.public_key import SSHKey
 
-    from yascheduler.infra.cloud import ConfigCloudVastAI, PCloudConfig
+    from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudVastAI
 
 BASE_URL = "https://console.vast.ai/api/v0"
 
@@ -197,7 +197,7 @@ async def _delete_instance(
 
 # START_CONTRACT: vastai_create_node
 #   PURPOSE: Create VastAI instance from cheapest matching offer and wait for readiness
-#   INPUTS: { log: logging.Logger, cfg: ConfigCloudVastAI, key: SSHKey, cloud_config: Optional[PCloudConfig] }
+#   INPUTS: { log: logging.Logger, cfg: ConfigCloudVastAI, key: SSHKey, cloud_config: Optional[CloudInitConfig] }
 #   OUTPUTS: { str - IP address of the running instance }
 #   SIDE_EFFECTS: Creates cloud instance; polls until running or timeout
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
@@ -206,7 +206,7 @@ async def vastai_create_node(
     log: logging.Logger,
     cfg: ConfigCloudVastAI,
     key: SSHKey,
-    cloud_config: PCloudConfig | None = None,
+    cloud_config: CloudInitConfig | None = None,
 ) -> str:
     async with aiohttp.ClientSession() as session:
         log.info("Searching VastAI offers...")

@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/hetzner.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Hetzner Cloud server creation and deletion via API.
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudHetzner from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
-#   PREVIOUS_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.8.0 - Retype hetzner_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
+#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudHetzner from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
 # END_CHANGE_SUMMARY
 #
 """Hetzner cloud methods"""
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
     from hcloud.servers.client import BoundServer
 
-    from yascheduler.infra.cloud import ConfigCloudHetzner, PCloudConfig
+    from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudHetzner
 
 executor = ThreadPoolExecutor(max_workers=5)
 
@@ -104,7 +104,7 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
 
 # START_CONTRACT: hetzner_create_node
 #   PURPOSE: Create Hetzner server with SSH key and cloud-config
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudHetzner - Hetzner config, key: ASSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudHetzner - Hetzner config, key: ASSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
 #   OUTPUTS: { str - IP address of created server }
 #   SIDE_EFFECTS: Creates Hetzner Cloud server with associated resources
 #   LINKS: M-CLOUD-HETZNER
@@ -113,7 +113,7 @@ async def hetzner_create_node(
     log: logging.Logger,
     cfg: ConfigCloudHetzner,
     key: ASSHKey,
-    cloud_config: PCloudConfig | None = None,
+    cloud_config: CloudInitConfig | None = None,
 ) -> str:
     """Create node"""
     if not _HETZNER_AVAILABLE:

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.4.0
+# VERSION: 2.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.4.0 - Note that test_cloud_config_render_serializes is now complemented by the package-wide test_no_attrs_dependency canary (drop-attrs-dependency / P5); no longer the sole guard.
-#   PREVIOUS_CHANGE: v2.3.0 - Add canary test_cloud_config_render_serializes guarding CloudConfig.render() JSON output across the attrs→dataclass migration (migrate-cloud-from-attrs).
+#   LAST_CHANGE: v2.5.0 - Update import from yascheduler.infra.cloud.cloud_config.CloudConfig → yascheduler.infra.cloud.cloud_init.CloudInitConfig; rename CloudConfig(...) constructor and isinstance checks accordingly (cloud-init-rename-and-prune / D2).
+#   PREVIOUS_CHANGE: v2.4.0 - Note that test_cloud_config_render_serializes is now complemented by the package-wide test_no_attrs_dependency canary (drop-attrs-dependency / P5); no longer the sole guard.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -38,7 +38,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from yascheduler.domain.model import Node
-from yascheduler.infra.cloud.cloud_config import CloudConfig
+from yascheduler.infra.cloud.cloud_init import CloudInitConfig
 from yascheduler.infra.cloud.manager import (
     CloudAllocateError,
     CloudProvisionerImpl,
@@ -510,7 +510,7 @@ class TestCloudConfigGeneration:
     async def test_cloud_config_with_engine_packages(
         self, mock_engines: MagicMock
     ) -> None:
-        """Returns CloudConfig with packages from matched engines."""
+        """Returns CloudInitConfig with packages from matched engines."""
         adapter, config = _make_mock_adapter(name="test")
         prov = make_provisioner(
             adapters={"test": adapter},
@@ -520,7 +520,7 @@ class TestCloudConfigGeneration:
 
         cc = await prov._get_cloud_config_data(adapter)
 
-        assert isinstance(cc, CloudConfig)
+        assert isinstance(cc, CloudInitConfig)
         assert cc.package_upgrade is True
         assert "vim" in cc.packages
         assert "htop" in cc.packages
@@ -528,8 +528,8 @@ class TestCloudConfigGeneration:
 
     @pytest.mark.asyncio
     async def test_cloud_config_render_serializes(self) -> None:
-        """CloudConfig.render() produces stable #cloud-config JSON (asdict canary)."""
-        cc = CloudConfig(
+        """CloudInitConfig.render() produces stable #cloud-config JSON (asdict canary)."""
+        cc = CloudInitConfig(
             bootcmd=("echo hi", ["mkdir", "/x"]),
             package_upgrade=True,
             packages=["vim", "htop"],

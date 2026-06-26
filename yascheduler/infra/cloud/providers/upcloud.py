@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/upcloud.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: UpCloud server creation and deletion via API.
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudUpcloud from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
-#   PREVIOUS_CHANGE: v1.6.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.8.0 - Retype upcloud_create_node_sync and upcloud_create_node cloud_config params PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
+#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudUpcloud from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
 # END_CHANGE_SUMMARY
 #
 """Upcloud cloud methods"""
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     from asyncssh.public_key import SSHKey
 
-    from yascheduler.infra.cloud import ConfigCloudUpcloud, PCloudConfig
+    from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudUpcloud
 
 executor = ThreadPoolExecutor(max_workers=5)
 
@@ -67,7 +67,7 @@ def get_client(cfg: ConfigCloudUpcloud) -> CloudManager:
 
 # START_CONTRACT: upcloud_create_node_sync
 #   PURPOSE: Create UpCloud server synchronously with SSH key and cloud-config
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
 #   OUTPUTS: { str - public IP address of created server }
 #   SIDE_EFFECTS: Creates UpCloud server and storage resources
 #   LINKS: M-CLOUD-UPCLOUD
@@ -76,7 +76,7 @@ def upcloud_create_node_sync(
     log: logging.Logger,
     cfg: ConfigCloudUpcloud,
     key: SSHKey,
-    cloud_config: PCloudConfig | None = None,
+    cloud_config: CloudInitConfig | None = None,
 ) -> str:
     """Create node"""
     if not _UPCLOUD_AVAILABLE:
@@ -107,7 +107,7 @@ def upcloud_create_node_sync(
 
 # START_CONTRACT: upcloud_create_node
 #   PURPOSE: Create UpCloud server asynchronously via thread pool executor
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[PCloudConfig] - optional cloud-config }
+#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
 #   OUTPUTS: { str - public IP address of created server }
 #   SIDE_EFFECTS: Creates UpCloud server via synchronous call in executor
 #   LINKS: M-CLOUD-UPCLOUD, upcloud_create_node_sync
@@ -116,7 +116,7 @@ async def upcloud_create_node(
     log: logging.Logger,
     cfg: ConfigCloudUpcloud,
     key: SSHKey,
-    cloud_config: PCloudConfig | None = None,
+    cloud_config: CloudInitConfig | None = None,
 ) -> str:
     """Create node"""
     if not _UPCLOUD_AVAILABLE:

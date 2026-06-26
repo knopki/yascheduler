@@ -1,11 +1,11 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.5.0
+# VERSION: 2.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
 #   SCOPE: CloudProvisionerImpl class implementing allocate, deallocate, select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineGateway.
-#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-SSH-KEYS, M-SSH-GATEWAY, M-SSH-KEYS, M-DOMAIN-SETTINGS
-#   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE
+#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-SSH-KEYS, M-SSH-GATEWAY, M-SSH-KEYS, M-DOMAIN-SETTINGS
+#   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE, M-CLOUD-INIT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.6.0 - TYPE_CHECKING import LocalSettings/RemoteDefaults from yascheduler.domain instead of ConfigLocal/ConfigRemote from yascheduler.config; field annotations updated (config-aggregate-to-entrypoints / P4).
-#   PREVIOUS_CHANGE: v2.5.0 - TYPE_CHECKING import ConfigCloud from .cloud_configs (intra-package) instead of yascheduler.config (cloud-configs-to-infra-registry); _connect_to_vm uses direct attribute access `config.jump_host or None` / `config.jump_username or None` instead of `getattr(config, "...", None) or None` (all four DTOs now declare those fields as frozen dataclass fields, so the defensive fallback is unnecessary).
+#   LAST_CHANGE: v2.7.0 - Retype _get_cloud_config_data return annotation PCloudConfig → CloudInitConfig and return constructor CloudConfig(...) → CloudInitConfig(...); drop TYPE_CHECKING PCloudConfig import (cloud-init-rename-and-prune / D2). Runtime import switched from .cloud_config to .cloud_init.
+#   PREVIOUS_CHANGE: v2.6.0 - TYPE_CHECKING import LocalSettings/RemoteDefaults from yascheduler.domain instead of ConfigLocal/ConfigRemote from yascheduler.config; field annotations updated (config-aggregate-to-entrypoints / P4).
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -35,7 +35,7 @@ from yascheduler.domain import (
 )
 from yascheduler.infra.ssh.keys import list_private_keys
 
-from .cloud_config import CloudConfig
+from .cloud_init import CloudInitConfig
 from .provider_selection import select_provider_pure
 from .ssh_keys import get_or_create_ssh_key
 
@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 
     from .adapters import CloudAdapter
     from .cloud_configs import ConfigCloud
-    from .protocols import PCloudConfig
 
 
 # START_CONTRACT: CloudProvisionerImpl
@@ -260,11 +259,11 @@ class CloudProvisionerImpl:
     # START_CONTRACT: CloudProvisionerImpl._get_cloud_config_data
     #   PURPOSE: Build cloud-config with packages for engines matching adapter platforms.
     #   INPUTS: { adapter: CloudAdapter - target provider adapter }
-    #   OUTPUTS: { PCloudConfig - cloud-config data with packages }
+    #   OUTPUTS: { CloudInitConfig - cloud-config data with packages }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-CLOUD-CONFIG
+    #   LINKS: M-CLOUD-INIT
     # END_CONTRACT: CloudProvisionerImpl._get_cloud_config_data
-    async def _get_cloud_config_data(self, adapter: CloudAdapter) -> PCloudConfig:
+    async def _get_cloud_config_data(self, adapter: CloudAdapter) -> CloudInitConfig:
         """Build cloud-config with engine packages for this adapter's platforms."""
         # START_BLOCK_FILTER_ENGINES
         supported_engines = self.engines.filter(
@@ -280,7 +279,7 @@ class CloudProvisionerImpl:
         )
         pkgs = supported_engines.get_platform_packages()
         # END_BLOCK_FILTER_ENGINES
-        return CloudConfig(package_upgrade=True, packages=pkgs)
+        return CloudInitConfig(package_upgrade=True, packages=pkgs)
 
     # START_CONTRACT: CloudProvisionerImpl._setup_vm
     #   PURPOSE: Connect via SSH, wait for cloud-init, install engines, get CPU count.
