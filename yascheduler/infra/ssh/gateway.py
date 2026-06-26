@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.1 - Replace PProcessInfo with ProcessInfo in pgrep/list_processes return annotations (prune-platform-protocols); import ProcessInfo from .platform.
-#   PREVIOUS_CHANGE: v1.5.0 - Retype _exec_spawn_command, start_task_on_machine, occupancy_check, start_occupancy_check to Engine; runtime-import Engine instead of TaskExecutionEngine, drop OccupancyConfig TYPE_CHECKING import (resolve-engine-protocol-debt). The concrete Engine dataclass carries every field the SSH gateway reads.
+#   LAST_CHANGE: v1.6.0 - Re-key SSHMachineGateway._bg_tasks from set[asyncio.Task] to dict[str, asyncio.Task] keyed by machine IP; disconnect(ip) now pops+cancel+awaits only that IP's monitor (was cancelling every machine's monitor); start_occupancy_check cancels any prior monitor for the same IP before installing a new one, with an identity-checked done-callback so a re-registered replacement survives the prior task's completion (fix-disconnect-bg-task-leak). No public surface change; M-SSH-GATEWAY annotations unchanged.
+#   PREVIOUS_CHANGE: v1.5.1 - Replace PProcessInfo with ProcessInfo in pgrep/list_processes return annotations (prune-platform-protocols); import ProcessInfo from .platform.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -170,7 +170,9 @@ class SSHMachineGateway:
         """Initialise SSH gateway."""
         self._machines: dict[str, _MachineState] = {}
         self._log = log or logging.getLogger("SSHMachineGateway")
-        self._bg_tasks: set[asyncio.Task] = set()
+        # One occupancy monitor per connected IP; keyed identically to
+        # _machines so disconnect(ip) cancels only that machine's monitor.
+        self._bg_tasks: dict[str, asyncio.Task[None]] = {}
 
     # START_CONTRACT: SSHMachineGateway._open_connection
     #   PURPOSE: Build SSH options and open connection.
@@ -320,24 +322,38 @@ class SSHMachineGateway:
         return machine
 
     # START_CONTRACT: SSHMachineGateway.disconnect
-    #   PURPOSE: Close SSH, cancel bg tasks, remove state.
+    #   PURPOSE: Close SSH for ip, cancel only that machine's occupancy monitor, remove state.
+    #   INPUTS: { ip: str - IP of the machine to disconnect }
+    #   OUTPUTS: { None }
+    #   SIDE_EFFECTS: Cancels and awaits the occupancy monitor registered for ip (if any);
+    #     closes the SSH connection; removes ip from _machines and _bg_tasks.
+    #     SHALL NOT cancel monitors registered for any other IP.
     #   LINKS: M-SSH-GATEWAY
     # END_CONTRACT: SSHMachineGateway.disconnect
     async def disconnect(self, ip: str) -> None:
-        """Close connection for a machine."""
+        """Close connection for a machine and cancel only that machine's monitor."""
+        # START_BLOCK_POP_MACHINE
         state = self._machines.pop(ip, None)
         if state is None:
             return
-        for task in list(self._bg_tasks):
+        # END_BLOCK_POP_MACHINE
+        # START_BLOCK_CANCEL_BG
+        # Pop before await so a re-entry race cannot re-insert the cancelled task.
+        task = self._bg_tasks.pop(ip, None)
+        if task is not None:
+            self._log.debug("[SSHGateway][disconnect][CANCEL_BG] ip=%s", ip)
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+        # END_BLOCK_CANCEL_BG
+        # START_BLOCK_CLOSE_CONN
         if state.conn._transport:
             self._log.debug("[SSHGateway][disconnect] ip=%s", ip)
             state.conn.close()
             await state.conn.wait_closed()
+        # END_BLOCK_CLOSE_CONN
 
     # START_CONTRACT: SSHMachineGateway.disconnect_all
     #   PURPOSE: Disconnect all machines.
@@ -764,7 +780,11 @@ class SSHMachineGateway:
     # START_CONTRACT: SSHMachineGateway.start_occupancy_check
     #   PURPOSE: Background task periodically checks occupancy, releases machine when done.
     #   INPUTS: { ip: str, config: Engine - engine metadata for occupancy checks }
-    #   SIDE_EFFECTS: Creates asyncio task
+    #   SIDE_EFFECTS: Creates asyncio task keyed by ip in _bg_tasks. If a monitor is
+    #     already registered for ip, cancels it (fire-and-forget; this method is
+    #     synchronous and cannot await) before installing the new one. The
+    #     done-callback pops ip only when the registering task still owns the slot
+    #     (identity check protects re-registrations).
     #   LINKS: M-SSH-GATEWAY
     # END_CONTRACT: SSHMachineGateway.start_occupancy_check
     def start_occupancy_check(self, ip: str, config: Engine) -> None:
@@ -772,6 +792,7 @@ class SSHMachineGateway:
 
         Occupies the ConnectedMachine at the gateway level so that
         _meta_sync sees BUSY instead of FREE while the task runs.
+        Re-registering for an already-monitored IP cancels the prior monitor.
         """
         state = self._machines.get(ip)
         if state is not None and state.machine.state == MachineState.FREE:
@@ -806,9 +827,23 @@ class SSHMachineGateway:
             except asyncio.CancelledError:
                 pass
 
+        # START_BLOCK_REPLACE_PRIOR
+        prior = self._bg_tasks.get(ip)
+        if prior is not None and not prior.done():
+            prior.cancel()
+        # END_BLOCK_REPLACE_PRIOR
         task = asyncio.create_task(_checker())
-        task.add_done_callback(self._bg_tasks.discard)
-        self._bg_tasks.add(task)
+
+        # START_BLOCK_INSTALL_DONE_CB
+        def _on_done(_t: asyncio.Task[None]) -> None:
+            # Only evict if the slot still points at us; a re-registered
+            # replacement must survive the prior task's completion.
+            if self._bg_tasks.get(ip) is _t:
+                self._bg_tasks.pop(ip, None)
+
+        task.add_done_callback(_on_done)
+        self._bg_tasks[ip] = task
+        # END_BLOCK_INSTALL_DONE_CB
 
     # START_CONTRACT: SSHMachineGateway.setup_node
     #   PURPOSE: Install engine dependencies on remote node.

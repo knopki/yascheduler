@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_ssh_gateway.py
-# VERSION: 1.0.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for SSHMachineGateway against a Docker SSH server via testcontainers.
@@ -10,20 +10,23 @@
 #
 # START_MODULE_MAP
 #   ssh_container - session-scoped fixture: starts Docker SSH container, generates key pair
+#   ssh_container_2 - session-scoped fixture for the second container (multi-machine regression)
 #   gateway - function-scoped fixture: SSHMachineGateway connected to test container
 #   TestSSHGatewayIntegration - connection lifecycle, command exec, SFTP, state transitions
 #   TestOccupancyIntegration - occupancy_check via check_pname/check_cmd against real SSH
 #   TestOccupancyRaceCondition - regression for ConnectedMachine state sync bug
+#   TestMultiMachineBgTaskLeak - regression for disconnect cancelling every machine's monitor
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.1 - Update TestOccupancyRaceCondition for new get_machine_state contract returning ConnectedMachine (gateway-port-cleanup).
-#   PREVIOUS_CHANGE: v1.2.0 - Add TestOccupancyRaceCondition: regression for two-level state desync bug.
+#   LAST_CHANGE: v1.3.0 - Migrate _bg_tasks accesses from list(set) to dict[ip]; add TestMultiMachineBgTaskLeak regression (skipped unless YASCHED_MULTI_CONTAINER=1, since the unit test is the primary guard) for fix-disconnect-bg-task-leak.
+#   PREVIOUS_CHANGE: v1.2.1 - Update TestOccupancyRaceCondition for new get_machine_state contract returning ConnectedMachine (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -45,6 +48,45 @@ if TYPE_CHECKING:
 async def ssh_container(tmp_path_factory: Any) -> AsyncGenerator[dict[str, Any], None]:  # noqa: ANN401
     """Start Docker SSH container, generate key pair, yield connection info."""
     key_dir = tmp_path_factory.mktemp("ssh_keys")
+    key_path = key_dir / "id_rsa"
+
+    key = asyncssh.generate_private_key("ssh-rsa")
+    public_key_str = key.export_public_key("openssh").decode().strip()
+    key.write_private_key(str(key_path))
+
+    container = DockerContainer("lscr.io/linuxserver/openssh-server:10.2_p1-r0-ls222")
+    container.with_env("USER_NAME", "testuser")
+    container.with_env("PUBLIC_KEY", public_key_str)
+    container.with_exposed_ports(2222)
+    container.waiting_for(LogMessageWaitStrategy("sshd is listening"))
+
+    container.start()
+    try:
+        await asyncio.sleep(1)
+
+        host = container.get_container_host_ip()
+        port = int(container.get_exposed_port(2222))
+
+        yield {
+            "host": host,
+            "port": port,
+            "username": "testuser",
+            "key_path": PurePosixPath(str(key_path)),
+        }
+    finally:
+        container.stop()
+
+
+@pytest.fixture(scope="session")
+async def ssh_container_2(
+    tmp_path_factory: Any,  # noqa: ANN401
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Start a second Docker SSH container for multi-machine regression tests.
+
+    Lazy: only started when a test actually requests it. Tests that need it
+    should be skipped unless ``YASCHED_MULTI_CONTAINER=1`` is set.
+    """
+    key_dir = tmp_path_factory.mktemp("ssh_keys_2")
     key_path = key_dir / "id_rsa"
 
     key = asyncssh.generate_private_key("ssh-rsa")
@@ -513,7 +555,7 @@ class TestOccupancyIntegration:
 
             gateway.start_occupancy_check(ip, engine)
             # Wait for checker to detect completion (sleep_interval + buffer)
-            task = list(gateway._bg_tasks)[0]
+            task = gateway._bg_tasks[ip]
             await asyncio.wait_for(task, timeout=5.0)
 
             # Machine should be released
@@ -625,9 +667,8 @@ class TestOccupancyRaceCondition:
             assert gateway._machines[ip].machine.state == MachineState.BUSY
 
             # Wait for checker to detect exit (sleep_interval + process time + buffer)
-            bg_tasks = list(gateway._bg_tasks)
-            assert len(bg_tasks) > 0
-            await asyncio.wait_for(bg_tasks[-1], timeout=5.0)
+            task = gateway._bg_tasks[ip]
+            await asyncio.wait_for(task, timeout=5.0)
 
             # Checker should have released the machine
             assert gateway._machines[ip].machine.state == MachineState.FREE, (
@@ -658,10 +699,10 @@ class TestOccupancyRaceCondition:
             gateway.start_occupancy_check(ip, engine)
             assert gateway._machines[ip].machine.state == MachineState.BUSY
         finally:
-            # Wait for checker to finish
-            bg_tasks = list(gateway._bg_tasks)
-            if bg_tasks:
-                await asyncio.wait_for(bg_tasks[-1], timeout=5.0)
+            # Wait for checker to finish (if it was registered for this ip)
+            task = gateway._bg_tasks.get(ip)
+            if task is not None:
+                await asyncio.wait_for(task, timeout=5.0)
             await gateway.run(
                 gateway._machines[ip].machine, "killall sleep 2>/dev/null || true"
             )
@@ -790,3 +831,84 @@ class TestOccupancySpawnScenario:
             )
         finally:
             await gateway.run(machine, "killall sleep 2>/dev/null || true")
+
+
+# =============================================================================
+# Multi-machine regression: disconnect must not cancel other machines' monitors
+# =============================================================================
+
+
+_MULTI_CONTAINER_REASON = (
+    "Multi-container SSH regression requires YASCHED_MULTI_CONTAINER=1; "
+    "the unit test test_disconnect_does_not_cancel_other_machines_monitors "
+    "is the primary guard for fix-disconnect-bg-task-leak."
+)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("YASCHED_MULTI_CONTAINER"), reason=_MULTI_CONTAINER_REASON
+)
+class TestMultiMachineBgTaskLeak:
+    """Regression: disconnecting one machine must not cancel another's monitor.
+
+    Real-asyncssh counterpart to the unit test
+    ``test_disconnect_does_not_cancel_other_machines_monitors``. Requires two
+    SSH testcontainers; skipped by default (the unit test is the primary guard).
+    """
+
+    async def test_disconnect_does_not_cancel_other_machines_monitors(
+        self,
+        ssh_container: dict[str, Any],  # type: ignore[type-arg]
+        ssh_container_2: dict[str, Any],  # type: ignore[type-arg]
+    ) -> None:
+        """Disconnect A cancels only A's monitor; B's monitor stays alive."""
+        gateway = SSHMachineGateway()
+        engine = _make_pengine(check_pname="sleep", sleep_interval=1)
+
+        await gateway.connect(
+            ip=ssh_container["host"],
+            username=ssh_container["username"],
+            client_keys=[ssh_container["key_path"]],
+            port=ssh_container["port"],
+        )
+        await gateway.connect(
+            ip=ssh_container_2["host"],
+            username=ssh_container_2["username"],
+            client_keys=[ssh_container_2["key_path"]],
+            port=ssh_container_2["port"],
+        )
+
+        ip_a = ssh_container["host"]
+        ip_b = ssh_container_2["host"]
+
+        try:
+            # Start a long-running sleep on each so the monitors stay BUSY
+            for ip in (ip_a, ip_b):
+                await gateway.run(
+                    gateway._machines[ip].machine,
+                    "nohup sleep 300 >/dev/null 2>&1 &",
+                )
+            await asyncio.sleep(0.5)
+
+            # Start occupancy monitors on each
+            for ip in (ip_a, ip_b):
+                gateway.start_occupancy_check(ip, engine)
+
+            assert ip_a in gateway._bg_tasks
+            assert ip_b in gateway._bg_tasks
+            task_b = gateway._bg_tasks[ip_b]
+
+            # Disconnect A — must cancel only A's monitor
+            await gateway.disconnect(ip_a)
+
+            assert ip_a not in gateway._machines
+            assert ip_a not in gateway._bg_tasks
+            # B's monitor and machine are untouched
+            assert not task_b.done(), "B monitor must survive disconnect(A)"
+            assert gateway._bg_tasks[ip_b] is task_b
+            assert ip_b in gateway._machines
+
+            await gateway.disconnect(ip_b)
+        finally:
+            # Best-effort cleanup of any surviving monitor / remote process
+            await gateway.disconnect_all()

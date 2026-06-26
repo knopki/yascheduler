@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway.py
-# VERSION: 1.0.2
+# VERSION: 1.0.3
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineGateway — connection lifecycle, command execution, SFTP, occupancy monitoring.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.2 - Replace PProcessInfo with ProcessInfo at 5 sites: import, two MagicMock(spec=...), two list[...] annotations (prune-platform-protocols). DEPENDS stays M-PLATFORM-PROTOCOL since ProcessInfo now lives in protocol.py.
-#   PREVIOUS_CHANGE: v1.0.1 - Move get_machine_state and list_connected tests to test_ssh_gateway_machine_queries.py to stay under hard size limit (gateway-port-cleanup).
+#   LAST_CHANGE: v1.0.3 - Migrate _bg_tasks access from list(set)[0] to dict[ip] keyed access for fix-disconnect-bg-task-leak; bg-task regression tests moved to test_ssh_gateway_bg_tasks.py.
+#   PREVIOUS_CHANGE: v1.0.2 - Replace PProcessInfo with ProcessInfo at 5 sites: import, two MagicMock(spec=...), two list[...] annotations (prune-platform-protocols). DEPENDS stays M-PLATFORM-PROTOCOL since ProcessInfo now lives in protocol.py.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -853,7 +853,7 @@ class TestOccupancy:
         ):
             gateway.start_occupancy_check(ip, mock_pengine)
             # Wait for the background task to complete
-            task = list(gateway._bg_tasks)[0]
+            task = gateway._bg_tasks[ip]
             await asyncio.wait_for(task, timeout=1.0)
 
         # Machine should be released
