@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/gateway.py
-# VERSION: 1.8.0
+# VERSION: 1.8.1
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH machine gateway implementing MachineGateway protocol via asyncssh.
 #   SCOPE: SSHMachineGateway class with connection lifecycle, command execution, SFTP, occupancy monitoring, output download.
@@ -26,7 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Drop @my_backoff_exc() from run_bg and @my_backoff_sftp() from upload/download (non-idempotent: spawn/put/get must not retry — a successful remote side-effect followed by a lost client confirmation must not be duplicated). Add BUSY rollback to start_task_on_machine: the deploy+spawn body runs under `except BaseException` (covers CancelledError during daemon shutdown); on any failure it looks up self._machines.get(ip), warns+skips if already disconnected, warns+releases if state was not BUSY, else info-logs+releases, then re-raises (gateway-level only — DB task status / orchestrator mark_running() untouched). Restructure download_outputs: drop the outer job_retry session-retry layer; open a FRESH get_sftp(ip) client per file (dead-connection blast radius bounded to one file); move rmtree to a single post-loop evaluation gated on `not transient_errors AND not permanent_errors` (conservative — any error preserves the remote dir) using its own fresh client. 3-tuple return shape and classification (SFTPRetryExc -> transient, else permanent) unchanged (fix-nonidempotent-ssh-retries).
+#   LAST_CHANGE: v1.8.1 - Remove generic `except Exception` swallow in `_write_remote_file`; non-SFTP upload failures now propagate and abort `start_task_on_machine` instead of silently launching spawn with missing/garbage inputs. The `asyncssh.misc.Error` branch (structured code/reason log + re-raise) is unchanged (fix-write-remote-file-swallow).
+#   PREVIOUS_CHANGE: v1.8.0 - Drop @my_backoff_exc() from run_bg and @my_backoff_sftp() from upload/download (non-idempotent: spawn/put/get must not retry — a successful remote side-effect followed by a lost client confirmation must not be duplicated). Add BUSY rollback to start_task_on_machine: the deploy+spawn body runs under `except BaseException` (covers CancelledError during daemon shutdown); on any failure it looks up self._machines.get(ip), warns+skips if already disconnected, warns+releases if state was not BUSY, else info-logs+releases, then re-raises (gateway-level only — DB task status / orchestrator mark_running() untouched). Restructure download_outputs: drop the outer job_retry session-retry layer; open a FRESH get_sftp(ip) client per file (dead-connection blast radius bounded to one file); move rmtree to a single post-loop evaluation gated on `not transient_errors AND not permanent_errors` (conservative — any error preserves the remote dir) using its own fresh client. 3-tuple return shape and classification (SFTPRetryExc -> transient, else permanent) unchanged (fix-nonidempotent-ssh-retries).
 #   PREVIOUS_CHANGE: v1.7.0 - download_outputs classifies per-file exceptions into transient (SFTPRetryExc) vs permanent (all other caught) and returns (meta_add, transient_errors, permanent_errors); rmtree now gated on `if not transient_errors` so the remote dir is preserved for retry when transient errors left files undownloaded; session-level catch-all appends to transient_errors. BREAKING: return shape 2-tuple -> 3-tuple (fix-download-rmtree-data-loss).
 #   PREVIOUS_CHANGE: v1.6.0 - Re-key SSHMachineGateway._bg_tasks from set[asyncio.Task] to dict[str, asyncio.Task] keyed by machine IP; disconnect(ip) now pops+cancel+awaits only that IP's monitor (was cancelling every machine's monitor); start_occupancy_check cancels any prior monitor for the same IP before installing a new one, with an identity-checked done-callback so a re-registered replacement survives the prior task's completion (fix-disconnect-bg-task-leak). No public surface change; M-SSH-GATEWAY annotations unchanged.
 # END_CHANGE_SUMMARY
@@ -141,8 +142,6 @@ async def _write_remote_file(
             err.code,
         )
         raise err
-    except Exception as e:
-        log.error("Error processing file %s: %s", path, e)
     # END_BLOCK_WRITE_FILE
 
 

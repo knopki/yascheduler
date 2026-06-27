@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for orchestrator producer/stats resilience and worker registration (fix-orchestrator-producer-silent-death).
-#   PREVIOUS_CHANGE: none
+#   LAST_CHANGE: v1.0.1 - test_producer_exception_continues_loop: explicitly cancel+await the worker registered in _bg_jobs after the producer loop exits via cancellation_event (normal exit does NOT run the `except CancelledError` drain, so the worker would otherwise remain blocked on queue.get() and emit a PytestUnraisableExceptionWarning "Event loop is closed" at teardown). Matches the explicit-cancel pattern already used in test_workers_registered_in_bg_jobs.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for orchestrator producer/stats resilience and worker registration (fix-orchestrator-producer-silent-death).
 # END_CHANGE_SUMMARY
 #
 """Unit tests for orchestrator producer and stats error resilience."""
@@ -211,6 +211,15 @@ class TestProducerResilience:
 
         with caplog.at_level(logging.ERROR, logger=log_name):
             await orch._create_producer_consumers(q, producer, consumer, workers_num=1)
+
+        # The loop exits via the while-condition (cancellation_event set), NOT
+        # via CancelledError — so the `except CancelledError` drain path does
+        # NOT run and the worker remains blocked on queue.get(). Cancel and
+        # await it explicitly to avoid "Event loop is closed" unraisable
+        # warnings when pytest-asyncio tears the loop down.
+        for t in orch._bg_jobs:
+            t.cancel()
+        await asyncio.gather(*orch._bg_jobs, return_exceptions=True)
 
         assert call_count["n"] >= 2, "producer was not retried after raising"
         assert success["n"] >= 1, "second producer cycle did not complete"
