@@ -1,8 +1,8 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.4.0
+# VERSION: 6.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); worker tasks registered in self._bg_jobs so stop() cancels them.
+#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.4.0 - Producer-error resilience: _create_producer_consumers and _print_stats now catch Exception, log, and continue on the next tick; worker tasks are registered in self._bg_jobs so stop()'s cancel cascade reaches them even on a BaseException exit. CancelledError (a BaseException since Py3.8) still propagates past `except Exception` to the graceful-drain `except CancelledError` path (fix-orchestrator-producer-silent-death).
-#   PREVIOUS_CHANGE: v6.3.0 - Add in-flight consume guard `self._consuming: set[int]`: _task_consumer_producer skips yielding a task whose id is in _consuming; _task_consumer_consumer adds task_id before await and discards in a finally. consume_task return value (bool) now gates `self._occupancy_started.discard(ip)` — only finalised (True) discards, deferred (False) keeps the ip registered so the next producer cycle re-enters the consume block for retry (fix-download-rmtree-data-loss).
+#   LAST_CHANGE: v6.5.0 - stop() idempotent and exception-safe: `_stopped` guard for single execution (set synchronously, no await between check and set), `except Exception` on `await task` for dead-bg-job tolerance (CancelledError remains a separate BaseException path), per-step try/except isolation for clouds.stop()/disconnect_all()/http_session.close(), http_session nulled after close. run_daemon wraps `await orch.start()` in `try/finally: await orch.stop()` so cleanup runs on every exit path (fix-daemon-resource-leak-on-start-return).
+#   PREVIOUS_CHANGE: v6.4.0 - Producer-error resilience: _create_producer_consumers and _print_stats now catch Exception, log, and continue on the next tick; worker tasks are registered in self._bg_jobs so stop()'s cancel cascade reaches them even on a BaseException exit. CancelledError (a BaseException since Py3.8) still propagates past `except Exception` to the graceful-drain `except CancelledError` path (fix-orchestrator-producer-silent-death).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -139,6 +139,11 @@ class Orchestrator:
         # Per-IP first-seen monotonic timestamp of a consecutive connect
         # failure; in-memory only (daemon restart resets grace windows).
         self._connect_failures: dict[str, float] = {}
+        # Single-execution guard for stop(): set synchronously at the top of
+        # stop() with no `await` between check and set — atomic in
+        # single-threaded asyncio. In-memory only; a fresh Orchestrator
+        # starts with _stopped = False.
+        self._stopped: bool = False
 
         lcfg = local_settings
         self._conn_machine_q: UniqueQueue[str, Node] = UniqueQueue(
@@ -723,21 +728,52 @@ class Orchestrator:
     #   PURPOSE: Signal the daemon to stop and clean up non-session resources.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Cancels jobs, disconnects machines, stops clouds.
-    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY
+    #   SIDE_EFFECTS: Cancels bg jobs (tolerant of jobs that died with a non-CancelledError before shutdown — includes worker tasks registered in `_bg_jobs`), disconnects machines, stops clouds, closes http_session; idempotent — the cleanup body runs exactly once across concurrent/interleaved/repeated callers via a `_stopped` guard; each cleanup step is isolated so one failing step does not skip the others; `http_session` is nulled after close.
+    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY; idempotency + per-step isolation contract documented in openspec/changes/fix-daemon-resource-leak-on-start-return
     # END_CONTRACT: Orchestrator.stop
     async def stop(self) -> None:
+        # START_BLOCK_STOP_GUARD
+        if self._stopped:
+            return
+        self._stopped = True
+        # END_BLOCK_STOP_GUARD
         self._log.info("Stopping...")
         self._cancellation_event.set()
 
+        # START_BLOCK_STOP_AWAIT_JOBS
         for task in self._bg_jobs:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+            # CancelledError is BaseException (not Exception) since Py3.8, so
+            # the two except clauses are distinct and non-overlapping. Catches
+            # a bg job that already died with a non-CancelledError before
+            # shutdown so the pre-existing exception does not abort cleanup.
+            except Exception as e:
+                self._log.debug("[Orchestrator][stop][BG_JOB_ENDED] %s", e)
+        # END_BLOCK_STOP_AWAIT_JOBS
 
-        await self._clouds.stop()
-        await self._gateway.disconnect_all()
+        # START_BLOCK_STOP_CLOUDS
+        try:
+            await self._clouds.stop()
+        except Exception as e:
+            self._log.warning("[Orchestrator][stop][CLOUDS_STOP_FAILED] %s", e)
+        # END_BLOCK_STOP_CLOUDS
+
+        # START_BLOCK_STOP_GATEWAY
+        try:
+            await self._gateway.disconnect_all()
+        except Exception as e:
+            self._log.warning("[Orchestrator][stop][DISCONNECT_ALL_FAILED] %s", e)
+        # END_BLOCK_STOP_GATEWAY
+
+        # START_BLOCK_STOP_HTTP
         if self._http_session is not None:
-            await self._http_session.close()
+            try:
+                await self._http_session.close()
+            except Exception as e:
+                self._log.warning("[Orchestrator][stop][HTTP_CLOSE_FAILED] %s", e)
+        self._http_session = None
+        # END_BLOCK_STOP_HTTP

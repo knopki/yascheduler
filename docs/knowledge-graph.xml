@@ -176,7 +176,7 @@
       <depends>M-ENTRYPOINTS</depends>
       <annotations>
         <fn-configure_logger PURPOSE="Configure the ROOT logger: stderr StreamHandler always + FileHandler when log_file set; backoff/asyncssh → ERROR; captureWarnings(True); NO basicConfig" />
-        <fn-run_daemon PURPOSE="Async daemon core: await make_daemon, register SIGTERM/SIGINT handlers on the running loop, await orch.start()" />
+        <fn-run_daemon PURPOSE="Async daemon core: await make_daemon, register SIGTERM/SIGINT handlers on the running loop, await orch.start() wrapped in try/finally so orch.stop() runs on every exit path (normal return, start exception, signal)" />
       </annotations>
     </M-DAEMON-COMMON>
 
@@ -522,7 +522,7 @@
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected nodes" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
-        <fn-stop PURPOSE="Graceful shutdown" />
+        <fn-stop PURPOSE="Idempotent exception-safe cleanup: single-execution _stopped guard (set synchronously, no await between check and set), per-step try/except isolation for clouds.stop()/disconnect_all()/http_session.close(), dead-bg-job tolerance via except Exception, http_session nulled after close" />
         <fn-_asleep_until PURPOSE="Private async sleep-until helper inlined from former shared.async_utils" />
         <fn-_connect_grace_for PURPOSE="Resolve per-cloud connect grace (cfg.connect_grace by prefix match) with conservative 120s fallback for unknown clouds" />
         <fn-_create_producer_consumers PURPOSE="Run resilient producer-consumer loop with worker registration in self._bg_jobs; logs transient producer Exception and continues next tick; CancelledError propagates to graceful-drain path" />
