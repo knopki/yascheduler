@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_queue.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for UniqueQueue and UMessage covering deduplication, item lifecycle, and edge cases.
 #   SCOPE: put/get, deduplication, item_done tracking, psize, task_done NotImplementedError.
@@ -19,12 +19,15 @@
 #   test_dedup_by_id - two messages with equal id dedup regardless of payload
 #   test_dedup_first_wins - on duplicate id the first-inserted message is retained
 #   test_unhashable_payload - unhashable payload is accepted through full lifecycle
+#   test_put_race_full_queue - concurrent puts on full queue deduplicate under lock
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Added test_dedup_by_id, test_dedup_first_wins, test_unhashable_payload pinning the id-only dedup invariant (payload excluded from __eq__/__hash__).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial queue unit tests.
+#   LAST_CHANGE: v1.2.0 - Added test_put_race_full_queue covering concurrent-put dedup under lock (check-then-act race fix).
+#   PREVIOUS_CHANGE: v1.1.0 - Added test_dedup_by_id, test_dedup_first_wins, test_unhashable_payload pinning the id-only dedup invariant (payload excluded from __eq__/__hash__).
 # END_CHANGE_SUMMARY
+
+import asyncio
 
 import pytest
 import pytest_asyncio
@@ -175,8 +178,56 @@ async def test_dedup_first_wins(queue: UniqueQueue) -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: M-QUEUE
 # END_CONTRACT: test_unhashable_payload
-async def test_unhashable_payload(queue: UniqueQueue) -> None:
-    m = UMessage(id="a", payload={"k": "v"})
-    await queue.put(m)
-    got = await queue.get()
-    queue.item_done(got)
+# START_CONTRACT: test_put_race_full_queue
+#   PURPOSE: Verify that concurrent puts of the same item on a full queue do not produce duplicates (check-then-act race fix).
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-QUEUE
+# END_CONTRACT: test_put_race_full_queue
+async def test_put_race_full_queue() -> None:
+    """Reproduce the check-then-act race: two concurrent put(Y) on a full maxsize=1 queue.
+
+    With the fix (_put_lock), only one Y is ever enqueued — the second coroutine
+    re-checks the dedup under the lock after the first completes.
+    """
+    q: UniqueQueue = UniqueQueue(name="test", maxsize=1)
+    a = UMessage(id="a", payload="A")
+    y = UMessage(id="y", payload="Y")
+
+    await q.put(a)  # queue is now full (maxsize=1)
+
+    # Track how many times _put is called (actual enqueue, not just put() entry)
+    put_count: int = 0
+    orig_put = q._put
+
+    def counting_put(item: UMessage) -> None:  # type: ignore[type-arg]
+        nonlocal put_count
+        put_count += 1
+        orig_put(item)
+
+    q._put = counting_put  # type: ignore[assignment,method-assign]
+
+    async def put_y() -> None:
+        await q.put(y)
+
+    task1 = asyncio.create_task(put_y())
+    task2 = asyncio.create_task(put_y())
+
+    # Yield control so both tasks start; task1 suspends in super().put() (queue full),
+    # task2 blocks at _put_lock (task1 holds it).
+    await asyncio.sleep(0)
+
+    # Drain: get A wakes task1's putter -> task1 enqueues Y -> lock released
+    # task2 acquires lock -> re-checks -> Y already in queue -> returns early
+    got_a = await q.get()
+    assert got_a == a
+    got_y = await q.get()
+    assert got_y == y
+
+    await asyncio.gather(task1, task2)
+
+    # Queue empty — no duplicate Y
+    assert q.qsize() == 0
+    # Exactly one _put call succeeded (the other was dedup'd under lock)
+    assert put_count == 1

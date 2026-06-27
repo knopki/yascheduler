@@ -268,6 +268,14 @@ accepted at construction and during enqueue/get/item_done operations.
 - **WHEN** the same item (equal `id`) is put twice before being consumed
 - **THEN** the second put is ignored and queue size does not increase
 
+#### Scenario: UniqueQueue deduplicates under concurrent put on a full queue
+- **WHEN** a `UniqueQueue` at `maxsize=1` with a blocking item A has two
+  concurrent coroutines attempting `put(Y)` with the same item, both suspended
+  inside `super().put()` because the queue is full, and a consumer drains
+  the queue via repeated `get()` calls
+- **THEN** only one Y is ever enqueued: after the consumer drains `A` and `Y`,
+  `q.qsize() == 0`, and exactly one `put` call enqueued the item
+
 ### Requirement: Remote machine management
 
 Tests SHALL verify `RemoteMachineMetadata` state transitions (`busy` toggles

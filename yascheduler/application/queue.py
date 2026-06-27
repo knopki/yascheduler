@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/queue.py
-# VERSION: 1.8.0
+# VERSION: 1.9.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Deduplicating async queue for producer-consumer scheduling loops.
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Migrated UMessage from attrs to stdlib dataclasses; equality and hash are now keyed on id only via manual __eq__/__hash__ with eq=False (payload excluded; field(compare=False) was rejected because it conflicts with __slots__); manual __slots__ retained for immutability parity with prior attrs @define.
-#   PREVIOUS_CHANGE: v1.7.0 - Relocated from yascheduler/queue.py; same contents.
+#   LAST_CHANGE: v1.9.0 - Added asyncio.Lock to UniqueQueue to close check-then-act race window in put() under full-queue concurrent puts.
+#   PREVIOUS_CHANGE: v1.8.0 - Migrated UMessage from attrs to stdlib dataclasses; equality and hash are now keyed on id only via manual __eq__/__hash__ with eq=False (payload excluded; field(compare=False) was rejected because it conflicts with __slots__); manual __slots__ retained for immutability parity with prior attrs @define.
 # END_CHANGE_SUMMARY
 """Async queue with message deduplication"""
 
@@ -69,20 +69,22 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     """Async queue with message deduplication"""
 
     name: str
+    _put_lock: asyncio.Lock
     _queue: deque[UMessage[TUMsgId, TUMsgPayload]]
     _done_pending: set[UMessage[TUMsgId, TUMsgPayload]]
 
     # START_CONTRACT: __init__
-    #   PURPOSE: Initialize queue with name and maxsize
+    #   PURPOSE: Initialize queue with name, maxsize, and _put_lock
     #   INPUTS: { name: str - queue identifier } | { maxsize: int - maximum queue size, default 0 (unlimited) }
     #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Initializes internal queue state and done_pending set
+    #   SIDE_EFFECTS: Initializes internal queue state, done_pending set, and _put_lock
     #   LINKS: M-QUEUE
     # END_CONTRACT: __init__
     def __init__(
         self, name: str, *argv: object, maxsize: int = 0, **kwargs: object
     ) -> None:  # noqa: ANN002,ANN003
         self.name = name
+        self._put_lock = asyncio.Lock()
         self._done_pending = set()
         super().__init__(maxsize, *argv, **kwargs)
 
@@ -102,17 +104,18 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
         return await super().get()
 
     # START_CONTRACT: put
-    #   PURPOSE: Put message into queue, skip if ID already in seen set or queue
+    #   PURPOSE: Put message into queue under _put_lock, skip if ID already in seen set or queue
     #   INPUTS: { item: UMessage - message to enqueue }
     #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Appends item to queue if not duplicate
+    #   SIDE_EFFECTS: Appends item to queue if not duplicate; lock serializes check-then-act
     #   LINKS: M-QUEUE
     # END_CONTRACT: put
     async def put(self, item: UMessage[TUMsgId, TUMsgPayload]) -> None:
-        # skip already added
-        if item in self._queue or item in self._done_pending:
-            return
-        await super().put(item)
+        async with self._put_lock:
+            # skip already added
+            if item in self._queue or item in self._done_pending:
+                return
+            await super().put(item)
 
     # START_CONTRACT: task_done
     #   PURPOSE: Mark task as done (not implemented, use item_done instead)
