@@ -75,8 +75,10 @@ Pure stdlib. Frozen dataclasses for entities, `typing.Protocol` for ports, a
   `EngineRepository` collection, and `Deploy` strategies
   (`LocalFilesDeploy`, `LocalArchiveDeploy`, `RemoteArchiveDeploy`).
 - **`ports.py`** — async ports `TaskRepository`, `NodeRepository`,
-  `MachineGateway`, `CloudProvisioner`, plus the structural `CloudConfig`
-  Protocol that cloud DTOs satisfy.
+  `MachineRepository`, `MachineSession`, `MachineOperations`,
+  `CloudProvisioner`, plus the structural `CloudConfig` Protocol (7-field
+  surface: `prefix`, `max_nodes`, `idle_tolerance`, `connect_grace`,
+  `username`, `jump_username`, `jump_host`) that cloud DTOs satisfy.
 - **`settings.py`** — `LocalSettings` (daemon paths, webhook, concurrency
   limits) and `RemoteDefaults` (SSH paths, username, jump host), frozen
   dataclasses with validation in `__post_init__`.
@@ -102,12 +104,28 @@ dependency-injected parameters. Every use case is UoW-based.
   (or `TaskFailed` on unsupported engine).
 - **`consume_task.py`** — downloads outputs, finalizes the task
   (`complete`/`fail`), records `TaskCompleted`/`TaskFailed`, discards the
-  allocation-tracker slot.
+  allocation-tracker slot. Returns `bool`: `True` when finalised (DONE
+  applied, remote dir cleaned, tracker slot discarded) or the task row no
+  longer exists (tracker slot discarded); `False` when deferred —
+  transient-only SFTP failures leave the task `RUNNING`, preserve the
+  remote dir, and retain the tracker slot so the orchestrator re-consumes
+  on the next tick.
+- **`abandon_node.py`** — `abandon_node(node, repository, clouds, uow_factory,
+tracker)` cleans up a never-connected cloud node: best-effort
+  `clouds.deallocate`, `uow.nodes.remove + commit`, then locates the
+  originating `TO_DO` task by `allocated_ip == ip` (via
+  `uow.tasks.list_by_status({TO_DO})` + in-memory filter) and calls
+  `tracker.discard(task_id)` so the task re-enters allocation on the next
+  cycle.
 - **`deallocate_nodes.py`** — disables idle cloud nodes past `idle_tolerance`
-  (`deallocate_nodes`) and deletes them (`deallocate_node`: gateway disconnect
-  → UoW disable → `clouds.deallocate` → UoW remove).
+  (`deallocate_nodes`) and deletes them (`deallocate_node`: session
+  disconnect → UoW disable → `clouds.deallocate` → UoW remove).
 - **`orchestrator.py`** — long-running daemon driving four producer-consumer
-  loop pairs over de-duplicating queues (see §3).
+  loop pairs over de-duplicating queues (see §3), plus a per-IP
+  never-connected-node failure timer (`connect_grace`) that dispatches to
+  `abandon_node`, an in-flight consume guard (`self._consuming: set[int]`)
+  preventing two workers from concurrently consuming the same `RUNNING`
+  task, and producer/consumer error resilience (see §4.7).
 - **`uow.py`** — `AbstractUnitOfWork` Protocol (`tasks`, `nodes`, `commit`,
   `rollback`).
 - **`message_bus.py`** — type-keyed handler registry; `dispatch(events)`
@@ -116,11 +134,13 @@ dependency-injected parameters. Every use case is UoW-based.
   cloud allocations, owned by the orchestrator and injected into the
   allocate/consume use cases for dedup.
 - **`queue.py`** — `UniqueQueue`/`UMessage`: async queue that skips duplicate
-  messages by ID, used by every orchestrator loop.
+  messages by ID, used by every orchestrator loop. `put()` is serialised
+  by an `asyncio.Lock` so the check-then-act dedup window cannot admit a
+  duplicate under concurrent `put()` on a full queue.
 
 `application/__init__.py` is the sole public surface, re-exporting
 `AbstractUnitOfWork`, `Orchestrator`, `MessageBus`, `submit_task`,
-`query_tasks`, `AllocationTracker`.
+`query_tasks`, `abandon_node`, `AllocationTracker`.
 
 ### 2.3 Persistence Adapter (`yascheduler/infra/persistence/`)
 
@@ -137,7 +157,15 @@ dependency-injected parameters. Every use case is UoW-based.
 - **`db_config.py`** — `PostgresDbConfig` frozen dataclass.
 - **`sql_loader.py`** — `load_query(name)` with `@functools.cache`.
 - **`sql/`** — one file per query (`task/*.sql`, `node/*.sql`, `schema.sql`).
-- **`exceptions.py`** — `UnitOfWorkNotInitializedError`.
+  `task/update_by_id.sql` and `task/update_status.sql` use
+  `RETURNING task_id` so the repository can detect a 0-row outcome and
+  raise `TaskRowNotFoundError`.
+- **`exceptions.py`** — `UnitOfWorkNotInitializedError`,
+  `TaskRowNotFoundError`. The latter is raised by
+  `PostgresTaskRepository.save`/`update_status` when an `UPDATE` targets a
+  non-existent `task_id` (the SQL uses `RETURNING task_id` so a 0-row
+  outcome is detectable). Programming-error / contract precondition
+  violation, not a domain exception — callers SHALL NOT catch it.
 
 pg8000 is synchronous. The single-worker executor serializes DB access within
 one UoW; concurrent use cases each create their own UoW and executor. This is
@@ -145,17 +173,61 @@ intentional and adequate for current load.
 
 ### 2.4 SSH Adapter (`yascheduler/infra/ssh/`)
 
-`SSHMachineGateway` implements `MachineGateway` via asyncssh: connects and
-registers machines with occupancy state, runs commands, uploads/downloads
-files, installs engine dependencies, and runs background occupancy checks.
+The SSH adapter splits the connected-machine collection from operations on
+a single machine. Three concrete modules (`repository.py`, `session.py`,
+`operations/`) implement three domain ports (`MachineRepository`,
+`MachineSession`, `MachineOperations`).
 
-Platform detection is delegated to `infra/ssh/platform/` (Linux and Windows
-adapters behind a `RemoteMachineAdapter` registry, with `checks.py` for OS
-detection and `common.py`/`linux.py`/`windows.py` for OS-specific commands).
-`helpers.py` holds the SSH client factory, connection options, and platform
-detection glue; `exceptions.py` re-exports the retry-exception tuples;
-`keys.py` exposes the pure `list_private_keys(keys_dir)` discovery function
-that the orchestrator consumes via injection.
+- **`repository.py`** — `SSHMachineRepository` implements `MachineRepository`.
+  Owns the connected-machine collection (`_sessions: dict[str,
+MachineSession]`). Seven-method surface: `connect → MachineSession`,
+  `disconnect(ip)`, `disconnect_all()`, `list_free(platforms) →
+list[MachineSession]`, `list_connected() → list[MachineSession]`,
+  `get_session(ip) → MachineSession | None`, plus `__contains__`/`__len__`.
+  State transitions (`occupy`/`release`/`update`), accessor getters
+  (`path`/`quote`/`hostname`), and the monitor mechanism live on the
+  session — the repository only hands sessions out and tracks them by IP.
+  `disconnect(ip)` pops `_sessions[ip]` and delegates teardown to
+  `session._close()`; it SHALL NOT touch any other session's monitor.
+  Connection-building bits (`MySSHClient`, `DEFAULT_CONN_OPTS`,
+  `_resolve_tunnel`) live here.
+- **`session.py`** — `SSHMachineSession` implements `MachineSession`, the
+  connected-machine entity handle. Carries domain identity (`ip`, mutable
+  `machine` snapshot, `occupy`/`release`/`update` transitions), read-only
+  connect-time config (`adapter`, `platforms`, `data_dir`, `engines_dir`,
+  `tasks_dir`), adapter-derived accessors (`path`, `quote`, `hostname`),
+  base SSH primitives (`run`, `run_full`, `run_bg`, `upload`, `open_sftp`,
+  `get_cpu_cores`, `setup_node`, `pgrep`, `list_processes`), and the
+  per-session monitor mechanism (`install_monitor`/`cancel_monitor`). The
+  session owns its own monitor task — the repository holds no `_monitors`
+  dict. `_close()` is private, called only by
+  `SSHMachineRepository.disconnect`.
+- **`operations/`** — `SSHMachineOperations` (the `MachineOperations`
+  facade) composes three stateless sibling collaborators:
+  `TaskDeployer` (`start_task_on_machine` + upload + spawn + rollback,
+  `_write_remote_file`, `_safe_b64decode`),
+  `OutputDownloader` (`download_outputs` + error classification, with
+  per-file SFTP isolation and a single post-loop `rmtree` gate on
+  `not transient_errors AND not permanent_errors`),
+  `OccupancyChecker` (`occupancy_check`, `_by_pgrep`, `_by_cmd`,
+  `start_occupancy_check` — calls `session.occupy()` +
+  `session.install_monitor(...)`). The facade also exposes pass-throughs
+  (`run`/`run_full`/`run_bg`/`get_cpu_cores`/`setup_node`) that delegate
+  to the `session`. All machine-reference parameters are typed
+  `session: MachineSession`; the orchestrator resolves a session per
+  tick via `repository.get_session(ip)` before calling an operations
+  method. `run_bg`, `upload`, and `download` are single-attempt (spawn,
+  `sftp.put`, and `sftp.get` are non-idempotent); `get_cpu_cores` keeps its
+  backoff (idempotent read).
+- **`platform/`** — platform detection (Linux and Windows adapters behind a
+  `RemoteMachineAdapter` registry) and `checks.py` (OS detection),
+  `common.py`/`linux.py`/`windows.py` (OS-specific commands),
+  `paths.py` (path normalization), `registry.py`/`detect.py`/`run_fn.py`
+  (adapter registry, platform detection, run-fn closure).
+- **`keys.py`** — the pure `list_private_keys(keys_dir)` discovery function
+  the orchestrator consumes via injection.
+- **`exceptions.py`** — re-exports the retry-exception tuples
+  (`AllSSHRetryExc`, `SFTPRetryExc`).
 
 ### 2.5 Cloud Adapter (`yascheduler/infra/cloud/`)
 
@@ -167,10 +239,13 @@ platform support.
 Provider SDK integration lives in `providers/` (**Azure, Hetzner, UpCloud,
 VastAI**); `adapters.py` registers provider factories and resolves them by
 config prefix. `cloud_configs.py` holds the frozen cloud-config DTOs (one per
-provider) that satisfy the domain `CloudConfig` Protocol; `cloud_init.py`
-renders cloud-init user-data; `ssh_keys.py` loads or generates SSH keys.
-Azure/Hetzner/UpCloud SDKs are optional extras; VastAI uses a REST API with no
-extra dependency.
+provider) that satisfy the domain `CloudConfig` Protocol (each declares a
+per-provider `connect_grace` default: Hetzner/UpCloud = 60s, Azure/VastAI =
+120s); `cloud_init.py` renders cloud-init user-data; `ssh_keys.py` loads or
+generates SSH keys. `protocols.py` defines the node create/delete callables
+and `provider_selection.py` picks the best provider by priority, capacity, and
+platform support. Azure/Hetzner/UpCloud SDKs are optional extras; VastAI uses a
+REST API with no extra dependency.
 
 ### 2.6 Notifier (`yascheduler/infra/notifier/`)
 
@@ -207,11 +282,15 @@ SIGTERM/SIGINT handlers that call `orch.stop()`.
 
 - **`make_daemon(config, log, *, clouds=None)`** — builds the `MessageBus`
   (registers `webhook_handler` for all event types), an aiohttp session, a
-  `PostgresUnitOfWork` factory, `CloudProvisionerImpl`, `SSHMachineGateway`,
-  the `AllocationTracker`, the `allocation_lock`, and injects
-  `list_private_keys` as `list_private_keys_fn`. Returns a wired
-  `Orchestrator`. Does not create a DB or run schema migration (the operator
-  runs `yainit` first). Accepts pre-built `clouds` for tests.
+  `PostgresUnitOfWork` factory, `CloudProvisionerImpl`, one
+  `SSHMachineRepository` and one `SSHMachineOperations` (shared between
+  `CloudProvisionerImpl.machine_repository`/`machine_operations` and the
+  `Orchestrator.repository`/`operations` ports so `_setup_vm` connections
+  are visible to the orchestrator), the `AllocationTracker`, the
+  `allocation_lock`, and injects `list_private_keys` as
+  `list_private_keys_fn`. Returns a wired `Orchestrator`. Does not create a
+  DB or run schema migration (the operator runs `yainit` first). Accepts
+  pre-built `clouds` for tests.
 - **`make_cli_deps(config)`** — returns a lightweight `CLIDeps` container
   (`engines`, `uow_factory`, `remote_tasks_dir`, `submit()`). No
   SSH/cloud/daemon dependencies.
@@ -261,16 +340,21 @@ The daemon's runtime work is the `Orchestrator`. `start()` launches four
 
 | Loop           | Producer scans                        | Consumer does                                     | Limit knob     |
 | -------------- | ------------------------------------- | ------------------------------------------------- | -------------- |
-| **Connect**    | `uow.nodes.list_enabled()`            | `gateway.connect()` newly enabled nodes           | `conn_machine` |
+| **Connect**    | `uow.nodes.list_enabled()`            | `repository.connect()` newly enabled nodes        | `conn_machine` |
 | **Allocate**   | `uow.tasks.list_by_status({TO_DO})`   | `allocate_task()` (engine → free machine → cloud) | `allocate`     |
 | **Consume**    | `uow.tasks.list_by_status({RUNNING})` | completion check; if done → `consume_task()`      | `consume`      |
 | **Deallocate** | idle free machines                    | `deallocate_node()` sweep                         | `deallocate`   |
 
 Per-loop concurrency limits and queue sizes come from `LocalSettings`; the
 sleep interval is `min(engine.sleep_interval)` across engines. Shutdown is
-cooperative: SIGTERM/SIGINT → `orch.stop()` sets a cancellation event, drains
-the queues, cancels workers, then `clouds.stop()` and
-`gateway.disconnect_all()`.
+cooperative: SIGTERM/SIGINT → `orch.stop()` (idempotent, exception-safe) sets
+the `_stopped` guard, drains the queues, cancels workers (registered in
+`self._bg_jobs` so the cancel cascade reaches them even if a parent coroutine
+died), then `clouds.stop()` and `repository.disconnect_all()`.
+`run_daemon` wraps `await orch.start()` in `try/finally: await orch.stop()` so
+cleanup runs on every exit path (normal `start()` return, `start()` exception,
+signal-driven shutdown where the handler's `stop()` runs first and the
+`finally`'s `stop()` is an idempotent no-op).
 
 **Cloud fallback** (`allocate_task`): if no free compatible machine exists,
 `tracker.add(task_id)` dedups; under the shared `allocation_lock` it runs a
@@ -279,16 +363,35 @@ provisioned and the temp node replaced with the real one. On any
 post-allocate failure the VM is best-effort deallocated and the temp node
 cleaned up.
 
+**Never-connected-node cleanup**: a cloud node that is provisioned and
+persisted (`enabled=True`) but fails to establish its SSH connection is
+bounded by `connect_grace`. The connect consumer tracks `first_seen`
+(monotonic) per IP on `MachineConnectionError`; on each failure it compares
+elapsed age against the node's cloud `connect_grace`; on success it pops the
+entry. Once `connect_grace` is exhausted it dispatches to `abandon_node`
+(best-effort VM delete + DB-row remove + tracker discard for the stuck
+`TO_DO` task).
+
 **Lost-node detection**: after 20 consecutive consume passes where a task's
 machine is gone, the consumer records `TaskAbandoned`, fails the task, and
 discards the tracker slot.
+
+**Consume error handling**: `consume_task` returns `False` on transient-only
+SFTP failures (task stays `RUNNING`, remote dir preserved, tracker slot
+retained, re-consumed next tick) and `True` on finalisation (success or any
+permanent error → `DONE` with `task.fail()`, `rmtree` runs). An in-flight
+consume guard (`self._consuming: set[int]`) prevents two workers from
+concurrently consuming the same `RUNNING` task across overlapping producer
+cycles.
 
 ```txt
 submit_task ──▶ TO_DO ──allocate_task──▶ RUNNING ──consume_task──▶ DONE
                   │                          │
                   │              cloud fallback (tracker + allocation_lock)
                   │                          │
-                  └──────── TaskAbandoned (20 lost-node passes) ───────────▶ DONE
+                  ├──── never-connected cloud node (connect_grace) ──▶ abandon_node ──▶ TO_DO (re-allocate)
+                  │
+                  └──────── TaskAbandoned (20 lost-node passes) ─────────────────────▶ DONE
 ```
 
 ---
@@ -327,6 +430,11 @@ DomainError                              (domain/exceptions.py)
     └── CloudSetupError
 
 UnitOfWorkNotInitializedError            (infra/persistence/exceptions.py)
+TaskRowNotFoundError                      (infra/persistence/exceptions.py,
+                                           sibling of the above — programming-error,
+                                           not a domain exception; raised by
+                                           PostgresTaskRepository.save/update_status
+                                           on a 0-row UPDATE)
 ```
 
 `DomainError` subclasses carry domain context (task_id, engine name, ip). Use
@@ -372,7 +480,10 @@ registering a new handler — no use case changes.
 - Lazy-loaded via `load_query(name)` → `@functools.cache` → plain string.
 - Parameter placeholders use pg8000 `:param` style.
 - Schema DDL lives in `sql/schema.sql`; applied by `apply_schema()`.
-- `TaskRepository.save(task)` does a full-row `UPDATE`.
+- `TaskRepository.save(task)` runs `task/update_by_id.sql` with
+  `RETURNING task_id`; a 0-row outcome raises `TaskRowNotFoundError`
+  (predecessor-violation, not a domain error). `update_status` uses
+  `task/update_status.sql` with the same `RETURNING` guard.
 
 ### 4.6 Public API Stability
 
@@ -384,6 +495,39 @@ registering a new handler — no use case changes.
   interpolation) is preserved.
 - DB schema (`schema.sql`) is preserved; schema changes require migrations.
 - The AiiDA plugin entry point is preserved under the name `yascheduler`.
+
+### 4.7 Orchestrator & Daemon Resilience
+
+The daemon self-heals through transient failures and shuts down without
+leaking resources.
+
+- **Producer error resilience**: `_create_producer_consumers` wraps
+  `async for msg in producer()` in `try/except Exception` — a producer
+  failure (DB timeout, gateway error) is logged and the loop continues on
+  the next `_sleep_interval` tick. `asyncio.CancelledError` is a
+  `BaseException` (not `Exception`) since 3.8, so graceful shutdown still
+  propagates to the existing `except CancelledError` drain path. `_print_stats`
+  has the identical wrap. Worker tasks are registered in `self._bg_jobs` so
+  `stop()`'s cancel cascade reaches them.
+- **Consumer error resilience**: the inner `worker()` in
+  `_create_producer_consumers` wraps `await consumer(msg)` in
+  `try/except Exception` (log + continue next message), symmetric to the
+  producer wrap; `finally: queue.item_done(msg)` is preserved so the item
+  is still dequeued on raise. This also covers `TaskRowNotFoundError` from
+  the orchestrator's task-abandon path (which races the row's lifetime).
+- **Idempotent, exception-safe `stop()`**: a `_stopped` guard (set
+  synchronously, no `await` between check and set) makes the cleanup body
+  run exactly once across concurrent/interleaved/repeated callers. Each
+  cleanup step (`clouds.stop()`, `repository.disconnect_all()`,
+  `http_session.close()`) is isolated in its own `try/except Exception` so
+  one failing step cannot skip the others. `await task` on cancelled
+  background jobs tolerates a non-`CancelledError` exception via
+  `except Exception`. `http_session` is nulled after close.
+- **`run_daemon` cleanup guarantee**: `await orch.start()` is wrapped in
+  `try/finally: await orch.stop()` so cleanup runs on every exit path
+  (normal `start()` return, `start()` exception, signal-driven shutdown
+  where the handler's `stop()` runs first and the `finally`'s `stop()` is
+  an idempotent no-op).
 
 ---
 
@@ -404,7 +548,7 @@ yascheduler/
 │       └── args.py              #     shared argparse helpers
 ├── infra/                       # driven adapters
 │   ├── persistence/             #   pg8000: repos, UoW, schema, SQL files
-│   ├── ssh/                     #   asyncssh gateway + platform/ (Linux, Windows)
+│   ├── ssh/                     #   asyncssh
 │   ├── cloud/                   #   CloudProvisionerImpl + providers/ (4 providers)
 │   └── notifier/                #   webhook handler
 ├── application/                 # use cases, orchestrator, UoW, message bus
@@ -419,8 +563,9 @@ yascheduler/
 Tests are split into three pytest markers (`unit`, `integration`, `e2e`):
 
 - **Unit** (`tests/unit`) — use cases driven by in-memory fakes for every port
-  (`TaskRepository`, `NodeRepository`, `MachineGateway`, `CloudProvisioner`).
-  No real DB, SSH, or cloud.
+  (`TaskRepository`, `NodeRepository`, `MachineRepository`,
+  `MachineSession`, `MachineOperations`, `CloudProvisioner`). No real DB,
+  SSH, or cloud.
 - **Integration** (`tests/integration`) — persistence and use cases against
   real PostgreSQL and Docker SSH servers via `testcontainers[postgres]`.
 - **End-to-end** (`tests/e2e`) — full task lifecycle
