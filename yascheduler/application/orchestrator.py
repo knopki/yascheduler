@@ -32,7 +32,8 @@ from yascheduler.domain import (
     CloudProvisioner,
     ConnectedMachine,
     MachineConnectionError,
-    MachineGateway,
+    MachineOperations,
+    MachineRepository,
     MachineState,
     Node,
     Task,
@@ -89,10 +90,10 @@ async def _asleep_until(end: datetime) -> None:
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { local_settings: LocalSettings, remote_defaults: RemoteDefaults, uow_factory: Callable[[], AbstractUnitOfWork], clouds: CloudProvisioner, gateway: MachineGateway, engines: EngineRepository, log: Logger, config_clouds: Sequence[CloudConfig], local_tasks_dir: Path, allocation_tracker: AllocationTracker, active_clouds: Sequence[CloudConfig], allocation_lock: asyncio.Lock, list_private_keys_fn: Callable[[Path], Sequence[PurePath]], http_session: aiohttp.ClientSession | None }
+    #   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, repository, operations, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock, list_private_keys_fn, http_session }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues.
-    #   LINKS: M-APPLICATION-UOW, M-QUEUE, M-SSH-GATEWAY, M-SSH-KEYS
+    #   LINKS: M-APPLICATION-UOW, M-QUEUE, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS
     # END_CONTRACT: Orchestrator.__init__
     def __init__(
         self,
@@ -100,7 +101,8 @@ class Orchestrator:
         remote_defaults: RemoteDefaults,
         uow_factory: Callable[[], AbstractUnitOfWork],
         clouds: CloudProvisioner,
-        gateway: MachineGateway,
+        repository: MachineRepository,
+        operations: MachineOperations,
         engines: EngineRepository,
         log: logging.Logger,
         config_clouds: Sequence[CloudConfig],
@@ -115,7 +117,8 @@ class Orchestrator:
         self._remote_defaults = remote_defaults
         self._uow_factory = uow_factory
         self._clouds = clouds
-        self._gateway = gateway
+        self._repository = repository
+        self._operations = operations
         self._engines = engines
         self._log = log
         self._config_clouds = config_clouds
@@ -162,10 +165,10 @@ class Orchestrator:
     # ---- Task deployment wrapper ----
 
     # START_CONTRACT: Orchestrator._start_task_on_machine
-    #   PURPOSE: Thin wrapper — resolve ncpus via UoW, delegate to gateway.start_task_on_machine.
+    #   PURPOSE: Thin wrapper — resolve ncpus via UoW, delegate to operations.start_task_on_machine.
     #   INPUTS: { machine: ConnectedMachine, engine: Engine, task: Task }
     #   OUTPUTS: { bool - True on successful spawn }
-    #   SIDE_EFFECTS: Reads node from DB, calls gateway.start_task_on_machine.
+    #   SIDE_EFFECTS: Reads node from DB, calls operations.start_task_on_machine.
     #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
     # END_CONTRACT: Orchestrator._start_task_on_machine
     async def _start_task_on_machine(
@@ -177,9 +180,11 @@ class Orchestrator:
         # START_BLOCK_RESOLVE_NCPUS
         async with self._uow_factory() as uow:
             node = await uow.nodes.get(task.allocated_ip or "")
-        ncpus = (node and node.ncpus) or await self._gateway.get_cpu_cores(machine.ip)
+        ncpus = (node and node.ncpus) or await self._operations.get_cpu_cores(
+            machine.ip
+        )
         # END_BLOCK_RESOLVE_NCPUS
-        return await self._gateway.start_task_on_machine(
+        return await self._operations.start_task_on_machine(
             machine, engine, task, ncpus, self._remote_defaults.engines_dir
         )
 
@@ -190,7 +195,7 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Logs statistics every 10 seconds. Transient Exceptions from DB or
-    #     gateway reads are logged and the loop continues on its next tick; CancelledError
+    #     repository reads are logged and the loop continues on its next tick; CancelledError
     #     (a BaseException) propagates past `except Exception` so the shutdown path is preserved.
     #   LINKS: M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator._print_stats
@@ -204,7 +209,7 @@ class Orchestrator:
                     tcounters = await uow.tasks.count_by_status()
                 n_busy = sum(
                     1
-                    for m in self._gateway.list_connected()
+                    for m in self._repository.list_connected()
                     if m.state == MachineState.BUSY
                 )
                 tmpl = (
@@ -256,7 +261,7 @@ class Orchestrator:
         new_nodes = [
             n
             for n in enabled_nodes
-            if n.cloud is not None and not self._gateway.contains(n.ip)
+            if n.cloud is not None and not self._repository.contains(n.ip)
         ]
         # END_BLOCK_FILTER_CLOUD_ONLY
         for node in new_nodes:
@@ -275,7 +280,7 @@ class Orchestrator:
                     jump_host, jump_username = cloud.jump_host, cloud.jump_username
 
         try:
-            await self._gateway.connect(
+            await self._repository.connect(
                 ip=node.ip,
                 username=node.username,
                 client_keys=keys,
@@ -319,7 +324,6 @@ class Orchestrator:
             try:
                 await abandon_node(
                     node,
-                    self._gateway,
                     self._clouds,
                     self._uow_factory,
                     self._tracker,
@@ -355,7 +359,7 @@ class Orchestrator:
         self,
     ) -> AsyncGenerator[UMessage[int, Task], None]:
         ccap = await self._clouds_get_capacity()
-        tlim = max(ccap, len(self._gateway.list_free(None)), 10)
+        tlim = max(ccap, len(self._repository.list_free(None)), 10)
         async with self._uow_factory() as uow:
             tasks = await uow.tasks.list_by_status({TaskStatus.TO_DO}, limit=tlim)
         if tasks:
@@ -384,7 +388,8 @@ class Orchestrator:
                 task_id=msg.id,
                 engines=self._engines,
                 uow_factory=self._uow_factory,
-                gateway=self._gateway,
+                repository=self._repository,
+                operations=self._operations,
                 clouds=self._clouds,
                 start_task_on_machine=self._start_task_on_machine,
                 tracker=self._tracker,
@@ -424,7 +429,7 @@ class Orchestrator:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
         ip = task.allocated_ip or ""
-        machine = self._gateway.get_machine_state(ip)
+        machine = self._repository.get_machine_state(ip)
         if machine is None:
             # START_BLOCK_MACHINE_GONE
             self._log.warning(
@@ -460,9 +465,9 @@ class Orchestrator:
         if ip not in self._occupancy_started:
             engine = self._engines.get(task.context.engine)
             if engine:
-                self._gateway.start_occupancy_check(ip, engine)
+                self._operations.start_occupancy_check(ip, engine)
                 self._occupancy_started.add(ip)
-                machine = self._gateway.get_machine_state(ip)
+                machine = self._repository.get_machine_state(ip)
                 if machine is None:
                     return
 
@@ -480,7 +485,7 @@ class Orchestrator:
                 finalised = await consume_task(
                     task_id=task_id,
                     ip=ip,
-                    gateway=self._gateway,
+                    operations=self._operations,
                     engines=self._engines,
                     uow_factory=self._uow_factory,
                     local_tasks_dir=self._local_tasks_dir,
@@ -510,7 +515,7 @@ class Orchestrator:
         # free_since is monotonic; pass it through unchanged so deallocate_nodes
         # compares against time.monotonic() and stays immune to wall-clock jumps.
         idle_machines: dict[str, float] = {}
-        for m in self._gateway.list_connected():
+        for m in self._repository.list_connected():
             if m.state == MachineState.FREE and m.free_since is not None:
                 idle_machines[m.ip] = m.free_since
         # END_BLOCK_COLLECT_IDLE
@@ -540,10 +545,10 @@ class Orchestrator:
                 node = await uow.nodes.get(ip)
             if node is not None:
                 await deallocate_node(
-                    node, self._gateway, self._clouds, self._uow_factory
+                    node, self._repository, self._clouds, self._uow_factory
                 )
-            elif self._gateway.contains(ip):
-                await self._gateway.disconnect(ip)
+            elif self._repository.contains(ip):
+                await self._repository.disconnect(ip)
         except Exception as err:
             self._log.error("Deallocator error for %s: %s", ip, err)
 
@@ -662,11 +667,11 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-SSH-GATEWAY
+    #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
     # END_CONTRACT: Orchestrator._await_first_machine
     async def _await_first_machine(self) -> None:
         # START_BLOCK_WAIT_MACHINES
-        if len(self._gateway) > 0:
+        if len(self._repository) > 0:
             return
 
         async def _wait() -> None:
@@ -756,7 +761,7 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Cancels bg jobs (tolerant of jobs that died with a non-CancelledError before shutdown — includes worker tasks registered in `_bg_jobs`), disconnects machines, stops clouds, closes http_session; idempotent — the cleanup body runs exactly once across concurrent/interleaved/repeated callers via a `_stopped` guard; each cleanup step is isolated so one failing step does not skip the others; `http_session` is nulled after close.
-    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-GATEWAY; idempotency + per-step isolation contract documented in openspec/changes/fix-daemon-resource-leak-on-start-return
+    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS; idempotency + per-step isolation contract documented in openspec/changes/fix-daemon-resource-leak-on-start-return
     # END_CONTRACT: Orchestrator.stop
     async def stop(self) -> None:
         # START_BLOCK_STOP_GUARD
@@ -791,7 +796,7 @@ class Orchestrator:
 
         # START_BLOCK_STOP_GATEWAY
         try:
-            await self._gateway.disconnect_all()
+            await self._repository.disconnect_all()
         except Exception as e:
             self._log.warning("[Orchestrator][stop][DISCONNECT_ALL_FAILED] %s", e)
         # END_BLOCK_STOP_GATEWAY

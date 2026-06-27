@@ -80,30 +80,40 @@ def make_mock_deps(config: MagicMock, uow: AsyncMock) -> MagicMock:
     return deps
 
 
-def make_mock_gateway() -> AsyncMock:
-    """Return an AsyncMock SSHMachineGateway with connect/setup_node/disconnect."""
-    gateway = AsyncMock()
-    gateway.connect = AsyncMock()
-    gateway.setup_node = AsyncMock()
-    gateway.disconnect = AsyncMock()
-    return gateway
+def make_mock_repository() -> AsyncMock:
+    """Return an AsyncMock SSHMachineRepository with connect/disconnect."""
+    repo = AsyncMock()
+    repo.connect = AsyncMock()
+    repo.disconnect = AsyncMock()
+    return repo
+
+
+def make_mock_operations() -> AsyncMock:
+    """Return an AsyncMock SSHMachineOperations with setup_node."""
+    ops = AsyncMock()
+    ops.setup_node = AsyncMock()
+    return ops
 
 
 @pytest.fixture
 def stub_env(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[MagicMock, AsyncMock, MagicMock, AsyncMock]:
-    """Patch Config/make_cli_deps/SSHMachineGateway; return (config, uow, deps, gateway)."""
+) -> tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock]:
+    """Patch Config/make_cli_deps/SSHMachineRepository+SSHMachineOperations; return (config, uow, deps, repo, ops)."""
     config = make_mock_config()
     uow = make_mock_uow()
     deps = make_mock_deps(config, uow)
-    gateway = make_mock_gateway()
+    repo = make_mock_repository()
+    ops = make_mock_operations()
     monkeypatch.setattr(manage_node_mod, "parse_config", MagicMock(return_value=config))
     monkeypatch.setattr(manage_node_mod, "make_cli_deps", MagicMock(return_value=deps))
     monkeypatch.setattr(
-        manage_node_mod, "SSHMachineGateway", MagicMock(return_value=gateway)
+        manage_node_mod, "SSHMachineRepository", MagicMock(return_value=repo)
     )
-    return config, uow, deps, gateway
+    monkeypatch.setattr(
+        manage_node_mod, "SSHMachineOperations", MagicMock(return_value=ops)
+    )
+    return config, uow, deps, repo, ops
 
 
 def _run(argv: list[str]) -> None:
@@ -298,11 +308,11 @@ class TestManageNodeArgparse:
         self,
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
         # Deliberately set sys.argv to something unrelated to prove argv wins.
         monkeypatch.setattr("sys.argv", ["python", "-c", "unrelated"])
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
         _run(["10.0.0.1"])  # add path with mocked env
         out, _ = capsys.readouterr()
@@ -327,16 +337,16 @@ class TestManageNodeAddPath:
     def test_add_happy_path(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, gateway = stub_env
+        _config, uow, _deps, repo, ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
 
         _run(["10.0.0.1"])  # no SystemExit on success
 
-        gateway.connect.assert_called_once()
-        gateway.setup_node.assert_called_once_with("10.0.0.1", _config.engines)
-        gateway.disconnect.assert_called_once_with("10.0.0.1")
+        repo.connect.assert_called_once()
+        ops.setup_node.assert_called_once_with("10.0.0.1", _config.engines)
+        repo.disconnect.assert_called_once_with("10.0.0.1")
         uow.nodes.add.assert_called_once()
         uow.commit.assert_called_once()
         out, _ = capsys.readouterr()
@@ -346,16 +356,16 @@ class TestManageNodeAddPath:
     def test_add_with_skip_setup(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, gateway = stub_env
+        _config, uow, _deps, repo, ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
 
         _run(["10.0.0.1", "--skip-setup"])
 
-        gateway.connect.assert_called_once()
-        gateway.setup_node.assert_not_called()
-        gateway.disconnect.assert_called_once_with("10.0.0.1")
+        repo.connect.assert_called_once()
+        ops.setup_node.assert_not_called()
+        repo.disconnect.assert_called_once_with("10.0.0.1")
         uow.nodes.add.assert_called_once()
         uow.commit.assert_called_once()
         out, _ = capsys.readouterr()
@@ -365,18 +375,18 @@ class TestManageNodeAddPath:
     def test_add_disconnects_when_setup_raises(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, gateway = stub_env
+        _config, uow, _deps, repo, ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
-        gateway.setup_node = AsyncMock(side_effect=RuntimeError("setup boom"))
+        ops.setup_node = AsyncMock(side_effect=RuntimeError("setup boom"))
 
         with pytest.raises(SystemExit) as exc:
             _run(["10.0.0.1"])
         assert exc.value.code == 1
         # Resource-leak fix: disconnect ran even though setup raised.
-        gateway.connect.assert_called_once()
-        gateway.disconnect.assert_called_once_with("10.0.0.1")
+        repo.connect.assert_called_once()
+        repo.disconnect.assert_called_once_with("10.0.0.1")
         uow.nodes.add.assert_not_called()
         _, err = capsys.readouterr()
         assert "Error:" in err
@@ -384,9 +394,9 @@ class TestManageNodeAddPath:
     def test_add_already_in_db_exits_one(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, gateway = stub_env
+        _config, uow, _deps, repo, ops = stub_env
         uow.nodes.get = AsyncMock(
             return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
         )
@@ -395,7 +405,7 @@ class TestManageNodeAddPath:
             _run(["10.0.0.1"])
         assert exc.value.code == 1
         uow.nodes.add.assert_not_called()
-        gateway.connect.assert_not_called()
+        repo.connect.assert_not_called()
         out, err = capsys.readouterr()
         assert out == ""
         assert "already in DB" in err
@@ -403,9 +413,9 @@ class TestManageNodeAddPath:
     def test_node_uses_config_username_when_no_override(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        config, uow, _deps, _gateway = stub_env
+        config, uow, _deps, _repo, _ops = stub_env
         config.remote.username = "opsuser"
         uow.nodes.get = AsyncMock(return_value=None)
 
@@ -417,9 +427,9 @@ class TestManageNodeAddPath:
     def test_node_uses_user_override_when_present(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        config, uow, _deps, _gateway = stub_env
+        config, uow, _deps, _repo, _ops = stub_env
         config.remote.username = "opsuser"
         uow.nodes.get = AsyncMock(return_value=None)
 
@@ -431,9 +441,9 @@ class TestManageNodeAddPath:
     def test_node_default_ncpus_zero_when_absent(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
 
         _run(["10.0.0.1"])
@@ -447,9 +457,9 @@ class TestManageNodeAddPath:
     def test_node_ncpus_when_explicit(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
 
         _run(["10.0.0.1~4"])
@@ -460,9 +470,9 @@ class TestManageNodeAddPath:
     def test_node_construction_uses_port(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
 
         _run(["10.0.0.1:2222"])
@@ -484,9 +494,9 @@ class TestManageNodeRemovePath:
     def test_remove_hard_happy_path(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, gateway = stub_env
+        _config, uow, _deps, repo, ops = stub_env
         uow.nodes.get = AsyncMock(
             return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
         )
@@ -500,7 +510,7 @@ class TestManageNodeRemovePath:
         uow.nodes.remove.assert_called_once_with("10.0.0.1")
         uow.commit.assert_called_once()
         # add path not triggered
-        gateway.connect.assert_not_called()
+        repo.connect.assert_not_called()
         out, _ = capsys.readouterr()
         assert "An associated task 1 at 10.0.0.1 is now marked done!" in out
         assert "An associated task 2 at 10.0.0.1 is now marked done!" in out
@@ -509,9 +519,9 @@ class TestManageNodeRemovePath:
     def test_remove_soft_with_tasks_disables(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(
             return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
         )
@@ -529,9 +539,9 @@ class TestManageNodeRemovePath:
     def test_remove_soft_without_tasks_removes(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(
             return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
         )
@@ -549,9 +559,9 @@ class TestManageNodeRemovePath:
     def test_remove_nonexistent_exits_one(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
 
         with pytest.raises(SystemExit) as exc:
@@ -565,9 +575,9 @@ class TestManageNodeRemovePath:
     def test_remove_hard_prints_after_commit(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(
             return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
         )
@@ -597,9 +607,9 @@ class TestManageNodeExitCodesAndChannels:
     def test_add_success_exits_zero(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
 
         _run(["10.0.0.1"])  # no SystemExit raised on success → implicit exit 0
@@ -607,11 +617,11 @@ class TestManageNodeExitCodesAndChannels:
     def test_ssh_failure_exits_one(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, gateway = stub_env
+        _config, uow, _deps, repo, ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
-        gateway.connect = AsyncMock(side_effect=RuntimeError("ssh down"))
+        repo.connect = AsyncMock(side_effect=RuntimeError("ssh down"))
 
         with pytest.raises(SystemExit) as exc:
             _run(["10.0.0.1"])
@@ -622,9 +632,9 @@ class TestManageNodeExitCodesAndChannels:
     def test_db_error_exits_one(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
         uow.nodes.add = AsyncMock(side_effect=RuntimeError("db down"))
 
@@ -654,9 +664,9 @@ class TestManageNodeExitCodesAndChannels:
     def test_failure_messages_on_stderr_not_stdout(
         self,
         capsys: pytest.CaptureFixture[str],
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
         uow.nodes.add = AsyncMock(side_effect=RuntimeError("db down"))
 
@@ -670,14 +680,14 @@ class TestManageNodeExitCodesAndChannels:
         self,
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
         capture_spy = MagicMock()
         monkeypatch.setattr(logging, "captureWarnings", capture_spy)
         root = logging.getLogger()
         original_level = root.level
         try:
-            _config, uow, _deps, _gateway = stub_env
+            _config, uow, _deps, _repo, _ops = stub_env
             uow.nodes.get = AsyncMock(return_value=None)
 
             _run(["10.0.0.1"])
@@ -724,12 +734,12 @@ class TestManageNodeConfigLogLevel:
 
     def test_log_level_debug_sets_root_to_debug(
         self,
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import logging
 
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
         root = logging.getLogger()
         original_level = root.level
@@ -757,20 +767,25 @@ class TestManageNodeConfigLogLevel:
         )
         monkeypatch.setattr(
             manage_node_mod,
-            "SSHMachineGateway",
-            MagicMock(return_value=make_mock_gateway()),
+            "SSHMachineRepository",
+            MagicMock(return_value=make_mock_repository()),
+        )
+        monkeypatch.setattr(
+            manage_node_mod,
+            "SSHMachineOperations",
+            MagicMock(return_value=make_mock_operations()),
         )
         _run(["10.0.0.1", "--config", str(custom_conf)])
         from_config_spy.assert_called_once_with(custom_conf)
 
     def test_default_config_is_config_file(
         self,
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from yascheduler import CONFIG_FILE
 
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
         from_config_spy = MagicMock(return_value=make_mock_config())
         monkeypatch.setattr(manage_node_mod, "parse_config", from_config_spy)
@@ -779,12 +794,12 @@ class TestManageNodeConfigLogLevel:
 
     def test_default_log_level_is_warning(
         self,
-        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import logging
 
-        _config, uow, _deps, _gateway = stub_env
+        _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
         root = logging.getLogger()
         original_level = root.level

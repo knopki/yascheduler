@@ -2,11 +2,11 @@
 # VERSION: 1.0.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineGateway.connect two-method pattern and error translation.
+#   PURPOSE: Unit tests for SSHMachineRepository.connect two-method pattern and error translation.
 #   SCOPE: Transaction of asyncssh.misc.Error → MachineConnectionError,
 #     OSError → MachineConnectionError, and successful return.
-#   DEPENDS: M-SSH-GATEWAY, M-DOMAIN-EXCEPTIONS
-#   LINKS: M-SSH-GATEWAY
+#   DEPENDS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS
+#   LINKS: M-SSH-REPOSITORY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -26,7 +26,7 @@ import pytest
 
 from yascheduler.domain import ConnectedMachine, MachineState
 from yascheduler.domain.exceptions import MachineConnectionError
-from yascheduler.infra.ssh.gateway import SSHMachineGateway
+from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 
 # START_CONTRACT: test_connect_translates_asyncssh_error
@@ -34,11 +34,11 @@ from yascheduler.infra.ssh.gateway import SSHMachineGateway
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
-#   LINKS: M-SSH-GATEWAY, M-DOMAIN-EXCEPTIONS
+#   LINKS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS
 # END_CONTRACT: test_connect_translates_asyncssh_error
 @pytest.mark.asyncio
 async def test_connect_translates_asyncssh_error() -> None:
-    gw = SSHMachineGateway()
+    gw = SSHMachineRepository()
     err = asyncssh.misc.PermissionDenied("denied")
     gw._connect_impl = AsyncMock(side_effect=err)  # type: ignore[method-assign]
     with pytest.raises(MachineConnectionError) as exc_info:
@@ -53,11 +53,11 @@ async def test_connect_translates_asyncssh_error() -> None:
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
-#   LINKS: M-SSH-GATEWAY, M-DOMAIN-EXCEPTIONS
+#   LINKS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS
 # END_CONTRACT: test_connect_translates_oserror
 @pytest.mark.asyncio
 async def test_connect_translates_oserror() -> None:
-    gw = SSHMachineGateway()
+    gw = SSHMachineRepository()
     gw._connect_impl = AsyncMock(side_effect=OSError("refused"))  # type: ignore[method-assign]
     with pytest.raises(MachineConnectionError) as exc_info:
         await gw.connect("10.0.0.1", "root", None)
@@ -70,11 +70,11 @@ async def test_connect_translates_oserror() -> None:
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
-#   LINKS: M-SSH-GATEWAY
+#   LINKS: M-SSH-REPOSITORY
 # END_CONTRACT: test_connect_returns_machine_on_success
 @pytest.mark.asyncio
 async def test_connect_returns_machine_on_success() -> None:
-    gw = SSHMachineGateway()
+    gw = SSHMachineRepository()
     machine = ConnectedMachine(
         ip="10.0.0.1",
         platform="linux",

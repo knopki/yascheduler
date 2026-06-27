@@ -1,9 +1,9 @@
 # FILE: yascheduler/application/abandon_node.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Abandon never-connected cloud node use case — VM delete + DB-row remove + release stuck TO_DO task.
 #   SCOPE: abandon_node async function.
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-APPLICATION-ABANDON-NODE, M-APPLICATION-ORCHESTRATOR
 # END_MODULE_CONTRACT
 #
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial use case extracted from the never-connected-node-leak fix (fix-never-connected-node-leak). Symmetric with deallocate_node for the never-connected case: skips gateway.disconnect (the node was never registered), goes straight to cloud delete -> DB remove -> tracker discard for the originating TO_DO task.
-#   PREVIOUS_CHANGE: none
+#   LAST_CHANGE: v1.1.0 - Drop the unused gateway parameter (decompose-ssh-gateway). The node was never registered with the repository, so no SSH-side call is needed; the previous gateway param was present only for symmetry with deallocate_node and was never used in the body.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial use case extracted from the never-connected-node-leak fix (fix-never-connected-node-leak).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from yascheduler.domain import Node, TaskStatus
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.domain import CloudProvisioner, MachineGateway
+    from yascheduler.domain import CloudProvisioner
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
@@ -38,19 +38,17 @@ logger = logging.getLogger(__name__)
 #   PURPOSE: Clean up a cloud node that never established its SSH connection and release its stuck task.
 #   INPUTS: {
 #     node: Node - The never-connected node to abandon,
-#     gateway: MachineGateway - SSH gateway (unused — node was never registered; present for symmetry with deallocate_node),
 #     clouds: CloudProvisioner - Cloud provider manager for VM deletion,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     tracker: AllocationTracker - In-flight allocation dedup to release the stuck task into
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Best-effort cloud VM delete (logged not raised); removes yascheduler_nodes row + commit (re-raised on failure so the orchestrator's outer try/except keeps the worker alive); on success, discards the stuck TO_DO task from AllocationTracker so it re-allocates on the next cycle. Does NOT call gateway.disconnect (node was never in the gateway). Does NOT mark the task FAILED or emit a domain event (per Non-Goal on re-allocation limits).
+#   SIDE_EFFECTS: Best-effort cloud VM delete (logged not raised); removes yascheduler_nodes row + commit (re-raised on failure so the orchestrator's outer try/except keeps the worker alive); on success, discards the stuck TO_DO task from AllocationTracker so it re-allocates on the next cycle. Does NOT call repository.disconnect (node was never in the repository). Does NOT mark the task FAILED or emit a domain event (per Non-Goal on re-allocation limits).
 #   RAISES: Re-raises any exception from uow.nodes.remove / uow.commit (caller catches to keep the worker alive). Cloud-delete failures are swallowed (logged at error) so DB cleanup still runs.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: abandon_node
 async def abandon_node(
     node: Node,
-    gateway: MachineGateway,
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
     tracker: AllocationTracker,

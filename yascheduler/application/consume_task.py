@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 5.5.0
+# VERSION: 5.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
 #   SCOPE: consume_task async function returning bool (True=finalised, False=deferred for retry).
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-GATEWAY, M-DOMAIN-ENGINE
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-OPERATIONS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.5.0 - consume_task returns bool (True=finalised, False=deferred for retry); unpacks 3-tuple (meta_add, transient_errors, permanent_errors) from gateway.download_outputs; transient-only errors defer (no status change, no save, no event, no tracker.discard) so the orchestrator re-consumes the RUNNING task; permanent errors or full success finalise (task.fail with combined msg when both lists present, or task.complete); tracker.discard moved into finalise branch only (fix-download-rmtree-data-loss). Renamed _record_finalization_event -> _decide_finalisation.
-#   PREVIOUS_CHANGE: v5.4.0 - TYPE_CHECKING import EngineRepository from yascheduler.domain instead of yascheduler.config (engine-to-domain-frozen).
+#   LAST_CHANGE: v5.6.0 - Retype repository: MachineRepository, operations: MachineOperations -> operations: MachineOperations (consume uses download_outputs only) per decompose-ssh-gateway.
+#   PREVIOUS_CHANGE: v5.5.0 - consume_task returns bool (True=finalised, False=deferred for retry); unpacks 3-tuple (meta_add, transient_errors, permanent_errors) from gateway.download_outputs; transient-only errors defer (no status change, no save, no event, no tracker.discard) so the orchestrator re-consumes the RUNNING task; permanent errors or full success finalise (task.fail with combined msg when both lists present, or task.complete); tracker.discard moved into finalise branch only (fix-download-rmtree-data-loss). Renamed _record_finalization_event -> _decide_finalisation.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from yascheduler.domain import TaskCompleted, TaskFailed
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.domain import EngineRepository, MachineGateway, Task
+    from yascheduler.domain import EngineRepository, MachineOperations, Task
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
@@ -197,7 +197,7 @@ async def _finalize_task(
 #   INPUTS: {
 #     task_id: int - ID of the task to consume,
 #     ip: str - IP address of the machine where the task ran,
-#     gateway: MachineGateway - SSH gateway for output download,
+#     repository: MachineRepository, operations: MachineOperations - SSH gateway for output download,
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable - Factory providing AbstractUnitOfWork,
 #     local_tasks_dir: Path - Local base directory for output storage,
@@ -205,12 +205,12 @@ async def _finalize_task(
 #   }
 #   OUTPUTS: { bool - True when finalised (DONE applied, remote dir cleaned by gateway, tracker slot discarded) or task not found in DB (vacuously finalised, tracker slot discarded); False when deferred (stay RUNNING, remote dir preserved, tracker slot retained) }
 #   SIDE_EFFECTS: Downloads files via SFTP; on finalise applies domain lifecycle, saves via UoW, records events, discards tracker slot; on task-not-found discards tracker slot; on defer none.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: consume_task
 async def consume_task(
     task_id: int,
     ip: str,
-    gateway: MachineGateway,
+    operations: MachineOperations,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
     local_tasks_dir: Path,
@@ -228,7 +228,7 @@ async def consume_task(
     store_folder, output_files, remote_folder = await _prepare_store_folder(
         task, local_tasks_dir, engines
     )
-    meta_add, transient_errors, permanent_errors = await gateway.download_outputs(
+    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
         ip=ip,
         remote_dir=remote_folder,
         local_dir=store_folder,

@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.8.0
+# VERSION: 5.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
-#   DEPENDS: M-APPLICATION-UOW, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
+#   DEPENDS: M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.8.0 - Retype start_task_on_machine callback signatures to Engine; remove cast("TaskExecutionEngine") and cast("OccupancyConfig") bridging calls and the unused cast import (resolve-engine-protocol-debt). The frozen Engine dataclass is now typed directly against MachineGateway methods.
-#   PREVIOUS_CHANGE: v5.7.0 - TYPE_CHECKING import Engine, EngineRepository from yascheduler.domain instead of yascheduler.config (engine-to-domain-frozen).
+#   LAST_CHANGE: v5.9.0 - Retype SSH-side parameters: repository: MachineRepository, operations: MachineOperations split into repository: MachineRepository (list_free) and operations: MachineOperations (start_occupancy_check) per decompose-ssh-gateway. _try_start_on_machine now takes operations instead of gateway (uses operations.start_occupancy_check); _find_free_machines takes repository (uses repository.list_free).
+#   PREVIOUS_CHANGE: v5.8.0 - Retype start_task_on_machine callback signatures to Engine; remove cast("TaskExecutionEngine") and cast("OccupancyConfig") bridging calls and the unused cast import (resolve-engine-protocol-debt).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -48,7 +48,8 @@ if TYPE_CHECKING:
         CloudProvisioner,
         Engine,
         EngineRepository,
-        MachineGateway,
+        MachineOperations,
+        MachineRepository,
     )
 
     from .allocation_tracker import AllocationTracker
@@ -102,20 +103,20 @@ async def _validate_engine(
 #     machine: ConnectedMachine - The machine to try,
 #     engine: Engine - The resolved engine config,
 #     task: Task - The task to allocate,
-#     gateway: MachineGateway - SSH gateway for occupancy checks,
+#     repository: MachineRepository, operations: MachineOperations - SSH gateway for occupancy checks,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
 #     tracker: AllocationTracker - In-flight cloud allocation tracker
 #   }
 #   OUTPUTS: { bool - True if task started successfully on this machine }
 #   SIDE_EFFECTS: Sets task running, starts occupancy check, records TaskAllocated event, discards tracker slot.
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _try_start_on_machine
 async def _try_start_on_machine(
     machine: ConnectedMachine,
     engine: Engine,
     task: Task,
-    gateway: MachineGateway,
+    operations: MachineOperations,
     uow_factory: Callable[[], AbstractUnitOfWork],
     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
@@ -133,7 +134,7 @@ async def _try_start_on_machine(
         task.task_id,
         machine.ip,
     )
-    gateway.start_occupancy_check(machine.ip, engine)
+    operations.start_occupancy_check(machine.ip, engine)
     task = task.with_event(
         TaskAllocated, node_ip=machine.ip, engine_name=task.context.engine
     )
@@ -149,16 +150,16 @@ async def _try_start_on_machine(
 #   INPUTS: {
 #     engine: Engine - The resolved engine config,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     gateway: MachineGateway - SSH gateway with connected machines
+#     repository: MachineRepository, operations: MachineOperations - SSH gateway with connected machines
 #   }
 #   OUTPUTS: { list[ConnectedMachine] - Free machines matching platforms }
 #   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL, M-SSH-GATEWAY
+#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_CONTRACT: _find_free_machines
 async def _find_free_machines(
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    gateway: MachineGateway,
+    repository: MachineRepository,
 ) -> list[ConnectedMachine]:
     # START_BLOCK_FIND_FREE_MACHINES
     async with uow_factory() as uow:
@@ -166,7 +167,7 @@ async def _find_free_machines(
     busy_node_ips = {t.allocated_ip for t in running_tasks if t.allocated_ip}
     free_machines = [
         m
-        for m in gateway.list_free(platforms=list(engine.platforms))
+        for m in repository.list_free(platforms=list(engine.platforms))
         if m.ip not in busy_node_ips
     ]
     return free_machines
@@ -175,21 +176,22 @@ async def _find_free_machines(
 
 # START_CONTRACT: _allocate_free_machine
 #   PURPOSE: Find a free compatible machine and start the task on it.
-#   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, gateway: MachineGateway,
+#   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, repository: MachineRepository, operations: MachineOperations,
 #     start_task_on_machine: Callable, tracker: AllocationTracker }
 #   OUTPUTS: { bool - True if allocated to a machine, False if not }
 #   SIDE_EFFECTS: Updates task status, starts occupancy check, records TaskAllocated event, discards tracker slot.
-#   LINKS: M-DOMAIN-MODEL, M-SSH-GATEWAY, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _allocate_free_machine
 async def _allocate_free_machine(
     task: Task,
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    gateway: MachineGateway,
+    repository: MachineRepository,
+    operations: MachineOperations,
     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
 ) -> bool:
-    free_machines = await _find_free_machines(engine, uow_factory, gateway)
+    free_machines = await _find_free_machines(engine, uow_factory, repository)
 
     # START_BLOCK_ALLOCATE_MACHINE
     for machine in free_machines:
@@ -197,7 +199,7 @@ async def _allocate_free_machine(
             machine,
             engine,
             task,
-            gateway,
+            operations,
             uow_factory,
             start_task_on_machine,
             tracker,
@@ -431,7 +433,7 @@ async def _provision_and_persist(
 #     task_id: int - The task id to allocate,
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     gateway: MachineGateway - SSH gateway with connected machines,
+#     repository: MachineRepository, operations: MachineOperations - SSH gateway with connected machines,
 #     clouds: CloudProvisioner - Cloud provider port,
 #     start_task_on_machine: Callable - Callback to upload+spawn on remote machine,
 #     tracker: AllocationTracker - In-flight cloud allocation tracker,
@@ -439,13 +441,14 @@ async def _provision_and_persist(
 #   }
 #   OUTPUTS: { bool - True if allocated to a machine, False if cloud requested or error }
 #   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), tracker.add/discard lifecycle, tmp-node insertion, cloud allocation via port. On cloud-fallback failure the VM and tmp-node are best-effort cleaned up by _provision_and_persist.
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: allocate_task
 async def allocate_task(
     task_id: int,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    gateway: MachineGateway,
+    repository: MachineRepository,
+    operations: MachineOperations,
     clouds: CloudProvisioner,
     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
@@ -466,7 +469,8 @@ async def allocate_task(
         task,
         engine,
         uow_factory,
-        gateway,
+        repository,
+        operations,
         start_task_on_machine,
         tracker,
     ):

@@ -123,7 +123,8 @@ class TestAllocateTaskEvents:
             task_id=1,
             engines=engines,
             uow_factory=uow_factory,
-            gateway=MagicMock(),
+            repository=MagicMock(),
+            operations=MagicMock(),
             clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
@@ -152,9 +153,10 @@ class TestAllocateTaskEvents:
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[free_machine])
-        gateway.start_occupancy_check = MagicMock()
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[free_machine])
+        operations = MagicMock()
+        operations.start_occupancy_check = MagicMock()
 
         todo_task = Task(
             task_id=1,
@@ -185,7 +187,8 @@ class TestAllocateTaskEvents:
             task_id=1,
             engines=engines,
             uow_factory=uow_factory,
-            gateway=gateway,
+            repository=repository,
+            operations=operations,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -209,15 +212,15 @@ class TestConsumeTaskEvents:
     """Verify consume_task records TaskCompleted or TaskFailed events."""
 
     @pytest.fixture
-    def gateway_mock(self) -> MagicMock:
-        gateway = MagicMock()
-        gateway.download_outputs = AsyncMock(return_value=([], [], []))
-        return gateway
+    def mock_operations(self) -> MagicMock:
+        operations = MagicMock()
+        operations.download_outputs = AsyncMock(return_value=([], [], []))
+        return operations
 
     async def _run_consume(
         self,
         ip: str,
-        gateway: MagicMock,
+        operations: MagicMock,
         task: Task,
         uow_factory: Callable[[], AbstractUnitOfWork],
         engines: EngineRepository,
@@ -227,7 +230,7 @@ class TestConsumeTaskEvents:
         await consume_task(
             task_id=task.task_id,
             ip=ip,
-            gateway=gateway,
+            operations=operations,
             engines=engines,
             uow_factory=uow_factory,
             local_tasks_dir=local_tasks_dir,
@@ -236,7 +239,7 @@ class TestConsumeTaskEvents:
 
     async def test_consume_success_records_task_completed_event(
         self,
-        gateway_mock: MagicMock,
+        mock_operations: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
@@ -258,7 +261,7 @@ class TestConsumeTaskEvents:
 
         await self._run_consume(
             ip=running_task.allocated_ip,  # type: ignore[arg-type]
-            gateway=gateway_mock,
+            operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -275,11 +278,11 @@ class TestConsumeTaskEvents:
 
     async def test_consume_failure_records_task_failed_event(
         self,
-        gateway_mock: MagicMock,
+        mock_operations: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
-        gateway_mock.download_outputs = AsyncMock(
+        mock_operations.download_outputs = AsyncMock(
             return_value=([], [], [("/remote/file", OSError("Connection refused"))])
         )
 
@@ -301,7 +304,7 @@ class TestConsumeTaskEvents:
 
         await self._run_consume(
             ip=running_task.allocated_ip,  # type: ignore[arg-type]
-            gateway=gateway_mock,
+            operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,

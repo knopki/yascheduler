@@ -2,10 +2,10 @@
 # VERSION: 1.0.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineGateway machine-query methods added by gateway-port-cleanup.
+#   PURPOSE: Unit tests for SSHMachineRepository machine-query methods added by gateway-port-cleanup.
 #   SCOPE: get_machine_state (public + internal), list_connected.
-#   DEPENDS: M-SSH-GATEWAY
-#   LINKS: M-SSH-GATEWAY
+#   DEPENDS: M-SSH-REPOSITORY
+#   LINKS: M-SSH-REPOSITORY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -29,7 +29,7 @@ import pytest
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
 from yascheduler.domain import ConnectedMachine, MachineState
-from yascheduler.infra.ssh.gateway import SSHMachineGateway, _MachineState
+from yascheduler.infra.ssh.repository import SSHMachineRepository, _MachineState
 
 
 def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
@@ -79,34 +79,34 @@ def _make_state(
 
 
 @pytest.fixture
-def gateway() -> SSHMachineGateway:
-    return SSHMachineGateway()
+def repository() -> SSHMachineRepository:
+    return SSHMachineRepository()
 
 
 class TestMachineQueries:
     """Machine query methods added/renamed by gateway-port-cleanup."""
 
-    def test_get_machine_state_internal(self, gateway: SSHMachineGateway) -> None:
+    def test_get_machine_state_internal(self, repository: SSHMachineRepository) -> None:
         """_get_machine_state returns adapter-internal _MachineState or None."""
         state = _make_state(ip="10.0.0.1")
-        gateway._machines["10.0.0.1"] = state
-        assert gateway._get_machine_state("10.0.0.1") is state
-        assert gateway._get_machine_state("10.0.0.2") is None
+        repository._machines["10.0.0.1"] = state
+        assert repository._get_machine_state("10.0.0.1") is state
+        assert repository._get_machine_state("10.0.0.2") is None
 
-    def test_get_machine_state_public(self, gateway: SSHMachineGateway) -> None:
+    def test_get_machine_state_public(self, repository: SSHMachineRepository) -> None:
         """get_machine_state returns ConnectedMachine (port contract) or None."""
         state = _make_state(ip="10.0.0.1")
-        gateway._machines["10.0.0.1"] = state
-        result = gateway.get_machine_state("10.0.0.1")
+        repository._machines["10.0.0.1"] = state
+        result = repository.get_machine_state("10.0.0.1")
         assert result is state.machine
-        assert gateway.get_machine_state("10.0.0.2") is None
+        assert repository.get_machine_state("10.0.0.2") is None
 
-    def test_list_connected(self, gateway: SSHMachineGateway) -> None:
+    def test_list_connected(self, repository: SSHMachineRepository) -> None:
         """list_connected returns the ConnectedMachine of every registered state."""
         state_a = _make_state(ip="10.0.0.1")
         state_b = _make_state(ip="10.0.0.2")
-        gateway._machines["10.0.0.1"] = state_a
-        gateway._machines["10.0.0.2"] = state_b
-        result = gateway.list_connected()
+        repository._machines["10.0.0.1"] = state_a
+        repository._machines["10.0.0.2"] = state_b
+        result = repository.list_connected()
         assert set(result) == {state_a.machine, state_b.machine}
         assert all(hasattr(m, "ip") for m in result)

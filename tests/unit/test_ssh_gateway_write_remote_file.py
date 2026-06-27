@@ -6,8 +6,8 @@
 #   SCOPE: Non-SFTP exception propagates (not swallowed); asyncssh.misc.Error logged with
 #     structured code/reason and re-raised; start_task_on_machine aborts spawn on upload failure;
 #     successful write returns normally and the per-file loop continues.
-#   DEPENDS: M-SSH-GATEWAY, M-DOMAIN-MODEL
-#   LINKS: M-SSH-GATEWAY
+#   DEPENDS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-DOMAIN-MODEL
+#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -37,11 +37,9 @@ import pytest
 
 from yascheduler.domain import Engine
 from yascheduler.domain.model import Task, TaskContext
-from yascheduler.infra.ssh.gateway import (
-    SSHMachineGateway,
-    _MachineState,
-    _write_remote_file,
-)
+from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.operations.deployment import _write_remote_file
+from yascheduler.infra.ssh.repository import SSHMachineRepository, _MachineState
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -267,19 +265,20 @@ class TestStartTaskAbortOnUploadFailure:
         _exec_spawn_command is NOT called; the exception propagates to the caller;
         the upstream handler logs "Can't upload task_id=N files: <err>" with the task_id.
         """
-        gw = SSHMachineGateway()
+        repository = SSHMachineRepository()
+        operations = SSHMachineOperations(repository=repository)
         state, _sftp = _make_sftp_state(write_side_effect=ValueError("bad input"))
-        gw._machines["10.0.0.1"] = state
-        machine = gw._machines["10.0.0.1"].machine
+        repository._machines["10.0.0.1"] = state
+        machine = repository._machines["10.0.0.1"].machine
 
         spawn_calls: list[Any] = []
-        gw._exec_spawn_command = AsyncMock(  # type: ignore[method-assign]
+        operations.deploy._exec_spawn_command = AsyncMock(  # type: ignore[method-assign]
             side_effect=lambda *a, **kw: spawn_calls.append((a, kw))
         )
 
         with caplog.at_level(logging.ERROR):
             with pytest.raises(ValueError, match="bad input"):
-                await gw.start_task_on_machine(
+                await operations.start_task_on_machine(
                     machine,
                     _make_engine(input_files=("input.txt",)),
                     _make_task(extra={"input.txt": "hello"}),
@@ -302,17 +301,18 @@ class TestStartTaskAbortOnUploadFailure:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """An asyncssh.misc.Error during an input file write aborts start_task_on_machine."""
-        gw = SSHMachineGateway()
+        repository = SSHMachineRepository()
+        operations = SSHMachineOperations(repository=repository)
         err = asyncssh.misc.Error(2, "No such file")
         state, _sftp = _make_sftp_state(write_side_effect=err)
-        gw._machines["10.0.0.1"] = state
-        machine = gw._machines["10.0.0.1"].machine
+        repository._machines["10.0.0.1"] = state
+        machine = repository._machines["10.0.0.1"].machine
 
-        gw._exec_spawn_command = AsyncMock()  # type: ignore[method-assign]
+        operations.deploy._exec_spawn_command = AsyncMock()  # type: ignore[method-assign]
 
         with caplog.at_level(logging.ERROR):
             with pytest.raises(asyncssh.misc.Error):
-                await gw.start_task_on_machine(
+                await operations.start_task_on_machine(
                     machine,
                     _make_engine(input_files=("input.txt",)),
                     _make_task(extra={"input.txt": "hello"}),
@@ -320,7 +320,7 @@ class TestStartTaskAbortOnUploadFailure:
                     PurePosixPath("/engines"),
                 )
 
-        gw._exec_spawn_command.assert_not_awaited()  # type: ignore[attr-defined]
+        operations.deploy._exec_spawn_command.assert_not_awaited()  # type: ignore[attr-defined]
         # Both diagnostic lines present: the structured SFTPError (from the
         # _write_remote_file branch) and the task_id-bearing upload-failure
         # log (from the start_task_on_machine DEPLOY handler).
@@ -361,13 +361,14 @@ class TestSuccessfulWrite:
     @pytest.mark.asyncio
     async def test_upload_loop_continues_across_files(self) -> None:
         """_upload_task_data writes every input file when none raise; returns True."""
-        gw = SSHMachineGateway()
+        repository = SSHMachineRepository()
+        operations = SSHMachineOperations(repository=repository)
         state, sftp = _make_sftp_state(write_side_effect=None)
-        gw._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
 
         # Two input files; the _FakeSFTPFile is shared across calls so we can
         # count write invocations across the loop.
-        ok = await gw._upload_task_data(
+        ok = await operations.deploy._upload_task_data(
             "10.0.0.1",
             _make_task(extra={"input.txt": "a", "fort.9": "AAAA"}),
             PurePosixPath("/remote/tasks/7"),

@@ -187,7 +187,8 @@ class TestAllocateTask:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=uow_factory,
-            gateway=MagicMock(),
+            repository=MagicMock(),
+            operations=MagicMock(),
             clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
@@ -218,9 +219,10 @@ class TestAllocateTask:
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[free_machine])
-        gateway.start_occupancy_check = MagicMock()
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[free_machine])
+        operations = MagicMock()
+        operations.start_occupancy_check = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -245,7 +247,8 @@ class TestAllocateTask:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=uow_factory,
-            gateway=gateway,
+            repository=repository,
+            operations=operations,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -253,13 +256,13 @@ class TestAllocateTask:
         )
 
         assert result is True
-        gateway.list_free.assert_called_once_with(platforms=["linux"])
+        repository.list_free.assert_called_once_with(platforms=["linux"])
         start_on_machine.assert_called_once()
         _call_machine, _call_engine, _call_task = start_on_machine.call_args[0]
         assert _call_machine is free_machine
         assert _call_engine is engine
         assert _call_task.allocated_ip == "10.0.0.1"
-        gateway.start_occupancy_check.assert_called_once_with("10.0.0.1", engine)
+        operations.start_occupancy_check.assert_called_once_with("10.0.0.1", engine)
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.allocated_ip == "10.0.0.1"
@@ -279,8 +282,9 @@ class TestAllocateTask:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[])  # No free machines
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])  # No free machines
+        operations = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -316,7 +320,8 @@ class TestAllocateTask:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=uow_factory,
-            gateway=gateway,
+            repository=repository,
+            operations=operations,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -356,8 +361,9 @@ class TestAllocateTask:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[])
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        operations = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -393,7 +399,8 @@ class TestAllocateTask:
                 task_id=todo_task.task_id,
                 engines=engines,
                 uow_factory=uow_factory,
-                gateway=gateway,
+                repository=repository,
+                operations=operations,
                 clouds=clouds,
                 start_task_on_machine=start_on_machine,
                 tracker=tracker,
@@ -424,8 +431,9 @@ class TestAllocateTask:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[])
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        operations = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -450,7 +458,8 @@ class TestAllocateTask:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=uow_factory,
-            gateway=gateway,
+            repository=repository,
+            operations=operations,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -478,8 +487,9 @@ class TestAllocateTask:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[])
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        operations = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -507,7 +517,8 @@ class TestAllocateTask:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=uow_factory,
-            gateway=gateway,
+            repository=repository,
+            operations=operations,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -644,7 +655,7 @@ class TestDeallocateNodeBracketing:
         )
 
         await deallocate_node(
-            node=node, gateway=gateway, clouds=clouds, uow_factory=uow_factory
+            node=node, repository=gateway, clouds=clouds, uow_factory=uow_factory
         )
 
         assert calls == ["disable", "commit", "deallocate", "remove", "commit"]
@@ -675,7 +686,7 @@ class TestDeallocateNodeBracketing:
         with pytest.raises(CloudAllocateError):
             await deallocate_node(
                 node=node,
-                gateway=gateway,
+                repository=gateway,
                 clouds=clouds,
                 uow_factory=uow_factory,
             )
@@ -715,7 +726,7 @@ class TestDeallocateNodeBracketing:
             # Must not raise — the cloud VM is already gone.
             await deallocate_node(
                 node=node,
-                gateway=gateway,
+                repository=gateway,
                 clouds=clouds,
                 uow_factory=uow_factory,
             )

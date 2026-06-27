@@ -120,16 +120,23 @@ def _make_mock_adapter(
     return adapter, config
 
 
-def _make_mock_gateway(**kwargs: Any) -> MagicMock:
-    """Create a mock SSHMachineGateway."""
-    gw = MagicMock()
+def _make_mock_repository(**kwargs: Any) -> MagicMock:
+    """Create a mock SSHMachineRepository."""
+    repo = MagicMock()
 
     async def _connect(**kw: Any) -> MagicMock:
         machine = MagicMock()
         machine.ip = kw.get("ip", "10.0.0.1")
         return machine
 
-    gw.connect = _connect
+    repo.connect = _connect
+
+    return repo
+
+
+def _make_mock_operations(**kwargs: Any) -> MagicMock:
+    """Create a mock SSHMachineOperations."""
+    ops = MagicMock()
 
     async def _run(machine: Any, cmd: str) -> MagicMock:
         result = MagicMock()
@@ -138,19 +145,19 @@ def _make_mock_gateway(**kwargs: Any) -> MagicMock:
         result.stderr = ""
         return result
 
-    gw.run = _run
+    ops.run = _run
 
     async def _setup_node(ip: str, engines: Any) -> None:
         pass
 
-    gw.setup_node = _setup_node
+    ops.setup_node = _setup_node
 
     async def _get_cpu_cores(ip: str) -> int:
         return kwargs.get("ncpus", 4)
 
-    gw.get_cpu_cores = _get_cpu_cores
+    ops.get_cpu_cores = _get_cpu_cores
 
-    return gw
+    return ops
 
 
 @pytest.fixture
@@ -200,7 +207,8 @@ def mock_logger() -> MagicMock:
 def make_provisioner(
     adapters: dict[str, MagicMock] | None = None,
     configs: dict[str, MagicMock] | None = None,
-    gateway: MagicMock | None = None,
+    machine_repository: MagicMock | None = None,
+    machine_operations: MagicMock | None = None,
     local_config: MagicMock | None = None,
     remote_config: MagicMock | None = None,
     engines: MagicMock | None = None,
@@ -216,7 +224,8 @@ def make_provisioner(
     return CloudProvisionerImpl(
         adapters=adapters or {},  # type: ignore[arg-type]
         configs=configs or {},  # type: ignore[arg-type]
-        machine_gateway=gateway or _make_mock_gateway(),
+        machine_repository=machine_repository or _make_mock_repository(),
+        machine_operations=machine_operations or _make_mock_operations(),
         local_config=local_config or MagicMock(),
         remote_config=remote_config or MagicMock(),
         engines=engines or MagicMock(),
@@ -238,12 +247,14 @@ class TestAllocate:
     ) -> None:
         """Full flow: create VM -> SSH -> cloud-init -> setup -> return Node."""
         adapter, config = _make_mock_adapter(name="test", priority=10)
-        gw = _make_mock_gateway(ncpus=4)
+        repo = _make_mock_repository()
+        ops = _make_mock_operations(ncpus=4)
 
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
-            gateway=gw,
+            machine_repository=repo,
+            machine_operations=ops,
             engines=mock_engines,
             local_config=mock_local_config,
         )
@@ -297,17 +308,17 @@ class TestAllocate:
     ) -> None:
         """Deletes VM when SSH/cloud-init/setup fails."""
         adapter, config = _make_mock_adapter(name="test")
-        gw = MagicMock()
+        repo = MagicMock()
 
         async def _connect_fail(**kw: Any) -> Any:
             raise RuntimeError("SSH timeout")
 
-        gw.connect = _connect_fail
+        repo.connect = _connect_fail
 
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
-            gateway=gw,
+            machine_repository=repo,
             engines=mock_engines,
             local_config=mock_local_config,
         )
@@ -334,25 +345,27 @@ class TestAllocate:
         # Shrink timeout so the test stays fast.
         adapter.create_node_timeout = 0.05
 
-        gw = MagicMock()
+        repo = MagicMock()
+        ops = MagicMock()
 
         async def _connect(**kw: Any) -> Any:
             machine = MagicMock()
             machine.ip = kw.get("ip", "10.0.0.1")
             return machine
 
-        gw.connect = _connect
+        repo.connect = _connect
 
         async def _hang(*args: Any, **kwargs: Any) -> Any:
             await asyncio.sleep(60)
             return MagicMock(exit_code=0, stdout="", stderr="")
 
-        gw.run = _hang
+        ops.run = _hang
 
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
-            gateway=gw,
+            machine_repository=repo,
+            machine_operations=ops,
             engines=mock_engines,
             local_config=mock_local_config,
         )
@@ -427,32 +440,32 @@ class TestDeallocate:
 
 
 class TestStop:
-    """stop() drains machine_gateway via disconnect_all."""
+    """stop() drains machine_repository via disconnect_all."""
 
     @pytest.mark.asyncio
     async def test_stop(self) -> None:
-        """stop() awaits machine_gateway.disconnect_all exactly once."""
-        gw = MagicMock()
-        gw.disconnect_all = AsyncMock()
+        """stop() awaits machine_repository.disconnect_all exactly once."""
+        repo = MagicMock()
+        repo.disconnect_all = AsyncMock()
 
-        prov = make_provisioner(gateway=gw)
+        prov = make_provisioner(machine_repository=repo)
 
         await prov.stop()
 
-        gw.disconnect_all.assert_awaited_once()
+        repo.disconnect_all.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_stop_idempotent_under_repeated_calls(self) -> None:
         """Calling stop() twice does not raise; disconnect_all is awaited on the second call too (spec: idempotency guard)."""
-        gw = MagicMock()
-        gw.disconnect_all = AsyncMock()
+        repo = MagicMock()
+        repo.disconnect_all = AsyncMock()
 
-        prov = make_provisioner(gateway=gw)
+        prov = make_provisioner(machine_repository=repo)
 
         await prov.stop()
         await prov.stop()
 
-        assert gw.disconnect_all.await_count == 2
+        assert repo.disconnect_all.await_count == 2
 
 
 class TestIsPlatformSupported:

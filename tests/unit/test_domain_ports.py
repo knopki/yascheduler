@@ -20,9 +20,13 @@
 #   PREVIOUS_CHANGE: v1.2.0 - Update StubMachineGateway to satisfy extended MachineGateway Protocol (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
+# ruff: noqa: ANN401
+
 from __future__ import annotations
 
+from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock
 
 from yascheduler.domain.model import (
     ConnectedMachine,
@@ -33,16 +37,17 @@ from yascheduler.domain.model import (
 )
 from yascheduler.domain.ports import (
     CloudProvisioner,
-    MachineGateway,
+    MachineOperations,
+    MachineRepository,
     NodeRepository,
     TaskRepository,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from pathlib import Path, PurePath
+    from collections.abc import Awaitable, Callable, Sequence
+    from pathlib import Path
 
-    from yascheduler.domain import Engine
+    from yascheduler.domain import Engine, EngineRepository
 
 
 class StubTaskRepository:
@@ -111,7 +116,7 @@ class StubNodeRepository:
         return {}
 
 
-class StubMachineGateway:
+class StubMachineRepository:
     async def connect(
         self,
         ip: str,
@@ -152,8 +157,62 @@ class StubMachineGateway:
     def __len__(self) -> int:
         return 0
 
+    def __contains__(self, ip: str) -> bool:
+        return False
+
+    def occupy(self, ip: str) -> None:
+        pass
+
+    def release(self, ip: str) -> None:
+        pass
+
+    def get_adapter(self, ip: str) -> Any:
+        return None
+
+    def get_platforms(self, ip: str) -> Sequence[str]:
+        return []
+
+    def get_path(self, ip: str) -> type[PurePath]:
+        return PurePath
+
+    def get_quote(self, ip: str) -> Callable[[str], str]:
+        return lambda s: s
+
+    def get_data_dir(self, ip: str) -> PurePath:
+        return PurePath("/data")
+
+    def get_engines_dir(self, ip: str) -> PurePath:
+        return PurePath("/engines")
+
+    def get_tasks_dir(self, ip: str) -> PurePath:
+        return PurePath("/tasks")
+
+    def get_hostname(self, ip: str) -> str:
+        return "host"
+
+    async def get_conn(self, ip: str) -> Any:
+        return None
+
+    def install_monitor(
+        self,
+        ip: str,
+        *,
+        interval: float,
+        check_factory: Callable[[], Awaitable[bool]],
+        on_free: Callable[[], None],
+    ) -> None:
+        pass
+
+    def cancel_monitor(self, ip: str) -> None:
+        pass
+
+
+class StubMachineOperations:
     async def run(self, machine: ConnectedMachine, cmd: str) -> ProcessResult:
         return ProcessResult(exit_code=0)
+
+    async def run_full(self, machine: ConnectedMachine, cmd: str) -> Any:
+        return MagicMock(returncode=0, stdout="")
 
     async def run_bg(
         self, machine: ConnectedMachine, cmd: str, *, cwd: str | None = None
@@ -163,10 +222,25 @@ class StubMachineGateway:
     async def upload(self, machine: ConnectedMachine, local: Path, remote: str) -> None:
         pass
 
-    async def download(
-        self, machine: ConnectedMachine, remote: str, local: Path
-    ) -> None:
+    def get_sftp(self, ip: str) -> Any:
+        return None
+
+    def pgrep(
+        self,
+        ip: str,
+        pattern: str | Any,
+        full: bool = True,
+    ) -> Any:
+        return None
+
+    def list_processes(self, ip: str) -> Any:
+        return None
+
+    async def setup_node(self, ip: str, engines: EngineRepository) -> None:
         pass
+
+    async def occupancy_check(self, ip: str, config: Engine) -> bool:
+        return False
 
     async def download_outputs(
         self,
@@ -239,16 +313,28 @@ def test_node_repository_protocol() -> None:
     assert isinstance(stub, NodeRepository)
 
 
-# START_CONTRACT: test_machine_gateway_protocol
-#   PURPOSE: Verify a stub implementing all MachineGateway methods satisfies the Protocol structurally.
+# START_CONTRACT: test_machine_repository_protocol
+#   PURPOSE: Verify a stub implementing all MachineRepository methods satisfies the Protocol structurally.
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion passes if isinstance succeeds }
 #   SIDE_EFFECTS: None
 #   LINKS:
-# END_CONTRACT: test_machine_gateway_protocol
-def test_machine_gateway_protocol() -> None:
-    stub = StubMachineGateway()
-    assert isinstance(stub, MachineGateway)
+# END_CONTRACT: test_machine_repository_protocol
+def test_machine_repository_protocol() -> None:
+    stub = StubMachineRepository()
+    assert isinstance(stub, MachineRepository)
+
+
+# START_CONTRACT: test_machine_operations_protocol
+#   PURPOSE: Verify a stub implementing all MachineOperations methods satisfies the Protocol structurally.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion passes if isinstance succeeds }
+#   SIDE_EFFECTS: None
+#   LINKS:
+# END_CONTRACT: test_machine_operations_protocol
+def test_machine_operations_protocol() -> None:
+    stub = StubMachineOperations()
+    assert isinstance(stub, MachineOperations)
 
 
 # START_CONTRACT: test_cloud_provisioner_protocol

@@ -83,9 +83,10 @@ def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
     engines = MagicMock(spec=EngineRepository)
     engines.values.return_value = [engine]
 
-    gateway = MagicMock()
-    gateway.__len__ = MagicMock(return_value=1)
-    gateway.disconnect_all = AsyncMock()
+    repository = MagicMock()
+    repository.__len__ = MagicMock(return_value=1)
+    repository.disconnect_all = AsyncMock()
+    operations = MagicMock()
 
     log = MagicMock(spec=logging.Logger)
 
@@ -94,7 +95,8 @@ def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
         remote_defaults=remote,
         uow_factory=lambda: mock_uow,
         clouds=AsyncMock(),
-        gateway=gateway,
+        repository=repository,
+        operations=operations,
         engines=engines,
         log=log,
         config_clouds=[],
@@ -504,7 +506,7 @@ class TestStatsResilience:
         logger = logging.getLogger(log_name)
         logger.setLevel(logging.DEBUG)
         orch._log = logger  # type: ignore[method-assign]
-        orch._gateway.list_connected = MagicMock(return_value=[])  # type: ignore[method-assign]
+        orch._repository.list_connected = MagicMock(return_value=[])  # type: ignore[method-assign]
 
         boom = _BoomUow()
         orch._uow_factory = _uow_factory(boom)  # type: ignore[method-assign]

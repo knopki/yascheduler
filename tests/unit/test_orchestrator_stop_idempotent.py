@@ -84,11 +84,12 @@ def _make_orchestrator(
     clouds = MagicMock()
     clouds.stop = clouds_stop if clouds_stop is not None else AsyncMock()
 
-    gateway = MagicMock()
-    gateway.__len__ = MagicMock(return_value=0)
-    gateway.disconnect_all = (
+    repository = MagicMock()
+    repository.__len__ = MagicMock(return_value=0)
+    repository.disconnect_all = (
         disconnect_all if disconnect_all is not None else AsyncMock()
     )
+    operations = MagicMock()
 
     log = MagicMock(spec=logging.Logger)
 
@@ -97,7 +98,8 @@ def _make_orchestrator(
         remote_defaults=remote,
         uow_factory=lambda: AsyncMock(),
         clouds=clouds,
-        gateway=gateway,
+        repository=repository,
+        operations=operations,
         engines=engines,
         log=log,
         config_clouds=[],

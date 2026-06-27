@@ -2,16 +2,17 @@
 # VERSION: 1.3.2
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for SSHMachineGateway against a Docker SSH server via testcontainers.
+#   PURPOSE: Integration tests for SSHMachineRepository + SSHMachineOperations against a Docker SSH server via testcontainers.
 #   SCOPE: Connection lifecycle, command execution, SFTP upload/download, machine state transitions.
-#   DEPENDS: M-SSH-GATEWAY, M-DOMAIN-MODEL
-#   LINKS: M-SSH-GATEWAY
+#   DEPENDS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-DOMAIN-MODEL
+#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   ssh_container - session-scoped fixture: starts Docker SSH container, generates key pair
 #   ssh_container_2 - session-scoped fixture for the second container (multi-machine regression), yields bridge IP + internal port 2222
-#   gateway - function-scoped fixture: SSHMachineGateway connected to test container
+#   repository - function-scoped fixture: SSHMachineRepository connected to test container
+#   operations - function-scoped fixture: SSHMachineOperations from that repository
 #   TestSSHGatewayIntegration - connection lifecycle, command exec, SFTP, state transitions
 #   TestOccupancyIntegration - occupancy_check via check_pname/check_cmd against real SSH
 #   TestOccupancyRaceCondition - regression for ConnectedMachine state sync bug
@@ -39,7 +40,8 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from yascheduler.domain import Engine
 from yascheduler.domain.model import ConnectedMachine, MachineState
-from yascheduler.infra.ssh.gateway import SSHMachineGateway
+from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -88,7 +90,7 @@ async def ssh_container_2(
     the Docker/Podman bridge) plus the internal SSH port 2222, so the gateway
     sees a genuinely distinct IP from the first container. ``get_container_host_ip``
     returns ``localhost`` for both testcontainers, which would collide with
-    ``ssh_container`` because SSHMachineGateway keys machines by IP only.
+    ``ssh_container`` because SSHMachineRepository keys machines by IP only.
     """
     key_dir = tmp_path_factory.mktemp("ssh_keys_2")
     key_path = key_dir / "id_rsa"
@@ -134,160 +136,190 @@ async def ssh_container_2(
 
 
 @pytest.fixture
-async def gateway(
+async def repository(
     ssh_container: dict[str, Any],  # type: ignore[type-arg]
-) -> AsyncGenerator[SSHMachineGateway, None]:
-    """Create SSHMachineGateway connected to test container."""
-    gw = SSHMachineGateway()
-    await gw.connect(
+) -> AsyncGenerator[SSHMachineRepository, None]:
+    """Create SSHMachineRepository connected to test container."""
+    repo = SSHMachineRepository()
+    await repo.connect(
         ip=ssh_container["host"],
         username=ssh_container["username"],
         client_keys=[ssh_container["key_path"]],
         port=ssh_container["port"],
     )
-    yield gw
-    await gw.disconnect_all()
+    yield repo
+    await repo.disconnect_all()
+
+
+@pytest.fixture
+async def operations(
+    repository: SSHMachineRepository,  # type: ignore[type-arg]
+) -> SSHMachineOperations:
+    """Create SSHMachineOperations from the connected repository."""
+    return SSHMachineOperations(repository=repository)
 
 
 class TestSSHGatewayIntegration:
-    """Integration tests for SSHMachineGateway against real Docker SSH server."""
+    """Integration tests for SSHMachineRepository + SSHMachineOperations against real Docker SSH server."""
 
-    async def _get_machine(self, gateway: SSHMachineGateway) -> ConnectedMachine:
-        machines = gateway.list_free(None)
+    async def _get_machine(self, repository: SSHMachineRepository) -> ConnectedMachine:
+        machines = repository.list_free(None)
         assert len(machines) > 0
         return machines[0]
 
     async def test_connect_returns_connected_machine(
         self,
-        gateway: SSHMachineGateway,
+        repository: SSHMachineRepository,
+        operations: SSHMachineOperations,
         ssh_container: dict[str, Any],  # type: ignore[type-arg]
     ) -> None:
         """connect() returns a ConnectedMachine with correct ip, platform, and FREE state."""
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         assert machine.ip == ssh_container["host"]
         assert machine.platform == "linux"
         assert machine.state == MachineState.FREE
         assert machine.ncpus > 0
 
-    async def test_run_echo(self, gateway: SSHMachineGateway) -> None:
-        """gateway.run() executes command and returns output."""
-        machine = await self._get_machine(gateway)
-        result = await gateway.run(machine, "echo hello_world")
+    async def test_run_echo(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
+        """operations.run() executes command and returns output."""
+        machine = await self._get_machine(repository)
+        result = await operations.run(machine, "echo hello_world")
         assert result.exit_code == 0
         assert "hello_world" in result.stdout
 
-    async def test_run_stderr(self, gateway: SSHMachineGateway) -> None:
-        """gateway.run() captures stderr."""
-        machine = await self._get_machine(gateway)
-        result = await gateway.run(machine, "echo error_msg >&2")
+    async def test_run_stderr(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
+        """operations.run() captures stderr."""
+        machine = await self._get_machine(repository)
+        result = await operations.run(machine, "echo error_msg >&2")
         assert "error_msg" in result.stderr
 
-    async def test_run_exit_code_nonzero(self, gateway: SSHMachineGateway) -> None:
-        """gateway.run() returns non-zero exit code on failure."""
-        machine = await self._get_machine(gateway)
-        result = await gateway.run(machine, "exit 42")
+    async def test_run_exit_code_nonzero(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
+        """operations.run() returns non-zero exit code on failure."""
+        machine = await self._get_machine(repository)
+        result = await operations.run(machine, "exit 42")
         assert result.exit_code == 42
 
-    async def test_run_multiline_output(self, gateway: SSHMachineGateway) -> None:
-        """gateway.run() handles multiline stdout."""
-        machine = await self._get_machine(gateway)
-        result = await gateway.run(machine, "echo line1; echo line2")
+    async def test_run_multiline_output(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
+        """operations.run() handles multiline stdout."""
+        machine = await self._get_machine(repository)
+        result = await operations.run(machine, "echo line1; echo line2")
         assert "line1" in result.stdout
         assert "line2" in result.stdout
 
     async def test_upload_download_roundtrip(
         self,
-        gateway: SSHMachineGateway,
+        repository: SSHMachineRepository,
+        operations: SSHMachineOperations,
         ssh_container: dict[str, Any],  # type: ignore[type-arg]
         tmp_path: Path,
     ) -> None:
         """upload then download returns original content."""
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
 
         local_upload = tmp_path / "upload.txt"
         local_upload.write_text("test content")
 
         remote = "/tmp/test_upload.txt"
-        await gateway.upload(machine, local_upload, remote)
+        await operations.upload(machine, local_upload, remote)
 
         local_download = tmp_path / "downloaded.txt"
-        await gateway.download(machine, remote, local_download)
+        async with operations.get_sftp(machine.ip) as sftp:
+            await sftp.get(remote, str(local_download))
 
         assert local_download.read_text() == "test content"
 
-    async def test_list_free_after_connect(self, gateway: SSHMachineGateway) -> None:
+    async def test_list_free_after_connect(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
         """Connected machine appears in list_free with matching platform."""
-        machines_all = gateway.list_free(None)
+        machines_all = repository.list_free(None)
         assert len(machines_all) >= 1
         assert machines_all[0].platform == "linux"
 
-        machines_linux = gateway.list_free(["linux"])
+        machines_linux = repository.list_free(["linux"])
         assert len(machines_linux) >= 1
 
-        machines_windows = gateway.list_free(["windows"])
+        machines_windows = repository.list_free(["windows"])
         assert len(machines_windows) == 0
 
-    async def test_list_free_excludes_busy(self, gateway: SSHMachineGateway) -> None:
+    async def test_list_free_excludes_busy(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
         """list_free excludes BUSY machines."""
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         busy = machine.occupy()
-        gateway.update_machine(busy)
+        repository.update_machine(busy)
 
-        assert len(gateway.list_free(None)) == 0
+        assert len(repository.list_free(None)) == 0
 
     async def test_disconnect_removes_machine(
         self,
         ssh_container: dict[str, Any],  # type: ignore[type-arg]
     ) -> None:
-        """disconnect() removes machine from gateway registry."""
-        gw = SSHMachineGateway()
-        machine = await gw.connect(
+        """disconnect() removes machine from repository registry."""
+        repo = SSHMachineRepository()
+        machine = await repo.connect(
             ip=ssh_container["host"],
             username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
             port=ssh_container["port"],
         )
-        assert machine.ip in gw
+        assert machine.ip in repo
 
-        await gw.disconnect(machine.ip)
-        assert machine.ip not in gw
+        await repo.disconnect(machine.ip)
+        assert machine.ip not in repo
 
-    async def test_run_multiple_commands(self, gateway: SSHMachineGateway) -> None:
+    async def test_run_multiple_commands(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
         """Multiple sequential run() calls work on same connection."""
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
 
-        r1 = await gateway.run(machine, "echo first")
+        r1 = await operations.run(machine, "echo first")
         assert "first" in r1.stdout
         assert r1.exit_code == 0
 
-        r2 = await gateway.run(machine, "echo second")
+        r2 = await operations.run(machine, "echo second")
         assert "second" in r2.stdout
         assert r2.exit_code == 0
 
-        r3 = await gateway.run(machine, "echo third")
+        r3 = await operations.run(machine, "echo third")
         assert "third" in r3.stdout
         assert r3.exit_code == 0
 
-    async def test_connect_with_env_variable(self, gateway: SSHMachineGateway) -> None:
+    async def test_connect_with_env_variable(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
         """Run command that reads env variable to verify shell works."""
-        machine = await self._get_machine(gateway)
-        result = await gateway.run(machine, "echo $HOME")
+        machine = await self._get_machine(repository)
+        result = await operations.run(machine, "echo $HOME")
         assert result.exit_code == 0
         assert result.stdout.strip() != ""
 
     async def test_upload_and_check_via_run(
-        self, gateway: SSHMachineGateway, tmp_path: Path
+        self,
+        repository: SSHMachineRepository,
+        operations: SSHMachineOperations,
+        tmp_path: Path,
     ) -> None:
         """Upload a file, then run cat to verify content remotely."""
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
 
         local = tmp_path / "verify.txt"
         local.write_text("verify me")
 
         remote = "/tmp/verify_test.txt"
-        await gateway.upload(machine, local, remote)
+        await operations.upload(machine, local, remote)
 
-        result = await gateway.run(machine, "cat /tmp/verify_test.txt")
+        result = await operations.run(machine, "cat /tmp/verify_test.txt")
         assert "verify me" in result.stdout
 
     async def test_disconnect_all(
@@ -295,29 +327,29 @@ class TestSSHGatewayIntegration:
         ssh_container: dict[str, Any],  # type: ignore[type-arg]
     ) -> None:
         """disconnect_all() removes all machines."""
-        gw = SSHMachineGateway()
-        await gw.connect(
+        repo = SSHMachineRepository()
+        await repo.connect(
             ip=ssh_container["host"],
             username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
             port=ssh_container["port"],
         )
-        assert len(gw) > 0
+        assert len(repo) > 0
 
-        await gw.disconnect_all()
-        assert len(gw) == 0
+        await repo.disconnect_all()
+        assert len(repo) == 0
 
 
 class TestOccupancyRunBgLeak:
     """Reproduce bug: run_bg process killed when SSHClientProcess is not stored."""
 
-    async def _get_machine(self, gateway: SSHMachineGateway) -> ConnectedMachine:
-        machines = gateway.list_free(None)
+    async def _get_machine(self, repository: SSHMachineRepository) -> ConnectedMachine:
+        machines = repository.list_free(None)
         assert len(machines) > 0
         return machines[0]
 
     async def test_run_bg_process_survives_without_handle(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """run_bg process must survive even when returned handle is discarded.
 
@@ -328,11 +360,11 @@ class TestOccupancyRunBgLeak:
         machine free, even though the task should still be running.
         """
         engine = _make_pengine(check_pname="sleep")
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
         # Simulate what _exec_spawn_command does: run_bg without storing result
-        await gateway.run_bg(machine, "sleep 60")
+        await operations.run_bg(machine, "sleep 60")
         # (Handle intentionally not stored — simulating not storing it)
         import gc
 
@@ -342,11 +374,11 @@ class TestOccupancyRunBgLeak:
         await asyncio.sleep(1.5)
 
         # The sleep process must still be running
-        result = await gateway.occupancy_check(ip, engine)
+        result = await operations.occupancy_check(ip, engine)
         assert result is True, "sleep 60 process was killed after handle was discarded"
 
         # Cleanup
-        await gateway.run(machine, "killall sleep 2>/dev/null || true")
+        await operations.run(machine, "killall sleep 2>/dev/null || true")
 
 
 def _make_pengine(
@@ -371,140 +403,150 @@ def _make_pengine(
 class TestOccupancyIntegration:
     """Integration tests for occupancy_check against real Docker SSH server."""
 
-    async def _get_machine(self, gateway: SSHMachineGateway) -> ConnectedMachine:
-        machines = gateway.list_free(None)
+    async def _get_machine(self, repository: SSHMachineRepository) -> ConnectedMachine:
+        machines = repository.list_free(None)
         assert len(machines) > 0
         return machines[0]
 
-    async def _start_bg_process(self, gateway: SSHMachineGateway, cmd: str) -> None:
+    async def _start_bg_process(
+        self,
+        repository: SSHMachineRepository,
+        operations: SSHMachineOperations,
+        cmd: str,
+    ) -> None:
         """Start a detached background process on remote via nohup."""
-        machine = await self._get_machine(gateway)
-        result = await gateway.run(machine, f"nohup {cmd} >/dev/null 2>&1 &")
+        machine = await self._get_machine(repository)
+        result = await operations.run(machine, f"nohup {cmd} >/dev/null 2>&1 &")
         assert result.exit_code == 0
 
-    async def _kill_bg(self, gateway: SSHMachineGateway, name: str) -> None:
+    async def _kill_bg(
+        self,
+        repository: SSHMachineRepository,
+        operations: SSHMachineOperations,
+        name: str,
+    ) -> None:
         """Kill all processes with given name on remote."""
-        machine = await self._get_machine(gateway)
-        await gateway.run(machine, f"killall {name} 2>/dev/null || true")
+        machine = await self._get_machine(repository)
+        await operations.run(machine, f"killall {name} 2>/dev/null || true")
 
     async def test_occupancy_check_pname_detects_sleep(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_pname='sleep' finds running sleep via pgrep."""
         engine = _make_pengine(check_pname="sleep")
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
         try:
-            await self._start_bg_process(gateway, "sleep 60")
+            await self._start_bg_process(repository, operations, "sleep 60")
             await asyncio.sleep(0.5)
-            result = await gateway.occupancy_check(ip, engine)
+            result = await operations.occupancy_check(ip, engine)
             assert result is True
         finally:
-            await self._kill_bg(gateway, "sleep")
+            await self._kill_bg(repository, operations, "sleep")
 
     async def test_occupancy_check_pname_no_match_after_kill(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_pname='sleep' returns False after sleep is killed."""
         engine = _make_pengine(check_pname="sleep")
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
-        await self._start_bg_process(gateway, "sleep 60")
+        await self._start_bg_process(repository, operations, "sleep 60")
         await asyncio.sleep(0.5)
 
-        busy = await gateway.occupancy_check(ip, engine)
+        busy = await operations.occupancy_check(ip, engine)
         assert busy is True
 
-        await self._kill_bg(gateway, "sleep")
+        await self._kill_bg(repository, operations, "sleep")
         await asyncio.sleep(0.5)
 
-        busy = await gateway.occupancy_check(ip, engine)
+        busy = await operations.occupancy_check(ip, engine)
         assert busy is False
 
     async def test_occupancy_check_pname_nonexistent(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_pname with nonexistent process returns False."""
         engine = _make_pengine(check_pname="yascheduler_nonexistent_test_proc")
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
-        result = await gateway.occupancy_check(ip, engine)
+        result = await operations.occupancy_check(ip, engine)
         assert result is False
 
     async def test_occupancy_check_cmd_pgrep_detects_sleep(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_cmd='pgrep -x sleep' with code 0 detects running sleep."""
         engine = _make_pengine(check_cmd="pgrep -x sleep", check_cmd_code=0)
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
         try:
-            await self._start_bg_process(gateway, "sleep 60")
+            await self._start_bg_process(repository, operations, "sleep 60")
             await asyncio.sleep(0.5)
-            result = await gateway.occupancy_check(ip, engine)
+            result = await operations.occupancy_check(ip, engine)
             assert result is True
         finally:
-            await self._kill_bg(gateway, "sleep")
+            await self._kill_bg(repository, operations, "sleep")
 
     async def test_occupancy_check_cmd_pgrep_no_match_after_kill(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_cmd='pgrep -x sleep' returns False after sleep is killed."""
         engine = _make_pengine(check_cmd="pgrep -x sleep", check_cmd_code=0)
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
-        await self._start_bg_process(gateway, "sleep 60")
+        await self._start_bg_process(repository, operations, "sleep 60")
         await asyncio.sleep(0.5)
 
-        busy = await gateway.occupancy_check(ip, engine)
+        busy = await operations.occupancy_check(ip, engine)
         assert busy is True
 
-        await self._kill_bg(gateway, "sleep")
+        await self._kill_bg(repository, operations, "sleep")
         await asyncio.sleep(0.5)
 
-        busy = await gateway.occupancy_check(ip, engine)
+        busy = await operations.occupancy_check(ip, engine)
         assert busy is False
 
     async def test_occupancy_check_cmd_grep_q_detects_sleep(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_cmd='ps -eocomm= | grep -q sleep' detects running sleep."""
         engine = _make_pengine(
             check_cmd="ps -eocomm= | grep -q sleep", check_cmd_code=0
         )
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
         try:
-            await self._start_bg_process(gateway, "sleep 60")
+            await self._start_bg_process(repository, operations, "sleep 60")
             await asyncio.sleep(0.5)
-            result = await gateway.occupancy_check(ip, engine)
+            result = await operations.occupancy_check(ip, engine)
             assert result is True
         finally:
-            await self._kill_bg(gateway, "sleep")
+            await self._kill_bg(repository, operations, "sleep")
 
     async def test_occupancy_check_cmd_grep_q_no_match_after_kill(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_cmd='ps -eocomm= | grep -q sleep' returns False after kill."""
         engine = _make_pengine(
             check_cmd="ps -eocomm= | grep -q sleep", check_cmd_code=0
         )
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
-        await self._start_bg_process(gateway, "sleep 60")
+        await self._start_bg_process(repository, operations, "sleep 60")
         await asyncio.sleep(0.5)
 
-        busy = await gateway.occupancy_check(ip, engine)
+        busy = await operations.occupancy_check(ip, engine)
         assert busy is True
 
-        await self._kill_bg(gateway, "sleep")
+        await self._kill_bg(repository, operations, "sleep")
         await asyncio.sleep(0.5)
 
-        busy = await gateway.occupancy_check(ip, engine)
+        busy = await operations.occupancy_check(ip, engine)
         assert busy is False
 
     async def test_occupancy_check_pname_priority_over_cmd(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """When both check_pname and check_cmd are set, pgrep takes priority."""
         engine = _make_pengine(
@@ -512,74 +554,74 @@ class TestOccupancyIntegration:
             check_cmd="pgrep -x nonexistent_process_xyz",
             check_cmd_code=0,
         )
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
         try:
-            await self._start_bg_process(gateway, "sleep 60")
+            await self._start_bg_process(repository, operations, "sleep 60")
             await asyncio.sleep(0.5)
-            result = await gateway.occupancy_check(ip, engine)
+            result = await operations.occupancy_check(ip, engine)
             assert result is True
         finally:
-            await self._kill_bg(gateway, "sleep")
+            await self._kill_bg(repository, operations, "sleep")
 
     async def test_occupancy_check_cmd_nonzero_code(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_cmd with non-zero expected code (inverted logic)."""
         engine = _make_pengine(check_cmd="pgrep -x sleep", check_cmd_code=1)
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
         # No sleep running: pgrep returns 1, which matches check_cmd_code=1
-        result = await gateway.occupancy_check(ip, engine)
+        result = await operations.occupancy_check(ip, engine)
         assert result is True
 
     async def test_occupancy_check_cmd_nonzero_code_no_match(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_cmd_code=1 does NOT match when process IS running (pgrep returns 0)."""
         engine = _make_pengine(check_cmd="pgrep -x sleep", check_cmd_code=1)
-        ip = (await self._get_machine(gateway)).ip
+        ip = (await self._get_machine(repository)).ip
 
         try:
-            await self._start_bg_process(gateway, "sleep 60")
+            await self._start_bg_process(repository, operations, "sleep 60")
             await asyncio.sleep(0.5)
-            result = await gateway.occupancy_check(ip, engine)
+            result = await operations.occupancy_check(ip, engine)
             assert result is False
         finally:
-            await self._kill_bg(gateway, "sleep")
+            await self._kill_bg(repository, operations, "sleep")
 
     async def test_start_occupancy_check_releases_on_short_process(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """start_occupancy_check releases machine when short-lived process exits."""
         engine = _make_pengine(check_pname="sleep", sleep_interval=1)
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
         # Occupy machine
         busy = machine.occupy()
-        gateway.update_machine(busy)
-        assert gateway._machines[ip].machine.state == MachineState.BUSY
+        repository.update_machine(busy)
+        assert repository._machines[ip].machine.state == MachineState.BUSY
 
         try:
             # Start short-lived process (2 seconds)
-            result = await gateway.run(
-                gateway._machines[ip].machine,
+            result = await operations.run(
+                repository._machines[ip].machine,
                 "nohup sleep 2 >/dev/null 2>&1 &",
             )
             assert result.exit_code == 0
             await asyncio.sleep(0.5)
 
-            gateway.start_occupancy_check(ip, engine)
+            operations.start_occupancy_check(ip, engine)
             # Wait for checker to detect completion (sleep_interval + buffer)
-            task = gateway._bg_tasks[ip]
+            task = repository._monitors[ip]
             await asyncio.wait_for(task, timeout=5.0)
 
             # Machine should be released
-            assert gateway._machines[ip].machine.state == MachineState.FREE
+            assert repository._machines[ip].machine.state == MachineState.FREE
         finally:
-            await gateway.run(
-                gateway._machines[ip].machine,
+            await operations.run(
+                repository._machines[ip].machine,
                 "killall sleep 2>/dev/null || true",
             )
 
@@ -588,8 +630,8 @@ class TestOccupancyRaceCondition:
     """Test the two-level state sync between ConnectedMachine and RemoteMachineMetadata.
 
     Regression test for the bug where start_occupancy_check did NOT occupy
-    ConnectedMachine at the gateway level. The _meta_sync background task
-    (in remote_machine.py) polls gateway state every second and mirrors it
+    ConnectedMachine at the repository level. The _meta_sync background task
+    (in remote_machine.py) polls repository state every second and mirrors it
     to meta.busy. Without the fix, ConnectedMachine.state stayed FREE,
     causing _meta_sync to set meta.busy=False after 1 second, making the
     task consumer immediately consume (and fail) the running task.
@@ -598,130 +640,130 @@ class TestOccupancyRaceCondition:
     starting the _checker background task.
     """
 
-    async def _get_machine(self, gateway: SSHMachineGateway) -> ConnectedMachine:
-        machines = gateway.list_free(None)
+    async def _get_machine(self, repository: SSHMachineRepository) -> ConnectedMachine:
+        machines = repository.list_free(None)
         assert len(machines) > 0
         return machines[0]
 
     async def test_start_occupancy_check_sets_connected_machine_busy(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
-        """start_occupancy_check must occupy ConnectedMachine (BUSY) at gateway level.
+        """start_occupancy_check must occupy ConnectedMachine (BUSY) at repository level.
 
         Before fix: ConnectedMachine.state stayed FREE → _meta_sync saw FREE →
         set meta.busy=False → consumer consumed running task immediately.
         """
         engine = _make_pengine(check_pname="sleep", sleep_interval=1)
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
         # Machine starts FREE
-        assert gateway._machines[ip].machine.state == MachineState.FREE
+        assert repository._machines[ip].machine.state == MachineState.FREE
 
         # Start a background process (simulates run_bg spawn)
-        await gateway.run(machine, "nohup sleep 5 >/dev/null 2>&1 &")
+        await operations.run(machine, "nohup sleep 5 >/dev/null 2>&1 &")
         await asyncio.sleep(0.5)
 
         try:
             # THE FIX: start_occupancy_check must set ConnectedMachine to BUSY
-            gateway.start_occupancy_check(ip, engine)
+            operations.start_occupancy_check(ip, engine)
 
-            assert gateway._machines[ip].machine.state == MachineState.BUSY, (
-                "start_occupancy_check must occupy ConnectedMachine at gateway level"
+            assert repository._machines[ip].machine.state == MachineState.BUSY, (
+                "start_occupancy_check must occupy ConnectedMachine at repository level"
             )
 
-            # Simulate _meta_sync: it polls gateway state and would mirror to meta.busy
+            # Simulate _meta_sync: it polls repository state and would mirror to meta.busy
             # With the fix, it sees BUSY (not FREE), so meta.busy stays True
-            gw_machine = gateway.get_machine_state(ip)
+            gw_machine = repository.get_machine_state(ip)
             assert gw_machine is not None
             assert gw_machine.state == MachineState.BUSY, (
                 "_meta_sync would see FREE without the fix, causing premature task consumption"
             )
         finally:
-            await gateway.run(machine, "killall sleep 2>/dev/null || true")
+            await operations.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_meta_sync_pattern_does_not_prematurely_free(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """Simulating _meta_sync polling: must see BUSY while process runs."""
         engine = _make_pengine(check_pname="sleep", sleep_interval=1)
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
         # Start process, then start occupancy check
-        await gateway.run(machine, "nohup sleep 3 >/dev/null 2>&1 &")
+        await operations.run(machine, "nohup sleep 3 >/dev/null 2>&1 &")
         await asyncio.sleep(0.5)
 
         try:
-            gateway.start_occupancy_check(ip, engine)
+            operations.start_occupancy_check(ip, engine)
 
-            # Simulate _meta_sync: poll gateway state for 2 seconds
+            # Simulate _meta_sync: poll repository state for 2 seconds
             # Without the fix, at least one poll would see FREE
             for _ in range(4):
                 await asyncio.sleep(0.5)
-                gw_machine = gateway.get_machine_state(ip)
+                gw_machine = repository.get_machine_state(ip)
                 assert gw_machine is not None
                 assert gw_machine.state == MachineState.BUSY, (
                     "_meta_sync must consistently see BUSY while process is running"
                 )
         finally:
-            await gateway.run(machine, "killall sleep 2>/dev/null || true")
+            await operations.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_machine_released_after_process_exits(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """After process exits, checker detects it and releases ConnectedMachine."""
         engine = _make_pengine(check_pname="sleep", sleep_interval=1)
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
         # Short-lived process (2 seconds)
-        await gateway.run(machine, "nohup sleep 2 >/dev/null 2>&1 &")
+        await operations.run(machine, "nohup sleep 2 >/dev/null 2>&1 &")
         await asyncio.sleep(0.5)
 
         try:
-            gateway.start_occupancy_check(ip, engine)
-            assert gateway._machines[ip].machine.state == MachineState.BUSY
+            operations.start_occupancy_check(ip, engine)
+            assert repository._machines[ip].machine.state == MachineState.BUSY
 
             # Wait for checker to detect exit (sleep_interval + process time + buffer)
-            task = gateway._bg_tasks[ip]
+            task = repository._monitors[ip]
             await asyncio.wait_for(task, timeout=5.0)
 
             # Checker should have released the machine
-            assert gateway._machines[ip].machine.state == MachineState.FREE, (
+            assert repository._machines[ip].machine.state == MachineState.FREE, (
                 "ConnectedMachine must be FREE after process exits and checker releases it"
             )
         finally:
-            await gateway.run(machine, "killall sleep 2>/dev/null || true")
+            await operations.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_already_busy_machine_stays_busy_on_occupancy_start(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """start_occupancy_check on already-BUSY machine is a no-op (idempotent)."""
         engine = _make_pengine(check_pname="sleep", sleep_interval=1)
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
         # Manually occupy
-        gateway.update_machine(machine.occupy())
-        assert gateway._machines[ip].machine.state == MachineState.BUSY
+        repository.update_machine(machine.occupy())
+        assert repository._machines[ip].machine.state == MachineState.BUSY
 
-        await gateway.run(
-            gateway._machines[ip].machine, "nohup sleep 3 >/dev/null 2>&1 &"
+        await operations.run(
+            repository._machines[ip].machine, "nohup sleep 3 >/dev/null 2>&1 &"
         )
         await asyncio.sleep(0.5)
 
         try:
             # start_occupancy_check on already-BUSY machine should not crash
-            gateway.start_occupancy_check(ip, engine)
-            assert gateway._machines[ip].machine.state == MachineState.BUSY
+            operations.start_occupancy_check(ip, engine)
+            assert repository._machines[ip].machine.state == MachineState.BUSY
         finally:
             # Wait for checker to finish (if it was registered for this ip)
-            task = gateway._bg_tasks.get(ip)
+            task = repository._monitors.get(ip)
             if task is not None:
                 await asyncio.wait_for(task, timeout=5.0)
-            await gateway.run(
-                gateway._machines[ip].machine, "killall sleep 2>/dev/null || true"
+            await operations.run(
+                repository._machines[ip].machine, "killall sleep 2>/dev/null || true"
             )
 
 
@@ -733,49 +775,49 @@ class TestOccupancySpawnScenario:
     the remote process.
     """
 
-    async def _get_machine(self, gateway: SSHMachineGateway) -> ConnectedMachine:
-        machines = gateway.list_free(None)
+    async def _get_machine(self, repository: SSHMachineRepository) -> ConnectedMachine:
+        machines = repository.list_free(None)
         assert len(machines) > 0
         return machines[0]
 
     async def test_pgrep_detects_run_bg_process(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """pgrep finds a process started via run_bg (like spawn does)."""
         engine = _make_pengine(check_pname="sleep")
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
-        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await operations.run_bg(machine, "sleep 60", cwd="/tmp")
         try:
             await asyncio.sleep(1)
-            busy = await gateway.occupancy_check(ip, engine)
+            busy = await operations.occupancy_check(ip, engine)
             assert busy is True, "pgrep should find sleep process started via run_bg"
         finally:
-            await gateway.run(machine, "killall sleep 2>/dev/null || true")
+            await operations.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_pname_detects_spawn_like_command_via_run_bg(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_pname finds process from spawn-like command via run_bg.
 
         Simulates: spawn = sleep 60 && cat 1.input > 1.input.out
         """
         engine = _make_pengine(check_pname="sleep")
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
         # Simulate spawn command: cd to dir, then run sleep
-        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await operations.run_bg(machine, "sleep 60", cwd="/tmp")
         try:
             await asyncio.sleep(1)
-            busy = await gateway.occupancy_check(ip, engine)
+            busy = await operations.occupancy_check(ip, engine)
             assert busy is True, "sleep process should be found by pgrep after run_bg"
         finally:
-            await gateway.run(machine, "killall sleep 2>/dev/null || true")
+            await operations.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_pname_still_detects_after_handle_discarded(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """Process must survive even if run_bg handle is not stored.
 
@@ -785,53 +827,53 @@ class TestOccupancySpawnScenario:
         (asyncssh does not close on __del__). This test verifies that.
         """
         engine = _make_pengine(check_pname="sleep")
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
-        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await operations.run_bg(machine, "sleep 60", cwd="/tmp")
         import gc
 
         gc.collect()
 
         try:
             await asyncio.sleep(1)
-            busy = await gateway.occupancy_check(ip, engine)
+            busy = await operations.occupancy_check(ip, engine)
             assert busy is True, "sleep must survive SSHClientProcess handle GC"
         finally:
-            await gateway.run(machine, "killall sleep 2>/dev/null || true")
+            await operations.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_cmd_grep_detects_run_bg_process(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """check_cmd with grep detects process started via run_bg."""
         engine = _make_pengine(
             check_cmd="ps -eocomm= | grep -q sleep", check_cmd_code=0
         )
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
         ip = machine.ip
 
-        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await operations.run_bg(machine, "sleep 60", cwd="/tmp")
         try:
             await asyncio.sleep(1)
-            busy = await gateway.occupancy_check(ip, engine)
+            busy = await operations.occupancy_check(ip, engine)
             assert busy is True, "check_cmd should detect sleep via ps|grep"
         finally:
-            await gateway.run(machine, "killall sleep 2>/dev/null || true")
+            await operations.run(machine, "killall sleep 2>/dev/null || true")
 
     async def test_occupancy_check_via_pgrep_raw_output(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """Diagnostic: show what pgrep -f actually finds on the remote machine."""
-        machine = await self._get_machine(gateway)
+        machine = await self._get_machine(repository)
 
         # Start sleep via run_bg
-        await gateway.run_bg(machine, "sleep 60", cwd="/tmp")
+        await operations.run_bg(machine, "sleep 60", cwd="/tmp")
         try:
             await asyncio.sleep(0.5)
 
             # List processes via pgrep -f sleep
             procs = []
-            async for p in gateway.pgrep(machine.ip, "sleep"):
+            async for p in operations.pgrep(machine.ip, "sleep"):
                 procs.append(p)
 
             # Must find at least the sleep process
@@ -847,7 +889,7 @@ class TestOccupancySpawnScenario:
                 f"No process with 'sleep' in name/command found: {procs}"
             )
         finally:
-            await gateway.run(machine, "killall sleep 2>/dev/null || true")
+            await operations.run(machine, "killall sleep 2>/dev/null || true")
 
 
 # =============================================================================
@@ -860,7 +902,7 @@ class TestOccupancySpawnScenario:
 # ``ssh_container`` (host IP, mapped port) and machine B via ``ssh_container_2``
 # (container bridge IP, internal port 2222). The bridge IP is required because
 # ``get_container_host_ip`` returns ``localhost`` for both testcontainers, which
-# would collide since SSHMachineGateway keys ``_machines``/``_bg_tasks`` by IP
+# would collide since SSHMachineRepository keys ``_machines``/``_monitors`` by IP
 # only — that collision is exactly what made the original YASCHED_MULTI_CONTAINER
 # variant always fail.
 
@@ -874,16 +916,17 @@ class TestMultiMachineBgTaskLeak:
         ssh_container_2: dict[str, Any],  # type: ignore[type-arg]
     ) -> None:
         """Disconnect A cancels only A's monitor; B's monitor stays alive."""
-        gateway = SSHMachineGateway()
+        repository = SSHMachineRepository()
+        operations = SSHMachineOperations(repository=repository)
         engine = _make_pengine(check_pname="sleep", sleep_interval=1)
 
-        await gateway.connect(
+        await repository.connect(
             ip=ssh_container["host"],
             username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
             port=ssh_container["port"],
         )
-        await gateway.connect(
+        await repository.connect(
             ip=ssh_container_2["host"],
             username=ssh_container_2["username"],
             client_keys=[ssh_container_2["key_path"]],
@@ -899,31 +942,31 @@ class TestMultiMachineBgTaskLeak:
         try:
             # Start a long-running sleep on each so the monitors stay BUSY
             for ip in (ip_a, ip_b):
-                await gateway.run(
-                    gateway._machines[ip].machine,
+                await operations.run(
+                    repository._machines[ip].machine,
                     "nohup sleep 300 >/dev/null 2>&1 &",
                 )
             await asyncio.sleep(0.5)
 
             # Start occupancy monitors on each
             for ip in (ip_a, ip_b):
-                gateway.start_occupancy_check(ip, engine)
+                operations.start_occupancy_check(ip, engine)
 
-            assert ip_a in gateway._bg_tasks
-            assert ip_b in gateway._bg_tasks
-            task_b = gateway._bg_tasks[ip_b]
+            assert ip_a in repository._monitors
+            assert ip_b in repository._monitors
+            task_b = repository._monitors[ip_b]
 
             # Disconnect A — must cancel only A's monitor
-            await gateway.disconnect(ip_a)
+            await repository.disconnect(ip_a)
 
-            assert ip_a not in gateway._machines
-            assert ip_a not in gateway._bg_tasks
+            assert ip_a not in repository._machines
+            assert ip_a not in repository._monitors
             # B's monitor and machine are untouched
             assert not task_b.done(), "B monitor must survive disconnect(A)"
-            assert gateway._bg_tasks[ip_b] is task_b
-            assert ip_b in gateway._machines
+            assert repository._monitors[ip_b] is task_b
+            assert ip_b in repository._machines
 
-            await gateway.disconnect(ip_b)
+            await repository.disconnect(ip_b)
         finally:
             # Best-effort cleanup of any surviving monitor / remote process
-            await gateway.disconnect_all()
+            await repository.disconnect_all()

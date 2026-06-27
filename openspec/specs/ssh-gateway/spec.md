@@ -2,36 +2,46 @@
 
 ## Purpose
 
-Provide an SSHMachineGateway class that satisfies the MachineGateway Protocol
-using asyncssh for SSH connections, command execution, and SFTP transfer, with
-connection lifecycle, occupancy monitoring, and retry logic.
+Provide SSH machine infrastructure split across SSHMachineRepository (connected-machine collection lifecycle, queries, state transitions, occupancy-monitor mechanism) and SSHMachineOperations (per-machine command execution, SFTP transfer, process inspection, node setup, task deployment, output download, and occupancy check logic). Both implement the MachineRepository and MachineOperations domain ports respectively using asyncssh for SSH connections and SFTP, with retry logic on idempotent operations.
 
 ## Requirements
 
 ### Requirement: SSHMachineGateway implements MachineGateway
 
-The system SHALL provide an `SSHMachineGateway` class that satisfies the
-`MachineGateway` Protocol using asyncssh for SSH connections, command
-execution, and SFTP. The gateway SHALL be self-contained — it SHALL NOT import
-from `remote_machine/` or `clouds/`.
+The system SHALL provide SSH machine operations and connection
+management split across two implementation classes:
 
-The gateway SHALL provide a `download_outputs` method that encapsulates
-SFTP session management, per-file download with retry, error
-classification, and remote directory cleanup. The method SHALL return
-`tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]]`
-containing `(meta_add, transient_errors, permanent_errors)`. The method
-SHALL catch all per-file exceptions (including non-retry) and classify
-each into `transient_errors` (instances of `SFTPRetryExc`) or
-`permanent_errors` (all other caught exceptions, including
-`SFTPNoSuchFile`, `SFTPPermissionDenied`, and bare `OSError` from local
-filesystem writes). The method SHALL catch all session-level exceptions
-and return them in `transient_errors` (a session-level failure is
-transient — the remote directory is preserved for retry). The method
-SHALL NOT raise.
+- `SSHMachineRepository` in `infra/ssh/repository.py` — owns the
+  connected-machine collection, implements the `MachineRepository`
+  Protocol. Provides `connect`/`disconnect`/`disconnect_all`,
+  `list_free`/`list_connected`/`get_machine_state`, `update_machine`/
+  `occupy`/`release`, accessor getters, `get_conn` (reconnect), and the
+  generic occupancy-monitor mechanism (`install_monitor`/`cancel_monitor`).
+- `SSHMachineOperations` in `infra/ssh/operations/` — operates on a
+  single machine via the platform adapter and SFTP, implements the
+  `MachineOperations` Protocol. Composes `TaskDeployer`,
+  `OutputDownloader`, `OccupancyChecker`.
+
+The system SHALL NOT provide a single `SSHMachineGateway` class. The
+`MachineGateway` Protocol in `domain/ports.py` SHALL be removed and
+replaced by `MachineRepository` + `MachineOperations`.
+
+`SSHMachineOperations.download_outputs(ip, remote_dir, local_dir, files,
+task_id)` SHALL return
+`tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]],
+list[tuple[str | None, Exception]]]` containing `(meta_add,
+transient_errors, permanent_errors)`. The method SHALL catch all
+per-file exceptions (including non-retry) and classify each into
+`transient_errors` (instances of `SFTPRetryExc`) or `permanent_errors`
+(all other caught exceptions, including `SFTPNoSuchFile`,
+`SFTPPermissionDenied`, and bare `OSError` from local filesystem
+writes). The method SHALL catch all session-level exceptions and return
+them in `transient_errors` (a session-level failure is transient — the
+remote directory is preserved for retry). The method SHALL NOT raise.
 
 The method SHALL open a FRESH SFTP client (`get_sftp(ip)` context) per
-file in the per-file loop, so that a dropped SFTP connection on one
-file invalidates only that file's retries and does not fail-fast the
+file in the per-file loop, so that a dropped SFTP connection on one file
+invalidates only that file's retries and does not fail-fast the
 remaining files on a dead shared client. The per-file retry
 (`file_get_retry`, fibonacci, max_time=60, `SFTPRetryExc`) SHALL wrap
 each `sftp.get` call individually.
@@ -39,53 +49,58 @@ each `sftp.get` call individually.
 The method SHALL remove the remote directory tree only ONCE, after the
 per-file loop completes, and only when BOTH `transient_errors` AND
 `permanent_errors` are empty — i.e. on full success only. When either
-list is non-empty, the method SHALL NOT remove the remote directory
-tree (any undownloaded file, whether transient or permanent, must
-remain available for the next retry cycle or for operator
-debugging). The rmtree SHALL use its own separate `get_sftp(ip)`
-context (not a per-file client).
+list is non-empty, the method SHALL NOT remove the remote directory tree
+(any undownloaded file, whether transient or permanent, must remain
+available for the next retry cycle or for operator debugging). The
+rmtree SHALL use its own separate `get_sftp(ip)` context (not a
+per-file client).
 
-The gateway SHALL provide a `_get_machine_state` method returning `_MachineState | None`
-for adapter-internal use (e.g., `check_status.py`), and a `get_machine_state` method
-returning `ConnectedMachine | None` for the port contract.
+The repository SHALL provide a `_get_machine_state` method returning
+`_MachineState | None` for adapter-internal use (e.g.,
+`check_status.py`), and a `get_machine_state` method returning
+`ConnectedMachine | None` for the port contract.
 
-The gateway SHALL provide a `start_task_on_machine(machine, engine, task, ncpus, engines_dir) -> bool`
-method that uploads task input files via SFTP and spawns the calculation process
-via `run_bg`. The method SHALL encapsulate all SSH-specific operations
-(`get_sftp`, `get_path`, `get_quote`, `makedirs`, remote file writes) — no such
-operations SHALL remain in the orchestrator. The gateway MAY use private helpers
+The operations SHALL provide a `start_task_on_machine(machine, engine,
+task, ncpus, engines_dir) -> bool` method (forwarding to
+`deploy.start_task_on_machine`) that uploads task input files via SFTP
+and spawns the calculation process via `run_bg`. The method SHALL
+encapsulate all SSH-specific operations (`get_sftp`, `get_path`,
+`get_quote`, `makedirs`, remote file writes) — no such operations SHALL
+remain in the orchestrator. The implementation MAY use private helpers
 (`_upload_task_data`, `_exec_spawn_command`, `_write_remote_file`,
-`_safe_b64decode`) to structure the work.
+`_safe_b64decode`) within `operations/deployment.py`.
 
-The gateway SHALL provide `pgrep(ip, pattern, full=True) -> AsyncGenerator[ProcessInfo, None]`
-and `list_processes(ip) -> AsyncGenerator[ProcessInfo, None]` that delegate to
-the platform adapter. `ProcessInfo` is the frozen dataclass from
-`infra/ssh/platform/protocol.py` (re-exported via the package
-`yascheduler.infra.ssh.platform`). The gateway SHALL NOT reference the `PProcessInfo`
-Protocol.
+The operations SHALL provide `pgrep(ip, pattern, full=True) ->
+AsyncGenerator[ProcessInfo, None]` and `list_processes(ip) ->
+AsyncGenerator[ProcessInfo, None]` that delegate to the platform
+adapter. `ProcessInfo` is the frozen dataclass from
+`infra/ssh/platform/protocol.py`. The operations SHALL NOT reference the
+`PProcessInfo` Protocol.
 
 #### Scenario: Connect to machine
-- **WHEN** `gateway.connect(ip="10.0.0.1", username="root", client_keys=[...])` is called
+
+- **WHEN** `repository.connect(ip="10.0.0.1", username="root", client_keys=[...])` is called
 - **THEN** an SSH connection is established, platform is detected, and a
-  `ConnectedMachine` is registered internally
+  `ConnectedMachine` is registered in the repository's `_machines`
 
 #### Scenario: Run command on connected machine
-- **WHEN** `gateway.run(machine, "echo hello")` is called on a connected machine
+
+- **WHEN** `operations.run(machine, "echo hello")` is called on a connected machine
 - **THEN** returns a `ProcessResult` with the command output
 
 #### Scenario: Upload file
 
-- **WHEN** `gateway.upload(machine, local_path, "/remote/path")` is called
+- **WHEN** `operations.upload(machine, local_path, "/remote/path")` is called
 - **THEN** the file is transferred via SFTP to the remote path (single attempt, no retry)
 
 #### Scenario: Download file
 
-- **WHEN** `gateway.download(machine, "/remote/path", local_path)` is called
+- **WHEN** `operations.download(machine, "/remote/path", local_path)` is called
 - **THEN** the file is transferred via SFTP to the local path (single attempt, no retry)
 
 #### Scenario: Download task outputs with per-file SFTP isolation and retry
 
-- **WHEN** `gateway.download_outputs(ip, remote_dir, local_dir, files, task_id)` is called
+- **WHEN** `operations.download_outputs(ip, remote_dir, local_dir, files, task_id)` is called
 - **THEN** a FRESH SFTP client is opened per file in the loop, each
   file is downloaded with per-file retry (`file_get_retry`,
   fibonacci, max_time=60, `SFTPRetryExc`), per-file exceptions are
@@ -131,24 +146,42 @@ Protocol.
   directory is NOT removed, and the method returns without raising
 
 #### Scenario: List connected machines
-- **WHEN** `gateway.list_connected()` is called
+
+- **WHEN** `repository.list_connected()` is called
 - **THEN** returns a list of all `ConnectedMachine` objects currently registered
 
 #### Scenario: Get machine state for port
-- **WHEN** `gateway.get_machine_state("10.0.0.1")` is called
+
+- **WHEN** `repository.get_machine_state("10.0.0.1")` is called
 - **THEN** returns `ConnectedMachine | None` (domain entity, not adapter internals)
 
 #### Scenario: Get machine state for adapter-internal use
-- **WHEN** `gateway._get_machine_state("10.0.0.1")` is called
+
+- **WHEN** `repository._get_machine_state("10.0.0.1")` is called
 - **THEN** returns `_MachineState | None` (adapter-internal dataclass)
 
 #### Scenario: pgrep and list_processes return ProcessInfo
-- **WHEN** `gateway.pgrep(ip, pattern)` or `gateway.list_processes(ip)` is called on a connected machine
-- **THEN** the returned async generator yields `ProcessInfo` objects (the frozen dataclass from `infra/ssh/platform/protocol.py`), and the gateway does not reference `PProcessInfo`
+
+- **WHEN** `operations.pgrep(ip, pattern)` or `operations.list_processes(ip)` is called on a connected machine
+- **THEN** the returned async generator yields `ProcessInfo` objects (the frozen dataclass from `infra/ssh/platform/protocol.py`), and the operations object does not reference `PProcessInfo`
 
 ### Requirement: start_task_on_machine rolls back gateway BUSY on failure
 
-The gateway's `start_task_on_machine(machine, engine, task, ncpus, engines_dir) -> bool` method SHALL roll back the gateway-level BUSY marking on any deploy or spawn failure. The method SHALL mark the machine BUSY at the gateway (via `update_machine(machine.occupy())`) before performing the deploy (upload) and spawn (`_exec_spawn_command` → `run_bg`) steps. If any exception (including `CancelledError` during daemon shutdown) escapes the deploy or spawn steps, the method SHALL roll back the gateway-level BUSY marking by calling `update_machine(state.machine.release())` on the machine registered for `machine.ip`, then re-raise the original exception. The rollback SHALL run under `except BaseException` so that `CancelledError` is covered.
+The `start_task_on_machine` method SHALL roll back the repository-level
+BUSY marking on any deploy or spawn failure. The operations'
+`start_task_on_machine(machine, engine, task, ncpus,
+engines_dir) -> bool` method (implemented in `TaskDeployer`, forwarded
+from `SSHMachineOperations`) SHALL roll back the repository-level BUSY
+marking on any deploy or spawn failure. The method SHALL mark the
+machine BUSY at the repository (via `repository.occupy(machine.ip)`)
+before performing the deploy (upload) and spawn
+(`_exec_spawn_command` → `run_bg`) steps. If any exception (including
+`CancelledError` during daemon shutdown) escapes the deploy or spawn
+steps, the method SHALL roll back the repository-level BUSY marking by
+calling `repository.update_machine(state.machine.release())` on the
+machine registered for `machine.ip`, then re-raise the original
+exception. The rollback SHALL run under `except BaseException` so that
+`CancelledError` is covered.
 
 The rollback SHALL be defensive against concurrent state changes:
 
@@ -162,23 +195,22 @@ The rollback SHALL be defensive against concurrent state changes:
 - Otherwise the method SHALL log an info line (rollback succeeded) and
   re-raise.
 
-This requirement governs the gateway-level occupancy marker only; the
-DB task status and the orchestrator's in-memory `mark_running()` are
+This requirement governs the repository-level occupancy marker only;
+the DB task status and the orchestrator's in-memory `mark_running()` are
 owned by the caller (`_try_start_on_machine` in
-`allocate_task.py:114-144`) and are not affected by this rollback
-(the task stays TO_DO in the DB on spawn failure, which is correct).
+`allocate_task.py:114-144`) and are not affected by this rollback.
 
 #### Scenario: Upload failure rolls back BUSY
 
-- **WHEN** `start_task_on_machine` calls `update_machine(machine.occupy())`
+- **WHEN** `start_task_on_machine` calls `repository.occupy(machine.ip)`
   marking the machine BUSY, then `_upload_task_data` raises (e.g. an
   `asyncssh.misc.Error` from `sftp.makedirs` or a propagated
   non-SFTP exception from `_write_remote_file`)
 - **THEN** the method's `except BaseException` handler calls
-  `update_machine(state.machine.release())` on the machine registered
-  for `machine.ip`, logging an info line, and re-raises the original
-  exception
-- **AND** the machine's gateway state is `FREE` after the call returns
+  `repository.update_machine(state.machine.release())` on the machine
+  registered for `machine.ip`, logging an info line, and re-raises the
+  original exception
+- **AND** the machine's repository state is `FREE` after the call returns
   (via the raised exception), so the next allocator tick can pick it up
 
 #### Scenario: Spawn failure rolls back BUSY
@@ -188,9 +220,9 @@ owned by the caller (`_try_start_on_machine` in
   `ChannelOpenError`, no longer retried per the amended Backoff
   requirement)
 - **THEN** the method's `except BaseException` handler calls
-  `update_machine(state.machine.release())`, logs an info line, and
-  re-raises
-- **AND** the machine's gateway state is `FREE` after the call, and no
+  `repository.update_machine(state.machine.release())`, logs an info
+  line, and re-raises
+- **AND** the machine's repository state is `FREE` after the call, and no
   occupancy monitor was installed (it installs only after successful
   spawn)
 
@@ -200,17 +232,17 @@ owned by the caller (`_try_start_on_machine` in
   daemon is shut down mid-deploy (raising `CancelledError`) before
   spawn completes
 - **THEN** the `except BaseException` handler catches the
-  `CancelledError`, calls `update_machine(state.machine.release())`,
+  `CancelledError`, calls `repository.update_machine(state.machine.release())`,
   logs an info line, and re-raises the `CancelledError`
-- **AND** the machine's gateway state is `FREE` (not stuck BUSY with
+- **AND** the machine's repository state is `FREE` (not stuck BUSY with
   no owner)
 
 #### Scenario: Concurrent disconnect skips rollback with warning
 
 - **WHEN** `start_task_on_machine` marks the machine BUSY, then
-  `disconnect(machine.ip)` runs concurrently and removes the machine
-  from the registry, and then the deploy or spawn raises
-- **THEN** the rollback handler sees `self._machines.get(machine.ip)`
+  `repository.disconnect(machine.ip)` runs concurrently and removes the
+  machine from the registry, and then the deploy or spawn raises
+- **THEN** the rollback handler sees `repository._get_machine_state(machine.ip)`
   is `None`, logs a warning ("machine already disconnected"), and
   re-raises the original exception without attempting `release()`
 
@@ -220,32 +252,37 @@ owned by the caller (`_try_start_on_machine` in
   machine registered for `machine.ip` has state other than `BUSY`
   (a logic error somewhere upstream)
 - **THEN** the handler logs a warning ("unexpected state <state>,
-  expected BUSY"), still calls `update_machine(state.machine.release())`
+  expected BUSY"), still calls `repository.update_machine(state.machine.release())`
   to enforce the FREE-on-failure invariant, and re-raises
-- **AND** the machine's gateway state is `FREE` after the call
+- **AND** the machine's repository state is `FREE` after the call
 
 ### Requirement: `_write_remote_file` re-raises non-SFTP exceptions
 
-The gateway's `_write_remote_file(sftp, path, data, log, mode)` helper SHALL
-re-raise any exception that occurs during the SFTP file write. It SHALL NOT
-swallow non-SFTP exceptions (e.g. `binascii.Error` from a malformed base64
-`fort.9` payload, `TypeError` from a non-string `data`, `UnicodeEncodeError`
-on a text-mode write, `KeyError` from a missing `task.context.extra` key,
-transient non-SFTP asyncssh errors, or `OSError`).
+The `_write_remote_file` helper SHALL re-raise non-SFTP exceptions.
+The deploy module's `_write_remote_file(sftp, path, data, log, mode)`
+helper (in `infra/ssh/operations/deployment.py`) SHALL re-raise any
+exception that occurs during the SFTP file write. It SHALL NOT swallow
+non-SFTP exceptions (e.g. `binascii.Error` from a malformed base64
+`fort.9` payload, `TypeError` from a non-string `data`,
+`UnicodeEncodeError` on a text-mode write, `KeyError` from a missing
+`task.context.extra` key, transient non-SFTP asyncssh errors, or
+`OSError`).
 
-The helper MAY catch `asyncssh.misc.Error` specifically to log the structured
-SFTP `code` and `reason` fields (which are absent from `str(err)` at upstream
-catch sites) and SHALL re-raise it immediately after logging.
+The helper MAY catch `asyncssh.misc.Error` specifically to log the
+structured SFTP `code` and `reason` fields (which are absent from
+`str(err)` at upstream catch sites) and SHALL re-raise it immediately
+after logging.
 
 The propagation is the abort signal for `start_task_on_machine`: the
-exception surfaces in `_upload_task_data` (which has no `try/except` around
-the per-file loop) and then in `start_task_on_machine`'s DEPLOY block
-`try/except Exception`, which logs `"Can't upload task_id=N files: <err>"`
-(with `task_id`) and re-raises. The engine spawn command SHALL NOT execute
-when an input file write has failed.
+exception surfaces in `_upload_task_data` (which has no `try/except`
+around the per-file loop) and then in `start_task_on_machine`'s DEPLOY
+block `try/except Exception`, which logs `"Can't upload task_id=N
+files: <err>"` (with `task_id`) and re-raises. The engine spawn command
+SHALL NOT execute when an input file write has failed.
 
-This requirement governs the module-private helper only; no public surface
-(`MachineGateway` Protocol, CLI, INI, DB schema, AiiDA plugin) changes.
+This requirement governs the module-private helper only; no public
+surface (`MachineOperations`/`MachineRepository` Protocol, CLI, INI,
+DB schema, AiiDA plugin) changes.
 
 #### Scenario: Non-SFTP exception during write propagates and aborts spawn
 
@@ -278,19 +315,24 @@ This requirement governs the module-private helper only; no public surface
 - **THEN** the helper returns normally (no exception, no log line)
 - **AND** `_upload_task_data` continues to the next input file in the loop
 
-### Requirement: Backoff on gateway methods
+### Requirement: Backoff on operations methods
 
 The system SHALL apply `@my_backoff_exc()` (fibonacci, max_time=60,
-SSHRetryExc) ONLY to idempotent gateway methods — namely
-`get_cpu_cores` (a pure read of CPU core count). The system SHALL NOT
-apply `@my_backoff_exc()` to `run_bg` and SHALL NOT apply
+`SSHRetryExc`) ONLY to idempotent operations methods — namely
+`get_cpu_cores` (a pure read of CPU core count) and the repository's
+`_connect_impl` (retried connection establishment). The system SHALL
+NOT apply `@my_backoff_exc()` to `run_bg` and SHALL NOT apply
 `@my_backoff_sftp()` to `upload` or `download`: these three operations
 are non-idempotent (a successful remote side-effect followed by a lost
-client confirmation would produce a duplicate side-effect on retry),
-so a single attempt with failure-propagation is the correct contract.
-The `MachineGateway` Protocol declaration of `run_bg`, `upload`, and
+client confirmation would produce a duplicate side-effect on retry), so
+a single attempt with failure-propagation is the correct contract. The
+`MachineOperations` Protocol declaration of `run_bg`, `upload`, and
 `download` is preserved; only the SSH implementation's retry
 decorators are removed.
+
+`download_outputs` SHALL continue to use `my_backoff_sftp()` (defined
+in `infra/ssh/operations/download.py`) as the per-file retry wrapper
+inside the per-file loop.
 
 #### Scenario: run_bg does not retry on SSH failure
 
@@ -328,115 +370,123 @@ decorators are removed.
 
 ### Requirement: List free machines with platform filter
 
-The system SHALL return only FREE machines that match the requested platforms.
+The system SHALL return only FREE machines that match the requested
+platforms.
 
 #### Scenario: Filter by platform
-- **WHEN** `gateway.list_free(["linux", "debian-12"])` is called
+
+- **WHEN** `repository.list_free(["linux", "debian-12"])` is called
 - **THEN** returns only FREE machines with platform "linux" or "debian-12"
 
 #### Scenario: Empty list when no match
-- **WHEN** `gateway.list_free(["windows"])` is called and no Windows machines are connected
+
+- **WHEN** `repository.list_free(["windows"])` is called and no Windows machines are connected
 - **THEN** returns an empty list
 
 ### Requirement: Disconnect and cleanup
 
-The system SHALL support disconnecting specific machines or all machines,
-closing SSH connections, cancelling that machine's occupancy monitor (if
-any), and removing the machine from the registry.
+The system SHALL support disconnecting specific machines or all
+machines, closing SSH connections, cancelling that machine's occupancy
+monitor (if any), and removing the machine from the registry.
 
-`disconnect(ip)` SHALL be scoped to the targeted IP. It SHALL cancel only
-the background occupancy task registered for `ip` (if present) and SHALL
-NOT cancel background tasks registered for any other machine. After
-`disconnect(ip)` returns, the occupancy monitors for every other still
-connected machine SHALL remain alive and uncanceled.
+`repository.disconnect(ip)` SHALL be scoped to the targeted IP. It
+SHALL cancel only the background monitor task registered for `ip` (if
+present, via `cancel_monitor`) and SHALL NOT cancel monitors
+registered for any other machine. After `disconnect(ip)` returns, the
+monitors for every other still connected machine SHALL remain alive and
+uncanceled.
 
-The system SHALL maintain a one-to-one mapping between a connected machine
-IP and its occupancy monitor. Re-registering `start_occupancy_check(ip,
-config)` for an already-monitored IP SHALL replace the prior monitor;
-the replaced monitor SHALL be cancelled before the new one is installed.
+The system SHALL maintain a one-to-one mapping between a connected
+machine IP and its occupancy monitor. Re-registering
+`operations.occupancy.start_occupancy_check(ip, config)` for an
+already-monitored IP SHALL replace the prior monitor (the new
+`install_monitor` call cancels the prior); the replaced monitor SHALL be
+cancelled before the new one is installed.
 
-`disconnect_all()` SHALL disconnect every currently connected machine by
-invoking `disconnect(ip)` once per machine. The observable aggregate result
-(all machines disconnected, all occupancy monitors cancelled) is unchanged.
+`repository.disconnect_all()` SHALL disconnect every currently
+connected machine by invoking `disconnect(ip)` once per machine.
 
 #### Scenario: Disconnect single machine
 
-- **WHEN** `gateway.disconnect("10.0.0.1")` is called on a connected machine
+- **WHEN** `repository.disconnect("10.0.0.1")` is called on a connected machine
 - **THEN** the SSH connection for `10.0.0.1` is closed, the machine is
-  removed from the registry, and any occupancy monitor registered for
+  removed from the registry, and any monitor registered for
   `10.0.0.1` is cancelled and awaited
 
 #### Scenario: Disconnect does not touch other machines' monitors
 
-- **WHEN** machines A, B, and C are connected, each has an occupancy monitor
-  registered via `start_occupancy_check`, and `gateway.disconnect("B")` is
-  called
-- **THEN** only the monitor registered for B is cancelled, the monitors for
-  A and C remain alive (not cancelled) and remain registered for their
-  respective IPs, and machines A and C stay connected
+- **WHEN** machines A, B, and C are connected, each has an occupancy
+  monitor installed via `operations.occupancy.start_occupancy_check`,
+  and `repository.disconnect("B")` is called
+- **THEN** only the monitor registered for B is cancelled, the monitors
+  for A and C remain alive (not cancelled) and remain registered for
+  their respective IPs, and machines A and C stay connected
 
 #### Scenario: Disconnect unknown IP
 
-- **WHEN** `gateway.disconnect("10.0.0.99")` is called for an IP with no
-  registered machine
-- **THEN** no exception is raised, no occupancy monitor for any other IP is
+- **WHEN** `repository.disconnect("10.0.0.99")` is called for an IP with
+  no registered machine
+- **THEN** no exception is raised, no monitor for any other IP is
   cancelled, and the registry of connected machines is unchanged
 
 #### Scenario: Disconnect all
 
-- **WHEN** `gateway.disconnect_all()` is called
+- **WHEN** `repository.disconnect_all()` is called
 - **THEN** every connected machine's SSH connection is closed, every
   connected machine is removed from the registry, and every registered
-  occupancy monitor is cancelled
+  monitor is cancelled
 
 #### Scenario: Re-registering occupancy for an IP replaces the prior monitor
 
-- **WHEN** `start_occupancy_check(ip, config)` is called for an IP that
-  already has a live occupancy monitor
-- **THEN** the prior monitor is cancelled and the new monitor is installed
-  under the same IP key, without affecting monitors registered for other IPs
+- **WHEN** `operations.occupancy.start_occupancy_check(ip, config)` is
+  called for an IP that already has a live occupancy monitor
+- **THEN** the prior monitor is cancelled and the new monitor is
+  installed under the same IP key, without affecting monitors registered
+  for other IPs
 
 ### Requirement: Occupancy monitoring
 
-The system SHALL periodically check if an engine process is still running on
-a machine and update the machine state to FREE when the process exits.
+The system SHALL periodically check if an engine process is still
+running on a machine and update the machine state to FREE when the
+process exits. The check logic (`occupancy_check`,
+`_occupancy_by_pgrep`, `_occupancy_by_cmd`) lives in
+`infra/ssh/operations/occupancy.py`; the monitor mechanism
+(`install_monitor`/`cancel_monitor`) lives in
+`infra/ssh/repository.py`.
+
+The `OccupancyChecker.start_occupancy_check(ip, config)` SHALL
+additionally call `repository.occupy(ip)` before installing the monitor
+(so that `_meta_sync` sees BUSY while the task runs). The monitor's
+`on_free` SHALL call `repository.release(ip)`.
 
 #### Scenario: Process exits, machine becomes free
+
 - **WHEN** occupancy check detects the engine process has exited
-- **THEN** the `ConnectedMachine` state is updated to FREE with `free_since` set
+- **THEN** the `ConnectedMachine` state is updated to FREE with
+  `free_since` set (via `repository.release(ip)` invoked as the
+  monitor's `on_free`)
 
 ### Requirement: SSH connection retry
 
-The system SHALL retry SSH connections on transient failures using the
-`backoff` library with fibonacci backoff and `max_time=60`. The gateway
-SHALL use a two-method pattern for `connect()`: inner `_connect_impl` with
-`@my_backoff_exc()` decorator (retries on `SSHRetryExc`), outer `connect`
-translates exhausted `(asyncssh.misc.Error, OSError)` exceptions to `MachineConnectionError`.
+The system SHALL retry SSH connections on transient failures using
+the `backoff` library with fibonacci backoff and `max_time=60`. The
+repository SHALL use a two-method pattern for `connect()`: inner
+`_connect_impl` with `@my_backoff_exc()` decorator (retries on
+`SSHRetryExc`), outer `connect` translates exhausted
+`(asyncssh.misc.Error, OSError)` exceptions to
+`MachineConnectionError`.
 
 #### Scenario: Retry on connection refused
+
 - **WHEN** SSH connection fails with a retryable exception (in `SSHRetryExc`)
 - **THEN** the connection is retried with fibonacci backoff up to 60 seconds
 
 #### Scenario: Non-retryable error skips retry
+
 - **WHEN** SSH connection fails with a non-retryable exception (e.g., `PermissionDenied`)
 - **THEN** the error is NOT retried and immediately translated to `MachineConnectionError`
 
 #### Scenario: Exhausted retry raises MachineConnectionError
+
 - **WHEN** all retry attempts are exhausted
 - **THEN** the outer `connect` method catches `(asyncssh.misc.Error, OSError)` and raises `MachineConnectionError` wrapping the last exception
-
-### Requirement: SSHMachineGateway owns shared SSH infrastructure
-
-The system SHALL provide all SSH infrastructure constants and helpers in
-`infra/ssh/helpers.py`, including `ADAPTERS` registry, `DEFAULT_CONN_OPTS`,
-`MySSHClient`, `MAX_SESSIONS`, `my_backoff_exc`, `_detect_platform`,
-`_init_paths`, and `_resolve_tunnel`. `SSHMachineGateway` SHALL import these
-from `infra/ssh/helpers.py`, not from `remote_machine/`.
-
-#### Scenario: Gateway imports helpers from own package
-- **WHEN** `gateway.py` imports `ADAPTERS`, `DEFAULT_CONN_OPTS`, `_detect_platform`
-- **THEN** they are imported from `infra/ssh/helpers.py`
-
-#### Scenario: Helpers functional equivalence
-- **WHEN** `_detect_platform(conn, adapters)` is called from the new location
-- **THEN** it returns the same adapter and platform list as the old implementation

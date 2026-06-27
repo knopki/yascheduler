@@ -103,7 +103,6 @@ class TestAbandonNode:
 
         await abandon_node(
             node,
-            gateway=MagicMock(),
             clouds=clouds,
             uow_factory=_uow_factory(uow),
             tracker=tracker,
@@ -125,7 +124,6 @@ class TestAbandonNode:
 
         await abandon_node(
             node,
-            gateway=MagicMock(),
             clouds=clouds,
             uow_factory=_uow_factory(uow),
             tracker=tracker,
@@ -154,7 +152,6 @@ class TestAbandonNode:
             # Must NOT raise — cloud delete failure is logged not raised.
             await abandon_node(
                 node,
-                gateway=MagicMock(),
                 clouds=clouds,
                 uow_factory=_uow_factory(uow),
                 tracker=tracker,
@@ -190,7 +187,6 @@ class TestAbandonNode:
             with pytest.raises(RuntimeError, match="db gone"):
                 await abandon_node(
                     node,
-                    gateway=MagicMock(),
                     clouds=clouds,
                     uow_factory=_uow_factory(uow),
                     tracker=tracker,
@@ -218,7 +214,6 @@ class TestAbandonNode:
 
         await abandon_node(
             node,
-            gateway=MagicMock(),
             clouds=clouds,
             uow_factory=_uow_factory(uow),
             tracker=tracker,
@@ -245,7 +240,6 @@ class TestAbandonNode:
         ):
             await abandon_node(
                 node,
-                gateway=MagicMock(),
                 clouds=clouds,
                 uow_factory=_uow_factory(uow),
                 tracker=tracker,

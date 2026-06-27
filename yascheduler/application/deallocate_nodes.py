@@ -1,9 +1,9 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 4.3.0
+# VERSION: 4.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return IPs for VM deletion.
 #   SCOPE: deallocate_node, deallocate_nodes async functions.
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-SSH-REPOSITORY, M-CLOUD-PROVISIONER
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
 # END_MODULE_CONTRACT
 #
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.3.0 - TYPE_CHECKING import CloudConfig from yascheduler.domain instead of ConfigCloud from yascheduler.config (cloud-configs-to-infra-registry); config_clouds parameter typed as Sequence[CloudConfig] (domain Protocol) — application stays free of infra DTO imports via TYPE_CHECKING.
-#   PREVIOUS_CHANGE: v4.2.0 - Switch idle_machines to monotonic float timestamps (matching free_since on ConnectedMachine) and compare against time.monotonic(); eliminates wall-clock/monotonic mixing that skewed idle detection under DST/NTP clock jumps.
+#   LAST_CHANGE: v4.4.0 - Retype repository: MachineRepository, operations: MachineOperations -> repository: MachineRepository (deallocate uses list_connected, disconnect) per decompose-ssh-gateway.
+#   PREVIOUS_CHANGE: v4.3.0 - TYPE_CHECKING import CloudConfig from yascheduler.domain instead of ConfigCloud from yascheduler.config (cloud-configs-to-infra-registry).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from yascheduler.domain import Node, TaskStatus
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from yascheduler.domain import CloudConfig, CloudProvisioner, MachineGateway
+    from yascheduler.domain import CloudConfig, CloudProvisioner, MachineRepository
 
     from .uow import AbstractUnitOfWork
 
@@ -39,22 +39,22 @@ logger = logging.getLogger(__name__)
 #   PURPOSE: Disconnect and cloud-deallocate a single node.
 #   INPUTS: {
 #     node: Node - The node to deallocate,
-#     gateway: MachineGateway - SSH gateway,
+#     repository: MachineRepository, operations: MachineOperations - SSH gateway,
 #     clouds: CloudProvisioner - Cloud provider manager,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
 #   }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Disconnects remote machine, disables node via UoW, deletes cloud VM via port, removes node via second UoW. If the second UoW fails after cloud delete succeeded, logs loudly for manual reconciliation (row stays disabled) and does not re-raise — the cloud VM is already gone.
-#   LINKS: M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-UOW
+#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-UOW
 # END_CONTRACT: deallocate_node
 async def deallocate_node(
     node: Node,
-    gateway: MachineGateway,
+    repository: MachineRepository,
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> None:
-    if gateway.contains(node.ip):
-        await gateway.disconnect(node.ip)
+    if repository.contains(node.ip):
+        await repository.disconnect(node.ip)
         logger.info(
             "[deallocate_node][DISCONNECT] ip=%s gateway disconnected",
             node.ip,

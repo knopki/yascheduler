@@ -4,7 +4,7 @@
 #   PURPOSE: Engine value object, EngineRepository collection, Deploy strategies as frozen stdlib dataclasses.
 #   SCOPE: LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy, Deploy Union alias, Engine value object with validate_inputs, EngineRepository frozen collection with filter/filter_platforms/get_platform_packages.
 #   DEPENDS: M-SHARED
-#   LINKS: M-DOMAIN-MODEL, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS, M-SSH-GATEWAY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-SUBMIT, M-APPLICATION-ORCHESTRATOR, M-DI
+#   LINKS: M-DOMAIN-MODEL, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-SUBMIT, M-APPLICATION-ORCHESTRATOR, M-DI
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

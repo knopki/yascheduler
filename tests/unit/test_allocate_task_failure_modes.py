@@ -107,8 +107,9 @@ class TestAllocateTaskFailureModes:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[])
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        operations = MagicMock()
 
         uow = _make_uow(todo_task)
         uow.commit = AsyncMock(side_effect=RuntimeError("db connection lost"))
@@ -126,7 +127,8 @@ class TestAllocateTaskFailureModes:
                 task_id=todo_task.task_id,
                 engines=engines,
                 uow_factory=lambda: uow,
-                gateway=gateway,
+                repository=repository,
+                operations=operations,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
@@ -145,8 +147,9 @@ class TestAllocateTaskFailureModes:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[])
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        operations = MagicMock()
 
         uow = _make_uow(todo_task)
         uow.nodes.add = AsyncMock()
@@ -165,7 +168,8 @@ class TestAllocateTaskFailureModes:
                 task_id=todo_task.task_id,
                 engines=engines,
                 uow_factory=lambda: uow,
-                gateway=gateway,
+                repository=repository,
+                operations=operations,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
@@ -185,8 +189,9 @@ class TestAllocateTaskFailureModes:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[])
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        operations = MagicMock()
 
         uow = _make_uow(todo_task)
         cloud_node = Node(ip="10.0.0.100", ncpus=4, cloud="aws")
@@ -217,7 +222,8 @@ class TestAllocateTaskFailureModes:
                 task_id=todo_task.task_id,
                 engines=engines,
                 uow_factory=lambda: uow,
-                gateway=gateway,
+                repository=repository,
+                operations=operations,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
@@ -250,8 +256,9 @@ class TestAllocateTaskFailureModes:
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine_no_platforms
 
-        gateway = MagicMock()
-        gateway.list_free = MagicMock(return_value=[])
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        operations = MagicMock()
 
         uow = _make_uow(todo_task)
 
@@ -262,7 +269,8 @@ class TestAllocateTaskFailureModes:
             task_id=todo_task.task_id,
             engines=engines,
             uow_factory=lambda: uow,
-            gateway=gateway,
+            repository=repository,
+            operations=operations,
             clouds=clouds,
             start_task_on_machine=AsyncMock(),
             tracker=tracker,

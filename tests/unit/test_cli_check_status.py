@@ -141,19 +141,29 @@ def make_task(
     )
 
 
-def make_mock_gateway(stdout: str = "remote output", returncode: int = 0) -> MagicMock:
-    """Return a MagicMock SSHMachineGateway with async connect/disconnect/run_full."""
-    gateway = MagicMock()
-    gateway.connect = AsyncMock()
-    gateway.disconnect = AsyncMock()
+def make_mock_repository(
+    stdout: str = "remote output", returncode: int = 0
+) -> MagicMock:
+    """Return a MagicMock SSHMachineRepository with async connect/disconnect."""
+    repo = MagicMock()
+    repo.connect = AsyncMock()
+    repo.disconnect = AsyncMock()
     state = MagicMock()
-    gateway._get_machine_state = MagicMock(return_value=state)
-    gateway.run_full = AsyncMock(
+    repo._get_machine_state = MagicMock(return_value=state)
+    repo.get_path = MagicMock(return_value=lambda folder: PurePosixPath(folder))
+    repo.get_quote = MagicMock(return_value=lambda s: s)
+    return repo
+
+
+def make_mock_operations(
+    stdout: str = "remote output", returncode: int = 0
+) -> MagicMock:
+    """Return a MagicMock SSHMachineOperations with async run_full."""
+    ops = MagicMock()
+    ops.run_full = AsyncMock(
         return_value=MagicMock(returncode=returncode, stdout=stdout)
     )
-    gateway.get_path = MagicMock(return_value=lambda folder: PurePosixPath(folder))
-    gateway.get_quote = MagicMock(return_value=lambda s: s)
-    return gateway
+    return ops
 
 
 @pytest.fixture
@@ -666,9 +676,13 @@ class TestCheckStatusViewHappyPath:
         )
         uow.nodes.get_by_ips = AsyncMock(return_value={"10.0.0.1": node})
 
-        gateway = make_mock_gateway(stdout="OUTPUT TAIL")
+        repo = make_mock_repository(stdout="OUTPUT TAIL")
+        ops = make_mock_operations(stdout="OUTPUT TAIL")
         monkeypatch.setattr(
-            check_status_mod, "SSHMachineGateway", MagicMock(return_value=gateway)
+            check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
+        )
+        monkeypatch.setattr(
+            check_status_mod, "SSHMachineOperations", MagicMock(return_value=ops)
         )
         resolve_spy = MagicMock(wraps=check_status_mod._resolve_conn_params)
         monkeypatch.setattr(check_status_mod, "_resolve_conn_params", resolve_spy)
@@ -678,16 +692,16 @@ class TestCheckStatusViewHappyPath:
         # _resolve_conn_params called with the task's node.
         resolve_spy.assert_called_once()
         assert resolve_spy.call_args.args[0].ip == "10.0.0.1"
-        # gateway.connect called with node username/port + cloud jump host.
-        gateway.connect.assert_called_once()
-        kwargs = gateway.connect.call_args.kwargs
+        # repo.connect called with node username/port + cloud jump host.
+        repo.connect.assert_called_once()
+        kwargs = repo.connect.call_args.kwargs
         assert kwargs["username"] == "yascheduler"
         assert kwargs["port"] == 2222
         assert kwargs["jump_host"] == "jump.example.com"
         assert kwargs["jump_username"] == "jumper"
         # tails OUTPUT (run_full invoked) and disconnects.
-        assert gateway.run_full.await_count == 1
-        gateway.disconnect.assert_awaited()
+        assert ops.run_full.await_count == 1
+        repo.disconnect.assert_awaited()
         out, _ = capsys.readouterr()
         assert "OUTPUT TAIL" in out
 
@@ -708,8 +722,13 @@ class TestCheckStatusViewHappyPath:
         )
         monkeypatch.setattr(
             check_status_mod,
-            "SSHMachineGateway",
-            MagicMock(return_value=make_mock_gateway()),
+            "SSHMachineRepository",
+            MagicMock(return_value=make_mock_repository()),
+        )
+        monkeypatch.setattr(
+            check_status_mod,
+            "SSHMachineOperations",
+            MagicMock(return_value=make_mock_operations()),
         )
 
         _run(["-v"])
@@ -773,24 +792,28 @@ class TestCheckStatusQueryRenderSeparation:
             return_value={"10.0.0.1": Node(ip="10.0.0.1", ncpus=4)}
         )
 
-        gateway = make_mock_gateway()
+        repo = make_mock_repository()
+        ops = make_mock_operations()
         monkeypatch.setattr(
-            check_status_mod, "SSHMachineGateway", MagicMock(return_value=gateway)
+            check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
+        )
+        monkeypatch.setattr(
+            check_status_mod, "SSHMachineOperations", MagicMock(return_value=ops)
         )
 
         # Attach both mocks to a single manager BEFORE running so their call order
         # is recorded in one unified list.
         manager = MagicMock()
         manager.attach_mock(uow.__aexit__, "uow_aexit")
-        manager.attach_mock(gateway.connect, "gw_connect")
+        manager.attach_mock(repo.connect, "repo_connect")
 
         _run(["-v"])
 
         names = [call[0] for call in manager.mock_calls]
         # Both must have been called, and the UoW exit must precede the SSH connect.
         assert "uow_aexit" in names
-        assert "gw_connect" in names
-        assert names.index("uow_aexit") < names.index("gw_connect")
+        assert "repo_connect" in names
+        assert names.index("uow_aexit") < names.index("repo_connect")
 
 
 # ---------------------------------------------------------------------------

@@ -101,8 +101,9 @@ def _build_orchestrator(
     engines = MagicMock(spec=EngineRepository)
     engines.values.return_value = [engine]
 
-    gateway = MagicMock()
-    gateway.__len__ = MagicMock(return_value=0)
+    repository = MagicMock()
+    repository.__len__ = MagicMock(return_value=0)
+    operations = MagicMock()
 
     if tracker is None:
         tracker = AllocationTracker()
@@ -114,7 +115,8 @@ def _build_orchestrator(
         remote_defaults=remote,
         uow_factory=uow_factory,
         clouds=AsyncMock(),
-        gateway=gateway,
+        repository=repository,
+        operations=operations,
         engines=engines,
         log=MagicMock(),
         config_clouds=config_clouds,
@@ -173,7 +175,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
         uow_factory, config_clouds=config_clouds, tracker=tracker
     )
     # Simulate SSH connect always failing for the dead IP.
-    orch._gateway.connect = AsyncMock(  # type: ignore[method-assign]
+    orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
         side_effect=MachineConnectionError(dead_ip, "connection refused")
     )
 

@@ -3,8 +3,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
 #   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
-#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-SSH-GATEWAY, M-SSH-KEYS, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-SSH-GATEWAY, M-SSH-KEYS
+#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
+#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -17,7 +17,7 @@
 #   _render_json - Raw-domain-values JSON (9 fields)
 #   _render_view - Verbose renderer: SSH tail of OUTPUT, optional convergence snippet
 #   _resolve_conn_params - Resolve SSH conn params mirroring orchestrator._connect_machine_consumer
-#   _display_remote_output - Connect via SSHMachineGateway, tail OUTPUT file
+#   _display_remote_output - Connect via SSHMachineRepository / SSHMachineOperations, tail OUTPUT file
 #   _download_convergence_snippet - Download OUTPUT file via SFTP
 #   _parse_convergence - Parse CRYSTAL output for convergence info
 #   _ConnParams - Frozen SSH connection params DTO
@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.infra import SSHMachineGateway
+from yascheduler.infra import SSHMachineOperations, SSHMachineRepository
 from yascheduler.infra.ssh.keys import list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
@@ -207,7 +207,7 @@ class _ConnParams:
 #   INPUTS: { node: Node, config: Config }
 #   OUTPUTS: { _ConnParams - (username, port, jump_host, jump_username) }
 #   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-GATEWAY, M-ENTRYPOINTS-CONFIG
+#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-ENTRYPOINTS-CONFIG
 #   NOTE: Mirrors orchestrator._connect_machine_consumer:209-214; duplicated (not shared) because the shape
 #         differs (orchestrator connects inline; check_status returns a params object for the gateway call).
 #         Promotion to a shared helper awaits a third consumer. The `break` below stops at the first matching
@@ -233,18 +233,22 @@ def _resolve_conn_params(node: Node, config: Config) -> _ConnParams:
 
 # START_CONTRACT: _download_convergence_snippet
 #   PURPOSE: Download the remote OUTPUT file via SFTP into a local temp path for convergence parsing.
-#   INPUTS: { gateway: SSHMachineGateway, ip: str, remote_folder: str, local_path: Path }
+#   INPUTS: { repository: SSHMachineRepository, operations: SSHMachineOperations, ip: str, remote_folder: str, local_path: Path }
 #   OUTPUTS: { bool - True on success, False on OSError (e.g. missing remote file) }
 #   SIDE_EFFECTS: Opens an SFTP channel and writes to local_path.
-#   LINKS: M-SSH-GATEWAY
+#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_CONTRACT: _download_convergence_snippet
 async def _download_convergence_snippet(
-    gateway: SSHMachineGateway, ip: str, remote_folder: str, local_path: Path
+    repository: SSHMachineRepository,
+    operations: SSHMachineOperations,
+    ip: str,
+    remote_folder: str,
+    local_path: Path,
 ) -> bool:
     """Download OUTPUT file via SFTP for convergence parsing. Returns True on success."""
     try:
-        r_output = gateway.get_path(ip)(remote_folder) / "OUTPUT"
-        async with gateway.get_sftp(ip) as sftp:
+        r_output = repository.get_path(ip)(remote_folder) / "OUTPUT"
+        async with operations.get_sftp(ip) as sftp:
             await sftp.get([str(r_output)], local_path)
         return True
     except OSError:
@@ -299,23 +303,24 @@ def _parse_convergence(filepath: Path) -> str:
 
 
 # START_CONTRACT: _display_remote_output
-#   PURPOSE: Connect to the remote machine via gateway, tail the OUTPUT file, return (gateway, ip, remote_folder) or None.
+#   PURPOSE: Connect to the remote machine via repository+operations, tail the OUTPUT file, return (repository, operations, ip, remote_folder) or None.
 #   INPUTS: { task: Task, conn_params: _ConnParams - resolved SSH params, config: Config }
-#   OUTPUTS: { tuple[SSHMachineGateway, str, str] | None - (gateway, ip, remote_folder) or None if skipped }
+#   OUTPUTS: { tuple[SSHMachineRepository, SSHMachineOperations, str, str] | None - (repository, operations, ip, remote_folder) or None if skipped }
 #   SIDE_EFFECTS: Connects via SSH, reads remote file, prints to stdout.
-#   LINKS: M-SSH-GATEWAY
+#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_CONTRACT: _display_remote_output
 async def _display_remote_output(
     task: Task, conn_params: _ConnParams, config: Config
-) -> tuple[SSHMachineGateway, str, str] | None:
-    """Connect to machine via gateway, display tail of remote OUTPUT."""
+) -> tuple[SSHMachineRepository, SSHMachineOperations, str, str] | None:
+    """Connect to machine via repository+operations, display tail of remote OUTPUT."""
     if not task.allocated_ip:
         print("NO ALLOCATED IP")
         return None
     ip = task.allocated_ip
-    gateway = SSHMachineGateway()
+    repository = SSHMachineRepository()
+    operations = SSHMachineOperations(repository=repository)
     try:
-        await gateway.connect(
+        await repository.connect(
             ip=ip,
             username=conn_params.username,
             client_keys=list_private_keys(config.local.keys_dir),
@@ -329,25 +334,22 @@ async def _display_remote_output(
     remote_folder = task.context.remote_folder
     if not remote_folder:
         print("OUTDATED TASK, SKIPPING")
-        await gateway.disconnect(ip)
+        await repository.disconnect(ip)
         return None
-    r_output = gateway.get_path(ip)(remote_folder) / "OUTPUT"
-    # FIXME: _display_remote_output reaches into gateway._get_machine_state(ip) to bridge to
-    # run_full(state.machine, ...). A public SSHMachineGateway.run_command(ip, cmd) should replace
-    # this; tracked for a cross-cutting follow-up (not this relocation).
-    state = gateway._get_machine_state(ip)  # noqa: SLF001
+    r_output = repository.get_path(ip)(remote_folder) / "OUTPUT"
+    state = repository._get_machine_state(ip)  # noqa: SLF001
     if state is None:
         print("CAN'T CONNECT")
         return None
-    result = await gateway.run_full(
+    result = await operations.run_full(
         state.machine,
-        f"tail -n15 {gateway.get_quote(ip)(str(r_output))}",
+        f"tail -n15 {repository.get_quote(ip)(str(r_output))}",
     )
     if result.returncode:
         print("OUTDATED TASK, SKIPPING")
     else:
         print(result.stdout)
-    return gateway, ip, remote_folder
+    return repository, operations, ip, remote_folder
 
 
 # START_CONTRACT: _render_view
@@ -356,7 +358,7 @@ async def _display_remote_output(
 #   INPUTS: { tasks: list[Task], nodes_by_ip: dict[str, Node], config: Config, fetch_convergence: bool, deps: CLIDeps }
 #   OUTPUTS: { Path | None - path to the convergence snippet tempfile (cleaned by the caller), or None }
 #   SIDE_EFFECTS: Connects to remote machines via SSH, writes a tempfile, prints to stdout.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-GATEWAY, M-ENTRYPOINTS-CONFIG
+#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-ENTRYPOINTS-CONFIG
 # END_CONTRACT: _render_view
 async def _render_view(
     tasks: list[Task],
@@ -401,18 +403,18 @@ async def _render_view(
             conn = await _display_remote_output(task, conn_params, config)
             if conn is None:
                 continue
-            gateway, ip, remote_folder = conn
+            repository, operations, ip, remote_folder = conn
             try:
                 if fetch_convergence and snippet is not None:
                     success = await _download_convergence_snippet(
-                        gateway, ip, remote_folder, snippet
+                        repository, operations, ip, remote_folder, snippet
                     )
                     if success:
                         output = _parse_convergence(snippet)
                         if output:
                             print(output)
             finally:
-                await gateway.disconnect(ip)
+                await repository.disconnect(ip)
         # END_BLOCK_ITERATE_RUNNING
     except Exception:
         # Self-clean the snippet on exception so the temp file never leaks; re-raise to the caller's
@@ -430,7 +432,7 @@ async def _render_view(
 #   OUTPUTS: { None - prints to stdout; calls sys.exit(1) on failure }
 #   SIDE_EFFECTS: Opens ONE short query-phase UoW (closed before any SSH), reads config, may connect via SSH,
 #                 writes/removes a convergence tempfile in view mode.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-APPLICATION-UOW, M-SSH-GATEWAY
+#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_CONTRACT: _check_status_async
 async def _check_status_async(argv: list[str] | None) -> None:
     snippet: Path | None = None

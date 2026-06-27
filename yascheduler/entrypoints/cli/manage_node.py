@@ -3,8 +3,8 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path).
 #   SCOPE: manage_node command + argparse + host-spec parser + node add/remove helpers (each helper owns its UoW).
-#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-GATEWAY, M-SSH-KEYS, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-GATEWAY, M-APPLICATION-UOW, M-SSH-KEYS
+#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
+#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-UOW, M-SSH-KEYS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from yascheduler.domain import Node, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.infra import SSHMachineGateway
+from yascheduler.infra import SSHMachineOperations, SSHMachineRepository
 from yascheduler.infra.ssh.keys import list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
@@ -242,19 +242,20 @@ async def _remove_node_soft(deps: CLIDeps, spec: HostSpec) -> None:
 #   PURPOSE: Add a node — in its own UoW, connect gateway, optional setup, insert Node, commit, announce; disconnect in finally.
 #   INPUTS: {
 #     deps: CLIDeps - DI holder providing uow_factory,
-#     gateway: SSHMachineGateway - gateway constructed by manage_node (mockable),
+#     repository: SSHMachineRepository, operations: SSHMachineOperations - gateway constructed by manage_node (mockable),
 #     spec: HostSpec - parsed host,
 #     config: Config - for username default + private keys + engines,
 #     skip_setup: bool - skip gateway.setup_node when True
 #   }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Opens its own UoW; opens SSH, optionally sets up the remote node, inserts a Node, commits, prints to stdout;
-#                ALWAYS calls gateway.disconnect(host) via try/finally (resource-leak fix).
-#   LINKS: M-SSH-GATEWAY, M-APPLICATION-UOW, M-DOMAIN-MODEL, M-ENTRYPOINTS-CONFIG, M-DI
+#                ALWAYS calls repository.disconnect(host) via try/finally (resource-leak fix).
+#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-UOW, M-DOMAIN-MODEL, M-ENTRYPOINTS-CONFIG, M-DI
 # END_CONTRACT: _add_node
 async def _add_node(
     deps: CLIDeps,
-    gateway: SSHMachineGateway,
+    repository: SSHMachineRepository,
+    operations: SSHMachineOperations,
     spec: HostSpec,
     config: Config,
     skip_setup: bool,
@@ -263,7 +264,7 @@ async def _add_node(
     username = spec.username or config.remote.username
     # START_BLOCK_CONNECT_SETUP_ADD
     try:
-        await gateway.connect(
+        await repository.connect(
             ip=spec.host,
             username=username,
             client_keys=list_private_keys(config.local.keys_dir),
@@ -272,7 +273,7 @@ async def _add_node(
         )
         if not skip_setup:
             print("Setup host...")
-            await gateway.setup_node(spec.host, config.engines)
+            await operations.setup_node(spec.host, config.engines)
         async with deps.uow_factory() as uow:
             await uow.nodes.add(
                 Node(
@@ -286,7 +287,7 @@ async def _add_node(
             await uow.commit()
         print(f"Added host to yascheduler: {spec.host}:{spec.port}")
     finally:
-        await gateway.disconnect(spec.host)
+        await repository.disconnect(spec.host)
     # END_BLOCK_CONNECT_SETUP_ADD
 
 
@@ -295,7 +296,7 @@ async def _add_node(
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
 #   OUTPUTS: { None - prints success messages to stdout, Error: ... to stderr on failure, calls sys.exit(1) on failure }
 #   SIDE_EFFECTS: Reads config, opens a read-only validation UoW, dispatches to a per-helper UoW that mutates+commits, optionally opens SSH; may call sys.exit.
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-APPLICATION-UOW, M-SSH-GATEWAY
+#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_CONTRACT: _manage_node_async
 async def _manage_node_async(argv: list[str] | None) -> None:
     args = _parse_node_args(argv)
@@ -311,7 +312,8 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         # START_BLOCK_CONFIGURE
         config = parse_config(args.config)
         deps = make_cli_deps(config)
-        gateway = SSHMachineGateway()
+        repository = SSHMachineRepository()
+        operations = SSHMachineOperations(repository=repository)
         # END_BLOCK_CONFIGURE
 
         # START_BLOCK_VALIDATE
@@ -333,7 +335,7 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         elif args.remove_soft:
             await _remove_node_soft(deps, spec)
         else:
-            await _add_node(deps, gateway, spec, config, args.skip_setup)
+            await _add_node(deps, repository, operations, spec, config, args.skip_setup)
         # END_BLOCK_DISPATCH
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

@@ -2,10 +2,10 @@
 # VERSION: 1.0.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineGateway background-task keying and disconnect scoping.
+#   PURPOSE: Unit tests for SSHMachineRepository background-task (monitor mechanism) keying and disconnect scoping.
 #   SCOPE: _bg_tasks dict keying by IP, disconnect scope isolation, re-registration replacement.
-#   DEPENDS: M-SSH-GATEWAY, M-DOMAIN-MODEL
-#   LINKS: M-SSH-GATEWAY
+#   DEPENDS: M-SSH-REPOSITORY, M-DOMAIN-MODEL
+#   LINKS: M-SSH-REPOSITORY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import time
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -34,7 +35,8 @@ from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
 from yascheduler.domain import Engine
 from yascheduler.domain.model import ConnectedMachine, MachineState
-from yascheduler.infra.ssh.gateway import SSHMachineGateway, _MachineState
+from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.repository import SSHMachineRepository, _MachineState
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -103,8 +105,13 @@ def _make_state(
 
 
 @pytest.fixture
-def gateway() -> SSHMachineGateway:
-    return SSHMachineGateway()
+def repository() -> SSHMachineRepository:
+    return SSHMachineRepository()
+
+
+@pytest.fixture
+def operations(repository: SSHMachineRepository) -> SSHMachineOperations:
+    return SSHMachineOperations(repository=repository)
 
 
 @pytest.fixture
@@ -122,22 +129,25 @@ def mock_pengine() -> MagicMock:
 class TestBgTaskScoping:
     """Regression tests for fix-disconnect-bg-task-leak.
 
-    Pins the IP-keyed _bg_tasks data structure and the rule that
+    Pins the IP-keyed _monitors data structure and the rule that
     disconnect(ip) cancels only that IP's monitor.
     """
 
     @pytest.mark.asyncio
     async def test_disconnect_does_not_cancel_other_machines_monitors(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
+        self,
+        repository: SSHMachineRepository,
+        operations: SSHMachineOperations,
+        mock_pengine: MagicMock,
     ) -> None:
         """Regression: disconnect(B) cancels only B's monitor; A and C untouched.
 
         Pins the fix for the bug where disconnect iterated the entire
-        _bg_tasks set and cancelled every machine's monitor.
+        _monitors set and cancelled every machine's monitor.
         """
         ip_a, ip_b, ip_c = "10.0.0.1", "10.0.0.2", "10.0.0.3"
         for ip in (ip_a, ip_b, ip_c):
-            gateway._machines[ip] = _make_state(ip=ip, state=MachineState.BUSY)
+            repository._machines[ip] = _make_state(ip=ip, state=MachineState.FREE)
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = None
         mock_pengine.sleep_interval = 0.01
@@ -147,43 +157,46 @@ class TestBgTaskScoping:
 
         # NOTE: real asyncio.sleep (not AsyncMock) — required so task.cancel()
         # during disconnect raises CancelledError at a clean await point.
-        with patch.object(gateway, "occupancy_check", _always_busy):
+        with patch.object(operations.occupancy, "occupancy_check", _always_busy):
             for ip in (ip_a, ip_b, ip_c):
-                gateway.start_occupancy_check(ip, mock_pengine)
+                operations.occupancy.start_occupancy_check(ip, mock_pengine)
             # Let each monitor enter its loop
             await asyncio.sleep(0.05)
 
-            task_a = gateway._bg_tasks[ip_a]
-            task_c = gateway._bg_tasks[ip_c]
+            task_a = repository._monitors[ip_a]
+            task_c = repository._monitors[ip_c]
 
-            await gateway.disconnect(ip_b)
+            await repository.disconnect(ip_b)
 
             # B is gone from both registries
-            assert ip_b not in gateway._machines
-            assert ip_b not in gateway._bg_tasks
+            assert ip_b not in repository._machines
+            assert ip_b not in repository._monitors
             # A and C monitors are still alive and registered
             assert not task_a.cancelled(), "A monitor must survive disconnect(B)"
             assert not task_c.cancelled(), "C monitor must survive disconnect(B)"
-            assert gateway._bg_tasks[ip_a] is task_a
-            assert gateway._bg_tasks[ip_c] is task_c
-            assert ip_a in gateway._machines
-            assert ip_c in gateway._machines
+            assert repository._monitors[ip_a] is task_a
+            assert repository._monitors[ip_c] is task_c
+            assert ip_a in repository._machines
+            assert ip_c in repository._machines
 
             # cleanup: cancel surviving monitors
-            await gateway.disconnect(ip_a)
-            await gateway.disconnect(ip_c)
+            await repository.disconnect(ip_a)
+            await repository.disconnect(ip_c)
 
     @pytest.mark.asyncio
     async def test_start_occupancy_check_replaces_prior_monitor(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
+        self,
+        repository: SSHMachineRepository,
+        operations: SSHMachineOperations,
+        mock_pengine: MagicMock,
     ) -> None:
         """Re-registering occupancy for an IP cancels the prior monitor.
 
         Pins the spec scenario: only the second task remains under
-        _bg_tasks[ip]; the first is cancelled.
+        _monitors[ip]; the first is cancelled.
         """
         ip = "10.0.0.1"
-        gateway._machines[ip] = _make_state(ip=ip, state=MachineState.BUSY)
+        repository._machines[ip] = _make_state(ip=ip, state=MachineState.FREE)
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = None
         mock_pengine.sleep_interval = 0.01
@@ -191,14 +204,17 @@ class TestBgTaskScoping:
         async def _always_busy(*args: object, **kwargs: object) -> bool:
             return True
 
-        with patch.object(gateway, "occupancy_check", _always_busy):
-            gateway.start_occupancy_check(ip, mock_pengine)
-            first = gateway._bg_tasks[ip]
+        with patch.object(operations.occupancy, "occupancy_check", _always_busy):
+            operations.occupancy.start_occupancy_check(ip, mock_pengine)
+            first = repository._monitors[ip]
             await asyncio.sleep(0.02)
             assert not first.done()
 
-            gateway.start_occupancy_check(ip, mock_pengine)
-            second = gateway._bg_tasks[ip]
+            # Reset machine to FREE so the second start_occupancy_check can occupy it
+            cur = repository._machines[ip]
+            repository._machines[ip] = replace(cur, machine=cur.machine.release())
+            operations.occupancy.start_occupancy_check(ip, mock_pengine)
+            second = repository._monitors[ip]
             # Let the prior task finish cancelling. _checker swallows
             # CancelledError, so the prior task finishes with result=None
             # rather than raising — observable contract is done()+replaced.
@@ -208,21 +224,24 @@ class TestBgTaskScoping:
             # First monitor done and replaced; second installed and distinct
             assert second is not first
             assert first.done(), "prior monitor must be stopped on re-register"
-            assert gateway._bg_tasks[ip] is second
+            assert repository._monitors[ip] is second
             assert not second.done()
 
-            await gateway.disconnect(ip)
+            await repository.disconnect(ip)
 
-        assert ip not in gateway._bg_tasks
+        assert ip not in repository._monitors
 
     @pytest.mark.asyncio
     async def test_disconnect_unknown_ip_leaves_other_monitors_alive(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
+        self,
+        repository: SSHMachineRepository,
+        operations: SSHMachineOperations,
+        mock_pengine: MagicMock,
     ) -> None:
         """disconnect on an unknown IP is a no-op for every other monitor."""
         ip_a, ip_b = "10.0.0.1", "10.0.0.2"
         for ip in (ip_a, ip_b):
-            gateway._machines[ip] = _make_state(ip=ip, state=MachineState.BUSY)
+            repository._machines[ip] = _make_state(ip=ip, state=MachineState.FREE)
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = None
         mock_pengine.sleep_interval = 0.01
@@ -230,22 +249,22 @@ class TestBgTaskScoping:
         async def _always_busy(*args: object, **kwargs: object) -> bool:
             return True
 
-        with patch.object(gateway, "occupancy_check", _always_busy):
-            gateway.start_occupancy_check(ip_a, mock_pengine)
-            gateway.start_occupancy_check(ip_b, mock_pengine)
+        with patch.object(operations.occupancy, "occupancy_check", _always_busy):
+            operations.occupancy.start_occupancy_check(ip_a, mock_pengine)
+            operations.occupancy.start_occupancy_check(ip_b, mock_pengine)
             await asyncio.sleep(0.05)
 
-            task_a = gateway._bg_tasks[ip_a]
-            task_b = gateway._bg_tasks[ip_b]
+            task_a = repository._monitors[ip_a]
+            task_b = repository._monitors[ip_b]
 
-            await gateway.disconnect("10.0.0.99")
+            await repository.disconnect("10.0.0.99")
 
             assert not task_a.cancelled()
             assert not task_b.cancelled()
-            assert gateway._bg_tasks[ip_a] is task_a
-            assert gateway._bg_tasks[ip_b] is task_b
-            assert ip_a in gateway._machines
-            assert ip_b in gateway._machines
+            assert repository._monitors[ip_a] is task_a
+            assert repository._monitors[ip_b] is task_b
+            assert ip_a in repository._machines
+            assert ip_b in repository._machines
 
-            await gateway.disconnect(ip_a)
-            await gateway.disconnect(ip_b)
+            await repository.disconnect(ip_a)
+            await repository.disconnect(ip_b)

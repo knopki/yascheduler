@@ -2,10 +2,10 @@
 # VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineGateway.download_outputs classification + conditional rmtree.
+#   PURPOSE: Unit tests for SSHMachineOperations.download_outputs classification + conditional rmtree.
 #   SCOPE: Success path, per-file permanent error, per-file transient error, session-level error, rmtree gating, per-file SFTP isolation, task_id log correlation.
-#   DEPENDS: M-SSH-GATEWAY
-#   LINKS: M-SSH-GATEWAY
+#   DEPENDS: M-SSH-OPS-DOWNLOAD
+#   LINKS: M-SSH-OPS-DOWNLOAD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -33,9 +33,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from asyncssh.sftp import SFTPClient, SFTPFailure
 
-from yascheduler.infra.ssh import gateway as gateway_module
-from yascheduler.infra.ssh.gateway import SSHMachineGateway
+from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.operations import download as download_module
 from yascheduler.infra.ssh.platform.protocol import SFTPConnectionLost
+from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 
 @pytest.fixture(autouse=True)
@@ -49,20 +50,23 @@ def _no_sftp_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     root cause. Unit tests verify classification/isolation logic, not real
     backoff timing, so the retry is replaced with identity (raise immediately).
     """
-    monkeypatch.setattr(gateway_module, "my_backoff_sftp", lambda: lambda fn: fn)
+    monkeypatch.setattr(download_module, "my_backoff_sftp", lambda: lambda fn: fn)
 
 
-def make_gateway_with_sftp(sftp_mock: AsyncMock) -> SSHMachineGateway:
-    """Construct a gateway with mocked SFTP context manager and path type."""
-    gw = SSHMachineGateway()
+def make_gateway_with_sftp(
+    sftp_mock: AsyncMock,
+) -> tuple[SSHMachineRepository, SSHMachineOperations]:
+    """Construct a repository + operations with mocked SFTP context manager and path type."""
+    repository = SSHMachineRepository()
+    operations = SSHMachineOperations(repository=repository)
 
     @asynccontextmanager
     async def fake_sftp(_ip: str) -> AsyncGenerator[SFTPClient, None]:
         yield sftp_mock
 
-    gw.get_sftp = fake_sftp  # type: ignore[assignment]
-    gw.get_path = MagicMock(return_value=PurePosixPath)  # type: ignore[assignment]
-    return gw
+    operations.get_sftp = fake_sftp  # type: ignore[assignment]
+    repository.get_path = MagicMock(return_value=PurePosixPath)  # type: ignore[assignment]
+    return repository, operations
 
 
 @pytest.mark.asyncio
@@ -71,9 +75,9 @@ async def test_download_outputs_success() -> None:
     sftp_mock = AsyncMock()
     sftp_mock.get = AsyncMock(return_value=None)
     sftp_mock.rmtree = AsyncMock(return_value=None)
-    gw = make_gateway_with_sftp(sftp_mock)
+    _repository, operations = make_gateway_with_sftp(sftp_mock)
 
-    meta_add, transient_errors, permanent_errors = await gw.download_outputs(
+    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
         ip="10.0.0.1",
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -97,9 +101,9 @@ async def test_download_outputs_per_file_permanent_error() -> None:
     sftp_mock = AsyncMock()
     sftp_mock.get = AsyncMock(side_effect=OSError("permission denied"))
     sftp_mock.rmtree = AsyncMock(return_value=None)
-    gw = make_gateway_with_sftp(sftp_mock)
+    _repository, operations = make_gateway_with_sftp(sftp_mock)
 
-    meta_add, transient_errors, permanent_errors = await gw.download_outputs(
+    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
         ip="10.0.0.1",
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -126,9 +130,9 @@ async def test_download_outputs_per_file_transient_error() -> None:
     sftp_mock = AsyncMock()
     sftp_mock.get = AsyncMock(side_effect=SFTPFailure("connection lost"))
     sftp_mock.rmtree = AsyncMock(return_value=None)
-    gw = make_gateway_with_sftp(sftp_mock)
+    _repository, operations = make_gateway_with_sftp(sftp_mock)
 
-    meta_add, transient_errors, permanent_errors = await gw.download_outputs(
+    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
         ip="10.0.0.1",
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -152,17 +156,18 @@ async def test_download_outputs_per_file_transient_error() -> None:
 @pytest.mark.asyncio
 async def test_download_outputs_session_error() -> None:
     """get_sftp raises (session-level failure); caught in transient_errors; rmtree NOT called."""
-    gw = SSHMachineGateway()
+    repository = SSHMachineRepository()
+    operations = SSHMachineOperations(repository=repository)
 
     @asynccontextmanager
     async def bad_sftp(_ip: str) -> AsyncGenerator[Any, None]:
         raise OSError("no connection")
         yield  # type: ignore[unreachable]
 
-    gw.get_sftp = bad_sftp  # type: ignore[assignment]
-    gw.get_path = MagicMock(return_value=PurePosixPath)  # type: ignore[assignment]
+    operations.get_sftp = bad_sftp  # type: ignore[assignment]
+    repository.get_path = MagicMock(return_value=PurePosixPath)  # type: ignore[assignment]
 
-    meta_add, transient_errors, permanent_errors = await gw.download_outputs(
+    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
         ip="10.0.0.1",
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -187,10 +192,10 @@ async def test_download_outputs_task_id_in_signature() -> None:
     sftp_mock = AsyncMock()
     sftp_mock.get = AsyncMock(return_value=None)
     sftp_mock.rmtree = AsyncMock(return_value=None)
-    gw = make_gateway_with_sftp(sftp_mock)
+    _repository, operations = make_gateway_with_sftp(sftp_mock)
 
     # With task_id
-    meta_add, transient_errors, permanent_errors = await gw.download_outputs(
+    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
         ip="10.0.0.1",
         remote_dir="/r",
         local_dir=Path("/l"),
@@ -202,7 +207,7 @@ async def test_download_outputs_task_id_in_signature() -> None:
     assert len(meta_add) == 2
 
     # Without task_id (None default)
-    meta_add2, transient_errors2, permanent_errors2 = await gw.download_outputs(
+    meta_add2, transient_errors2, permanent_errors2 = await operations.download_outputs(
         ip="10.0.0.1",
         remote_dir="/r",
         local_dir=Path("/l"),
@@ -219,8 +224,8 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
     sftp_ok = AsyncMock()
     sftp_ok.get = AsyncMock(return_value=None)
     sftp_ok.rmtree = AsyncMock(return_value=None)
-    gw_ok = make_gateway_with_sftp(sftp_ok)
-    await gw_ok.download_outputs(
+    _repo_ok, ops_ok = make_gateway_with_sftp(sftp_ok)
+    await ops_ok.download_outputs(
         ip="10.0.0.1", remote_dir="/r", local_dir=Path("/l"), files=["f1", "f2"]
     )
     sftp_ok.rmtree.assert_awaited_once_with(PurePosixPath("/r"))
@@ -229,8 +234,8 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
     sftp_perm = AsyncMock()
     sftp_perm.get = AsyncMock(side_effect=OSError("denied"))
     sftp_perm.rmtree = AsyncMock(return_value=None)
-    gw_perm = make_gateway_with_sftp(sftp_perm)
-    _, transient, permanent = await gw_perm.download_outputs(
+    _repo_perm, ops_perm = make_gateway_with_sftp(sftp_perm)
+    _, transient, permanent = await ops_perm.download_outputs(
         ip="10.0.0.1", remote_dir="/r", local_dir=Path("/l"), files=["f1", "f2"]
     )
     assert len(permanent) == 2
@@ -241,8 +246,8 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
     sftp_trans = AsyncMock()
     sftp_trans.get = AsyncMock(side_effect=SFTPFailure("lost"))
     sftp_trans.rmtree = AsyncMock(return_value=None)
-    gw_trans = make_gateway_with_sftp(sftp_trans)
-    _, transient2, permanent2 = await gw_trans.download_outputs(
+    _repo_trans, ops_trans = make_gateway_with_sftp(sftp_trans)
+    _, transient2, permanent2 = await ops_trans.download_outputs(
         ip="10.0.0.1", remote_dir="/r", local_dir=Path("/l"), files=["f1", "f2"]
     )
     assert len(transient2) == 2
@@ -253,8 +258,9 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
 @pytest.mark.asyncio
 async def test_download_outputs_per_file_sftp_isolation() -> None:
     """A dropped SFTP client on file 2 does not fail-fast file 3 (fresh client per file)."""
-    gw = SSHMachineGateway()
-    gw.get_path = MagicMock(return_value=PurePosixPath)  # type: ignore[assignment]
+    repository = SSHMachineRepository()
+    operations = SSHMachineOperations(repository=repository)
+    repository.get_path = MagicMock(return_value=PurePosixPath)  # type: ignore[assignment]
 
     clients: list[AsyncMock] = []
 
@@ -271,9 +277,9 @@ async def test_download_outputs_per_file_sftp_isolation() -> None:
         clients.append(sftp)
         yield sftp
 
-    gw.get_sftp = fresh_sftp  # type: ignore[assignment]
+    operations.get_sftp = fresh_sftp  # type: ignore[assignment]
 
-    _, transient_errors, permanent_errors = await gw.download_outputs(
+    _, transient_errors, permanent_errors = await operations.download_outputs(
         ip="10.0.0.1",
         remote_dir="/r",
         local_dir=Path("/l"),
@@ -298,17 +304,18 @@ async def test_download_outputs_per_file_sftp_isolation() -> None:
 @pytest.mark.asyncio
 async def test_download_outputs_session_level_failure_transient() -> None:
     """get_sftp OPEN failure -> outer handler -> session-level transient (remote dir preserved)."""
-    gw = SSHMachineGateway()
-    gw.get_path = MagicMock(return_value=PurePosixPath)  # type: ignore[assignment]
+    repository = SSHMachineRepository()
+    operations = SSHMachineOperations(repository=repository)
+    repository.get_path = MagicMock(return_value=PurePosixPath)  # type: ignore[assignment]
 
     @asynccontextmanager
     async def broken_sftp(_ip: str) -> AsyncGenerator[Any, None]:
         raise SFTPConnectionLost("no session")
         yield  # type: ignore[unreachable]
 
-    gw.get_sftp = broken_sftp  # type: ignore[assignment]
+    operations.get_sftp = broken_sftp  # type: ignore[assignment]
 
-    meta_add, transient_errors, permanent_errors = await gw.download_outputs(
+    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
         ip="10.0.0.1",
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),

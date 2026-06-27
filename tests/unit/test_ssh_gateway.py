@@ -2,10 +2,10 @@
 # VERSION: 1.0.3
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineGateway — connection lifecycle, command execution, SFTP, occupancy monitoring.
-#   SCOPE: SSHMachineGateway with asyncssh fully mocked. No real SSH, SFTP, or platform detection.
-#   DEPENDS: M-SSH-GATEWAY, M-DOMAIN-MODEL, M-PLATFORM-PROTOCOL
-#   LINKS: M-SSH-GATEWAY
+#   PURPOSE: Unit tests for SSHMachineRepository + SSHMachineOperations — connection lifecycle, command execution, SFTP, machine state, property helpers.
+#   SCOPE: SSHMachineRepository + SSHMachineOperations with asyncssh fully mocked. No real SSH, SFTP, or platform detection.
+#   DEPENDS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-DOMAIN-MODEL, M-PLATFORM-PROTOCOL
+#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,18 +15,15 @@
 #   TestFileTransfer - upload / download / get_sftp context manager
 #   TestMachineState - update_machine, contains, len, keys, items, register_machine
 #   TestPropertyHelpers - get_adapter, get_platforms, get_hostname, get_path, get_quote
-#   TestOccupancy - occupancy_check via pgrep and check_cmd, start_occupancy_check background task
-#   TestAdvancedOperations - setup_node, get_cpu_cores, pgrep generator, list_processes generator
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.3 - Migrate _bg_tasks access from list(set)[0] to dict[ip] keyed access for fix-disconnect-bg-task-leak; bg-task regression tests moved to test_ssh_gateway_bg_tasks.py.
-#   PREVIOUS_CHANGE: v1.0.2 - Replace PProcessInfo with ProcessInfo at 5 sites: import, two MagicMock(spec=...), two list[...] annotations (prune-platform-protocols). DEPENDS stays M-PLATFORM-PROTOCOL since ProcessInfo now lives in protocol.py.
+#   LAST_CHANGE: v1.0.4 - Extract TestOccupancy + TestAdvancedOperations to test_ssh_gateway_operations.py for size compliance (GRACE-lite 1000-line limit).
+#   PREVIOUS_CHANGE: v1.0.3 - Migrate _bg_tasks access from list(set)[0] to dict[ip] keyed access for fix-disconnect-bg-task-leak; bg-task regression tests moved to test_ssh_gateway_bg_tasks.py.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
-import asyncio
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
@@ -35,13 +32,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.domain import Engine, EngineRepository
+from yascheduler.domain import Engine
 from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
-from yascheduler.infra.ssh.gateway import SSHMachineGateway, _MachineState
-from yascheduler.infra.ssh.platform.protocol import (
-    ChannelOpenError,
-    ProcessInfo,
-)
+from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.platform.protocol import ProcessInfo
+from yascheduler.infra.ssh.repository import SSHMachineRepository, _MachineState
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -184,8 +179,13 @@ def _make_state(
 
 
 @pytest.fixture
-def gateway() -> SSHMachineGateway:
-    return SSHMachineGateway()
+def repository() -> SSHMachineRepository:
+    return SSHMachineRepository()
+
+
+@pytest.fixture
+def operations(repository: SSHMachineRepository) -> SSHMachineOperations:
+    return SSHMachineOperations(repository=repository)
 
 
 @pytest.fixture
@@ -248,20 +248,23 @@ class TestConnectionLifecycle:
 
     @pytest.mark.asyncio
     async def test_connect_stores_machine(
-        self, gateway: SSHMachineGateway, mock_conn: MagicMock, mock_adapter: MagicMock
+        self,
+        repository: SSHMachineRepository,
+        mock_conn: MagicMock,
+        mock_adapter: MagicMock,
     ) -> None:
         """connect() stores a _MachineState in _machines."""
         with (
             patch(
-                "yascheduler.infra.ssh.gateway.asyncssh.connection.connect",
+                "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
                 AsyncMock(return_value=mock_conn),
             ),
             patch(
-                "yascheduler.infra.ssh.gateway._detect_platform",
+                "yascheduler.infra.ssh.repository._detect_platform",
                 AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
             ),
             patch(
-                "yascheduler.infra.ssh.gateway._init_paths",
+                "yascheduler.infra.ssh.repository._init_paths",
                 return_value=(
                     PurePosixPath("./data"),
                     PurePosixPath("./data/engines"),
@@ -269,32 +272,35 @@ class TestConnectionLifecycle:
                 ),
             ),
         ):
-            machine = await gateway.connect(
+            machine = await repository.connect(
                 ip="10.0.0.1",
                 username="root",
                 client_keys=[],
             )
 
-        assert "10.0.0.1" in gateway
-        assert gateway._machines["10.0.0.1"].machine is machine
-        assert gateway._machines["10.0.0.1"].machine.state == MachineState.FREE
+        assert "10.0.0.1" in repository
+        assert repository._machines["10.0.0.1"].machine is machine
+        assert repository._machines["10.0.0.1"].machine.state == MachineState.FREE
 
     @pytest.mark.asyncio
     async def test_connect_returns_connected_machine(
-        self, gateway: SSHMachineGateway, mock_conn: MagicMock, mock_adapter: MagicMock
+        self,
+        repository: SSHMachineRepository,
+        mock_conn: MagicMock,
+        mock_adapter: MagicMock,
     ) -> None:
         """connect() returns a ConnectedMachine with correct IP and platform."""
         with (
             patch(
-                "yascheduler.infra.ssh.gateway.asyncssh.connection.connect",
+                "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
                 AsyncMock(return_value=mock_conn),
             ),
             patch(
-                "yascheduler.infra.ssh.gateway._detect_platform",
+                "yascheduler.infra.ssh.repository._detect_platform",
                 AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
             ),
             patch(
-                "yascheduler.infra.ssh.gateway._init_paths",
+                "yascheduler.infra.ssh.repository._init_paths",
                 return_value=(
                     PurePosixPath("./data"),
                     PurePosixPath("./data/engines"),
@@ -302,7 +308,7 @@ class TestConnectionLifecycle:
                 ),
             ),
         ):
-            machine = await gateway.connect(
+            machine = await repository.connect(
                 ip="10.0.0.1",
                 username="root",
                 client_keys=[],
@@ -315,40 +321,44 @@ class TestConnectionLifecycle:
         assert machine.state == MachineState.FREE
 
     @pytest.mark.asyncio
-    async def test_disconnect_removes_machine(self, gateway: SSHMachineGateway) -> None:
+    async def test_disconnect_removes_machine(
+        self, repository: SSHMachineRepository
+    ) -> None:
         """disconnect() removes the machine from the registry."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        await gateway.disconnect("10.0.0.1")
-        assert "10.0.0.1" not in gateway
+        repository._machines["10.0.0.1"] = state
+        await repository.disconnect("10.0.0.1")
+        assert "10.0.0.1" not in repository
 
     @pytest.mark.asyncio
     async def test_disconnect_closes_connection(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository
     ) -> None:
         """disconnect() calls conn.close() and conn.wait_closed()."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        await gateway.disconnect("10.0.0.1")
+        repository._machines["10.0.0.1"] = state
+        await repository.disconnect("10.0.0.1")
         state.conn.close.assert_called_once()  # type: ignore[attr-defined]
         state.conn.wait_closed.assert_awaited_once()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
-    async def test_disconnect_all_removes_all(self, gateway: SSHMachineGateway) -> None:
+    async def test_disconnect_all_removes_all(
+        self, repository: SSHMachineRepository
+    ) -> None:
         """disconnect_all() clears all machines."""
         s1 = _make_state(ip="10.0.0.1")
         s2 = _make_state(ip="10.0.0.2")
-        gateway._machines["10.0.0.1"] = s1
-        gateway._machines["10.0.0.2"] = s2
-        await gateway.disconnect_all()
-        assert len(gateway) == 0
+        repository._machines["10.0.0.1"] = s1
+        repository._machines["10.0.0.2"] = s2
+        await repository.disconnect_all()
+        assert len(repository) == 0
 
     @pytest.mark.asyncio
     async def test_disconnect_unknown_ip_does_nothing(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository
     ) -> None:
         """disconnect() with no state does not raise."""
-        await gateway.disconnect("10.0.0.99")  # should not raise
+        await repository.disconnect("10.0.0.99")  # should not raise
 
 
 # =============================================================================
@@ -359,46 +369,54 @@ class TestConnectionLifecycle:
 class TestListFree:
     """list_free filtering by state and platform."""
 
-    def test_list_free_returns_free_machines(self, gateway: SSHMachineGateway) -> None:
+    def test_list_free_returns_free_machines(
+        self, repository: SSHMachineRepository
+    ) -> None:
         """list_free returns only FREE machines."""
         s_free = _make_state(ip="10.0.0.1", state=MachineState.FREE)
         s_busy = _make_state(ip="10.0.0.2", state=MachineState.BUSY)
-        gateway._machines["10.0.0.1"] = s_free
-        gateway._machines["10.0.0.2"] = s_busy
+        repository._machines["10.0.0.1"] = s_free
+        repository._machines["10.0.0.2"] = s_busy
 
-        result = gateway.list_free(platforms=None)
+        result = repository.list_free(platforms=None)
         assert len(result) == 1
         assert result[0].ip == "10.0.0.1"
 
-    def test_list_free_filters_by_platform(self, gateway: SSHMachineGateway) -> None:
+    def test_list_free_filters_by_platform(
+        self, repository: SSHMachineRepository
+    ) -> None:
         """list_free filters machines by platform."""
         s_linux = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.FREE)
         s_win = _make_state(ip="10.0.0.2", platform="windows", state=MachineState.FREE)
-        gateway._machines["10.0.0.1"] = s_linux
-        gateway._machines["10.0.0.2"] = s_win
+        repository._machines["10.0.0.1"] = s_linux
+        repository._machines["10.0.0.2"] = s_win
 
-        result = gateway.list_free(platforms=["linux"])
+        result = repository.list_free(platforms=["linux"])
         assert len(result) == 1
         assert result[0].ip == "10.0.0.1"
 
-    def test_list_free_empty_when_no_match(self, gateway: SSHMachineGateway) -> None:
+    def test_list_free_empty_when_no_match(
+        self, repository: SSHMachineRepository
+    ) -> None:
         """list_free returns empty list when no machines match."""
         s_linux = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.FREE)
-        gateway._machines["10.0.0.1"] = s_linux
+        repository._machines["10.0.0.1"] = s_linux
 
-        result = gateway.list_free(platforms=["windows"])
+        result = repository.list_free(platforms=["windows"])
         assert len(result) == 0
 
     def test_list_free_skips_busy_machine_matching_platform(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository
     ) -> None:
         """list_free excludes BUSY machines even when platform matches."""
         s = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.BUSY)
-        gateway._machines["10.0.0.1"] = s
-        result = gateway.list_free(platforms=["linux"])
+        repository._machines["10.0.0.1"] = s
+        result = repository.list_free(platforms=["linux"])
         assert len(result) == 0
 
-    def test_list_free_returns_oldest_first(self, gateway: SSHMachineGateway) -> None:
+    def test_list_free_returns_oldest_first(
+        self, repository: SSHMachineRepository
+    ) -> None:
         """list_free sorts by free_since ascending (oldest first)."""
         import time
 
@@ -439,10 +457,10 @@ class TestListFree:
             engines_dir=s2.engines_dir,
             tasks_dir=s2.tasks_dir,
         )
-        gateway._machines["10.0.0.1"] = s1
-        gateway._machines["10.0.0.2"] = s2
+        repository._machines["10.0.0.1"] = s1
+        repository._machines["10.0.0.2"] = s2
 
-        result = gateway.list_free(platforms=None)
+        result = repository.list_free(platforms=None)
         assert result[0].ip == "10.0.0.1"  # older free_since first
 
 
@@ -455,12 +473,14 @@ class TestCommandExecution:
     """run, run_full, run_bg."""
 
     @pytest.mark.asyncio
-    async def test_run_returns_process_result(self, gateway: SSHMachineGateway) -> None:
+    async def test_run_returns_process_result(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
         """run() returns a ProcessResult from the adapter output."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
 
-        result = await gateway.run(state.machine, "echo hello")
+        result = await operations.run(state.machine, "echo hello")
 
         assert isinstance(result, ProcessResult)
         assert result.exit_code == 0
@@ -468,49 +488,51 @@ class TestCommandExecution:
         assert result.stderr == ""
 
     @pytest.mark.asyncio
-    async def test_run_delegates_to_run_full(self, gateway: SSHMachineGateway) -> None:
+    async def test_run_delegates_to_run_full(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
         """run() internally calls run_full()."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
 
-        with patch.object(gateway, "run_full", AsyncMock()) as mock_run_full:
+        with patch.object(operations, "run_full", AsyncMock()) as mock_run_full:
             mock_run_full.return_value = MagicMock(
                 returncode=0, stdout="out", stderr=""
             )
-            result = await gateway.run(state.machine, "echo hello")
+            result = await operations.run(state.machine, "echo hello")
             mock_run_full.assert_awaited_once_with(state.machine, "echo hello")
             assert result.exit_code == 0
 
     @pytest.mark.asyncio
     async def test_run_full_returns_ssh_completed_process(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """run_full() returns the raw adapter.run result."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
 
-        proc = await gateway.run_full(state.machine, "echo hello")
+        proc = await operations.run_full(state.machine, "echo hello")
         assert proc.returncode == 0
         assert proc.stdout == "stdout"
 
     @pytest.mark.asyncio
     async def test_run_bg_starts_background_process(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """run_bg() delegates to adapter.run_bg (returns None per port contract)."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
 
-        await gateway.run_bg(state.machine, "long_running", cwd="/tmp")
+        await operations.run_bg(state.machine, "long_running", cwd="/tmp")
 
     @pytest.mark.asyncio
-    async def test_run_full_raises_key_error_for_unknown_ip(
-        self, gateway: SSHMachineGateway
+    async def test_run_full_raises_assertion_error_for_unknown_ip(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
-        """run_full() raises KeyError when machine is not registered."""
+        """run_full() raises AssertionError when machine is not registered."""
         machine = ConnectedMachine(ip="10.0.0.99", platform="linux", ncpus=4)
-        with pytest.raises(KeyError):
-            await gateway.run_full(machine, "echo hello")
+        with pytest.raises(AssertionError):
+            await operations.run_full(machine, "echo hello")
 
 
 # =============================================================================
@@ -522,39 +544,46 @@ class TestFileTransfer:
     """upload, download, get_sftp context manager."""
 
     @pytest.mark.asyncio
-    async def test_upload_uses_sftp(self, gateway: SSHMachineGateway) -> None:
+    async def test_upload_uses_sftp(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
         """upload() pushes file via SFTP put."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
         local = Path("/tmp/local.txt")
         remote = "/remote/path/file.txt"
 
-        await gateway.upload(state.machine, local, remote)
+        await operations.upload(state.machine, local, remote)
 
         # Enter the sftp context to access the same singleton sftp mock
         async with state.conn.start_sftp_client() as sf:
             sf.put.assert_awaited_once_with(str(local), remote)  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
-    async def test_download_uses_sftp(self, gateway: SSHMachineGateway) -> None:
-        """download() pulls file via SFTP get."""
+    async def test_download_uses_sftp(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
+        """download equivalent via get_sftp pulls file via SFTP get."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
         local = Path("/tmp/local.txt")
         remote = "/remote/path/file.txt"
 
-        await gateway.download(state.machine, remote, local)
+        async with operations.get_sftp("10.0.0.1") as sftp:
+            await sftp.get(remote, str(local))
 
         async with state.conn.start_sftp_client() as sf:
             sf.get.assert_awaited_once_with(remote, str(local))  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
-    async def test_get_sftp_context_manager(self, gateway: SSHMachineGateway) -> None:
+    async def test_get_sftp_context_manager(
+        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    ) -> None:
         """get_sftp yields an SFTP client via async context manager."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
 
-        async with gateway.get_sftp("10.0.0.1") as sftp:
+        async with operations.get_sftp("10.0.0.1") as sftp:
             assert sftp is not None
             # The sftp client should be our mock
             assert hasattr(sftp, "put")
@@ -569,62 +598,64 @@ class TestFileTransfer:
 class TestMachineState:
     """update_machine, contains, len, keys, items, register_machine."""
 
-    def test_update_machine_replaces_state(self, gateway: SSHMachineGateway) -> None:
+    def test_update_machine_replaces_state(
+        self, repository: SSHMachineRepository
+    ) -> None:
         """update_machine() replaces the ConnectedMachine in the state."""
         state = _make_state(ip="10.0.0.1", state=MachineState.FREE)
-        gateway._machines["10.0.0.1"] = state
+        repository._machines["10.0.0.1"] = state
 
         updated = state.machine.occupy()
-        gateway.update_machine(updated)
+        repository.update_machine(updated)
 
-        assert gateway._machines["10.0.0.1"].machine.state == MachineState.BUSY
+        assert repository._machines["10.0.0.1"].machine.state == MachineState.BUSY
 
     def test_update_machine_unknown_ip_does_nothing(
-        self, gateway: SSHMachineGateway
+        self, repository: SSHMachineRepository
     ) -> None:
         """update_machine() with unknown IP silently does nothing."""
         machine = ConnectedMachine(ip="10.0.0.99", platform="linux", ncpus=4)
-        gateway.update_machine(machine)  # should not raise
+        repository.update_machine(machine)  # should not raise
 
-    def test_contains(self, gateway: SSHMachineGateway) -> None:
+    def test_contains(self, repository: SSHMachineRepository) -> None:
         """__contains__ checks by IP."""
         state = _make_state(ip="10.0.0.1")
-        gateway._machines["10.0.0.1"] = state
-        assert "10.0.0.1" in gateway
-        assert "10.0.0.2" not in gateway
+        repository._machines["10.0.0.1"] = state
+        assert "10.0.0.1" in repository
+        assert "10.0.0.2" not in repository
 
-    def test_len(self, gateway: SSHMachineGateway) -> None:
+    def test_len(self, repository: SSHMachineRepository) -> None:
         """__len__ returns machine count."""
-        gateway._machines["10.0.0.1"] = _make_state(ip="10.0.0.1")
-        gateway._machines["10.0.0.2"] = _make_state(ip="10.0.0.2")
-        assert len(gateway) == 2
+        repository._machines["10.0.0.1"] = _make_state(ip="10.0.0.1")
+        repository._machines["10.0.0.2"] = _make_state(ip="10.0.0.2")
+        assert len(repository) == 2
 
-    def test_keys(self, gateway: SSHMachineGateway) -> None:
+    def test_keys(self, repository: SSHMachineRepository) -> None:
         """keys() returns all IPs."""
-        gateway._machines["10.0.0.1"] = _make_state(ip="10.0.0.1")
-        gateway._machines["10.0.0.2"] = _make_state(ip="10.0.0.2")
-        assert set(gateway.keys()) == {"10.0.0.1", "10.0.0.2"}
+        repository._machines["10.0.0.1"] = _make_state(ip="10.0.0.1")
+        repository._machines["10.0.0.2"] = _make_state(ip="10.0.0.2")
+        assert set(repository.keys()) == {"10.0.0.1", "10.0.0.2"}
 
-    def test_items(self, gateway: SSHMachineGateway) -> None:
+    def test_items(self, repository: SSHMachineRepository) -> None:
         """items() returns (ip, state) pairs."""
         state = _make_state(ip="10.0.0.1")
-        gateway._machines["10.0.0.1"] = state
-        items = dict(gateway.items())
+        repository._machines["10.0.0.1"] = state
+        items = dict(repository.items())
         assert items["10.0.0.1"] is state
 
-    def test_register_machine(self, gateway: SSHMachineGateway) -> None:
+    def test_register_machine(self, repository: SSHMachineRepository) -> None:
         """register_machine stores a _MachineState by IP."""
         state = _make_state(ip="10.0.0.1")
-        gateway.register_machine("10.0.0.1", state)
-        assert "10.0.0.1" in gateway
-        assert gateway._machines["10.0.0.1"] is state
+        repository.register_machine("10.0.0.1", state)
+        assert "10.0.0.1" in repository
+        assert repository._machines["10.0.0.1"] is state
 
-    def test_contains_method(self, gateway: SSHMachineGateway) -> None:
+    def test_contains_method(self, repository: SSHMachineRepository) -> None:
         """contains() checks by IP (explicit method)."""
         state = _make_state(ip="10.0.0.1")
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.contains("10.0.0.1") is True
-        assert gateway.contains("10.0.0.2") is False
+        repository._machines["10.0.0.1"] = state
+        assert repository.contains("10.0.0.1") is True
+        assert repository.contains("10.0.0.2") is False
 
 
 # =============================================================================
@@ -635,342 +666,51 @@ class TestMachineState:
 class TestPropertyHelpers:
     """get_adapter, get_platforms, get_hostname, get_path, get_quote."""
 
-    def test_get_adapter(self, gateway: SSHMachineGateway) -> None:
+    def test_get_adapter(self, repository: SSHMachineRepository) -> None:
         """get_adapter returns the RemoteMachineAdapter."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.get_adapter("10.0.0.1") is state.adapter
+        repository._machines["10.0.0.1"] = state
+        assert repository.get_adapter("10.0.0.1") is state.adapter
 
-    def test_get_platforms(self, gateway: SSHMachineGateway) -> None:
+    def test_get_platforms(self, repository: SSHMachineRepository) -> None:
         """get_platforms returns the platform list."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.get_platforms("10.0.0.1") == ["linux", "debian-like"]
+        repository._machines["10.0.0.1"] = state
+        assert repository.get_platforms("10.0.0.1") == ["linux", "debian-like"]
 
-    def test_get_hostname(self, gateway: SSHMachineGateway) -> None:
+    def test_get_hostname(self, repository: SSHMachineRepository) -> None:
         """get_hostname returns the host from conn_opts."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.get_hostname("10.0.0.1") == "10.0.0.1"
+        repository._machines["10.0.0.1"] = state
+        assert repository.get_hostname("10.0.0.1") == "10.0.0.1"
 
-    def test_get_path(self, gateway: SSHMachineGateway) -> None:
+    def test_get_path(self, repository: SSHMachineRepository) -> None:
         """get_path returns the adapter's path type."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.get_path("10.0.0.1") is PurePosixPath
+        repository._machines["10.0.0.1"] = state
+        assert repository.get_path("10.0.0.1") is PurePosixPath
 
-    def test_get_quote(self, gateway: SSHMachineGateway) -> None:
+    def test_get_quote(self, repository: SSHMachineRepository) -> None:
         """get_quote returns the adapter's quote callable."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        assert callable(gateway.get_quote("10.0.0.1"))
-        assert gateway.get_quote("10.0.0.1")("test") == "test"
+        repository._machines["10.0.0.1"] = state
+        assert callable(repository.get_quote("10.0.0.1"))
+        assert repository.get_quote("10.0.0.1")("test") == "test"
 
-    def test_get_data_dir(self, gateway: SSHMachineGateway) -> None:
+    def test_get_data_dir(self, repository: SSHMachineRepository) -> None:
         """get_data_dir returns the data directory."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.get_data_dir("10.0.0.1") == PurePosixPath("./data")
+        repository._machines["10.0.0.1"] = state
+        assert repository.get_data_dir("10.0.0.1") == PurePosixPath("./data")
 
-    def test_get_engines_dir(self, gateway: SSHMachineGateway) -> None:
+    def test_get_engines_dir(self, repository: SSHMachineRepository) -> None:
         """get_engines_dir returns the engines directory."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.get_engines_dir("10.0.0.1") == PurePosixPath("./data/engines")
+        repository._machines["10.0.0.1"] = state
+        assert repository.get_engines_dir("10.0.0.1") == PurePosixPath("./data/engines")
 
-    def test_get_tasks_dir(self, gateway: SSHMachineGateway) -> None:
+    def test_get_tasks_dir(self, repository: SSHMachineRepository) -> None:
         """get_tasks_dir returns the tasks directory."""
         state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        assert gateway.get_tasks_dir("10.0.0.1") == PurePosixPath("./data/tasks")
-
-
-# =============================================================================
-# Occupancy
-# =============================================================================
-
-
-class TestOccupancy:
-    """occupancy_check via pgrep and check_cmd, start_occupancy_check."""
-
-    @pytest.mark.asyncio
-    async def test_occupancy_check_pgrep_found(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """occupancy_check returns True when pgrep yields a process."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        mock_pengine.check_pname = "testproc"
-
-        result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_occupancy_check_pgrep_not_found(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """occupancy_check returns False when pgrep yields no process."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        mock_pengine.check_pname = "nonexistent"
-
-        # Override adapter.pgrep to yield nothing
-        state.adapter.pgrep = lambda *a, **kw: _AsyncIter([])  # type: ignore[assignment,misc]
-
-        result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_occupancy_check_cmd_match(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """occupancy_check returns True when check_cmd exit code matches."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        mock_pengine.check_pname = None
-        mock_pengine.check_cmd = "systemctl is-active test"
-        mock_pengine.check_cmd_code = 0
-
-        # Override adapter.run to return matching exit code
-        async def _run_match(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "active"
-            result.stderr = ""
-            return result
-
-        state.adapter.run = _run_match  # type: ignore[assignment,misc]
-
-        result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_occupancy_check_cmd_no_match(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """occupancy_check returns False when check_cmd exit code differs."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        mock_pengine.check_pname = None
-        mock_pengine.check_cmd = "systemctl is-active test"
-        mock_pengine.check_cmd_code = 0
-
-        async def _run_mismatch(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
-            result = MagicMock()
-            result.returncode = 3  # service not running
-            result.stdout = "inactive"
-            result.stderr = ""
-            return result
-
-        state.adapter.run = _run_mismatch  # type: ignore[assignment,misc]
-
-        result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_occupancy_check_uses_pgrep_when_both_set(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """occupancy_check prefers pgrep when check_pname is set even with check_cmd."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        mock_pengine.check_pname = "testproc"
-        mock_pengine.check_cmd = "systemctl is-active test"
-        mock_pengine.check_cmd_code = 0
-
-        # pgrep_found = True should short-circuit and return True
-        result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_occupancy_check_no_checks_configured(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """occupancy_check returns False when neither check_pname nor check_cmd is set."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        mock_pengine.check_pname = None
-        mock_pengine.check_cmd = None
-
-        result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_occupancy_check_pgrep_ssh_failure_returns_true(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """occupancy_check returns True (busy) when pgrep fails due to SSH error."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        mock_pengine.check_pname = "sleep"
-
-        # Replace adapter.pgrep with one that raises SSHRetryExc
-        async def _pgrep_ssh_fail(
-            *args: object, **kwargs: object
-        ) -> AsyncGenerator[None, None]:
-            raise ChannelOpenError(1, "SSH connection lost")
-            yield  # makes this an async generator
-
-        state.adapter.pgrep = _pgrep_ssh_fail  # type: ignore[assignment,misc]
-
-        result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_occupancy_check_cmd_ssh_failure_returns_true(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """occupancy_check returns True (busy) when check_cmd fails due to SSH error."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-        mock_pengine.check_pname = None
-        mock_pengine.check_cmd = "ps -eocomm= | grep -q sleep"
-        mock_pengine.check_cmd_code = 0
-
-        # Patch run_full to raise SSHRetryExc — simulates SSH failure
-        with patch.object(
-            gateway,
-            "run_full",
-            AsyncMock(side_effect=ChannelOpenError(1, "SSH connection lost")),
-        ):
-            result = await gateway.occupancy_check("10.0.0.1", mock_pengine)
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_start_occupancy_check_releases_machine(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """start_occupancy_check background task releases machine when occupancy ends."""
-        ip = "10.0.0.1"
-        state = _make_state(ip=ip, state=MachineState.BUSY)
-        gateway._machines[ip] = state
-        mock_pengine.check_pname = None
-        mock_pengine.check_cmd = None
-
-        with (
-            patch("yascheduler.infra.ssh.gateway.asyncio.sleep", AsyncMock()),
-            patch.object(gateway, "occupancy_check", AsyncMock(return_value=False)),
-        ):
-            gateway.start_occupancy_check(ip, mock_pengine)
-            # Wait for the background task to complete
-            task = gateway._bg_tasks[ip]
-            await asyncio.wait_for(task, timeout=1.0)
-
-        # Machine should be released
-        assert gateway._machines[ip].machine.state == MachineState.FREE
-
-    @pytest.mark.asyncio
-    async def test_start_occupancy_check_cancelled_gracefully(
-        self, gateway: SSHMachineGateway, mock_pengine: MagicMock
-    ) -> None:
-        """Start occupancy check then cancel it (disconnect)."""
-
-        ip = "10.0.0.1"
-        state = _make_state(ip=ip, state=MachineState.BUSY)
-        gateway._machines[ip] = state
-        mock_pengine.check_pname = None
-        mock_pengine.check_cmd = None
-
-        with (
-            patch("yascheduler.infra.ssh.gateway.asyncio.sleep", AsyncMock()),
-            patch.object(
-                gateway,
-                "occupancy_check",
-                AsyncMock(side_effect=[True, True, True]),
-            ),
-        ):
-            gateway.start_occupancy_check(ip, mock_pengine)
-            # Let the task start and do one iteration
-            await asyncio.sleep(0)
-
-            # Disconnect cancels the background task
-            await gateway.disconnect(ip)
-
-        # Machine removed
-        assert ip not in gateway
-
-
-# =============================================================================
-# Advanced Operations
-# =============================================================================
-
-
-class TestAdvancedOperations:
-    """setup_node, get_cpu_cores, pgrep generator, list_processes generator."""
-
-    @pytest.mark.asyncio
-    async def test_setup_node(self, gateway: SSHMachineGateway) -> None:
-        """setup_node delegates to adapter.setup_node with filtered engines."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-
-        engine_repo = MagicMock(spec=EngineRepository)
-        engine_repo.filter_platforms.return_value = engine_repo
-
-        await gateway.setup_node("10.0.0.1", engine_repo)
-
-        engine_repo.filter_platforms.assert_called_once_with(state.platforms)
-        state.adapter.setup_node.assert_awaited_once()  # type: ignore[attr-defined]
-
-    @pytest.mark.asyncio
-    async def test_get_cpu_cores(self, gateway: SSHMachineGateway) -> None:
-        """get_cpu_cores returns count from adapter."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-
-        cores = await gateway.get_cpu_cores("10.0.0.1")
-        assert cores == 4
-
-    @pytest.mark.asyncio
-    async def test_pgrep_yields_processes(self, gateway: SSHMachineGateway) -> None:
-        """pgrep yields process info objects."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-
-        results: list[ProcessInfo] = []
-        async for proc in gateway.pgrep("10.0.0.1", "testproc"):
-            results.append(proc)
-
-        assert len(results) == 1
-        assert results[0].pid == 1234
-
-    @pytest.mark.asyncio
-    async def test_list_processes_yields_processes(
-        self, gateway: SSHMachineGateway
-    ) -> None:
-        """list_processes yields all running processes."""
-        state = _make_state()
-        gateway._machines["10.0.0.1"] = state
-
-        results: list[ProcessInfo] = []
-        async for proc in gateway.list_processes("10.0.0.1"):
-            results.append(proc)
-
-        assert len(results) == 1
-
-    @pytest.mark.asyncio
-    async def test_pgrep_unknown_ip(self, gateway: SSHMachineGateway) -> None:
-        """pgrep raises KeyError for unknown IP."""
-        with pytest.raises(KeyError):
-            async for _ in gateway.pgrep("10.0.0.99", "test"):
-                pass  # pragma: no cover
-
-    @pytest.mark.asyncio
-    async def test_list_processes_unknown_ip(self, gateway: SSHMachineGateway) -> None:
-        """list_processes raises KeyError for unknown IP."""
-        with pytest.raises(KeyError):
-            async for _ in gateway.list_processes("10.0.0.99"):
-                pass  # pragma: no cover
-
-    @pytest.mark.asyncio
-    async def test_setup_node_unknown_ip(self, gateway: SSHMachineGateway) -> None:
-        """setup_node raises KeyError for unknown IP."""
-        engine_repo = MagicMock(spec=EngineRepository)
-        with pytest.raises(KeyError):
-            await gateway.setup_node("10.0.0.99", engine_repo)
-
-    @pytest.mark.asyncio
-    async def test_get_cpu_cores_unknown_ip(self, gateway: SSHMachineGateway) -> None:
-        """get_cpu_cores raises KeyError for unknown IP."""
-        with pytest.raises(KeyError):
-            await gateway.get_cpu_cores("10.0.0.99")
+        repository._machines["10.0.0.1"] = state
+        assert repository.get_tasks_dir("10.0.0.1") == PurePosixPath("./data/tasks")

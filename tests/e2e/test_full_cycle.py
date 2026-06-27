@@ -3,7 +3,7 @@
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test exercising full scheduler lifecycle against real PostgreSQL and SSH.
 #   SCOPE: Single test — node add → submit → allocate → spawn → consume → verify.
-#   DEPENDS: M-CONFIG, M-APPLICATION-ORCHESTRATOR, M-DI, M-SSH-GATEWAY, M-PERSISTENCE-UOW, M-DOMAIN-MODEL
+#   DEPENDS: M-CONFIG, M-APPLICATION-ORCHESTRATOR, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-PERSISTENCE-UOW, M-DOMAIN-MODEL
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-PERSISTENCE-UOW, M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
 #
@@ -28,7 +28,8 @@ import pytest
 from yascheduler.domain.model import MachineState, Node
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
-from yascheduler.infra.ssh.gateway import SSHMachineGateway
+from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -47,8 +48,9 @@ async def test_full_cycle(
     config = e2e_config
 
     # START_BLOCK_ADD_NODE
-    gateway = SSHMachineGateway(log=log)
-    machine = await gateway.connect(
+    repository = SSHMachineRepository(log=log)
+    operations = SSHMachineOperations(repository=repository)
+    machine = await repository.connect(
         ip=ssh_container["host"],
         username=ssh_container["username"],
         client_keys=[ssh_container["key_path"]],
@@ -57,15 +59,15 @@ async def test_full_cycle(
         engines_dir=config.remote.engines_dir,
         tasks_dir=config.remote.tasks_dir,
     )
-    await gateway.setup_node(ssh_container["host"], config.engines)
+    await operations.setup_node(ssh_container["host"], config.engines)
 
-    engines_dir = gateway.get_engines_dir(ssh_container["host"])
-    proc = await gateway.run(machine, f"test -f {engines_dir}/test_shell/run.sh")
+    engines_dir = repository.get_engines_dir(ssh_container["host"])
+    proc = await operations.run(machine, f"test -f {engines_dir}/test_shell/run.sh")
     assert proc.exit_code == 0, (
         f"Engine script not deployed at {engines_dir}/test_shell/run.sh"
     )
 
-    await gateway.disconnect(ssh_container["host"])
+    await repository.disconnect(ssh_container["host"])
 
     async with uow_factory() as uow:
         await uow.nodes.add(
@@ -113,7 +115,7 @@ async def test_full_cycle(
                 saw_running = True
                 node_ip = task.allocated_ip
                 if node_ip is not None:
-                    state = orchestrator._gateway.get_machine_state(node_ip)
+                    state = orchestrator._repository.get_machine_state(node_ip)
                     if state and state.state == MachineState.BUSY:
                         saw_busy = True
             if task and task.status == DomainTaskStatus.DONE:
@@ -138,7 +140,7 @@ async def test_full_cycle(
         # END_BLOCK_VERIFY
 
         # START_BLOCK_VERIFY_FREE
-        state = orchestrator._gateway.get_machine_state(ssh_container["host"])
+        state = orchestrator._repository.get_machine_state(ssh_container["host"])
         assert state is not None, "Machine not found in orchestrator registry"
         assert state.state == MachineState.FREE, (
             "Machine should be free after task completion"

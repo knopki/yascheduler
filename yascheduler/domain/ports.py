@@ -1,9 +1,9 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.8.1
+# VERSION: 2.9.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine operations, and cloud provisioning.
-#   SCOPE: TaskRepository, NodeRepository, MachineGateway, CloudConfig, CloudProvisioner Protocol classes.
-#   DEPENDS: M-DOMAIN-MODEL
+#   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/operations, and cloud provisioning.
+#   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
+#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-ENGINE
 #   LINKS: M-DOMAIN-MODEL, M-PERSISTENCE-POSTGRES, M-CLOUD-CONFIGS, M-APPLICATION-DEALLOCATE, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
 # END_MODULE_CONTRACT
 #
@@ -11,14 +11,14 @@
 #   TaskRepository - Async port for task persistence (get, save, insert, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status)
 #   NodeRepository - Async port for node persistence (full CRUD lifecycle, list_all, get_by_ips, count_by_status)
 #   CloudConfig - Structural Protocol for cloud provider config (7-field surface application consumers read: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host)
-#   MachineGateway - Async port for remote machine operations (lifecycle, queries, run, run_bg, upload, download, download_outputs, occupancy, cpu_cores, start_task_on_machine); download_outputs returns (meta_add, transient_errors, permanent_errors) and removes remote dir only when both transient_errors and permanent_errors are empty
+#   MachineRepository - Async port for the connected-machine collection (lifecycle, queries, state transitions, accessor getters, generic monitor mechanism); Engine-agnostic
+#   MachineOperations - Async port for operations on a single machine (exec, SFTP, deploy, download, occupancy check logic)
 #   CloudProvisioner - Async port for cloud node provisioning (allocate, deallocate, select_provider)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.8.1 - MODULE_MAP MachineGateway description accuracy fix: remote dir is removed only when both transient_errors AND permanent_errors are empty (matches the conservative download_outputs rmtree gate in fix-nonidempotent-ssh-retries). No Protocol signature change.
-#   PREVIOUS_CHANGE: v2.8.0 - MachineGateway.download_outputs Protocol signature changes from 2-tuple (meta_add, sftp_errors) to 3-tuple (meta_add, transient_errors, permanent_errors); remote dir is removed only when transient_errors is empty (fix-download-rmtree-data-loss). BREAKING for Protocol implementers.
-#   PREVIOUS_CHANGE: v2.7.0 - Add connect_grace: int to CloudConfig Protocol between idle_tolerance and username (fix-never-connected-node-leak); widens the surface from 6 to 7 fields so the orchestrator can resolve a per-cloud SSH connect-failure deadline. The 4 ConfigCloud* DTOs declare per-provider defaults (Hetzner/Upcloud=60, Azure/VastAI=120).
+#   LAST_CHANGE: v2.9.0 - Split MachineGateway Protocol into MachineRepository (collection lifecycle/queries/state transitions/accessors/monitor mechanism) and MachineOperations (exec/SFTP/deploy/download/occupancy logic) per decompose-ssh-gateway. BREAKING: MachineGateway removed; consumers take one or both of the two new Protocols. Deployment method named start_task_on_machine (per Q3 resolution, not deploy_task).
+#   PREVIOUS_CHANGE: v2.8.1 - MODULE_MAP MachineGateway description accuracy fix: remote dir is removed only when both transient_errors AND permanent_errors are empty.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -26,10 +26,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from contextlib import AbstractAsyncContextManager
     from pathlib import Path, PurePath
+    from re import Pattern
 
-    from .engine import Engine
+    from asyncssh.connection import SSHClientConnection
+    from asyncssh.sftp import SFTPClient
+
+    from .engine import Engine, EngineRepository
     from .model import (
         ConnectedMachine,
         Node,
@@ -121,13 +126,17 @@ class CloudConfig(Protocol):
 
 
 @runtime_checkable
-class MachineGateway(Protocol):
-    """Async port for remote machine operations.
+class MachineRepository(Protocol):
+    """Connected-machine collection — lifecycle, queries, state transitions,
+    accessor getters, and a generic occupancy-monitor mechanism keyed by IP.
 
-    Covers connection lifecycle, machine queries, command execution,
-    file transfer, occupancy monitoring, remote info, and task deployment.
+    Does NOT cover operations on a single machine (exec, SFTP, deploy,
+    download, occupancy-check logic) — those are MachineOperations. The
+    monitor mechanism is generic (Engine-agnostic): callers pass an opaque
+    check_factory and on_free callback.
     """
 
+    # ---- Collection lifecycle ----
     async def connect(
         self,
         ip: str,
@@ -147,6 +156,7 @@ class MachineGateway(Protocol):
 
     async def disconnect_all(self) -> None: ...
 
+    # ---- Queries ----
     def list_free(self, platforms: list[str] | None) -> list[ConnectedMachine]: ...
 
     def list_connected(self) -> list[ConnectedMachine]: ...
@@ -155,24 +165,102 @@ class MachineGateway(Protocol):
 
     def get_machine_state(self, ip: str) -> ConnectedMachine | None: ...
 
-    def update_machine(self, machine: ConnectedMachine) -> None: ...
-
     def __len__(self) -> int: ...
 
+    def __contains__(self, ip: str) -> bool: ...
+
+    # ---- State transitions ----
+    def update_machine(self, machine: ConnectedMachine) -> None: ...
+
+    def occupy(self, ip: str) -> None: ...
+
+    def release(self, ip: str) -> None: ...
+
+    # ---- Accessor getters (read stored state) ----
+    def get_adapter(self, ip: str) -> Any: ...  # noqa: ANN401 - infra RemoteMachineAdapter returned through domain Protocol
+
+    def get_platforms(self, ip: str) -> Sequence[str]: ...
+
+    def get_path(self, ip: str) -> type[PurePath]: ...
+
+    def get_quote(self, ip: str) -> Callable[[str], str]: ...
+
+    def get_data_dir(self, ip: str) -> PurePath: ...
+
+    def get_engines_dir(self, ip: str) -> PurePath: ...
+
+    def get_tasks_dir(self, ip: str) -> PurePath: ...
+
+    def get_hostname(self, ip: str) -> str: ...
+
+    # ---- Connection lifecycle ----
+    async def get_conn(self, ip: str) -> SSHClientConnection: ...
+
+    # ---- Monitor mechanism (generic, Engine-agnostic) ----
+    def install_monitor(
+        self,
+        ip: str,
+        *,
+        interval: float,
+        check_factory: Callable[[], Awaitable[bool]],
+        on_free: Callable[[], None],
+    ) -> None: ...
+
+    def cancel_monitor(self, ip: str) -> None: ...
+
+
+@runtime_checkable
+class MachineOperations(Protocol):
+    """Operations on a single machine — command exec, SFTP transfer,
+    process inspection, node setup, task deployment, output download,
+    and occupancy check logic.
+
+    Does NOT cover collection lifecycle, queries, state transitions,
+    accessor getters, or the monitor mechanism — those are MachineRepository.
+    """
+
+    # ---- Command execution ----
     async def run(self, machine: ConnectedMachine, cmd: str) -> ProcessResult: ...
+
+    async def run_full(self, machine: ConnectedMachine, cmd: str) -> Any: ...  # noqa: ANN401 - infra SSHCompletedProcess returned through domain Protocol
 
     async def run_bg(
         self, machine: ConnectedMachine, cmd: str, *, cwd: str | None = None
     ) -> None: ...
 
+    # ---- File transfer ----
     async def upload(
         self, machine: ConnectedMachine, local: Path, remote: str
     ) -> None: ...
 
-    async def download(
-        self, machine: ConnectedMachine, remote: str, local: Path
-    ) -> None: ...
+    def get_sftp(self, ip: str) -> AbstractAsyncContextManager[SFTPClient]: ...
 
+    # ---- Process inspection ----
+    def pgrep(
+        self,
+        ip: str,
+        pattern: str | Pattern[str],
+        full: bool = True,
+    ) -> Any: ...  # noqa: ANN401 - infra AsyncGenerator[ProcessInfo] returned through domain Protocol
+
+    def list_processes(self, ip: str) -> Any: ...  # noqa: ANN401 - infra AsyncGenerator[ProcessInfo] returned through domain Protocol
+
+    # ---- Node info / setup ----
+    async def get_cpu_cores(self, ip: str) -> int: ...
+
+    async def setup_node(self, ip: str, engines: EngineRepository) -> None: ...
+
+    # ---- Task deployment ----
+    async def start_task_on_machine(
+        self,
+        machine: ConnectedMachine,
+        engine: Engine,
+        task: Task,
+        ncpus: int,
+        engines_dir: PurePath,
+    ) -> bool: ...
+
+    # ---- Output download ----
     async def download_outputs(
         self,
         ip: str,
@@ -186,18 +274,10 @@ class MachineGateway(Protocol):
         list[tuple[str | None, Exception]],
     ]: ...
 
+    # ---- Occupancy check ----
+    async def occupancy_check(self, ip: str, config: Engine) -> bool: ...
+
     def start_occupancy_check(self, ip: str, config: Engine) -> None: ...
-
-    async def start_task_on_machine(
-        self,
-        machine: ConnectedMachine,
-        engine: Engine,
-        task: Task,
-        ncpus: int,
-        engines_dir: PurePath,
-    ) -> bool: ...
-
-    async def get_cpu_cores(self, ip: str) -> int: ...
 
 
 @runtime_checkable

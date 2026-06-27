@@ -1,9 +1,9 @@
 # FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.11.0
+# VERSION: 5.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
 #   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-ENTRYPOINTS-CONFIG, M-SSH-GATEWAY, M-SSH-KEYS, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
+#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-ENTRYPOINTS-CONFIG, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-ENTRYPOINTS-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-KEYS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS
 # END_MODULE_CONTRACT
 #
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.11.0 - make_daemon now constructs one SSHMachineGateway on the clouds is None branch and injects the same instance into both CloudProvisionerImpl.machine_gateway and Orchestrator.gateway (share-ssh-gateway). Merges the cloud-setup and orchestrator-runtime _machines registries so cloud-allocation connections are visible to the orchestrator (no double-connect) and reaped at shutdown. The pre-built-clouds branch keeps creating a fresh gateway for the orchestrator.
-#   PREVIOUS_CHANGE: v5.10.0 - Remove the 2 Protocol→Union downcasts (cast("ConfigCloud", cfg) and cast("list[ConfigCloud]", [...])) and drop the unused typing.cast import (narrow-config-clouds-type). Config.clouds is now typed Sequence[ConfigCloud], so iterating config.clouds yields ConfigCloud directly and feeds the infra sinks without a cast; the application-side Orchestrator(config_clouds=..., active_clouds=...) assignment still typechecks via covariance + explicit DTO→Protocol inheritance.
+#   LAST_CHANGE: v5.12.0 - make_daemon now constructs SSHMachineRepository + SSHMachineOperations (two ports) instead of a single SSHMachineRepository / SSHMachineOperations (decompose-ssh-gateway). Both are shared between CloudProvisionerImpl (machine_repository + machine_operations) and Orchestrator (repository + operations) on the clouds is None branch. CloudProvisionerImpl.machine_gateway renamed to machine_repository; machine_operations parameter added.
+#   PREVIOUS_CHANGE: v5.11.0 - make_daemon now constructs one SSHMachineRepository / SSHMachineOperations on the clouds is None branch and injects the same instance into both CloudProvisionerImpl.machine_gateway and Orchestrator.gateway (share-ssh-gateway).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -47,7 +47,8 @@ from yascheduler.infra import (
     CloudAdapter,
     CloudProvisionerImpl,
     PostgresUnitOfWork,
-    SSHMachineGateway,
+    SSHMachineOperations,
+    SSHMachineRepository,
     list_private_keys,
     resolve_adapter,
     webhook_handler,
@@ -124,8 +125,8 @@ def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
 #   INPUTS: { config: Config, log: Optional[Logger], clouds: Optional[CloudProvisionerImpl] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates UoW factory, AllocationTracker, asyncio.Lock, CloudProvisionerImpl, SSHMachineGateway; injects list_private_keys_fn.
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-GATEWAY, M-SSH-KEYS, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
+#   SIDE_EFFECTS: Creates UoW factory, AllocationTracker, asyncio.Lock, CloudProvisionerImpl, SSHMachineRepository / SSHMachineOperations; injects list_private_keys_fn.
+#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: make_daemon
 async def make_daemon(
     config: Config,
@@ -145,13 +146,15 @@ async def make_daemon(
         allocation_tracker = AllocationTracker()
         allocation_lock = asyncio.Lock()
 
-        # Single SSHMachineGateway for the production path (clouds is None):
-        # shared between CloudProvisionerImpl.machine_gateway and
-        # Orchestrator.gateway so _setup_vm connections are visible to the
+        # Single SSHMachineRepository + SSHMachineOperations for the production
+        # path (clouds is None): shared between CloudProvisionerImpl
+        # (machine_repository + machine_operations) and Orchestrator
+        # (repository + operations) so _setup_vm connections are visible to the
         # orchestrator (no double-connect) and reaped at shutdown. The
-        # pre-built-clouds branch still wires this fresh gateway to the
-        # orchestrator; caller-supplied clouds keep their own gateway.
-        gateway = SSHMachineGateway(log=log)
+        # pre-built-clouds branch still wires a fresh pair to the orchestrator;
+        # caller-supplied clouds keep their own.
+        repository = SSHMachineRepository(log=log)
+        operations = SSHMachineOperations(repository=repository, log=log)
 
         if clouds is None:
             active_clouds: list[ConfigCloud] = []
@@ -176,7 +179,8 @@ async def make_daemon(
             clouds = CloudProvisionerImpl(
                 adapters=_adapters,
                 configs=_configs,
-                machine_gateway=gateway,
+                machine_repository=repository,
+                machine_operations=operations,
                 local_config=config.local,
                 remote_config=config.remote,
                 engines=config.engines,
@@ -205,7 +209,8 @@ async def make_daemon(
             remote_defaults=config.remote,
             uow_factory=uow_factory,
             clouds=clouds,
-            gateway=gateway,
+            repository=repository,
+            operations=operations,
             engines=config.engines,
             log=log,
             config_clouds=config.clouds,

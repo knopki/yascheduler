@@ -4,7 +4,7 @@
 #   PURPOSE: Public SSH retry exception types for infra/ssh/ consumers.
 #   SCOPE: Re-exports of SSHRetryExc, SFTPRetryExc, AllSSHRetryExc from platform protocol.
 #   DEPENDS: M-PLATFORM-PROTOCOL
-#   LINKS: M-SSH-GATEWAY
+#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP

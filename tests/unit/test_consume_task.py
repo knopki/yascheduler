@@ -49,15 +49,15 @@ class TestConsumeTask:
     """consume_task — download outputs, finalise (True) or defer (False)."""
 
     @pytest.fixture
-    def gateway_mock(self) -> MagicMock:
-        gateway = MagicMock()
-        gateway.download_outputs = AsyncMock(return_value=([], [], []))
-        return gateway
+    def mock_operations(self) -> MagicMock:
+        operations = MagicMock()
+        operations.download_outputs = AsyncMock(return_value=([], [], []))
+        return operations
 
     async def _run_consume(
         self,
         ip: str,
-        gateway: MagicMock,
+        operations: MagicMock,
         task: Task,
         uow_factory: Callable[[], AbstractUnitOfWork],
         engines: EngineRepository,
@@ -67,7 +67,7 @@ class TestConsumeTask:
         return await consume_task(
             task_id=task.task_id,
             ip=ip,
-            gateway=gateway,
+            operations=operations,
             engines=engines,
             uow_factory=uow_factory,
             local_tasks_dir=local_tasks_dir,
@@ -76,7 +76,7 @@ class TestConsumeTask:
 
     async def test_consume_task_download_success_marks_done(
         self,
-        gateway_mock: MagicMock,
+        mock_operations: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
@@ -99,7 +99,7 @@ class TestConsumeTask:
 
         result = await self._run_consume(
             ip=running_task.allocated_ip,  # type: ignore[arg-type]
-            gateway=gateway_mock,
+            operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -108,13 +108,13 @@ class TestConsumeTask:
         )
 
         # download_outputs called with correct params
-        gateway_mock.download_outputs.assert_called_once()
-        assert gateway_mock.download_outputs.call_args[1]["ip"] == "10.0.0.1"
+        mock_operations.download_outputs.assert_called_once()
+        assert mock_operations.download_outputs.call_args[1]["ip"] == "10.0.0.1"
         assert (
-            gateway_mock.download_outputs.call_args[1]["remote_dir"]
+            mock_operations.download_outputs.call_args[1]["remote_dir"]
             == "/remote/tasks/20250101_120000_42"
         )
-        assert gateway_mock.download_outputs.call_args[1]["task_id"] == 1
+        assert mock_operations.download_outputs.call_args[1]["task_id"] == 1
         # DB saved with DONE status
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
@@ -128,12 +128,12 @@ class TestConsumeTask:
 
     async def test_consume_task_download_failure_marks_error(
         self,
-        gateway_mock: MagicMock,
+        mock_operations: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
         """Permanent-only errors -> save DONE with error, tracker discarded, returns True."""
-        gateway_mock.download_outputs = AsyncMock(
+        mock_operations.download_outputs = AsyncMock(
             return_value=([], [], [("/remote/file", OSError("Connection refused"))])
         )
 
@@ -155,7 +155,7 @@ class TestConsumeTask:
 
         result = await self._run_consume(
             ip=running_task.allocated_ip,  # type: ignore[arg-type]
-            gateway=gateway_mock,
+            operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -175,12 +175,12 @@ class TestConsumeTask:
 
     async def test_consume_task_transient_only_defers(
         self,
-        gateway_mock: MagicMock,
+        mock_operations: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
         """Transient-only errors -> no save, no event, no tracker.discard, returns False."""
-        gateway_mock.download_outputs = AsyncMock(
+        mock_operations.download_outputs = AsyncMock(
             return_value=(
                 [],
                 [("/remote/file", SFTPFailure("transient blip"))],
@@ -206,7 +206,7 @@ class TestConsumeTask:
 
         result = await self._run_consume(
             ip=running_task.allocated_ip,  # type: ignore[arg-type]
-            gateway=gateway_mock,
+            operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -223,14 +223,14 @@ class TestConsumeTask:
 
     async def test_consume_task_mixed_permanent_priority(
         self,
-        gateway_mock: MagicMock,
+        mock_operations: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
         """Both transient and permanent -> permanent priority, task.fail, returns True."""
         transient = [("/remote/a", SFTPFailure("transient"))]
         permanent = [("/remote/b", OSError("permanent missing"))]
-        gateway_mock.download_outputs = AsyncMock(
+        mock_operations.download_outputs = AsyncMock(
             return_value=([], transient, permanent)
         )
 
@@ -252,7 +252,7 @@ class TestConsumeTask:
 
         result = await self._run_consume(
             ip=running_task.allocated_ip,  # type: ignore[arg-type]
-            gateway=gateway_mock,
+            operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -275,7 +275,7 @@ class TestConsumeTask:
 
     async def test_consume_task_not_found_discards_tracker_returns_true(
         self,
-        gateway_mock: MagicMock,
+        mock_operations: MagicMock,
         mock_engine_repo: MagicMock,
     ) -> None:
         """Task not found in DB -> tracker.discard called, no download/save, returns True."""
@@ -296,7 +296,7 @@ class TestConsumeTask:
         result = await consume_task(
             task_id=999,
             ip="10.0.0.1",
-            gateway=gateway_mock,
+            operations=mock_operations,
             engines=mock_engine_repo,
             uow_factory=uow_factory,
             local_tasks_dir=local_tasks_dir,
@@ -304,7 +304,7 @@ class TestConsumeTask:
         )
 
         # No download attempted, no save, no commit; tracker slot discarded
-        gateway_mock.download_outputs.assert_not_called()
+        mock_operations.download_outputs.assert_not_called()
         uow.tasks.save.assert_not_called()
         uow.commit.assert_not_called()
         tracker.discard.assert_called_once_with(999)

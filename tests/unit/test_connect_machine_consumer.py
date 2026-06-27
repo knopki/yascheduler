@@ -97,8 +97,9 @@ def make_orchestrator(
     def uow_factory() -> AbstractUnitOfWork:
         return mock_uow
 
-    gateway = MagicMock()
-    gateway.__len__ = MagicMock(return_value=0)
+    repository = MagicMock()
+    repository.__len__ = MagicMock(return_value=0)
+    operations = MagicMock()
 
     engine = MagicMock(spec=Engine, sleep_interval=0)
     engine.name = "test_engine"
@@ -117,7 +118,8 @@ def make_orchestrator(
         remote_defaults=remote,
         uow_factory=uow_factory,
         clouds=clouds,
-        gateway=gateway,
+        repository=repository,
+        operations=operations,
         engines=engines,
         log=MagicMock(),
         config_clouds=config_clouds,
@@ -141,7 +143,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud.jump_host = None
         cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
-        orch._gateway.connect = AsyncMock(  # type: ignore[method-assign]
+        orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError("10.0.0.5", "refused")
         )
 
@@ -175,7 +177,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud.jump_host = None
         cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
-        orch._gateway.connect = AsyncMock(  # type: ignore[method-assign]
+        orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError("10.0.0.5", "refused")
         )
 
@@ -192,11 +194,10 @@ class TestConnectMachineConsumerGraceTimer:
             await orch._connect_machine_consumer(UMessage("10.0.0.5", _make_node()))
 
         mock_abandon.assert_awaited_once()
-        # abandon_node called with (node, gateway, clouds, uow_factory, tracker)
+        # abandon_node called with (node, clouds, uow_factory, tracker) — gateway dropped
         args = mock_abandon.call_args.args
-        assert args[1] is orch._gateway
-        assert args[2] is orch._clouds
-        assert args[4] is orch._tracker
+        assert args[1] is orch._clouds
+        assert args[3] is orch._tracker
         # IP popped after abandon
         assert "10.0.0.5" not in orch._connect_failures
         # CONNECT_ABANDON logged at error level
@@ -210,7 +211,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud.jump_host = None
         cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
-        orch._gateway.connect = AsyncMock(  # type: ignore[method-assign]
+        orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError("10.0.0.5", "x")
         )
 
@@ -226,7 +227,7 @@ class TestConnectMachineConsumerGraceTimer:
         assert "10.0.0.5" in orch._connect_failures
 
         # Second call: success → IP popped.
-        orch._gateway.connect = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]  # success
+        orch._repository.connect = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]  # success
         await orch._connect_machine_consumer(UMessage("10.0.0.5", _make_node()))
         assert "10.0.0.5" not in orch._connect_failures
 
@@ -237,7 +238,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud.jump_host = None
         cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
-        orch._gateway.connect = AsyncMock(  # type: ignore[method-assign]
+        orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError("10.0.0.5", "x")
         )
 
@@ -339,7 +340,7 @@ class TestConnectMachineProducerExcludesStaticNodes:
 
         orch = make_orchestrator(config_clouds=[])
         # Gateway contains neither IP → both would have been yielded pre-fix.
-        orch._gateway.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
+        orch._repository.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
         orch._uow_factory = MagicMock(  # type: ignore[method-assign]
             return_value=_uow_with_nodes([static_node, cloud_node])
         )
@@ -362,7 +363,7 @@ class TestConnectMachineProducerExcludesStaticNodes:
         )
 
         orch = make_orchestrator(config_clouds=[])
-        orch._gateway.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
+        orch._repository.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
         orch._uow_factory = MagicMock(  # type: ignore[method-assign]
             return_value=_uow_with_nodes([static_node])
         )
@@ -386,14 +387,14 @@ class TestConnectMachineProducerExcludesStaticNodes:
         )
 
         orch = make_orchestrator(config_clouds=[])
-        orch._gateway.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
+        orch._repository.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
         orch._uow_factory = MagicMock(  # type: ignore[method-assign]
             return_value=_uow_with_nodes([static_node])
         )
         # If the producer (incorrectly) yielded the static node, connect would
         # raise and, past 120s grace, abandon would fire. Set both up to prove
         # neither is ever called.
-        orch._gateway.connect = AsyncMock(  # type: ignore[method-assign]
+        orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError("10.0.0.9", "refused")
         )
 
@@ -401,7 +402,7 @@ class TestConnectMachineProducerExcludesStaticNodes:
         assert yielded == [], "static node must not be yielded"
 
         # Nothing was enqueued, so connect/abandon were never invoked.
-        orch._gateway.connect.assert_not_called()  # type: ignore[attr-defined]
+        orch._repository.connect.assert_not_called()
         assert "10.0.0.9" not in orch._connect_failures
 
 

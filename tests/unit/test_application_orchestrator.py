@@ -133,9 +133,10 @@ def make_orchestrator(
         return mock_uow
 
     clouds = AsyncMock()
-    gateway = MagicMock()
-    gateway.__len__ = MagicMock(return_value=1)
-    gateway.disconnect_all = AsyncMock()
+    repository = MagicMock()
+    repository.__len__ = MagicMock(return_value=1)
+    repository.disconnect_all = AsyncMock()
+    operations = MagicMock()
 
     # EngineRepository.values() must yield at least one Engine so
     # Orchestrator.__init__ can compute min(sleep_interval).
@@ -158,7 +159,8 @@ def make_orchestrator(
         remote_defaults=config.remote,
         uow_factory=uow_factory,
         clouds=clouds,
-        gateway=gateway,
+        repository=repository,
+        operations=operations,
         engines=engines,
         log=log,
         config_clouds=[],
@@ -212,7 +214,7 @@ class TestOrchestratorLifecycle:
         orch._cancellation_event.set()
         # wait_some_machines needs at least one connected machine to
         # exit instantly instead of waiting up to 30 s.
-        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
+        orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
         with patch(
             "yascheduler.application.orchestrator.asyncio.sleep",
@@ -252,7 +254,7 @@ class TestOrchestratorLifecycle:
 
         # Cleanup methods called
         orch._clouds.stop.assert_called_once()  # type: ignore[attr-defined]
-        orch._gateway.disconnect_all.assert_called_once()  # type: ignore[attr-defined]
+        orch._repository.disconnect_all.assert_called_once()  # type: ignore[attr-defined]
         # _http lifecycle owned by start()'s finally block, not stop()
 
     # ------------------------------------------------------------------ #
@@ -299,7 +301,7 @@ class TestOrchestratorLifecycle:
         orch = make_orchestrator(allocate_limit=3)
 
         orch._cancellation_event.set()
-        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
+        orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
         with patch.object(
             orch,
@@ -330,7 +332,7 @@ class TestOrchestratorLifecycle:
         orch = make_orchestrator(deallocate_limit=5)
 
         orch._cancellation_event.set()
-        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
+        orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
         with patch.object(
             orch,
@@ -358,7 +360,7 @@ class TestOrchestratorLifecycle:
         orch = make_orchestrator(conn_machine_limit=4)
 
         orch._cancellation_event.set()
-        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
+        orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
         with patch.object(
             orch,
@@ -386,7 +388,7 @@ class TestOrchestratorLifecycle:
         orch = make_orchestrator(consume_limit=7)
 
         orch._cancellation_event.set()
-        orch._gateway.__len__ = MagicMock(return_value=1)  # type: ignore[attr-defined,method-assign]
+        orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
         with patch.object(
             orch,
@@ -428,7 +430,7 @@ class TestOrchestratorTaskAbandoned:
         orch._uow_factory = uow_factory  # type: ignore[method-assign]
 
         # Gateway returns None for machine state (machine gone)
-        orch._gateway.get_machine_state = MagicMock(return_value=None)  # type: ignore[method-assign]
+        orch._repository.get_machine_state = MagicMock(return_value=None)  # type: ignore[method-assign]
 
         task = Task(
             task_id=42,
@@ -614,7 +616,7 @@ class TestDeallocatorConsumer:
             await orch._deallocator_consumer(msg)
 
         mock_dealloc.assert_called_once_with(
-            node, orch._gateway, orch._clouds, orch._uow_factory
+            node, orch._repository, orch._clouds, orch._uow_factory
         )
 
     @pytest.mark.asyncio
@@ -627,8 +629,8 @@ class TestDeallocatorConsumer:
         mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
         mock_uow.__aexit__ = AsyncMock(return_value=False)
         orch._uow_factory = lambda: mock_uow  # type: ignore[method-assign]
-        orch._gateway.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
-        orch._gateway.disconnect = AsyncMock()  # type: ignore[method-assign]
+        orch._repository.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
+        orch._repository.disconnect = AsyncMock()  # type: ignore[method-assign]
 
         from yascheduler.application.queue import UMessage
 
@@ -638,7 +640,7 @@ class TestDeallocatorConsumer:
             msg = UMessage("10.0.0.1", "10.0.0.1")
             await orch._deallocator_consumer(msg)
 
-        orch._gateway.disconnect.assert_called_once_with("10.0.0.1")
+        orch._repository.disconnect.assert_called_once_with("10.0.0.1")
         mock_dealloc.assert_not_called()
 
 
@@ -721,7 +723,8 @@ class TestAllocatorConsumer:
             task_id=7,
             engines=orch._engines,
             uow_factory=orch._uow_factory,
-            gateway=orch._gateway,
+            repository=orch._repository,
+            operations=orch._operations,
             clouds=orch._clouds,
             start_task_on_machine=orch._start_task_on_machine,
             tracker=orch._tracker,
@@ -746,7 +749,7 @@ class TestConsumeConditionalDiscard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
@@ -780,7 +783,7 @@ class TestConsumeConditionalDiscard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
@@ -858,7 +861,7 @@ class TestConsumeInFlightGuard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
@@ -892,7 +895,7 @@ class TestConsumeInFlightGuard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
@@ -928,7 +931,7 @@ class TestConsumeInFlightGuard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._gateway.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(

@@ -192,7 +192,8 @@ class TestMakeDaemon:
             patch(
                 "yascheduler.entrypoints.di.resolve_adapter", return_value=None
             ) as mock_resolve,
-            patch("yascheduler.entrypoints.di.SSHMachineGateway") as mock_gateway,
+            patch("yascheduler.entrypoints.di.SSHMachineRepository") as mock_repo_ctor,
+            patch("yascheduler.entrypoints.di.SSHMachineOperations") as mock_ops_ctor,
             patch(
                 "yascheduler.entrypoints.di.CloudProvisionerImpl"
             ) as mock_clouds_ctor,
@@ -202,8 +203,10 @@ class TestMakeDaemon:
             ) as mock_orch,
             patch("logging.getLogger") as mock_get_logger,
         ):
-            mock_gw = MagicMock()
-            mock_gateway.return_value = mock_gw
+            mock_repo = MagicMock()
+            mock_repo_ctor.return_value = mock_repo
+            mock_ops = MagicMock()
+            mock_ops_ctor.return_value = mock_ops
             resolved_log = MagicMock()
             mock_get_logger.return_value = resolved_log
 
@@ -213,15 +216,19 @@ class TestMakeDaemon:
 
         mock_get_logger.assert_called_once_with("Orchestrator")
         mock_resolve.assert_not_called()
-        # share-ssh-gateway: exactly one SSHMachineGateway on the clouds is
-        # None path, shared by CloudProvisionerImpl.machine_gateway and
-        # Orchestrator.gateway.
-        mock_gateway.assert_called_once()
+        # share-ssh-gateway: exactly one SSHMachineRepository + SSHMachineOperations
+        # on the clouds is None path, shared by CloudProvisionerImpl (machine_repository
+        # + machine_operations) and Orchestrator (repository + operations).
+        mock_repo_ctor.assert_called_once()
+        mock_ops_ctor.assert_called_once()
         clouds_kwargs = mock_clouds_ctor.call_args.kwargs
         orch_kwargs = mock_orch.call_args.kwargs
-        assert clouds_kwargs["machine_gateway"] is mock_gw
-        assert orch_kwargs["gateway"] is mock_gw
-        assert orch_kwargs["gateway"] is clouds_kwargs["machine_gateway"]
+        assert clouds_kwargs["machine_repository"] is mock_repo
+        assert clouds_kwargs["machine_operations"] is mock_ops
+        assert orch_kwargs["repository"] is mock_repo
+        assert orch_kwargs["operations"] is mock_ops
+        assert orch_kwargs["repository"] is clouds_kwargs["machine_repository"]
+        assert orch_kwargs["operations"] is clouds_kwargs["machine_operations"]
         assert "clouds" in orch_kwargs
         assert orch_kwargs["clouds"] is not None
         assert orch_kwargs["local_settings"] is config.local
@@ -248,22 +255,27 @@ class TestMakeDaemon:
 
         with (
             patch("yascheduler.entrypoints.di.resolve_adapter") as mock_resolve,
-            patch("yascheduler.entrypoints.di.SSHMachineGateway") as mock_gateway,
+            patch("yascheduler.entrypoints.di.SSHMachineRepository") as mock_repo_ctor,
+            patch("yascheduler.entrypoints.di.SSHMachineOperations") as mock_ops_ctor,
             patch("yascheduler.entrypoints.di.Orchestrator") as mock_orch,
             patch("logging.getLogger"),
         ):
-            mock_gw = MagicMock()
-            mock_gateway.return_value = mock_gw
+            mock_repo = MagicMock()
+            mock_repo_ctor.return_value = mock_repo
+            mock_ops = MagicMock()
+            mock_ops_ctor.return_value = mock_ops
 
             await make_daemon(config, clouds=custom_clouds)
 
         mock_resolve.assert_not_called()
-        # share-ssh-gateway: pre-built-clouds path keeps its own gateway —
-        # the orchestrator gets a fresh SSHMachineGateway, NOT the one on
-        # custom_clouds.machine_gateway.
-        orch_gateway = mock_orch.call_args.kwargs["gateway"]
-        assert orch_gateway is mock_gw
-        assert orch_gateway is not custom_clouds.machine_gateway
+        # pre-built-clouds path keeps its own repository + operations —
+        # the orchestrator gets a fresh SSHMachineRepository + SSHMachineOperations,
+        # NOT the ones on custom_clouds.
+        orch_repo = mock_orch.call_args.kwargs["repository"]
+        orch_ops = mock_orch.call_args.kwargs["operations"]
+        assert orch_repo is mock_repo
+        assert orch_ops is mock_ops
+        assert orch_repo is not custom_clouds.machine_repository
 
     @pytest.mark.asyncio
     async def test_prebuilt_clouds_active_clouds_filter_verifies_adapter_resolution(
