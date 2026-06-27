@@ -15,7 +15,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.6.0 - Retype repository: MachineRepository, operations: MachineOperations -> operations: MachineOperations (consume uses download_outputs only) per decompose-ssh-gateway.
+#   LAST_CHANGE: v5.7.0 - session-based-machine-handle: consume_task takes session: MachineSession instead of ip: str; delegates session to operations.download_outputs(session=session).
 #   PREVIOUS_CHANGE: v5.5.0 - consume_task returns bool (True=finalised, False=deferred for retry); unpacks 3-tuple (meta_add, transient_errors, permanent_errors) from gateway.download_outputs; transient-only errors defer (no status change, no save, no event, no tracker.discard) so the orchestrator re-consumes the RUNNING task; permanent errors or full success finalise (task.fail with combined msg when both lists present, or task.complete); tracker.discard moved into finalise branch only (fix-download-rmtree-data-loss). Renamed _record_finalization_event -> _decide_finalisation.
 # END_CHANGE_SUMMARY
 
@@ -31,7 +31,12 @@ from yascheduler.domain import TaskCompleted, TaskFailed
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.domain import EngineRepository, MachineOperations, Task
+    from yascheduler.domain import (
+        EngineRepository,
+        MachineOperations,
+        MachineSession,
+        Task,
+    )
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
@@ -196,8 +201,8 @@ async def _finalize_task(
 #   PURPOSE: Load task by id via UoW, download outputs from remote machine, finalise or defer.
 #   INPUTS: {
 #     task_id: int - ID of the task to consume,
-#     ip: str - IP address of the machine where the task ran,
-#     repository: MachineRepository, operations: MachineOperations - SSH gateway for output download,
+#     session: MachineSession - Session of the machine where the task ran,
+#     operations: MachineOperations - SSH operations for output download,
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable - Factory providing AbstractUnitOfWork,
 #     local_tasks_dir: Path - Local base directory for output storage,
@@ -205,11 +210,11 @@ async def _finalize_task(
 #   }
 #   OUTPUTS: { bool - True when finalised (DONE applied, remote dir cleaned by gateway, tracker slot discarded) or task not found in DB (vacuously finalised, tracker slot discarded); False when deferred (stay RUNNING, remote dir preserved, tracker slot retained) }
 #   SIDE_EFFECTS: Downloads files via SFTP; on finalise applies domain lifecycle, saves via UoW, records events, discards tracker slot; on task-not-found discards tracker slot; on defer none.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: consume_task
 async def consume_task(
     task_id: int,
-    ip: str,
+    session: MachineSession,
     operations: MachineOperations,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
@@ -229,7 +234,7 @@ async def consume_task(
         task, local_tasks_dir, engines
     )
     meta_add, transient_errors, permanent_errors = await operations.download_outputs(
-        ip=ip,
+        session=session,
         remote_dir=remote_folder,
         local_dir=store_folder,
         files=output_files,

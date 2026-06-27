@@ -31,6 +31,8 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path, PurePath
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -152,9 +154,10 @@ class TestAllocateTaskEvents:
         free_machine.ip = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
+        free_session = SimpleNamespace(machine=free_machine, ip="10.0.0.1")
 
         repository = MagicMock()
-        repository.list_free = MagicMock(return_value=[free_machine])
+        repository.list_free = MagicMock(return_value=[free_session])
         operations = MagicMock()
         operations.start_occupancy_check = MagicMock()
 
@@ -219,7 +222,7 @@ class TestConsumeTaskEvents:
 
     async def _run_consume(
         self,
-        ip: str,
+        session: Any,  # noqa: ANN401 - test stub for MachineSession
         operations: MagicMock,
         task: Task,
         uow_factory: Callable[[], AbstractUnitOfWork],
@@ -229,7 +232,7 @@ class TestConsumeTaskEvents:
     ) -> None:
         await consume_task(
             task_id=task.task_id,
-            ip=ip,
+            session=session,  # type: ignore[arg-type]
             operations=operations,
             engines=engines,
             uow_factory=uow_factory,
@@ -260,7 +263,7 @@ class TestConsumeTaskEvents:
         local_tasks_dir = MagicMock(spec=Path)
 
         await self._run_consume(
-            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            session=SimpleNamespace(),  # opaque to consume_task; only forwarded to operations.download_outputs
             operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
@@ -303,7 +306,7 @@ class TestConsumeTaskEvents:
         local_tasks_dir = MagicMock(spec=Path)
 
         await self._run_consume(
-            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            session=SimpleNamespace(),  # opaque to consume_task; only forwarded to operations.download_outputs
             operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,

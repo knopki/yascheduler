@@ -30,10 +30,10 @@ from typing import TYPE_CHECKING
 
 from yascheduler.domain import (
     CloudProvisioner,
-    ConnectedMachine,
     MachineConnectionError,
     MachineOperations,
     MachineRepository,
+    MachineSession,
     MachineState,
     Node,
     Task,
@@ -166,26 +166,24 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._start_task_on_machine
     #   PURPOSE: Thin wrapper — resolve ncpus via UoW, delegate to operations.start_task_on_machine.
-    #   INPUTS: { machine: ConnectedMachine, engine: Engine, task: Task }
+    #   INPUTS: { session: MachineSession, engine: Engine, task: Task }
     #   OUTPUTS: { bool - True on successful spawn }
     #   SIDE_EFFECTS: Reads node from DB, calls operations.start_task_on_machine.
     #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
     # END_CONTRACT: Orchestrator._start_task_on_machine
     async def _start_task_on_machine(
         self,
-        machine: ConnectedMachine,
+        session: MachineSession,
         engine: Engine,
         task: Task,
     ) -> bool:
         # START_BLOCK_RESOLVE_NCPUS
         async with self._uow_factory() as uow:
             node = await uow.nodes.get(task.allocated_ip or "")
-        ncpus = (node and node.ncpus) or await self._operations.get_cpu_cores(
-            machine.ip
-        )
+        ncpus = (node and node.ncpus) or await self._operations.get_cpu_cores(session)
         # END_BLOCK_RESOLVE_NCPUS
         return await self._operations.start_task_on_machine(
-            machine, engine, task, ncpus, self._remote_defaults.engines_dir
+            session, engine, task, ncpus, self._remote_defaults.engines_dir
         )
 
     # ---- Stats ----
@@ -209,8 +207,8 @@ class Orchestrator:
                     tcounters = await uow.tasks.count_by_status()
                 n_busy = sum(
                     1
-                    for m in self._repository.list_connected()
-                    if m.state == MachineState.BUSY
+                    for s in self._repository.list_connected()
+                    if s.machine.state == MachineState.BUSY
                 )
                 tmpl = (
                     "THREADS: {tasks} "
@@ -429,8 +427,8 @@ class Orchestrator:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
         ip = task.allocated_ip or ""
-        machine = self._repository.get_machine_state(ip)
-        if machine is None:
+        session = self._repository.get_session(ip)
+        if session is None:
             # START_BLOCK_MACHINE_GONE
             self._log.warning(
                 "[Orchestrator][_task_consumer_consumer][MACHINE_GONE] task_id=%s ip=%s",
@@ -462,14 +460,17 @@ class Orchestrator:
             # END_BLOCK_MACHINE_GONE
             return
 
+        machine = session.machine
+
         if ip not in self._occupancy_started:
             engine = self._engines.get(task.context.engine)
             if engine:
-                self._operations.start_occupancy_check(ip, engine)
+                self._operations.start_occupancy_check(session, engine)
                 self._occupancy_started.add(ip)
-                machine = self._repository.get_machine_state(ip)
-                if machine is None:
+                session = self._repository.get_session(ip)
+                if session is None:
                     return
+                machine = session.machine
 
         # START_BLOCK_CONSUME
         if machine.state == MachineState.FREE and ip in self._occupancy_started:
@@ -484,7 +485,7 @@ class Orchestrator:
             try:
                 finalised = await consume_task(
                     task_id=task_id,
-                    ip=ip,
+                    session=session,
                     operations=self._operations,
                     engines=self._engines,
                     uow_factory=self._uow_factory,
@@ -515,9 +516,12 @@ class Orchestrator:
         # free_since is monotonic; pass it through unchanged so deallocate_nodes
         # compares against time.monotonic() and stays immune to wall-clock jumps.
         idle_machines: dict[str, float] = {}
-        for m in self._repository.list_connected():
-            if m.state == MachineState.FREE and m.free_since is not None:
-                idle_machines[m.ip] = m.free_since
+        for s in self._repository.list_connected():
+            if (
+                s.machine.state == MachineState.FREE
+                and s.machine.free_since is not None
+            ):
+                idle_machines[s.machine.ip] = s.machine.free_since
         # END_BLOCK_COLLECT_IDLE
 
         # START_BLOCK_DEALLOCATE_USE_CASE

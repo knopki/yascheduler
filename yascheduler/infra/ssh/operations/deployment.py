@@ -1,21 +1,21 @@
 # FILE: yascheduler/infra/ssh/operations/deployment.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
-#   PURPOSE: TaskDeployer — upload task inputs and spawn the calculation process on a remote machine.
+#   PURPOSE: TaskDeployer — upload task inputs and spawn the calculation process on a remote machine via MachineSession. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: TaskDeployer class + _write_remote_file + _safe_b64decode module-private helpers.
-#   DEPENDS: M-SSH-OPERATIONS-BASE, M-SSH-REPOSITORY, M-DOMAIN, M-PLATFORM
-#   LINKS: M-SSH-OPS-DEPLOY
+#   DEPENDS: M-DOMAIN, M-SSH-SESSION
+#   LINKS: M-SSH-OPS-DEPLOY, M-SSH-SESSION
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   _safe_b64decode - Decode base64 with lenient padding handling (module-private)
 #   _write_remote_file - Write data to remote file via SFTP with error handling (module-private)
-#   TaskDeployer - Upload task inputs and spawn calculation process; rolls back BUSY on failure
+#   TaskDeployer - Upload task inputs and spawn calculation process; stateless (log)-only constructor; takes session per call; rolls back BUSY via session.is_closed check
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). Extracted from the dissolved SSHMachineGateway god-class; start_task_on_machine + _upload_task_data + _exec_spawn_command + _write_remote_file + _safe_b64decode moved verbatim. Rollback now calls repository.occupy(ip) / repository.update_machine(state.machine.release()).
-#   PREVIOUS_CHANGE: none
+#   LAST_CHANGE: v1.2.0 - session-based-machine-handle section 5.2: Method bodies rewritten to operate via MachineSession parameter directly. _upload_task_data, _exec_spawn_command, start_task_on_machine all take `session: MachineSession` instead of `ip`/`machine`. All self._operations/self._repository references replaced with session methods (open_sftp, run_bg, quote, path, hostname, is_closed, machine.state, update, release, occupy).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). Extracted from the dissolved SSHMachineGateway god-class; start_task_on_machine + _upload_task_data + _exec_spawn_command + _write_remote_file + _safe_b64decode moved verbatim.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -32,10 +32,7 @@ if TYPE_CHECKING:
 
     from asyncssh.sftp import SFTPClient
 
-    from yascheduler.domain import ConnectedMachine, Engine, Task
-
-    from ..repository import SSHMachineRepository
-    from .base import SSHMachineOperations
+    from yascheduler.domain import Engine, MachineSession, Task
 
 
 # START_CONTRACT: _safe_b64decode
@@ -85,38 +82,33 @@ async def _write_remote_file(
 
 
 # START_CONTRACT: TaskDeployer
-#   PURPOSE: Upload task inputs and spawn calculation process on a remote machine; rolls back BUSY on failure.
-#   LINKS: M-SSH-OPS-DEPLOY, M-SSH-OPERATIONS, M-SSH-REPOSITORY
+#   PURPOSE: Upload task inputs and spawn calculation process on a remote machine via MachineSession; rolls back BUSY on failure.
+#   LINKS: M-SSH-OPS-DEPLOY, M-SSH-SESSION
 # END_CONTRACT: TaskDeployer
 class TaskDeployer:
     """Upload task inputs and spawn the calculation process on a remote machine.
 
-    Receives a primitive-provider (the operations object, typed against the
-    narrow CommandExecutor + SftpProvider + StateAccessors Protocols) and the
-    repository (for occupy/release/get_quote). Rolls back the repository-level
-    BUSY marking under `except BaseException` on any deploy/spawn failure.
+    Stateless: takes (log) at construction, (session, ...) per call. Rolls back
+    the session BUSY marking under `except BaseException` on any deploy/spawn
+    failure.
     """
 
     def __init__(
         self,
-        operations: SSHMachineOperations,
-        repository: SSHMachineRepository,
         log: logging.Logger,
     ) -> None:
-        self._operations = operations
-        self._repository = repository
         self._log = log
 
     # START_CONTRACT: TaskDeployer._upload_task_data
     #   PURPOSE: Upload task input files to remote machine via SFTP.
-    #   INPUTS: { ip, task, remote_dir, input_files }
+    #   INPUTS: { session, task, remote_dir, input_files }
     #   OUTPUTS: { bool - True on success }
     #   SIDE_EFFECTS: Creates remote directories, writes files via SFTP.
     #   LINKS: M-SSH-OPS-DEPLOY
     # END_CONTRACT: TaskDeployer._upload_task_data
     async def _upload_task_data(
         self,
-        ip: str,
+        session: MachineSession,
         task: Task,
         remote_dir: PurePath,
         input_files: Sequence[str],
@@ -124,7 +116,7 @@ class TaskDeployer:
         from pathlib import PurePosixPath
 
         # START_BLOCK_UPLOAD
-        async with self._operations.get_sftp(ip) as sftp:
+        async with session.open_sftp() as sftp:
             try:
                 await sftp.makedirs(PurePosixPath(remote_dir), exist_ok=True)
             except asyncssh.misc.Error as err:
@@ -160,14 +152,14 @@ class TaskDeployer:
 
     # START_CONTRACT: TaskDeployer._exec_spawn_command
     #   PURPOSE: Execute spawn command on remote machine via SSH.
-    #   INPUTS: { machine, engine, task, task_dir, eng_path, ncpus }
+    #   INPUTS: { session, engine, task, task_dir, eng_path, ncpus }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Runs background process on remote machine.
     #   LINKS: M-SSH-OPS-DEPLOY
     # END_CONTRACT: TaskDeployer._exec_spawn_command
     async def _exec_spawn_command(
         self,
-        machine: ConnectedMachine,
+        session: MachineSession,
         engine: Engine,
         task: Task,
         task_dir: PurePath,
@@ -178,10 +170,10 @@ class TaskDeployer:
         try:
             run_cmd = engine.spawn.format(
                 engine_path=str(eng_path),
-                task_path=self._repository.get_quote(machine.ip)(str(task_dir)),
+                task_path=session.quote(str(task_dir)),
                 ncpus=ncpus,
             )
-            await self._operations.run_bg(machine, run_cmd, cwd=str(task_dir))
+            await session.run_bg(run_cmd, cwd=str(task_dir))
         except Exception as err:
             self._log.error("SSH spawn cmd error: %s", err)
             raise err
@@ -190,7 +182,7 @@ class TaskDeployer:
     # START_CONTRACT: TaskDeployer.start_task_on_machine
     #   PURPOSE: Upload task inputs and spawn calculation process on remote machine.
     #   INPUTS: {
-    #     machine: ConnectedMachine - Target machine,
+    #     session: MachineSession - Target machine session,
     #     engine: Engine - Engine metadata (spawn template, input files),
     #     task: Task - Task being deployed,
     #     ncpus: int - CPU cores for spawn command formatting,
@@ -198,11 +190,11 @@ class TaskDeployer:
     #   }
     #   OUTPUTS: { bool - True on successful spawn }
     #   SIDE_EFFECTS: Uploads files via SFTP, marks machine busy, runs spawn command via run_bg.
-    #   LINKS: M-SSH-OPS-DEPLOY, M-SSH-REPOSITORY
+    #   LINKS: M-SSH-OPS-DEPLOY, M-SSH-SESSION
     # END_CONTRACT: TaskDeployer.start_task_on_machine
     async def start_task_on_machine(
         self,
-        machine: ConnectedMachine,
+        session: MachineSession,
         engine: Engine,
         task: Task,
         ncpus: int,
@@ -216,17 +208,17 @@ class TaskDeployer:
             task.task_id,
             task.label,
             engine.name,
-            self._repository.get_hostname(machine.ip),
+            session.hostname,
         )
         assert task.context.remote_folder is not None
-        self._repository.occupy(machine.ip)
+        session.occupy()
 
         # START_BLOCK_DEPLOY_SPAWN
         try:
-            path_type = self._repository.get_path(machine.ip)
+            path_type = session.path
             remote_folder = path_type(task.context.remote_folder)
             # START_BLOCK_DEPLOY
-            async with self._operations.get_sftp(machine.ip) as sftp:
+            async with session.open_sftp() as sftp:
                 try:
                     root_dir = path_type(await sftp.realpath("."))
                     task_dir = (
@@ -239,7 +231,7 @@ class TaskDeployer:
                     else:
                         engine_path = root_dir / engines_dir / engine.name
                     await self._upload_task_data(
-                        machine.ip, task, task_dir, engine.input_files
+                        session, task, task_dir, engine.input_files
                     )
                 except Exception as err:
                     self._log.error(
@@ -249,36 +241,35 @@ class TaskDeployer:
             # END_BLOCK_DEPLOY
 
             await self._exec_spawn_command(
-                machine, engine, task, task_dir, engine_path, ncpus
+                session, engine, task, task_dir, engine_path, ncpus
             )
         except BaseException as err:
             # START_BLOCK_ROLLBACK_BUSY
-            # Roll back the repository BUSY marking on any deploy/spawn failure (incl.
+            # Roll back the session BUSY marking on any deploy/spawn failure (incl.
             # CancelledError during daemon shutdown) so the machine is not left stuck.
-            state = self._repository._get_machine_state(machine.ip)
-            if state is None:
+            if session.is_closed:
                 self._log.warning(
                     "task_id=%s on %s: already disconnected, skipping rollback (%s)",
                     task.task_id,
-                    machine.ip,
+                    session.ip,
                     err,
                 )
                 raise
-            if state.machine.state != MachineState.BUSY:
+            if session.machine.state != MachineState.BUSY:
                 self._log.warning(
                     "unexpected state %s, expected BUSY (task_id=%s on %s)",
-                    state.machine.state,
+                    session.machine.state,
                     task.task_id,
-                    machine.ip,
+                    session.ip,
                 )
             else:
                 self._log.info(
-                    "task_id=%s on %s (%s); rolling back repository BUSY",
+                    "task_id=%s on %s (%s); rolling back BUSY",
                     task.task_id,
-                    machine.ip,
+                    session.ip,
                     err,
                 )
-            self._repository.update_machine(state.machine.release())
+            session.update(session.machine.release())
             raise
             # END_BLOCK_ROLLBACK_BUSY
         # END_BLOCK_DEPLOY_SPAWN

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_check_status.py
-# VERSION: 1.1.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yastatus check_status() flag parsing, renderers, exit codes, and connection-params resolver.
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yastatus (entrypoints/cli/check_status.py) in relocate-check-status-command.
+#   LAST_CHANGE: v2.0.0 - session-based-machine-handle section 7.5: make_mock_repository returns session-like mock via repo.connect; remove _get_machine_state/get_path/get_quote; view tests check session.run_full instead of ops.run_full; SSHMachineOperations patches no longer needed in view tests.
+#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -144,14 +144,24 @@ def make_task(
 def make_mock_repository(
     stdout: str = "remote output", returncode: int = 0
 ) -> MagicMock:
-    """Return a MagicMock SSHMachineRepository with async connect/disconnect."""
+    """Return a MagicMock SSHMachineRepository with async connect/disconnect.
+
+    repo.connect returns a session-like mock with the minimal MachineSession
+    surface used by _display_remote_output / _download_convergence_snippet.
+    """
+    session = MagicMock()
+    session.is_closed = False
+    session.path = PurePosixPath
+    session.quote = lambda s: s
+    session.run_full = AsyncMock(
+        return_value=MagicMock(returncode=returncode, stdout=stdout)
+    )
+    session.ip = "10.0.0.1"
+    session.open_sftp = AsyncMock()
+
     repo = MagicMock()
-    repo.connect = AsyncMock()
+    repo.connect = AsyncMock(return_value=session)
     repo.disconnect = AsyncMock()
-    state = MagicMock()
-    repo._get_machine_state = MagicMock(return_value=state)
-    repo.get_path = MagicMock(return_value=lambda folder: PurePosixPath(folder))
-    repo.get_quote = MagicMock(return_value=lambda s: s)
     return repo
 
 
@@ -677,12 +687,9 @@ class TestCheckStatusViewHappyPath:
         uow.nodes.get_by_ips = AsyncMock(return_value={"10.0.0.1": node})
 
         repo = make_mock_repository(stdout="OUTPUT TAIL")
-        ops = make_mock_operations(stdout="OUTPUT TAIL")
+        session = repo.connect.return_value
         monkeypatch.setattr(
             check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
-        )
-        monkeypatch.setattr(
-            check_status_mod, "SSHMachineOperations", MagicMock(return_value=ops)
         )
         resolve_spy = MagicMock(wraps=check_status_mod._resolve_conn_params)
         monkeypatch.setattr(check_status_mod, "_resolve_conn_params", resolve_spy)
@@ -699,8 +706,8 @@ class TestCheckStatusViewHappyPath:
         assert kwargs["port"] == 2222
         assert kwargs["jump_host"] == "jump.example.com"
         assert kwargs["jump_username"] == "jumper"
-        # tails OUTPUT (run_full invoked) and disconnects.
-        assert ops.run_full.await_count == 1
+        # tails OUTPUT (session.run_full invoked) and disconnects.
+        assert session.run_full.await_count == 1
         repo.disconnect.assert_awaited()
         out, _ = capsys.readouterr()
         assert "OUTPUT TAIL" in out
@@ -724,11 +731,6 @@ class TestCheckStatusViewHappyPath:
             check_status_mod,
             "SSHMachineRepository",
             MagicMock(return_value=make_mock_repository()),
-        )
-        monkeypatch.setattr(
-            check_status_mod,
-            "SSHMachineOperations",
-            MagicMock(return_value=make_mock_operations()),
         )
 
         _run(["-v"])
@@ -793,12 +795,8 @@ class TestCheckStatusQueryRenderSeparation:
         )
 
         repo = make_mock_repository()
-        ops = make_mock_operations()
         monkeypatch.setattr(
             check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
-        )
-        monkeypatch.setattr(
-            check_status_mod, "SSHMachineOperations", MagicMock(return_value=ops)
         )
 
         # Attach both mocks to a single manager BEFORE running so their call order

@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.9.1
+# VERSION: 2.11.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/operations, and cloud provisioning.
-#   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
+#   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
+#   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
 #   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-ENGINE
 #   LINKS: M-DOMAIN-MODEL, M-PERSISTENCE-POSTGRES, M-CLOUD-CONFIGS, M-APPLICATION-DEALLOCATE, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
 # END_MODULE_CONTRACT
@@ -11,14 +11,15 @@
 #   TaskRepository - Async port for task persistence (get, save, insert, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status)
 #   NodeRepository - Async port for node persistence (full CRUD lifecycle, list_all, get_by_ips, count_by_status)
 #   CloudConfig - Structural Protocol for cloud provider config (7-field surface application consumers read: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host)
-#   MachineRepository - Async port for the connected-machine collection (lifecycle, queries, state transitions, accessor getters, generic monitor mechanism); Engine-agnostic
-#   MachineOperations - Async port for operations on a single machine (exec, SFTP, deploy, download, occupancy check logic)
+#   MachineRepository - Async port for the connected-machine collection (lifecycle, queries); returns MachineSession; no state transitions/accessors/monitor (moved to MachineSession)
+#   MachineSession - Connected-machine entity handle (identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism); Engine-agnostic
+#   MachineOperations - Async port for operations on a single machine; methods take session: MachineSession (use-case methods + facade pass-throughs)
 #   CloudProvisioner - Async port for cloud node provisioning (allocate, deallocate, select_provider)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.9.1 - Narrowed MachineRepository Protocol per cleanup-unused-repository-symbols: removed get_conn, get_adapter, get_platforms, get_data_dir, get_engines_dir, get_tasks_dir (zero production callers). Pure narrowing — any old-shape implementer still satisfies the new Protocol. SSHClientConnection TYPE_CHECKING import dropped (only used by removed get_conn).
-#   PREVIOUS_CHANGE: v2.9.0 - Split MachineGateway Protocol into MachineRepository (collection lifecycle/queries/state transitions/accessors/monitor mechanism) and MachineOperations (exec/SFTP/deploy/download/occupancy logic) per decompose-ssh-gateway. BREAKING: MachineGateway removed; consumers take one or both of the two new Protocols. Deployment method named start_task_on_machine (per Q3 resolution, not deploy_task).
+#   LAST_CHANGE: v2.11.0 - Session-based-machine-handle sections 3-4. Narrowed MachineRepository Protocol to 9-method surface (connect/disconnect/disconnect_all/list_free/list_connected/get_session/contains/__contains__/__len__) returning MachineSession; removed get_machine_state, update_machine, occupy, release, get_path, get_quote, get_hostname, install_monitor, cancel_monitor (migrated to MachineSession). Rewrote MachineOperations Protocol: methods now take session: MachineSession (was ConnectedMachine/ip); use-case methods (start_task_on_machine, download_outputs, occupancy_check, start_occupancy_check) + facade pass-throughs (run, run_full, run_bg, get_cpu_cores, setup_node); removed upload, get_sftp, pgrep, list_processes (accessed via session parameter by collaborators).
+#   PREVIOUS_CHANGE: v2.10.0 - Add MachineSession Protocol (session-based-machine-handle section 2). Connected-machine entity handle: identity (ip, machine, is_closed), state transitions (occupy/release/update), connect-time config (adapter, platforms, data_dir, engines_dir, tasks_dir), adapter-derived accessors (path, quote, hostname), base primitives (run/run_full/run_bg/upload/open_sftp/get_cpu_cores/setup_node/pgrep/list_processes), monitor mechanism (install_monitor/cancel_monitor). @runtime_checkable. Engine-agnostic.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
     from contextlib import AbstractAsyncContextManager
     from pathlib import Path, PurePath
     from re import Pattern
@@ -124,15 +125,115 @@ class CloudConfig(Protocol):
     jump_host: str | None
 
 
+# START_CONTRACT: MachineSession
+#   PURPOSE: Connected-machine entity handle — the public counterpart to the dissolved private _MachineState.
+#     Carries domain identity (ip, mutable machine snapshot), connect-time config (read-only),
+#     adapter-derived accessors, base SSH primitives, and the per-session monitor mechanism.
+#     What MachineOperations methods operate on; what MachineRepository hands out and tracks by IP.
+#   INPUTS: { None - Protocol has no inputs }
+#   OUTPUTS: { None - Protocol defines surface only }
+#   SIDE_EFFECTS: None at Protocol level; implementations own connection teardown via _close (private to concrete class)
+#   LINKS: M-DOMAIN-PORTS, M-SSH-SESSION, M-SSH-REPOSITORY, M-SSH-OPERATIONS
+# END_CONTRACT: MachineSession
+@runtime_checkable
+class MachineSession(Protocol):
+    """Connected-machine entity handle — identity, state transitions,
+    connect-time config, adapter-derived accessors, base SSH primitives,
+    and the per-session monitor mechanism.
+
+    Does NOT cover collection lifecycle, queries, or repository keying —
+    those are MachineRepository. Does NOT declare _close (private to the
+    concrete class; invoked only by SSHMachineRepository.disconnect).
+
+    The Protocol is Engine-agnostic: install_monitor is generic over
+    Callable[[], Awaitable[bool]] and Callable[[], None].
+    """
+
+    # ---- Domain face ----
+    @property
+    def ip(self) -> str: ...
+
+    @property
+    def machine(self) -> ConnectedMachine: ...
+
+    @property
+    def is_closed(self) -> bool: ...
+
+    def occupy(self) -> None: ...
+
+    def release(self) -> None: ...
+
+    def update(self, machine: ConnectedMachine) -> None: ...
+
+    # ---- Connect-time config (read-only) ----
+    @property
+    def adapter(self) -> Any: ...  # noqa: ANN401 - infra RemoteMachineAdapter returned through domain Protocol
+
+    @property
+    def platforms(self) -> Sequence[str]: ...
+
+    @property
+    def data_dir(self) -> PurePath: ...
+
+    @property
+    def engines_dir(self) -> PurePath: ...
+
+    @property
+    def tasks_dir(self) -> PurePath: ...
+
+    # ---- Adapter-derived accessors (read-only) ----
+    @property
+    def path(self) -> type[PurePath]: ...
+
+    @property
+    def quote(self) -> Callable[[str], str]: ...
+
+    @property
+    def hostname(self) -> str: ...
+
+    # ---- Base primitives ----
+    async def run(self, cmd: str) -> ProcessResult: ...
+
+    async def run_full(self, cmd: str) -> Any: ...  # noqa: ANN401 - infra SSHCompletedProcess returned through domain Protocol
+
+    async def run_bg(self, cmd: str, *, cwd: str | None = None) -> None: ...
+
+    async def upload(self, local: Path, remote: str) -> None: ...
+
+    def open_sftp(self) -> AbstractAsyncContextManager[SFTPClient]: ...
+
+    async def get_cpu_cores(self) -> int: ...
+
+    async def setup_node(self, engines: EngineRepository) -> None: ...
+
+    def pgrep(
+        self, pattern: str | Pattern[str], full: bool = True
+    ) -> AsyncGenerator[Any, None]: ...  # noqa: ANN401 - yields infra ProcessInfo through domain Protocol
+
+    def list_processes(self) -> AsyncGenerator[Any, None]: ...  # noqa: ANN401 - yields infra ProcessInfo through domain Protocol
+
+    # ---- Monitor mechanism (generic, Engine-agnostic) ----
+    def install_monitor(
+        self,
+        *,
+        interval: float,
+        check_factory: Callable[[], Awaitable[bool]],
+        on_free: Callable[[], None],
+    ) -> None: ...
+
+    def cancel_monitor(self) -> None: ...
+
+
 @runtime_checkable
 class MachineRepository(Protocol):
-    """Connected-machine collection — lifecycle, queries, state transitions,
-    accessor getters, and a generic occupancy-monitor mechanism keyed by IP.
+    """Connected-machine collection — lifecycle and queries.
 
-    Does NOT cover operations on a single machine (exec, SFTP, deploy,
-    download, occupancy-check logic) — those are MachineOperations. The
-    monitor mechanism is generic (Engine-agnostic): callers pass an opaque
-    check_factory and on_free callback.
+    Returns MachineSession from connect/list_free/list_connected/get_session.
+    Does NOT declare state transitions (occupy/release/update), accessor
+    getters (get_path/get_quote/get_hostname), the monitor mechanism
+    (install_monitor/cancel_monitor), or get_machine_state — those are on
+    MachineSession. Callers resolve a session via get_session(ip) and read
+    session.machine for the snapshot.
     """
 
     # ---- Collection lifecycle ----
@@ -149,107 +250,53 @@ class MachineRepository(Protocol):
         tasks_dir: PurePath | None = None,
         jump_host: str | None = None,
         jump_username: str | None = None,
-    ) -> ConnectedMachine: ...
+    ) -> MachineSession: ...
 
     async def disconnect(self, ip: str) -> None: ...
 
     async def disconnect_all(self) -> None: ...
 
     # ---- Queries ----
-    def list_free(self, platforms: list[str] | None) -> list[ConnectedMachine]: ...
+    def list_free(self, platforms: list[str] | None) -> list[MachineSession]: ...
 
-    def list_connected(self) -> list[ConnectedMachine]: ...
+    def list_connected(self) -> list[MachineSession]: ...
+
+    def get_session(self, ip: str) -> MachineSession | None: ...
 
     def contains(self, ip: str) -> bool: ...
-
-    def get_machine_state(self, ip: str) -> ConnectedMachine | None: ...
 
     def __len__(self) -> int: ...
 
     def __contains__(self, ip: str) -> bool: ...
 
-    # ---- State transitions ----
-    def update_machine(self, machine: ConnectedMachine) -> None: ...
-
-    def occupy(self, ip: str) -> None: ...
-
-    def release(self, ip: str) -> None: ...
-
-    # ---- Accessor getters (read stored state) ----
-    def get_path(self, ip: str) -> type[PurePath]: ...
-
-    def get_quote(self, ip: str) -> Callable[[str], str]: ...
-
-    def get_hostname(self, ip: str) -> str: ...
-
-    # ---- Monitor mechanism (generic, Engine-agnostic) ----
-    def install_monitor(
-        self,
-        ip: str,
-        *,
-        interval: float,
-        check_factory: Callable[[], Awaitable[bool]],
-        on_free: Callable[[], None],
-    ) -> None: ...
-
-    def cancel_monitor(self, ip: str) -> None: ...
-
 
 @runtime_checkable
 class MachineOperations(Protocol):
-    """Operations on a single machine — command exec, SFTP transfer,
-    process inspection, node setup, task deployment, output download,
-    and occupancy check logic.
+    """Operations on a single connected machine — use-case methods plus
+    facade pass-throughs. All machine-reference parameters are typed
+    `session: MachineSession` (resolved per-tick by the orchestrator via
+    `repository.get_session(ip)`).
 
-    Does NOT cover collection lifecycle, queries, state transitions,
-    accessor getters, or the monitor mechanism — those are MachineRepository.
+    Does NOT declare base primitives (run/run_full/run_bg/upload/
+    open_sftp/pgrep/list_processes/get_cpu_cores/setup_node) as abstract —
+    those live on MachineSession; the facade pass-throughs below delegate
+    to them. Does NOT expose upload/get_sftp/pgrep/list_processes —
+    collaborators access them via the session parameter.
     """
 
-    # ---- Command execution ----
-    async def run(self, machine: ConnectedMachine, cmd: str) -> ProcessResult: ...
-
-    async def run_full(self, machine: ConnectedMachine, cmd: str) -> Any: ...  # noqa: ANN401 - infra SSHCompletedProcess returned through domain Protocol
-
-    async def run_bg(
-        self, machine: ConnectedMachine, cmd: str, *, cwd: str | None = None
-    ) -> None: ...
-
-    # ---- File transfer ----
-    async def upload(
-        self, machine: ConnectedMachine, local: Path, remote: str
-    ) -> None: ...
-
-    def get_sftp(self, ip: str) -> AbstractAsyncContextManager[SFTPClient]: ...
-
-    # ---- Process inspection ----
-    def pgrep(
-        self,
-        ip: str,
-        pattern: str | Pattern[str],
-        full: bool = True,
-    ) -> Any: ...  # noqa: ANN401 - infra AsyncGenerator[ProcessInfo] returned through domain Protocol
-
-    def list_processes(self, ip: str) -> Any: ...  # noqa: ANN401 - infra AsyncGenerator[ProcessInfo] returned through domain Protocol
-
-    # ---- Node info / setup ----
-    async def get_cpu_cores(self, ip: str) -> int: ...
-
-    async def setup_node(self, ip: str, engines: EngineRepository) -> None: ...
-
-    # ---- Task deployment ----
+    # ---- Use-case methods (forwarded to collaborators) ----
     async def start_task_on_machine(
         self,
-        machine: ConnectedMachine,
+        session: MachineSession,
         engine: Engine,
         task: Task,
         ncpus: int,
         engines_dir: PurePath,
     ) -> bool: ...
 
-    # ---- Output download ----
     async def download_outputs(
         self,
-        ip: str,
+        session: MachineSession,
         remote_dir: str,
         local_dir: Path,
         files: list[str],
@@ -260,10 +307,28 @@ class MachineOperations(Protocol):
         list[tuple[str | None, Exception]],
     ]: ...
 
-    # ---- Occupancy check ----
-    async def occupancy_check(self, ip: str, config: Engine) -> bool: ...
+    async def occupancy_check(
+        self, session: MachineSession, config: Engine
+    ) -> bool: ...
 
-    def start_occupancy_check(self, ip: str, config: Engine) -> None: ...
+    def start_occupancy_check(
+        self, session: MachineSession, config: Engine
+    ) -> None: ...
+
+    # ---- Facade pass-throughs (delegate to session.*) ----
+    async def run(self, session: MachineSession, cmd: str) -> ProcessResult: ...
+
+    async def run_full(self, session: MachineSession, cmd: str) -> Any: ...  # noqa: ANN401 - infra SSHCompletedProcess returned through domain Protocol
+
+    async def run_bg(
+        self, session: MachineSession, cmd: str, *, cwd: str | None = None
+    ) -> None: ...
+
+    async def get_cpu_cores(self, session: MachineSession) -> int: ...
+
+    async def setup_node(
+        self, session: MachineSession, engines: EngineRepository
+    ) -> None: ...
 
 
 @runtime_checkable

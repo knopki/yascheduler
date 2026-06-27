@@ -1,20 +1,20 @@
 # FILE: yascheduler/infra/ssh/operations/download.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
-#   PURPOSE: OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.
+#   PURPOSE: OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OutputDownloader class + my_backoff_sftp partial (canonical location — its first user is download_outputs).
-#   DEPENDS: M-SSH-OPERATIONS-BASE, M-SSH-REPOSITORY, M-SSH-EXCEPTIONS, M-PLATFORM
+#   DEPENDS: M-SSH-SESSION, M-SSH-EXCEPTIONS
 #   LINKS: M-SSH-OPS-DOWNLOAD
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   my_backoff_sftp - Partial backoff decorator for SFTPRetryExc (canonical; first user is download_outputs)
-#   OutputDownloader - Per-file SFTP-isolated download with retry and error classification; 3-tuple return
+#   OutputDownloader - Per-file SFTP-isolated download with retry and error classification; stateless (log)-only constructor; 3-tuple return
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). Extracted from the dissolved SSHMachineGateway god-class; download_outputs moved verbatim with self.get_sftp → self._operations.get_sftp, self.get_path → self._repository.get_path. my_backoff_sftp defined here (canonical location per design D4 note).
-#   PREVIOUS_CHANGE: none
+#   LAST_CHANGE: v1.2.0 - session-based-machine-handle section 5.4: download_outputs rewritten to operate via MachineSession parameter. Uses session.open_sftp() instead of self._operations.get_sftp(ip), session.path instead of self._repository.get_path(ip).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). Extracted from the dissolved SSHMachineGateway god-class; download_outputs moved verbatim with self.get_sftp → self._operations.get_sftp, self.get_path → self._repository.get_path.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,8 +31,7 @@ if TYPE_CHECKING:
     import logging
     from pathlib import Path
 
-    from ..repository import SSHMachineRepository
-    from .base import SSHMachineOperations
+    from yascheduler.domain import MachineSession
 
 my_backoff_sftp = partial(
     backoff.on_exception,
@@ -44,7 +43,7 @@ my_backoff_sftp = partial(
 
 # START_CONTRACT: OutputDownloader
 #   PURPOSE: Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.
-#   LINKS: M-SSH-OPS-DOWNLOAD, M-SSH-OPERATIONS, M-SSH-REPOSITORY
+#   LINKS: M-SSH-OPS-DOWNLOAD, M-SSH-SESSION
 # END_CONTRACT: OutputDownloader
 class OutputDownloader:
     """Per-file SFTP-isolated download with retry and error classification.
@@ -52,31 +51,27 @@ class OutputDownloader:
     Opens a FRESH SFTP client per file (dead-connection blast radius bounded
     to one file). Classifies per-file exceptions into transient (SFTPRetryExc)
     or permanent (everything else). Removes the remote dir tree ONCE only on
-    full success (both error lists empty). Session-level failures are caught
-    and recorded as transient. Returns a 3-tuple
+    full success (both error lists empty). Stateless: takes (log) at
+    construction, (session, ...) per call. Returns a 3-tuple
     (meta_add, transient_errors, permanent_errors).
     """
 
     def __init__(
         self,
-        operations: SSHMachineOperations,
-        repository: SSHMachineRepository,
         log: logging.Logger,
     ) -> None:
-        self._operations = operations
-        self._repository = repository
         self._log = log
 
     # START_CONTRACT: OutputDownloader.download_outputs
     #   PURPOSE: Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.
-    #   INPUTS: { ip: str, remote_dir: str, local_dir: Path, files: list[str], task_id: int | None }
+    #   INPUTS: { session: MachineSession, remote_dir: str, local_dir: Path, files: list[str], task_id: int | None }
     #   OUTPUTS: { tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]] - (meta_add, transient_errors, permanent_errors) }
     #   SIDE_EFFECTS: Downloads files via SFTP using a FRESH client per file; removes the remote directory tree ONCE after the loop ONLY when both transient_errors and permanent_errors are empty.
-    #   LINKS: M-SSH-OPS-DOWNLOAD, M-SSH-OPERATIONS, M-SSH-REPOSITORY
+    #   LINKS: M-SSH-OPS-DOWNLOAD, M-SSH-SESSION
     # END_CONTRACT: OutputDownloader.download_outputs
     async def download_outputs(
         self,
-        ip: str,
+        session: MachineSession,
         remote_dir: str,
         local_dir: Path,
         files: list[str],
@@ -93,7 +88,7 @@ class OutputDownloader:
         ]
         transient_errors: list[tuple[str | None, Exception]] = []
         permanent_errors: list[tuple[str | None, Exception]] = []
-        path_type = self._repository.get_path(ip)
+        path_type = session.path
         file_get_retry = my_backoff_sftp()
 
         try:
@@ -102,7 +97,7 @@ class OutputDownloader:
             # retries. The inner try classifies ONLY sftp.get failures — a get_sftp OPEN
             # failure escapes to the outer handler as a session-level transient (not per-file).
             for out_file in files:
-                async with self._operations.get_sftp(ip) as sftp:
+                async with session.open_sftp() as sftp:
                     try:
                         await file_get_retry(sftp.get)(
                             out_file, local_dir, preserve=True
@@ -126,11 +121,11 @@ class OutputDownloader:
             # Post-loop rmtree on full success only (both error lists empty); own fresh
             # client. Any error preserves the remote dir for retry / debugging.
             if not transient_errors and not permanent_errors:
-                async with self._operations.get_sftp(ip) as sftp:
+                async with session.open_sftp() as sftp:
                     await sftp.rmtree(path_type(remote_dir))
             # END_BLOCK_RMTREE_GATE
         except Exception as err:
-            # Catch-all: whole-session failure (get_sftp raising, or a non-(OSError|SFTPError)
+            # Catch-all: whole-session failure (open_sftp raising, or a non-(OSError|SFTPError)
             # escape) is transient — the remote dir is preserved.
             self._log.warning("Cannot scp from %s: %s", remote_dir, err)
             transient_errors.append((remote_dir, err))

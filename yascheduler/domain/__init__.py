@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.7.0
+# VERSION: 2.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain layer entry point — re-exports events, model entities, engine types, exception hierarchy, port interfaces, and cross-layer settings.
-#   SCOPE: Re-exports domain events from .events, domain entities from .model, engine types from .engine (via .model), exception tree from .exceptions, port Protocols from .ports (including CloudConfig, MachineRepository, MachineOperations), and LocalSettings/RemoteDefaults from .settings.
+#   SCOPE: Re-exports domain events from .events, domain entities from .model, engine types from .engine (via .model), exception tree from .exceptions, port Protocols from .ports (including CloudConfig, MachineRepository, MachineSession, MachineOperations), and LocalSettings/RemoteDefaults from .settings.
 #   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-ENGINE, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS
 #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-ENGINE, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS
 # END_MODULE_CONTRACT
@@ -44,8 +44,9 @@
 #   CloudSetupError - Cloud node setup error
 #   TaskRepository - Async port for task persistence
 #   NodeRepository - Async port for node persistence
-#   MachineRepository - Async port for the connected-machine collection (lifecycle, queries, state transitions, accessors, monitor mechanism)
-#   MachineOperations - Async port for operations on a single machine (exec, SFTP, deploy, download, occupancy check logic)
+#   MachineRepository - Async port for the connected-machine collection (lifecycle, queries)
+#   MachineSession - Connected-machine entity handle (identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)
+#   MachineOperations - Async port for operations on a single machine (deploy, download, occupancy, facade pass-throughs)
 #   CloudConfig - Structural contract for cloud provider config (7-field surface application consumers read)
 #   CloudProvisioner - Async port for cloud node provisioning
 #   LocalSettings - Frozen dataclass: local daemon settings (paths, webhook, concurrency limits)
@@ -53,8 +54,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.7.0 - Split MachineGateway Protocol into MachineRepository + MachineOperations (decompose-ssh-gateway). __all__ and .ports re-export updated; MachineGateway removed. BREAKING.
-#   PREVIOUS_CHANGE: v2.6.0 - Drop OccupancyConfig and TaskExecutionEngine from __all__, .ports re-export, and MODULE_MAP (resolve-engine-protocol-debt).
+#   LAST_CHANGE: v2.8.0 - Re-export MachineSession Protocol (session-based-machine-handle section 2). Joined __all__ and .ports re-export next to MachineRepository and MachineOperations.
+#   PREVIOUS_CHANGE: v2.7.0 - Split MachineGateway Protocol into MachineRepository + MachineOperations (decompose-ssh-gateway). __all__ and .ports re-export updated; MachineGateway removed. BREAKING.
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -102,6 +103,7 @@ __all__ = [
     "TaskRepository",
     "NodeRepository",
     "MachineRepository",
+    "MachineSession",
     "MachineOperations",
     "CloudConfig",
     "CloudProvisioner",
@@ -160,6 +162,7 @@ from .ports import (
     CloudProvisioner,
     MachineOperations,
     MachineRepository,
+    MachineSession,
     NodeRepository,
     TaskRepository,
 )

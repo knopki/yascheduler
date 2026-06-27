@@ -22,7 +22,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.9.0 - Retype SSH-side parameters: repository: MachineRepository, operations: MachineOperations split into repository: MachineRepository (list_free) and operations: MachineOperations (start_occupancy_check) per decompose-ssh-gateway. _try_start_on_machine now takes operations instead of gateway (uses operations.start_occupancy_check); _find_free_machines takes repository (uses repository.list_free).
+#   LAST_CHANGE: v5.10.0 - session-based-machine-handle: _try_start_on_machine takes MachineSession instead of ConnectedMachine; callback type changed to Callable[[MachineSession, Engine, Task], Awaitable[bool]]; _find_free_machines returns list[MachineSession]; _allocate_free_machine iterates sessions.
 #   PREVIOUS_CHANGE: v5.8.0 - Retype start_task_on_machine callback signatures to Engine; remove cast("TaskExecutionEngine") and cast("OccupancyConfig") bridging calls and the unused cast import (resolve-engine-protocol-debt).
 # END_CHANGE_SUMMARY
 
@@ -32,7 +32,7 @@ import logging
 from typing import TYPE_CHECKING, NamedTuple
 
 from yascheduler.domain import (
-    ConnectedMachine,
+    MachineSession,
     Node,
     Task,
     TaskAllocated,
@@ -100,43 +100,43 @@ async def _validate_engine(
 # START_CONTRACT: _try_start_on_machine
 #   PURPOSE: Attempt to start a task on a specific free machine.
 #   INPUTS: {
-#     machine: ConnectedMachine - The machine to try,
+#     session: MachineSession - The machine session to try,
 #     engine: Engine - The resolved engine config,
 #     task: Task - The task to allocate,
-#     repository: MachineRepository, operations: MachineOperations - SSH gateway for occupancy checks,
+#     operations: MachineOperations - SSH operations for occupancy checks,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
+#     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
 #     tracker: AllocationTracker - In-flight cloud allocation tracker
 #   }
 #   OUTPUTS: { bool - True if task started successfully on this machine }
 #   SIDE_EFFECTS: Sets task running, starts occupancy check, records TaskAllocated event, discards tracker slot.
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _try_start_on_machine
 async def _try_start_on_machine(
-    machine: ConnectedMachine,
+    session: MachineSession,
     engine: Engine,
     task: Task,
     operations: MachineOperations,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
+    start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
 ) -> bool:
-    task = task.allocate_to(machine.ip).mark_running()
+    task = task.allocate_to(session.ip).mark_running()
     logger.debug(
         "[AllocateTask][_try_allocate_to_machine] task_id=%s ip=%s",
         task.task_id,
-        machine.ip,
+        session.ip,
     )
-    if not await start_task_on_machine(machine, engine, task):
+    if not await start_task_on_machine(session, engine, task):
         return False
     logger.debug(
         "[AllocateTask][_try_allocate_to_machine][ALLOCATED] task_id=%s ip=%s",
         task.task_id,
-        machine.ip,
+        session.ip,
     )
-    operations.start_occupancy_check(machine.ip, engine)
+    operations.start_occupancy_check(session, engine)
     task = task.with_event(
-        TaskAllocated, node_ip=machine.ip, engine_name=task.context.engine
+        TaskAllocated, node_ip=session.ip, engine_name=task.context.engine
     )
     async with uow_factory() as uow:
         await uow.tasks.save(task)
@@ -150,27 +150,27 @@ async def _try_start_on_machine(
 #   INPUTS: {
 #     engine: Engine - The resolved engine config,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     repository: MachineRepository, operations: MachineOperations - SSH gateway with connected machines
+#     repository: MachineRepository - SSH repository with connected machines
 #   }
-#   OUTPUTS: { list[ConnectedMachine] - Free machines matching platforms }
+#   OUTPUTS: { list[MachineSession] - Free sessions matching platforms }
 #   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS
+#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY
 # END_CONTRACT: _find_free_machines
 async def _find_free_machines(
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
     repository: MachineRepository,
-) -> list[ConnectedMachine]:
+) -> list[MachineSession]:
     # START_BLOCK_FIND_FREE_MACHINES
     async with uow_factory() as uow:
         running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
     busy_node_ips = {t.allocated_ip for t in running_tasks if t.allocated_ip}
-    free_machines = [
-        m
-        for m in repository.list_free(platforms=list(engine.platforms))
-        if m.ip not in busy_node_ips
+    free_sessions = [
+        s
+        for s in repository.list_free(platforms=list(engine.platforms))
+        if s.machine.ip not in busy_node_ips
     ]
-    return free_machines
+    return free_sessions
     # END_BLOCK_FIND_FREE_MACHINES
 
 
@@ -188,15 +188,15 @@ async def _allocate_free_machine(
     uow_factory: Callable[[], AbstractUnitOfWork],
     repository: MachineRepository,
     operations: MachineOperations,
-    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
+    start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
 ) -> bool:
-    free_machines = await _find_free_machines(engine, uow_factory, repository)
+    free_sessions = await _find_free_machines(engine, uow_factory, repository)
 
     # START_BLOCK_ALLOCATE_MACHINE
-    for machine in free_machines:
+    for session in free_sessions:
         if await _try_start_on_machine(
-            machine,
+            session,
             engine,
             task,
             operations,
@@ -450,7 +450,7 @@ async def allocate_task(
     repository: MachineRepository,
     operations: MachineOperations,
     clouds: CloudProvisioner,
-    start_task_on_machine: Callable[[ConnectedMachine, Engine, Task], Awaitable[bool]],
+    start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
     allocation_lock: asyncio.Lock,
 ) -> bool:

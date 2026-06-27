@@ -24,7 +24,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - _display_remote_output calls list_private_keys(config.local.keys_dir) from M-SSH-KEYS instead of config.local.get_private_keys() (ssh-keys-extraction-vastai-parser-fix).
+#   LAST_CHANGE: v1.3.0 - session-based-machine-handle: _download_convergence_snippet takes MachineSession instead of (repository, operations, ip); _display_remote_output uses session directly (session.path, session.quote, session.run_full) and returns (session, remote_folder, repository) triple; _render_view unpacking updated.
 #   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def check_status to def check_status(argv): asyncio.run(_check_status_async(argv)) + async def _check_status_async(argv).
 #   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-check-status-command (moved from infra/cli/, added prog/argv/exit-codes/--json/full mutex/-o requires -v/connection-params bugfix/UoW lifecycle fix/tempfile).
 # END_CHANGE_SUMMARY
@@ -45,14 +45,14 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.infra import SSHMachineOperations, SSHMachineRepository
+from yascheduler.infra import SSHMachineRepository
 from yascheduler.infra.ssh.keys import list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
 
 if TYPE_CHECKING:
     from yascheduler.application import AbstractUnitOfWork
-    from yascheduler.domain import Node, Task
+    from yascheduler.domain import MachineSession, Node, Task
 
 
 # START_CONTRACT: _parse_status_args
@@ -233,22 +233,20 @@ def _resolve_conn_params(node: Node, config: Config) -> _ConnParams:
 
 # START_CONTRACT: _download_convergence_snippet
 #   PURPOSE: Download the remote OUTPUT file via SFTP into a local temp path for convergence parsing.
-#   INPUTS: { repository: SSHMachineRepository, operations: SSHMachineOperations, ip: str, remote_folder: str, local_path: Path }
+#   INPUTS: { session: MachineSession, remote_folder: str, local_path: Path }
 #   OUTPUTS: { bool - True on success, False on OSError (e.g. missing remote file) }
 #   SIDE_EFFECTS: Opens an SFTP channel and writes to local_path.
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
+#   LINKS: M-SSH-SESSION
 # END_CONTRACT: _download_convergence_snippet
 async def _download_convergence_snippet(
-    repository: SSHMachineRepository,
-    operations: SSHMachineOperations,
-    ip: str,
+    session: MachineSession,
     remote_folder: str,
     local_path: Path,
 ) -> bool:
     """Download OUTPUT file via SFTP for convergence parsing. Returns True on success."""
     try:
-        r_output = repository.get_path(ip)(remote_folder) / "OUTPUT"
-        async with operations.get_sftp(ip) as sftp:
+        r_output = session.path(remote_folder) / "OUTPUT"
+        async with session.open_sftp() as sftp:
             await sftp.get([str(r_output)], local_path)
         return True
     except OSError:
@@ -303,24 +301,23 @@ def _parse_convergence(filepath: Path) -> str:
 
 
 # START_CONTRACT: _display_remote_output
-#   PURPOSE: Connect to the remote machine via repository+operations, tail the OUTPUT file, return (repository, operations, ip, remote_folder) or None.
+#   PURPOSE: Connect to the remote machine via repository, tail the OUTPUT file, return (session, remote_folder) or None.
 #   INPUTS: { task: Task, conn_params: _ConnParams - resolved SSH params, config: Config }
-#   OUTPUTS: { tuple[SSHMachineRepository, SSHMachineOperations, str, str] | None - (repository, operations, ip, remote_folder) or None if skipped }
+#   OUTPUTS: { tuple[MachineSession, str, SSHMachineRepository] | None - (session, remote_folder, repository) or None if skipped }
 #   SIDE_EFFECTS: Connects via SSH, reads remote file, prints to stdout.
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
+#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
 # END_CONTRACT: _display_remote_output
 async def _display_remote_output(
     task: Task, conn_params: _ConnParams, config: Config
-) -> tuple[SSHMachineRepository, SSHMachineOperations, str, str] | None:
-    """Connect to machine via repository+operations, display tail of remote OUTPUT."""
+) -> tuple[MachineSession, str, SSHMachineRepository] | None:
+    """Connect to machine via repository, display tail of remote OUTPUT."""
     if not task.allocated_ip:
         print("NO ALLOCATED IP")
         return None
     ip = task.allocated_ip
     repository = SSHMachineRepository()
-    operations = SSHMachineOperations(repository=repository)
     try:
-        await repository.connect(
+        session = await repository.connect(
             ip=ip,
             username=conn_params.username,
             client_keys=list_private_keys(config.local.keys_dir),
@@ -336,20 +333,18 @@ async def _display_remote_output(
         print("OUTDATED TASK, SKIPPING")
         await repository.disconnect(ip)
         return None
-    r_output = repository.get_path(ip)(remote_folder) / "OUTPUT"
-    state = repository._get_machine_state(ip)  # noqa: SLF001
-    if state is None:
+    if session.is_closed:
         print("CAN'T CONNECT")
         return None
-    result = await operations.run_full(
-        state.machine,
-        f"tail -n15 {repository.get_quote(ip)(str(r_output))}",
+    r_output = session.path(remote_folder) / "OUTPUT"
+    result = await session.run_full(
+        f"tail -n15 {session.quote(str(r_output))}",
     )
     if result.returncode:
         print("OUTDATED TASK, SKIPPING")
     else:
         print(result.stdout)
-    return repository, operations, ip, remote_folder
+    return session, remote_folder, repository
 
 
 # START_CONTRACT: _render_view
@@ -403,18 +398,18 @@ async def _render_view(
             conn = await _display_remote_output(task, conn_params, config)
             if conn is None:
                 continue
-            repository, operations, ip, remote_folder = conn
+            session, remote_folder, repository = conn
             try:
                 if fetch_convergence and snippet is not None:
                     success = await _download_convergence_snippet(
-                        repository, operations, ip, remote_folder, snippet
+                        session, remote_folder, snippet
                     )
                     if success:
                         output = _parse_convergence(snippet)
                         if output:
                             print(output)
             finally:
-                await repository.disconnect(ip)
+                await repository.disconnect(session.ip)
         # END_BLOCK_ITERATE_RUNNING
     except Exception:
         # Self-clean the snippet on exception so the temp file never leaks; re-raise to the caller's

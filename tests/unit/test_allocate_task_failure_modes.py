@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.3.0 - select_provider returns str; _make_clouds helper signature uses str selection; replace ProviderSelection(name="aws", username="root") with "aws" literal (collapse-provider-selection).]
-#   PREVIOUS_CHANGE: [v1.2.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in signatures evaluated at import).]
+#   LAST_CHANGE: [v1.4.0 - session-based-machine-handle section 7.3: no behavioral changes needed (all failure-mode tests use empty list_free which is session-agnostic).]
+#   PREVIOUS_CHANGE: [v1.3.0 - select_provider returns str; _make_clouds helper signature uses str selection; replace ProviderSelection(name="aws", username="root") with "aws" literal (collapse-provider-selection).]
 # END_CHANGE_SUMMARY
 #
 """Failure-mode tests for allocate_task cloud-fallback hardening.

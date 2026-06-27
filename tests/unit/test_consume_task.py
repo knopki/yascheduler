@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_consume_task.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for consume_task finalise/defer branches and task-not-found path.
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from test_application_use_cases.py (GRACE 1000-line hard limit). Covers consume_task bool return + 3-tuple download_outputs branches (fix-download-rmtree-data-loss).
+#   LAST_CHANGE: v2.0.0 - session-based-machine-handle section 7.4: _run_consume wrapper and all test methods pass session: MachineSession instead of ip: str; update download_outputs assertion from ip= kwarg to session= kwarg.
+#   PREVIOUS_CHANGE: v1.0.0 - Extracted from test_application_use_cases.py (GRACE 1000-line hard limit). Covers consume_task bool return + 3-tuple download_outputs branches (fix-download-rmtree-data-loss).
 # END_CHANGE_SUMMARY
 #
 """Unit tests for consume_task finalise/defer branches.
@@ -28,6 +29,7 @@ path. The `running_task` and `mock_engine_repo` fixtures come from
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
@@ -42,7 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from yascheduler.application.uow import AbstractUnitOfWork
-    from yascheduler.domain import EngineRepository
+    from yascheduler.domain import EngineRepository, MachineSession
 
 
 class TestConsumeTask:
@@ -56,7 +58,7 @@ class TestConsumeTask:
 
     async def _run_consume(
         self,
-        ip: str,
+        session: MachineSession,
         operations: MagicMock,
         task: Task,
         uow_factory: Callable[[], AbstractUnitOfWork],
@@ -66,7 +68,7 @@ class TestConsumeTask:
     ) -> bool:
         return await consume_task(
             task_id=task.task_id,
-            ip=ip,
+            session=session,
             operations=operations,
             engines=engines,
             uow_factory=uow_factory,
@@ -81,6 +83,8 @@ class TestConsumeTask:
         mock_engine_repo: MagicMock,
     ) -> None:
         """All output files downloaded -> save DONE + tracker discarded, returns True."""
+        session_mock = SimpleNamespace(ip="10.0.0.1")
+
         uow = AsyncMock()
         uow.tasks = AsyncMock()
         uow.tasks.get = AsyncMock(return_value=running_task)
@@ -98,7 +102,7 @@ class TestConsumeTask:
         local_tasks_dir = MagicMock(spec=Path)
 
         result = await self._run_consume(
-            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            session=session_mock,
             operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
@@ -109,7 +113,7 @@ class TestConsumeTask:
 
         # download_outputs called with correct params
         mock_operations.download_outputs.assert_called_once()
-        assert mock_operations.download_outputs.call_args[1]["ip"] == "10.0.0.1"
+        assert mock_operations.download_outputs.call_args[1]["session"] is session_mock
         assert (
             mock_operations.download_outputs.call_args[1]["remote_dir"]
             == "/remote/tasks/20250101_120000_42"
@@ -133,6 +137,7 @@ class TestConsumeTask:
         mock_engine_repo: MagicMock,
     ) -> None:
         """Permanent-only errors -> save DONE with error, tracker discarded, returns True."""
+        session_mock = SimpleNamespace(ip="10.0.0.1")
         mock_operations.download_outputs = AsyncMock(
             return_value=([], [], [("/remote/file", OSError("Connection refused"))])
         )
@@ -154,7 +159,7 @@ class TestConsumeTask:
         local_tasks_dir = MagicMock(spec=Path)
 
         result = await self._run_consume(
-            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            session=session_mock,
             operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
@@ -180,6 +185,7 @@ class TestConsumeTask:
         mock_engine_repo: MagicMock,
     ) -> None:
         """Transient-only errors -> no save, no event, no tracker.discard, returns False."""
+        session_mock = SimpleNamespace(ip="10.0.0.1")
         mock_operations.download_outputs = AsyncMock(
             return_value=(
                 [],
@@ -205,7 +211,7 @@ class TestConsumeTask:
         local_tasks_dir = MagicMock(spec=Path)
 
         result = await self._run_consume(
-            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            session=session_mock,
             operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
@@ -228,6 +234,7 @@ class TestConsumeTask:
         mock_engine_repo: MagicMock,
     ) -> None:
         """Both transient and permanent -> permanent priority, task.fail, returns True."""
+        session_mock = SimpleNamespace(ip="10.0.0.1")
         transient = [("/remote/a", SFTPFailure("transient"))]
         permanent = [("/remote/b", OSError("permanent missing"))]
         mock_operations.download_outputs = AsyncMock(
@@ -251,7 +258,7 @@ class TestConsumeTask:
         local_tasks_dir = MagicMock(spec=Path)
 
         result = await self._run_consume(
-            ip=running_task.allocated_ip,  # type: ignore[arg-type]
+            session=session_mock,
             operations=mock_operations,
             task=running_task,
             uow_factory=uow_factory,
@@ -279,6 +286,8 @@ class TestConsumeTask:
         mock_engine_repo: MagicMock,
     ) -> None:
         """Task not found in DB -> tracker.discard called, no download/save, returns True."""
+        session_mock = SimpleNamespace(ip="10.0.0.1")
+
         uow = AsyncMock()
         uow.tasks = AsyncMock()
         uow.tasks.get = AsyncMock(return_value=None)
@@ -295,7 +304,7 @@ class TestConsumeTask:
 
         result = await consume_task(
             task_id=999,
-            ip="10.0.0.1",
+            session=session_mock,
             operations=mock_operations,
             engines=mock_engine_repo,
             uow_factory=uow_factory,

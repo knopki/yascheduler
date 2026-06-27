@@ -19,7 +19,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - _add_node calls list_private_keys(config.local.keys_dir) from M-SSH-KEYS instead of config.local.get_private_keys() (ssh-keys-extraction-vastai-parser-fix).
+#   LAST_CHANGE: v1.4.0 - session-based-machine-handle: _add_node captures session from repository.connect() and passes it to operations.setup_node(session, engines).
 #   PREVIOUS_CHANGE: v1.2.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
 #   PREVIOUS_CHANGE: v1.2.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName; converted @to_sync async def manage_node to def manage_node(argv): asyncio.run(_manage_node_async(argv)) + async def _manage_node_async(argv).
 #   PREVIOUS_CHANGE: v1.1.0 - Per-helper UoW (design D18): validation read uses a short read-only UoW closed before dispatch; each mutate helper opens its OWN UoW via deps.uow_factory(), commits, and prints inside it. Eliminates the double-commit footgun of a single shared async-with UoW with commits scattered across helpers. Accepted TOCTOU window between validation and dispatch (single-operator CLI; benign non-corrupting failure modes).
@@ -264,7 +264,7 @@ async def _add_node(
     username = spec.username or config.remote.username
     # START_BLOCK_CONNECT_SETUP_ADD
     try:
-        await repository.connect(
+        session = await repository.connect(
             ip=spec.host,
             username=username,
             client_keys=list_private_keys(config.local.keys_dir),
@@ -273,7 +273,7 @@ async def _add_node(
         )
         if not skip_setup:
             print("Setup host...")
-            await operations.setup_node(spec.host, config.engines)
+            await operations.setup_node(session, config.engines)
         async with deps.uow_factory() as uow:
             await uow.nodes.add(
                 Node(

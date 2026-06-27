@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_full_cycle.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test exercising full scheduler lifecycle against real PostgreSQL and SSH.
 #   SCOPE: Single test — node add → submit → allocate → spawn → consume → verify.
@@ -8,11 +8,12 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   test_full_cycle - Full scheduler lifecycle E2E test with node BUSY→FREE transition verification
+#   test_full_cycle - Full scheduler lifecycle E2E test with session BUSY→FREE transition verification
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Mark the e2e node as cloud-provisioned (cloud="e2e") so the orchestrator's connect-machine producer yields it; fix-never-connected-node-leak excluded static (cloud=None) nodes from the connect path, which silently broke this test (task stuck in TO_DO, never allocated).
+#   LAST_CHANGE: v1.3.0 - session-based-machine-handle section 7.x: Migrate from get_machine_state to get_session. Rename machine→session for SSHMachineSession. setup_node and run take session parameter.
+#   PREVIOUS_CHANGE: v1.2.0 - Mark the e2e node as cloud-provisioned (cloud="e2e") so the orchestrator's connect-machine producer yields it; fix-never-connected-node-leak excluded static (cloud=None) nodes from the connect path, which silently broke this test (task stuck in TO_DO, never allocated).
 #   PREVIOUS_CHANGE: v1.1.0 - Migrate from DB facade to PostgresUnitOfWork (remove-legacy-db).
 # END_CHANGE_SUMMARY
 
@@ -50,7 +51,7 @@ async def test_full_cycle(
     # START_BLOCK_ADD_NODE
     repository = SSHMachineRepository(log=log)
     operations = SSHMachineOperations(repository=repository)
-    machine = await repository.connect(
+    session = await repository.connect(
         ip=ssh_container["host"],
         username=ssh_container["username"],
         client_keys=[ssh_container["key_path"]],
@@ -59,10 +60,10 @@ async def test_full_cycle(
         engines_dir=config.remote.engines_dir,
         tasks_dir=config.remote.tasks_dir,
     )
-    await operations.setup_node(ssh_container["host"], config.engines)
+    await operations.setup_node(session, config.engines)
 
     engines_dir = config.remote.engines_dir
-    proc = await operations.run(machine, f"test -f {engines_dir}/test_shell/run.sh")
+    proc = await operations.run(session, f"test -f {engines_dir}/test_shell/run.sh")
     assert proc.exit_code == 0, (
         f"Engine script not deployed at {engines_dir}/test_shell/run.sh"
     )
@@ -115,8 +116,9 @@ async def test_full_cycle(
                 saw_running = True
                 node_ip = task.allocated_ip
                 if node_ip is not None:
-                    state = orchestrator._repository.get_machine_state(node_ip)
-                    if state and state.state == MachineState.BUSY:
+                    s = orchestrator._repository.get_session(node_ip)
+                    state = s.machine if s is not None else None
+                    if state is not None and state.state == MachineState.BUSY:
                         saw_busy = True
             if task and task.status == DomainTaskStatus.DONE:
                 break
@@ -140,7 +142,8 @@ async def test_full_cycle(
         # END_BLOCK_VERIFY
 
         # START_BLOCK_VERIFY_FREE
-        state = orchestrator._repository.get_machine_state(ssh_container["host"])
+        s = orchestrator._repository.get_session(ssh_container["host"])
+        state = s.machine if s is not None else None
         assert state is not None, "Machine not found in orchestrator registry"
         assert state.state == MachineState.FREE, (
             "Machine should be free after task completion"

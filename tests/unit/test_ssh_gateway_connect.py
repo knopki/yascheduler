@@ -1,22 +1,23 @@
 # FILE: tests/unit/test_ssh_gateway_connect.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineRepository.connect two-method pattern and error translation.
 #   SCOPE: Transaction of asyncssh.misc.Error → MachineConnectionError,
-#     OSError → MachineConnectionError, and successful return.
-#   DEPENDS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS
+#     OSError → MachineConnectionError, and successful return of a MachineSession.
+#   DEPENDS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS, M-SSH-SESSION
 #   LINKS: M-SSH-REPOSITORY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   test_connect_translates_asyncssh_error - asyncssh.misc.Error → MachineConnectionError with ip and cause
 #   test_connect_translates_oserror - OSError → MachineConnectionError with ip
-#   test_connect_returns_machine_on_success - Successful connect returns ConnectedMachine
+#   test_connect_returns_session_on_success - Successful connect returns MachineSession
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for connect error translation (gateway-port-cleanup).
+#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: connect returns MachineSession (was ConnectedMachine). Test_connect_returns_session_on_success now mocks _connect_impl to return a session stub and asserts the session is returned unchanged.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for connect error translation (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 from unittest.mock import AsyncMock
@@ -24,7 +25,7 @@ from unittest.mock import AsyncMock
 import asyncssh
 import pytest
 
-from yascheduler.domain import ConnectedMachine, MachineState
+from tests.unit.test_ssh_gateway import _make_state
 from yascheduler.domain.exceptions import MachineConnectionError
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 
@@ -65,23 +66,19 @@ async def test_connect_translates_oserror() -> None:
     assert "refused" in exc_info.value.reason
 
 
-# START_CONTRACT: test_connect_returns_machine_on_success
-#   PURPOSE: Verify connect returns ConnectedMachine unchanged when _connect_impl succeeds.
+# START_CONTRACT: test_connect_returns_session_on_success
+#   PURPOSE: Verify connect returns the MachineSession produced by _connect_impl unchanged.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
-#   LINKS: M-SSH-REPOSITORY
-# END_CONTRACT: test_connect_returns_machine_on_success
+#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
+# END_CONTRACT: test_connect_returns_session_on_success
 @pytest.mark.asyncio
-async def test_connect_returns_machine_on_success() -> None:
+async def test_connect_returns_session_on_success() -> None:
     gw = SSHMachineRepository()
-    machine = ConnectedMachine(
-        ip="10.0.0.1",
-        platform="linux",
-        ncpus=4,
-        state=MachineState.FREE,
-        free_since=0.0,
-    )
-    gw._connect_impl = AsyncMock(return_value=machine)  # type: ignore[method-assign]
+    session = _make_state(ip="10.0.0.1")
+    gw._connect_impl = AsyncMock(return_value=session)  # type: ignore[method-assign]
     result = await gw.connect("10.0.0.1", "root", None)
-    assert result is machine
+    assert result is session
+    assert result.ip == "10.0.0.1"
+    assert isinstance(result, type(session))

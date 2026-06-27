@@ -1,43 +1,35 @@
 # FILE: tests/unit/test_ssh_gateway_operations.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineOperations occupancy check + advanced operations (setup_node, get_cpu_cores, pgrep, list_processes).
-#   SCOPE: occupancy_check via pgrep/check_cmd, start_occupancy_check background task, setup_node, get_cpu_cores, pgrep generator, list_processes generator.
-#   DEPENDS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
+#   PURPOSE: Unit tests for SSHMachineOperations occupancy check + advanced operations (setup_node, get_cpu_cores) via the session-typed facade.
+#   SCOPE: occupancy_check via pgrep/check_cmd, start_occupancy_check background task, setup_node, get_cpu_cores.
+#   DEPENDS: M-SSH-OPERATIONS, M-SSH-SESSION
+#   LINKS: M-SSH-OPERATIONS, M-SSH-SESSION
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   TestOccupancy - occupancy_check via pgrep/check_cmd, start_occupancy_check background task
-#   TestAdvancedOperations - setup_node, get_cpu_cores, pgrep generator, list_processes generator
+#   TestAdvancedOperations - setup_node, get_cpu_cores (facade delegates to session)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extract occupancy + advanced ops tests from test_ssh_gateway.py for size compliance (GRACE-lite 1000-line limit).
+#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: operations facade takes session instead of ip/machine. Removed pgrep/list_processes/unknown-IP tests (those primitives now live on the session and the facade no longer IP-keys). start_occupancy_check patch target moves from repository.asyncio.sleep to session.asyncio.sleep; monitor task accessed via session._monitor_task.
+#   PREVIOUS_CHANGE: v1.0.0 - Extract occupancy + advanced ops tests from test_ssh_gateway.py for size compliance (GRACE-lite 1000-line limit).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from tests.unit.test_ssh_gateway import _AsyncIter, _make_state
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import MachineState
 from yascheduler.infra.ssh.operations import SSHMachineOperations
-from yascheduler.infra.ssh.platform.protocol import (
-    ChannelOpenError,
-    ProcessInfo,
-)
+from yascheduler.infra.ssh.platform.protocol import ChannelOpenError
 from yascheduler.infra.ssh.repository import SSHMachineRepository
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
 
 # =============================================================================
 # Fixtures
@@ -77,327 +69,228 @@ class TestOccupancy:
     @pytest.mark.asyncio
     async def test_occupancy_check_pgrep_found(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """occupancy_check returns True when pgrep yields a process."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        session = _make_state()
         mock_pengine.check_pname = "testproc"
-
-        result = await operations.occupancy_check("10.0.0.1", mock_pengine)
+        result = await operations.occupancy_check(session, mock_pengine)
         assert result is True
 
     @pytest.mark.asyncio
     async def test_occupancy_check_pgrep_not_found(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """occupancy_check returns False when pgrep yields no process."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        session = _make_state()
         mock_pengine.check_pname = "nonexistent"
-
         # Override adapter.pgrep to yield nothing
-        state.adapter.pgrep = lambda *a, **kw: _AsyncIter([])  # type: ignore[assignment,misc]
-
-        result = await operations.occupancy_check("10.0.0.1", mock_pengine)
+        session._adapter.pgrep = lambda *a, **kw: _AsyncIter([])  # type: ignore[assignment,misc]  # noqa: SLF001
+        result = await operations.occupancy_check(session, mock_pengine)
         assert result is False
 
     @pytest.mark.asyncio
     async def test_occupancy_check_cmd_match(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """occupancy_check returns True when check_cmd exit code matches."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        session = _make_state()
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = "systemctl is-active test"
         mock_pengine.check_cmd_code = 0
 
-        # Override adapter.run to return matching exit code
-        async def _run_match(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
+        async def _run_match(*args: object, **kwargs: object) -> MagicMock:
             result = MagicMock()
             result.returncode = 0
             result.stdout = "active"
             result.stderr = ""
             return result
 
-        state.adapter.run = _run_match  # type: ignore[assignment,misc]
+        session._adapter.run = _run_match  # type: ignore[assignment,misc]  # noqa: SLF001
 
-        result = await operations.occupancy_check("10.0.0.1", mock_pengine)
+        result = await operations.occupancy_check(session, mock_pengine)
         assert result is True
 
     @pytest.mark.asyncio
     async def test_occupancy_check_cmd_no_match(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """occupancy_check returns False when check_cmd exit code differs."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        session = _make_state()
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = "systemctl is-active test"
         mock_pengine.check_cmd_code = 0
 
-        async def _run_mismatch(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
+        async def _run_mismatch(*args: object, **kwargs: object) -> MagicMock:
             result = MagicMock()
-            result.returncode = 3  # service not running
+            result.returncode = 3
             result.stdout = "inactive"
             result.stderr = ""
             return result
 
-        state.adapter.run = _run_mismatch  # type: ignore[assignment,misc]
+        session._adapter.run = _run_mismatch  # type: ignore[assignment,misc]  # noqa: SLF001
 
-        result = await operations.occupancy_check("10.0.0.1", mock_pengine)
+        result = await operations.occupancy_check(session, mock_pengine)
         assert result is False
 
     @pytest.mark.asyncio
     async def test_occupancy_check_uses_pgrep_when_both_set(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """occupancy_check prefers pgrep when check_pname is set even with check_cmd."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        session = _make_state()
         mock_pengine.check_pname = "testproc"
         mock_pengine.check_cmd = "systemctl is-active test"
         mock_pengine.check_cmd_code = 0
-
-        # pgrep_found = True should short-circuit and return True
-        result = await operations.occupancy_check("10.0.0.1", mock_pengine)
+        result = await operations.occupancy_check(session, mock_pengine)
         assert result is True
 
     @pytest.mark.asyncio
     async def test_occupancy_check_no_checks_configured(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """occupancy_check returns False when neither check_pname nor check_cmd is set."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        session = _make_state()
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = None
-
-        result = await operations.occupancy_check("10.0.0.1", mock_pengine)
+        result = await operations.occupancy_check(session, mock_pengine)
         assert result is False
 
     @pytest.mark.asyncio
     async def test_occupancy_check_pgrep_ssh_failure_returns_true(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """occupancy_check returns True (busy) when pgrep fails due to SSH error."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        session = _make_state()
         mock_pengine.check_pname = "sleep"
 
-        # Replace adapter.pgrep with one that raises SSHRetryExc
-        async def _pgrep_ssh_fail(
+        # Replace adapter.pgrep with one that raises SSHRetryExc-class (ChannelOpenError)
+        async def _pgrep_ssh_fail(  # noqa: ANN202
             *args: object, **kwargs: object
-        ) -> AsyncGenerator[None, None]:
+        ):  # type: ignore[return-type]
             raise ChannelOpenError(1, "SSH connection lost")
-            yield  # makes this an async generator
+            yield  # type: ignore[unreachable]  # makes this an async generator
 
-        state.adapter.pgrep = _pgrep_ssh_fail  # type: ignore[assignment,misc]
+        session._adapter.pgrep = _pgrep_ssh_fail  # type: ignore[assignment,misc]  # noqa: SLF001
 
-        result = await operations.occupancy_check("10.0.0.1", mock_pengine)
+        result = await operations.occupancy_check(session, mock_pengine)
         assert result is True
 
     @pytest.mark.asyncio
     async def test_occupancy_check_cmd_ssh_failure_returns_true(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """occupancy_check returns True (busy) when check_cmd fails due to SSH error."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        session = _make_state()
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = "ps -eocomm= | grep -q sleep"
         mock_pengine.check_cmd_code = 0
 
-        # Patch run_full to raise SSHRetryExc — simulates SSH failure
+        # Patch session.run_full to raise ChannelOpenError — simulates SSH failure.
         with patch.object(
-            operations,
+            session,
             "run_full",
             AsyncMock(side_effect=ChannelOpenError(1, "SSH connection lost")),
         ):
-            result = await operations.occupancy_check("10.0.0.1", mock_pengine)
+            result = await operations.occupancy_check(session, mock_pengine)
         assert result is True
 
     @pytest.mark.asyncio
     async def test_start_occupancy_check_releases_machine(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
         """start_occupancy_check background task releases machine when occupancy ends."""
-        ip = "10.0.0.1"
-        state = _make_state(ip=ip, state=MachineState.FREE)
-        repository._machines[ip] = state
+        from yascheduler.domain.model import MachineState
+
+        session = _make_state(state=MachineState.FREE)
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = None
 
         with (
-            patch("yascheduler.infra.ssh.repository.asyncio.sleep", AsyncMock()),
+            patch("yascheduler.infra.ssh.session.asyncio.sleep", AsyncMock()),
             patch.object(
                 operations.occupancy, "occupancy_check", AsyncMock(return_value=False)
             ),
         ):
-            operations.occupancy.start_occupancy_check(ip, mock_pengine)
-            # Wait for the background task to complete
-            task = repository._monitors[ip]
+            operations.occupancy.start_occupancy_check(session, mock_pengine)
+            task = session._monitor_task  # noqa: SLF001
+            assert task is not None
             await asyncio.wait_for(task, timeout=1.0)
 
-        # Machine should be released
-        assert repository._machines[ip].machine.state == MachineState.FREE
+        # Session should be released
+        assert session.machine.state == MachineState.FREE
 
     @pytest.mark.asyncio
     async def test_start_occupancy_check_cancelled_gracefully(
         self,
-        repository: SSHMachineRepository,
         operations: SSHMachineOperations,
         mock_pengine: MagicMock,
     ) -> None:
-        """Start occupancy check then cancel it (disconnect)."""
+        """Start occupancy check then cancel it (disconnect cancels monitor via _close)."""
 
-        ip = "10.0.0.1"
-        state = _make_state(ip=ip, state=MachineState.FREE)
-        repository._machines[ip] = state
+        from yascheduler.domain.model import MachineState
+
+        session = _make_state(state=MachineState.FREE)
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = None
 
         with (
-            patch("yascheduler.infra.ssh.repository.asyncio.sleep", AsyncMock()),
+            patch("yascheduler.infra.ssh.session.asyncio.sleep", AsyncMock()),
             patch.object(
                 operations.occupancy,
                 "occupancy_check",
                 AsyncMock(side_effect=[True, True, True]),
             ),
         ):
-            operations.occupancy.start_occupancy_check(ip, mock_pengine)
-            # Let the task start and do one iteration
+            operations.occupancy.start_occupancy_check(session, mock_pengine)
             await asyncio.sleep(0)
 
-            # Disconnect cancels the background task
-            await repository.disconnect(ip)
+            # _close cancels the monitor task
+            await session._close()  # noqa: SLF001
 
-        # Machine removed
-        assert ip not in repository
+        assert session.is_closed is True
 
 
 # =============================================================================
-# Advanced Operations
+# Advanced Operations (facade delegates to session)
 # =============================================================================
 
 
 class TestAdvancedOperations:
-    """setup_node, get_cpu_cores, pgrep generator, list_processes generator."""
+    """setup_node, get_cpu_cores via the operations facade."""
 
     @pytest.mark.asyncio
-    async def test_setup_node(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """setup_node delegates to adapter.setup_node with filtered engines."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
+    async def test_setup_node(self, operations: SSHMachineOperations) -> None:
+        """setup_node delegates to session.setup_node (adapter.setup_node with filtered engines)."""
+        session = _make_state()
         engine_repo = MagicMock(spec=EngineRepository)
         engine_repo.filter_platforms.return_value = engine_repo
 
-        await operations.setup_node("10.0.0.1", engine_repo)
+        await operations.setup_node(session, engine_repo)
 
-        engine_repo.filter_platforms.assert_called_once_with(state.platforms)
-        state.adapter.setup_node.assert_awaited_once()  # type: ignore[attr-defined]
+        engine_repo.filter_platforms.assert_called_once_with(session.platforms)
+        session._adapter.setup_node.assert_awaited_once()  # type: ignore[attr-defined]  # noqa: SLF001
 
     @pytest.mark.asyncio
-    async def test_get_cpu_cores(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """get_cpu_cores returns count from adapter."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
-        cores = await operations.get_cpu_cores("10.0.0.1")
+    async def test_get_cpu_cores(self, operations: SSHMachineOperations) -> None:
+        """get_cpu_cores returns count from session (adapter)."""
+        session = _make_state()
+        cores = await operations.get_cpu_cores(session)
         assert cores == 4
-
-    @pytest.mark.asyncio
-    async def test_pgrep_yields_processes(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """pgrep yields process info objects."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
-        results: list[ProcessInfo] = []
-        async for proc in operations.pgrep("10.0.0.1", "testproc"):
-            results.append(proc)
-
-        assert len(results) == 1
-        assert results[0].pid == 1234
-
-    @pytest.mark.asyncio
-    async def test_list_processes_yields_processes(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """list_processes yields all running processes."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
-        results: list[ProcessInfo] = []
-        async for proc in operations.list_processes("10.0.0.1"):
-            results.append(proc)
-
-        assert len(results) == 1
-
-    @pytest.mark.asyncio
-    async def test_pgrep_unknown_ip(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """pgrep raises AssertionError for unknown IP."""
-        with pytest.raises(AssertionError):
-            async for _ in operations.pgrep("10.0.0.99", "test"):
-                pass  # pragma: no cover
-
-    @pytest.mark.asyncio
-    async def test_list_processes_unknown_ip(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """list_processes raises AssertionError for unknown IP."""
-        with pytest.raises(AssertionError):
-            async for _ in operations.list_processes("10.0.0.99"):
-                pass  # pragma: no cover
-
-    @pytest.mark.asyncio
-    async def test_setup_node_unknown_ip(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """setup_node raises AssertionError for unknown IP."""
-        engine_repo = MagicMock(spec=EngineRepository)
-        with pytest.raises(AssertionError):
-            await operations.setup_node("10.0.0.99", engine_repo)
-
-    @pytest.mark.asyncio
-    async def test_get_cpu_cores_unknown_ip(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """get_cpu_cores raises AssertionError for unknown IP."""
-        with pytest.raises(AssertionError):
-            await operations.get_cpu_cores("10.0.0.99")

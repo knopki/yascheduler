@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway_write_remote_file.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for _write_remote_file exception contract (fix-write-remote-file-swallow).
@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Add test_open_failure_propagates covering a non-SFTP exception raised by sftp.open() (same try block as f.write; gap surfaced by the bug-hunt review of v1.0.0). Helper _make_sftp_state gains an open_side_effect parameter.
+#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: repository._machines → repository._sessions; start_task_on_machine takes session (was machine); _upload_task_data takes session (was ip); _make_sftp_state returns SSHMachineSession; wiring on session._conn (was state.conn).
+#   PREVIOUS_CHANGE: v1.0.1 - Add test_open_failure_propagates covering a non-SFTP exception raised by sftp.open() (same try block as f.write; gap surfaced by the bug-hunt review of v1.0.0). Helper _make_sftp_state gains an open_side_effect parameter.
 #   PREVIOUS_CHANGE: v1.0.0 - Initial tests for fix-write-remote-file-swallow: non-SFTP exception
 #     propagation through _write_remote_file / _upload_task_data; asyncssh.misc.Error structured
 #     log + re-raise; start_task_on_machine abort contract (spawn not called on upload failure);
@@ -39,12 +40,14 @@ from yascheduler.domain import Engine
 from yascheduler.domain.model import Task, TaskContext
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.operations.deployment import _write_remote_file
-from yascheduler.infra.ssh.repository import SSHMachineRepository, _MachineState
+from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from asyncssh.sftp import SFTPClient
+
+    from yascheduler.infra.ssh.session import SSHMachineSession
 
 
 # =============================================================================
@@ -85,8 +88,8 @@ class _FakeSFTPClient:
 def _make_sftp_state(
     write_side_effect: BaseException | None = None,
     open_side_effect: BaseException | None = None,
-) -> tuple[_MachineState, _FakeSFTPClient]:
-    """Build a _MachineState wired so its SFTP session yields a _FakeSFTPClient.
+) -> tuple[SSHMachineSession, _FakeSFTPClient]:
+    """Build an SSHMachineSession wired so its SFTP session yields a _FakeSFTPClient.
 
     The _FakeSFTPFile.write() raises ``write_side_effect`` (if set) or returns
     None (success path). If ``open_side_effect`` is set, sftp.open() raises
@@ -105,7 +108,7 @@ def _make_sftp_state(
     async def _sftp_ctx() -> AsyncGenerator[_FakeSFTPClient, None]:
         yield sftp
 
-    state.conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]
+    state._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
     return state, sftp
 
 
@@ -267,9 +270,8 @@ class TestStartTaskAbortOnUploadFailure:
         """
         repository = SSHMachineRepository()
         operations = SSHMachineOperations(repository=repository)
-        state, _sftp = _make_sftp_state(write_side_effect=ValueError("bad input"))
-        repository._machines["10.0.0.1"] = state
-        machine = repository._machines["10.0.0.1"].machine
+        session, _sftp = _make_sftp_state(write_side_effect=ValueError("bad input"))
+        repository._sessions["10.0.0.1"] = session
 
         spawn_calls: list[Any] = []
         operations.deploy._exec_spawn_command = AsyncMock(  # type: ignore[method-assign]
@@ -279,7 +281,7 @@ class TestStartTaskAbortOnUploadFailure:
         with caplog.at_level(logging.ERROR):
             with pytest.raises(ValueError, match="bad input"):
                 await operations.start_task_on_machine(
-                    machine,
+                    session,
                     _make_engine(input_files=("input.txt",)),
                     _make_task(extra={"input.txt": "hello"}),
                     4,
@@ -304,16 +306,15 @@ class TestStartTaskAbortOnUploadFailure:
         repository = SSHMachineRepository()
         operations = SSHMachineOperations(repository=repository)
         err = asyncssh.misc.Error(2, "No such file")
-        state, _sftp = _make_sftp_state(write_side_effect=err)
-        repository._machines["10.0.0.1"] = state
-        machine = repository._machines["10.0.0.1"].machine
+        session, _sftp = _make_sftp_state(write_side_effect=err)
+        repository._sessions["10.0.0.1"] = session
 
         operations.deploy._exec_spawn_command = AsyncMock()  # type: ignore[method-assign]
 
         with caplog.at_level(logging.ERROR):
             with pytest.raises(asyncssh.misc.Error):
                 await operations.start_task_on_machine(
-                    machine,
+                    session,
                     _make_engine(input_files=("input.txt",)),
                     _make_task(extra={"input.txt": "hello"}),
                     4,
@@ -364,12 +365,12 @@ class TestSuccessfulWrite:
         repository = SSHMachineRepository()
         operations = SSHMachineOperations(repository=repository)
         state, sftp = _make_sftp_state(write_side_effect=None)
-        repository._machines["10.0.0.1"] = state
+        repository._sessions["10.0.0.1"] = state
 
         # Two input files; the _FakeSFTPFile is shared across calls so we can
         # count write invocations across the loop.
         ok = await operations.deploy._upload_task_data(
-            "10.0.0.1",
+            state,
             _make_task(extra={"input.txt": "a", "fort.9": "AAAA"}),
             PurePosixPath("/remote/tasks/7"),
             input_files=("input.txt", "fort.9"),

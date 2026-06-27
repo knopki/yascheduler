@@ -345,7 +345,11 @@ class TestManageNodeAddPath:
         _run(["10.0.0.1"])  # no SystemExit on success
 
         repo.connect.assert_called_once()
-        ops.setup_node.assert_called_once_with("10.0.0.1", _config.engines)
+        ops.setup_node.assert_called_once()
+        setup_call_args = ops.setup_node.call_args.args
+        assert len(setup_call_args) == 2
+        assert setup_call_args[0] is repo.connect.return_value
+        assert setup_call_args[1] is _config.engines
         repo.disconnect.assert_called_once_with("10.0.0.1")
         uow.nodes.add.assert_called_once()
         uow.commit.assert_called_once()

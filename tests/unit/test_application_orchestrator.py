@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.5.2
+# VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.2 - Update test_start_creates_background_tasks: _bg_jobs now includes worker tasks (5 parents + 7 workers = 12 with default limits) since fix-orchestrator-producer-silent-death registers workers in self._bg_jobs.
-#   PREVIOUS_CHANGE: v1.5.1 - Add TestConsumeConditionalDiscard and TestConsumeInFlightGuard for consume_task bool return + _consuming in-flight guard (fix-download-rmtree-data-loss).
+#   LAST_CHANGE: v1.6.0 - session-based-machine-handle section 7.5: replace repository.get_machine_state with repository.get_session returning session stub (session.machine = ConnectedMachine).
+#   PREVIOUS_CHANGE: v1.5.2 - Update test_start_creates_background_tasks: _bg_jobs now includes worker tasks (5 parents + 7 workers = 12 with default limits) since fix-orchestrator-producer-silent-death registers workers in self._bg_jobs.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for Orchestrator lifecycle management.
@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -430,7 +431,7 @@ class TestOrchestratorTaskAbandoned:
         orch._uow_factory = uow_factory  # type: ignore[method-assign]
 
         # Gateway returns None for machine state (machine gone)
-        orch._repository.get_machine_state = MagicMock(return_value=None)  # type: ignore[method-assign]
+        orch._repository.get_session = MagicMock(return_value=None)  # type: ignore[method-assign]
 
         task = Task(
             task_id=42,
@@ -749,7 +750,8 @@ class TestConsumeConditionalDiscard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
+        orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
@@ -783,7 +785,8 @@ class TestConsumeConditionalDiscard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
+        orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
@@ -861,7 +864,8 @@ class TestConsumeInFlightGuard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
+        orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
@@ -895,7 +899,8 @@ class TestConsumeInFlightGuard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
+        orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
@@ -931,7 +936,8 @@ class TestConsumeInFlightGuard:
             state=MachineState.FREE,
             free_since=0.0,
         )
-        orch._repository.get_machine_state = MagicMock(return_value=machine)  # type: ignore[method-assign]
+        session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
+        orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(

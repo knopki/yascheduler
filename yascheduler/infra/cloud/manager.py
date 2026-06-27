@@ -15,7 +15,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.9.0 - Rename machine_repository parameter to machine_repository AND add machine_operations parameter (decompose-ssh-gateway). _setup_vm uses machine_repository.connect/disconnect and machine_operations.setup_node/get_cpu_cores. stop() delegates to machine_repository.disconnect_all().
+#   LAST_CHANGE: v2.10.0 - session-based-machine-handle: _setup_vm uses MachineSession instead of ConnectedMachine; _connect_to_vm returns MachineSession; session passed to run/setup_node/get_cpu_cores operations methods.
 #   PREVIOUS_CHANGE: v2.8.0 - stop() now delegates to machine_repository.disconnect_all() instead of being a no-op (share-ssh-gateway).
 # END_CHANGE_SUMMARY
 
@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import (
     CloudAllocateError,
     CloudSetupError,
-    ConnectedMachine,
+    MachineSession,
     Node,
 )
 from yascheduler.infra.ssh.keys import list_private_keys
@@ -311,7 +311,7 @@ class CloudProvisionerImpl:
     ) -> Node:
         """Connect to VM, wait for cloud-init, install engines, return Node."""
         # START_BLOCK_SSH_CONNECT_SETUP
-        connected_machine = await self._connect_to_vm(ip_addr, adapter, config)
+        session = await self._connect_to_vm(ip_addr, adapter, config)
         # END_BLOCK_SSH_CONNECT_SETUP
 
         # START_BLOCK_CLOUD_INIT
@@ -321,9 +321,7 @@ class CloudProvisionerImpl:
         self.log.debug("[CloudProvisionerImpl][setup_vm][CLOUD_INIT] ip=%s", ip_addr)
         try:
             result = await asyncio.wait_for(
-                self.machine_operations.run(
-                    connected_machine, "cloud-init status --wait"
-                ),
+                self.machine_operations.run(session, "cloud-init status --wait"),
                 timeout=adapter.create_node_timeout,
             )
             if result.exit_code != 0:
@@ -347,14 +345,14 @@ class CloudProvisionerImpl:
         # START_BLOCK_SETUP_NODE
         self.log.debug("[CloudProvisionerImpl][setup_vm][SETUP_NODE] ip=%s", ip_addr)
         try:
-            await self.machine_operations.setup_node(ip_addr, self.engines)
+            await self.machine_operations.setup_node(session, self.engines)
         except Exception as err:
             raise CloudSetupError(f"Setup node {ip_addr} failed: {err}") from err
         # END_BLOCK_SETUP_NODE
 
         # START_BLOCK_GET_CPUS
         try:
-            ncpus = await self.machine_operations.get_cpu_cores(ip_addr)
+            ncpus = await self.machine_operations.get_cpu_cores(session)
         except Exception as err:
             raise CloudSetupError(f"Get CPU cores for {ip_addr} failed: {err}") from err
         # END_BLOCK_GET_CPUS
@@ -380,14 +378,14 @@ class CloudProvisionerImpl:
     #     adapter: CloudAdapter - provider adapter (for timeout settings),
     #     config: ConfigCloud - provider config (for SSH username/jump)
     #   }
-    #   OUTPUTS: { ConnectedMachine - connected machine instance }
+    #   OUTPUTS: { MachineSession - connected machine session instance }
     #   SIDE_EFFECTS: Opens SSH connection to VM.
     #   RAISES: CloudSetupError - if SSH connection fails
     #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
     # END_CONTRACT: CloudProvisionerImpl._connect_to_vm
     async def _connect_to_vm(
         self, ip_addr: str, adapter: CloudAdapter, config: ConfigCloud
-    ) -> ConnectedMachine:
+    ) -> MachineSession:
         """Connect to VM via SSH gateway with retry-friendly error wrapping."""
         # START_BLOCK_GET_KEYS
         keys: Sequence[PurePath] = await asyncio.get_running_loop().run_in_executor(
@@ -402,7 +400,7 @@ class CloudProvisionerImpl:
             config.username,
         )
         try:
-            connected_machine = await self.machine_repository.connect(
+            session = await self.machine_repository.connect(
                 ip=ip_addr,
                 username=config.username,
                 client_keys=keys,
@@ -416,4 +414,4 @@ class CloudProvisionerImpl:
         except Exception as err:
             raise CloudSetupError(f"SSH connect to {ip_addr} failed: {err}") from err
         # END_BLOCK_SSH_CONNECT_VM
-        return connected_machine
+        return session

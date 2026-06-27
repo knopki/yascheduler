@@ -1,24 +1,28 @@
 # FILE: tests/unit/test_ssh_gateway.py
-# VERSION: 1.0.5
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineRepository + SSHMachineOperations — connection lifecycle, command execution, SFTP, machine state, property helpers.
-#   SCOPE: SSHMachineRepository + SSHMachineOperations with asyncssh fully mocked. No real SSH, SFTP, or platform detection.
-#   DEPENDS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-DOMAIN-MODEL, M-PLATFORM-PROTOCOL
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
+#   PURPOSE: Unit tests for SSHMachineRepository + SSHMachineSession — connection lifecycle, command execution via session, SFTP via session, machine state via session, repository collection semantics.
+#   SCOPE: SSHMachineRepository + SSHMachineSession with asyncssh fully mocked. No real SSH, SFTP, or platform detection.
+#   DEPENDS: M-SSH-REPOSITORY, M-SSH-SESSION, M-DOMAIN-MODEL, M-PLATFORM-PROTOCOL
+#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
+#   _AsyncIter - Simple async iterator from a list (avoids aclose warnings)
+#   _make_mock_adapter - Build a mock RemoteMachineAdapter with async stubs
+#   _make_mock_connection - Build a mock (conn, conn_opts) tuple with SFTP ctx
+#   _make_state - Build a fully-mocked SSHMachineSession (bypasses connect); name kept for import-compat with sibling test modules
 #   TestConnectionLifecycle - connect / disconnect / disconnect_all
-#   TestListFree - list_free filtering by state and platform
-#   TestCommandExecution - run / run_full / run_bg
-#   TestFileTransfer - upload / download / get_sftp context manager
-#   TestMachineState - update_machine, contains, len
+#   TestListFree - list_free filtering by state and platform (returns sessions)
+#   TestCommandExecution - run / run_full / run_bg via the operations facade taking a session
+#   TestSessionFileTransfer - session.upload / session.open_sftp
+#   TestRepositoryCollection - contains, len, get_session
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.5 - Removed TestPropertyHelpers class and test_keys/test_items/test_register_machine per cleanup-unused-repository-symbols (methods deleted from SSHMachineRepository).
-#   PREVIOUS_CHANGE: v1.0.4 - Extract TestOccupancy + TestAdvancedOperations to test_ssh_gateway_operations.py for size compliance (GRACE-lite 1000-line limit).
+#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: _make_state now builds an SSHMachineSession (was _MachineState). repository._machines → repository._sessions. operations.run/run_full/run_bg(machine,…) → operations.X(session,…). operations.upload/get_sftp removed from facade — rewritten as TestSessionFileTransfer testing session.upload/session.open_sftp directly. update_machine → session.update. Removed unknown-IP AssertionError tests (facade no longer IP-keys). list_free/list_connected now return sessions; assertions read session.machine.
+#   PREVIOUS_CHANGE: v1.0.5 - Removed TestPropertyHelpers class and test_keys/test_items/test_register_machine per cleanup-unused-repository-symbols (methods deleted from SSHMachineRepository).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -35,7 +39,8 @@ from yascheduler.domain import Engine
 from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.platform.protocol import ProcessInfo
-from yascheduler.infra.ssh.repository import SSHMachineRepository, _MachineState
+from yascheduler.infra.ssh.repository import SSHMachineRepository
+from yascheduler.infra.ssh.session import SSHMachineSession
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -63,8 +68,6 @@ class _AsyncIter:
 
 def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     """Create a mock adapter with async stubs for all platform methods."""
-    from unittest.mock import MagicMock
-
     adapter = MagicMock()
     adapter.platform = platform
     adapter.path = PurePosixPath
@@ -114,8 +117,6 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
 def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
     """Create a mock connection with SFTP client context manager."""
-    from unittest.mock import MagicMock
-
     conn = MagicMock()
     conn._transport = MagicMock()
     conn._transport.is_closing.return_value = False
@@ -147,8 +148,12 @@ def _make_state(
     platform: str = "linux",
     ncpus: int = 4,
     state: MachineState = MachineState.FREE,
-) -> _MachineState:
-    """Create a fully-mocked _MachineState (bypasses connect)."""
+) -> SSHMachineSession:
+    """Create a fully-mocked SSHMachineSession (bypasses connect).
+
+    Name kept as ``_make_state`` for import-compat with sibling test modules
+    that ``from tests.unit.test_ssh_gateway import _make_state``.
+    """
     adapter = _make_mock_adapter(platform=platform, ncpus=ncpus)
     conn, conn_opts = _make_mock_connection(ip=ip)
 
@@ -160,7 +165,8 @@ def _make_state(
         free_since=time.monotonic(),
     )
 
-    return _MachineState(
+    return SSHMachineSession(
+        ip=ip,
         conn=conn,
         conn_opts=conn_opts,
         machine=machine,
@@ -246,13 +252,13 @@ class TestConnectionLifecycle:
     """Connect, disconnect, disconnect_all."""
 
     @pytest.mark.asyncio
-    async def test_connect_stores_machine(
+    async def test_connect_returns_session(
         self,
         repository: SSHMachineRepository,
         mock_conn: MagicMock,
         mock_adapter: MagicMock,
     ) -> None:
-        """connect() stores a _MachineState in _machines."""
+        """connect() stores an SSHMachineSession in _sessions and returns it."""
         with (
             patch(
                 "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
@@ -271,61 +277,27 @@ class TestConnectionLifecycle:
                 ),
             ),
         ):
-            machine = await repository.connect(
+            session = await repository.connect(
                 ip="10.0.0.1",
                 username="root",
                 client_keys=[],
             )
 
         assert "10.0.0.1" in repository
-        assert repository._machines["10.0.0.1"].machine is machine
-        assert repository._machines["10.0.0.1"].machine.state == MachineState.FREE
+        stored = repository._sessions["10.0.0.1"]
+        assert stored is session
+        assert isinstance(session, SSHMachineSession)
+        assert session.ip == "10.0.0.1"
+        assert session.machine.state == MachineState.FREE
+        assert session.is_closed is False
 
     @pytest.mark.asyncio
-    async def test_connect_returns_connected_machine(
-        self,
-        repository: SSHMachineRepository,
-        mock_conn: MagicMock,
-        mock_adapter: MagicMock,
-    ) -> None:
-        """connect() returns a ConnectedMachine with correct IP and platform."""
-        with (
-            patch(
-                "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
-                AsyncMock(return_value=mock_conn),
-            ),
-            patch(
-                "yascheduler.infra.ssh.repository._detect_platform",
-                AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
-            ),
-            patch(
-                "yascheduler.infra.ssh.repository._init_paths",
-                return_value=(
-                    PurePosixPath("./data"),
-                    PurePosixPath("./data/engines"),
-                    PurePosixPath("./data/tasks"),
-                ),
-            ),
-        ):
-            machine = await repository.connect(
-                ip="10.0.0.1",
-                username="root",
-                client_keys=[],
-            )
-
-        assert isinstance(machine, ConnectedMachine)
-        assert machine.ip == "10.0.0.1"
-        assert machine.platform == "linux"
-        assert machine.ncpus == 4
-        assert machine.state == MachineState.FREE
-
-    @pytest.mark.asyncio
-    async def test_disconnect_removes_machine(
+    async def test_disconnect_removes_session(
         self, repository: SSHMachineRepository
     ) -> None:
-        """disconnect() removes the machine from the registry."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        """disconnect() removes the session from the repository."""
+        session = _make_state()
+        repository._sessions["10.0.0.1"] = session
         await repository.disconnect("10.0.0.1")
         assert "10.0.0.1" not in repository
 
@@ -333,22 +305,22 @@ class TestConnectionLifecycle:
     async def test_disconnect_closes_connection(
         self, repository: SSHMachineRepository
     ) -> None:
-        """disconnect() calls conn.close() and conn.wait_closed()."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+        """disconnect() delegates teardown to session._close() (which closes conn)."""
+        session = _make_state()
+        repository._sessions["10.0.0.1"] = session
         await repository.disconnect("10.0.0.1")
-        state.conn.close.assert_called_once()  # type: ignore[attr-defined]
-        state.conn.wait_closed.assert_awaited_once()  # type: ignore[attr-defined]
+        session._conn.close.assert_called_once()  # type: ignore[attr-defined]
+        session._conn.wait_closed.assert_awaited_once()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_disconnect_all_removes_all(
         self, repository: SSHMachineRepository
     ) -> None:
-        """disconnect_all() clears all machines."""
+        """disconnect_all() clears all sessions."""
         s1 = _make_state(ip="10.0.0.1")
         s2 = _make_state(ip="10.0.0.2")
-        repository._machines["10.0.0.1"] = s1
-        repository._machines["10.0.0.2"] = s2
+        repository._sessions["10.0.0.1"] = s1
+        repository._sessions["10.0.0.2"] = s2
         await repository.disconnect_all()
         assert len(repository) == 0
 
@@ -356,7 +328,7 @@ class TestConnectionLifecycle:
     async def test_disconnect_unknown_ip_does_nothing(
         self, repository: SSHMachineRepository
     ) -> None:
-        """disconnect() with no state does not raise."""
+        """disconnect() with no session does not raise."""
         await repository.disconnect("10.0.0.99")  # should not raise
 
 
@@ -366,272 +338,234 @@ class TestConnectionLifecycle:
 
 
 class TestListFree:
-    """list_free filtering by state and platform."""
+    """list_free filtering by state and platform — returns sessions."""
 
-    def test_list_free_returns_free_machines(
+    def test_list_free_returns_free_sessions(
         self, repository: SSHMachineRepository
     ) -> None:
-        """list_free returns only FREE machines."""
+        """list_free returns only FREE sessions."""
         s_free = _make_state(ip="10.0.0.1", state=MachineState.FREE)
         s_busy = _make_state(ip="10.0.0.2", state=MachineState.BUSY)
-        repository._machines["10.0.0.1"] = s_free
-        repository._machines["10.0.0.2"] = s_busy
+        repository._sessions["10.0.0.1"] = s_free
+        repository._sessions["10.0.0.2"] = s_busy
 
         result = repository.list_free(platforms=None)
         assert len(result) == 1
-        assert result[0].ip == "10.0.0.1"
+        assert result[0].machine.ip == "10.0.0.1"
 
     def test_list_free_filters_by_platform(
         self, repository: SSHMachineRepository
     ) -> None:
-        """list_free filters machines by platform."""
+        """list_free filters sessions by platform."""
         s_linux = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.FREE)
         s_win = _make_state(ip="10.0.0.2", platform="windows", state=MachineState.FREE)
-        repository._machines["10.0.0.1"] = s_linux
-        repository._machines["10.0.0.2"] = s_win
+        repository._sessions["10.0.0.1"] = s_linux
+        repository._sessions["10.0.0.2"] = s_win
 
         result = repository.list_free(platforms=["linux"])
         assert len(result) == 1
-        assert result[0].ip == "10.0.0.1"
+        assert result[0].machine.ip == "10.0.0.1"
 
     def test_list_free_empty_when_no_match(
         self, repository: SSHMachineRepository
     ) -> None:
-        """list_free returns empty list when no machines match."""
+        """list_free returns empty list when no sessions match."""
         s_linux = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.FREE)
-        repository._machines["10.0.0.1"] = s_linux
+        repository._sessions["10.0.0.1"] = s_linux
 
         result = repository.list_free(platforms=["windows"])
         assert len(result) == 0
 
-    def test_list_free_skips_busy_machine_matching_platform(
+    def test_list_free_skips_busy_session_matching_platform(
         self, repository: SSHMachineRepository
     ) -> None:
-        """list_free excludes BUSY machines even when platform matches."""
+        """list_free excludes BUSY sessions even when platform matches."""
         s = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.BUSY)
-        repository._machines["10.0.0.1"] = s
+        repository._sessions["10.0.0.1"] = s
         result = repository.list_free(platforms=["linux"])
         assert len(result) == 0
 
     def test_list_free_returns_oldest_first(
         self, repository: SSHMachineRepository
     ) -> None:
-        """list_free sorts by free_since ascending (oldest first)."""
-        import time
-
+        """list_free sorts by session.machine.free_since ascending (oldest first)."""
         older = time.monotonic() - 100
         newer = time.monotonic() - 10
         s1 = _make_state(ip="10.0.0.1", state=MachineState.FREE)
         s2 = _make_state(ip="10.0.0.2", state=MachineState.FREE)
-        # Override free_since for ordering
-        s1 = _MachineState(
-            conn=s1.conn,
-            conn_opts=s1.conn_opts,
-            machine=ConnectedMachine(
+        # Override free_since for ordering via session.update
+        s1.update(
+            ConnectedMachine(
                 ip="10.0.0.1",
                 platform="linux",
                 ncpus=4,
                 state=MachineState.FREE,
                 free_since=older,
-            ),
-            adapter=s1.adapter,
-            platforms=s1.platforms,
-            data_dir=s1.data_dir,
-            engines_dir=s1.engines_dir,
-            tasks_dir=s1.tasks_dir,
+            )
         )
-        s2 = _MachineState(
-            conn=s2.conn,
-            conn_opts=s2.conn_opts,
-            machine=ConnectedMachine(
+        s2.update(
+            ConnectedMachine(
                 ip="10.0.0.2",
                 platform="linux",
                 ncpus=4,
                 state=MachineState.FREE,
                 free_since=newer,
-            ),
-            adapter=s2.adapter,
-            platforms=s2.platforms,
-            data_dir=s2.data_dir,
-            engines_dir=s2.engines_dir,
-            tasks_dir=s2.tasks_dir,
+            )
         )
-        repository._machines["10.0.0.1"] = s1
-        repository._machines["10.0.0.2"] = s2
+        repository._sessions["10.0.0.1"] = s1
+        repository._sessions["10.0.0.2"] = s2
 
         result = repository.list_free(platforms=None)
-        assert result[0].ip == "10.0.0.1"  # older free_since first
+        assert result[0].machine.ip == "10.0.0.1"  # older free_since first
 
 
 # =============================================================================
-# Command Execution
+# Command Execution (via operations facade taking a session)
 # =============================================================================
 
 
 class TestCommandExecution:
-    """run, run_full, run_bg."""
+    """run, run_full, run_bg via the operations facade (session-typed)."""
 
     @pytest.mark.asyncio
     async def test_run_returns_process_result(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+        self, operations: SSHMachineOperations
     ) -> None:
-        """run() returns a ProcessResult from the adapter output."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
-        result = await operations.run(state.machine, "echo hello")
-
+        """run(session, cmd) returns a ProcessResult from the adapter output."""
+        session = _make_state()
+        result = await operations.run(session, "echo hello")
         assert isinstance(result, ProcessResult)
         assert result.exit_code == 0
         assert result.stdout == "stdout"
         assert result.stderr == ""
 
     @pytest.mark.asyncio
-    async def test_run_delegates_to_run_full(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+    async def test_run_delegates_to_session_run(
+        self, operations: SSHMachineOperations
     ) -> None:
-        """run() internally calls run_full()."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
-        with patch.object(operations, "run_full", AsyncMock()) as mock_run_full:
-            mock_run_full.return_value = MagicMock(
-                returncode=0, stdout="out", stderr=""
-            )
-            result = await operations.run(state.machine, "echo hello")
-            mock_run_full.assert_awaited_once_with(state.machine, "echo hello")
+        """operations.run(session, cmd) delegates to session.run(cmd)."""
+        session = _make_state()
+        with patch.object(session, "run", AsyncMock()) as mock_run:
+            mock_run.return_value = ProcessResult(exit_code=0, stdout="out", stderr="")
+            result = await operations.run(session, "echo hello")
+            mock_run.assert_awaited_once_with("echo hello")
             assert result.exit_code == 0
 
     @pytest.mark.asyncio
     async def test_run_full_returns_ssh_completed_process(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+        self, operations: SSHMachineOperations
     ) -> None:
-        """run_full() returns the raw adapter.run result."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
-        proc = await operations.run_full(state.machine, "echo hello")
+        """run_full(session, cmd) returns the raw adapter.run result."""
+        session = _make_state()
+        proc = await operations.run_full(session, "echo hello")
         assert proc.returncode == 0
         assert proc.stdout == "stdout"
 
     @pytest.mark.asyncio
     async def test_run_bg_starts_background_process(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+        self, operations: SSHMachineOperations
     ) -> None:
-        """run_bg() delegates to adapter.run_bg (returns None per port contract)."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
-        await operations.run_bg(state.machine, "long_running", cwd="/tmp")
-
-    @pytest.mark.asyncio
-    async def test_run_full_raises_assertion_error_for_unknown_ip(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """run_full() raises AssertionError when machine is not registered."""
-        machine = ConnectedMachine(ip="10.0.0.99", platform="linux", ncpus=4)
-        with pytest.raises(AssertionError):
-            await operations.run_full(machine, "echo hello")
+        """run_bg(session, cmd, cwd=...) delegates to session.run_bg (returns None)."""
+        session = _make_state()
+        await operations.run_bg(session, "long_running", cwd="/tmp")
 
 
 # =============================================================================
-# File Transfer
+# File Transfer (on the session — facade no longer exposes upload/get_sftp)
 # =============================================================================
 
 
-class TestFileTransfer:
-    """upload, download, get_sftp context manager."""
+class TestSessionFileTransfer:
+    """session.upload / session.open_sftp."""
 
     @pytest.mark.asyncio
-    async def test_upload_uses_sftp(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """upload() pushes file via SFTP put."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
+    async def test_session_upload_uses_sftp(self) -> None:
+        """session.upload pushes file via SFTP put."""
+        session = _make_state()
         local = Path("/tmp/local.txt")
         remote = "/remote/path/file.txt"
 
-        await operations.upload(state.machine, local, remote)
+        await session.upload(local, remote)
 
         # Enter the sftp context to access the same singleton sftp mock
-        async with state.conn.start_sftp_client() as sf:
+        async with session._conn.start_sftp_client() as sf:  # noqa: SLF001
             sf.put.assert_awaited_once_with(str(local), remote)  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
-    async def test_download_uses_sftp(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """download equivalent via get_sftp pulls file via SFTP get."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        local = Path("/tmp/local.txt")
-        remote = "/remote/path/file.txt"
+    async def test_session_open_sftp_context_manager(self) -> None:
+        """session.open_sftp yields an SFTP client via async context manager."""
+        session = _make_state()
 
-        async with operations.get_sftp("10.0.0.1") as sftp:
-            await sftp.get(remote, str(local))
-
-        async with state.conn.start_sftp_client() as sf:
-            sf.get.assert_awaited_once_with(remote, str(local))  # type: ignore[attr-defined]
-
-    @pytest.mark.asyncio
-    async def test_get_sftp_context_manager(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
-    ) -> None:
-        """get_sftp yields an SFTP client via async context manager."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-
-        async with operations.get_sftp("10.0.0.1") as sftp:
+        async with session.open_sftp() as sftp:
             assert sftp is not None
-            # The sftp client should be our mock
             assert hasattr(sftp, "put")
             assert hasattr(sftp, "get")
 
 
 # =============================================================================
-# Machine State
+# Repository collection semantics
 # =============================================================================
 
 
-class TestMachineState:
-    """update_machine, contains, len."""
-
-    def test_update_machine_replaces_state(
-        self, repository: SSHMachineRepository
-    ) -> None:
-        """update_machine() replaces the ConnectedMachine in the state."""
-        state = _make_state(ip="10.0.0.1", state=MachineState.FREE)
-        repository._machines["10.0.0.1"] = state
-
-        updated = state.machine.occupy()
-        repository.update_machine(updated)
-
-        assert repository._machines["10.0.0.1"].machine.state == MachineState.BUSY
-
-    def test_update_machine_unknown_ip_does_nothing(
-        self, repository: SSHMachineRepository
-    ) -> None:
-        """update_machine() with unknown IP silently does nothing."""
-        machine = ConnectedMachine(ip="10.0.0.99", platform="linux", ncpus=4)
-        repository.update_machine(machine)  # should not raise
+class TestRepositoryCollection:
+    """contains, len, get_session."""
 
     def test_contains(self, repository: SSHMachineRepository) -> None:
         """__contains__ checks by IP."""
-        state = _make_state(ip="10.0.0.1")
-        repository._machines["10.0.0.1"] = state
+        session = _make_state(ip="10.0.0.1")
+        repository._sessions["10.0.0.1"] = session
         assert "10.0.0.1" in repository
         assert "10.0.0.2" not in repository
 
     def test_len(self, repository: SSHMachineRepository) -> None:
-        """__len__ returns machine count."""
-        repository._machines["10.0.0.1"] = _make_state(ip="10.0.0.1")
-        repository._machines["10.0.0.2"] = _make_state(ip="10.0.0.2")
+        """__len__ returns session count."""
+        repository._sessions["10.0.0.1"] = _make_state(ip="10.0.0.1")
+        repository._sessions["10.0.0.2"] = _make_state(ip="10.0.0.2")
         assert len(repository) == 2
 
     def test_contains_method(self, repository: SSHMachineRepository) -> None:
         """contains() checks by IP (explicit method)."""
-        state = _make_state(ip="10.0.0.1")
-        repository._machines["10.0.0.1"] = state
+        session = _make_state(ip="10.0.0.1")
+        repository._sessions["10.0.0.1"] = session
         assert repository.contains("10.0.0.1") is True
         assert repository.contains("10.0.0.2") is False
+
+    def test_get_session_returns_live_or_none(
+        self, repository: SSHMachineRepository
+    ) -> None:
+        """get_session(ip) returns the registered session or None."""
+        session = _make_state(ip="10.0.0.1")
+        repository._sessions["10.0.0.1"] = session
+        assert repository.get_session("10.0.0.1") is session
+        assert repository.get_session("10.0.0.2") is None
+
+
+# =============================================================================
+# Session state transitions (occupy/release/update)
+# =============================================================================
+
+
+class TestSessionStateTransitions:
+    """session.occupy / session.release / session.update."""
+
+    def test_occupy_transitions_to_busy(self) -> None:
+        """session.occupy() transitions snapshot to BUSY."""
+        session = _make_state(state=MachineState.FREE)
+        session.occupy()
+        assert session.machine.state == MachineState.BUSY
+
+    def test_release_transitions_to_free(self) -> None:
+        """session.release() transitions snapshot to FREE with free_since set."""
+        session = _make_state(state=MachineState.BUSY)
+        before = time.monotonic()
+        session.release()
+        assert session.machine.state == MachineState.FREE
+        assert session.machine.free_since is not None
+        assert session.machine.free_since >= before
+
+    def test_update_replaces_snapshot(self) -> None:
+        """session.update(machine) replaces the internal snapshot."""
+        session = _make_state(state=MachineState.FREE)
+        busy = session.machine.occupy()
+        session.update(busy)
+        assert session.machine.state == MachineState.BUSY

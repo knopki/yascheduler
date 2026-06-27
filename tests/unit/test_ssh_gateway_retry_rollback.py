@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway_retry_rollback.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for non-idempotent retry removal (run_bg/upload/download single-attempt) and start_task_on_machine BUSY rollback.
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for fix-nonidempotent-ssh-retries: run_bg/upload/download single-attempt propagation; start_task_on_machine BUSY rollback (upload failure, spawn failure, CancelledError, unexpected non-BUSY state, concurrent disconnect).
+#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: repository._machines → repository._sessions; operations.run_bg/start_task_on_machine take session; operations.upload/get_sftp removed — use session.upload/session.open_sftp; rollback uses session.is_closed; occupy spy on session not repository. Log substring "rolling back BUSY" (no "repository").
+#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for fix-nonidempotent-ssh-retries: run_bg/upload/download single-attempt propagation; start_task_on_machine BUSY rollback (upload failure, spawn failure, CancelledError, unexpected non-BUSY state, concurrent disconnect).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -41,10 +41,12 @@ from yascheduler.infra.ssh.platform.protocol import (
     ChannelOpenError,
     SFTPConnectionLost,
 )
-from yascheduler.infra.ssh.repository import SSHMachineRepository, _MachineState
+from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+    from yascheduler.infra.ssh.session import SSHMachineSession
 
 
 @pytest.fixture
@@ -71,7 +73,7 @@ def _make_task(remote_folder: str = "/remote/tasks/1") -> Task:
     )
 
 
-def _wire_realpath(state: _MachineState) -> None:
+def _wire_realpath(state: SSHMachineSession) -> None:
     """Configure the DEPLOY SFTP client's realpath before start_task_on_machine."""
     sftp = AsyncMock()
     sftp.realpath = AsyncMock(return_value="/root")
@@ -80,7 +82,7 @@ def _wire_realpath(state: _MachineState) -> None:
     async def _sftp_ctx() -> AsyncGenerator[AsyncMock, None]:
         yield sftp
 
-    state.conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]
+    state._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
 
 
 # =============================================================================
@@ -96,13 +98,13 @@ class TestNonIdempotentRetry:
         self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """run_bg propagates ChannelOpenError immediately, single attempt (no retry)."""
-        state = _make_state()
-        adapter = cast("MagicMock", state.adapter)
+        session = _make_state()
+        adapter = cast("MagicMock", session.adapter)
         adapter.run_bg = AsyncMock(side_effect=ChannelOpenError(11, "open failed"))
-        repository._machines["10.0.0.1"] = state
+        repository._sessions["10.0.0.1"] = session
 
         with pytest.raises(ChannelOpenError):
-            await operations.run_bg(state.machine, "spawn-cmd", cwd="/tmp")
+            await operations.run_bg(session, "spawn-cmd", cwd="/tmp")
 
         adapter.run_bg.assert_awaited_once()  # type: ignore[attr-defined]
 
@@ -111,7 +113,7 @@ class TestNonIdempotentRetry:
         self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
         """upload propagates SFTPConnectionLost immediately, single put attempt."""
-        state = _make_state()
+        session = _make_state()
         sftp = AsyncMock()
         sftp.put = AsyncMock(side_effect=SFTPConnectionLost("connection lost"))
 
@@ -119,11 +121,11 @@ class TestNonIdempotentRetry:
         async def _sftp_ctx() -> AsyncGenerator[AsyncMock, None]:
             yield sftp
 
-        state.conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]
-        repository._machines["10.0.0.1"] = state
+        session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
+        repository._sessions["10.0.0.1"] = session
 
         with pytest.raises(SFTPConnectionLost):
-            await operations.upload(state.machine, Path("/tmp/local"), "/remote/file")
+            await session.upload(Path("/tmp/local"), "/remote/file")
 
         sftp.put.assert_awaited_once()
 
@@ -131,8 +133,8 @@ class TestNonIdempotentRetry:
     async def test_download_no_longer_retries_on_sftp_error(
         self, repository: SSHMachineRepository, operations: SSHMachineOperations
     ) -> None:
-        """download equivalent via get_sftp propagates SFTPConnectionLost immediately, single get attempt."""
-        state = _make_state()
+        """download equivalent via open_sftp propagates SFTPConnectionLost immediately, single get attempt."""
+        session = _make_state()
         sftp = AsyncMock()
         sftp.get = AsyncMock(side_effect=SFTPConnectionLost("connection lost"))
 
@@ -140,11 +142,11 @@ class TestNonIdempotentRetry:
         async def _sftp_ctx() -> AsyncGenerator[AsyncMock, None]:
             yield sftp
 
-        state.conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]
-        repository._machines["10.0.0.1"] = state
+        session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
+        repository._sessions["10.0.0.1"] = session
 
         with pytest.raises(SFTPConnectionLost):
-            async with operations.get_sftp("10.0.0.1") as sftp_client:
+            async with session.open_sftp() as sftp_client:
                 await sftp_client.get("/remote/file", "/tmp/local")
 
         sftp.get.assert_awaited_once()
@@ -166,10 +168,9 @@ class TestStartTaskRollback:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Upload failure -> machine released, info log, original error re-raised."""
-        state = _make_state()
-        _wire_realpath(state)
-        repository._machines["10.0.0.1"] = state
-        machine = repository._machines["10.0.0.1"].machine
+        session = _make_state()
+        _wire_realpath(session)
+        repository._sessions["10.0.0.1"] = session
 
         with patch.object(
             operations.deploy,
@@ -179,15 +180,15 @@ class TestStartTaskRollback:
             with caplog.at_level(logging.INFO):
                 with pytest.raises(OSError, match="upload boom"):
                     await operations.start_task_on_machine(
-                        machine,
+                        session,
                         _make_engine(),
                         _make_task(),
                         4,
                         PurePosixPath("/engines"),
                     )
 
-        assert repository._machines["10.0.0.1"].machine.state == MachineState.FREE
-        assert "rolling back repository BUSY" in caplog.text
+        assert repository._sessions["10.0.0.1"].machine.state == MachineState.FREE
+        assert "rolling back BUSY" in caplog.text
 
     @pytest.mark.asyncio
     async def test_rollback_busy_on_spawn_failure(
@@ -197,10 +198,9 @@ class TestStartTaskRollback:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Spawn failure (ChannelOpenError) -> machine released, info log, re-raised."""
-        state = _make_state()
-        _wire_realpath(state)
-        repository._machines["10.0.0.1"] = state
-        machine = repository._machines["10.0.0.1"].machine
+        session = _make_state()
+        _wire_realpath(session)
+        repository._sessions["10.0.0.1"] = session
 
         with (
             patch.object(
@@ -215,15 +215,15 @@ class TestStartTaskRollback:
             with caplog.at_level(logging.INFO):
                 with pytest.raises(ChannelOpenError):
                     await operations.start_task_on_machine(
-                        machine,
+                        session,
                         _make_engine(),
                         _make_task(),
                         4,
                         PurePosixPath("/engines"),
                     )
 
-        assert repository._machines["10.0.0.1"].machine.state == MachineState.FREE
-        assert "rolling back repository BUSY" in caplog.text
+        assert repository._sessions["10.0.0.1"].machine.state == MachineState.FREE
+        assert "rolling back BUSY" in caplog.text
 
     @pytest.mark.asyncio
     async def test_rollback_on_cancelled_error(
@@ -233,10 +233,9 @@ class TestStartTaskRollback:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """CancelledError (BaseException) is caught, machine released, then re-raised."""
-        state = _make_state()
-        _wire_realpath(state)
-        repository._machines["10.0.0.1"] = state
-        machine = repository._machines["10.0.0.1"].machine
+        session = _make_state()
+        _wire_realpath(session)
+        repository._sessions["10.0.0.1"] = session
 
         with patch.object(
             operations.deploy,
@@ -246,15 +245,15 @@ class TestStartTaskRollback:
             with caplog.at_level(logging.INFO):
                 with pytest.raises(asyncio.CancelledError):
                     await operations.start_task_on_machine(
-                        machine,
+                        session,
                         _make_engine(),
                         _make_task(),
                         4,
                         PurePosixPath("/engines"),
                     )
 
-        assert repository._machines["10.0.0.1"].machine.state == MachineState.FREE
-        assert "rolling back repository BUSY" in caplog.text
+        assert repository._sessions["10.0.0.1"].machine.state == MachineState.FREE
+        assert "rolling back BUSY" in caplog.text
 
     @pytest.mark.asyncio
     async def test_rollback_warns_on_unexpected_state(
@@ -264,17 +263,15 @@ class TestStartTaskRollback:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Non-BUSY state at rollback -> warn, still release, re-raise."""
-        state = _make_state()
-        _wire_realpath(state)
-        repository._machines["10.0.0.1"] = state
-        machine = repository._machines["10.0.0.1"].machine
+        session = _make_state()
+        _wire_realpath(session)
+        repository._sessions["10.0.0.1"] = session
 
         async def _fail_with_unexpected_state(
-            ip: str, task: Task, task_dir: object, input_files: object
+            s: object, task: Task, task_dir: object, input_files: object
         ) -> bool:
             # Simulate a concurrent transition away from BUSY before rollback.
-            cur = repository._machines[ip]
-            repository._machines[ip] = replace(cur, machine=cur.machine.release())
+            session.release()
             raise OSError("boom")
 
         with patch.object(
@@ -285,14 +282,14 @@ class TestStartTaskRollback:
             with caplog.at_level(logging.WARNING):
                 with pytest.raises(OSError):
                     await operations.start_task_on_machine(
-                        machine,
+                        session,
                         _make_engine(),
                         _make_task(),
                         4,
                         PurePosixPath("/engines"),
                     )
 
-        assert repository._machines["10.0.0.1"].machine.state == MachineState.FREE
+        assert repository._sessions["10.0.0.1"].machine.state == MachineState.FREE
         assert "unexpected state" in caplog.text
         assert "expected BUSY" in caplog.text
 
@@ -303,19 +300,18 @@ class TestStartTaskRollback:
         operations: SSHMachineOperations,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Machine gone (concurrent disconnect) -> warn, skip release, re-raise."""
-        state = _make_state()
-        _wire_realpath(state)
-        repository._machines["10.0.0.1"] = state
+        """Session closed (concurrent disconnect) -> warn, skip release, re-raise."""
+        session = _make_state()
+        _wire_realpath(session)
+        repository._sessions["10.0.0.1"] = session
 
         async def _fail_after_disconnect(
-            ip: str, task: Task, task_dir: object, input_files: object
+            s: object, task: Task, task_dir: object, input_files: object
         ) -> bool:
-            repository._machines.pop(ip, None)  # simulate concurrent disconnect
+            await session._close()  # noqa: SLF001
             raise OSError("boom")
 
-        machine = repository._machines["10.0.0.1"].machine
-        occupy_spy = patch.object(repository, "occupy", wraps=repository.occupy)
+        occupy_spy = patch.object(session, "occupy", wraps=session.occupy)
 
         with (
             occupy_spy as spy,
@@ -328,15 +324,16 @@ class TestStartTaskRollback:
             with caplog.at_level(logging.WARNING):
                 with pytest.raises(OSError):
                     await operations.start_task_on_machine(
-                        machine,
+                        session,
                         _make_engine(),
                         _make_task(),
                         4,
                         PurePosixPath("/engines"),
                     )
 
-        # Rollback saw None and did not re-register via occupy.
-        assert repository._machines.get("10.0.0.1") is None
+        # Rollback saw is_closed and skipped release; session stays BUSY in repo.
+        assert session.is_closed
+        assert repository._sessions["10.0.0.1"].machine.state == MachineState.BUSY
         # occupy was called exactly once (the initial occupy); no release call.
         assert spy.call_count == 1
         assert "already disconnected" in caplog.text

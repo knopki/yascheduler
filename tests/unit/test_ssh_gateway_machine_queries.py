@@ -1,22 +1,23 @@
 # FILE: tests/unit/test_ssh_gateway_machine_queries.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineRepository machine-query methods added by gateway-port-cleanup.
-#   SCOPE: get_machine_state (public + internal), list_connected.
-#   DEPENDS: M-SSH-REPOSITORY
-#   LINKS: M-SSH-REPOSITORY
+#   PURPOSE: Unit tests for SSHMachineRepository session-query methods.
+#   SCOPE: get_session (public port), list_connected.
+#   DEPENDS: M-SSH-REPOSITORY, M-SSH-SESSION
+#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   _make_mock_adapter - Build a mock RemoteMachineAdapter
 #   _make_mock_connection - Build a mock (conn, conn_opts) tuple
-#   _make_state - Build a fully-mocked _MachineState (bypasses connect)
-#   TestMachineQueries - get_machine_state public/internal, list_connected
+#   _make_session - Build a fully-mocked SSHMachineSession (bypasses connect)
+#   TestMachineQueries - get_session public, list_connected
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extract machine-query tests from test_ssh_gateway.py to keep file under hard limit (gateway-port-cleanup).
+#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: rename _get_machine_state → get_session; build SSHMachineSession instead of _MachineState; repository._machines → repository._sessions; assertions read session.machine.
+#   PREVIOUS_CHANGE: v1.0.0 - Extract machine-query tests from test_ssh_gateway.py to keep file under hard limit (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,7 +30,8 @@ import pytest
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
 from yascheduler.domain import ConnectedMachine, MachineState
-from yascheduler.infra.ssh.repository import SSHMachineRepository, _MachineState
+from yascheduler.infra.ssh.repository import SSHMachineRepository
+from yascheduler.infra.ssh.session import SSHMachineSession
 
 
 def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
@@ -48,13 +50,13 @@ def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
     return conn, conn_opts
 
 
-def _make_state(
+def _make_session(
     ip: str = "10.0.0.1",
     platform: str = "linux",
     ncpus: int = 4,
     state: MachineState = MachineState.FREE,
-) -> _MachineState:
-    """Create a fully-mocked _MachineState (bypasses connect)."""
+) -> SSHMachineSession:
+    """Create a fully-mocked SSHMachineSession (bypasses connect)."""
     adapter = _make_mock_adapter(platform=platform, ncpus=ncpus)
     conn, conn_opts = _make_mock_connection(ip=ip)
 
@@ -66,7 +68,8 @@ def _make_state(
         free_since=time.monotonic(),
     )
 
-    return _MachineState(
+    return SSHMachineSession(
+        ip=ip,
         conn=conn,
         conn_opts=conn_opts,
         machine=machine,
@@ -84,29 +87,32 @@ def repository() -> SSHMachineRepository:
 
 
 class TestMachineQueries:
-    """Machine query methods added/renamed by gateway-port-cleanup."""
+    """Session-query methods after session-based-machine-handle."""
 
-    def test_get_machine_state_internal(self, repository: SSHMachineRepository) -> None:
-        """_get_machine_state returns adapter-internal _MachineState or None."""
-        state = _make_state(ip="10.0.0.1")
-        repository._machines["10.0.0.1"] = state
-        assert repository._get_machine_state("10.0.0.1") is state
-        assert repository._get_machine_state("10.0.0.2") is None
+    def test_get_session_returns_live_session(
+        self, repository: SSHMachineRepository
+    ) -> None:
+        """get_session returns the live MachineSession registered for ip, or None."""
+        session = _make_session(ip="10.0.0.1")
+        repository._sessions["10.0.0.1"] = session
+        assert repository.get_session("10.0.0.1") is session
+        assert repository.get_session("10.0.0.2") is None
 
-    def test_get_machine_state_public(self, repository: SSHMachineRepository) -> None:
-        """get_machine_state returns ConnectedMachine (port contract) or None."""
-        state = _make_state(ip="10.0.0.1")
-        repository._machines["10.0.0.1"] = state
-        result = repository.get_machine_state("10.0.0.1")
-        assert result is state.machine
-        assert repository.get_machine_state("10.0.0.2") is None
+    def test_get_session_returns_none_after_disconnect(
+        self, repository: SSHMachineRepository
+    ) -> None:
+        """get_session returns None once the ip is popped from _sessions."""
+        session = _make_session(ip="10.0.0.1")
+        repository._sessions["10.0.0.1"] = session
+        repository._sessions.pop("10.0.0.1", None)
+        assert repository.get_session("10.0.0.1") is None
 
     def test_list_connected(self, repository: SSHMachineRepository) -> None:
-        """list_connected returns the ConnectedMachine of every registered state."""
-        state_a = _make_state(ip="10.0.0.1")
-        state_b = _make_state(ip="10.0.0.2")
-        repository._machines["10.0.0.1"] = state_a
-        repository._machines["10.0.0.2"] = state_b
+        """list_connected returns every registered session."""
+        session_a = _make_session(ip="10.0.0.1")
+        session_b = _make_session(ip="10.0.0.2")
+        repository._sessions["10.0.0.1"] = session_a
+        repository._sessions["10.0.0.2"] = session_b
         result = repository.list_connected()
-        assert set(result) == {state_a.machine, state_b.machine}
-        assert all(hasattr(m, "ip") for m in result)
+        assert set(result) == {session_a, session_b}
+        assert all(hasattr(s, "machine") for s in result)

@@ -1,10 +1,6 @@
-# SSH Machine Repository
+# SSH Machine Repository (delta — session-based-machine-handle)
 
-## Purpose
-
-TBD - SSH machine repository and operations adapters implementing the MachineRepository and MachineOperations domain ports.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: MachineRepository port
 
@@ -272,3 +268,18 @@ prior `decompose-ssh-gateway` change in `operations/base.py` SHALL be
 
 - **WHEN** `operations.run(session, cmd)` is called
 - **THEN** the implementation calls `session.run(cmd)` and returns its result; the operations object does NOT look up the session via the repository
+
+## REMOVED Requirements
+
+### Requirement: (none)
+
+This change does not remove any top-level requirement from
+`ssh-machine-repository`. The `MachineRepository port`,
+`SSHMachineRepository implements MachineRepository`, `MachineOperations
+port`, and `SSHMachineOperations composition` requirements are all
+MODIFIED in place. Their previous content (including `_MachineState`,
+`_get_machine_state`, `_monitors`, `occupy`/`release`/`update_machine`,
+`install_monitor`/`cancel_monitor`, `get_path`/`get_quote`/
+`get_hostname`, `get_machine_state`, and the operations base primitives)
+is superseded by the MODIFIED text above and by the new
+`ssh-machine-session` capability spec.

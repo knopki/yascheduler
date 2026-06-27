@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.4.0
+# VERSION: 4.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.4.0 - Extract TestConsumeTask to test_consume_task.py (GRACE 1000-line hard limit).
-#   PREVIOUS_CHANGE: v4.3.0 - Update TestConsumeTask for consume_task -> bool and 3-tuple download_outputs (meta_add, transient_errors, permanent_errors); add transient-only (defer, returns False, no save/event/tracker.discard) and mixed (permanent priority, returns True) branches (fix-download-rmtree-data-loss).
+#   LAST_CHANGE: v4.5.0 - session-based-machine-handle section 7.2: update test_allocate_task_finds_free_machine to use session stub for repository.list_free; start_task_on_machine callback receives session (not machine).
+#   PREVIOUS_CHANGE: v4.4.0 - Extract TestConsumeTask to test_consume_task.py (GRACE 1000-line hard limit).
 # END_CHANGE_SUMMARY
 #
 """Unit tests for application use cases.
@@ -36,6 +36,7 @@ import asyncio
 import time
 from dataclasses import replace
 from pathlib import PurePath
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -219,8 +220,10 @@ class TestAllocateTask:
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
 
+        free_session = SimpleNamespace(machine=free_machine, ip="10.0.0.1")
+
         repository = MagicMock()
-        repository.list_free = MagicMock(return_value=[free_machine])
+        repository.list_free = MagicMock(return_value=[free_session])
         operations = MagicMock()
         operations.start_occupancy_check = MagicMock()
 
@@ -258,11 +261,11 @@ class TestAllocateTask:
         assert result is True
         repository.list_free.assert_called_once_with(platforms=["linux"])
         start_on_machine.assert_called_once()
-        _call_machine, _call_engine, _call_task = start_on_machine.call_args[0]
-        assert _call_machine is free_machine
+        _call_session, _call_engine, _call_task = start_on_machine.call_args[0]
+        assert _call_session is free_session
         assert _call_engine is engine
         assert _call_task.allocated_ip == "10.0.0.1"
-        operations.start_occupancy_check.assert_called_once_with("10.0.0.1", engine)
+        operations.start_occupancy_check.assert_called_once_with(free_session, engine)
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.allocated_ip == "10.0.0.1"

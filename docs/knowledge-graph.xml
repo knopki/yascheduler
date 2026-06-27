@@ -300,6 +300,7 @@
         <export-TaskRepository PURPOSE="Async port for task persistence" />
         <export-NodeRepository PURPOSE="Async port for node persistence" />
         <export-MachineRepository PURPOSE="Async port for the connected-machine collection" />
+        <export-MachineSession PURPOSE="Connected-machine entity handle Protocol" />
         <export-MachineOperations PURPOSE="Async port for operations on a single machine" />
         <export-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
         <export-CloudAllocateError PURPOSE="Cloud node allocation failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
@@ -377,8 +378,9 @@
       <annotations>
         <class-TaskRepository PURPOSE="Async port for task persistence" />
         <class-NodeRepository PURPOSE="Async port for node persistence (full CRUD lifecycle)" />
-        <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries, state transitions, accessors, monitor mechanism)" />
-        <class-MachineOperations PURPOSE="Async port for operations on a single machine (exec, SFTP, deploy, download, occupancy check logic)" />
+        <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries)" />
+        <class-MachineSession PURPOSE="Connected-machine entity handle Protocol (domain identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)" />
+        <class-MachineOperations PURPOSE="Async port for operations on a single machine (facade pass-throughs + use-case methods forwarding to stateless collaborators)" />
         <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host) — 7-field surface application consumers read" />
         <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider), deallocate(cloud, ip), select_provider(platforms, counts) -> str | None (sync)" />
         <type-connect_grace PURPOSE="Per-cloud SSH connect-failure deadline in seconds (declared on CloudConfig Protocol + each ConfigCloud* DTO with provider-specific default)" />
@@ -906,119 +908,124 @@
           ═══════════════════════════════════════════════ -->
 
     <M-SSH NAME="SSH subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>SSH subpackage facade — internal organization of the adapters layer; re-exports gateway class and retry exceptions for the M-ADAPTERS layer facade.</purpose>
+      <purpose>SSH subpackage facade — internal organization of the adapters layer; re-exports repository, session, operations, and retry exceptions for the M-ADAPTERS layer facade.</purpose>
       <path>yascheduler/infra/ssh/__init__.py</path>
-      <depends>M-SSH-EXCEPTIONS, M-SSH-REPOSITORY, M-SSH-OPERATIONS</depends>
+      <depends>M-SSH-EXCEPTIONS, M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS</depends>
       <annotations>
         <export-SSHMachineRepository PURPOSE="Concrete MachineRepository implementation" />
-        <export-SSHMachineOperations PURPOSE="Concrete MachineOperations implementation" />
+        <export-SSHMachineSession PURPOSE="Concrete MachineSession implementation (connected-machine entity handle)" />
+        <export-SSHMachineOperations PURPOSE="Concrete MachineOperations facade implementation" />
         <export-AllSSHRetryExc PURPOSE="Tuple of all retryable SSH exceptions" />
         <export-SFTPRetryExc PURPOSE="Tuple of retryable SFTP exceptions" />
       </annotations>
     </M-SSH>
 
-    <M-SSH-REPOSITORY NAME="SSH machine repository" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>SSHMachineRepository — connected-machine collection: registration, lifecycle, queries, state transitions, accessor getters, generic occupancy-monitor mechanism keyed by IP. Implements the MachineRepository Protocol.</purpose>
-      <path>yascheduler/infra/ssh/repository.py</path>
-      <depends>M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-PLATFORM, M-SSH-OPERATIONS-BASE</depends>
+    <M-SSH-SESSION NAME="SSH machine session" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>SSHMachineSession — concrete connected-machine entity handle: domain identity (ip, mutable machine snapshot, is_closed, occupy/release/update), connect-time config (adapter, platforms, data_dir, engines_dir, tasks_dir), adapter-derived accessors (path, quote, hostname), base SSH primitives (run/run_full/run_bg/upload/open_sftp/get_cpu_cores/setup_node/pgrep/list_processes), and the per-session monitor mechanism (install_monitor/cancel_monitor) with self-owned teardown (_close). Implements the MachineSession Protocol. Owns my_backoff_exc canonical partial (moved from operations/base.py).</purpose>
+      <path>yascheduler/infra/ssh/session.py</path>
+      <depends>M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN</depends>
       <annotations>
-        <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _machines and _monitors dicts" />
-        <class-_MachineState PURPOSE="Frozen internal state holder (conn, conn_opts, machine, adapter, platforms, data_dir, engines_dir, tasks_dir)" />
-        <class-MySSHClient PURPOSE="Insecure SSH client trusting all host keys" />
-        <const-DEFAULT_CONN_OPTS PURPOSE="Default SSH connection options" />
-        <fn-_resolve_tunnel PURPOSE="Build SSH tunnel string from jump host/username" />
-        <fn-connect PURPOSE="Open SSH connection, detect platform, register machine (two-method pattern with @my_backoff_exc on _connect_impl)" />
-        <fn-_connect_impl PURPOSE="Inner connect with fibonacci backoff retry on SSHRetryExc" />
+        <type-MachineSession PURPOSE="Domain Protocol for the connected-machine entity handle (defined in M-DOMAIN-PORTS, surfaced here as the contract implemented)" />
+        <class-SSHMachineSession PURPOSE="Concrete MachineSession implementation owning _conn, _adapter, _machine, _closed, _monitor_task" />
+        <const-my_backoff_exc PURPOSE="Partial backoff decorator for SSHRetryExc (canonical copy; moved from operations/base.py)" />
+        <fn-install_monitor PURPOSE="Generic occupancy-monitor installer on this session; replaces prior monitor before installing new; no-op on closed session; identity-checked done-callback" />
+        <fn-cancel_monitor PURPOSE="Pop and cancel this session's monitor (no await)" />
+        <fn-_close PURPOSE="Idempotent teardown: marks _closed=True synchronously before any await, cancels monitor, awaits cancellation, closes SSH connection" />
+        <fn-occupy PURPOSE="Read-modify-write transitioning the snapshot to BUSY" />
+        <fn-release PURPOSE="Read-modify-write transitioning the snapshot to FREE with free_since=now" />
+        <fn-update PURPOSE="Replace the internal machine snapshot (used by rollback paths)" />
+        <fn-run PURPOSE="Run command and return ProcessResult (delegates to run_full)" />
+        <fn-run_full PURPOSE="Run command via self._adapter and return raw SSHCompletedProcess (@my_backoff_exc)" />
+        <fn-run_bg PURPOSE="Start background process on remote (no backoff — non-idempotent)" />
+        <fn-upload PURPOSE="Upload file via SFTP (no backoff — non-idempotent)" />
+        <fn-open_sftp PURPOSE="Async context manager yielding an SFTP client" />
+        <fn-get_cpu_cores PURPOSE="Return CPU core count via adapter.get_cpu_cores(make_run_fn(conn, adapter)) (@my_backoff_exc — idempotent read)" />
+        <fn-setup_node PURPOSE="Install engine dependencies on remote node via adapter.setup_node with make_run_fn(conn, adapter)" />
+        <fn-pgrep PURPOSE="Yield remote processes matching pattern" />
+        <fn-list_processes PURPOSE="Yield all running processes on remote machine" />
+      </annotations>
+    </M-SSH-SESSION>
+
+    <M-SSH-REPOSITORY NAME="SSH machine repository" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. True collection only — no state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession). Implements the MachineRepository Protocol.</purpose>
+      <path>yascheduler/infra/ssh/repository.py</path>
+      <depends>M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION</depends>
+      <annotations>
+        <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _sessions: dict[str, SSHMachineSession]; delegates teardown to session._close()" />
+        <class-MySSHClient PURPOSE="Insecure SSH client trusting all host keys (connection-building bit; stays)" />
+        <const-DEFAULT_CONN_OPTS PURPOSE="Default SSH connection options (connection-building bit; stays)" />
+        <fn-_resolve_tunnel PURPOSE="Build SSH tunnel string from jump host/username (connection-building bit; stays)" />
+        <fn-connect PURPOSE="Open SSH connection, detect platform, construct and register SSHMachineSession (two-method pattern with @my_backoff_exc on _connect_impl); returns MachineSession" />
+        <fn-_connect_impl PURPOSE="Inner connect with fibonacci backoff retry on SSHRetryExc; constructs SSHMachineSession, stores in _sessions[ip]" />
         <fn-_open_connection PURPOSE="Build SSH options and open connection" />
-        <fn-disconnect PURPOSE="Close SSH for ip, cancel only that machine's monitor, remove state (pop-before-await)" />
-        <fn-disconnect_all PURPOSE="Disconnect every connected machine" />
-        <fn-list_free PURPOSE="Return FREE machines filtered by platform, oldest first" />
-        <fn-list_connected PURPOSE="Return all registered ConnectedMachine objects" />
-        <fn-contains PURPOSE="Return whether ip is registered" />
-        <fn-get_machine_state PURPOSE="Return ConnectedMachine registered for ip, or None" />
-        <fn-update_machine PURPOSE="Replace ConnectedMachine in stored _MachineState" />
-        <fn-occupy PURPOSE="Read-modify-write transitioning stored machine to BUSY" />
-        <fn-release PURPOSE="Read-modify-write transitioning stored machine to FREE with free_since=now" />
-        <fn-get_path PURPOSE="Return stored adapter.path type for ip" />
-        <fn-get_quote PURPOSE="Return stored adapter.quote for ip" />
-        <fn-get_hostname PURPOSE="Return conn_opts.host for ip" />
-        <fn-install_monitor PURPOSE="Generic occupancy-monitor installer keyed by IP; replaces prior monitor before installing new" />
-        <fn-cancel_monitor PURPOSE="Pop + cancel monitor for ip (no await)" />
-        <fn-_get_machine_state PURPOSE="Return internal _MachineState for ip, or None" />
+        <fn-disconnect PURPOSE="Pop _sessions[ip] then await session._close() (pop-before-await ordering preserved)" />
+        <fn-disconnect_all PURPOSE="Disconnect every connected session" />
+        <fn-list_free PURPOSE="Return FREE sessions filtered by platform, oldest first by session.machine.free_since" />
+        <fn-list_connected PURPOSE="Return all registered sessions (list[MachineSession])" />
+        <fn-get_session PURPOSE="Return the live session for ip, or None (after disconnect)" />
+        <fn-contains PURPOSE="Return whether ip is registered (explicit form of __contains__)" />
+        <fn-__contains__ PURPOSE="Support `ip in repository`" />
+        <fn-__len__ PURPOSE="Support len(repository)" />
       </annotations>
     </M-SSH-REPOSITORY>
 
     <M-SSH-OPERATIONS NAME="SSH machine operations" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>SSHMachineOperations — operations on a single connected machine via the platform adapter and SFTP; composes TaskDeployer, OutputDownloader, OccupancyChecker collaborators. Implements the MachineOperations Protocol.</purpose>
+      <purpose>SSHMachineOperations — facade over MachineSession. Use-case methods forward to stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker); facade pass-throughs delegate to session.*. Implements the MachineOperations Protocol. No base primitives declared on the facade (moved to SSHMachineSession).</purpose>
       <path>yascheduler/infra/ssh/operations/</path>
-      <depends>M-SSH-REPOSITORY, M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
+      <depends>M-SSH-SESSION, M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
       <annotations>
-        <class-SSHMachineOperations PURPOSE="Operations on a single machine; composes deploy/download/occupancy collaborators" />
-        <fn-run PURPOSE="Run command, return ProcessResult" />
-        <fn-run_full PURPOSE="Run command, return raw SSHCompletedProcess (@my_backoff_exc)" />
-        <fn-run_bg PURPOSE="Start background process via SSH (no backoff — non-idempotent)" />
-        <fn-upload PURPOSE="Upload file via SFTP (no backoff — non-idempotent)" />
-        <fn-get_sftp PURPOSE="Async context manager yielding SFTP client" />
-        <fn-pgrep PURPOSE="Yield remote processes matching pattern" />
-        <fn-list_processes PURPOSE="Yield all running processes on remote machine" />
-        <fn-get_cpu_cores PURPOSE="Return CPU core count (@my_backoff_exc — idempotent read)" />
-        <fn-setup_node PURPOSE="Install engine dependencies on remote node (my_backoff_exc exception=AllSSHRetryExc)" />
-        <fn-start_task_on_machine PURPOSE="Upload inputs and spawn process; forwards to deploy.start_task_on_machine" />
-        <fn-download_outputs PURPOSE="Per-file SFTP-isolated download; forwards to download.download_outputs" />
-        <fn-occupancy_check PURPOSE="Check if engine process is still running; forwards to occupancy.occupancy_check" />
-        <fn-start_occupancy_check PURPOSE="Start background occupancy monitoring; forwards to occupancy.start_occupancy_check" />
-        <const-my_backoff_exc PURPOSE="Partial backoff decorator for SSHRetryExc (canonical; moved from gateway.py)" />
+        <class-SSHMachineOperations PURPOSE="Facade over MachineSession; composes stateless deploy/download/occupancy collaborators; facade pass-throughs delegate to session.*" />
+        <fn-start_task_on_machine PURPOSE="Upload inputs and spawn process; forwards to deploy.start_task_on_machine with session" />
+        <fn-download_outputs PURPOSE="Per-file SFTP-isolated download; forwards to download.download_outputs with session" />
+        <fn-occupancy_check PURPOSE="Check if engine process is still running; forwards to occupancy.occupancy_check with session" />
+        <fn-start_occupancy_check PURPOSE="Start background occupancy monitoring; forwards to occupancy.start_occupancy_check with session" />
       </annotations>
     </M-SSH-OPERATIONS>
 
     <M-SSH-OPS-DEPLOY NAME="Task deployer" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>TaskDeployer — upload task inputs and spawn the calculation process on a remote machine; rolls back repository BUSY on failure.</purpose>
+      <purpose>TaskDeployer — upload task inputs and spawn the calculation process on a remote machine via MachineSession primitives; rolls back session BUSY on failure.</purpose>
       <path>yascheduler/infra/ssh/operations/deployment.py</path>
-      <depends>M-SSH-OPERATIONS-BASE, M-SSH-REPOSITORY, M-DOMAIN, M-PLATFORM</depends>
+      <depends>M-SSH-SESSION, M-DOMAIN, M-PLATFORM</depends>
       <annotations>
-        <class-TaskDeployer PURPOSE="Upload task inputs and spawn calculation process; rolls back BUSY on failure" />
-        <fn-start_task_on_machine PURPOSE="Upload inputs and spawn process; rolls back repository BUSY under except BaseException" />
-        <fn-_upload_task_data PURPOSE="Upload task input files to remote machine via SFTP" />
-        <fn-_exec_spawn_command PURPOSE="Execute spawn command on remote machine via SSH" />
+        <class-TaskDeployer PURPOSE="Upload task inputs and spawn calculation process; stateless (takes log); rolls back session BUSY on failure" />
+        <fn-start_task_on_machine PURPOSE="Upload inputs and spawn process; checks session.is_closed in rollback (already-disconnected warning); rolls back via session.update(session.machine.release())" />
+        <fn-_upload_task_data PURPOSE="Upload task input files to remote machine via SFTP (session.open_sftp)" />
+        <fn-_exec_spawn_command PURPOSE="Execute spawn command on remote machine via SSH (session.run_bg)" />
         <fn-_write_remote_file PURPOSE="Write data to remote file via SFTP with error handling (module-private)" />
         <fn-_safe_b64decode PURPOSE="Decode base64 with lenient padding handling (module-private)" />
       </annotations>
     </M-SSH-OPS-DEPLOY>
 
     <M-SSH-OPS-DOWNLOAD NAME="Output downloader" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.</purpose>
+      <purpose>OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Operates on a MachineSession; stateless.</purpose>
       <path>yascheduler/infra/ssh/operations/download.py</path>
-      <depends>M-SSH-OPERATIONS-BASE, M-SSH-REPOSITORY, M-SSH-EXCEPTIONS, M-PLATFORM</depends>
+      <depends>M-SSH-SESSION, M-SSH-EXCEPTIONS, M-PLATFORM</depends>
       <annotations>
-        <class-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification; 3-tuple return" />
-        <fn-download_outputs PURPOSE="Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree" />
+        <class-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification; stateless (takes log); 3-tuple return" />
+        <fn-download_outputs PURPOSE="Per-file SFTP-isolated download via session.open_sftp/session.path with retry, error classification, conservative post-loop rmtree" />
         <fn-my_backoff_sftp PURPOSE="Partial backoff decorator for SFTPRetryExc (canonical; first user is download_outputs)" />
       </annotations>
     </M-SSH-OPS-DOWNLOAD>
 
     <M-SSH-OPS-OCCUPANCY NAME="Occupancy checker" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>OccupancyChecker — pgrep/cmd-based occupancy check logic + monitor installer composing the repository's generic monitor mechanism.</purpose>
+      <purpose>OccupancyChecker — pgrep/cmd-based occupancy check logic + monitor installer composing the session's monitor mechanism. Operates on a MachineSession; stateless.</purpose>
       <path>yascheduler/infra/ssh/operations/occupancy.py</path>
-      <depends>M-SSH-OPERATIONS-BASE, M-SSH-REPOSITORY, M-DOMAIN-ENGINE, M-SSH-EXCEPTIONS</depends>
+      <depends>M-SSH-SESSION, M-DOMAIN-ENGINE, M-SSH-EXCEPTIONS</depends>
       <annotations>
-        <class-OccupancyChecker PURPOSE="Occupancy check via pgrep or check_cmd; start_occupancy_check composes repository.install_monitor" />
-        <fn-occupancy_check PURPOSE="Check if engine process is still running via pgrep or check_cmd" />
-        <fn-_occupancy_by_pgrep PURPOSE="Occupancy check via pgrep on check_pname; safe-default busy on SSH failure" />
-        <fn-_occupancy_by_cmd PURPOSE="Occupancy check via check_cmd exit code; safe-default busy on SSH failure" />
-        <fn-start_occupancy_check PURPOSE="Call repository.occupy(ip) then repository.install_monitor(...); check_factory wraps occupancy_check with asyncio.wait_for(timeout=config.sleep_interval)" />
+        <class-OccupancyChecker PURPOSE="Occupancy check via pgrep or check_cmd; start_occupancy_check composes session.install_monitor; stateless (takes log)" />
+        <fn-occupancy_check PURPOSE="Check if engine process is still running via session.pgrep or session.run_full on check_cmd" />
+        <fn-_occupancy_by_pgrep PURPOSE="Occupancy check via session.pgrep on check_pname; safe-default busy on SSH failure" />
+        <fn-_occupancy_by_cmd PURPOSE="Occupancy check via session.run_full on check_cmd exit code; safe-default busy on SSH failure" />
+        <fn-start_occupancy_check PURPOSE="Call session.occupy() if FREE then session.install_monitor(...); check_factory wraps occupancy_check with asyncio.wait_for(timeout=config.sleep_interval); on_free=session.release" />
       </annotations>
     </M-SSH-OPS-OCCUPANCY>
 
-    <M-SSH-OPERATIONS-BASE NAME="SSH machine operations base" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>SSHMachineOperations base primitives + my_backoff_exc partial + narrow local Protocols (CommandExecutor, SftpProvider, StateAccessors).</purpose>
+    <M-SSH-OPERATIONS-BASE NAME="SSH machine operations facade" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>SSHMachineOperations — facade over MachineSession. Use-case methods forward to stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker); facade pass-throughs delegate to session.*. No base primitives, no narrow local Protocols, no my_backoff_exc — all moved to SSHMachineSession.</purpose>
       <path>yascheduler/infra/ssh/operations/base.py</path>
-      <depends>M-SSH-REPOSITORY, M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN</depends>
+      <depends>M-SSH-SESSION, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
       <annotations>
-        <class-SSHMachineOperations PURPOSE="Operations on a single machine; composes deploy/download/occupancy collaborators" />
-        <const-my_backoff_exc PURPOSE="Partial backoff decorator for SSHRetryExc (canonical; moved from gateway.py)" />
-        <type-CommandExecutor PURPOSE="Narrow local Protocol: run_full/run_bg (used by TaskDeployer)" />
-        <type-SftpProvider PURPOSE="Narrow local Protocol: get_sftp (used by TaskDeployer, OutputDownloader)" />
-        <type-StateAccessors PURPOSE="Narrow local Protocol: get_path/get_quote/get_hostname (used by TaskDeployer)" />
+        <class-SSHMachineOperations PURPOSE="Facade over MachineSession; composes stateless deploy/download/occupancy collaborators; facade pass-throughs delegate to session.*" />
       </annotations>
     </M-SSH-OPERATIONS-BASE>
 
@@ -1278,8 +1285,15 @@
 
     <!-- SSH adapter cross-links -->
     <CrossLink from="M-SSH-REPOSITORY" to="M-PLATFORM-ADAPTERS" relation="uses platform detection and adapters (ADAPTERS, _detect_platform, _init_paths, make_run_fn)" />
-    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-REPOSITORY" relation="consumes MachineRepository Protocol (collection lifecycle, queries, state transitions) injected via constructor" />
-    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-OPERATIONS" relation="consumes MachineOperations Protocol (exec, deploy, download, occupancy) injected via constructor" />
+    <CrossLink from="M-SSH-REPOSITORY" to="M-SSH-SESSION" relation="owns collection of: _sessions dict, constructs via connect, delegates teardown via session._close()" />
+    <CrossLink from="M-SSH-OPERATIONS" to="M-SSH-SESSION" relation="facade pass-throughs (run/run_full/run_bg/get_cpu_cores/setup_node) delegate to session.*" />
+    <CrossLink from="M-SSH-OPERATIONS" to="M-SSH-OPERATIONS-BASE" relation="package re-exports SSHMachineOperations facade from base.py" />
+    <CrossLink from="M-SSH-OPS-DEPLOY" to="M-SSH-SESSION" relation="takes session per call: open_sftp, run_bg, occupy, update, is_closed, hostname, path, quote" />
+    <CrossLink from="M-SSH-OPS-DOWNLOAD" to="M-SSH-SESSION" relation="takes session per call: open_sftp, path" />
+    <CrossLink from="M-SSH-OPS-OCCUPANCY" to="M-SSH-SESSION" relation="installs monitor on: session.occupy, session.install_monitor, session.pgrep, session.run_full, session.release" />
+    <CrossLink from="M-SSH-SESSION" to="M-PLATFORM-RUN-FN" relation="uses make_run_fn(conn, adapter) for get_cpu_cores and setup_node" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-REPOSITORY" relation="consumes MachineRepository Protocol (collection lifecycle, queries) injected via constructor; resolves session per tick via get_session(ip)" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-OPERATIONS" relation="consumes MachineOperations Protocol (exec, deploy, download, occupancy) injected via constructor; passes session per call" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-KEYS" relation="consumes injected list_private_keys_fn to enumerate client keys without importing yascheduler.infra" />
     <CrossLink from="M-DI" to="M-SSH-KEYS" relation="imports list_private_keys and injects it as list_private_keys_fn into Orchestrator" />
     <CrossLink from="M-DI" to="M-SSH-REPOSITORY" relation="make_daemon constructs one SSHMachineRepository on the clouds is None branch and injects the same instance into CloudProvisionerImpl.machine_repository and Orchestrator.repository (shared registry spans cloud setup and orchestrator runtime)" />
@@ -1291,7 +1305,7 @@
     <CrossLink from="M-SHARED" to="M-SHARED-COMPAT" relation="re-exports Self/Unpack from compat module" />
     <CrossLink from="M-DAEMONIZE" to="M-DAEMON-COMMON" relation="foreground daemon launch delegates to shared daemon core" />
     <CrossLink from="M-PLATFORM" to="M-PLATFORM-ADAPTERS" relation="package root re-exports platform adapters" />
-    <CrossLink from="M-SSH-OPERATIONS" to="M-PLATFORM" relation="uses platform facade for make_run_fn (get_cpu_cores, setup_node)" />
+    <CrossLink from="M-SSH-OPERATIONS" to="M-PLATFORM" relation="facade pass-through setup_node delegates to session.setup_node, which uses adapter.setup_node via make_run_fn" />
     <CrossLink from="M-CLOUD-ADAPTERS-NEW" to="M-CLOUD-PROVIDERS" relation="lazy-imports provider callables via providers facade" />
     <CrossLink from="M-CLOUD-PROVIDER-AZ" to="M-CLOUD" relation="imports CloudInitConfig/get_rnd_name from cloud facade" />
     <CrossLink from="M-CLOUD-PROVIDER-HETZNER" to="M-CLOUD" relation="imports get_key_name/get_rnd_name from cloud facade" />
