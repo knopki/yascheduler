@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_consume_retry.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
 #   SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial e2e tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
+#   LAST_CHANGE: v1.1.0 - Mark the e2e node as cloud-provisioned (cloud="e2e") so the orchestrator's connect-machine producer yields it; fix-never-connected-node-leak excluded static (cloud=None) nodes from the connect path, which silently broke these tests (task stuck in TO_DO, never allocated).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial e2e tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -68,6 +69,13 @@ async def _setup_node_and_submit(
                 port=ssh_container["port"],
                 enabled=True,
                 ncpus=0,
+                # fix-never-connected-node-leak excluded static nodes
+                # (cloud is None) from the connect-machine producer so they
+                # cannot be auto-removed by the abandon path. The e2e flow
+                # relies on the orchestrator connecting this node, so mark it
+                # as cloud-provisioned; _connect_grace_for falls back to 120s
+                # for unknown cloud prefixes and the SSH connect succeeds.
+                cloud="e2e",
             )
         )
         await uow.commit()
@@ -264,8 +272,11 @@ async def test_consume_transient_preserves_remote_dir_regression(
     orch_task = asyncio.create_task(orchestrator.start())
 
     try:
-        # Wait a few consume cycles to confirm the task stays RUNNING (deferred)
-        await asyncio.sleep(3.0)
+        # Wait a few consume cycles to confirm the task stays RUNNING (deferred).
+        # The engine's run.sh sleeps 3s, so the machine is BUSY for ~3s before
+        # the consume path can call download_outputs. Wait 8s to guarantee at
+        # least one consume cycle ran after the machine transitioned to FREE.
+        await asyncio.sleep(8.0)
         async with uow_factory() as uow:
             task = await uow.tasks.get(task_id)
         assert task is not None

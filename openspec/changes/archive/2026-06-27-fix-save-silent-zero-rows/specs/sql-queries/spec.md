@@ -1,10 +1,4 @@
-# sql-queries
-
-## Purpose
-
-SQL query file organization and lazy-loading utility for the persistence adapter.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: SQL files organized by entity
 

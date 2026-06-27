@@ -410,8 +410,8 @@ class TestPostgresTaskRepository:
 
     # -- save ------------------------------------------------------------------
 
-    async def test_save_calls_upsert(self, mocker: MockerFixture) -> None:
-        """save calls _run with the upsert query and all task fields."""
+    async def test_save_calls_update_by_id(self, mocker: MockerFixture) -> None:
+        """save calls _run with the update_by_id query and all task fields."""
         repo = self._make_repo(mocker)
         ctx = TaskContext(engine="fleur", remote_folder="/remote")
         task = Task(
@@ -424,7 +424,7 @@ class TestPostgresTaskRepository:
         call_args = repo._run.call_args  # type: ignore[attr-defined]
         assert call_args is not None
         (sql,), kwargs = call_args
-        assert sql == load_query("task/upsert")
+        assert sql == load_query("task/update_by_id")
         assert kwargs["task_id"] == 7
         assert kwargs["label"] == "my-job"
         assert kwargs["status"] == 0

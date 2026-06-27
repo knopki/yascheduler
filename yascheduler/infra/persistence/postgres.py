@@ -1,21 +1,21 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
-#   DEPENDS: M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL, M-DOMAIN-PORTS
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-PERSISTENCE-SQLLOADER
+#   DEPENDS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS, M-DOMAIN-MODEL, M-DOMAIN-PORTS
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   _PgRepository - base class for pg8000-backed repositories (conn, executor, _run)
-#   PostgresTaskRepository - async task CRUD: get, save, update_status, insert, list_by_status, list_by_jobs, count_by_status
+#   PostgresTaskRepository - async task CRUD: get, save, update_status, insert, list_by_status, list_by_jobs, count_by_status; save/update_status raise TaskRowNotFoundError on 0-row UPDATE
 #   PostgresNodeRepository - async node CRUD: get, get_by_ips, list_*, add, add_tmp, enable, disable, remove, count_*
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - add_tmp drops username param; insert_tmp.sql binds only :cloud, username falls back to DB DEFAULT 'root' (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v1.2.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.4.0 - save/update_status use RETURNING task_id to detect 0-row UPDATE; raise TaskRowNotFoundError before _saved_tasks.append; upsert.sql renamed to update_by_id.sql (fix-save-silent-zero-rows).
+#   PREVIOUS_CHANGE: v1.3.0 - add_tmp drops username param; insert_tmp.sql binds only :cloud, username falls back to DB DEFAULT 'root' (collapse-provider-selection).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from yascheduler.domain import Node, Task, TaskContext, TaskStatus
 
+from .exceptions import TaskRowNotFoundError
 from .sql_loader import load_query
 
 if TYPE_CHECKING:
@@ -94,40 +95,48 @@ class PostgresTaskRepository(_PgRepository):
         return self._row_to_task(rows[0])
 
     # START_CONTRACT: save
-    #   PURPOSE: Upsert all mutable task fields (label, status, ip, metadata) by task_id.
+    #   PURPOSE: Update mutable fields of an existing task row by task_id; raise TaskRowNotFoundError if the row does not exist.
     #   INPUTS: { task: Task - domain task with serialized context }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Writes to yascheduler_tasks row; metadata serialized as JSON.
-    #   LINKS: task/upsert.sql, TaskContext.to_metadata
+    #   SIDE_EFFECTS: Writes to yascheduler_tasks row; metadata serialized as JSON; raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist.
+    #   LINKS: task/update_by_id.sql, TaskContext.to_metadata, TaskRowNotFoundError
     # END_CONTRACT: save
     async def save(self, task: Task) -> None:
-        """Persist task state to the database (upsert by task_id)."""
+        """Persist task state to the database (update by task_id; raises on missing row)."""
         metadata = json.dumps(task.context.to_metadata())
-        await self._run(
-            load_query("task/upsert"),
+        # START_BLOCK_DETECT_ZERO_ROWS
+        rows = await self._run(
+            load_query("task/update_by_id"),
             task_id=task.task_id,
             label=task.label,
             status=task.status.value,
             ip=task.allocated_ip,
             metadata=metadata,
         )
+        if not rows:
+            raise TaskRowNotFoundError(task.task_id)
+        # END_BLOCK_DETECT_ZERO_ROWS
         if self._saved_tasks is not None:
             self._saved_tasks.append(task)
 
     # START_CONTRACT: update_status
-    #   PURPOSE: Atomically update only the status field of a task.
+    #   PURPOSE: Atomically update only the status field of a task; raise TaskRowNotFoundError if the row does not exist.
     #   INPUTS: { task_id: int - task to update, status: TaskStatus - new status }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Executes atomic UPDATE on yascheduler_tasks.status.
-    #   LINKS: task/update_status.sql
+    #   SIDE_EFFECTS: Executes atomic UPDATE on yascheduler_tasks.status; raises TaskRowNotFoundError when the targeted task_id does not exist.
+    #   LINKS: task/update_status.sql, TaskRowNotFoundError
     # END_CONTRACT: update_status
     async def update_status(self, task_id: int, status: TaskStatus) -> None:
-        """Atomically update only the status field."""
-        await self._run(
+        """Atomically update only the status field; raises on missing row."""
+        # START_BLOCK_DETECT_ZERO_ROWS
+        rows = await self._run(
             load_query("task/update_status"),
             task_id=task_id,
             status=status.value,
         )
+        if not rows:
+            raise TaskRowNotFoundError(task_id)
+        # END_BLOCK_DETECT_ZERO_ROWS
 
     # START_CONTRACT: list_ids_by_ip_and_status
     #   PURPOSE: Return task IDs matching the given IP and status.

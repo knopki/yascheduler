@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_persistence_adapter.py
-# VERSION: 1.2.0
+# VERSION: 1.2.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
 #   SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
@@ -10,7 +10,7 @@
 # START_MODULE_MAP
 #   test_repo_task_insert_and_get - round-trip insert + get with JSONB metadata
 #   test_repo_task_get_none - get() returns None for non-existent task
-#   test_repo_task_save_updates - save() updates existing task fields via upsert
+#   test_repo_task_save_updates - save() updates existing task fields via update_by_id
 #   test_repo_task_list_by_status - list_by_status filtering
 #   test_repo_task_count_by_status - count_by_status aggregates
 #   test_repo_task_update_status_atomic - update_status only changes status
@@ -25,8 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - add_tmp("aws") drops username arg; tmp row falls back to DB DEFAULT 'root' (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v1.1.0 - Remove DB dependency; use pg_conn/pg_executor fixtures (remove-legacy-db).
+#   LAST_CHANGE: v1.2.1 - Update save() docstring/contract comments from "upsert" to "update_by_id" to track the SQL rename (fix-save-silent-zero-rows).
+#   PREVIOUS_CHANGE: v1.2.0 - add_tmp("aws") drops username arg; tmp row falls back to DB DEFAULT 'root' (collapse-provider-selection).
 # END_CHANGE_SUMMARY
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
@@ -115,7 +115,7 @@ async def test_repo_task_get_none(
 
 
 # START_CONTRACT: test_repo_task_save_updates
-#   PURPOSE: Verify save() updates an existing task's fields via upsert.
+#   PURPOSE: Verify save() updates an existing task's fields via update_by_id.
 #   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
@@ -124,7 +124,7 @@ async def test_repo_task_get_none(
 async def test_repo_task_save_updates(
     pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
 ) -> None:
-    """Save updates an existing task's fields via upsert."""
+    """Save updates an existing task's fields via update_by_id."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
     task = await repo.insert(

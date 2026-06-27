@@ -169,7 +169,7 @@ pg8000 connections:
 - UoW: enter creates repos, commit calls `conn.run("COMMIT")`, exception
   triggers rollback, normal exit closes connection, commit after exit raises
   `UnitOfWorkNotInitializedError`
-- Task repo: `get`, `insert` (returns generated ID), `save` (upsert),
+- Task repo: `get`, `insert` (returns generated ID), `save` (update by task_id),
   `list_by_status`, `list_by_jobs`, `count_by_status`, `update_status`
 - Node repo: `get`, `list_enabled` (filters invalid IPs), `list_disabled`,
   `add`, `enable`, `disable`, `remove`, `get_by_ips`

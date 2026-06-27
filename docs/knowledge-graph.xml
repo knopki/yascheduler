@@ -591,6 +591,7 @@
       <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW</depends>
       <annotations>
         <export-UnitOfWorkNotInitializedError PURPOSE="Re-exported from exceptions" />
+        <export-TaskRowNotFoundError PURPOSE="Re-exported from exceptions" />
         <export-apply_schema PURPOSE="Apply DB schema migrations" />
         <export-PostgresUnitOfWork PURPOSE="Concrete UoW backed by Postgres (consumed by composition root)" />
       </annotations>
@@ -607,20 +608,21 @@
     </M-PERSISTENCE-SQLLOADER>
 
     <M-PERSISTENCE-EXCEPTIONS NAME="Persistence exceptions" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Adapter-layer exceptions for persistence UoW state-contract violations.</purpose>
+      <purpose>Adapter-layer exceptions for persistence UoW state-contract violations and repository row-existence precondition violations.</purpose>
       <path>yascheduler/infra/persistence/exceptions.py</path>
       <depends>none</depends>
       <annotations>
         <class-UnitOfWorkNotInitializedError PURPOSE="Raised when UoW methods called without entering context" />
+        <class-TaskRowNotFoundError PURPOSE="Raised by PostgresTaskRepository.save/update_status when an UPDATE targets a non-existent task_id" />
       </annotations>
     </M-PERSISTENCE-EXCEPTIONS>
 
     <M-PERSISTENCE-POSTGRES NAME="PostgreSQL repositories" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>PostgresTaskRepository and PostgresNodeRepository implementing domain repository ports via pg8000.</purpose>
       <path>yascheduler/infra/persistence/postgres.py</path>
-      <depends>M-DOMAIN, M-PERSISTENCE-SQLLOADER</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS</depends>
       <annotations>
-        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, list_by_status, list_by_jobs, count_by_status)" />
+        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, update_status, list_by_status, list_by_jobs, count_by_status); save/update_status raise TaskRowNotFoundError on 0-row UPDATE" />
         <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port (full CRUD lifecycle)" />
       </annotations>
     </M-PERSISTENCE-POSTGRES>
@@ -1093,6 +1095,7 @@
     <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-POSTGRES" relation="instantiates and wires repositories" />
     <CrossLink from="M-PERSISTENCE-POSTGRES" to="M-DOMAIN-MODEL" relation="maps DB rows to domain entities" />
     <CrossLink from="M-PERSISTENCE-UOW" to="M-PERSISTENCE-EXCEPTIONS" relation="raises UnitOfWorkNotInitializedError for state-contract violations" />
+    <CrossLink from="M-PERSISTENCE-POSTGRES" to="M-PERSISTENCE-EXCEPTIONS" relation="raises TaskRowNotFoundError on 0-row UPDATE outcome" />
 
     <!-- Application layer cross-links (v2.0.0) -->
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ALLOCATE" relation="calls allocate_task use case in consumer loop" />

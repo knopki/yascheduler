@@ -1,8 +1,8 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.5.0
+# VERSION: 6.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
+#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.5.0 - stop() idempotent and exception-safe: `_stopped` guard for single execution (set synchronously, no await between check and set), `except Exception` on `await task` for dead-bg-job tolerance (CancelledError remains a separate BaseException path), per-step try/except isolation for clouds.stop()/disconnect_all()/http_session.close(), http_session nulled after close. run_daemon wraps `await orch.start()` in `try/finally: await orch.stop()` so cleanup runs on every exit path (fix-daemon-resource-leak-on-start-return).
-#   PREVIOUS_CHANGE: v6.4.0 - Producer-error resilience: _create_producer_consumers and _print_stats now catch Exception, log, and continue on the next tick; worker tasks are registered in self._bg_jobs so stop()'s cancel cascade reaches them even on a BaseException exit. CancelledError (a BaseException since Py3.8) still propagates past `except Exception` to the graceful-drain `except CancelledError` path (fix-orchestrator-producer-silent-death).
+#   LAST_CHANGE: v6.6.0 - Consumer-error resilience: the inner worker() in _create_producer_consumers now wraps `await consumer(msg)` in try/except Exception (log + continue next message) symmetric to the producer-error wrap. finally: queue.item_done(msg) preserved so the item is still dequeued on raise. CancelledError (BaseException) still propagates past `except Exception` to the existing `except CancelledError` drain path. Motivated by fix-save-silent-zero-rows: PostgresTaskRepository.save now raises TaskRowNotFoundError on a 0-row UPDATE (orchestrator:440 abandon race), which would otherwise silently kill the worker.
+#   PREVIOUS_CHANGE: v6.5.0 - stop() idempotent and exception-safe: `_stopped` guard for single execution (set synchronously, no await between check and set), `except Exception` on `await task` for dead-bg-job tolerance (CancelledError remains a separate BaseException path), per-step try/except isolation for clouds.stop()/disconnect_all()/http_session.close(), http_session nulled after close. run_daemon wraps `await orch.start()` in `try/finally: await orch.stop()` so cleanup runs on every exit path (fix-daemon-resource-leak-on-start-return).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -436,12 +436,24 @@ class Orchestrator:
             if machine_not_found[task_id] > broken_tasks_passes:
                 task = task.fail("node is gone")
                 task = task.with_event(TaskAbandoned, node_ip=ip)
-                async with self._uow_factory() as uow:
-                    await uow.tasks.save(task)
-                    await uow.commit()
-                # Drop the in-flight allocation slot so the abandoned task_id
-                # can't falsely dedup a future task if task IDs ever recycle.
-                self._tracker.discard(task_id)
+                # START_BLOCK_ABANDON_PERSIST
+                # Persist the TaskAbandoned transition. The row may have been
+                # concurrently deleted between the producer's list_by_status
+                # read and this save — in that case save() raises
+                # TaskRowNotFoundError, which propagates to the consumer-worker
+                # `except Exception` wrap and is logged. The tracker slot is
+                # discarded in a finally so a 0-row raise cannot leak an
+                # in-flight allocation slot for the daemon's lifetime.
+                try:
+                    async with self._uow_factory() as uow:
+                        await uow.tasks.save(task)
+                        await uow.commit()
+                finally:
+                    # Drop the in-flight allocation slot so the abandoned
+                    # task_id can't falsely dedup a future task if task IDs
+                    # ever recycle. Runs even if save() raised.
+                    self._tracker.discard(task_id)
+                # END_BLOCK_ABANDON_PERSIST
             # END_BLOCK_MACHINE_GONE
             return
 
@@ -559,15 +571,17 @@ class Orchestrator:
         # END_BLOCK_COMPUTE_CAPACITY
 
     # START_CONTRACT: Orchestrator._create_producer_consumers
-    #   PURPOSE: Run a resilient producer-consumer loop with N workers; self-heal on transient producer errors.
+    #   PURPOSE: Run a resilient producer-consumer loop with N workers; self-heal on transient producer and consumer errors.
     #   INPUTS: { queue: UniqueQueue, producer: Callable, consumer: Callable, workers_num: int = 1 }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Spawns worker tasks registered in BOTH the local workers set and self._bg_jobs (so
     #     stop()'s cancel cascade reaches them even on a BaseException exit); drives the producer each
     #     _sleep_interval tick; on a transient producer Exception logs and continues on the next tick;
-    #     on CancelledError drains the queue (queue.join), cancels workers, and awaits them. CancelledError
-    #     (a BaseException since Python 3.8) propagates past `except Exception` to the graceful-drain
-    #     `except CancelledError` — the producer-error handler SHALL NOT run on graceful shutdown.
+    #     on a transient consumer Exception inside worker() logs and continues processing subsequent
+    #     messages (the worker task is NOT killed); on CancelledError drains the queue (queue.join),
+    #     cancels workers, and awaits them. CancelledError (a BaseException since Python 3.8) propagates
+    #     past `except Exception` to the graceful-drain `except CancelledError` — neither the producer-error
+    #     nor the consumer-error handler SHALL run on graceful shutdown.
     #   LINKS: M-QUEUE
     # END_CONTRACT: Orchestrator._create_producer_consumers
     async def _create_producer_consumers(
@@ -580,10 +594,23 @@ class Orchestrator:
         async def worker() -> None:
             while not self._cancellation_event.is_set():
                 msg = await queue.get()
+                # START_BLOCK_CONSUMER_RESILIENCE
+                # Mirror the producer-error wrap: a raise out of consumer(msg)
+                # would otherwise kill the worker task silently. Catch Exception
+                # (not BaseException) so CancelledError still propagates to the
+                # graceful-drain path. The finally keeps the queue item dequeued.
                 try:
                     await consumer(msg)
+                except Exception as err:
+                    self._log.error(
+                        "[Orchestrator][_create_producer_consumers][CONSUMER_ERROR] "
+                        "queue=%s err=%s",
+                        queue.name,
+                        err,
+                    )
                 finally:
                     queue.item_done(msg)
+                # END_BLOCK_CONSUMER_RESILIENCE
 
         workers: set[asyncio.Task] = set()
         # START_BLOCK_REGISTER_WORKERS

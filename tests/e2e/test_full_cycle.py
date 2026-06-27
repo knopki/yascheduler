@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_full_cycle.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test exercising full scheduler lifecycle against real PostgreSQL and SSH.
 #   SCOPE: Single test — node add → submit → allocate → spawn → consume → verify.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Migrate from DB facade to PostgresUnitOfWork (remove-legacy-db).
-#   PREVIOUS_CHANGE: v1.0.1 - Update get_machine_state assertions for new ConnectedMachine return contract (gateway-port-cleanup).
+#   LAST_CHANGE: v1.2.0 - Mark the e2e node as cloud-provisioned (cloud="e2e") so the orchestrator's connect-machine producer yields it; fix-never-connected-node-leak excluded static (cloud=None) nodes from the connect path, which silently broke this test (task stuck in TO_DO, never allocated).
+#   PREVIOUS_CHANGE: v1.1.0 - Migrate from DB facade to PostgresUnitOfWork (remove-legacy-db).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -75,6 +75,13 @@ async def test_full_cycle(
                 port=ssh_container["port"],
                 enabled=True,
                 ncpus=0,
+                # fix-never-connected-node-leak excluded static nodes
+                # (cloud is None) from the connect-machine producer so they
+                # cannot be auto-removed by the abandon path. The e2e flow
+                # relies on the orchestrator connecting this node, so mark it
+                # as cloud-provisioned; _connect_grace_for falls back to 120s
+                # for unknown cloud prefixes and the SSH connect succeeds.
+                cloud="e2e",
             )
         )
         await uow.commit()
