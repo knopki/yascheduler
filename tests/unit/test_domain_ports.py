@@ -1,9 +1,9 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.3.0
+# VERSION: 1.3.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
-#   SCOPE: TaskRepository, NodeRepository, MachineGateway, CloudProvisioner Protocols.
+#   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineOperations, CloudProvisioner Protocols.
 #   DEPENDS: none
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -11,13 +11,14 @@
 # START_MODULE_MAP
 #   test_task_repository_protocol - Stub with all TaskRepository methods passes isinstance
 #   test_node_repository_protocol - Stub with all NodeRepository methods passes isinstance
-#   test_machine_gateway_protocol - Stub with all MachineGateway methods passes isinstance
+#   test_machine_repository_protocol - Stub with all MachineRepository methods passes isinstance
+#   test_machine_operations_protocol - Stub with all MachineOperations methods passes isinstance
 #   test_cloud_provisioner_protocol - Stub with all CloudProvisioner methods passes isinstance
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - CloudProvisioner.select_provider returns str|None; NodeRepository.add_tmp drops username (collapse-provider-selection).
-#   PREVIOUS_CHANGE: v1.2.0 - Update StubMachineGateway to satisfy extended MachineGateway Protocol (gateway-port-cleanup).
+#   LAST_CHANGE: v1.3.1 - Narrowed StubMachineRepository lockstep with MachineRepository Protocol per cleanup-unused-repository-symbols (removed get_conn, get_adapter, get_platforms, get_data_dir, get_engines_dir, get_tasks_dir). MODULE_MAP/SCOPE corrected: MachineGateway replaced by MachineRepository+MachineOperations.
+#   PREVIOUS_CHANGE: v1.3.0 - CloudProvisioner.select_provider returns str|None; NodeRepository.add_tmp drops username (collapse-provider-selection).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -166,32 +167,14 @@ class StubMachineRepository:
     def release(self, ip: str) -> None:
         pass
 
-    def get_adapter(self, ip: str) -> Any:
-        return None
-
-    def get_platforms(self, ip: str) -> Sequence[str]:
-        return []
-
     def get_path(self, ip: str) -> type[PurePath]:
         return PurePath
 
     def get_quote(self, ip: str) -> Callable[[str], str]:
         return lambda s: s
 
-    def get_data_dir(self, ip: str) -> PurePath:
-        return PurePath("/data")
-
-    def get_engines_dir(self, ip: str) -> PurePath:
-        return PurePath("/engines")
-
-    def get_tasks_dir(self, ip: str) -> PurePath:
-        return PurePath("/tasks")
-
     def get_hostname(self, ip: str) -> str:
         return "host"
-
-    async def get_conn(self, ip: str) -> Any:
-        return None
 
     def install_monitor(
         self,

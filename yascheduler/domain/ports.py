@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.9.0
+# VERSION: 2.9.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.9.0 - Split MachineGateway Protocol into MachineRepository (collection lifecycle/queries/state transitions/accessors/monitor mechanism) and MachineOperations (exec/SFTP/deploy/download/occupancy logic) per decompose-ssh-gateway. BREAKING: MachineGateway removed; consumers take one or both of the two new Protocols. Deployment method named start_task_on_machine (per Q3 resolution, not deploy_task).
-#   PREVIOUS_CHANGE: v2.8.1 - MODULE_MAP MachineGateway description accuracy fix: remote dir is removed only when both transient_errors AND permanent_errors are empty.
+#   LAST_CHANGE: v2.9.1 - Narrowed MachineRepository Protocol per cleanup-unused-repository-symbols: removed get_conn, get_adapter, get_platforms, get_data_dir, get_engines_dir, get_tasks_dir (zero production callers). Pure narrowing — any old-shape implementer still satisfies the new Protocol. SSHClientConnection TYPE_CHECKING import dropped (only used by removed get_conn).
+#   PREVIOUS_CHANGE: v2.9.0 - Split MachineGateway Protocol into MachineRepository (collection lifecycle/queries/state transitions/accessors/monitor mechanism) and MachineOperations (exec/SFTP/deploy/download/occupancy logic) per decompose-ssh-gateway. BREAKING: MachineGateway removed; consumers take one or both of the two new Protocols. Deployment method named start_task_on_machine (per Q3 resolution, not deploy_task).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from pathlib import Path, PurePath
     from re import Pattern
 
-    from asyncssh.connection import SSHClientConnection
     from asyncssh.sftp import SFTPClient
 
     from .engine import Engine, EngineRepository
@@ -177,24 +176,11 @@ class MachineRepository(Protocol):
     def release(self, ip: str) -> None: ...
 
     # ---- Accessor getters (read stored state) ----
-    def get_adapter(self, ip: str) -> Any: ...  # noqa: ANN401 - infra RemoteMachineAdapter returned through domain Protocol
-
-    def get_platforms(self, ip: str) -> Sequence[str]: ...
-
     def get_path(self, ip: str) -> type[PurePath]: ...
 
     def get_quote(self, ip: str) -> Callable[[str], str]: ...
 
-    def get_data_dir(self, ip: str) -> PurePath: ...
-
-    def get_engines_dir(self, ip: str) -> PurePath: ...
-
-    def get_tasks_dir(self, ip: str) -> PurePath: ...
-
     def get_hostname(self, ip: str) -> str: ...
-
-    # ---- Connection lifecycle ----
-    async def get_conn(self, ip: str) -> SSHClientConnection: ...
 
     # ---- Monitor mechanism (generic, Engine-agnostic) ----
     def install_monitor(

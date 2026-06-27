@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/repository.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSHMachineRepository — connected-machine collection: registration, lifecycle, queries, state transitions, accessor getters, generic occupancy-monitor mechanism keyed by IP.
 #   SCOPE: SSHMachineRepository class + _MachineState dataclass + MySSHClient + DEFAULT_CONN_OPTS + _resolve_tunnel connection-building helpers.
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). SSHMachineRepository extracted from the dissolved SSHMachineGateway god-class; collection responsibility (lifecycle/queries/state transitions/accessors/monitor mechanism) lives here. _MachineState, MySSHClient, DEFAULT_CONN_OPTS, _resolve_tunnel moved verbatim from gateway.py/helpers.py. _bg_tasks renamed to _monitors; monitor mechanism generalized to install_monitor/cancel_monitor (Engine-agnostic). Operations responsibility moved to infra/ssh/operations/.
-#   PREVIOUS_CHANGE: none
+#   LAST_CHANGE: v1.1.0 - Removed nine zero-caller methods from SSHMachineRepository (get_conn, keys, items, register_machine, get_adapter, get_platforms, get_data_dir, get_engines_dir, get_tasks_dir) per cleanup-unused-repository-symbols. Narrowing pure deletion; no behavior change, no caller migration. ItemsView/KeysView TYPE_CHECKING imports dropped (only used by removed keys()/items()).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). SSHMachineRepository extracted from the dissolved SSHMachineGateway god-class; collection responsibility (lifecycle/queries/state transitions/accessors/monitor mechanism) lives here. _MachineState, MySSHClient, DEFAULT_CONN_OPTS, _resolve_tunnel moved verbatim from gateway.py/helpers.py. _bg_tasks renamed to _monitors; monitor mechanism generalized to install_monitor/cancel_monitor (Engine-agnostic). Operations responsibility moved to infra/ssh/operations/.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from .operations.base import my_backoff_exc
 from .platform import ADAPTERS, _detect_platform, _init_paths, make_run_fn
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, ItemsView, KeysView, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
     from pathlib import PurePath
 
     from asyncssh.public_key import SSHKey
@@ -304,26 +304,6 @@ class SSHMachineRepository:
         for ip in list(self._machines):
             await self.disconnect(ip)
 
-    # START_CONTRACT: SSHMachineRepository.get_conn
-    #   PURPOSE: Return current SSH connection; reconnect if closing.
-    #   LINKS: M-SSH-REPOSITORY
-    # END_CONTRACT: SSHMachineRepository.get_conn
-    async def get_conn(self, ip: str) -> SSHClientConnection:
-        """Return current SSH connection; reconnect if closed."""
-        state = self._machines[ip]
-        if state.conn._transport and not state.conn._transport.is_closing():
-            return state.conn
-        self._log.debug("[SSHRepository][get_conn][REOPEN] ip=%s", ip)
-        conn = await asyncssh.connection.connect(
-            options=state.conn_opts,
-            host=state.conn_opts.host,
-            tunnel=state.conn_opts.tunnel,
-            config=[],
-            known_hosts=None,
-        )
-        self._machines[ip] = replace(state, conn=conn)
-        return conn
-
     # ---- Queries ----
 
     # START_CONTRACT: SSHMachineRepository.list_free
@@ -363,15 +343,6 @@ class SSHMachineRepository:
     def __len__(self) -> int:
         return len(self._machines)
 
-    def keys(self) -> KeysView[str]:
-        return self._machines.keys()
-
-    def items(self) -> ItemsView[str, _MachineState]:
-        return self._machines.items()
-
-    def register_machine(self, ip: str, state: _MachineState) -> None:
-        self._machines[ip] = state
-
     def _get_machine_state(self, ip: str) -> _MachineState | None:
         """Return adapter-internal state for ip, or None."""
         return self._machines.get(ip)
@@ -410,26 +381,11 @@ class SSHMachineRepository:
 
     # ---- Accessor getters ----
 
-    def get_adapter(self, ip: str) -> RemoteMachineAdapter:
-        return self._machines[ip].adapter
-
-    def get_platforms(self, ip: str) -> Sequence[str]:
-        return self._machines[ip].platforms
-
     def get_path(self, ip: str) -> type[PurePath]:
         return self._machines[ip].adapter.path
 
     def get_quote(self, ip: str) -> QuoteCallable:
         return self._machines[ip].adapter.quote
-
-    def get_data_dir(self, ip: str) -> PurePath:
-        return self._machines[ip].data_dir
-
-    def get_engines_dir(self, ip: str) -> PurePath:
-        return self._machines[ip].engines_dir
-
-    def get_tasks_dir(self, ip: str) -> PurePath:
-        return self._machines[ip].tasks_dir
 
     def get_hostname(self, ip: str) -> str:
         return self._machines[ip].conn_opts.host

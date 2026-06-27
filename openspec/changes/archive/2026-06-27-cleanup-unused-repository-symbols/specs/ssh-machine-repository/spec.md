@@ -1,10 +1,4 @@
-# SSH Machine Repository
-
-## Purpose
-
-TBD - SSH machine repository and operations adapters implementing the MachineRepository and MachineOperations domain ports.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: MachineRepository port
 
@@ -42,7 +36,7 @@ occupancy-check logic) — those are `MachineOperations`.
 - `install_monitor(ip: str, *, interval: float, check_factory: Callable[[], Awaitable[bool]], on_free: Callable[[], None]) -> None` (sync) — creates an `asyncio.Task` keyed by IP that sleeps `interval`, calls `check_factory()`, and calls `on_free()` then breaks when the check returns `False`. Re-installing for an already-monitored IP cancels the prior monitor before installing the new one. A done-callback pops the IP only when the slot still points at the same task (re-registration identity check).
 - `cancel_monitor(ip: str) -> None` (sync) — pops the monitor for `ip` (if any), cancels it; does NOT await
 
-Note: `_get_machine_state(ip: str) -> _MachineState | None`
+Note: `_get_machine_state(ip) -> _MachineState | None`
 is the sole implementation-only method on `SSHMachineRepository` (see the
 "SSHMachineRepository implements MachineRepository" requirement) — it
 references `_MachineState` (an infra-internal dataclass) and is therefore
@@ -125,12 +119,11 @@ cancelled task).
 In addition to the `MachineRepository` Protocol methods, `SSHMachineRepository`
 SHALL expose a single implementation-only method (NOT part of the domain
 Protocol; used by adapter-internal consumers and tests):
-- `_get_machine_state(ip: str) -> _MachineState | None` (sync) — returns the internal `_MachineState` (or None)
+- `_get_machine_state(ip: str) -> _MachineState | None` (sync) — returns the internal `_MachineState` (or `None`)
 
 The connection-building bits (`MySSHClient`, `DEFAULT_CONN_OPTS`,
 `_resolve_tunnel`) SHALL live in `infra/ssh/repository.py` and be used by
-`_open_connection`. They SHALL NOT be imported from `helpers.py` (which
-is deleted).
+`_open_connection`.
 
 #### Scenario: Repository imported from correct module
 
@@ -146,121 +139,3 @@ is deleted).
 
 - **WHEN** `disconnect(ip)` runs
 - **THEN** `_machines[ip]` and `_monitors[ip]` are both popped (when present), the monitor is cancelled and awaited, and the SSH connection is closed
-
-### Requirement: MachineOperations port
-
-The system SHALL define a `@runtime_checkable` `MachineOperations`
-Protocol in `yascheduler/domain/ports.py` representing operations on a
-single machine — command exec, SFTP transfer, process inspection, node
-setup, task deployment, output download, and occupancy check logic. The
-Protocol SHALL NOT include collection lifecycle, queries, state
-transitions, accessor getters, or the monitor mechanism — those are
-`MachineRepository`.
-
-**Command execution:**
-- `run(machine: ConnectedMachine, cmd: str) -> ProcessResult` (async)
-- `run_full(machine: ConnectedMachine, cmd: str) -> SSHCompletedProcess` (async)
-- `run_bg(machine: ConnectedMachine, cmd: str, *, cwd: str | None = None) -> None` (async)
-
-**File transfer:**
-- `upload(machine: ConnectedMachine, local: Path, remote: str) -> None` (async)
-- `download(machine: ConnectedMachine, remote: str, local: Path) -> None` (async)
-- `get_sftp(ip: str) -> AsyncContextManager[SFTPClient]` (async) — async context manager yielding an SFTP client
-
-**Process inspection:**
-- `pgrep(ip: str, pattern: str | Pattern[str], full: bool = True) -> AsyncGenerator[ProcessInfo, None]` (async)
-- `list_processes(ip: str) -> AsyncGenerator[ProcessInfo, None]` (async)
-
-**Node info / setup:**
-- `get_cpu_cores(ip: str) -> int` (async) — retries on `SSHRetryExc` (idempotent read)
-- `setup_node(ip: str, engines: EngineRepository) -> None` (async)
-
-**Task deployment:**
-- `start_task_on_machine(machine: ConnectedMachine, engine: Engine, task: Task, ncpus: int, engines_dir: PurePath) -> bool` (async)
-
-**Output download:**
-- `download_outputs(ip: str, remote_dir: str, local_dir: Path, files: list[str], task_id: int | None = None) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]]` (async) — returns `(meta_add, transient_errors, permanent_errors)`
-
-**Occupancy check:**
-- `occupancy_check(ip: str, config: Engine) -> bool` (async) — True if busy or SSH failed (safe default), False only when confirmed free
-- `start_occupancy_check(ip: str, config: Engine) -> None` (sync) — engine-aware installer that calls `repository.occupy(ip)` then `repository.install_monitor(ip, interval=config.sleep_interval, check_factory=partial(self.occupancy_check, ip, config), on_free=partial(repository.release, ip))`
-
-The `config` parameter of `start_occupancy_check` and `occupancy_check`,
-and the `engine` parameter of `start_task_on_machine`, SHALL be the
-concrete `Engine` frozen dataclass from `yascheduler.domain.engine` (per
-the `engine-to-domain-frozen` precedent — no separate
-`OccupancyConfig`/`TaskExecutionEngine` Protocols).
-
-Note (per design.md Q3): the domain `MachineOperations` Protocol exposes
-the deployment use-case as `start_task_on_machine(...)` (matching the
-implementation's method name and the existing orchestrator call sites),
-rather than the flattened `deploy_task(...)` name design.md D8 floated
-as an alternative. The concrete `SSHMachineOperations` class forwards
-`start_task_on_machine` to `self.deploy.start_task_on_machine`; the
-Protocol uses the existing name so existing call sites do not need a
-method-name rename alongside the parameter-name change.
-
-`MachineOperations` is `@runtime_checkable`.
-
-#### Scenario: Operations satisfies Protocol structurally
-
-- **WHEN** a class implements all `MachineOperations` methods with matching signatures
-- **THEN** it satisfies the `@runtime_checkable` Protocol structurally
-
-#### Scenario: start_occupancy_check composes repository monitor
-
-- **WHEN** `start_occupancy_check(ip, engine)` is called
-- **THEN** the operations object calls `repository.occupy(ip)` and `repository.install_monitor(ip, interval=engine.sleep_interval, check_factory=..., on_free=...)` — the operations object does NOT touch `_monitors` directly
-
-#### Scenario: occupancy_check defaults to busy on SSH failure
-
-- **WHEN** `occupancy_check(ip, config)` runs and the underlying SSH check raises a `SSHRetryExc`
-- **THEN** the method returns `True` (safe-default busy) rather than propagating the exception
-
-### Requirement: SSHMachineOperations composition
-
-The system SHALL provide an `SSHMachineOperations` class in
-`yascheduler/infra/ssh/operations/` satisfying the `MachineOperations`
-Protocol. The class SHALL receive a `MachineRepository` reference and a
-logger at construction and SHALL compose three sibling collaborators:
-`TaskDeployer`, `OutputDownloader`, `OccupancyChecker` — exposed as the
-`deploy`, `download`, `occupancy` attributes respectively. Base
-primitives (`run`, `run_full`, `run_bg`, `upload`, `download`,
-`get_sftp`, `pgrep`, `list_processes`, `get_cpu_cores`, `setup_node`)
-SHALL live on `SSHMachineOperations` itself; the three collaborators
-SHALL receive a reference to a primitive-provider (typed against narrow
-local Protocols defined in `operations/base.py`) plus the repository.
-
-`SSHMachineOperations.start_task_on_machine(...)` SHALL forward to
-`self.deploy.start_task_on_machine(...)`; similarly
-`download_outputs(...)` to `self.download.download_outputs(...)` and
-`start_occupancy_check(...)`/`occupancy_check(...)` to
-`self.occupancy.*`.
-
-Composition (not inheritance) SHALL be used. The collaborators SHALL
-NOT subclass `SSHMachineOperations`.
-
-#### Scenario: Operations imports from operations package
-
-- **WHEN** `SSHMachineOperations` is imported
-- **THEN** it is imported from `yascheduler.infra.ssh.operations`
-
-#### Scenario: Deploy attribute is TaskDeployer
-
-- **WHEN** `SSHMachineOperations(repository, log).deploy` is accessed
-- **THEN** it is an instance of `TaskDeployer` holding the same repository and primitive-provider references
-
-#### Scenario: start_task_on_machine forwards to deploy
-
-- **WHEN** `operations.start_task_on_machine(machine, engine, task, ncpus, engines_dir)` is called
-- **THEN** the call forwards to `operations.deploy.start_task_on_machine(...)` with identical arguments
-
-#### Scenario: download_outputs forwards to download
-
-- **WHEN** `operations.download_outputs(ip, remote_dir, local_dir, files, task_id)` is called
-- **THEN** the call forwards to `operations.download.download_outputs(...)` with identical arguments
-
-#### Scenario: start_occupancy_check forwards to occupancy
-
-- **WHEN** `operations.start_occupancy_check(ip, engine)` is called
-- **THEN** the call forwards to `operations.occupancy.start_occupancy_check(...)` with identical arguments

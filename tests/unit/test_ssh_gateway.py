@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway.py
-# VERSION: 1.0.3
+# VERSION: 1.0.5
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineRepository + SSHMachineOperations — connection lifecycle, command execution, SFTP, machine state, property helpers.
@@ -13,13 +13,12 @@
 #   TestListFree - list_free filtering by state and platform
 #   TestCommandExecution - run / run_full / run_bg
 #   TestFileTransfer - upload / download / get_sftp context manager
-#   TestMachineState - update_machine, contains, len, keys, items, register_machine
-#   TestPropertyHelpers - get_adapter, get_platforms, get_hostname, get_path, get_quote
+#   TestMachineState - update_machine, contains, len
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.4 - Extract TestOccupancy + TestAdvancedOperations to test_ssh_gateway_operations.py for size compliance (GRACE-lite 1000-line limit).
-#   PREVIOUS_CHANGE: v1.0.3 - Migrate _bg_tasks access from list(set)[0] to dict[ip] keyed access for fix-disconnect-bg-task-leak; bg-task regression tests moved to test_ssh_gateway_bg_tasks.py.
+#   LAST_CHANGE: v1.0.5 - Removed TestPropertyHelpers class and test_keys/test_items/test_register_machine per cleanup-unused-repository-symbols (methods deleted from SSHMachineRepository).
+#   PREVIOUS_CHANGE: v1.0.4 - Extract TestOccupancy + TestAdvancedOperations to test_ssh_gateway_operations.py for size compliance (GRACE-lite 1000-line limit).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -596,7 +595,7 @@ class TestFileTransfer:
 
 
 class TestMachineState:
-    """update_machine, contains, len, keys, items, register_machine."""
+    """update_machine, contains, len."""
 
     def test_update_machine_replaces_state(
         self, repository: SSHMachineRepository
@@ -630,87 +629,9 @@ class TestMachineState:
         repository._machines["10.0.0.2"] = _make_state(ip="10.0.0.2")
         assert len(repository) == 2
 
-    def test_keys(self, repository: SSHMachineRepository) -> None:
-        """keys() returns all IPs."""
-        repository._machines["10.0.0.1"] = _make_state(ip="10.0.0.1")
-        repository._machines["10.0.0.2"] = _make_state(ip="10.0.0.2")
-        assert set(repository.keys()) == {"10.0.0.1", "10.0.0.2"}
-
-    def test_items(self, repository: SSHMachineRepository) -> None:
-        """items() returns (ip, state) pairs."""
-        state = _make_state(ip="10.0.0.1")
-        repository._machines["10.0.0.1"] = state
-        items = dict(repository.items())
-        assert items["10.0.0.1"] is state
-
-    def test_register_machine(self, repository: SSHMachineRepository) -> None:
-        """register_machine stores a _MachineState by IP."""
-        state = _make_state(ip="10.0.0.1")
-        repository.register_machine("10.0.0.1", state)
-        assert "10.0.0.1" in repository
-        assert repository._machines["10.0.0.1"] is state
-
     def test_contains_method(self, repository: SSHMachineRepository) -> None:
         """contains() checks by IP (explicit method)."""
         state = _make_state(ip="10.0.0.1")
         repository._machines["10.0.0.1"] = state
         assert repository.contains("10.0.0.1") is True
         assert repository.contains("10.0.0.2") is False
-
-
-# =============================================================================
-# Property Helpers
-# =============================================================================
-
-
-class TestPropertyHelpers:
-    """get_adapter, get_platforms, get_hostname, get_path, get_quote."""
-
-    def test_get_adapter(self, repository: SSHMachineRepository) -> None:
-        """get_adapter returns the RemoteMachineAdapter."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        assert repository.get_adapter("10.0.0.1") is state.adapter
-
-    def test_get_platforms(self, repository: SSHMachineRepository) -> None:
-        """get_platforms returns the platform list."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        assert repository.get_platforms("10.0.0.1") == ["linux", "debian-like"]
-
-    def test_get_hostname(self, repository: SSHMachineRepository) -> None:
-        """get_hostname returns the host from conn_opts."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        assert repository.get_hostname("10.0.0.1") == "10.0.0.1"
-
-    def test_get_path(self, repository: SSHMachineRepository) -> None:
-        """get_path returns the adapter's path type."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        assert repository.get_path("10.0.0.1") is PurePosixPath
-
-    def test_get_quote(self, repository: SSHMachineRepository) -> None:
-        """get_quote returns the adapter's quote callable."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        assert callable(repository.get_quote("10.0.0.1"))
-        assert repository.get_quote("10.0.0.1")("test") == "test"
-
-    def test_get_data_dir(self, repository: SSHMachineRepository) -> None:
-        """get_data_dir returns the data directory."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        assert repository.get_data_dir("10.0.0.1") == PurePosixPath("./data")
-
-    def test_get_engines_dir(self, repository: SSHMachineRepository) -> None:
-        """get_engines_dir returns the engines directory."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        assert repository.get_engines_dir("10.0.0.1") == PurePosixPath("./data/engines")
-
-    def test_get_tasks_dir(self, repository: SSHMachineRepository) -> None:
-        """get_tasks_dir returns the tasks directory."""
-        state = _make_state()
-        repository._machines["10.0.0.1"] = state
-        assert repository.get_tasks_dir("10.0.0.1") == PurePosixPath("./data/tasks")

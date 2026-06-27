@@ -61,10 +61,8 @@ The system SHALL define two `@runtime_checkable` Protocols in
   (`connect`/`disconnect`/`disconnect_all`), queries
   (`list_free`/`list_connected`/`get_machine_state`/`contains`),
   state transitions (`update_machine`/`occupy`/`release`), accessor
-  getters (`get_adapter`/`get_platforms`/`get_path`/`get_quote`/
-  `get_data_dir`/`get_engines_dir`/`get_tasks_dir`/`get_hostname`),
-  connection lifecycle (`get_conn`), and the generic monitor mechanism
-  (`install_monitor`/`cancel_monitor`).
+  getters (`get_path`/`get_quote`/`get_hostname`), and the generic
+  monitor mechanism (`install_monitor`/`cancel_monitor`).
 - `MachineOperations` — operations on a single machine:
   `run`/`run_full`/`run_bg`, `upload`/`download`/`get_sftp`,
   `pgrep`/`list_processes`, `get_cpu_cores`/`setup_node`,

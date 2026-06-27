@@ -61,7 +61,7 @@ async def test_full_cycle(
     )
     await operations.setup_node(ssh_container["host"], config.engines)
 
-    engines_dir = repository.get_engines_dir(ssh_container["host"])
+    engines_dir = config.remote.engines_dir
     proc = await operations.run(machine, f"test -f {engines_dir}/test_shell/run.sh")
     assert proc.exit_code == 0, (
         f"Engine script not deployed at {engines_dir}/test_shell/run.sh"

@@ -932,7 +932,6 @@
         <fn-_open_connection PURPOSE="Build SSH options and open connection" />
         <fn-disconnect PURPOSE="Close SSH for ip, cancel only that machine's monitor, remove state (pop-before-await)" />
         <fn-disconnect_all PURPOSE="Disconnect every connected machine" />
-        <fn-get_conn PURPOSE="Return current SSH connection; reconnect if closing" />
         <fn-list_free PURPOSE="Return FREE machines filtered by platform, oldest first" />
         <fn-list_connected PURPOSE="Return all registered ConnectedMachine objects" />
         <fn-contains PURPOSE="Return whether ip is registered" />
@@ -940,20 +939,12 @@
         <fn-update_machine PURPOSE="Replace ConnectedMachine in stored _MachineState" />
         <fn-occupy PURPOSE="Read-modify-write transitioning stored machine to BUSY" />
         <fn-release PURPOSE="Read-modify-write transitioning stored machine to FREE with free_since=now" />
-        <fn-get_adapter PURPOSE="Return stored RemoteMachineAdapter for ip" />
-        <fn-get_platforms PURPOSE="Return stored platforms Sequence for ip" />
         <fn-get_path PURPOSE="Return stored adapter.path type for ip" />
         <fn-get_quote PURPOSE="Return stored adapter.quote for ip" />
-        <fn-get_data_dir PURPOSE="Return stored data_dir for ip" />
-        <fn-get_engines_dir PURPOSE="Return stored engines_dir for ip" />
-        <fn-get_tasks_dir PURPOSE="Return stored tasks_dir for ip" />
         <fn-get_hostname PURPOSE="Return conn_opts.host for ip" />
         <fn-install_monitor PURPOSE="Generic occupancy-monitor installer keyed by IP; replaces prior monitor before installing new" />
         <fn-cancel_monitor PURPOSE="Pop + cancel monitor for ip (no await)" />
         <fn-_get_machine_state PURPOSE="Return internal _MachineState for ip, or None" />
-        <fn-register_machine PURPOSE="Test/CLI hook to install a prebuilt _MachineState" />
-        <fn-keys PURPOSE="IP keys of _machines" />
-        <fn-items PURPOSE="(ip, _MachineState) pairs of _machines" />
       </annotations>
     </M-SSH-REPOSITORY>
 
