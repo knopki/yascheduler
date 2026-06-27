@@ -933,7 +933,7 @@
         <fn-_get_machine_state PURPOSE="Return internal _MachineState for an IP (adapter-internal)" />
         <fn-get_machine_state PURPOSE="Return ConnectedMachine registered for an IP, or None" />
         <fn-list_connected PURPOSE="Return list of all registered ConnectedMachine objects" />
-        <fn-download_outputs PURPOSE="SFTP session, per-file retry download, error classification (transient vs permanent), conditional rmtree (only when transient_errors empty); returns (meta_add, transient_errors, permanent_errors)" />
+        <fn-download_outputs PURPOSE="Per-file SFTP-isolated download with retry, error classification (transient vs permanent), conservative post-loop rmtree (only when both transient_errors and permanent_errors are empty); returns (meta_add, transient_errors, permanent_errors)" />
         <fn-start_task_on_machine PURPOSE="Upload inputs and spawn process; returns True on success" />
       </annotations>
     </M-SSH-GATEWAY>

@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.8.0
+# VERSION: 2.8.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineGateway, CloudConfig, CloudProvisioner Protocol classes.
@@ -11,12 +11,13 @@
 #   TaskRepository - Async port for task persistence (get, save, insert, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status)
 #   NodeRepository - Async port for node persistence (full CRUD lifecycle, list_all, get_by_ips, count_by_status)
 #   CloudConfig - Structural Protocol for cloud provider config (7-field surface application consumers read: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host)
-#   MachineGateway - Async port for remote machine operations (lifecycle, queries, run, run_bg, upload, download, download_outputs, occupancy, cpu_cores, start_task_on_machine); download_outputs returns (meta_add, transient_errors, permanent_errors) and removes remote dir only when transient_errors is empty
+#   MachineGateway - Async port for remote machine operations (lifecycle, queries, run, run_bg, upload, download, download_outputs, occupancy, cpu_cores, start_task_on_machine); download_outputs returns (meta_add, transient_errors, permanent_errors) and removes remote dir only when both transient_errors and permanent_errors are empty
 #   CloudProvisioner - Async port for cloud node provisioning (allocate, deallocate, select_provider)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.8.0 - MachineGateway.download_outputs Protocol signature changes from 2-tuple (meta_add, sftp_errors) to 3-tuple (meta_add, transient_errors, permanent_errors); remote dir is removed only when transient_errors is empty (fix-download-rmtree-data-loss). BREAKING for Protocol implementers.
+#   LAST_CHANGE: v2.8.1 - MODULE_MAP MachineGateway description accuracy fix: remote dir is removed only when both transient_errors AND permanent_errors are empty (matches the conservative download_outputs rmtree gate in fix-nonidempotent-ssh-retries). No Protocol signature change.
+#   PREVIOUS_CHANGE: v2.8.0 - MachineGateway.download_outputs Protocol signature changes from 2-tuple (meta_add, sftp_errors) to 3-tuple (meta_add, transient_errors, permanent_errors); remote dir is removed only when transient_errors is empty (fix-download-rmtree-data-loss). BREAKING for Protocol implementers.
 #   PREVIOUS_CHANGE: v2.7.0 - Add connect_grace: int to CloudConfig Protocol between idle_tolerance and username (fix-never-connected-node-leak); widens the surface from 6 to 7 fields so the orchestrator can resolve a per-cloud SSH connect-failure deadline. The 4 ConfigCloud* DTOs declare per-provider defaults (Hetzner/Upcloud=60, Azure/VastAI=120).
 # END_CHANGE_SUMMARY
 

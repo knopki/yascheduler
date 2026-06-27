@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/gateway.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH machine gateway implementing MachineGateway protocol via asyncssh.
 #   SCOPE: SSHMachineGateway class with connection lifecycle, command execution, SFTP, occupancy monitoring, output download.
@@ -22,11 +22,12 @@
 #   SSHMachineGateway.start_task_on_machine - Upload task inputs and spawn calculation process (port contract)
 #   SSHMachineGateway._occupancy_by_pgrep - pgrep-based occupancy check (busy-safe on SSH failure)
 #   SSHMachineGateway._occupancy_by_cmd - check_cmd-based occupancy check (busy-safe on SSH failure)
-#   SSHMachineGateway.download_outputs - SFTP session, per-file download with retry, error classification, conditional rmtree
+#   SSHMachineGateway.download_outputs - per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - download_outputs classifies per-file exceptions into transient (SFTPRetryExc) vs permanent (all other caught) and returns (meta_add, transient_errors, permanent_errors); rmtree now gated on `if not transient_errors` so the remote dir is preserved for retry when transient errors left files undownloaded; session-level catch-all appends to transient_errors. BREAKING: return shape 2-tuple -> 3-tuple (fix-download-rmtree-data-loss).
+#   LAST_CHANGE: v1.8.0 - Drop @my_backoff_exc() from run_bg and @my_backoff_sftp() from upload/download (non-idempotent: spawn/put/get must not retry — a successful remote side-effect followed by a lost client confirmation must not be duplicated). Add BUSY rollback to start_task_on_machine: the deploy+spawn body runs under `except BaseException` (covers CancelledError during daemon shutdown); on any failure it looks up self._machines.get(ip), warns+skips if already disconnected, warns+releases if state was not BUSY, else info-logs+releases, then re-raises (gateway-level only — DB task status / orchestrator mark_running() untouched). Restructure download_outputs: drop the outer job_retry session-retry layer; open a FRESH get_sftp(ip) client per file (dead-connection blast radius bounded to one file); move rmtree to a single post-loop evaluation gated on `not transient_errors AND not permanent_errors` (conservative — any error preserves the remote dir) using its own fresh client. 3-tuple return shape and classification (SFTPRetryExc -> transient, else permanent) unchanged (fix-nonidempotent-ssh-retries).
+#   PREVIOUS_CHANGE: v1.7.0 - download_outputs classifies per-file exceptions into transient (SFTPRetryExc) vs permanent (all other caught) and returns (meta_add, transient_errors, permanent_errors); rmtree now gated on `if not transient_errors` so the remote dir is preserved for retry when transient errors left files undownloaded; session-level catch-all appends to transient_errors. BREAKING: return shape 2-tuple -> 3-tuple (fix-download-rmtree-data-loss).
 #   PREVIOUS_CHANGE: v1.6.0 - Re-key SSHMachineGateway._bg_tasks from set[asyncio.Task] to dict[str, asyncio.Task] keyed by machine IP; disconnect(ip) now pops+cancel+awaits only that IP's monitor (was cancelling every machine's monitor); start_occupancy_check cancels any prior monitor for the same IP before installing a new one, with an identity-checked done-callback so a re-registered replacement survives the prior task's completion (fix-disconnect-bg-task-leak). No public surface change; M-SSH-GATEWAY annotations unchanged.
 # END_CHANGE_SUMMARY
 
@@ -430,7 +431,6 @@ class SSHMachineGateway:
     #   OUTPUTS: { None - matches port contract }
     #   LINKS: M-SSH-GATEWAY
     # END_CONTRACT: SSHMachineGateway.run_bg
-    @my_backoff_exc()
     async def run_bg(
         self,
         machine: ConnectedMachine,
@@ -438,7 +438,7 @@ class SSHMachineGateway:
         *,
         cwd: str | None = None,
     ) -> None:
-        """Start background process on remote machine."""
+        """Start background process on remote machine (single attempt — spawn is non-idempotent)."""
         state = self._machines[machine.ip]
         await state.adapter.run_bg(state.conn, state.adapter.quote, cmd, cwd=cwd)
 
@@ -446,9 +446,8 @@ class SSHMachineGateway:
     #   PURPOSE: Upload file via SFTP.
     #   LINKS: M-SSH-GATEWAY, M-DOMAIN-PORTS
     # END_CONTRACT: SSHMachineGateway.upload
-    @my_backoff_sftp()
     async def upload(self, machine: ConnectedMachine, local: Path, remote: str) -> None:
-        """Upload file to remote machine via SFTP."""
+        """Upload file to remote machine via SFTP (single attempt — put is non-idempotent)."""
         state = self._machines[machine.ip]
         async with state.conn.start_sftp_client() as sftp:
             await sftp.put(str(local), remote)
@@ -457,11 +456,10 @@ class SSHMachineGateway:
     #   PURPOSE: Download file via SFTP.
     #   LINKS: M-SSH-GATEWAY, M-DOMAIN-PORTS
     # END_CONTRACT: SSHMachineGateway.download
-    @my_backoff_sftp()
     async def download(
         self, machine: ConnectedMachine, remote: str, local: Path
     ) -> None:
-        """Download file from remote machine via SFTP."""
+        """Download file from remote machine via SFTP (single attempt — get is non-idempotent)."""
         state = self._machines[machine.ip]
         async with state.conn.start_sftp_client() as sftp:
             await sftp.get(remote, str(local))
@@ -608,48 +606,77 @@ class SSHMachineGateway:
         )
         assert task.context.remote_folder is not None
         self.update_machine(machine.occupy())
-        path_type = self.get_path(machine.ip)
-        remote_folder = path_type(task.context.remote_folder)
 
-        # START_BLOCK_DEPLOY
-        async with self.get_sftp(machine.ip) as sftp:
-            try:
-                root_dir = path_type(await sftp.realpath("."))
-                task_dir = (
-                    remote_folder
-                    if remote_folder.is_absolute()
-                    else root_dir / remote_folder
-                )
-                if engines_dir.is_absolute():
-                    engine_path = engines_dir / engine.name
-                else:
-                    engine_path = root_dir / engines_dir / engine.name
-                await self._upload_task_data(
-                    machine.ip, task, task_dir, engine.input_files
-                )
-            except Exception as err:
-                self._log.error("Can't upload task_id=%s files: %s", task.task_id, err)
-                raise err
-        # END_BLOCK_DEPLOY
+        # START_BLOCK_DEPLOY_SPAWN
+        try:
+            path_type = self.get_path(machine.ip)
+            remote_folder = path_type(task.context.remote_folder)
+            # START_BLOCK_DEPLOY
+            async with self.get_sftp(machine.ip) as sftp:
+                try:
+                    root_dir = path_type(await sftp.realpath("."))
+                    task_dir = (
+                        remote_folder
+                        if remote_folder.is_absolute()
+                        else root_dir / remote_folder
+                    )
+                    if engines_dir.is_absolute():
+                        engine_path = engines_dir / engine.name
+                    else:
+                        engine_path = root_dir / engines_dir / engine.name
+                    await self._upload_task_data(
+                        machine.ip, task, task_dir, engine.input_files
+                    )
+                except Exception as err:
+                    self._log.error(
+                        "Can't upload task_id=%s files: %s", task.task_id, err
+                    )
+                    raise err
+            # END_BLOCK_DEPLOY
 
-        await self._exec_spawn_command(
-            machine, engine, task, task_dir, engine_path, ncpus
-        )
+            await self._exec_spawn_command(
+                machine, engine, task, task_dir, engine_path, ncpus
+            )
+        except BaseException as err:
+            # START_BLOCK_ROLLBACK_BUSY
+            # Roll back the gateway BUSY marking on any deploy/spawn failure (incl.
+            # CancelledError during daemon shutdown) so the machine is not left stuck.
+            state = self._machines.get(machine.ip)
+            if state is None:
+                self._log.warning(
+                    "task_id=%s on %s: already disconnected, skipping rollback (%s)",
+                    task.task_id,
+                    machine.ip,
+                    err,
+                )
+                raise
+            if state.machine.state != MachineState.BUSY:
+                self._log.warning(
+                    "unexpected state %s, expected BUSY (task_id=%s on %s)",
+                    state.machine.state,
+                    task.task_id,
+                    machine.ip,
+                )
+            else:
+                self._log.info(
+                    "task_id=%s on %s (%s); rolling back gateway BUSY",
+                    task.task_id,
+                    machine.ip,
+                    err,
+                )
+            self.update_machine(state.machine.release())
+            raise
+            # END_BLOCK_ROLLBACK_BUSY
+        # END_BLOCK_DEPLOY_SPAWN
 
         return True
         # END_BLOCK_START_TASK
 
     # START_CONTRACT: SSHMachineGateway.download_outputs
-    #   PURPOSE: SFTP session, per-file download with retry, error classification, conditional rmtree.
-    #   INPUTS: {
-    #     ip: str - Machine IP,
-    #     remote_dir: str - Remote directory path to clean after download (only when transient_errors empty),
-    #     local_dir: Path - Local destination directory,
-    #     files: list[str] - Remote file paths to download,
-    #     task_id: int | None - Optional task ID for log correlation
-    #   }
+    #   PURPOSE: Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.
+    #   INPUTS: { ip: str, remote_dir: str, local_dir: Path, files: list[str], task_id: int | None }
     #   OUTPUTS: { tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]] - (meta_add, transient_errors, permanent_errors) }
-    #   SIDE_EFFECTS: Downloads files via SFTP; removes remote directory tree ONLY when transient_errors is empty.
+    #   SIDE_EFFECTS: Downloads files via SFTP using a FRESH client per file; removes the remote directory tree ONCE after the loop ONLY when both transient_errors and permanent_errors are empty.
     #   LINKS: M-SSH-GATEWAY, M-DOMAIN-PORTS
     # END_CONTRACT: SSHMachineGateway.download_outputs
     async def download_outputs(
@@ -673,11 +700,14 @@ class SSHMachineGateway:
         permanent_errors: list[tuple[str | None, Exception]] = []
         path_type = self.get_path(ip)
         file_get_retry = my_backoff_sftp()
-        job_retry = my_backoff_sftp()
 
-        async def _session() -> None:
-            async with self.get_sftp(ip) as sftp:
-                for out_file in files:
+        try:
+            # START_BLOCK_PER_FILE_DOWNLOAD
+            # Fresh SFTP client per file: a dropped channel on file N invalidates only N's
+            # retries. The inner try classifies ONLY sftp.get failures — a get_sftp OPEN
+            # failure escapes to the outer handler as a session-level transient (not per-file).
+            for out_file in files:
+                async with self.get_sftp(ip) as sftp:
                     try:
                         await file_get_retry(sftp.get)(
                             out_file, local_dir, preserve=True
@@ -695,18 +725,18 @@ class SSHMachineGateway:
                             out_file,
                             err,
                         )
-                # START_BLOCK_RMTREE_GATE
-                # rmtree only when no transient errors left files undownloaded;
-                # otherwise preserve the remote dir for the next retry cycle.
-                if not transient_errors:
-                    await sftp.rmtree(path_type(remote_dir))
-                # END_BLOCK_RMTREE_GATE
+            # END_BLOCK_PER_FILE_DOWNLOAD
 
-        try:
-            await job_retry(_session)()
+            # START_BLOCK_RMTREE_GATE
+            # Post-loop rmtree on full success only (both error lists empty); own fresh
+            # client. Any error preserves the remote dir for retry / debugging.
+            if not transient_errors and not permanent_errors:
+                async with self.get_sftp(ip) as sftp:
+                    await sftp.rmtree(path_type(remote_dir))
+            # END_BLOCK_RMTREE_GATE
         except Exception as err:
-            # Catch-all: whole-session failure (lost connection, etc.) is
-            # transient — the remote dir is preserved for retry.
+            # Catch-all: whole-session failure (get_sftp raising, or a non-(OSError|SFTPError)
+            # escape) is transient — the remote dir is preserved.
             self._log.warning("Cannot scp from %s: %s", remote_dir, err)
             transient_errors.append((remote_dir, err))
         # END_BLOCK_DOWNLOAD_OUTPUTS
