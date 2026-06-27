@@ -1,8 +1,8 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.3.0
+# VERSION: 6.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path); in-flight consume guard preventing concurrent consume of the same RUNNING task.
+#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); worker tasks registered in self._bg_jobs so stop() cancels them.
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.3.0 - Add in-flight consume guard `self._consuming: set[int]`: _task_consumer_producer skips yielding a task whose id is in _consuming; _task_consumer_consumer adds task_id before await and discards in a finally. consume_task return value (bool) now gates `self._occupancy_started.discard(ip)` — only finalised (True) discards, deferred (False) keeps the ip registered so the next producer cycle re-enters the consume block for retry (fix-download-rmtree-data-loss).
-#   PREVIOUS_CHANGE: v6.2.1 - Restrict the connect-machine producer to cloud nodes (filter `n.cloud is not None`) so the never-connected-node abandon path cannot auto-remove operator-managed static nodes during transient SSH outages. The design's scope is bounding cloud billing; static nodes were never auto-removed by the application and must stay that way. _connect_grace_for(None) is now unreachable from the producer but remains as a defensive fallback for direct callers / future use.
+#   LAST_CHANGE: v6.4.0 - Producer-error resilience: _create_producer_consumers and _print_stats now catch Exception, log, and continue on the next tick; worker tasks are registered in self._bg_jobs so stop()'s cancel cascade reaches them even on a BaseException exit. CancelledError (a BaseException since Py3.8) still propagates past `except Exception` to the graceful-drain `except CancelledError` path (fix-orchestrator-producer-silent-death).
+#   PREVIOUS_CHANGE: v6.3.0 - Add in-flight consume guard `self._consuming: set[int]`: _task_consumer_producer skips yielding a task whose id is in _consuming; _task_consumer_consumer adds task_id before await and discards in a finally. consume_task return value (bool) now gates `self._occupancy_started.discard(ip)` — only finalised (True) discards, deferred (False) keeps the ip registered so the next producer cycle re-enters the consume block for retry (fix-download-rmtree-data-loss).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -184,45 +184,55 @@ class Orchestrator:
     #   PURPOSE: Periodically log queue sizes, node counts, and task counts.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Logs statistics every 10 seconds.
+    #   SIDE_EFFECTS: Logs statistics every 10 seconds. Transient Exceptions from DB or
+    #     gateway reads are logged and the loop continues on its next tick; CancelledError
+    #     (a BaseException) propagates past `except Exception` so the shutdown path is preserved.
     #   LINKS: M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator._print_stats
     async def _print_stats(self) -> None:
         while not self._cancellation_event.is_set():
             end_time = datetime.now() + timedelta(seconds=10)
-            async with self._uow_factory() as uow:
-                ncounters = await uow.nodes.count_by_status()
-                tcounters = await uow.tasks.count_by_status()
-            n_busy = sum(
-                1
-                for m in self._gateway.list_connected()
-                if m.state == MachineState.BUSY
-            )
-            tmpl = (
-                "THREADS: {tasks} "
-                "NODES: busy:{n_busy}/enabled:{n_enabled}/total:{n_total} "
-                "TASKS: run:{t_run}/todo:{t_todo}/done:{t_done}"
-            )
-            msg = tmpl.format(
-                tasks=len(asyncio.all_tasks()),
-                n_busy=n_busy,
-                n_enabled=ncounters[True],
-                n_total=sum(ncounters.values()),
-                t_run=tcounters.get(TaskStatus.RUNNING, 0),
-                t_todo=tcounters.get(TaskStatus.TO_DO, 0),
-                t_done=tcounters.get(TaskStatus.DONE, 0),
-            )
-            self._log.info(msg)
+            # START_BLOCK_STATS_RESILIENCE
+            try:
+                async with self._uow_factory() as uow:
+                    ncounters = await uow.nodes.count_by_status()
+                    tcounters = await uow.tasks.count_by_status()
+                n_busy = sum(
+                    1
+                    for m in self._gateway.list_connected()
+                    if m.state == MachineState.BUSY
+                )
+                tmpl = (
+                    "THREADS: {tasks} "
+                    "NODES: busy:{n_busy}/enabled:{n_enabled}/total:{n_total} "
+                    "TASKS: run:{t_run}/todo:{t_todo}/done:{t_done}"
+                )
+                msg = tmpl.format(
+                    tasks=len(asyncio.all_tasks()),
+                    n_busy=n_busy,
+                    n_enabled=ncounters[True],
+                    n_total=sum(ncounters.values()),
+                    t_run=tcounters.get(TaskStatus.RUNNING, 0),
+                    t_todo=tcounters.get(TaskStatus.TO_DO, 0),
+                    t_done=tcounters.get(TaskStatus.DONE, 0),
+                )
+                self._log.info(msg)
 
-            queues = [
-                self._conn_machine_q,
-                self._allocate_q,
-                self._deallocate_q,
-                self._consume_q,
-            ]
-            qmsgs = [f"{q.name}: {q.psize()}/{q.qsize()}" for q in queues]
-            self._log.info("QUEUES: {}".format(" ".join(qmsgs)))
-            await _asleep_until(end_time)
+                queues = [
+                    self._conn_machine_q,
+                    self._allocate_q,
+                    self._deallocate_q,
+                    self._consume_q,
+                ]
+                qmsgs = [f"{q.name}: {q.psize()}/{q.qsize()}" for q in queues]
+                self._log.info("QUEUES: {}".format(" ".join(qmsgs)))
+            # CancelledError is a BaseException — do NOT broaden to
+            # `except BaseException` or shutdown will be swallowed.
+            except Exception as err:
+                self._log.error("[Orchestrator][_print_stats][ERROR] err=%s", err)
+            finally:
+                await _asleep_until(end_time)
+            # END_BLOCK_STATS_RESILIENCE
 
     # ---- Producers / Consumers ----
 
@@ -543,6 +553,18 @@ class Orchestrator:
         return max(0, diff)
         # END_BLOCK_COMPUTE_CAPACITY
 
+    # START_CONTRACT: Orchestrator._create_producer_consumers
+    #   PURPOSE: Run a resilient producer-consumer loop with N workers; self-heal on transient producer errors.
+    #   INPUTS: { queue: UniqueQueue, producer: Callable, consumer: Callable, workers_num: int = 1 }
+    #   OUTPUTS: { None }
+    #   SIDE_EFFECTS: Spawns worker tasks registered in BOTH the local workers set and self._bg_jobs (so
+    #     stop()'s cancel cascade reaches them even on a BaseException exit); drives the producer each
+    #     _sleep_interval tick; on a transient producer Exception logs and continues on the next tick;
+    #     on CancelledError drains the queue (queue.join), cancels workers, and awaits them. CancelledError
+    #     (a BaseException since Python 3.8) propagates past `except Exception` to the graceful-drain
+    #     `except CancelledError` — the producer-error handler SHALL NOT run on graceful shutdown.
+    #   LINKS: M-QUEUE
+    # END_CONTRACT: Orchestrator._create_producer_consumers
     async def _create_producer_consumers(
         self,
         queue: UniqueQueue,
@@ -559,17 +581,38 @@ class Orchestrator:
                     queue.item_done(msg)
 
         workers: set[asyncio.Task] = set()
+        # START_BLOCK_REGISTER_WORKERS
+        # Workers are background jobs for the daemon's lifetime — register them
+        # in self._bg_jobs so stop()'s cancel cascade reaches them even if the
+        # parent exits via a BaseException (SystemExit/KeyboardInterrupt) that
+        # `except Exception` does not catch. The local `workers` set is kept
+        # for the `except CancelledError` drain path; double-cancel is idempotent.
         for _ in range(workers_num):
-            workers.add(asyncio.create_task(worker()))
+            t = asyncio.create_task(worker())
+            workers.add(t)
+            self._bg_jobs.add(t)
+        # END_BLOCK_REGISTER_WORKERS
 
         try:
             while not self._cancellation_event.is_set():
                 end_time = datetime.now() + timedelta(seconds=self._sleep_interval)
+                # START_BLOCK_PRODUCER_RESILIENCE
                 try:
                     async for msg in producer():
                         await queue.put(msg)
+                # CancelledError is a BaseException (not Exception) since Python
+                # 3.8 — do NOT broaden this to `except BaseException` or graceful
+                # shutdown will be swallowed and the drain below bypassed.
+                except Exception as err:
+                    self._log.error(
+                        "[Orchestrator][_create_producer_consumers][PRODUCER_ERROR] "
+                        "queue=%s err=%s",
+                        queue.name,
+                        err,
+                    )
                 finally:
                     await _asleep_until(end_time)
+                # END_BLOCK_PRODUCER_RESILIENCE
         except asyncio.CancelledError:
             if not queue.empty():
                 self._log.info(

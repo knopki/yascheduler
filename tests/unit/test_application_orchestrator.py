@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.5.1
+# VERSION: 1.5.2
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.1 - Add TestConsumeConditionalDiscard and TestConsumeInFlightGuard for consume_task bool return + _consuming in-flight guard (fix-download-rmtree-data-loss).
-#   PREVIOUS_CHANGE: [v1.5.0 - Migrate imports: ConfigDb→PostgresDbConfig, ConfigLocal→LocalSettings, ConfigRemote→RemoteDefaults; Orchestrator __init__ signature change: config=config → local_settings=config.local, remote_defaults=config.remote (config-aggregate-to-entrypoints / P4).]
+#   LAST_CHANGE: v1.5.2 - Update test_start_creates_background_tasks: _bg_jobs now includes worker tasks (5 parents + 7 workers = 12 with default limits) since fix-orchestrator-producer-silent-death registers workers in self._bg_jobs.
+#   PREVIOUS_CHANGE: v1.5.1 - Add TestConsumeConditionalDiscard and TestConsumeInFlightGuard for consume_task bool return + _consuming in-flight guard (fix-download-rmtree-data-loss).
 # END_CHANGE_SUMMARY
 #
 """Unit tests for Orchestrator lifecycle management.
@@ -198,7 +198,13 @@ class TestOrchestratorLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_creates_background_tasks(self) -> None:
-        """start() creates 5 background tasks for stats and all loops."""
+        """start() creates background tasks for stats, all loops, AND their workers.
+
+        Since fix-orchestrator-producer-silent-death, _create_producer_consumers
+        registers worker tasks in self._bg_jobs (in addition to the parent
+        coroutine that start() adds). With default limits (conn_machine=1,
+        allocate=3, consume=2, deallocate=1) the total is 5 parents + 7 workers = 12.
+        """
         orch = make_orchestrator()
 
         # Pre-set cancellation so loops exit immediately instead of
@@ -214,7 +220,9 @@ class TestOrchestratorLifecycle:
         ):
             await orch.start()
 
-        assert len(orch._bg_jobs) == 5
+        # 5 parent coroutines (stats + 4 producer-consumer loops) + 7 workers
+        # (conn_machine_limit=1 + allocate_limit=3 + consume_limit=2 + deallocate_limit=1).
+        assert len(orch._bg_jobs) == 12
 
     # ------------------------------------------------------------------ #
     # Test 3: stop cancels tasks and calls cleanup

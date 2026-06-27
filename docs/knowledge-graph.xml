@@ -525,6 +525,8 @@
         <fn-stop PURPOSE="Graceful shutdown" />
         <fn-_asleep_until PURPOSE="Private async sleep-until helper inlined from former shared.async_utils" />
         <fn-_connect_grace_for PURPOSE="Resolve per-cloud connect grace (cfg.connect_grace by prefix match) with conservative 120s fallback for unknown clouds" />
+        <fn-_create_producer_consumers PURPOSE="Run resilient producer-consumer loop with worker registration in self._bg_jobs; logs transient producer Exception and continues next tick; CancelledError propagates to graceful-drain path" />
+        <fn-_print_stats PURPOSE="Periodic stats with transient-error resilience (catch Exception, log, continue next tick; CancelledError propagates)" />
         <const-allocation_tracker PURPOSE="Owned AllocationTracker injected into allocate/consume use cases" />
         <const-active_clouds PURPOSE="Filtered Sequence[ConfigCloud] with max_nodes>0 and resolved adapter" />
         <const-allocation_lock PURPOSE="Owned asyncio.Lock serializing allocate_task critical section" />
