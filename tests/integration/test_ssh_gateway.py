@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_ssh_gateway.py
-# VERSION: 1.3.0
+# VERSION: 1.3.2
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for SSHMachineGateway against a Docker SSH server via testcontainers.
@@ -10,23 +10,24 @@
 #
 # START_MODULE_MAP
 #   ssh_container - session-scoped fixture: starts Docker SSH container, generates key pair
-#   ssh_container_2 - session-scoped fixture for the second container (multi-machine regression)
+#   ssh_container_2 - session-scoped fixture for the second container (multi-machine regression), yields bridge IP + internal port 2222
 #   gateway - function-scoped fixture: SSHMachineGateway connected to test container
 #   TestSSHGatewayIntegration - connection lifecycle, command exec, SFTP, state transitions
 #   TestOccupancyIntegration - occupancy_check via check_pname/check_cmd against real SSH
 #   TestOccupancyRaceCondition - regression for ConnectedMachine state sync bug
-#   TestMultiMachineBgTaskLeak - regression for disconnect cancelling every machine's monitor
+#   TestMultiMachineBgTaskLeak - real-asyncssh regression: disconnect(A) must not cancel B's monitor
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Migrate _bg_tasks accesses from list(set) to dict[ip]; add TestMultiMachineBgTaskLeak regression (skipped unless YASCHED_MULTI_CONTAINER=1, since the unit test is the primary guard) for fix-disconnect-bg-task-leak.
+#   LAST_CHANGE: v1.3.2 - Restore TestMultiMachineBgTaskLeak as a working real-asyncssh regression: ssh_container_2 now yields the container bridge IP (from docker SDK NetworkSettings.IPAddress, with a fallback to the first network's IPAddress) plus the internal port 2222, so machine B is reached at a genuinely distinct IP from machine A (localhost). The original variant keyed both testcontainers by 'localhost' and was guaranteed to fail because SSHMachineGateway keys _machines/_bg_tasks by IP only; the YASCHED_MULTI_CONTAINER=1 skip guard was added by mistake and only hid the unavoidable failure. Drops the env-guard entirely.
+#   PREVIOUS_CHANGE: v1.3.1 - Remove TestMultiMachineBgTaskLeak and ssh_container_2 fixture: the integration test was architecturally broken on a single Docker host (both testcontainers report host 'localhost', but SSHMachineGateway keys _machines/_bg_tasks by IP only, so the second connect overwrote the first and disconnect cancelled the only surviving monitor). The skip guard YASCHED_MULTI_CONTAINER=1 was added by mistake; enabling it surfaced the unavoidable failure. The unit test test_disconnect_does_not_cancel_other_machines_monitors (three distinct IPs) remains the primary guard for fix-disconnect-bg-task-leak.
+#   PREVIOUS_CHANGE: v1.3.0 - Migrate _bg_tasks accesses from list(set) to dict[ip]; add TestMultiMachineBgTaskLeak regression (skipped unless YASCHED_MULTI_CONTAINER=1, since the unit test is the primary guard) for fix-disconnect-bg-task-leak.
 #   PREVIOUS_CHANGE: v1.2.1 - Update TestOccupancyRaceCondition for new get_machine_state contract returning ConnectedMachine (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -83,8 +84,11 @@ async def ssh_container_2(
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Start a second Docker SSH container for multi-machine regression tests.
 
-    Lazy: only started when a test actually requests it. Tests that need it
-    should be skipped unless ``YASCHED_MULTI_CONTAINER=1`` is set.
+    Yields the bridge-network IP of the container (reachable from the host on
+    the Docker/Podman bridge) plus the internal SSH port 2222, so the gateway
+    sees a genuinely distinct IP from the first container. ``get_container_host_ip``
+    returns ``localhost`` for both testcontainers, which would collide with
+    ``ssh_container`` because SSHMachineGateway keys machines by IP only.
     """
     key_dir = tmp_path_factory.mktemp("ssh_keys_2")
     key_path = key_dir / "id_rsa"
@@ -103,12 +107,25 @@ async def ssh_container_2(
     try:
         await asyncio.sleep(1)
 
-        host = container.get_container_host_ip()
-        port = int(container.get_exposed_port(2222))
+        wrapped = container.get_wrapped_container()
+        wrapped.reload()
+        bridge_ip = wrapped.attrs["NetworkSettings"]["IPAddress"]
+        if not bridge_ip:
+            # Fallback: first network's IPAddress (e.g. podman net)
+            nets = wrapped.attrs["NetworkSettings"].get("Networks", {})
+            bridge_ip = next(
+                (cfg.get("IPAddress") for cfg in nets.values() if cfg.get("IPAddress")),
+                "",
+            )
+        if not bridge_ip:
+            pytest.skip(
+                "Could not resolve container bridge IP for ssh_container_2; "
+                "multi-machine disconnect regression needs a distinct IP from ssh_container."
+            )
 
         yield {
-            "host": host,
-            "port": port,
+            "host": bridge_ip,
+            "port": 2222,
             "username": "testuser",
             "key_path": PurePosixPath(str(key_path)),
         }
@@ -836,25 +853,20 @@ class TestOccupancySpawnScenario:
 # =============================================================================
 # Multi-machine regression: disconnect must not cancel other machines' monitors
 # =============================================================================
+#
+# Real-asyncssh counterpart to the unit test
+# ``test_disconnect_does_not_cancel_other_machines_monitors``. Uses two SSH
+# testcontainers reached via genuinely distinct IPs: machine A via
+# ``ssh_container`` (host IP, mapped port) and machine B via ``ssh_container_2``
+# (container bridge IP, internal port 2222). The bridge IP is required because
+# ``get_container_host_ip`` returns ``localhost`` for both testcontainers, which
+# would collide since SSHMachineGateway keys ``_machines``/``_bg_tasks`` by IP
+# only — that collision is exactly what made the original YASCHED_MULTI_CONTAINER
+# variant always fail.
 
 
-_MULTI_CONTAINER_REASON = (
-    "Multi-container SSH regression requires YASCHED_MULTI_CONTAINER=1; "
-    "the unit test test_disconnect_does_not_cancel_other_machines_monitors "
-    "is the primary guard for fix-disconnect-bg-task-leak."
-)
-
-
-@pytest.mark.skipif(
-    not os.environ.get("YASCHED_MULTI_CONTAINER"), reason=_MULTI_CONTAINER_REASON
-)
 class TestMultiMachineBgTaskLeak:
-    """Regression: disconnecting one machine must not cancel another's monitor.
-
-    Real-asyncssh counterpart to the unit test
-    ``test_disconnect_does_not_cancel_other_machines_monitors``. Requires two
-    SSH testcontainers; skipped by default (the unit test is the primary guard).
-    """
+    """Regression: disconnecting one machine must not cancel another's monitor."""
 
     async def test_disconnect_does_not_cancel_other_machines_monitors(
         self,
@@ -880,6 +892,9 @@ class TestMultiMachineBgTaskLeak:
 
         ip_a = ssh_container["host"]
         ip_b = ssh_container_2["host"]
+        assert ip_a != ip_b, (
+            f"test requires two distinct IPs, got ip_a={ip_a!r} ip_b={ip_b!r}"
+        )
 
         try:
             # Start a long-running sleep on each so the monitors stay BUSY
