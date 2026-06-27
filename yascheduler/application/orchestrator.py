@@ -1,8 +1,8 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.6.0
+# VERSION: 6.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes are excluded from the abandon path); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
+#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.6.0 - Consumer-error resilience: the inner worker() in _create_producer_consumers now wraps `await consumer(msg)` in try/except Exception (log + continue next message) symmetric to the producer-error wrap. finally: queue.item_done(msg) preserved so the item is still dequeued on raise. CancelledError (BaseException) still propagates past `except Exception` to the existing `except CancelledError` drain path. Motivated by fix-save-silent-zero-rows: PostgresTaskRepository.save now raises TaskRowNotFoundError on a 0-row UPDATE (orchestrator:440 abandon race), which would otherwise silently kill the worker.
-#   PREVIOUS_CHANGE: v6.5.0 - stop() idempotent and exception-safe: `_stopped` guard for single execution (set synchronously, no await between check and set), `except Exception` on `await task` for dead-bg-job tolerance (CancelledError remains a separate BaseException path), per-step try/except isolation for clouds.stop()/disconnect_all()/http_session.close(), http_session nulled after close. run_daemon wraps `await orch.start()` in `try/finally: await orch.stop()` so cleanup runs on every exit path (fix-daemon-resource-leak-on-start-return).
+#   LAST_CHANGE: v6.7.0 - fix(orchestrator): connect static nodes (cloud=None) again; the v6.2.1 FILTER_CLOUD_ONLY producer filter (fix-never-connected-node-leak task 4.7) excluded static nodes from auto-connect, breaking the yasetnode → daemon handoff (static nodes persisted by _add_node are never reconnected by the daemon, tasks stuck in TO_DO). Replaced with a precise consumer-side guard before the grace-check that retries static nodes indefinitely without ever calling abandon_node. Same intent as task 4.7 (static never abandoned), narrower mechanism, restores pre-3c3f7e0 connectivity.
+#   PREVIOUS_CHANGE: v6.6.0 - Consumer-error resilience: the inner worker() in _create_producer_consumers now wraps `await consumer(msg)` in try/except Exception (log + continue next message) symmetric to the producer-error wrap. finally: queue.item_done(msg) preserved so the item is still dequeued on raise. CancelledError (BaseException) still propagates past `except Exception` to the existing `except CancelledError` drain path. Motivated by fix-save-silent-zero-rows: PostgresTaskRepository.save now raises TaskRowNotFoundError on a 0-row UPDATE (orchestrator:440 abandon race), which would otherwise silently kill the worker.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -249,19 +249,14 @@ class Orchestrator:
     ) -> AsyncGenerator[UMessage[str, Node], None]:
         async with self._uow_factory() as uow:
             enabled_nodes = await uow.nodes.list_enabled()
-        # START_BLOCK_FILTER_CLOUD_ONLY
-        # The never-connected-node abandon path bounds cloud billing only
-        # (design.md Goals). Static operator-managed nodes (cloud is None) are
-        # excluded: the application has never auto-removed them, and a
-        # transient SSH outage after a daemon restart must not silently delete
-        # an operator's node row. Only cloud nodes reach the connect consumer
-        # and therefore the abandon dispatch.
-        new_nodes = [
-            n
-            for n in enabled_nodes
-            if n.cloud is not None and not self._repository.contains(n.ip)
-        ]
-        # END_BLOCK_FILTER_CLOUD_ONLY
+        # START_BLOCK_FILTER_NOT_CONNECTED
+        # Yield every enabled node not currently registered in the gateway,
+        # regardless of cloud. Static (cloud is None) and cloud-provisioned
+        # nodes are both connected here; the never-abandon guarantee for
+        # static nodes is enforced in _connect_machine_consumer before the
+        # grace-check (see START_BLOCK_STATIC_NODE_RETRY).
+        new_nodes = [n for n in enabled_nodes if not self._repository.contains(n.ip)]
+        # END_BLOCK_FILTER_NOT_CONNECTED
         for node in new_nodes:
             yield UMessage(node.ip, node)
 
@@ -295,6 +290,21 @@ class Orchestrator:
             # END_BLOCK_CONNECT_RESET_FAILURE_TIMER
             self._machine_connected_event.set()
         except MachineConnectionError as err:
+            # START_BLOCK_STATIC_NODE_RETRY
+            # Static operator-managed nodes (cloud is None) are retried
+            # indefinitely on every producer cycle and never enter the
+            # abandon path. The guard sits before the grace-check so
+            # _connect_failures is never populated and _connect_grace_for
+            # is never called on the production path for static nodes.
+            if node.cloud is None:
+                self._log.warning(
+                    "[Orchestrator][_connect_machine_consumer][CONNECT_RETRY_STATIC] "
+                    "ip=%s err=%s",
+                    node.ip,
+                    err,
+                )
+                return
+            # END_BLOCK_STATIC_NODE_RETRY
             # START_BLOCK_CONNECT_GRACE_CHECK
             first_seen = self._connect_failures.setdefault(node.ip, time.monotonic())
             age = time.monotonic() - first_seen

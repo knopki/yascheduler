@@ -1,9 +1,9 @@
 # FILE: tests/unit/test_connect_machine_consumer.py
-# VERSION: 1.0.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator._connect_machine_consumer never-connected-node grace timer + abandon dispatch.
-#   SCOPE: Failure-within-grace retries, failure-past-grace abandons, success resets timer, unknown-cloud fallback, abandon-failed isolation, daemon-restart reset, _connect_grace_for pure helper, producer excludes static nodes.
+#   SCOPE: Failure-within-grace retries, failure-past-grace abandons, success resets timer, unknown-cloud fallback, abandon-failed isolation, daemon-restart reset, _connect_grace_for pure helper, producer yields static nodes (cloud is None); static nodes retried without abandon.
 #   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-CLOUD-CONFIGS
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
 # END_MODULE_CONTRACT
@@ -12,12 +12,12 @@
 #   TestConnectMachineConsumerGraceTimer - Within-grace retries, past-grace abandons, success resets, abandon-failed isolation
 #   TestConnectGraceFor - _connect_grace_for pure helper: per-cloud lookup + 120s fallback
 #   TestDaemonRestartResetsFailureTimers - Fresh Orchestrator has empty _connect_failures
-#   TestConnectMachineProducerExcludesStaticNodes - cloud=None nodes never yielded to the consumer / abandon path
+#   TestConnectMachineProducerYieldsStaticNodes - cloud=None nodes ARE yielded to the consumer; static node failures retried without abandon (consumer-side guard before grace-check)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add TestConnectMachineProducerExcludesStaticNodes covering the v6.2.1 producer filter (static nodes never reach the abandon path). Regression guard for the non-cloud-node auto-removal scope creep found in review.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for the never-connected-node grace timer + abandon dispatch (fix-never-connected-node-leak).
+#   LAST_CHANGE: v1.2.0 - Rewrite TestConnectMachineProducerExcludesStaticNodes → TestConnectMachineProducerYieldsStaticNodes for fix-static-node-connect-exclusion: the producer filter no longer excludes cloud=None nodes (over-broad v6.2.1 FILTER_CLOUD_ONLY filter broke the yasetnode → daemon handoff, leaving tasks stuck in TO_DO). New contract: static nodes ARE yielded; a consumer-side guard before the grace-check retries them indefinitely without ever calling abandon_node. Added test_static_node_past_grace_does_not_abandon temporal guard.
+#   PREVIOUS_CHANGE: v1.1.0 - Add TestConnectMachineProducerExcludesStaticNodes covering the v6.2.1 producer filter (static nodes never reach the abandon path). Regression guard for the non-cloud-node auto-removal scope creep found in review.
 # END_CHANGE_SUMMARY
 """Unit tests for Orchestrator._connect_machine_consumer grace timer + abandon dispatch.
 
@@ -30,7 +30,8 @@ fix-never-connected-node-leak change:
 - Unknown cloud falls back to 120s grace
 - Abandon failure is caught (worker survives)
 - Fresh Orchestrator starts with an empty timer (daemon-restart reset)
-- Producer excludes static (cloud=None) nodes from the abandon path
+- Producer yields static (cloud=None) nodes; static node failures retry
+  without abandon (consumer-side guard before the grace-check)
 """
 
 from __future__ import annotations
@@ -307,22 +308,26 @@ class TestDaemonRestartResetsFailureTimers:
         assert orch._connect_failures == {}
 
 
-class TestConnectMachineProducerExcludesStaticNodes:
-    """The connect-machine producer must not yield static (cloud=None) nodes.
+class TestConnectMachineProducerYieldsStaticNodes:
+    """The connect-machine producer yields static (cloud=None) nodes; static
+    node failures are retried without abandon.
 
-    Regression guard for the v6.2.1 scope fix: the never-connected-node abandon
-    path bounds cloud billing only. Static operator-managed nodes were never
-    auto-removed by the application and must never reach the abandon dispatch,
-    even across daemon restarts or transient SSH outages.
+    Coverage for fix-static-node-connect-exclusion: the v6.2.1 producer filter
+    (`n.cloud is not None`) was over-broad — it excluded static nodes from the
+    connect path entirely, breaking the yasetnode → daemon handoff (tasks
+    stuck in TO_DO). The filter is removed; a consumer-side guard before the
+    grace-check now retries static nodes indefinitely without ever calling
+    abandon_node, preserving the task 4.7 intent (static nodes never
+    auto-removed) with a narrower mechanism.
     """
 
     @pytest.mark.asyncio
-    async def test_static_node_not_yielded_to_consumer(self) -> None:
-        """cloud=None enabled node not in gateway → producer yields nothing for it.
+    async def test_static_node_yielded_to_consumer(self) -> None:
+        """cloud=None enabled node not in gateway → producer YIELDS it.
 
         Drives the producer to completion and collects every yielded message's
-        IP. A static node must not appear, so it can never reach the consumer
-        (and thus never reach abandon_node / DB-row removal).
+        IP. A static node MUST appear (the daemon connects it), alongside the
+        cloud node.
         """
         from yascheduler.domain.model import Node
 
@@ -339,7 +344,7 @@ class TestConnectMachineProducerExcludesStaticNodes:
         )
 
         orch = make_orchestrator(config_clouds=[])
-        # Gateway contains neither IP → both would have been yielded pre-fix.
+        # Gateway contains neither IP → both are yielded.
         orch._repository.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
         orch._uow_factory = MagicMock(  # type: ignore[method-assign]
             return_value=_uow_with_nodes([static_node, cloud_node])
@@ -347,9 +352,9 @@ class TestConnectMachineProducerExcludesStaticNodes:
 
         yielded_ips = [msg.id async for msg in orch._connect_machine_producer()]
 
-        assert "10.0.0.9" not in yielded_ips, (
-            "static node (cloud=None) must NOT be yielded to the connect consumer — "
-            "operator-managed nodes must never reach the abandon path"
+        assert "10.0.0.9" in yielded_ips, (
+            "static node (cloud=None) MUST be yielded to the connect consumer — "
+            "the daemon must connect operator-managed nodes"
         )
         assert "10.0.0.10" in yielded_ips, "cloud node must still be yielded normally"
 
@@ -372,12 +377,65 @@ class TestConnectMachineProducerExcludesStaticNodes:
         assert yielded_ips == []
 
     @pytest.mark.asyncio
-    async def test_static_node_never_reaches_abandon_even_past_grace(self) -> None:
-        """End-to-end guard: a static node that fails SSH forever is never abandoned.
+    async def test_static_node_failure_retries_without_abandon(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A static node that fails SSH is retried without reaching abandon_node.
 
-        Confirms the producer filter is the defense — even if a bug elsewhere
-        tried to drive a static node, the consumer path is never entered for it
-        because the producer does not enqueue it.
+        Drives _connect_machine_consumer directly with a static node whose
+        gateway.connect raises MachineConnectionError. The consumer-side guard
+        (START_BLOCK_STATIC_NODE_RETRY) fires before the grace-check, so:
+        - abandon_node is never called
+        - _connect_failures is never populated for the static IP
+        - a CONNECT_RETRY_STATIC warning is emitted
+        """
+        import logging
+
+        from yascheduler.domain.exceptions import MachineConnectionError
+        from yascheduler.domain.model import Node
+
+        static_node = Node(
+            ip="10.0.0.9", ncpus=2, cloud=None, username="root", port=22, enabled=True
+        )
+
+        orch = make_orchestrator(config_clouds=[])
+        # Use a real logger so caplog can capture the CONNECT_RETRY_STATIC
+        # warning emitted by the consumer-side guard.
+        orch._log = logging.getLogger("orch.test_static_retry")  # type: ignore[method-assign]
+        orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
+            side_effect=MachineConnectionError("10.0.0.9", "refused")
+        )
+
+        with (
+            patch(
+                "yascheduler.application.orchestrator.abandon_node",
+                new=AsyncMock(),
+            ) as mock_abandon,
+        ):
+            await orch._connect_machine_consumer(UMessage("10.0.0.9", static_node))
+
+        mock_abandon.assert_not_called()
+        assert "10.0.0.9" not in orch._connect_failures, (
+            "static node IP must never enter the failure timer "
+            "(consumer-side guard bypasses the grace-check)"
+        )
+        assert any(
+            "CONNECT_RETRY_STATIC" in rec.message
+            and "10.0.0.9" in rec.message
+            and rec.levelno == logging.WARNING
+            for rec in caplog.records
+        ), "expected a CONNECT_RETRY_STATIC warning for the static node"
+
+    @pytest.mark.asyncio
+    async def test_static_node_past_grace_does_not_abandon(self) -> None:
+        """A static node that has been failing >120s is still NOT abandoned.
+
+        Temporal guard: even if the failure timer hypothetically accumulated
+        past the 120s conservative fallback, the consumer-side guard fires
+        before the grace-check so abandon_node is never reached and the DB
+        row is preserved. Mirrors the test_connect_failure_past_grace_triggers_abandon
+        pattern in TestConnectMachineConsumerGraceTimer, but with cloud=None
+        and patched monotonic timestamps >120s apart.
         """
         from yascheduler.domain.exceptions import MachineConnectionError
         from yascheduler.domain.model import Node
@@ -387,22 +445,27 @@ class TestConnectMachineProducerExcludesStaticNodes:
         )
 
         orch = make_orchestrator(config_clouds=[])
-        orch._repository.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
-        orch._uow_factory = MagicMock(  # type: ignore[method-assign]
-            return_value=_uow_with_nodes([static_node])
-        )
-        # If the producer (incorrectly) yielded the static node, connect would
-        # raise and, past 120s grace, abandon would fire. Set both up to prove
-        # neither is ever called.
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError("10.0.0.9", "refused")
         )
 
-        yielded = [msg async for msg in orch._connect_machine_producer()]
-        assert yielded == [], "static node must not be yielded"
+        with (
+            patch(
+                "yascheduler.application.orchestrator.time.monotonic",
+                side_effect=[100.0, 250.0],
+            ),
+            patch(
+                "yascheduler.application.orchestrator.abandon_node",
+                new=AsyncMock(),
+            ) as mock_abandon,
+        ):
+            await orch._connect_machine_consumer(UMessage("10.0.0.9", static_node))
 
-        # Nothing was enqueued, so connect/abandon were never invoked.
-        orch._repository.connect.assert_not_called()
+        mock_abandon.assert_not_called()
+        # The DB row is preserved because abandon_node (the only path that
+        # removes the yascheduler_nodes row) is structurally unreachable for
+        # static nodes — the consumer-side guard returns before the
+        # grace-check / abandon block.
         assert "10.0.0.9" not in orch._connect_failures
 
 

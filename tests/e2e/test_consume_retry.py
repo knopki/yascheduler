@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_consume_retry.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
 #   SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - session-based-machine-handle section 7.x: Migrate monkey-patched download_outputs signatures from ip to session. Capture session from connect for setup_node/open_sftp/path access.
-#   PREVIOUS_CHANGE: v1.1.0 - Mark the e2e node as cloud-provisioned (cloud="e2e") so the orchestrator's connect-machine producer yields it; fix-never-connected-node-leak excluded static (cloud=None) nodes from the connect path, which silently broke these tests (task stuck in TO_DO, never allocated).
+#   LAST_CHANGE: v1.3.0 - fix-static-node-connect-exclusion: drop the `cloud="e2e"` workaround (added in v1.1.0 to mask the v6.2.1 over-broad producer filter that excluded static nodes from the connect path). The orchestrator now connects static (cloud=None) nodes again; the e2e flow exercises the real static-node production path.
+#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle section 7.x: Migrate monkey-patched download_outputs signatures from ip to session. Capture session from connect for setup_node/open_sftp/path access.
 #   PREVIOUS_CHANGE: v1.0.0 - Initial e2e tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
 # END_CHANGE_SUMMARY
 
@@ -73,13 +73,6 @@ async def _setup_node_and_submit(
                 port=ssh_container["port"],
                 enabled=True,
                 ncpus=0,
-                # fix-never-connected-node-leak excluded static nodes
-                # (cloud is None) from the connect-machine producer so they
-                # cannot be auto-removed by the abandon path. The e2e flow
-                # relies on the orchestrator connecting this node, so mark it
-                # as cloud-provisioned; _connect_grace_for falls back to 120s
-                # for unknown cloud prefixes and the SSH connect succeeds.
-                cloud="e2e",
             )
         )
         await uow.commit()

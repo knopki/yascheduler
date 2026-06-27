@@ -524,7 +524,7 @@
       <path>yascheduler/application/orchestrator.py</path>
       <depends>M-DOMAIN, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-QUEUE, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER</depends>
       <annotations>
-        <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected nodes" />
+        <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected cloud nodes (static nodes retried without abandon)" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
         <fn-stop PURPOSE="Idempotent exception-safe cleanup: single-execution _stopped guard (set synchronously, no await between check and set), per-step try/except isolation for clouds.stop()/disconnect_all()/http_session.close(), dead-bg-job tolerance via except Exception, http_session nulled after close" />
         <fn-_asleep_until PURPOSE="Private async sleep-until helper inlined from former shared.async_utils" />
@@ -1212,7 +1212,7 @@
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ALLOCATE" relation="calls allocate_task use case in consumer loop" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-CONSUME" relation="calls consume_task use case in consumer loop; consume_task returns bool finalisation signal (True=finalised -> discard ip from _occupancy_started; False=deferred -> keep ip for retry) and is guarded by _consuming in-flight set" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-DEALLOCATE" relation="calls deallocate_node per node in producer-consumer loop with deallocate_limit concurrency" />
-    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ABANDON-NODE" relation="delegates never-connected node cleanup when connect-grace window is exceeded" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ABANDON-NODE" relation="delegates never-connected cloud node cleanup when connect-grace window is exceeded (static nodes retried indefinitely without abandon)" />
     <CrossLink from="M-DI" to="M-APPLICATION-ORCHESTRATOR" relation="creates Orchestrator with wired dependencies" />
     <CrossLink from="M-DI" to="M-PERSISTENCE-UOW" relation="creates UoW factory from PostgresUnitOfWork with MessageBus" />
     <CrossLink from="M-DI" to="M-APPLICATION-MESSAGE-BUS" relation="creates MessageBus and registers webhook handlers" />
