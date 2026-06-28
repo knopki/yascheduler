@@ -1,8 +1,8 @@
 # FILE: tests/e2e/conftest.py
-# VERSION: 2.2.0
+# VERSION: 2.3.0
 # START_MODULE_CONTRACT
-#   PURPOSE: E2E test fixtures — PostgreSQL + SSH containers, config, schema, and UoW-based DB access.
-#   SCOPE: Session-scoped containers and config, function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE.
+#   PURPOSE: E2E test fixtures — PostgreSQL + SSH container pool, config, schema, log capture, and UoW-based DB access.
+#   SCOPE: Session-scoped containers (postgres + ssh_pool of two), config; function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE, log_records.
 #   DEPENDS: M-ENTRYPOINTS-CONFIG, M-SSH-REPOSITORY, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
 #   LINKS: M-ENTRYPOINTS-CONFIG, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
 # END_MODULE_CONTRACT
@@ -11,22 +11,26 @@
 #   pytest_collection_modifyitems - auto-mark tests as "e2e"
 #   postgres_container - session-scoped PostgreSQL container
 #   _db_config - session-scoped PostgresDbConfig from container URL
-#   ssh_container - session-scoped SSH container with key pair
-#   e2e_config - session-scoped Config with temp dir, INI, engine script, SSH key
+#   ssh_pool - session-scoped list of TWO SSH containers sharing ONE keypair (distinct bridge IPs, port 2222)
+#   ssh_container - thin wrapper returning ssh_pool[0] for backward compat with test_consume_retry.py
+#   e2e_config - session-scoped Config with temp dir, INI, engine script, single SSH key symlink
 #   _init_schema - session-scoped schema.sql application via apply_schema()
 #   _bus - session-scoped bare MessageBus for UoW event dispatch
 #   pg_executor - function-scoped ThreadPoolExecutor for pg8000
 #   pg_conn - function-scoped raw pg8000 connection with TRUNCATE teardown
 #   uow_factory - function-scoped factory returning PostgresUnitOfWork instances
+#   log_records - function-scoped in-memory LogCaptureHandler attached to the "yascheduler" logger at DEBUG
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - Replace DB fixture with layered pg_conn/pg_executor/uow_factory fixtures (remove-legacy-db).
+#   LAST_CHANGE: v2.3.0 - e2e-real-lifecycle: add session-scoped ssh_pool fixture (two SSH containers, one shared keypair, distinct bridge IPs) and function-scoped log_records fixture (in-memory LogCaptureHandler on the "yascheduler" logger). e2e_config consumes ssh_pool; ssh_container becomes a thin wrapper over ssh_pool[0] for backward compat with test_consume_retry.py.
+#   PREVIOUS_CHANGE: v2.2.0 - Replace DB fixture with layered pg_conn/pg_executor/uow_factory fixtures (remove-legacy-db).
 #   PREVIOUS_CHANGE: v2.1.0 - _init_schema uses sync apply_schema() instead of legacy DB.run/migrate.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
 from concurrent.futures import ThreadPoolExecutor
@@ -51,6 +55,51 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
     from yascheduler.entrypoints import Config
+
+
+_SSH_IMAGE = "lscr.io/linuxserver/openssh-server:10.2_p1-r0-ls222"
+_SSH_USERNAME = "testuser"
+_YASCHEDULER_LOGGER = "yascheduler"
+
+
+def _container_bridge_ip(container: DockerContainer) -> str:
+    """Return the container's bridge-network IP address.
+
+    `get_container_host_ip()` returns the docker host (e.g. ``localhost``)
+    for every container in the default docker_host connection mode, which
+    collapses the two-container pool into a single indistinguishable host.
+    The bridge IP is distinct per container and reachable from the host on
+    rootful podman/netavark (verified) and on Docker bridge networks.
+    """
+    wrapped = container.get_wrapped_container()
+    wrapped.reload()
+    networks: dict[str, dict[str, Any]] = (
+        wrapped.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
+    )
+    for net in networks.values():
+        ip = net.get("IPAddress")
+        if ip:
+            return str(ip)
+    top = wrapped.attrs.get("NetworkSettings", {}).get("IPAddress")
+    if top:
+        return str(top)
+    raise RuntimeError("could not determine container bridge IP")
+
+
+# START_CONTRACT: LogCaptureHandler
+#   PURPOSE: In-memory logging.Handler that appends every LogRecord to a list, for e2e log-grepping.
+#   INPUTS: { records: list[logging.LogRecord] - list to append to (supplied by the fixture) }
+#   OUTPUTS: { None - mutates records in place via emit }
+#   SIDE_EFFECTS: None beyond the records list append.
+#   LINKS: log_records fixture (this module)
+# END_CONTRACT: LogCaptureHandler
+class LogCaptureHandler(logging.Handler):
+    def __init__(self, records: list[logging.LogRecord]) -> None:
+        super().__init__(level=logging.DEBUG)
+        self._records = records
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._records.append(record)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -78,47 +127,74 @@ def _db_config(postgres_container: PostgresContainer) -> PostgresDbConfig:
 
 
 @pytest.fixture(scope="session")
-async def ssh_container(
+async def ssh_pool(
     tmp_path_factory: Any,  # noqa: ANN401
-) -> AsyncGenerator[dict[str, Any], None]:
-    import asyncio
-
+) -> AsyncGenerator[list[dict[str, Any]], None]:
+    # START_BLOCK_KEYPAIR
     key_dir = tmp_path_factory.mktemp("ssh_keys")
     key_path = key_dir / "id_rsa"
-
     key = asyncssh.generate_private_key("ssh-rsa")
     public_key_str = key.export_public_key("openssh").decode().strip()
     key.write_private_key(str(key_path))
+    # END_BLOCK_KEYPAIR
 
-    container = DockerContainer("lscr.io/linuxserver/openssh-server:10.2_p1-r0-ls222")
-    container.with_env("USER_NAME", "testuser")
-    container.with_env("PUBLIC_KEY", public_key_str)
-    container.with_exposed_ports(2222)
-    container.waiting_for(LogMessageWaitStrategy("sshd is listening"))
-
-    container.start()
+    # START_BLOCK_START_CONTAINERS
+    containers: list[DockerContainer] = []
     try:
+        for _ in range(2):
+            c = DockerContainer(_SSH_IMAGE)
+            c.with_env("USER_NAME", _SSH_USERNAME)
+            c.with_env("PUBLIC_KEY", public_key_str)
+            c.with_exposed_ports(2222)
+            c.waiting_for(LogMessageWaitStrategy("sshd is listening"))
+            c.start()
+            containers.append(c)
+
+        # Give sshd a moment to accept connections after the log line; the
+        # wait strategy only confirms the listener, not a ready socket.
+        import asyncio
+
         await asyncio.sleep(1)
-        host = container.get_container_host_ip()
-        if host == "localhost":
-            host = "127.0.0.1"
-        port = int(container.get_exposed_port(2222))
-        yield {
-            "host": host,
-            "port": port,
-            "username": "testuser",
-            "key_path": PurePosixPath(str(key_path)),
-        }
+
+        entries: list[dict[str, Any]] = []
+        for c in containers:
+            host = _container_bridge_ip(c)
+            entries.append(
+                {
+                    "host": host,
+                    "port": 2222,
+                    "username": _SSH_USERNAME,
+                    "key_path": PurePosixPath(str(key_path)),
+                }
+            )
+        assert entries[0]["host"] != entries[1]["host"], (
+            "ssh_pool containers must have distinct bridge IPs; "
+            f"got {entries[0]['host']} twice"
+        )
+        yield entries
     finally:
-        container.stop()
+        for c in containers:
+            c.stop()
+    # END_BLOCK_START_CONTAINERS
+
+
+@pytest.fixture(scope="session")
+def ssh_container(ssh_pool: list[dict[str, Any]]) -> dict[str, Any]:
+    # Backward-compat wrapper for test_consume_retry.py: the single-container
+    # fixture is now the first entry of the pool. The pool shares one keypair,
+    # so key_path/username are identical to the pre-2.3.0 single-container case.
+    return ssh_pool[0]
 
 
 @pytest.fixture(scope="session")
 def e2e_config(
     tmp_path_factory: Any,  # noqa: ANN401
     _db_config: PostgresDbConfig,
-    ssh_container: dict[str, Any],
+    ssh_pool: list[dict[str, Any]],
 ) -> Config:
+    # ssh_pool shares one keypair across both containers; index 0 carries the
+    # shared username/key_path that the single-container fixture used to provide.
+    ssh = ssh_pool[0]
     tmp = tmp_path_factory.mktemp("e2e_config")
     data_dir = tmp / "data"
 
@@ -136,7 +212,7 @@ def e2e_config(
         f"data_dir = {data_dir}\n"
         f"\n"
         f"[remote]\n"
-        f"user = {ssh_container['username']}\n"
+        f"user = {ssh['username']}\n"
         f"\n"
         f"[engine.test_shell]\n"
         f"spawn = {{engine_path}}/run.sh\n"
@@ -160,7 +236,7 @@ def e2e_config(
     # START_BLOCK_SSH_KEY
     keys_dir = tmp / "data" / "keys"
     keys_dir.mkdir(parents=True)
-    src = Path(str(ssh_container["key_path"]))
+    src = Path(str(ssh["key_path"]))
     dst = keys_dir / src.name
     dst.symlink_to(src)
     # END_BLOCK_SSH_KEY
@@ -223,3 +299,22 @@ def uow_factory(
         return PostgresUnitOfWork(_db_config, _bus)
 
     return _factory
+
+
+@pytest.fixture
+def log_records() -> Generator[list[logging.LogRecord], None, None]:
+    # START_BLOCK_ATTACH_HANDLER
+    logger = logging.getLogger(_YASCHEDULER_LOGGER)
+    records: list[logging.LogRecord] = []
+    handler = LogCaptureHandler(records)
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    # END_BLOCK_ATTACH_HANDLER
+    try:
+        yield records
+    finally:
+        # START_BLOCK_DETACH_HANDLER
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+        # END_BLOCK_DETACH_HANDLER

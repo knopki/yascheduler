@@ -1,8 +1,4 @@
-## Purpose
-
-End-to-end test infrastructure and full-cycle tests that validate the scheduler's complete task lifecycle against real PostgreSQL and SSH containers.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: E2E test fixtures
 The project SHALL provide session-scoped and function-scoped pytest fixtures in `tests/e2e/conftest.py` that set up a complete test environment:
