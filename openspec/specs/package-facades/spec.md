@@ -59,7 +59,7 @@ layer in the project. Both direct and indirect imports are checked.
 - **THEN** the `layers` contract reports a violation
 
 #### Scenario: Composition root imports from infra — allowed
-- **WHEN** `yascheduler.entrypoints.di` imports `PostgresUnitOfWork`, `SSHMachineGateway`, `CloudProvisionerImpl`, `resolve_adapter`, and `webhook_handler` from `yascheduler.infra`
+- **WHEN** `yascheduler.entrypoints.di` imports `PostgresUnitOfWork`, `SSHMachineRepository`, `SSHMachineOperations`, `CloudProvisionerImpl`, `resolve_adapter`, and `webhook_handler` from `yascheduler.infra`
 - **THEN** the `layers` contract reports no violation (composition root is a resident of `yascheduler.entrypoints` and its imports flow in the layer direction)
 
 ### Requirement: Within-package relative imports (R1)
@@ -114,17 +114,17 @@ any import.
 - **WHEN** a module in `yascheduler.infra` is added and needs to import `Task`
 - **THEN** it uses `from yascheduler.domain import Task`, not `from yascheduler.domain.model import Task`
 
-#### Scenario: Application imports adapter symbols via adapters layer facade
-- **WHEN** a module in `yascheduler.application` needs to import `SSHMachineGateway` or `CloudProvisionerImpl`
-- **THEN** it uses `from yascheduler.infra import SSHMachineGateway, CloudProvisionerImpl`, not `from yascheduler.infra.ssh import SSHMachineGateway` or `from yascheduler.infra.ssh.gateway import SSHMachineGateway`
+#### Scenario: Application imports adapter symbols via infra layer facade
+- **WHEN** a module in `yascheduler.application` needs to import `SSHMachineRepository`, `SSHMachineOperations`, or `CloudProvisionerImpl`
+- **THEN** it uses `from yascheduler.infra import SSHMachineRepository, SSHMachineOperations, CloudProvisionerImpl`, not `from yascheduler.infra.ssh import SSHMachineRepository` or `from yascheduler.infra.ssh.repository import SSHMachineRepository`
 
 #### Scenario: Composition root imports use layer facades
 - **WHEN** a module in the composition root (`entrypoints/di.py`, `entrypoints/client.py`) imports a symbol from any layer
 - **THEN** the import goes through the layer's `__init__.py` (e.g. `from yascheduler.infra import webhook_handler`), not through a subpackage facade or deep submodule path
 
 #### Scenario: Within-layer cross-subpackage imports also use the layer facade
-- **WHEN** a module in `yascheduler.infra.cli` needs `SSHMachineGateway` (which lives in `yascheduler.infra.ssh`)
-- **THEN** it imports via `from yascheduler.infra import SSHMachineGateway` — the layer facade is the single public surface, even for sibling subpackages within the same layer
+- **WHEN** a module in `yascheduler.infra.cli` needs `SSHMachineRepository` (which lives in `yascheduler.infra.ssh`)
+- **THEN** it imports via `from yascheduler.infra import SSHMachineRepository` — the layer facade is the single public surface, even for sibling subpackages within the same layer
 
 ### Requirement: Package facade as public surface (lazy publication)
 
@@ -194,7 +194,7 @@ The composition root `yascheduler.entrypoints.di` itself SHALL import
 `AllocationTracker` from `yascheduler.application`; `TaskCreated`,
 `TaskAllocated`, `TaskCompleted`, `TaskFailed`, `TaskAbandoned` from
 `yascheduler.domain`; and `CloudProvisionerImpl`, `CloudAdapter`,
-`SSHMachineGateway`, `PostgresUnitOfWork`, `resolve_adapter`,
+`SSHMachineRepository`, `SSHMachineOperations`, `PostgresUnitOfWork`, `resolve_adapter`,
 `webhook_handler` from `yascheduler.infra` — all via layer facades (R2).
 
 #### Scenario: Entrypoints facade re-exports Yascheduler, composition root, and path constants
@@ -408,10 +408,10 @@ categories of symbols as the public surface of the domain layer:
 - **Model**: `Task` and related domain entities defined in `yascheduler.domain.model`.
 - **Engine types**: `Engine`, `EngineRepository`, `LocalFilesDeploy`, `LocalArchiveDeploy`, `RemoteArchiveDeploy`, `Deploy` from `yascheduler.domain.engine` (re-exported via `yascheduler.domain.model`).
 - **Exceptions**: the existing `DomainError` tree from `yascheduler.domain.exceptions` (no new symbols added by this change).
-- **Ports**: `TaskRepository`, `NodeRepository`, `MachineGateway`, `CloudProvisioner` Protocols from `yascheduler.domain.ports`.
+- **Ports**: `TaskRepository`, `NodeRepository`, `MachineRepository`, `MachineSession`, `MachineOperations`, `CloudProvisioner` Protocols from `yascheduler.domain.ports`.
 
 #### Scenario: Domain facade exposes all required categories
-- **WHEN** a consumer imports `from yascheduler.domain import Task, TaskCreated, DomainError, TaskRepository, NodeRepository, MachineGateway, CloudProvisioner`
+- **WHEN** a consumer imports `from yascheduler.domain import Task, TaskCreated, DomainError, TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudProvisioner`
 - **THEN** all symbols resolve without ImportError
 
 #### Scenario: Domain facade exposes Engine types
@@ -430,20 +430,20 @@ the lazy publication policy in operation: each symbol is added because
 a real cross-package consumer requires it, and R2 retroactive
 enforcement demands the facade form.
 
-- **`yascheduler/infra/__init__.py`** (the adapters LAYER facade — sole public surface for cross-layer consumers and composition root) SHALL re-export:
-  - `SSHMachineGateway`, `AllSSHRetryExc`, `SFTPRetryExc` from `.ssh` (consumed by `yascheduler.application.*` at module level for backoff and under `TYPE_CHECKING` for type hints; also consumed within the `adapters` layer by `cli.*` and `cloud.manager`).
+- **`yascheduler/infra/__init__.py`** (the infra LAYER facade — sole public surface for cross-layer consumers and composition root) SHALL re-export:
+  - `SSHMachineRepository`, `SSHMachineOperations`, `AllSSHRetryExc`, `SFTPRetryExc` from `.ssh` (consumed by `yascheduler.application.*` under `TYPE_CHECKING` for type hints; also consumed within the `infra` layer by `cloud.manager` and the composition root).
   - `CloudProvisionerImpl` from `.cloud` (consumed by `yascheduler.application.*` under `TYPE_CHECKING` and by the composition root `yascheduler.entrypoints.di`).
   - `CloudAdapter` from `.cloud` (consumed by the composition root `yascheduler.entrypoints.di` for adapter typing).
-  - `apply_schema` from `.persistence` (consumed by `adapters.cli.init`).
+  - `apply_schema` from `.persistence` (consumed by `entrypoints.cli.init`).
   - `webhook_handler` from `.notifier` (consumed by the composition root `yascheduler.entrypoints.di`).
   - `PostgresUnitOfWork` from `.persistence` (consumed by the composition root `yascheduler.entrypoints.di` for UoW wiring).
 - **`yascheduler/application/__init__.py`** SHALL re-export:
-  - `AbstractUnitOfWork` from `.uow` (consumed by `adapters.cli.manage_node`).
-  - `Orchestrator` from `.orchestrator` (consumed by `adapters.cli.daemonize` and the composition root `yascheduler.entrypoints.di`).
-  - `MessageBus` from `.message_bus` (consumed by `adapters.persistence.postgres_uow` and the composition root `yascheduler.entrypoints.di`).
+  - `AbstractUnitOfWork` from `.uow` (consumed by `entrypoints.cli.manage_node`).
+  - `Orchestrator` from `.orchestrator` (consumed by `entrypoints.cli.daemonize` and the composition root `yascheduler.entrypoints.di`).
+  - `MessageBus` from `.message_bus` (consumed by `infra.persistence.postgres_uow` and the composition root `yascheduler.entrypoints.di`).
   - `submit_task` from `.submit_task` (consumed by the composition root `yascheduler.entrypoints.di`).
 - **`yascheduler/infra/notifier/__init__.py`** SHALL re-export:
-  - `webhook_handler` from `.webhook` (consumed by the composition root via the `adapters` layer facade).
+  - `webhook_handler` from `.webhook` (consumed by the composition root via the `infra` layer facade).
 - **`yascheduler/infra/cloud/__init__.py`** SHALL re-export:
   - `get_rnd_name` from `.utils` (consumed within the `cloud` subpackage by `providers/*`).
   - `ConfigCloud`, `ConfigCloudAzure`, `ConfigCloudHetzner`, `ConfigCloudUpcloud`,
@@ -479,8 +479,8 @@ enforcement demands the facade form.
     the canonical import is `from yascheduler.infra.cloud import
     CloudInitConfig`).
 - **`yascheduler/infra/persistence/__init__.py`** SHALL re-export:
-  - `apply_schema` from `.postgres_schema` (consumed by `adapters.cli.init` via the `adapters` layer facade).
-  - `PostgresUnitOfWork` from `.postgres_uow` (consumed by the composition root `yascheduler.entrypoints.di` via the `adapters` layer facade).
+  - `apply_schema` from `.postgres_schema` (consumed by `entrypoints.cli.init` via the `infra` layer facade).
+  - `PostgresUnitOfWork` from `.postgres_uow` (consumed by the composition root `yascheduler.entrypoints.di` via the `infra` layer facade).
   - (Preserved existing `load_query` and `UnitOfWorkNotInitializedError`.)
 - **`yascheduler/config/__init__.py`** SHALL re-export:
   - `Config` from `.config` (consumed by daemon/CLI entry points until P4).
@@ -511,9 +511,9 @@ every pre-existing cross-package import R2-compliant, including
 composition-root (`yascheduler.entrypoints.di`) wiring. (Engine types are
 now R2-compliant via `yascheduler.domain`, not `yascheduler.config`.)
 
-#### Scenario: Adapters layer facade exposes the cross-layer surface
-- **WHEN** a consumer imports `from yascheduler.infra import SSHMachineGateway, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
-- **THEN** all eight symbols resolve without ImportError
+#### Scenario: Infra layer facade exposes the cross-layer surface
+- **WHEN** a consumer imports `from yascheduler.infra import SSHMachineRepository, SSHMachineOperations, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
+- **THEN** all nine symbols resolve without ImportError
 
 #### Scenario: Application facade exposes UoW, Orchestrator, MessageBus, submit_task
 - **WHEN** a consumer imports `from yascheduler.application import AbstractUnitOfWork, Orchestrator, MessageBus, submit_task`
@@ -585,7 +585,7 @@ The system SHALL maintain an explicit, spec-documented list of deep-path
 imports that are exempt from R2 (facade) enforcement because the symbols
 are deliberately private (leading underscore) and MUST NOT be promoted to
 any facade. As of this change, the list is empty: the prior carve-out for
-`yascheduler/di.py: from .adapters.cloud.adapters import _resolve_adapter`
+`yascheduler/di.py: from .infra.cloud.adapters import _resolve_adapter`
 is removed because the symbol was renamed to public `resolve_adapter` (in
 the `review-hardening` change) and is now imported by the composition root
 via the `infra` layer facade (`from yascheduler.infra import

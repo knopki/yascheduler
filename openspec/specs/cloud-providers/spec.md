@@ -19,15 +19,15 @@ stdlib dataclasses (no attrs) with no INI-parsing methods; INI parsing is invoke
 the `CLOUD_CONFIG_PARSERS` registry from the composition root.
 
 #### Scenario: Azure provider accessible
-- **WHEN** az_create_node is imported from adapters.cloud.providers.az
+- **WHEN** az_create_node is imported from infra.cloud.providers.az
 - **THEN** the function is available and creates Azure VMs
 
 #### Scenario: Hetzner provider accessible
-- **WHEN** hetzner_create_node is imported from adapters.cloud.providers.hetzner
+- **WHEN** hetzner_create_node is imported from infra.cloud.providers.hetzner
 - **THEN** the function is available and creates Hetzner servers
 
 #### Scenario: UpCloud provider accessible
-- **WHEN** upcloud_create_node_sync is imported from adapters.cloud.providers.upcloud
+- **WHEN** upcloud_create_node_sync is imported from infra.cloud.providers.upcloud
 - **THEN** the function is available and creates UpCloud servers
 
 #### Scenario: Provider modules import config DTOs from infra cloud facade

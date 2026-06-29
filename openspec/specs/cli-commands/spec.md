@@ -3,8 +3,8 @@
 ## Purpose
 
 Define how CLI commands are wired to use cases via dependency injection,
-how entry points resolve to the correct module, and how backward compatibility
-is maintained through utils.py re-exports.
+how entry points resolve to the correct module, and how each command is a
+synchronous `def` entry point that calls `asyncio.run(_<name>_async(argv))`.
 ## Requirements
 ### Requirement: CLI commands call use cases via DI
 
@@ -19,11 +19,12 @@ that parses an AiiDA script file, builds task metadata, and submits a task
 via `CLIDeps.submit` (which delegates to the `submit_task` use case); it
 lives in `entrypoints/cli/`. The `yasetnode` command is an execution-mutate
 entrypoint that adds, soft-removes, or hard-removes nodes via a UoW (and via
-`SSHMachineGateway` for the add path's optional remote setup); it lives in
-`entrypoints/cli/`. The `yastatus` command is an execution-query entrypoint
-that reads tasks (and, in verbose mode, remote machine output) via `CLIDeps`
-and the SSH gateway; it lives in `entrypoints/cli/`. The `yascheduler` command
-(`daemonize` in `entrypoints/cli/daemonize.py`) starts the daemon via
+`SSHMachineRepository` + `SSHMachineOperations` for the add path's optional
+remote setup); it lives in `entrypoints/cli/`. The `yastatus` command is an
+execution-query entrypoint that reads tasks (and, in verbose mode, remote
+machine output) via `CLIDeps` and the SSH repository/operations; it lives in
+`entrypoints/cli/`. The `yascheduler` command (`daemonize` in
+`entrypoints/cli/daemonize.py`) starts the daemon via
 `make_daemon()` and `orchestrator.start()`, delegating the async runtime and
 signal handling to `daemon_common.run_daemon` (see the `daemon-common`
 capability); it lives in `entrypoints/cli/`. All six CLI commands now live in
@@ -70,7 +71,7 @@ None` parameter (None reads `sys.argv`) for testability.
 
 #### Scenario: yasetnode opens a validation UoW then dispatches via per-helper UoW
 - **WHEN** `yasetnode` is invoked with a valid host spec and a add/remove flag combination
-- **THEN** `Config.from_config_parser(args.config)` is called (NOT the hardcoded `CONFIG_FILE`), `make_cli_deps(config)` is called to obtain `CLIDeps`, an `SSHMachineGateway` is constructed at the top of `manage_node` (before any UoW is opened), a short read-only UoW is opened via `async with deps.uow_factory() as uow:` solely to read `already_there = await uow.nodes.get(spec.host) is not None` (it is closed without commit — nothing was mutated), and the body dispatches to exactly one helper; each helper opens its OWN UoW via `deps.uow_factory()` to perform its mutations, commit, and print. On the add path, the gateway is passed to the add helper.
+- **THEN** `Config.from_config_parser(args.config)` is called (NOT the hardcoded `CONFIG_FILE`), `make_cli_deps(config)` is called to obtain `CLIDeps`, an `SSHMachineRepository` and an `SSHMachineOperations` (bound to that repository) are constructed at the top of `manage_node` (before any UoW is opened), a short read-only UoW is opened via `async with deps.uow_factory() as uow:` solely to read `already_there = await uow.nodes.get(spec.host) is not None` (it is closed without commit — nothing was mutated), and the body dispatches to exactly one helper; each helper opens its OWN UoW via `deps.uow_factory()` to perform its mutations, commit, and print. On the add path, the repository and operations are passed to the add helper.
 
 #### Scenario: all six CLI commands accept --config
 - **WHEN** any of `yascheduler`, `yainit`, `yanodes`, `yasubmit`, `yasetnode`, `yastatus` is invoked with `--config /path/to/yascheduler.conf`
@@ -106,55 +107,27 @@ The `yasubmit` command SHALL parse an AiiDA script file (key=value metadata
 lines), read the engine's declared input files from the current working
 directory, build the task metadata, and submit a task via `CLIDeps.submit`
 (which delegates to the `submit_task` use case). The command is implemented
-as `submit()` in `yascheduler/entrypoints/cli/submit.py`, an async function
-decorated with `@to_sync` (so the console_script invokes a synchronous
-callable). It SHALL accept an `argv: list[str] | None = None` parameter for
-testability (`None` reads `sys.argv`, the argparse convention; tests pass an
-explicit list). It SHALL obtain `Config` via `Config.from_config_parser`,
-build `CLIDeps` via `make_cli_deps(config)`, parse the script into key=value
-pairs, validate that an `ENGINE` key is present and known to
-`config.engines`, build the metadata dict (including `local_folder`, the
-engine's input files, and the webhook fields when `PARENT` is present and
-`config.local.webhook_url` is set), and call `deps.submit(label, metadata,
-engine.name)`. The logic SHALL be split into private pure functions:
-`_existing_path` (argparse type validator), `_parse_submit_args(argv)`,
-`_parse_script_metadata(text)` (parse key=value lines, malformed lines
-ignored), `_read_input_files(engine, local_folder)` (read each file in
-`engine.input_files`, falling back to base64 on `UnicodeDecodeError`),
-`_build_metadata(script_params, config, local_folder)` (assemble the
-metadata dict, encapsulating the webhook branch).
+as `submit()` in `yascheduler/entrypoints/cli/submit.py`, a synchronous
+entry point that calls `asyncio.run(_submit_async(argv))` (NOT
+`@to_sync`-decorated; CLI entry points have no async caller). It SHALL
+accept an `argv: list[str] | None = None` parameter for testability (`None`
+reads `sys.argv`, the argparse convention; tests pass an explicit list). It
+SHALL obtain `Config` via `Config.from_config_parser`, build `CLIDeps` via
+`make_cli_deps(config)`, parse the script into key=value pairs, validate
+that an `ENGINE` key is present and known to `config.engines`, build the
+metadata dict (including `local_folder`, the engine's input files, and the
+webhook fields when `PARENT` is present and `config.local.webhook_url` is
+set), and call `deps.submit(label, metadata, engine.name)`. The logic SHALL
+be split into private pure functions: `_existing_path` (argparse type
+validator), `_parse_submit_args(argv)`.
 
-#### Scenario: yasubmit happy path
-- **WHEN** `yasubmit script.in` is invoked with a valid script containing `LABEL = Test job` and `ENGINE = g09`, and `g09` is a known engine with `input_files = ("input",)`, and the file `input` exists in the current working directory
-- **THEN** `deps.submit("Test job", metadata, "g09")` is called where `metadata` contains `local_folder`, the input file contents, and the webhook fields only if `PARENT` is present and `config.local.webhook_url` is set; `str(task_id)` is printed to stdout; the process exits `0`
+#### Scenario: yasubmit parses AiiDA script and submits task
+- **WHEN** yasubmit is invoked with a valid script file path
+- **THEN** the script is parsed, the engine is validated against `config.engines`, input files are read, metadata is built, and `deps.submit(...)` is called
 
-#### Scenario: yasubmit reads config and builds deps
-- **WHEN** `submit()` is invoked
-- **THEN** `Config.from_config_parser(CONFIG_FILE)` is called and `make_cli_deps(config)` is called to obtain `CLIDeps`
-
-#### Scenario: yasubmit parses script metadata
-- **WHEN** `_parse_script_metadata("LABEL = Test job\nENGINE = g09\nmalformed line\n")` is called
-- **THEN** it returns `{"LABEL": "Test job", "ENGINE": "g09"}` (the malformed line without `=` is ignored)
-
-#### Scenario: yasubmit reads input files as text
-- **WHEN** `_read_input_files(engine, local_folder)` is called and a file in `engine.input_files` is valid UTF-8
-- **THEN** the file's text content is included in the returned dict under the filename key
-
-#### Scenario: yasubmit falls back to base64 for binary input files
-- **WHEN** `_read_input_files(engine, local_folder)` is called and a file in `engine.input_files` raises `UnicodeDecodeError` when read as UTF-8
-- **THEN** the file's bytes are base64-encoded and the ASCII string is included in the returned dict under the filename key (the current fallback behavior is preserved)
-
-#### Scenario: yasubmit builds metadata with webhook when PARENT and webhook_url set
-- **WHEN** `_build_metadata(script_params, config, local_folder)` is called with `script_params` containing `PARENT = 42` and `config.local.webhook_url` set to a non-None URL
-- **THEN** the returned dict contains `webhook_url` (the URL) and `webhook_custom_params` equal to `{"parent": "42"}`, plus `local_folder` and the input files
-
-#### Scenario: yasubmit omits webhook fields when PARENT absent
-- **WHEN** `_build_metadata(script_params, config, local_folder)` is called with `script_params` NOT containing `PARENT`
-- **THEN** the returned dict does NOT contain `webhook_url` or `webhook_custom_params`, regardless of `config.local.webhook_url`
-
-#### Scenario: yasubmit omits webhook fields when webhook_url is None
-- **WHEN** `_build_metadata(script_params, config, local_folder)` is called with `script_params` containing `PARENT` but `config.local.webhook_url` is `None`
-- **THEN** the returned dict does NOT contain `webhook_url` or `webhook_custom_params`
+#### Scenario: yasubmit entry point uses asyncio.run
+- **WHEN** the `submit` callable in `yascheduler/entrypoints/cli/submit.py` is inspected
+- **THEN** it is a synchronous `def submit(argv: list[str] | None = None)` that calls `asyncio.run(_submit_async(argv))`; it is NOT `@to_sync`-decorated and has no `__wrapped__` attribute
 
 ### Requirement: yasubmit parses flags via argparse
 
@@ -522,39 +495,13 @@ an `Error:` message is a defect.
 - **WHEN** argparse calls `sys.exit(2)` inside the `try` block of an entry point
 - **THEN** the `except Exception` block does NOT catch it (`SystemExit` is not an `Exception` subclass); the exit code is `2`
 
-### Requirement: utils.py preserves re-exports
-
-The system SHALL keep utils.py as a re-export module importing from
-adapters.cli.commands.
-
-#### Scenario: Direct import of utils.submit still works
-- **WHEN** from yascheduler.utils import submit is executed
-- **THEN** the function from adapters.cli.commands is returned
-
 ### Requirement: yanodes lists nodes and their running tasks
 
-The `yanodes` command SHALL list nodes and their currently running tasks. The command is implemented as `show_nodes()` in `yascheduler/entrypoints/cli/show_nodes.py`, an async function decorated with `@to_sync` (so the console_script invokes a synchronous callable). It SHALL accept an `argv: list[str] | None = None` parameter for testability (`None` reads `sys.argv`, the argparse convention; tests pass an explicit list). It SHALL obtain `Config` via `Config.from_config_parser`, build `CLIDeps` via `make_cli_deps(config)`, open a single UoW, read nodes via `uow.nodes.list_all()` and running tasks via `uow.tasks.list_by_status({TaskStatus.RUNNING})`, join them in memory, apply the active filters, and print the result via the selected renderer. Output row order SHALL preserve the order returned by `uow.nodes.list_all()` (no sorting). Each node SHALL produce exactly one output row (table) or one output object (JSON).
+The `yanodes` command SHALL list nodes and their currently running tasks. The command is implemented as `show_nodes()` in `yascheduler/entrypoints/cli/show_nodes.py`, a synchronous entry point that calls `asyncio.run(_show_nodes_async(argv))` (NOT `@to_sync`-decorated; CLI entry points have no async caller). It SHALL accept an `argv: list[str] | None = None` parameter for testability (`None` reads `sys.argv`, the argparse convention; tests pass an explicit list). It SHALL obtain `Config` via `Config.from_config_parser`, build `CLIDeps` via `make_cli_deps(config)`, open a single UoW, read nodes via `uow.nodes.list_all()` and running tasks via `uow.tasks.list_by_status({TaskStatus.RUNNING})`, join them in memory, apply the active filters, and print the result via the selected renderer. Output row order SHALL preserve the order returned by `uow.nodes.list_all()` (no sorting). Each node SHALL produce exactly one output row (table) or one output object (JSON).
 
-#### Scenario: yanodes default invocation lists all nodes
-- **WHEN** `yanodes` is invoked with no flags
-- **THEN** all nodes returned by `uow.nodes.list_all()` are listed in the table format, each as one row, in the order returned by `list_all()`, and the process exits `0`
-
-#### Scenario: yanodes preserves list_all order
-- **WHEN** `uow.nodes.list_all()` returns nodes in a given order (e.g. `[node_b, node_a, node_c]`)
-- **THEN** the output rows appear in that same order (`node_b`, `node_a`, `node_c`), with no reordering by ip, enabled, or any other key
-
-#### Scenario: yanodes with no nodes exits 0
-- **WHEN** `uow.nodes.list_all()` returns an empty list
-- **THEN** the table renders only its header row (or no rows) and the process exits `0` (an empty result is a valid query answer, not a failure)
-
-#### Scenario: yanodes one row per node
-- **WHEN** a node has one running task with `allocated_ip == node.ip`
-- **THEN** exactly one row is emitted for that node, showing the task's `task_id` and `label`
-- **AND** when a node has no running task, exactly one row is emitted with the free-node display (`TASK_ID=-`, `LABEL=-` in table; `occupied_by: null` in JSON)
-
-#### Scenario: yanodes reads config and builds deps
-- **WHEN** `show_nodes()` is invoked
-- **THEN** `Config.from_config_parser(CONFIG_FILE)` is called and `make_cli_deps(config)` is called to obtain the UoW factory
+#### Scenario: yanodes entry point uses asyncio.run
+- **WHEN** the `show_nodes` callable in `yascheduler/entrypoints/cli/show_nodes.py` is inspected
+- **THEN** it is a synchronous `def show_nodes(argv: list[str] | None = None)` that calls `asyncio.run(_show_nodes_async(argv))`; it is NOT `@to_sync`-decorated and has no `__wrapped__` attribute
 
 ### Requirement: yanodes parses flags via argparse
 
@@ -1100,39 +1047,37 @@ stdout.
 ### Requirement: yasetnode gateway lifecycle and resource safety
 
 On the add path, `manage_node()` SHALL construct a single
-`SSHMachineGateway` at the top of the function (before opening any UoW) and
-pass it as a parameter to the add helper. The add helper `_add_node(deps,
-gateway, spec, config, skip_setup)` SHALL open its own UoW via
-`deps.uow_factory()` and wrap the sequence `gateway.connect(...)` → optional
-`gateway.setup_node(...)` → `uow.nodes.add(...)` → `uow.commit()` in
-`try/finally`, with `await gateway.disconnect(host)` in the `finally` block.
-The disconnect SHALL run on both the success path and any failure path (SSH
-failure, setup failure, DB failure), so the SSH connection is released
-rather than leaking until timeout.
+`SSHMachineRepository` and a single `SSHMachineOperations` (bound to that
+repository) at the top of the function (before opening any UoW) and pass
+them as parameters to the add helper. The add helper `_add_node(deps,
+repository, operations, spec, config, skip_setup)` SHALL open its own UoW
+via `deps.uow_factory()` and wrap the sequence `repository.connect(...)` →
+optional `operations.setup_node(session, ...)` → `uow.nodes.add(...)` →
+`uow.commit()` in `try/finally`, with `await repository.disconnect(host)`
+in the `finally` block. The disconnect SHALL run on both the success path
+and any failure path (SSH failure, setup failure, DB failure), so the SSH
+connection is released rather than leaking until timeout.
 
-The gateway SHALL be instantiated once per invocation; the helper SHALL
-NOT construct its own gateway. This makes the add helper unit-testable via
-direct mock injection (no `patch.object` on the gateway class).
+The repository and operations SHALL be instantiated once per invocation;
+the helper SHALL NOT construct its own repository/operations. This makes
+the add helper unit-testable via direct mock injection (no `patch.object`
+on the classes).
 
-#### Scenario: yasetnode constructs gateway once and passes to add helper
+#### Scenario: yasetnode constructs repository+operations once and passes to add helper
 - **WHEN** `yasetnode 10.0.0.1` is invoked on the add path
-- **THEN** exactly one `SSHMachineGateway()` is constructed (at the top of `manage_node`), and that instance is passed as a parameter to the add helper
+- **THEN** exactly one `SSHMachineRepository()` and one `SSHMachineOperations(...)` are constructed (at the top of `manage_node`), and those instances are passed as parameters to the add helper
 
-#### Scenario: yasetnode disconnects gateway on add success
+#### Scenario: yasetnode disconnects repository on add success
 - **WHEN** `yasetnode 10.0.0.1` succeeds on the add path
-- **THEN** `gateway.disconnect(host)` is called after `uow.commit()` (inside `_add_node`'s own UoW, the `try/finally` ensures disconnect runs)
+- **THEN** `repository.disconnect(host)` is called after `uow.commit()` (inside `_add_node`'s own UoW, the `try/finally` ensures disconnect runs)
 
-#### Scenario: yasetnode disconnects gateway when setup_node raises
-- **WHEN** `gateway.setup_node(...)` raises an exception after `gateway.connect(...)` succeeded
-- **THEN** `gateway.disconnect(host)` is still called (the `finally` block runs), the exception propagates to the top-level handler which prints `Error: ...` to stderr and exits `1`
+#### Scenario: yasetnode disconnects repository when setup_node raises
+- **WHEN** `operations.setup_node(session, ...)` raises an exception after `repository.connect(...)` succeeded
+- **THEN** `repository.disconnect(host)` is still called (the `finally` block runs), the exception propagates to the top-level handler which prints `Error: ...` to stderr and exits `1`
 
-#### Scenario: yasetnode disconnects gateway when nodes.add raises
-- **WHEN** `uow.nodes.add(...)` raises a DB error after `gateway.connect(...)` succeeded
-- **THEN** `gateway.disconnect(host)` is still called (the `finally` block runs), the exception propagates to the top-level handler which prints `Error: ...` to stderr and exits `1`
-
-#### Scenario: yasetnode skips setup when --skip-setup given
-- **WHEN** `yasetnode 10.0.0.1 --skip-setup` succeeds on the add path
-- **THEN** `gateway.setup_node(...)` is NOT called, but `gateway.connect(...)` and `gateway.disconnect(host)` ARE called, and `uow.nodes.add(...)` IS called
+#### Scenario: yasetnode disconnects repository when nodes.add raises
+- **WHEN** `uow.nodes.add(...)` raises a DB error after `repository.connect(...)` succeeded
+- **THEN** `repository.disconnect(host)` is still called (the `finally` block runs), the exception propagates to the top-level handler which prints `Error: ...` to stderr and exits `1`
 
 ### Requirement: yasetnode dispatches add and remove paths
 
@@ -1206,25 +1151,26 @@ The `Node` record constructed on the add path SHALL use
 ### Requirement: yasetnode module path and GRACE-lite markup
 
 The `yasetnode` command SHALL be implemented as `manage_node()` in
-`yascheduler/entrypoints/cli/manage_node.py`, an async function decorated
-with `@to_sync` (so the console_script invokes a synchronous callable).
-The module SHALL carry fresh GRACE-lite markup (`MODULE_CONTRACT`,
-`MODULE_MAP`, `CHANGE_SUMMARY`, function contracts, and block anchors)
-versioned `1.0.0`. The stale `# FIXME: split adapter and application
-layer` comment from the old `infra/cli/manage_node.py` SHALL NOT be carried
-to the new file. The logic SHALL be split into private pure functions:
-`_parse_host_spec(s)`, `_parse_node_args(argv)`, `_remove_node_hard(deps,
-spec)`, `_remove_node_soft(deps, spec)`, `_add_node(deps, gateway, spec,
-config, skip_setup)`, and the `HostSpec` frozen dataclass. Each mutate
-helper opens its own UoW via `deps.uow_factory()` (see the dispatch
+`yascheduler/entrypoints/cli/manage_node.py`, a synchronous entry point
+that calls `asyncio.run(_manage_node_async(argv))` (NOT `@to_sync`-decorated;
+CLI entry points have no async caller). The module SHALL carry fresh
+GRACE-lite markup (`MODULE_CONTRACT`, `MODULE_MAP`, `CHANGE_SUMMARY`,
+function contracts, and block anchors) versioned `1.0.0`. The stale
+`# FIXME: split adapter and application layer` comment from the old
+`infra/cli/manage_node.py` SHALL NOT be carried to the new file. The logic
+SHALL be split into private pure functions: `_parse_host_spec(s)`,
+`_parse_node_args(argv)`, `_remove_node_hard(deps, spec)`,
+`_remove_node_soft(deps, spec)`, `_add_node(deps, repository, operations,
+spec, config, skip_setup)`, and the `HostSpec` frozen dataclass. Each
+mutate helper opens its own UoW via `deps.uow_factory()` (see the dispatch
 requirement); the validation read uses a separate read-only UoW closed
 before dispatch. No use case SHALL be extracted into `application/` — YAGNI
 (no second consumer; the daemon-side node lifecycle is owned by the
 orchestrator).
 
-#### Scenario: yasetnode is to_sync-decorated
+#### Scenario: yasetnode entry point uses asyncio.run
 - **WHEN** the `manage_node` callable in `yascheduler/entrypoints/cli/manage_node.py` is inspected
-- **THEN** it is decorated with `@to_sync` (the `__wrapped__` attribute points to an async function)
+- **THEN** it is a synchronous `def manage_node(argv: list[str] | None = None)` that calls `asyncio.run(_manage_node_async(argv))`; it is NOT `@to_sync`-decorated and has no `__wrapped__` attribute
 
 #### Scenario: yasetnode module has fresh GRACE-lite markup
 - **WHEN** `yascheduler/entrypoints/cli/manage_node.py` is inspected
@@ -1243,53 +1189,20 @@ orchestrator).
 The `yastatus` command SHALL query and display task status, optionally with
 remote machine output (verbose mode) and convergence info. The command is
 implemented as `check_status()` in
-`yascheduler/entrypoints/cli/check_status.py`, an async function decorated
-with `@to_sync` (so the console_script invokes a synchronous callable). It
-SHALL accept an `argv: list[str] | None = None` parameter for testability
-(`None` reads `sys.argv`, the argparse convention; tests pass an explicit
-list). It SHALL obtain `Config` via `Config.from_config_parser`, build
-`CLIDeps` via `make_cli_deps(config)` once, and open exactly one short UoW
-for the query phase (fetching `tasks`, and additionally `nodes_by_ip` only
-when the selected renderer needs node fields — i.e. `-v` or `--json`). The
-UoW SHALL be closed before any SSH work begins (no DB connection held during
-SSH).
+`yascheduler/entrypoints/cli/check_status.py`, a synchronous entry point
+that calls `asyncio.run(_check_status_async(argv))` (NOT `@to_sync`-decorated;
+CLI entry points have no async caller). It SHALL accept an `argv:
+list[str] | None = None` parameter for testability (`None` reads
+`sys.argv`, the argparse convention; tests pass an explicit list). It SHALL
+obtain `Config` via `Config.from_config_parser`, build `CLIDeps` via
+`make_cli_deps(config)` once, and open exactly one short UoW for the query
+phase (fetching `tasks`, and additionally `nodes_by_ip` only when the
+selected renderer needs node fields — i.e. `-v` or `--json`). The UoW SHALL
+be closed before any SSH work begins (no DB connection held during SSH).
 
-The default query (no `-j`) SHALL call
-`uow.tasks.list_by_status({TaskStatus.RUNNING, TaskStatus.TO_DO})` (DONE
-excluded — the AiiDA plugin relies on this default). With `-j ID...`, the
-query SHALL call `uow.tasks.list_by_jobs(job_ids=args.jobs)` (returns tasks
-of any status; the closed `TaskStatus` enum guarantees all returned statuses
-are valid AiiDA states).
-
-The logic SHALL be split into private pure functions: `_parse_status_args`,
-`_query_tasks`, `_render_default` (AiiDA contract), `_render_info`,
-`_render_json`, `_render_view`, `_resolve_conn_params` (connection-params
-bugfix helper mirroring `orchestrator._connect_machine_consumer:209-214`),
-`_display_remote_output`, `_download_convergence_snippet`, `_parse_convergence`.
-
-#### Scenario: yastatus default invocation lists RUNNING and TO_DO tasks
-- **WHEN** `yastatus` is invoked with no flags
-- **THEN** `uow.tasks.list_by_status({RUNNING, TO_DO})` is called, DONE tasks are excluded, and the default renderer prints one line per task
-
-#### Scenario: yastatus -j filters by job ids
-- **WHEN** `yastatus -j 1 2` is invoked
-- **THEN** `uow.tasks.list_by_jobs(job_ids=["1", "2"])` is called and the result is rendered (tasks of any status, including DONE, are returned)
-
-#### Scenario: yastatus reads config and builds deps once
-- **WHEN** `check_status()` is invoked
-- **THEN** `Config.from_config_parser(CONFIG_FILE)` is called exactly once and `make_cli_deps(config)` is called exactly once (the previous implementation called it twice)
-
-#### Scenario: yastatus closes the UoW before SSH work
-- **WHEN** `yastatus -v` is invoked and the render phase performs SSH operations (connect, tail OUTPUT, SFTP download)
-- **THEN** the query-phase UoW is closed before any SSH operation begins (no DB connection is held during SSH)
-
-#### Scenario: yastatus -v and --json fetch nodes_by_ip
-- **WHEN** `yastatus -v` or `yastatus --json` is invoked and tasks have allocated IPs
-- **THEN** `uow.nodes.get_by_ips([t.allocated_ip for t in tasks if t.allocated_ip])` is called within the query-phase UoW
-
-#### Scenario: yastatus default and -i skip the nodes lookup
-- **WHEN** `yastatus` (default) or `yastatus -i` is invoked
-- **THEN** `uow.nodes.get_by_ips` is NOT called (the default and info renderers use only task fields; the nodes lookup is conditional on the renderer)
+#### Scenario: yastatus entry point uses asyncio.run
+- **WHEN** the `check_status` callable in `yascheduler/entrypoints/cli/check_status.py` is inspected
+- **THEN** it is a synchronous `def check_status(argv: list[str] | None = None)` that calls `asyncio.run(_check_status_async(argv))`; it is NOT `@to_sync`-decorated and has no `__wrapped__` attribute
 
 ### Requirement: yastatus default output format (AiiDA compatibility)
 
@@ -1412,9 +1325,9 @@ previous non-idiomatic `nargs="?", type=bool, const=True` shape).
 `check_status()` SHALL NOT call `sys.exit(0)` explicitly on success — the
 function returns normally and the process exits `0`. Only the failure path
 calls `sys.exit(1)`. argparse's `--help`/error path calls `sys.exit(0)`/
-`sys.exit(2)` internally before reaching the function body. The `@to_sync`
-decorator propagates `SystemExit` correctly (it is a `BaseException`;
-`asyncio.run` does not wrap it).
+`sys.exit(2)` internally before reaching the function body. `asyncio.run`
+propagates `SystemExit` correctly (it is a `BaseException`; `asyncio.run`
+does not wrap it).
 
 #### Scenario: yastatus exits 0 on success
 - **WHEN** `yastatus` is invoked and the query + render complete without exception
@@ -1518,10 +1431,11 @@ output is excluded by design).
 ### Requirement: yastatus view mode connects via SSH with correct node params
 
 When `-v` (or `-v -o`) is given, `yastatus` SHALL, for each RUNNING task with
-an allocated IP, connect to the remote machine via `SSHMachineGateway`,
-display a tail of the remote `OUTPUT` file, optionally download and parse a
-CRYSTAL convergence snippet (when `-o` is also given), and disconnect. The
-SSH connection parameters SHALL be resolved by a private
+an allocated IP, connect to the remote machine via `SSHMachineRepository`
+(resolving a `MachineSession` via `repository.get_session` / a fresh
+`repository.connect`), display a tail of the remote `OUTPUT` file, optionally
+download and parse a CRYSTAL convergence snippet (when `-o` is also given),
+and disconnect. The SSH connection parameters SHALL be resolved by a private
 `_resolve_conn_params(node, config)` helper that mirrors
 `orchestrator._connect_machine_consumer:209-214`:
 
@@ -1537,26 +1451,26 @@ SSH connection parameters SHALL be resolved by a private
   jump-host parameters, so `yastatus -v` on a cloud node behind a jump host
   was functionally broken.
 
-All four parameters SHALL be passed to `gateway.connect(...)`. The
+All four parameters SHALL be passed to `repository.connect(...)`. The
 convergence snippet SHALL be stored in a `tempfile`-based file (NOT the
 previous fixed-name `local_calc_snippet.tmp`) and cleaned up in a
 `try/finally` block so it is removed even when `_render_view` raises.
 
 #### Scenario: yastatus -v uses node.username not cloud username
 - **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a node with `username="yascheduler"` and `cloud="hetzner"`, and the `hetzner` cloud config has `username="hcloud-user"`
-- **THEN** `gateway.connect(...)` is called with `username="yascheduler"` (the node's username, NOT the cloud's)
+- **THEN** `repository.connect(...)` is called with `username="yascheduler"` (the node's username, NOT the cloud's)
 
 #### Scenario: yastatus -v passes node.port
 - **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a node with `port=2222`
-- **THEN** `gateway.connect(...)` is called with `port=2222` (NOT the gateway default of 22)
+- **THEN** `repository.connect(...)` is called with `port=2222` (NOT the repository default of 22)
 
 #### Scenario: yastatus -v resolves jump host from matching cloud
 - **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a node with `cloud="hetzner"`, and the `hetzner` cloud config has `jump_host="jump.example.com"` and `jump_username="jumper"`
-- **THEN** `gateway.connect(...)` is called with `jump_host="jump.example.com"` and `jump_username="jumper"`
+- **THEN** `repository.connect(...)` is called with `jump_host="jump.example.com"` and `jump_username="jumper"`
 
 #### Scenario: yastatus -v falls back to config.remote for static nodes
 - **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a static node (`cloud=None`), and `config.remote.jump_host` is set
-- **THEN** `gateway.connect(...)` is called with `jump_host=config.remote.jump_host` and `jump_username=config.remote.jump_username`
+- **THEN** `repository.connect(...)` is called with `jump_host=config.remote.jump_host` and `jump_username=config.remote.jump_username`
 
 #### Scenario: yastatus -v -o uses a tempfile for the convergence snippet
 - **WHEN** `yastatus -v -o` is invoked

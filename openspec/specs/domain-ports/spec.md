@@ -78,11 +78,10 @@ The system SHALL define three `@runtime_checkable` Protocols in
   `start_occupancy_check`.
 
 The full method-signature specification of these three Protocols lives
-in the `ssh-machine-repository` capability spec (Requirement:
-MachineRepository port, Requirement: MachineOperations port, Requirement:
-SSHMachineOperations composition) and the `ssh-machine-session`
-capability spec (Requirement: MachineSession port, Requirement:
-SSHMachineSession implements MachineSession). The `domain-ports`
+in the `ssh-infrastructure` capability spec (Requirement:
+MachineRepository port, Requirement: MachineSession port, Requirement:
+SSHMachineSession implements MachineSession, Requirement: MachineOperations port,
+Requirement: SSHMachineOperations composition). The `domain-ports`
 capability asserts only that all three Protocols are defined here, are
 `@runtime_checkable`, and are exposed via `yascheduler.domain.ports` and
 `yascheduler.domain` facades.

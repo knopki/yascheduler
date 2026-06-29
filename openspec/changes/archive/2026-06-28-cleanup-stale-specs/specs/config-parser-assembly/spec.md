@@ -1,11 +1,4 @@
-# Config Parser Assembly
-
-## Purpose
-
-The `parse_config` assembly function and per-section parser helpers that read
-an INI file and produce a frozen `Config` aggregate, keeping value objects pure.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: parse_config assembly
 
@@ -67,43 +60,3 @@ without a cast.
 #### Scenario: parse_config warns on unknown keys
 - **WHEN** `parse_config(path)` is called with an INI containing an unknown key in `[local]`
 - **THEN** a `ConfigWarning` is emitted via `warn_unknown_fields`
-
-#### Scenario: parse_config uses cloud registry
-- **WHEN** `parse_config(path)` is called with an INI containing `[cloud.vastai]`
-- **THEN** the cloud is parsed via the `CLOUD_CONFIG_PARSERS` registry entry for `vastai` (no hardcoded variant list in `parse_config`)
-
-#### Scenario: value objects have no parser methods
-- **WHEN** `LocalSettings`, `RemoteDefaults`, `PostgresDbConfig` are inspected for `from_config_parser_section` / `get_valid_config_parser_fields`
-- **THEN** no such methods exist on the dataclasses; parsing is invoked only via the `entrypoints/config_parser.py` functions
-
-#### Scenario: yascheduler.config package does not exist
-- **WHEN** `python -c "import yascheduler.config"` is executed
-- **THEN** `ModuleNotFoundError` is raised
-
-#### Scenario: parse_engine_section raises ValueError on missing spawn
-- **WHEN** `parse_engine_section(sec, engines_dir)` is called with a `[engine.fleur]`
-  section that omits the `spawn` key (i.e., `sec.get("spawn")` returns `None`)
-- **THEN** `ValueError` is raised with a message containing the engine name
-  (e.g., `fleur`) and the phrase `has no spawn command`; the `Engine` value
-  object is NOT constructed (the exception is raised before the `Engine(...)`
-  call)
-
-#### Scenario: parse_engine_section raises ValueError not AttributeError on missing spawn
-- **WHEN** the same call as the prior scenario is made
-- **THEN** the raised exception is `ValueError` (not `AttributeError`); the
-  message is actionable (names the engine and the missing key), replacing
-  the prior `AttributeError: 'NoneType' object has no attribute 'format'`
-  raised from `_check_spawn(engine, None)` after the `Engine(spawn=None)`
-  construction
-
-#### Scenario: Engine constructor call has no type: ignore on spawn
-- **WHEN** `parse_engine_section`'s `Engine(...)` constructor call is inspected
-- **THEN** the `spawn=spawn` argument does NOT carry a `# type: ignore[arg-type]`
-  annotation (the hoisted `ValueError` narrows `spawn` to `str` before the
-  constructor is reached)
-
-#### Scenario: parse_config has no cast bridge for clouds
-- **WHEN** `parse_config`'s `Config(...)` constructor call is inspected
-- **THEN** the `clouds=clouds` argument does NOT carry a
-  `cast("Sequence[CloudConfig]", clouds)` wrapper (the explicit
-  DTO→Protocol inheritance makes the cast dead weight)

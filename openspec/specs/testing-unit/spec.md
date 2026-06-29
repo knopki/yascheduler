@@ -92,11 +92,12 @@ Tests SHALL verify all exception classes from `yascheduler.domain.exceptions`:
 ### Requirement: Domain port Protocol conformance
 
 Tests SHALL verify that stub implementations satisfy `@runtime_checkable`
-Protocol checks for `TaskRepository`, `NodeRepository`, `MachineGateway`,
-`CloudProvisioner` from `yascheduler.domain.ports`.
+Protocol checks for `TaskRepository`, `NodeRepository`, `MachineRepository`,
+`MachineSession`, `MachineOperations`, `CloudProvisioner` from
+`yascheduler.domain.ports`.
 
 #### Scenario: Stub implementations satisfy Protocol checks
-- **WHEN** stub classes with matching async method signatures are checked against `TaskRepository`, `NodeRepository`, `MachineGateway`, `CloudProvisioner`
+- **WHEN** stub classes with matching async method signatures are checked against `TaskRepository`, `NodeRepository`, `MachineRepository`, `MachineSession`, `MachineOperations`, `CloudProvisioner`
 - **THEN** `isinstance` returns `True` for each
 
 ### Requirement: Domain services
@@ -232,8 +233,9 @@ listing and info mode, node listing with task info, node add/remove/enable/disab
 
 ### Requirement: CLI smoke tests
 
-Tests SHALL verify CLI entry point functions exist, are decorated with `@to_sync`
-where applicable, and `daemonize` references `make_daemon`.
+Tests SHALL verify CLI entry point functions exist, are synchronous `def`
+entry points that call `asyncio.run(_<name>_async(argv))` (not `@to_sync`-
+decorated), and `daemonize` references `make_daemon`.
 
 #### Scenario: CLI entry points are importable
 - **WHEN** each CLI entry point module is imported
@@ -278,13 +280,28 @@ accepted at construction and during enqueue/get/item_done operations.
 
 ### Requirement: Remote machine management
 
-Tests SHALL verify `RemoteMachineMetadata` state transitions (`busy` toggles
-`free_since`), `is_free_longer_than` evaluation, `RemoteMachineRepository.filter`
-(busy, platforms, free_since_gt, reverse_sort, original unchanged).
+Tests SHALL verify `ConnectedMachine` state transitions (`occupy`/`release`
+toggling `free_since` via `MachineSession.occupy()`/`MachineSession.release()`),
+and `SSHMachineRepository.list_free(platforms)` filtering (busy exclusion,
+platforms filter, oldest-first ordering by `free_since`, original registry
+unchanged). The legacy `RemoteMachineMetadata`, `is_free_longer_than`, and
+`RemoteMachineRepository.filter` symbols are removed; tests target the
+session/repository split defined in the `ssh-infrastructure` capability.
 
-#### Scenario: RemoteMachineMetadata busy=True sets free_since to None
-- **WHEN** `metadata.busy = True` is set on a free machine
-- **THEN** `free_since` becomes `None`
+#### Scenario: ConnectedMachine occupy sets state to BUSY
+
+- **WHEN** `session.occupy()` is called on a session whose `machine.state` is FREE
+- **THEN** `session.machine.state` becomes BUSY and `session.machine.free_since` remains its prior value (only `release` resets `free_since`)
+
+#### Scenario: ConnectedMachine release resets free_since
+
+- **WHEN** `session.release()` is called on a session whose `machine.state` is BUSY
+- **THEN** `session.machine.state` becomes FREE and `session.machine.free_since` is set to `time.monotonic()`
+
+#### Scenario: list_free filters by platform and state
+
+- **WHEN** `repository.list_free(["linux", "debian-12"])` is called on a repository holding FREE linux, BUSY linux, and FREE windows sessions
+- **THEN** the returned list contains only the FREE linux session (BUSY excluded, windows excluded by platform filter), sorted oldest-first by `session.machine.free_since`, and the repository's `_sessions` dict is unchanged
 
 ### Requirement: OS check functions
 

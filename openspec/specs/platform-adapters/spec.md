@@ -28,15 +28,15 @@ package `infra/ssh/platform/__init__.py` SHALL import `ProcessInfo` from
 `infra/ssh/platform/common.py` SHALL NOT define `ProcessInfo`.
 
 #### Scenario: Adapters accessible at new location
-- **WHEN** the adapters module is imported from adapters.ssh.platform.adapters
+- **WHEN** the adapters module is imported from infra.ssh.platform.adapters
 - **THEN** the adapter registry is accessible
 
 #### Scenario: Platform checks accessible
-- **WHEN** check_is_linux is imported from adapters.ssh.platform.checks
+- **WHEN** check_is_linux is imported from infra.ssh.platform.checks
 - **THEN** the check function is accessible
 
 #### Scenario: OS-specific methods accessible
-- **WHEN** linux_setup_node is imported from adapters.ssh.platform.linux
+- **WHEN** linux_setup_node is imported from infra.ssh.platform.linux
 - **THEN** the function is accessible
 
 #### Scenario: PEngine Protocol removed
