@@ -24,10 +24,15 @@ consumed by all six CLI command entry points and the three daemon launchers:
   missing config file exits 2 with a clear `not a file: <path>` message instead of a cryptic
   parse error from `Config.from_config_parser`. The default is `CONFIG_FILE` (which is
   env-aware via `YASCHEDULER_CONF_PATH`).
-- `add_log_level_arg(parser: ArgumentParser, *, default: str = "WARNING") -> None` — adds a
+- `add_log_level_arg(parser: ArgumentParser, *, default: str = "WARNING", short: str | None = None) -> None` — adds a
   `--log-level` argument with an explicit `choices` list of
-  `["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]`. The system SHALL NOT use the private
-  `logging._levelToName` / `logging._nameToLevel` APIs; the resolved level is obtained via
+  `["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]`. When `short` is given (e.g. `"-l"`),
+  the short flag is registered as an alias for `--log-level` (argparse option strings list);
+  when `short` is `None` (default), `--log-level` is long-only. The caller MUST ensure the
+  chosen `short` does not collide with another option registered on the same parser — in
+  particular, `daemon_sysv.py` SHALL NOT pass `short="-l"` because it already registers
+  `-l`/`--log-file`. The system SHALL NOT use the private `logging._levelToName` /
+  `logging._nameToLevel` APIs; the resolved level is obtained via
   `logging.getLevelName(args.log_level)` (returns the int), which works on Python 3.9+.
 - `add_log_file_arg(parser: ArgumentParser, *, default: str | None = None) -> None` — adds
   a `--log-file PATH` argument (path string, no existence check; the `FileHandler` will fail
@@ -60,6 +65,18 @@ This composes with command-specific positional arguments and mutually-exclusive 
 #### Scenario: add_log_level_arg resolves via logging.getLevelName
 - **WHEN** `args.log_level == "WARNING"`
 - **THEN** `logging.getLevelName(args.log_level)` returns `30` (the integer level for `WARNING`); the private `logging._nameToLevel` API is not used
+
+#### Scenario: add_log_level_arg long-only by default
+- **WHEN** a parser built with `add_log_level_arg(parser)` (no `short`) is given `-l DEBUG`
+- **THEN** argparse rejects it with exit 2 (only `--log-level` is registered, no short flag)
+
+#### Scenario: add_log_level_arg registers a short alias
+- **WHEN** a parser built with `add_log_level_arg(parser, short="-l")` is given `-l DEBUG`
+- **THEN** `args.log_level == "DEBUG"` (the `-l` short flag is an alias for `--log-level`)
+
+#### Scenario: add_log_level_arg short alias is rejected for invalid choices
+- **WHEN** a parser built with `add_log_level_arg(parser, short="-l")` is given `-l WARN`
+- **THEN** argparse rejects it with exit 2 (the short alias honors the same `choices` list)
 
 #### Scenario: add_log_file_arg adds --log-file
 - **WHEN** a parser built with `add_log_file_arg(parser, default="/var/log/yascheduler.log")` is given no `--log-file`

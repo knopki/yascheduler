@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_args.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yascheduler/entrypoints/cli/args.py — existing_path validator and the three add_*_arg helpers.
@@ -11,12 +11,13 @@
 # START_MODULE_MAP
 #   TestExistingPath - happy path returns Path; missing file raises ArgumentTypeError
 #   TestAddConfigArg - default is CONFIG_FILE; missing-file exits 2 with "not a file"
-#   TestAddLogLevelArg - choices reject WARN; getLevelName resolves WARNING to int 30
+#   TestAddLogLevelArg - choices reject WARN; getLevelName resolves WARNING to int 30; optional short alias
 #   TestAddLogFileArg - default None (stderr); custom default passed through
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for args.py (consolidate-daemon-entrypoints).
+#   LAST_CHANGE: v1.1.0 - restore--log-level-short-flag: added TestAddLogLevelArg short-alias coverage (long-only by default; short="-l" registers -l; short alias honors choices).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for args.py (consolidate-daemon-entrypoints).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -133,6 +134,33 @@ class TestAddLogLevelArg:
         add_log_level_arg(parser, default="INFO")
         args = parser.parse_args([])
         assert args.log_level == "INFO"
+
+    def test_long_only_by_default_rejects_short_l(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Without `short`, only --log-level is registered; -l is unrecognized.
+        parser = _parser()
+        add_log_level_arg(parser)
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["-l", "DEBUG"])
+        assert exc.value.code == 2
+
+    def test_short_alias_registers_minus_l(self) -> None:
+        parser = _parser()
+        add_log_level_arg(parser, short="-l")
+        # Both the short and long forms resolve to the same dest.
+        assert parser.parse_args(["-l", "DEBUG"]).log_level == "DEBUG"
+        assert parser.parse_args(["--log-level", "DEBUG"]).log_level == "DEBUG"
+
+    def test_short_alias_honors_choices(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The short alias MUST reject invalid choices just like --log-level.
+        parser = _parser()
+        add_log_level_arg(parser, short="-l")
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["-l", "WARN"])
+        assert exc.value.code == 2
 
 
 class TestAddLogFileArg:

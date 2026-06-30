@@ -164,7 +164,7 @@
       <annotations>
         <fn-existing_path PURPOSE="argparse type validator: Path(s) if s is an existing file else ArgumentTypeError (exit 2)" />
         <fn-add_config_arg PURPOSE="Add --config PATH (type=existing_path, default=CONFIG_FILE)" />
-        <fn-add_log_level_arg PURPOSE="Add --log-level (choices=LOG_LEVEL_CHOICES, default=WARNING); resolved via logging.getLevelName" />
+        <fn-add_log_level_arg PURPOSE="Add --log-level (choices=LOG_LEVEL_CHOICES, default=WARNING); optional short alias (e.g. -l) when `short` is passed; resolved via logging.getLevelName" />
         <fn-add_log_file_arg PURPOSE="Add --log-file PATH (default=None unless caller overrides)" />
         <const-LOG_LEVEL_CHOICES PURPOSE="Explicit list of accepted log-level names (no logging._levelToName private API)" />
       </annotations>

@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/args.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Shared argparse helpers for CLI entry points — validators and flag adders consumed by all six CLI commands and the three daemon launchers.
 #   SCOPE: argparse type validator (existing_path) and three flag adders (add_config_arg, add_log_level_arg, add_log_file_arg) plus LOG_LEVEL_CHOICES constant.
@@ -11,13 +11,13 @@
 #   LOG_LEVEL_CHOICES - Explicit list of accepted log-level names (no logging._levelToName private API)
 #   existing_path - argparse type validator: Path(s) if s is an existing file else ArgumentTypeError
 #   add_config_arg - Add --config PATH (type=existing_path, default=CONFIG_FILE)
-#   add_log_level_arg - Add --log-level (choices=LOG_LEVEL_CHOICES, default="WARNING")
+#   add_log_level_arg - Add --log-level (choices=LOG_LEVEL_CHOICES, default="WARNING"); optional short alias (e.g. "-l") when `short` is passed
 #   add_log_file_arg - Add --log-file PATH (default=None unless caller overrides)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial module (consolidate-daemon-entrypoints): shared argparse helpers extracted from submit.py + daemonize.py; --log-level uses explicit choices resolved via logging.getLevelName (no private logging API); --config uses existing_path so missing files exit 2 with a clear message.
+#   LAST_CHANGE: v1.2.0 - restore--log-level-short-flag: add_log_level_arg gains an optional `short` parameter so a caller can register a short flag alias (e.g. "-l") for --log-level; restores the pre-consolidate-daemon-entrypoints `yascheduler -l DEBUG` behavior on daemonize without affecting daemon_sysv (which keeps -l for --log-file).
+#   PREVIOUS_CHANGE: v1.1.0 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -71,19 +71,26 @@ def add_config_arg(
 
 
 # START_CONTRACT: add_log_level_arg
-#   PURPOSE: Add a --log-level argument with an explicit choices list resolved via logging.getLevelName (no private logging._levelToName API).
-#   INPUTS: { parser: argparse.ArgumentParser - parser to mutate, default: str - default level name (WARNING) }
+#   PURPOSE: Add a --log-level argument with an explicit choices list resolved via logging.getLevelName (no private logging._levelToName API); optionally register a short flag alias.
+#   INPUTS: { parser: argparse.ArgumentParser - parser to mutate, default: str - default level name (WARNING), short: str | None - optional short flag (e.g. "-l") registered as an alias for --log-level }
 #   OUTPUTS: { None - mutates parser in place }
-#   SIDE_EFFECTS: Registers --log-level on the parser; argparse exits 2 on an invalid choice (e.g. WARN is rejected — only WARNING is accepted).
+#   SIDE_EFFECTS: Registers --log-level (and the short alias when given) on the parser; argparse exits 2 on an invalid choice (e.g. WARN is rejected — only WARNING is accepted). The caller MUST ensure `short` does not collide with another option on the same parser (e.g. daemon_sysv registers -l for --log-file, so it MUST NOT pass short="-l").
 #   LINKS: M-ENTRYPOINTS-CLI-ARGS
 # END_CONTRACT: add_log_level_arg
 def add_log_level_arg(
     parser: argparse.ArgumentParser,
     *,
     default: str = "WARNING",
+    short: str | None = None,
 ) -> None:
+    # `short` (when given) is listed before --log-level so argparse renders the
+    # short flag first in the usage line and help, matching the pre-refactor
+    # `yascheduler -l DEBUG` convention. daemon_sysv MUST NOT pass short="-l"
+    # (it already registers -l for --log-file); that collision avoidance is the
+    # caller's responsibility, not enforced here.
+    option_strings = [short, "--log-level"] if short is not None else ["--log-level"]
     parser.add_argument(
-        "--log-level",
+        *option_strings,
         dest="log_level",
         choices=LOG_LEVEL_CHOICES,
         default=default,

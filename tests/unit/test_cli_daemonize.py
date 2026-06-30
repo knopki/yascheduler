@@ -1,24 +1,26 @@
 # FILE: tests/unit/test_cli_daemonize.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemonize.py — argparse, exit codes, argv injection, runtime-error path with mocked daemon core.
-#   SCOPE: daemonize() argparse behavior (--help/--bogus/--config/--log-level/--log-file defaults) and the runtime-error → exit 1 path; make_daemon mocked, no real DB/SSH.
+#   SCOPE: daemonize() argparse behavior (--help/--bogus/--config/--log-level/--log-file defaults, -l short alias) and the runtime-error → exit 1 path; make_daemon mocked, no real DB/SSH.
 #   DEPENDS: M-CLI-COMMANDS
 #   LINKS: M-CLI-COMMANDS, M-DAEMON-COMMON
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestDaemonizeParsing - --help exit 0 (prog=yascheduler), --bogus exit 2, --config /nonexistent exit 2, defaults
+#   TestDaemonizeParsing - --help exit 0 (prog=yascheduler), --bogus exit 2, --config /nonexistent exit 2, defaults, -l short alias
 #   TestDaemonizeRuntime - make_daemon raising → exit 1 with Error: on stderr; argv injection
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for relocated daemonize (consolidate-daemon-entrypoints).
+#   LAST_CHANGE: v1.1.0 - restore--log-level-short-flag: added test_log_level_short_alias_parses (yascheduler -l DEBUG works again).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for relocated daemonize (consolidate-daemon-entrypoints).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -50,7 +52,28 @@ class TestDaemonizeParsing:
         assert "usage: yascheduler" in out
         assert "--config" in out
         assert "--log-level" in out
+        assert "-l" in out  # -l short alias for --log-level is now listed
         assert "--log-file" in out
+
+    def test_log_level_short_alias_parses(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # `yascheduler -l DEBUG` MUST work (pre-refactor backward compatibility).
+        cfg_logger_spy = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr(daemonize_mod, "configure_logger", cfg_logger_spy)
+        monkeypatch.setattr(
+            daemonize_mod,
+            "parse_config",
+            MagicMock(return_value=MagicMock()),
+        )
+
+        def fake_run(coro: Coroutine) -> None:
+            coro.close()
+
+        monkeypatch.setattr(daemonize_mod.asyncio, "run", fake_run)
+        _run(["-l", "DEBUG"])
+        # configure_logger's second arg is logging.getLevelName("DEBUG") == logging.DEBUG.
+        assert cfg_logger_spy.call_args.args[1] == logging.getLevelName("DEBUG")
 
     def test_bogus_flag_exits_two(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -93,8 +116,6 @@ class TestDaemonizeParsing:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import logging
-
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(daemonize_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(

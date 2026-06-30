@@ -392,14 +392,27 @@ helpers and call `daemon_common.run_daemon` with ready arguments (see the
 Each SHALL accept `--log-file` (default `None` → stderr for `daemonize` and
 `daemon_systemd`; default `LOG_FILE` for `daemon_sysv`).
 
+`daemonize.py` (the foreground `yascheduler` console_script) SHALL accept the
+short flag `-l`/`--log-level` for backward compatibility with the pre-refactor
+behavior (`yascheduler -l DEBUG` worked before the
+`consolidate-daemon-entrypoints` refactor regressed it to long-only). Because
+`daemonize.py` registers `--log-file` via `add_log_file_arg` (long-only), `-l`
+is free to alias `--log-level` with no collision. This is independent of
+`daemon_sysv.py`'s `-l`/`--log-file`: each launcher parses its own argv once,
+so there is no shared `sys.argv` re-parse to collide on.
+
 `daemon_sysv.py` SHALL additionally accept `-p`/`--pid-file` (default
 `PID_FILE`) and SHALL keep the short flag `-l`/`--log-file` for backward
 compatibility with the installed `yascheduler.sh` init script, which invokes
 `$yascheduler -p "$pidfile" -l "$logfile" "$OPTIONS"`. `--config` and
 `--log-level` SHALL be long-only in `daemon_sysv.py` (no short flag collision
-with `-l`, since `daemonize`'s `--log-level` is also long-only — the original
-`-l` collision bug is fixed by each launcher parsing once and passing ready
-values, not by re-parsing `sys.argv`).
+with `-l`: `-l` is `--log-file` in `daemon_sysv.py`; the original `-l` collision
+bug is fixed by each launcher parsing once and passing ready values, not by
+re-parsing `sys.argv`).
+
+`daemon_systemd.py` SHALL keep `--log-level` long-only (no `-l` alias): it has
+no historical `-l` short flag and no `yascheduler.sh`-style external caller;
+adding `-l` there would be gratuitous surface area.
 
 `daemon_sysv.py` SHALL wrap the daemon execution in a `python-daemon`
 `DaemonContext` with `working_directory="/"` (the `python-daemon` default, NOT
@@ -418,7 +431,11 @@ Its `--log-file` default is `None` (stderr).
 
 #### Scenario: daemonize --help shows prog yascheduler
 - **WHEN** `yascheduler --help` is invoked
-- **THEN** the help text shows `usage: yascheduler [-h] [--config CONFIG] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}] [--log-file LOG_FILE]`
+- **THEN** the help text shows `usage: yascheduler [-h] [--config CONFIG] [-l {DEBUG,INFO,WARNING,ERROR,CRITICAL}] [--log-file LOG_FILE]`
+
+#### Scenario: daemonize accepts -l as --log-level alias
+- **WHEN** `yascheduler -l DEBUG` is invoked
+- **THEN** `args.log_level == "DEBUG"` (the `-l` short flag aliases `--log-level`; backward compatibility with the pre-refactor behavior)
 
 #### Scenario: daemonize default log-file is None (stderr)
 - **WHEN** `yascheduler` is invoked with no `--log-file`
