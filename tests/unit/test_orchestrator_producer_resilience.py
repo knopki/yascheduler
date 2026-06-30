@@ -558,3 +558,76 @@ class TestStatsResilience:
         ):
             with pytest.raises(asyncio.CancelledError):
                 await orch._print_stats()
+
+
+class _EmptyMappingsUow:
+    """UoW whose count_by_status return empty mappings (no rows / no enabled).
+
+    Models a fresh DB (yascheduler_nodes empty) — reproduces the
+    KeyError(True) regression on ncounters[True] in _print_stats.
+    """
+
+    async def __aenter__(self) -> _EmptyMappingsUow:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    @property
+    def nodes(self) -> object:
+        return AsyncMock(count_by_status=AsyncMock(return_value={}))
+
+    @property
+    def tasks(self) -> object:
+        return AsyncMock(count_by_status=AsyncMock(return_value={}))
+
+
+class TestStatsEmptyDbRegression:
+    """_print_stats on empty yascheduler_nodes SHALL NOT raise KeyError.
+
+    Regression: ncounters[True] raised KeyError(True) (str→'True', logged as
+    err=True) every 10s when the nodes table was empty or had no enabled rows.
+    """
+
+    @pytest.mark.asyncio
+    async def test_print_stats_succeeds_on_empty_nodes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        orch = _make_orchestrator(sleep_interval=0)
+        log_name = "test_stats_empty_db"
+        logger = logging.getLogger(log_name)
+        logger.setLevel(logging.DEBUG)
+        orch._log = logger  # type: ignore[method-assign]
+        orch._repository.list_connected = MagicMock(return_value=[])  # type: ignore[method-assign]
+        orch._uow_factory = _uow_factory(_EmptyMappingsUow())  # type: ignore[method-assign]
+
+        async def _noop_sleep(_end: object) -> None:
+            await asyncio.sleep(0)
+
+        with caplog.at_level(logging.INFO, logger=log_name):
+            with patch(
+                "yascheduler.application.orchestrator._asleep_until",
+                new=_noop_sleep,
+            ):
+                stats_task = asyncio.create_task(orch._print_stats())
+                # Let one full tick execute, then stop.
+                for _ in range(50):
+                    if any(
+                        r.getMessage().startswith("THREADS:") for r in caplog.records
+                    ):
+                        break
+                    await asyncio.sleep(0)
+                orch._cancellation_event.set()
+                stats_task.cancel()
+                try:
+                    await stats_task
+                except asyncio.CancelledError:
+                    pass
+        assert any(
+            r.getMessage().startswith("THREADS:")
+            and "enabled:0/total:0" in r.getMessage()
+            for r in caplog.records
+        ), "stats did not log successfully on empty nodes table"
+        assert not any(
+            "[_print_stats][ERROR]" in r.getMessage() for r in caplog.records
+        ), "stats raised on empty nodes table (KeyError regression)"

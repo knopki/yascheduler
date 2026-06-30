@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.7.0
+# VERSION: 6.7.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.7.0 - fix(orchestrator): connect static nodes (cloud=None) again; the v6.2.1 FILTER_CLOUD_ONLY producer filter (fix-never-connected-node-leak task 4.7) excluded static nodes from auto-connect, breaking the yasetnode → daemon handoff (static nodes persisted by _add_node are never reconnected by the daemon, tasks stuck in TO_DO). Replaced with a precise consumer-side guard before the grace-check that retries static nodes indefinitely without ever calling abandon_node. Same intent as task 4.7 (static never abandoned), narrower mechanism, restores pre-3c3f7e0 connectivity.
-#   PREVIOUS_CHANGE: v6.6.0 - Consumer-error resilience: the inner worker() in _create_producer_consumers now wraps `await consumer(msg)` in try/except Exception (log + continue next message) symmetric to the producer-error wrap. finally: queue.item_done(msg) preserved so the item is still dequeued on raise. CancelledError (BaseException) still propagates past `except Exception` to the existing `except CancelledError` drain path. Motivated by fix-save-silent-zero-rows: PostgresTaskRepository.save now raises TaskRowNotFoundError on a 0-row UPDATE (orchestrator:440 abandon race), which would otherwise silently kill the worker.
+#   LAST_CHANGE: v6.7.1 - fix(orchestrator): _print_stats used ncounters[True] which raised KeyError(True) every 10s (logged as err=True, str(KeyError(True))=='True') when yascheduler_nodes is empty or has no enabled rows. Switched to ncounters.get(True, 0). The stats-resilience try/except masked it (loop continued), so the daemon spammed err=True instead of printing stats on a fresh/empty DB. Regression test added in test_orchestrator_producer_resilience.py.
+#   PREVIOUS_CHANGE: v6.7.0 - fix(orchestrator): connect static nodes (cloud=None) again; the v6.2.1 FILTER_CLOUD_ONLY producer filter (fix-never-connected-node-leak task 4.7) excluded static nodes from auto-connect, breaking the yasetnode → daemon handoff (static nodes persisted by _add_node are never reconnected by the daemon, tasks stuck in TO_DO). Replaced with a precise consumer-side guard before the grace-check that retries static nodes indefinitely without ever calling abandon_node. Same intent as task 4.7 (static never abandoned), narrower mechanism, restores pre-3c3f7e0 connectivity.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -218,7 +218,7 @@ class Orchestrator:
                 msg = tmpl.format(
                     tasks=len(asyncio.all_tasks()),
                     n_busy=n_busy,
-                    n_enabled=ncounters[True],
+                    n_enabled=ncounters.get(True, 0),
                     n_total=sum(ncounters.values()),
                     t_run=tcounters.get(TaskStatus.RUNNING, 0),
                     t_todo=tcounters.get(TaskStatus.TO_DO, 0),

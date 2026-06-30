@@ -222,6 +222,10 @@ instead of `gateway.items()` for iterating connected machines.
 - **WHEN** `_print_stats` iterates connected machines
 - **THEN** it uses `repository.list_connected()` and accesses `session.machine.state` directly (not `state.machine.state`)
 
+#### Scenario: Stats tolerates empty or partial count mappings
+- **WHEN** `_print_stats` reads `nodes.count_by_status()` and the mapping lacks the `True` key (e.g. `yascheduler_nodes` is empty or has no enabled rows)
+- **THEN** `_print_stats` SHALL use `Mapping.get(key, 0)` (or equivalent) for status-count lookups, log a normal stats line with zero counts, and SHALL NOT raise `KeyError` that would be caught by the stats-resilience `except Exception` path and spam the log every tick
+
 ### Requirement: Orchestrator concurrency limits
 
 The system SHALL enforce configurable concurrency limits for each loop:
