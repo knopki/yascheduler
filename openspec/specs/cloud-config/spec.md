@@ -60,10 +60,6 @@ file — the DTO default is the sole source.
 - **WHEN** each `ConfigCloud*` DTO's `__mro__` is introspected
 - **THEN** the `CloudConfig` Protocol from `yascheduler.domain` appears in the MRO (the inheritance is explicit, not merely structural)
 
-#### Scenario: issubclass on the DTO class is not used by production code
-- **WHEN** the `yascheduler/` source tree is searched for `issubclass(<class>, CloudConfig)`
-- **THEN** zero matches are found in production code (PEP 544 bans `issubclass` on data-Protocols with non-method members; tests use `__mro__` introspection or `isinstance` on instances instead)
-
 #### Scenario: deallocate_nodes types against CloudConfig
 - **WHEN** `deallocate_nodes.py` is inspected for its `config_clouds` parameter type annotation
 - **THEN** it is `Sequence[CloudConfig]` imported from `yascheduler.domain` (TYPE_CHECKING)
