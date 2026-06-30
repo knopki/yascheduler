@@ -1,11 +1,4 @@
-# Cloud Providers
-
-## Purpose
-
-Relocate provider-specific VM lifecycle code and cloud support modules to
-infra/cloud/, with graceful handling of optional provider SDKs.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Provider code relocated
 
@@ -36,25 +29,3 @@ invoked via the `CLOUD_CONFIG_PARSERS` registry from the composition root.
 #### Scenario: Provider config DTOs are frozen dataclasses
 - **WHEN** a provider module's `cfg: ConfigCloudAzure` parameter is introspected
 - **THEN** `ConfigCloudAzure` is a stdlib `@dataclass(frozen=True)` with no `from_config_parser_section` / `get_valid_config_parser_fields` methods
-
-### Requirement: Support modules relocated
-
-The system SHALL move cloud support modules (adapters, protocols, utils)
-to infra/cloud/ preserving their functionality.
-
-#### Scenario: Cloud adapter registry accessible
-- **WHEN** CloudAdapter is imported from yascheduler.infra.cloud.adapters
-- **THEN** the class is available with the same API, backed by stdlib dataclasses
-
-#### Scenario: CloudInitConfig render output
-- **WHEN** `CloudInitConfig.render()` is called on a frozen dataclass instance
-- **THEN** the output is a `"#cloud-config\n"`-prefixed JSON serialization of all fields
-
-### Requirement: Optional provider SDKs handled gracefully
-
-The system SHALL skip providers whose SDK is not installed, logging a warning
-instead of raising an ImportError.
-
-#### Scenario: Azure SDK not installed
-- **WHEN** the Azure provider is configured but azure-identity is not installed
-- **THEN** a warning is logged and the provider is excluded from capacity

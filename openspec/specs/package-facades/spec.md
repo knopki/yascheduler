@@ -12,7 +12,7 @@ via an `import-linter` `layers` contract configured in `pyproject.toml`.
 the composition root at `yascheduler.entrypoints.di`) may import from
 `yascheduler.infra`, `yascheduler.application`, `yascheduler.domain`,
 `yascheduler.shared`, and the outside-layer-set modules
-(`yascheduler.config`, `yascheduler.data`, etc.). The composition root
+(`yascheduler.data`, etc.). The composition root
 `yascheduler.entrypoints.di` is a resident of this layer and is subject to
 this R3 contract; its imports flow `entrypoints → infra → application →
 domain`, which is layer-legal. `yascheduler.infra` may import from
@@ -202,7 +202,7 @@ The composition root `yascheduler.entrypoints.di` itself SHALL import
 - **THEN** all seven symbols resolve without ImportError
 
 #### Scenario: Entrypoints facade is the sole public surface
-- **WHEN** a module in `yascheduler.application`, `yascheduler.domain`, `yascheduler.infra`, `yascheduler.shared`, or `yascheduler.config` imports a symbol from `yascheduler.entrypoints`
+- **WHEN** a module in `yascheduler.application`, `yascheduler.domain`, `yascheduler.infra`, or `yascheduler.shared` imports a symbol from `yascheduler.entrypoints`
 - **THEN** the import goes through `yascheduler.entrypoints.__init__`, not a deep submodule path like `yascheduler.entrypoints.client`
 
 #### Scenario: AiiDA plugin is not re-exported by the entrypoints facade
@@ -300,8 +300,7 @@ definition is the primary membership rule. As a second guardrail,
 `yascheduler.shared` SHALL NOT contain business logic, domain types, or
 SSH/DB/HTTP/cloud I/O — defense-in-depth beyond the layer-direction
 enforcement in the `layers` contract (the `layers` contract blocks
-`shared → {entrypoints, adapters, application, domain}` and the
-`forbidden` contract blocks `shared → config`, but neither contract can
+`shared → {entrypoints, adapters, application, domain}`, but the contract cannot
 detect a contributor adding business logic or I/O that imports only
 stdlib/third-party; the clause gives reviewers a spec-grounded basis to
 reject such accretion).
@@ -309,10 +308,6 @@ reject such accretion).
 #### Scenario: Outside-set modules not flagged for layer direction
 - **WHEN** the `layers` contract runs
 - **THEN** modules in the outside-set list (`yascheduler.data`, `yascheduler.client`) are not checked for R3 violations
-
-#### Scenario: yascheduler.config no longer in outside-set
-- **WHEN** the `layers` contract runs
-- **THEN** `yascheduler.config` is not present in the outside-set list (the package is deleted; the exemption is removed)
 
 #### Scenario: Composition root is layer-checked after migration
 - **WHEN** the `layers` contract runs
@@ -348,8 +343,7 @@ configured with:
 - A `layers` contract with the name `Clean architecture layers` and `layers = ["yascheduler.entrypoints", "yascheduler.infra", "yascheduler.application", "yascheduler.domain", "yascheduler.shared"]`.
 - Dev dependency pinned as `import-linter >=2.5,<2.6` (the upper bound is required because `import-linter 2.6+` dropped Python 3.9 support, and the project pins `python >=3.9`).
 
-The `forbidden` contract (`Shared kernel has no config imports`) is removed
-— `yascheduler.config` no longer exists, so the contract is vacuous.
+No `forbidden` contract entry exists; the `layers` contract is the sole import-linter contract.
 
 #### Scenario: pyproject.toml contains required keys
 - **WHEN** `pyproject.toml` is parsed
@@ -448,68 +442,21 @@ enforcement demands the facade form.
   - `get_rnd_name` from `.utils` (consumed within the `cloud` subpackage by `providers/*`).
   - `ConfigCloud`, `ConfigCloudAzure`, `ConfigCloudHetzner`, `ConfigCloudUpcloud`,
     `ConfigCloudVastAI`, `AzureImageReference` from `.cloud_configs`
-    (cloud-configs-to-infra-registry: the cloud config DTOs relocated from
-    `yascheduler.config.cloud`; consumed by provider modules under
-    `TYPE_CHECKING`, by `infra/cloud/protocols.py` at runtime, and by the
-    composition root).
-  - `CloudInitConfig` from `.cloud_init` (cloud-init-rename-and-prune: the
-    cloud-init user-data renderer was renamed from `class CloudConfig` in
-    `cloud_config.py` to `class CloudInitConfig` in `cloud_init.py` to
-    disambiguate from the `ConfigCloud*` provider-config DTOs and from the
-    unrelated domain `CloudConfig` Protocol in `domain/ports.py`; consumed by
+    (consumed by provider modules under `TYPE_CHECKING`, by
+    `infra/cloud/protocols.py` at runtime, and by the composition root).
+  - `CloudInitConfig` from `.cloud_init` (consumed by
     `infra/cloud/manager.py` and the cloud providers under
     `TYPE_CHECKING`/runtime).
   - (Existing re-exports `CloudProvisionerImpl`, `CloudAdapter`,
     `get_key_name`, `resolve_adapter`, etc. preserved.)
-  - `PCloudConfig` SHALL NO LONGER be re-exported from
-    `yascheduler.infra.cloud` (cloud-init-rename-and-prune: the
-    single-implementer Protocol was collapsed into its sole concrete class
-    `CloudInitConfig`; the Protocol is deleted from
-    `infra/cloud/protocols.py`; the canonical type for cloud-init config
-    parameters is now `CloudInitConfig`).
-  - `CloudCapacity` SHALL NO LONGER be re-exported from
-    `yascheduler.infra.cloud` (cloud-init-rename-and-prune: the dead
-    dataclass was deleted; its last consumer was removed in the archived
-    `cloud-provisioner-pure` change which rewrote `_clouds_get_capacity` to
-    return `int`; the unrelated `CloudCapacityExhaustedError` domain
-    exception in `domain/exceptions.py` is unaffected).
-  - `CloudConfig` (the cloud-init renderer, NOT the domain Protocol) SHALL
-    NO LONGER be re-exported from `yascheduler.infra.cloud`
-    (cloud-init-rename-and-prune: the class was renamed to `CloudInitConfig`;
-    the canonical import is `from yascheduler.infra.cloud import
-    CloudInitConfig`).
 - **`yascheduler/infra/persistence/__init__.py`** SHALL re-export:
   - `apply_schema` from `.postgres_schema` (consumed by `entrypoints.cli.init` via the `infra` layer facade).
   - `PostgresUnitOfWork` from `.postgres_uow` (consumed by the composition root `yascheduler.entrypoints.di` via the `infra` layer facade).
   - (Preserved existing `load_query` and `UnitOfWorkNotInitializedError`.)
-- **`yascheduler/config/__init__.py`** SHALL re-export:
-  - `Config` from `.config` (consumed by daemon/CLI entry points until P4).
-  - `ConfigDb` from `.db` (consumed by `infra/persistence/*` until P4).
-  - `ConfigLocal` from `.local` (consumed by orchestrator/cloud manager until P4).
-  - `ConfigRemote` from `.remote` (consumed by orchestrator/cloud manager until P4).
-  - `AzureImageReference` SHALL NO LONGER be re-exported from `yascheduler.config`
-    (cloud-configs-to-infra-registry: the symbol moved to
-    `yascheduler.infra.cloud`; the canonical import is
-    `from yascheduler.infra.cloud import AzureImageReference`).
-  - `ConfigCloud`, `ConfigCloudAzure`, `ConfigCloudHetzner`, `ConfigCloudUpcloud`,
-    `ConfigCloudVastAI` SHALL NO LONGER be re-exported from `yascheduler.config`
-    (cloud-configs-to-infra-registry: the symbols moved to
-    `yascheduler.infra.cloud`; the canonical import is
-    `from yascheduler.infra.cloud import ...`).
-
-`yascheduler/config/__init__.py` SHALL NOT re-export `Engine`,
-`EngineRepository`, `Deploy`, `LocalFilesDeploy`, `LocalArchiveDeploy`, or
-`RemoteArchiveDeploy` — these symbols move to `yascheduler.domain` in the
-`engine-to-domain-frozen` change. The physical files
-`yascheduler/config/engine.py` and `yascheduler/config/engine_repository.py`
-SHALL NOT exist after this change; engine domain types live in
-`yascheduler/domain/engine.py` and are re-exported via
-`yascheduler.domain.model` and `yascheduler.domain`.
 
 The re-exports enumerated here are the complete set required to make
 every pre-existing cross-package import R2-compliant, including
-composition-root (`yascheduler.entrypoints.di`) wiring. (Engine types are
-now R2-compliant via `yascheduler.domain`, not `yascheduler.config`.)
+composition-root (`yascheduler.entrypoints.di`) wiring.
 
 #### Scenario: Infra layer facade exposes the cross-layer surface
 - **WHEN** a consumer imports `from yascheduler.infra import SSHMachineRepository, SSHMachineOperations, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
@@ -529,55 +476,15 @@ now R2-compliant via `yascheduler.domain`, not `yascheduler.config`.)
 
 #### Scenario: Cloud subpackage facade exposes cloud config DTOs
 - **WHEN** a consumer imports `from yascheduler.infra.cloud import ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference`
-- **THEN** all six symbols resolve without ImportError (the DTOs were relocated from
-  `yascheduler.config.cloud`; the cloud subpackage facade is now the canonical path)
+- **THEN** all six symbols resolve without ImportError
 
 #### Scenario: Cloud subpackage facade exposes CloudInitConfig
 - **WHEN** a consumer imports `from yascheduler.infra.cloud import CloudInitConfig`
-- **THEN** the symbol resolves without ImportError (the cloud-init renderer was
-  renamed from `CloudConfig` in `cloud_config.py` to `CloudInitConfig` in
-  `cloud_init.py` in the `cloud-init-rename-and-prune` change)
-
-#### Scenario: Cloud subpackage facade no longer re-exports PCloudConfig
-- **WHEN** a consumer attempts `from yascheduler.infra.cloud import PCloudConfig`
-- **THEN** `ImportError` is raised (the single-implementer Protocol was collapsed
-  into its sole concrete class `CloudInitConfig`; the Protocol is deleted from
-  `infra/cloud/protocols.py`; the canonical type for cloud-init config params is
-  `CloudInitConfig`)
-
-#### Scenario: Cloud subpackage facade no longer re-exports CloudCapacity
-- **WHEN** a consumer attempts `from yascheduler.infra.cloud import CloudCapacity`
-- **THEN** `ImportError` is raised (the dead dataclass was deleted; its last
-  consumer was removed in the archived `cloud-provisioner-pure` change; the
-  unrelated `CloudCapacityExhaustedError` domain exception in
-  `domain/exceptions.py` is NOT affected and remains importable from
-  `yascheduler.domain`)
-
-#### Scenario: Cloud subpackage facade no longer re-exports the infra CloudConfig renderer
-- **WHEN** a consumer attempts `from yascheduler.infra.cloud import CloudConfig`
-- **THEN** `ImportError` is raised for the renderer (the class was renamed to
-  `CloudInitConfig`; the canonical import is `from yascheduler.infra.cloud
-  import CloudInitConfig`). Note: `from yascheduler.domain import CloudConfig`
-  continues to resolve — that is the unrelated domain Protocol (the 6-field
-  provider-config contract in `domain/ports.py`), which this change does NOT
-  touch.
+- **THEN** the symbol resolves without ImportError
 
 #### Scenario: Persistence subpackage facade exposes apply_schema and PostgresUnitOfWork
 - **WHEN** a consumer imports `from yascheduler.infra.persistence import apply_schema, PostgresUnitOfWork`
 - **THEN** both symbols resolve without ImportError
-
-#### Scenario: Config facade no longer re-exports cloud config DTOs
-- **WHEN** a consumer imports `from yascheduler.config import ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference`
-- **THEN** ImportError is raised (the symbols moved to `yascheduler.infra.cloud`; the
-  canonical import path is `from yascheduler.infra.cloud import ...`)
-
-#### Scenario: Config facade no longer exposes Engine types
-- **WHEN** a consumer attempts `from yascheduler.config import Engine, EngineRepository, Deploy, LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy`
-- **THEN** `ImportError` is raised (the symbols are re-exported by `yascheduler.domain`, not `yascheduler.config`)
-
-#### Scenario: Config engine modules removed
-- **WHEN** the `yascheduler/config/` directory is inspected for `engine.py` and `engine_repository.py`
-- **THEN** neither file exists; the engine domain types live in `yascheduler/domain/engine.py`
 
 ### Requirement: Documented private-symbol carve-outs
 

@@ -12,90 +12,30 @@ each entry point instantiates only the adapters it needs.
 The system SHALL provide an `async make_daemon(config: Config, log:
 Logger | None = None, *, clouds: CloudProvisionerImpl | None = None) ->
 Orchestrator` factory function, exposed at `yascheduler.entrypoints.di`.
-The `Config` aggregate SHALL be imported from
-`yascheduler.entrypoints.config` (not `yascheduler.config`). The function
-SHALL create a `PostgresUnitOfWork` factory and pass it to the
-`Orchestrator` instead of a legacy DB facade. It SHALL construct the SSH
-infrastructure directly as TWO ports — a `MachineRepository` (instantiated
-as `SSHMachineRepository`) and a `MachineOperations` (instantiated as
-`SSHMachineOperations` receiving the repository), then inject them into
-the consumers that previously took a single `gateway`. It SHALL NOT
-construct a single `SSHMachineGateway`. It SHALL NOT import from
-`remote_machine/`, `clouds/`, or `infra/ssh/gateway.py` (deleted). It
-SHALL NOT import from `infra/ssh/helpers.py` (deleted).
-
-The function SHALL NOT run schema migration, and SHALL NOT accept a `db`
-parameter. Schema migration is the operator's responsibility (run
-`yainit` before starting the daemon).
-
-The function SHALL construct `CloudProvisionerImpl` without a `node_repo`
-parameter — the adapter is a pure cloud-API client. The function SHALL
-construct an `AllocationTracker`, an `asyncio.Lock` for allocation
-serialization, and a filtered `active_clouds` list (clouds with
-`max_nodes > 0` AND a successfully resolved adapter), passing all three
-to the `Orchestrator` alongside the `clouds` instance.
-
-The function SHALL NOT pass `adapters` or `configs` dicts to the
-`Orchestrator` — provider selection is delegated to the
-`clouds.select_provider` port method, and `adapters`/`configs` stay on
-`CloudProvisionerImpl`.
-
-The function SHALL unpack the `Config` aggregate when constructing the
-`Orchestrator`: `config.local` SHALL be passed as the `local_settings`
-parameter, `config.remote` SHALL be passed as the `remote_defaults`
-parameter, and `list_private_keys` from `yascheduler.infra.ssh.keys` SHALL
-be passed as the `list_private_keys_fn` callable. The `Orchestrator` SHALL
-NOT receive the `Config` aggregate itself.
+The `Config` aggregate SHALL be imported from `yascheduler.entrypoints.config`.
+The function SHALL create a `PostgresUnitOfWork` factory and pass it to the
+`Orchestrator`. It SHALL construct the SSH infrastructure directly as TWO ports
+— a `MachineRepository` (instantiated as `SSHMachineRepository`) and a
+`MachineOperations` (instantiated as `SSHMachineOperations`) — and pass both to
+the `Orchestrator` and to `CloudProvisionerImpl`.
 
 The composition root SHALL NOT introduce a DB-facade class. Persistence is
 accessed only via `PostgresUnitOfWork` and the repository ports
-(`TaskRepository`, `NodeRepository`). No module in
-`yascheduler.entrypoints.di` SHALL import from `yascheduler.db` (the
-module is removed) or from `yascheduler.config` (the package is removed).
+(`TaskRepository`, `NodeRepository`).
 
 The composition root SHALL NOT use `typing.cast` to bridge between the
 domain `CloudConfig` Protocol and the infra `ConfigCloud` Union. The
 `typing.cast` symbol SHALL NOT be imported by `yascheduler.entrypoints.di`.
 
-#### Scenario: make_daemon returns orchestrator with UoW factory
-
-- **WHEN** `make_daemon(config)` is called with a valid Config
-- **THEN** returns an Orchestrator wired with `uow_factory`, `repository: MachineRepository` (an `SSHMachineRepository` instance), `operations: MachineOperations` (an `SSHMachineOperations` instance), `CloudProvisionerImpl`, `AllocationTracker`, `allocation_lock`, `active_clouds`, `local_settings=config.local`, `remote_defaults=config.remote`, and `list_private_keys_fn=list_private_keys` — without running schema migration, and without constructing any of the removed symbols (`SSHMachineGateway`, `RemoteMachineRepository`, the `DB` facade class)
-
-#### Scenario: make_daemon accepts pre-built clouds
-
-- **WHEN** `make_daemon(config, clouds=my_clouds)` is called
-- **THEN** the provided `clouds` are wired to the orchestrator; no schema migration runs
-
-#### Scenario: make_daemon unpacks Config into orchestrator
-
-- **WHEN** `make_daemon(config)` is inspected for how it constructs `Orchestrator`
-- **THEN** it passes `local_settings=config.local` and `remote_defaults=config.remote` (not `config=config`); the `Orchestrator` never receives the aggregate
-
-#### Scenario: make_daemon imports Config from entrypoints
+#### Scenario: Config imported from entrypoints
 
 - **WHEN** `yascheduler.entrypoints.di` is inspected for its `Config` import
-- **THEN** it imports `Config` from `yascheduler.entrypoints.config` (or `yascheduler.entrypoints`), not from `yascheduler.config`
+- **THEN** it imports `Config` from `yascheduler.entrypoints.config` (or `yascheduler.entrypoints`)
 
 #### Scenario: No DB-facade import in the composition root
 
 - **WHEN** `yascheduler.entrypoints.di` is imported
-- **THEN** it does NOT import a `DB` facade from `yascheduler.db`, and no `DB`-like facade class is introduced; persistence is wired only via `PostgresUnitOfWork`; it does NOT import from `yascheduler.config`
-
-#### Scenario: No cast bridges in the composition root
-
-- **WHEN** `yascheduler/entrypoints/di.py` is parsed with `ast` and walked for
-  `Call` nodes whose function is the bare name `cast` or the attribute
-  `typing.cast`, and for `ImportFrom` from `typing` binding the name `cast`
-- **THEN** zero matches are found
-
-#### Scenario: active_clouds built without cast
-
-- **WHEN** `make_daemon` is inspected for the construction of the `active_clouds`
-  value in the `clouds is None` branch (the loop appending resolved configs) and
-  in the `clouds is not None` branch (the list comprehension filtering by
-  `max_nodes > 0` and `cfg.prefix in resolved_prefixes`)
-- **THEN** neither branch wraps its result in `cast("list[ConfigCloud]", ...)`
+- **THEN** it does NOT import a `DB` facade, and no `DB`-like facade class is introduced; persistence is wired only via `PostgresUnitOfWork`
 
 ### Requirement: make_cli_deps factory
 

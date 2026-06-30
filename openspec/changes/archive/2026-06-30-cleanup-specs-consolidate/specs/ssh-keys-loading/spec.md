@@ -1,10 +1,8 @@
-## Purpose
+## REMOVED Requirements
 
-Pure-function SSH private-key discovery from a keys directory, consumed by the
-orchestrator (as an injected callable), the cloud provisioner, and the
-node-management CLI.
+### Requirement: ConfigLocal migrated to stdlib dataclass
 
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: SSH private-key discovery as a pure function
 

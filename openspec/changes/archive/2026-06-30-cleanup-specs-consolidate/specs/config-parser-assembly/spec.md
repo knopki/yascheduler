@@ -1,11 +1,4 @@
-# Config Parser Assembly
-
-## Purpose
-
-The `parse_config` assembly function and per-section parser helpers that read
-an INI file and produce a frozen `Config` aggregate, keeping value objects pure.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: parse_config assembly
 

@@ -52,7 +52,7 @@ removed before any reader touches it; no caller needs to supply a username.
 - **WHEN** `add_tmp("aws")` is called
 - **THEN** a tmp-node row is inserted with `enabled=FALSE`, the given cloud, and `username` left to the DB default (`'root'`); the generated IP is returned
 
-### Requirement: MachineRepository, MachineSession, and MachineOperations ports replace MachineGateway
+### Requirement: MachineRepository, MachineSession, and MachineOperations ports
 
 The system SHALL define three `@runtime_checkable` Protocols in
 `yascheduler/domain/ports.py`:
@@ -90,8 +90,7 @@ Application-layer consumers (`allocate_task.py`, `consume_task.py`,
 `deallocate_nodes.py`, `abandon_node.py`, `orchestrator.py`) SHALL type
 their SSH-side parameters against `MachineRepository`,
 `MachineSession`, and/or `MachineOperations` (one or more, depending on
-which methods they call) — never against `MachineGateway` (removed by
-`decompose-ssh-gateway`).
+which methods they call).
 
 #### Scenario: Import MachineRepository from domain facade
 
@@ -123,73 +122,19 @@ which methods they call) — never against `MachineGateway` (removed by
   `application/abandon_node.py` are inspected for SSH-side parameter
   annotations
 - **THEN** the annotations are `MachineRepository`, `MachineSession`,
-  and/or `MachineOperations` (per the methods each consumer calls); the
-  annotation `MachineGateway` does not appear in any of these files
+  and/or `MachineOperations` (per the methods each consumer calls)
 
 ### Requirement: CloudConfig structural Protocol
 
 The system SHALL define a `@runtime_checkable` `CloudConfig` Protocol in
-`yascheduler/domain/ports.py` with attributes:
-- `prefix: str`
-- `max_nodes: int`
-- `idle_tolerance: int`
-- `username: str`
-- `jump_username: str | None`
-- `jump_host: str | None`
+`yascheduler/domain/ports.py` capturing the cloud-config surface that
+application-layer consumers (`deallocate_nodes`, `orchestrator`) read.
 
-`CloudConfig` captures the 6-field surface that application-layer consumers
-(`deallocate_nodes`, `orchestrator`) read from cloud provider configs. The
-concrete `ConfigCloud*` DTOs in `infra/cloud/cloud_configs.py` SHALL
-**explicitly inherit** `CloudConfig` as a typing aid — the inheritance removes
-the writable-vs-frozen mismatch that previously forced `cast` bridges in the
-composition root and parser. The Protocol remains structural: a DTO outside
-the inheritance tree still satisfies `CloudConfig` structurally per PEP 544;
-the explicit inheritance by the 4 `ConfigCloud*` DTOs does not relax the
-structural contract.
-
-Application-layer consumers SHALL type `config_clouds` / `active_clouds`
-parameters as `Sequence[CloudConfig]`, not `Sequence[ConfigCloud]`, keeping
-`application → infra` TYPE_CHECKING-only. `CloudConfig` is a structural
-Protocol for the minimal surface a consumer needs; it stands as its own
-requirement (previously sub-prose under the `MachineGateway port`
-requirement) because it has its own implementers (the 4 `ConfigCloud*` DTOs)
-and its own consumption surface (`deallocate_nodes`, `orchestrator`), unlike
-the single-implementer `Engine` case where the `OccupancyConfig` and
-`TaskExecutionEngine` Protocols were removed.
-
-The `CloudConfig` Protocol's docstring SHALL reflect the explicit-inheritance
-choice — the prior "(no explicit inheritance)" wording (sub-prose under the
-`MachineGateway port` requirement) becomes stale after the 4 `ConfigCloud*`
-DTOs gain explicit inheritance; the docstring SHALL state that the DTOs inherit
-the Protocol explicitly as a typing aid while structural matching continues to
-apply to any DTO declaring the 6 fields. The stale "satisfied ... without
-inheritance" prose under the `MachineGateway port` requirement SHALL be removed
-from that location — the CloudConfig contract now stands as its own
-requirement (this one), and the `MachineGateway port` requirement SHALL no
-longer carry CloudConfig sub-prose.
-
-#### Scenario: CloudConfig is runtime_checkable and satisfied by ConfigCloud DTOs
-- **WHEN** `isinstance(ConfigCloudAzure(...), CloudConfig)` is evaluated
-- **THEN** it returns `True` (the DTO inherits the Protocol explicitly; the
-  Protocol is `@runtime_checkable`)
-
-#### Scenario: CloudConfig docstring reflects explicit inheritance
-- **WHEN** the `CloudConfig` Protocol's docstring in
-  `yascheduler/domain/ports.py` is inspected
-- **THEN** it does NOT contain the phrase "(no explicit inheritance)" (the 4
-  `ConfigCloud*` DTOs now inherit the Protocol explicitly); it SHALL state
-  that the DTOs inherit the Protocol as a typing aid and that structural
-  matching continues to apply to any DTO declaring the 6 fields
-
-#### Scenario: No stale "without inheritance" prose under MachineGateway port
-- **WHEN** the `### Requirement: MachineGateway port` block in
-  `yascheduler/domain/ports.py` (or in the rendered spec) is inspected
-- **THEN** it does NOT carry the CloudConfig sub-prose previously at lines
-  100-117 of `openspec/specs/domain-ports/spec.md` (the CloudConfig contract
-  now stands as its own requirement; the `MachineGateway port` requirement
-  no longer carries CloudConfig sub-prose or the "CloudConfig is
-  runtime_checkable and satisfied by ConfigCloud DTOs" Scenario previously
-  at lines 162-164)
+The authoritative field list, the explicit-inheritance contract with the
+`ConfigCloud*` DTOs, and the importability scenarios live in the `cloud-config`
+capability. `domain-ports` asserts only that the Protocol is defined here, is
+`@runtime_checkable`, and is exposed via `yascheduler.domain.ports` and
+`yascheduler.domain` facades.
 
 #### Scenario: CloudConfig importable from domain facade
 - **WHEN** a consumer imports `from yascheduler.domain import CloudConfig`
@@ -216,8 +161,8 @@ provider has capacity OR when the selected provider's op semaphore is
 locked (throttle). The caller's `selection is None` branch handles
 cleanup.
 
-`capacity()` is removed — capacity counting is a use case / orchestrator
-responsibility, not a cloud adapter concern.
+`capacity()` is not part of the port — capacity counting is a use case /
+orchestrator responsibility, not a cloud adapter concern.
 
 `select_provider` returns the selected provider's name as a bare `str`,
 matching the identity-string convention used across `NodeRepository`
@@ -229,10 +174,6 @@ back to `allocate`/`deallocate` unchanged.
 #### Scenario: Allocate cloud node
 - **WHEN** `allocate("aws")` is called with a valid provider name
 - **THEN** returns a Node with the provisioned IP (no DB write inside the adapter)
-
-#### Scenario: Report capacity
-- **WHEN** `capacity()` is called
-- **THEN** returns a dict mapping provider names to available node counts
 
 #### Scenario: Deallocate cloud node with explicit cloud
 - **WHEN** `deallocate(cloud="aws", ip="10.0.0.1")` is called
@@ -256,10 +197,6 @@ The system SHALL expose all port Protocols from `yascheduler.domain.ports`,
 including `CloudConfig`, `MachineRepository`, `MachineSession`, and
 `MachineOperations`.
 
-The module SHALL NOT export `MachineGateway` — the Protocol is removed
-and replaced by `MachineRepository` + `MachineSession` +
-`MachineOperations`.
-
 #### Scenario: Import ports for adapter implementation
 
 - **WHEN** an adapter module imports `from yascheduler.domain.ports import TaskRepository`
@@ -268,14 +205,4 @@ and replaced by `MachineRepository` + `MachineSession` +
 #### Scenario: Import MachineRepository, MachineSession, and MachineOperations from domain facade
 
 - **WHEN** a consumer imports `from yascheduler.domain import MachineRepository, MachineSession, MachineOperations`
-- **THEN** the Protocol classes resolve without ImportError
-
-#### Scenario: Import CloudConfig from domain facade
-
-- **WHEN** a consumer imports `from yascheduler.domain import CloudConfig`
-- **THEN** the Protocol class resolves without ImportError
-
-#### Scenario: MachineGateway not exported
-
-- **WHEN** `yascheduler.domain.ports` is inspected for `MachineGateway`
-- **THEN** the name is absent; the Protocol has been removed and replaced by `MachineRepository` + `MachineOperations`
+- **THEN** all three Protocol classes resolve without ImportError

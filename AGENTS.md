@@ -45,14 +45,40 @@ implementation.
 If the user requests changes outside the OpenSpec workflow, offer to use
 OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 
-- [testing-unit](openspec/specs/testing-unit) — unit tests: config parsing, data
-  models, DB (mocked), remote machine management, scheduler orchestration
-- [test-db-integration](openspec/specs/test-db-integration) — integration tests
-  for DB against real PostgreSQL via testcontainers
-- [e2e-testing](openspec/specs/e2e-testing) — end-to-end tests: full task
-  lifecycle against real PostgreSQL and SSH containers via testcontainers
-- [testing-infrastructure](openspec/specs/testing-infrastructure) — pytest
-  config, directory structure, shared fixtures, CI workflow
+- `openspec/specs/abstract-uow` — `AbstractUnitOfWork` Protocol and the
+  transaction-boundary contract shared by use cases
+- `openspec/specs/cli-args`
+- `openspec/specs/cli-commands`
+- `openspec/specs/cloud-config`
+- `openspec/specs/cloud-providers`
+- `openspec/specs/cloud-provisioner`
+- `openspec/specs/config-parser-assembly`
+- `openspec/specs/config-value-objects` — frozen
+  `LocalSettings`/`RemoteDefaults`/`PostgresDbConfig`/`Config` dataclasses and
+  the composition-root-only `Config` consumption rule
+- `openspec/specs/daemon-common`
+- `openspec/specs/dependency-injection`
+- `openspec/specs/domain-engine-types`
+- `openspec/specs/domain-entities`
+- `openspec/specs/domain-events`
+- `openspec/specs/domain-exceptions`
+- `openspec/specs/domain-ports`
+- `openspec/specs/domain-services`
+- `openspec/specs/e2e-testing`
+- `openspec/specs/message-bus`
+- `openspec/specs/orchestrator`
+- `openspec/specs/package-facades`
+- `openspec/specs/platform-adapters`
+- `openspec/specs/postgres-repositories`
+- `openspec/specs/postgres-schema-apply`
+- `openspec/specs/postgres-uow`
+- `openspec/specs/sql-queries`
+- `openspec/specs/ssh-infrastructure`
+- `openspec/specs/ssh-keys-loading`
+- `openspec/specs/test-db-integration`
+- `openspec/specs/testing-unit`
+- `openspec/specs/use-cases`
+- `openspec/specs/webhook-handler`
 
 ## Verification
 

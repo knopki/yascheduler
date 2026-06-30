@@ -13,8 +13,7 @@ idle cloud nodes.
 The system SHALL provide an `Orchestrator` class that runs 4 producer-consumer
 loops. The `Orchestrator` SHALL accept `uow_factory: Callable[[],
 AbstractUnitOfWork]`, `repository: MachineRepository` and `operations:
-MachineOperations` (Protocol types for all code paths, replacing the former
-single `gateway: MachineGateway`), `clouds: CloudProvisioner` (Protocol type), `allocation_tracker:
+MachineOperations` (Protocol types for all code paths), `clouds: CloudProvisioner` (Protocol type), `allocation_tracker:
 AllocationTracker`, `active_clouds: Sequence[CloudConfig]` (domain Protocol
 type), and `allocation_lock: asyncio.Lock`. The orchestrator SHALL own the
 tracker, the filtered cloud config list, and the lock — constructing them once

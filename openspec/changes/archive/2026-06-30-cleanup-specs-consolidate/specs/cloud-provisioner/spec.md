@@ -1,10 +1,8 @@
-# Cloud Provisioner
+## REMOVED Requirements
 
-## Purpose
+### Requirement: CloudProvisionerImpl.stop closes machine_gateway connections
 
-CloudProvisionerImpl class that manages cloud provider selection, VM provisioning (allocate/deallocate/capacity), cloud-init rendering, SSH key management, node setup after provisioning, and concurrent allocation throttling.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: CloudProvisionerImpl implements CloudProvisioner
 
@@ -54,43 +52,6 @@ declare these fields.
 - **WHEN** `CloudProvisionerImpl._connect_to_vm` is inspected for how it reads `jump_host` / `jump_username` from the config DTO
 - **THEN** it uses `config.jump_host or None` / `config.jump_username or None` (direct attribute access)
 
-### Requirement: Provider selection by priority and capacity
-
-The system SHALL select the best available cloud provider based on
-configurable priority and current capacity. Provider selection SHALL be
-exposed via the sync port method `select_provider(platforms,
-current_counts) -> str | None` on `CloudProvisioner`. The implementation
-SHALL call the adapter-internal pure function `select_provider_pure(adapters,
-configs, platforms, current_counts, log)` and return the selected
-adapter's `name` as a bare `str` (or `None`). The application layer SHALL
-NOT call `select_provider_pure` directly or reference
-`CloudAdapter`/`ConfigCloud` types.
-
-If the selected provider's op semaphore is locked (concurrent op limit
-reached), the port method SHALL return `None` (not raise). This matches
-current caller-visible semantics where `allocate_with_tracking` returned
-`None` on throttle.
-
-The returned `str` is the selected provider's identity, passed back
-unchanged by the caller to `allocate(provider)` and `deallocate(cloud, ip)`.
-No `ProviderSelection` value object is constructed or returned.
-
-#### Scenario: Higher priority wins
-- **WHEN** provider A has priority=100 and provider B has priority=50, both with capacity
-- **THEN** `select_provider(platforms, counts)` returns the string `provider_a.name`
-
-#### Scenario: Full provider skipped
-- **WHEN** a provider has reached max_nodes (current_counts[name] >= configs[name].max_nodes)
-- **THEN** it is excluded from selection
-
-#### Scenario: No platform support
-- **WHEN** no provider supports any of the requested platforms
-- **THEN** `select_provider` returns `None`
-
-#### Scenario: Provider op-limit returns None
-- **WHEN** the highest-priority provider with capacity has its op semaphore locked
-- **THEN** `select_provider` returns `None` (does not raise); the caller's `selection is None` branch handles cleanup
-
 ### Requirement: Node setup after provisioning
 
 The system SHALL run cloud-init status check and engine setup after a VM is
@@ -104,23 +65,6 @@ created, before returning the Node. All setup logic SHALL be contained within
 #### Scenario: Engine packages installed
 - **WHEN** node setup runs on a fresh VM
 - **THEN** required packages for configured engines are installed
-
-### Requirement: Concurrent allocation throttling
-
-The system SHALL prevent duplicate allocation requests for the same task
-while a provisioning operation is in-flight. Throttling SHALL be owned by
-the application layer: `AllocationTracker` deduplicates by task_id, and
-the `CloudProvisioner.select_provider` port method returns `None` when
-the selected provider's op semaphore is locked (concurrent op limit
-reached).
-
-#### Scenario: Duplicate request ignored
-- **WHEN** `allocate_task` is called for task_id=42 while task 42 is already tracked by `AllocationTracker`
-- **THEN** the second call returns immediately without creating a second VM
-
-#### Scenario: Provider op-limit returns None
-- **WHEN** the selected provider's op semaphore is locked (concurrent op limit reached)
-- **THEN** `select_provider` returns `None` and the use case's `selection is None` branch calls `tracker.discard(task_id)` and returns False
 
 ### Requirement: CloudProvisionerImpl owns cloud-init rendering and SSH key management
 
@@ -156,6 +100,8 @@ boundary guard narrowing `cloud_config` to the concrete class.
 #### Scenario: CreateNodeCallable types cloud_config as CloudInitConfig
 - **WHEN** `CreateNodeCallable.__call__` in `infra/cloud/protocols.py` is inspected for its `cloud_config` parameter type annotation
 - **THEN** the annotation is `Optional[CloudInitConfig]` (or `CloudInitConfig | None`)
+
+## ADDED Requirements
 
 ### Requirement: CloudProvisionerImpl.stop closes machine_repository connections
 

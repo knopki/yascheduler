@@ -1,11 +1,4 @@
-# Platform Adapters
-
-## Purpose
-
-Provide platform-specific SSH adapters (Linux, Debian, etc.) relocated from
-remote_machine/ to infra/ssh/platform/ with backward-compatible re-exports.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Platform code relocated
 

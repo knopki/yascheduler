@@ -1,10 +1,9 @@
-# Cloud Config
+## REMOVED Requirements
 
-## Purpose
+### Requirement: Cloud config DTOs relocated to infra
+### Requirement: Config.from_config_parser delegates cloud assembly
 
-Cloud configuration contract: the CloudConfig structural Protocol, the frozen stdlib dataclass DTOs (ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference) relocated to infra, the per-prefix parser registry, the per-prefix parser functions, and Config.from_config_parser delegation of cloud assembly.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: CloudConfig structural Protocol
 
@@ -104,27 +103,6 @@ file — the DTO default is the sole source.
 - **WHEN** `entrypoints/config_parser.py` is inspected for any `connect_grace` token
 - **THEN** zero matches are found (the DTO default is the sole source)
 
-### Requirement: Cloud config parser registry
-
-The system SHALL define a `CLOUD_CONFIG_PARSERS: dict[str, Callable[[SectionProxy], CloudConfig]]` registry in `yascheduler/entrypoints/config_parser.py` mapping each cloud provider prefix (`az`, `hetzner`, `upcloud`, `vastai`) to its parser function.
-
-The registry lives at the composition-root layer (`entrypoints`) so the `infra → entrypoints` dependency direction stays R3-legal (the registry references parser functions, which are composition-root concerns; the DTOs live in `infra/cloud/cloud_configs.py`).
-
-Adding a new cloud provider SHALL require only:
-1. Defining a frozen dataclass DTO in `infra/cloud/cloud_configs.py`.
-2. Defining a parser function in `entrypoints/config_parser.py`.
-3. Registering one entry in `CLOUD_CONFIG_PARSERS`.
-
-No edit to `Config.from_config_parser` (the aggregate root) SHALL be required to add a provider — the registry is the open/closed seam.
-
-#### Scenario: Registry maps all four provider prefixes
-- **WHEN** `CLOUD_CONFIG_PARSERS` is inspected
-- **THEN** it contains exactly the keys `az`, `hetzner`, `upcloud`, `vastai` mapped to callable parser functions
-
-#### Scenario: Adding a provider does not touch the aggregate root
-- **WHEN** a contributor adds a new provider `foo` by adding a `ConfigCloudFoo` DTO, a `_parse_foo_section` parser, and a `"foo": _parse_foo_section` registry entry
-- **THEN** no edit to `Config.from_config_parser` is required; the new provider's `[cloud.foo]` sections round-trip into `Config.clouds` via registry iteration
-
 ### Requirement: Cloud section parser functions
 
 The system SHALL define `parse_cloud_section(sec: SectionProxy, prefix: str) -> CloudConfig` and `parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[CloudConfig]` in `yascheduler/entrypoints/config_parser.py`.
@@ -160,6 +138,8 @@ The per-prefix parser functions (`_parse_azure_section`, `_parse_hetzner_section
 #### Scenario: VastAI section round-trips via registry
 - **WHEN** `parse_clouds(cfg, remote)` is called with a config parser whose `[clouds]` section contains `vastai_*` keys
 - **THEN** the returned list contains a `ConfigCloudVastAI` instance with `prefix == "vastai"`
+
+## ADDED Requirements
 
 ### Requirement: Cloud config DTOs
 
