@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.9.0
+# VERSION: 5.11.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.10.0 - session-based-machine-handle: _try_start_on_machine takes MachineSession instead of ConnectedMachine; callback type changed to Callable[[MachineSession, Engine, Task], Awaitable[bool]]; _find_free_machines returns list[MachineSession]; _allocate_free_machine iterates sessions.
-#   PREVIOUS_CHANGE: v5.8.0 - Retype start_task_on_machine callback signatures to Engine; remove cast("TaskExecutionEngine") and cast("OccupancyConfig") bridging calls and the unused cast import (resolve-engine-protocol-debt).
+#   LAST_CHANGE: v5.11.0 - fix-cloud-alloc-session-lifecycle: Fix A in _find_free_machines intersects list_free with DB-enabled IPs (uow.nodes.list_enabled) so setup-in-flight tmp-nodes (enabled=FALSE) and disabled-but-not-disconnected nodes are invisible to the allocator; Fix C in _allocate_free_machine wraps each _try_start_on_machine in try/except (log + continue) so a single stale/unreachable session cannot abort the free-machine loop and starve the cloud branch.
+#   PREVIOUS_CHANGE: v5.10.0 - session-based-machine-handle: _try_start_on_machine takes MachineSession instead of ConnectedMachine; callback type changed to Callable[[MachineSession, Engine, Task], Awaitable[bool]]; _find_free_machines returns list[MachineSession]; _allocate_free_machine iterates sessions.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -152,9 +152,9 @@ async def _try_start_on_machine(
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     repository: MachineRepository - SSH repository with connected machines
 #   }
-#   OUTPUTS: { list[MachineSession] - Free sessions matching platforms }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY
+#   OUTPUTS: { list[MachineSession] - Free sessions matching platforms whose IP is DB-enabled and not busy }
+#   SIDE_EFFECTS: Reads uow.tasks.list_by_status({RUNNING}) and uow.nodes.list_enabled() in the same UoW. Enabled-gate invariant: a session is returned ONLY if its machine.ip is in the set of DB-enabled node IPs, so setup-in-flight tmp-nodes (enabled=FALSE) and disabled-but-not-disconnected nodes are excluded.
+#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-PERSISTENCE-UOW
 # END_CONTRACT: _find_free_machines
 async def _find_free_machines(
     engine: Engine,
@@ -164,11 +164,13 @@ async def _find_free_machines(
     # START_BLOCK_FIND_FREE_MACHINES
     async with uow_factory() as uow:
         running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
+        enabled_nodes = await uow.nodes.list_enabled()
     busy_node_ips = {t.allocated_ip for t in running_tasks if t.allocated_ip}
+    enabled_ips = {n.ip for n in enabled_nodes}
     free_sessions = [
         s
         for s in repository.list_free(platforms=list(engine.platforms))
-        if s.machine.ip not in busy_node_ips
+        if s.machine.ip in enabled_ips and s.machine.ip not in busy_node_ips
     ]
     return free_sessions
     # END_BLOCK_FIND_FREE_MACHINES
@@ -179,7 +181,7 @@ async def _find_free_machines(
 #   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, repository: MachineRepository, operations: MachineOperations,
 #     start_task_on_machine: Callable, tracker: AllocationTracker }
 #   OUTPUTS: { bool - True if allocated to a machine, False if not }
-#   SIDE_EFFECTS: Updates task status, starts occupancy check, records TaskAllocated event, discards tracker slot.
+#   SIDE_EFFECTS: Updates task status, starts occupancy check, records TaskAllocated event, discards tracker slot. Per-session failures are isolated: each _try_start_on_machine call is wrapped in try/except Exception, logged at error with task_id and ip, and the loop continues to the next session. A transient SSH failure does NOT call repository.disconnect — the monitor task owns session lifecycle. No exception propagates out of the loop.
 #   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _allocate_free_machine
 async def _allocate_free_machine(
@@ -195,16 +197,34 @@ async def _allocate_free_machine(
 
     # START_BLOCK_ALLOCATE_MACHINE
     for session in free_sessions:
-        if await _try_start_on_machine(
-            session,
-            engine,
-            task,
-            operations,
-            uow_factory,
-            start_task_on_machine,
-            tracker,
-        ):
-            return True
+        # START_BLOCK_TRY_START_ISOLATED
+        # Defense-in-depth: a single stale or transiently-unreachable session
+        # must not abort the loop and starve the cloud-provisioning branch.
+        # No repository.disconnect here — a transient SSH failure does not
+        # imply a dead session; the monitor task manages its lifecycle.
+        # Stale sessions left by failed setup are prevented at the source by
+        # the setup-failure disconnect in CloudProvisionerImpl.allocate.
+        try:
+            if await _try_start_on_machine(
+                session,
+                engine,
+                task,
+                operations,
+                uow_factory,
+                start_task_on_machine,
+                tracker,
+            ):
+                return True
+        except Exception as err:
+            logger.error(
+                "[AllocateTask][_allocate_free_machine][SESSION_FAILED] "
+                "task_id=%s ip=%s err=%s",
+                task.task_id,
+                session.ip,
+                err,
+            )
+            continue
+        # END_BLOCK_TRY_START_ISOLATED
     # END_BLOCK_ALLOCATE_MACHINE
 
     return False
@@ -389,7 +409,7 @@ async def _persist_node_with_cleanup(
         raise
     # END_BLOCK_FINAL_PERSIST
 
-    logger.info(
+    logger.debug(
         "[AllocateTask][allocate_task][CLOUD_DONE] task_id=%s ip=%s provider=%s",
         task_id,
         node.ip,

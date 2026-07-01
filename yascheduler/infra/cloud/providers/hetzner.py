@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/hetzner.py
-# VERSION: 1.8.0
+# VERSION: 1.8.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Hetzner Cloud server creation and deletion via API.
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Retype hetzner_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
-#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudHetzner from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
+#   LAST_CHANGE: v1.8.1 - fix-hetzner-ssh-key-uniqueness: get_ssh_key_id recovery branch now triggers on APIException code `uniqueness_error` (Hetzner's current duplicate-key wording "SSH key not unique") in addition to the legacy "already" substring; previously the new wording skipped the fingerprint/name lookup and re-raised, breaking all allocations once a key already existed on the Hetzner project.
+#   PREVIOUS_CHANGE: v1.8.0 - Retype hetzner_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
 # END_CHANGE_SUMMARY
 #
 """Hetzner cloud methods"""
@@ -85,7 +85,9 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
         hkey = client.ssh_keys.create(name=key_name, public_key=pub_key)
         return cast("int", hkey.id)
     except APIException as err:
-        if "already" in str(err):
+        # Hetzner signals a duplicate key with code `uniqueness_error` (newer
+        # API wording "SSH key not unique"); older wording contained "already".
+        if err.code == "uniqueness_error" or "already" in str(err):
             hkey = client.ssh_keys.get_by_fingerprint(
                 key.get_fingerprint("md5").split(":", maxsplit=1)[1]
             ) or client.ssh_keys.get_by_name(key_name)

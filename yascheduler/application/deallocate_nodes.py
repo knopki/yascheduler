@@ -55,13 +55,13 @@ async def deallocate_node(
 ) -> None:
     if repository.contains(node.ip):
         await repository.disconnect(node.ip)
-        logger.info(
+        logger.debug(
             "[deallocate_node][DISCONNECT] ip=%s gateway disconnected",
             node.ip,
         )
     if node.cloud:
         # START_BLOCK_DISABLE
-        logger.info(
+        logger.debug(
             "[deallocate_node][DISABLE] ip=%s cloud=%s",
             node.ip,
             node.cloud,
@@ -72,7 +72,7 @@ async def deallocate_node(
         # END_BLOCK_DISABLE
 
         # START_BLOCK_CLOUD_DELETE
-        logger.info(
+        logger.debug(
             "[deallocate_node][CLOUD_DELETE] ip=%s cloud=%s",
             node.ip,
             node.cloud,
@@ -81,7 +81,7 @@ async def deallocate_node(
         # END_BLOCK_CLOUD_DELETE
 
         # START_BLOCK_REMOVE
-        logger.info(
+        logger.debug(
             "[deallocate_node][REMOVE] ip=%s cloud=%s",
             node.ip,
             node.cloud,

@@ -314,6 +314,8 @@ class TestAllocate:
             raise RuntimeError("SSH timeout")
 
         repo.connect = _connect_fail
+        # Fix B: allocate now awaits machine_repository.disconnect on setup failure.
+        repo.disconnect = AsyncMock()
 
         prov = make_provisioner(
             adapters={"test": adapter},
@@ -354,6 +356,8 @@ class TestAllocate:
             return machine
 
         repo.connect = _connect
+        # Fix B: allocate now awaits machine_repository.disconnect on setup failure.
+        repo.disconnect = AsyncMock()
 
         async def _hang(*args: Any, **kwargs: Any) -> Any:
             await asyncio.sleep(60)
@@ -573,6 +577,27 @@ class TestCloudConfigGeneration:
         assert payload["bootcmd"] == ["echo hi", ["mkdir", "/x"]]
         assert payload["packages"] == ["vim", "htop"]
         assert payload["package_upgrade"] is True
+
+    def test_render_omits_empty_bootcmd_and_packages(self) -> None:
+        """Empty bootcmd/packages omitted — cloud-init schema rejects [] (minItems: 1, exit=2)."""
+        cc = CloudInitConfig(package_upgrade=True, packages=[])
+        payload = json.loads(cc.render()[len("#cloud-config\n") :])
+        assert "bootcmd" not in payload
+        assert "packages" not in payload
+        assert payload["package_upgrade"] is True
+
+    def test_render_default_omits_empty_lists(self) -> None:
+        """Default CloudInitConfig renders valid cloud-config with no empty-array keys."""
+        payload = json.loads(CloudInitConfig().render()[len("#cloud-config\n") :])
+        assert "bootcmd" not in payload
+        assert "packages" not in payload
+
+    def test_render_keeps_non_empty_lists(self) -> None:
+        """Non-empty bootcmd/packages are preserved when present."""
+        cc = CloudInitConfig(bootcmd=(["echo", "hi"],), packages=["vim"])
+        payload = json.loads(cc.render()[len("#cloud-config\n") :])
+        assert payload["bootcmd"] == [["echo", "hi"]]
+        assert payload["packages"] == ["vim"]
 
 
 class TestSelectProvider:

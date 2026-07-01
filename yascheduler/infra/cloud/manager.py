@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.9.0
+# VERSION: 2.11.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.10.0 - session-based-machine-handle: _setup_vm uses MachineSession instead of ConnectedMachine; _connect_to_vm returns MachineSession; session passed to run/setup_node/get_cpu_cores operations methods.
-#   PREVIOUS_CHANGE: v2.8.0 - stop() now delegates to machine_repository.disconnect_all() instead of being a no-op (share-ssh-gateway).
+#   LAST_CHANGE: v2.11.0 - fix-cloud-alloc-session-lifecycle: Fix B in CloudProvisionerImpl.allocate awaits machine_repository.disconnect(ip_addr) before adapter.delete_node on both setup-failure except paths (CloudSetupError and generic Exception) so a failed allocation no longer leaks a stale FREE session pointing at a deleted VM's IP; disconnect is best-effort (failures logged and swallowed) so a raise during SSH teardown cannot skip delete_node and orphan a billable VM; Fix D in _setup_vm CLOUD_INIT block includes stdout in the cloud-init failure message (cloud-init status --wait writes its status line to stdout).
+#   PREVIOUS_CHANGE: v2.10.0 - session-based-machine-handle: _setup_vm uses MachineSession instead of ConnectedMachine; _connect_to_vm returns MachineSession; session passed to run/setup_node/get_cpu_cores operations methods.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -141,7 +141,7 @@ class CloudProvisionerImpl:
     #   PURPOSE: Create VM on named provider, wait SSH, cloud-init, setup, return Node (no DB write).
     #   INPUTS: { provider: str - selected provider name (matches adapters dict key) }
     #   OUTPUTS: { Node - new node record (caller persists) }
-    #   SIDE_EFFECTS: Creates cloud VM, writes SSH key, installs engines. Deletes VM on setup failure.
+    #   SIDE_EFFECTS: Creates cloud VM, writes SSH key, installs engines. On setup failure: best-effort disconnect of the machine_repository session for the failed IP (failures logged and swallowed so delete_node is never skipped), then deletes the VM.
     #   RAISES: CloudAllocateError - if provider unknown or VM creation fails;
     #           CloudSetupError - if SSH/cloud-init/setup fails
     #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS
@@ -175,6 +175,17 @@ class CloudProvisionerImpl:
         # END_BLOCK_CREATE_VM
 
         # START_BLOCK_SETUP_VM
+        # On either setup-failure path, disconnect the machine_repository
+        # session for ip_addr BEFORE deleting the VM. A failed allocation
+        # would otherwise leak a stale FREE session pointing at the deleted
+        # VM's IP, which the allocator would pick up via list_free() and
+        # fail against. disconnect is a safe no-op when _connect_to_vm
+        # itself failed (never registered a session — see
+        # SSHMachineRepository.disconnect). The disconnect is best-effort:
+        # SSHMachineSession._close can raise (e.g. wait_closed on a broken
+        # transport), and such a failure MUST NOT skip delete_node or a
+        # billable VM would be orphaned — so disconnect failures are logged
+        # and swallowed, then delete_node always runs.
         try:
             node = await self._setup_vm(ip_addr, adapter, config)
         except CloudSetupError:
@@ -182,6 +193,14 @@ class CloudProvisionerImpl:
                 "[CloudProvisionerImpl][allocate][SETUP_FAILED] ip=%s - removing VM",
                 ip_addr,
             )
+            try:
+                await self.machine_repository.disconnect(ip_addr)
+            except Exception as disc_err:
+                self.log.warning(
+                    "[CloudProvisionerImpl][allocate][DISCONNECT_FAILED] ip=%s err=%s",
+                    ip_addr,
+                    disc_err,
+                )
             await adapter.delete_node(log=self.log, cfg=config, host=ip_addr)
             raise
         except Exception as err:
@@ -189,11 +208,19 @@ class CloudProvisionerImpl:
                 "[CloudProvisionerImpl][allocate][SETUP_FAILED] ip=%s - removing VM",
                 ip_addr,
             )
+            try:
+                await self.machine_repository.disconnect(ip_addr)
+            except Exception as disc_err:
+                self.log.warning(
+                    "[CloudProvisionerImpl][allocate][DISCONNECT_FAILED] ip=%s err=%s",
+                    ip_addr,
+                    disc_err,
+                )
             await adapter.delete_node(log=self.log, cfg=config, host=ip_addr)
             raise CloudSetupError(f"Setup node error: {err}") from err
         # END_BLOCK_SETUP_VM
 
-        self.log.info(
+        self.log.debug(
             "[CloudProvisionerImpl][allocate][DONE] ip=%s provider=%s ncpus=%d",
             node.ip,
             node.cloud,
@@ -234,7 +261,7 @@ class CloudProvisionerImpl:
 
         # START_BLOCK_DELETE_VM
         await adapter.delete_node(log=self.log, cfg=config, host=ip)
-        self.log.info(
+        self.log.debug(
             "[CloudProvisionerImpl][deallocate][DONE] ip=%s cloud=%s", ip, cloud
         )
         # END_BLOCK_DELETE_VM
@@ -317,7 +344,9 @@ class CloudProvisionerImpl:
         # START_BLOCK_CLOUD_INIT
         # `cloud-init status --wait` blocks until cloud-init finishes (or hangs).
         # Bound it with adapter.create_node_timeout so a hung cloud-init cannot
-        # pin an allocator worker forever.
+        # pin an allocator worker forever. The failure message includes both
+        # stdout and stderr — cloud-init writes its status line to stdout, so
+        # omitting stdout (the previous behavior) gave no clue why it failed.
         self.log.debug("[CloudProvisionerImpl][setup_vm][CLOUD_INIT] ip=%s", ip_addr)
         try:
             result = await asyncio.wait_for(
@@ -327,7 +356,7 @@ class CloudProvisionerImpl:
             if result.exit_code != 0:
                 raise CloudSetupError(
                     f"cloud-init failed on {ip_addr}: exit={result.exit_code} "
-                    f"stderr={result.stderr}"
+                    f"stdout={result.stdout} stderr={result.stderr}"
                 )
         except asyncio.TimeoutError as err:
             raise CloudSetupError(
@@ -357,7 +386,7 @@ class CloudProvisionerImpl:
             raise CloudSetupError(f"Get CPU cores for {ip_addr} failed: {err}") from err
         # END_BLOCK_GET_CPUS
 
-        self.log.info(
+        self.log.debug(
             "[CloudProvisionerImpl][setup_vm][READY] ip=%s ncpus=%d",
             ip_addr,
             ncpus,

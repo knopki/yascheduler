@@ -232,6 +232,11 @@ class TestAllocateTask:
         uow.tasks.get = AsyncMock(return_value=todo_task)
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.tasks.save = AsyncMock()
+        uow.nodes = AsyncMock()
+        # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
+        uow.nodes.list_enabled = AsyncMock(
+            return_value=[Node(ip="10.0.0.1", ncpus=4, enabled=True)]
+        )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
         uow.publish_events = AsyncMock()
