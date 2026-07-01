@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_connect_machine_consumer.py
-# VERSION: 1.2.0
+# VERSION: 1.2.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator._connect_machine_consumer never-connected-node grace timer + abandon dispatch.
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Rewrite TestConnectMachineProducerExcludesStaticNodes → TestConnectMachineProducerYieldsStaticNodes for fix-static-node-connect-exclusion: the producer filter no longer excludes cloud=None nodes (over-broad v6.2.1 FILTER_CLOUD_ONLY filter broke the yasetnode → daemon handoff, leaving tasks stuck in TO_DO). New contract: static nodes ARE yielded; a consumer-side guard before the grace-check retries them indefinitely without ever calling abandon_node. Added test_static_node_past_grace_does_not_abandon temporal guard.
-#   PREVIOUS_CHANGE: v1.1.0 - Add TestConnectMachineProducerExcludesStaticNodes covering the v6.2.1 producer filter (static nodes never reach the abandon path). Regression guard for the non-cloud-node auto-removal scope creep found in review.
+#   LAST_CHANGE: v1.2.1 - Fix TestConnectMachineConsumerGraceTimer on Python 3.12: asyncio calls time.monotonic during the await chain (run_in_executor), draining a side_effect=[a,b] list before the consumer reaches the grace-check → StopIteration → RuntimeError. Replaced exhausting list side_effects with non-exhausting return_value constants and pre-seeded _connect_failures for past-grace tests; dropped the fragile mock_mono.call_count==2 assertion. Behavior under test unchanged.
+#   PREVIOUS_CHANGE: v1.2.0 - Rewrite TestConnectMachineProducerExcludesStaticNodes → TestConnectMachineProducerYieldsStaticNodes for fix-static-node-connect-exclusion: the producer filter no longer excludes cloud=None nodes (over-broad v6.2.1 FILTER_CLOUD_ONLY filter broke the yasetnode → daemon handoff, leaving tasks stuck in TO_DO). New contract: static nodes ARE yielded; a consumer-side guard before the grace-check retries them indefinitely without ever calling abandon_node. Added test_static_node_past_grace_does_not_abandon temporal guard.
 # END_CHANGE_SUMMARY
 """Unit tests for Orchestrator._connect_machine_consumer grace timer + abandon dispatch.
 
@@ -148,13 +148,16 @@ class TestConnectMachineConsumerGraceTimer:
             side_effect=MachineConnectionError("10.0.0.5", "refused")
         )
 
-        # monotonic sequence: first failure records first_seen=100.0; the second
-        # read for `age` returns 110.0 → age=10s < grace=60s → retry path.
+        # Constant return_value (never exhausts): on first failure line 309
+        # records first_seen=110.0 and line 310 computes age=0 < grace=60s →
+        # retry path. A list side_effect would drain under Python 3.12, whose
+        # asyncio calls time.monotonic during the await chain before the
+        # consumer reaches the grace-check (StopIteration → RuntimeError).
         with (
             patch(
                 "yascheduler.application.orchestrator.time.monotonic",
-                side_effect=[100.0, 110.0],
-            ) as mock_mono,
+                return_value=110.0,
+            ),
             patch(
                 "yascheduler.application.orchestrator.abandon_node",
                 new=AsyncMock(),
@@ -162,7 +165,6 @@ class TestConnectMachineConsumerGraceTimer:
         ):
             await orch._connect_machine_consumer(UMessage("10.0.0.5", _make_node()))
 
-        assert mock_mono.call_count == 2
         mock_abandon.assert_not_called()
         # IP stays in the timer (retry path)
         assert "10.0.0.5" in orch._connect_failures
@@ -182,10 +184,12 @@ class TestConnectMachineConsumerGraceTimer:
             side_effect=MachineConnectionError("10.0.0.5", "refused")
         )
 
+        # Pre-seed first_seen so age = 165 - 100 = 65s >= 60s grace → abandon.
+        orch._connect_failures["10.0.0.5"] = 100.0
         with (
             patch(
                 "yascheduler.application.orchestrator.time.monotonic",
-                side_effect=[100.0, 165.0],
+                return_value=165.0,
             ),
             patch(
                 "yascheduler.application.orchestrator.abandon_node",
@@ -216,11 +220,12 @@ class TestConnectMachineConsumerGraceTimer:
             side_effect=MachineConnectionError("10.0.0.5", "x")
         )
 
-        # First call: failure within grace → IP recorded.
+        # First call: failure within grace → IP recorded (constant monotonic →
+        # age=0 < 60s → retry path, IP entered into the timer).
         with (
             patch(
                 "yascheduler.application.orchestrator.time.monotonic",
-                side_effect=[100.0, 105.0],
+                return_value=105.0,
             ),
             patch("yascheduler.application.orchestrator.abandon_node", new=AsyncMock()),
         ):
@@ -243,10 +248,13 @@ class TestConnectMachineConsumerGraceTimer:
             side_effect=MachineConnectionError("10.0.0.5", "x")
         )
 
+        # Pre-seed first_seen so age = 200 - 100 = 100s >= 60s → abandon path
+        # (abandon_node raises and is caught by the consumer).
+        orch._connect_failures["10.0.0.5"] = 100.0
         with (
             patch(
                 "yascheduler.application.orchestrator.time.monotonic",
-                side_effect=[100.0, 200.0],
+                return_value=200.0,
             ),
             patch(
                 "yascheduler.application.orchestrator.abandon_node",
