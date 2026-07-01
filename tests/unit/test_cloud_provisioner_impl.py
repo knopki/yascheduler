@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.6.0
+# VERSION: 2.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.6.0 - Rewrite TestStop.test_stop to inject a mock gateway and assert disconnect_all is awaited exactly once; add test_stop_idempotent_under_repeated_calls (share-ssh-gateway: stop now drains machine_gateway instead of being a no-op).
-#   PREVIOUS_CHANGE: v2.5.0 - Update import from yascheduler.infra.cloud.cloud_config.CloudConfig → yascheduler.infra.cloud.cloud_init.CloudInitConfig; rename CloudConfig(...) constructor and isinstance checks accordingly (cloud-init-rename-and-prune / D2).
+#   LAST_CHANGE: v2.8.0 - move-cloud-package-upgrade: rename test_cloud_config_package_upgrade_sourced_from_local_config → test_cloud_config_package_upgrade_sourced_from_per_cloud_config and rewrite both _get_cloud_config_data tests to pass a real ConfigCloudHetzner(package_upgrade=...) DTO as the new config arg (package_upgrade now sourced from config.package_upgrade, not local_config.cloud_package_upgrade).
+#   PREVIOUS_CHANGE: v2.7.0 - add-hetzner-live-e2e: update test_cloud_config_with_engine_packages to inject a MagicMock local_config with cloud_package_upgrade=True (now sourced from local_config instead of hardcoded True); add test_cloud_config_package_upgrade_sourced_from_local_config asserting False propagates to CloudInitConfig.package_upgrade.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -38,6 +38,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from yascheduler.domain.model import Node
+from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
 from yascheduler.infra.cloud.cloud_init import CloudInitConfig
 from yascheduler.infra.cloud.manager import (
     CloudAllocateError,
@@ -205,8 +206,8 @@ def mock_logger() -> MagicMock:
 
 
 def make_provisioner(
-    adapters: dict[str, MagicMock] | None = None,
-    configs: dict[str, MagicMock] | None = None,
+    adapters: dict[str, Any] | None = None,
+    configs: dict[str, Any] | None = None,
     machine_repository: MagicMock | None = None,
     machine_operations: MagicMock | None = None,
     local_config: MagicMock | None = None,
@@ -222,8 +223,8 @@ def make_provisioner(
         except RuntimeError:
             asyncio.set_event_loop(asyncio.new_event_loop())
     return CloudProvisionerImpl(
-        adapters=adapters or {},  # type: ignore[arg-type]
-        configs=configs or {},  # type: ignore[arg-type]
+        adapters=adapters or {},
+        configs=configs or {},
         machine_repository=machine_repository or _make_mock_repository(),
         machine_operations=machine_operations or _make_mock_operations(),
         local_config=local_config or MagicMock(),
@@ -548,20 +549,39 @@ class TestCloudConfigGeneration:
         self, mock_engines: MagicMock
     ) -> None:
         """Returns CloudInitConfig with packages from matched engines."""
-        adapter, config = _make_mock_adapter(name="test")
+        adapter, _config = _make_mock_adapter(name="test")
+        cloud_config = ConfigCloudHetzner(package_upgrade=True)
         prov = make_provisioner(
             adapters={"test": adapter},
-            configs={"test": config},
+            configs={"test": cloud_config},
             engines=mock_engines,
         )
 
-        cc = await prov._get_cloud_config_data(adapter)
+        cc = await prov._get_cloud_config_data(adapter, cloud_config)
 
         assert isinstance(cc, CloudInitConfig)
         assert cc.package_upgrade is True
         assert "vim" in cc.packages
         assert "htop" in cc.packages
         mock_engines.filter.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cloud_config_package_upgrade_sourced_from_per_cloud_config(
+        self, mock_engines: MagicMock
+    ) -> None:
+        """package_upgrade is sourced from config.package_upgrade (False propagates)."""
+        adapter, _config = _make_mock_adapter(name="test")
+        cloud_config = ConfigCloudHetzner(package_upgrade=False)
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": cloud_config},
+            engines=mock_engines,
+        )
+
+        cc = await prov._get_cloud_config_data(adapter, cloud_config)
+
+        assert isinstance(cc, CloudInitConfig)
+        assert cc.package_upgrade is False
 
     @pytest.mark.asyncio
     async def test_cloud_config_render_serializes(self) -> None:

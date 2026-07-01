@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_config.py
-# VERSION: 1.3.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for INI → config parsing across all yascheduler config sub-modules.
@@ -40,8 +40,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Migrate config DTO imports to new homes per config-aggregate-to-entrypoints (P4): ConfigDb→PostgresDbConfig (yascheduler.infra.persistence), ConfigLocal→LocalSettings (yascheduler.domain), ConfigRemote→RemoteDefaults (yascheduler.domain), Config→yascheduler.entrypoints, ConfigWarning/warn_unknown_fields→yascheduler.entrypoints._config_utils; X.from_config_parser_section calls → _parse_*_section free functions; Config.from_config_parser → parse_config; GRACE LINKS updated.
-#   PREVIOUS_CHANGE: v1.3.0 - Migrate cloud DTO imports to yascheduler.infra.cloud (cloud-configs-to-infra-registry); ConfigCloudX.from_config_parser_section calls → parse_cloud_section from entrypoints.config_parser; test_config_cloud_azure_rejects_root now asserts parser-side ValueError (not DTO __post_init__); add test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods asserting the DTOs have no parser methods and are stdlib frozen dataclasses; GRACE LINKS updated to M-CLOUD-CONFIGS.
+#   LAST_CHANGE: v1.5.0 - move-cloud-package-upgrade: add [clouds] {prefix}_package_upgrade parser coverage — hetzner_package_upgrade=false parses to False without a ConfigWarning (auto-registered), absent key defaults to True, package_upgrade is NOT on the CloudConfig domain Protocol, and a leftover [local] cloud_package_upgrade=false now emits a ConfigWarning (LocalSettings no longer carries the field).
+#   PREVIOUS_CHANGE: v1.4.0 - Migrate config DTO imports to new homes per config-aggregate-to-entrypoints (P4): ConfigDb→PostgresDbConfig (yascheduler.infra.persistence), ConfigLocal→LocalSettings (yascheduler.domain), ConfigRemote→RemoteDefaults (yascheduler.domain), Config→yascheduler.entrypoints, ConfigWarning/warn_unknown_fields→yascheduler.entrypoints._config_utils; X.from_config_parser_section calls → _parse_*_section free functions; Config.from_config_parser → parse_config; GRACE LINKS updated.
 # END_CHANGE_SUMMARY
 
 from configparser import ConfigParser
@@ -51,13 +51,20 @@ from typing import cast
 
 import pytest
 
-from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
+from yascheduler.domain import (
+    CloudConfig,
+    Engine,
+    EngineRepository,
+    LocalSettings,
+    RemoteDefaults,
+)
 from yascheduler.entrypoints._config_utils import ConfigWarning, warn_unknown_fields
 from yascheduler.entrypoints.config_parser import (
     _parse_db_section,
     _parse_local_section,
     _parse_remote_section,
     parse_cloud_section,
+    parse_clouds,
     parse_config,
     parse_engine_section,
 )
@@ -259,6 +266,70 @@ def test_config_cloud_azure_rejects_root() -> None:
     cfg.read_string("[clouds]\naz_tenant_id=tid\naz_user=root\n")
     with pytest.raises(ValueError, match="Root user is forbidden on Azure"):
         parse_cloud_section(cfg["clouds"], "az")
+
+
+# START_CONTRACT: test_config_cloud_hetzner_package_upgrade_false
+#   PURPOSE: Verify [clouds] hetzner_package_upgrade=false parses to ConfigCloudHetzner.package_upgrade is False AND does not warn
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
+# END_CONTRACT: test_config_cloud_hetzner_package_upgrade_false
+@pytest.mark.filterwarnings(
+    "error::yascheduler.entrypoints._config_utils.ConfigWarning"
+)
+def test_config_cloud_hetzner_package_upgrade_false() -> None:
+    """[clouds] hetzner_package_upgrade=false → ConfigCloudHetzner.package_upgrade is False (no ConfigWarning)"""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nhetzner_token=t\nhetzner_package_upgrade=false\n")
+    clouds = parse_clouds(cfg, RemoteDefaults())
+    hetzner = next(c for c in clouds if isinstance(c, ConfigCloudHetzner))
+    assert hetzner.package_upgrade is False
+
+
+# START_CONTRACT: test_config_cloud_package_upgrade_defaults_true
+#   PURPOSE: Verify an absent {prefix}_package_upgrade key leaves ConfigCloudHetzner.package_upgrade at the True default
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
+# END_CONTRACT: test_config_cloud_package_upgrade_defaults_true
+def test_config_cloud_package_upgrade_defaults_true() -> None:
+    """absent hetzner_package_upgrade → ConfigCloudHetzner.package_upgrade is True (default)"""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nhetzner_token=t\n")
+    clouds = parse_clouds(cfg, RemoteDefaults())
+    hetzner = next(c for c in clouds if isinstance(c, ConfigCloudHetzner))
+    assert hetzner.package_upgrade is True
+
+
+# START_CONTRACT: test_package_upgrade_not_on_cloud_config_protocol
+#   PURPOSE: Verify package_upgrade is declared on the concrete DTOs only, NOT on the domain CloudConfig Protocol
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
+# END_CONTRACT: test_package_upgrade_not_on_cloud_config_protocol
+def test_package_upgrade_not_on_cloud_config_protocol() -> None:
+    """package_upgrade is NOT on the CloudConfig Protocol (infra-only consumer, like token/vm_size)"""
+    assert not hasattr(CloudConfig, "package_upgrade")
+    assert "package_upgrade" not in CloudConfig.__annotations__
+
+
+# START_CONTRACT: test_local_cloud_package_upgrade_now_warns_unknown
+#   PURPOSE: Verify a leftover [local] cloud_package_upgrade key now surfaces as a ConfigWarning (the field was relocated to ConfigCloud*)
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
+# END_CONTRACT: test_local_cloud_package_upgrade_now_warns_unknown
+def test_local_cloud_package_upgrade_now_warns_unknown() -> None:
+    """a leftover [local] cloud_package_upgrade=false emits a ConfigWarning (clean break, no deprecation shim)"""
+    cfg = ConfigParser()
+    cfg.read_string("[local]\ncloud_package_upgrade=false\n")
+    with pytest.warns(ConfigWarning, match="unknown fields"):
+        local = _parse_local_section(cfg["local"])
+    assert not hasattr(local, "cloud_package_upgrade")
 
 
 # START_CONTRACT: test_engine_valid_parsing

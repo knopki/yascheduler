@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/cloud_configs.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Cloud provider config DTOs + ConfigCloud union.
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Add connect_grace field (next to idle_tolerance) on all 4 ConfigCloud* DTOs (fix-never-connected-node-leak): Hetzner/Upcloud=60, Azure/VastAI=120. INI parsing is intentionally not added in this change — DTO defaults are the sole source.
-#   PREVIOUS_CHANGE: v1.1.0 - 4 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol via a runtime `from yascheduler.domain import CloudConfig` import (resolve-type-bridge-debt); removes the writable-vs-frozen mismatch that forced cast bridges in di.py and config_parser.py. AzureImageReference unchanged (not a CloudConfig).
+#   LAST_CHANGE: v1.3.0 - Add package_upgrade: bool = True field to all 4 ConfigCloud* DTOs (move-cloud-package-upgrade), relocated from LocalSettings.cloud_package_upgrade; the knob controls the cloud-init package_upgrade flag on freshly-provisioned VMs per provider and is read by CloudProvisionerImpl._get_cloud_config_data via config.package_upgrade. Default True preserves pre-change cloud-init behavior. NOT added to the CloudConfig Protocol (infra-only consumer, like token/vm_size) nor to AzureImageReference.
+#   PREVIOUS_CHANGE: v1.2.0 - Add connect_grace field (next to idle_tolerance) on all 4 ConfigCloud* DTOs (fix-never-connected-node-leak): Hetzner/Upcloud=60, Azure/VastAI=120. INI parsing is intentionally not added in this change — DTO defaults are the sole source.
 # END_CHANGE_SUMMARY
 #
 """Cloud provider config DTOs (relocated from yascheduler.config.cloud)."""
@@ -81,6 +81,7 @@ class ConfigCloudAzure(CloudConfig):
     priority: int = 0
     idle_tolerance: int = 300
     connect_grace: int = 120
+    package_upgrade: bool = True
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
 
@@ -100,6 +101,7 @@ class ConfigCloudHetzner(CloudConfig):
     image_name: str = "debian-13"
     idle_tolerance: int = 120
     connect_grace: int = 60
+    package_upgrade: bool = True
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
 
@@ -117,6 +119,7 @@ class ConfigCloudUpcloud(CloudConfig):
     priority: int = 0
     idle_tolerance: int = 120
     connect_grace: int = 60
+    package_upgrade: bool = True
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
 
@@ -138,6 +141,7 @@ class ConfigCloudVastAI(CloudConfig):
     priority: int = 0
     idle_tolerance: int = 300
     connect_grace: int = 120
+    package_upgrade: bool = True
     onstart_script: str = ""
     docker_options: str = ""
     env: dict = field(default_factory=dict)

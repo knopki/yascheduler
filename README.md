@@ -276,6 +276,13 @@ These settings are common to all the providers:
 
   _Default_: different for providers, starting from 120 seconds.
 
+- `*_package_upgrade`
+
+  Per provider cloud-init `package_upgrade` flag on freshly-provisioned VMs.
+  Set to `false` to skip the slow `apt-get upgrade` on first boot.
+
+  _Default_: `true`.
+
 - `*_jump_user`
 
   Username of this cloud SSH jump host (if used).

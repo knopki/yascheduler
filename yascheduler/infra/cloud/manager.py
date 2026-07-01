@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.11.0
+# VERSION: 2.13.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.11.0 - fix-cloud-alloc-session-lifecycle: Fix B in CloudProvisionerImpl.allocate awaits machine_repository.disconnect(ip_addr) before adapter.delete_node on both setup-failure except paths (CloudSetupError and generic Exception) so a failed allocation no longer leaks a stale FREE session pointing at a deleted VM's IP; disconnect is best-effort (failures logged and swallowed) so a raise during SSH teardown cannot skip delete_node and orphan a billable VM; Fix D in _setup_vm CLOUD_INIT block includes stdout in the cloud-init failure message (cloud-init status --wait writes its status line to stdout).
-#   PREVIOUS_CHANGE: v2.10.0 - session-based-machine-handle: _setup_vm uses MachineSession instead of ConnectedMachine; _connect_to_vm returns MachineSession; session passed to run/setup_node/get_cpu_cores operations methods.
+#   LAST_CHANGE: v2.13.0 - _get_cloud_config_data gains a config: ConfigCloud parameter and sources CloudInitConfig.package_upgrade from config.package_upgrade instead of self.local_config.cloud_package_upgrade (move-cloud-package-upgrade); the LocalSettings.cloud_package_upgrade field was relocated to the per-provider ConfigCloud* DTOs (package_upgrade: bool = True, infra-only, NOT on the CloudConfig Protocol). allocate passes the config it already resolves at the top of the method.
+#   PREVIOUS_CHANGE: v2.12.0 - _get_cloud_config_data sources CloudInitConfig.package_upgrade from self.local_config.cloud_package_upgrade instead of hardcoding True (add-hetzner-live-e2e); lets operators and tests skip the slow cloud-init apt-get upgrade on freshly-provisioned VMs. The LocalSettings field defaults to True so pre-change cloud-init behavior is preserved.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -167,7 +167,7 @@ class CloudProvisionerImpl:
                 log=self.log,
                 cfg=config,
                 key=await self._get_ssh_key(),
-                cloud_config=await self._get_cloud_config_data(adapter),
+                cloud_config=await self._get_cloud_config_data(adapter, config),
             )
         except Exception as err:
             self.log.error("[CloudProvisionerImpl][allocate][CREATE_FAILED] %s", err)
@@ -295,12 +295,17 @@ class CloudProvisionerImpl:
 
     # START_CONTRACT: CloudProvisionerImpl._get_cloud_config_data
     #   PURPOSE: Build cloud-config with packages for engines matching adapter platforms.
-    #   INPUTS: { adapter: CloudAdapter - target provider adapter }
+    #   INPUTS: {
+    #     adapter: CloudAdapter - target provider adapter,
+    #     config: ConfigCloud - resolved per-cloud config DTO (sources package_upgrade)
+    #   }
     #   OUTPUTS: { CloudInitConfig - cloud-config data with packages }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-CLOUD-INIT
+    #   SIDE_EFFECTS: None — package_upgrade flag is sourced from config.package_upgrade (per-provider DTO field, default True), NOT from self.local_config and NOT hardcoded.
+    #   LINKS: M-CLOUD-INIT, M-CLOUD-CONFIGS
     # END_CONTRACT: CloudProvisionerImpl._get_cloud_config_data
-    async def _get_cloud_config_data(self, adapter: CloudAdapter) -> CloudInitConfig:
+    async def _get_cloud_config_data(
+        self, adapter: CloudAdapter, config: ConfigCloud
+    ) -> CloudInitConfig:
         """Build cloud-config with engine packages for this adapter's platforms."""
         # START_BLOCK_FILTER_ENGINES
         supported_engines = self.engines.filter(
@@ -316,7 +321,10 @@ class CloudProvisionerImpl:
         )
         pkgs = supported_engines.get_platform_packages()
         # END_BLOCK_FILTER_ENGINES
-        return CloudInitConfig(package_upgrade=True, packages=pkgs)
+        return CloudInitConfig(
+            package_upgrade=config.package_upgrade,
+            packages=pkgs,
+        )
 
     # START_CONTRACT: CloudProvisionerImpl._setup_vm
     #   PURPOSE: Connect via SSH, wait for cloud-init, install engines, get CPU count.

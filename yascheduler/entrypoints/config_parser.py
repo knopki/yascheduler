@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/config_parser.py
-# VERSION: 1.2.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: INI config parsing — adapter layer between ConfigParser and domain/infra types; owns parse_config assembly and all per-section parsers.
 #   SCOPE: parse_engine_section, parse_engines, engine_valid_fields (P2 engine parsers); parse_cloud_section, parse_clouds, cloud_valid_fields, CLOUD_CONFIG_PARSERS (P3 cloud parsers + registry); _parse_db_section, _db_valid_fields, _parse_local_section, _local_valid_fields, _parse_remote_section, _remote_valid_fields (P4 db/local/remote parsers); parse_config public assembly (P4); _check_spawn, _check_check_, _check_at_least_one_elem, _check_az_user, _fmt_key parser-internal validators/helpers.
@@ -34,8 +34,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Remove cast("Sequence[CloudConfig]", clouds) upcast in parse_config (D1: DTOs explicitly inherit CloudConfig Protocol → list[ConfigCloud] assignable to Sequence[CloudConfig]); hoist missing-spawn ValueError above Engine(...) constructor in parse_engine_section (D2: raises ValueError instead of AttributeError); drop spawn=spawn type: ignore[arg-type] (resolve-type-bridge-debt).
-#   PREVIOUS_CHANGE: v1.2.0 - Add _parse_db_section/_db_valid_fields, _parse_local_section/_local_valid_fields, _parse_remote_section/_remote_valid_fields, and public parse_config assembly (config-aggregate-to-entrypoints / P4); relocate ConfigWarning/warn_unknown_fields/opt_str_val from yascheduler.config.utils into entrypoints/_config_utils.py (stdlib migration, drop attrs); switch warn_unknown_fields import to the local sibling; Config assembled as frozen stdlib dataclass from entrypoints.config; the lazy config->entrypoints seam in Config.from_config_parser is gone (assembly is now intra-package).
+#   LAST_CHANGE: v1.5.0 - Move cloud-init package_upgrade knob to the per-provider cloud config (move-cloud-package-upgrade): remove cloud_package_upgrade=sec.getboolean(...) from _parse_local_section, and add package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True) to _parse_azure_section/_parse_hetzner_section/_parse_upcloud_section/_parse_vastai_section. cloud_valid_fields(prefix) auto-introspects dataclasses.fields(dto_cls), so {prefix}_package_upgrade is auto-registered as a valid key with no edit to _CLOUD_FIELD_RULES, and _local_valid_fields() drops cloud_package_upgrade automatically so a leftover [local] key now surfaces as a ConfigWarning.
+#   PREVIOUS_CHANGE: v1.4.0 - _parse_local_section reads optional [local] cloud_package_upgrade key via sec.getboolean(..., fallback=True) (add-hetzner-live-e2e); the new LocalSettings field defaults to True preserving pre-change cloud-init behavior, and _local_valid_fields() introspection already accepts the key with no "unknown field" warning.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -316,6 +316,7 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
         username=username,
         priority=sec.getint(fmt("priority"), fallback=0),
         idle_tolerance=idle_tolerance,
+        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
     )
@@ -351,6 +352,7 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
         location=sec.get(fmt("location"), None),
         image_name=sec.get(fmt("image_name"), "debian-13"),
         idle_tolerance=idle_tolerance,
+        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
     )
@@ -384,6 +386,7 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
         username=sec.get(fmt("user"), "root"),
         priority=sec.getint(fmt("priority"), fallback=0),
         idle_tolerance=idle_tolerance,
+        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
     )
@@ -435,6 +438,7 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
         username=sec.get(fmt("user"), "root"),
         priority=sec.getint(fmt("priority"), fallback=0),
         idle_tolerance=idle_tolerance,
+        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         onstart_script=sec.get(fmt("onstart_script"), ""),
         docker_options=sec.get(fmt("docker_options"), ""),
         env={},
