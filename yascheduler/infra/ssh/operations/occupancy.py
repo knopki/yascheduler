@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/occupancy.py
-# VERSION: 1.1.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: OccupancyChecker — pgrep/cmd-based occupancy check logic + monitor installer composing the session's generic monitor mechanism. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OccupancyChecker class (_occupancy_by_pgrep, _occupancy_by_cmd, occupancy_check, start_occupancy_check).
@@ -12,13 +12,12 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - session-based-machine-handle sections 5.6-5.9: All four method bodies rewritten to operate via MachineSession parameter. _occupancy_by_pgrep uses session.pgrep(), _occupancy_by_cmd uses session.run_full(), occupancy_check/start_occupancy_check dispatch on session. install_monitor/occupy/release called on session instead of repository.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). Extracted from the dissolved SSHMachineGateway god-class; occupancy_check + _occupancy_by_pgrep + _occupancy_by_cmd moved verbatim.
+#   LAST_CHANGE: v1.3.0 - fix-occupancy-monitor-cancel-hang: drop asyncio.wait_for wrapper from _check_factory. On Python <3.12 wait_for swallowed the outer monitor Task's cancellation, so SSHMachineSession._close()'s task.cancel()+await task hung forever (manifested as test_ssh_gateway_bg_tasks.py infinite hang on <=3.11). occupancy_check's underlying SSH primitives already self-bound via my_backoff_exc; failed checks still fall back to busy. Removed now-unused asyncio import.
+#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle sections 5.6-5.9: All four method bodies rewritten to operate via MachineSession parameter. _occupancy_by_pgrep uses session.pgrep(), _occupancy_by_cmd uses session.run_full(), occupancy_check/start_occupancy_check dispatch on session. install_monitor/occupy/release called on session instead of repository.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 from ..exceptions import SSHRetryExc
@@ -163,21 +162,10 @@ class OccupancyChecker:
             session.occupy()
 
         async def _check_factory() -> bool:
-            # Wrap each check with the engine's sleep_interval as a per-check
-            # timeout bound (preserves the original start_occupancy_check behavior
-            # where asyncio.wait_for bounded each check to config.sleep_interval).
+            # No asyncio.wait_for: on Python <3.12 it swallows the monitor task's
+            # cancellation, so SSHMachineSession._close() hangs on task.cancel().
             try:
-                return await asyncio.wait_for(
-                    self.occupancy_check(session, config),
-                    timeout=config.sleep_interval,
-                )
-            except asyncio.TimeoutError:
-                self._log.warning(
-                    "Engine %s busy check timed out on %s",
-                    config.name,
-                    session.ip,
-                )
-                return True
+                return await self.occupancy_check(session, config)
             except Exception:  # noqa: BLE001
                 self._log.exception(
                     "Occupancy check failed for %s on %s",

@@ -1016,7 +1016,7 @@
         <fn-occupancy_check PURPOSE="Check if engine process is still running via session.pgrep or session.run_full on check_cmd" />
         <fn-_occupancy_by_pgrep PURPOSE="Occupancy check via session.pgrep on check_pname; safe-default busy on SSH failure" />
         <fn-_occupancy_by_cmd PURPOSE="Occupancy check via session.run_full on check_cmd exit code; safe-default busy on SSH failure" />
-        <fn-start_occupancy_check PURPOSE="Call session.occupy() if FREE then session.install_monitor(...); check_factory wraps occupancy_check with asyncio.wait_for(timeout=config.sleep_interval); on_free=session.release" />
+        <fn-start_occupancy_check PURPOSE="Call session.occupy() if FREE then session.install_monitor(...); check_factory awaits occupancy_check; on_free=session.release" />
       </annotations>
     </M-SSH-OPS-OCCUPANCY>
 
