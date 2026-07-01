@@ -57,6 +57,26 @@ def can_debian_bullseye(platform: str) -> bool:
     return platform in ["debian-11", "debian", "debian-like", "linux"]
 
 
+def can_debian_bookworm(platform: str) -> bool:
+    "Platform is compatible with Debian Bookworm"
+    return platform in ["debian-12", "debian", "debian-like", "linux"]
+
+
+def can_debian_trixie(platform: str) -> bool:
+    "Platform is compatible with Debian Trixie"
+    return platform in ["debian-13", "debian", "debian-like", "linux"]
+
+
+def can_debian_forky(platform: str) -> bool:
+    "Platform is compatible with Debian Forky"
+    return platform in ["debian-14", "debian", "debian-like", "linux"]
+
+
+def can_debian_duke(platform: str) -> bool:
+    "Platform is compatible with Debian Duke"
+    return platform in ["debian-13", "debian", "debian-like", "linux"]
+
+
 def can_win10(platform: str) -> bool:
     "Platform is compatible with Windows 10"
     return platform in ["windows-10", "windows"]
@@ -116,7 +136,7 @@ def get_azure_adapter(name: str) -> CloudAdapter:
 
 
 # START_CONTRACT: get_hetzner_adapter
-#   PURPOSE: Create CloudAdapter for Hetzner with Buster platform support
+#   PURPOSE: Create CloudAdapter for Hetzner with Trixie platform support
 #   INPUTS: { name: str - cloud provider name }
 #   OUTPUTS: { CloudAdapter - configured Hetzner cloud adapter }
 #   SIDE_EFFECTS: None
@@ -127,7 +147,12 @@ def get_hetzner_adapter(name: str) -> CloudAdapter:
 
     return CloudAdapter(
         name=name,
-        supported_platform_checks=(can_debian_buster,),
+        supported_platform_checks=(
+            can_debian_duke,
+            can_debian_forky,
+            can_debian_trixie,
+            can_debian_buster,
+        ),
         create_node=hetzner_create_node,
         delete_node=hetzner_delete_node,
         op_limit=5,
@@ -165,7 +190,12 @@ def get_vastai_adapter(name: str) -> CloudAdapter:
 
     return CloudAdapter(
         name=name,
-        supported_platform_checks=(can_debian_bullseye,),
+        supported_platform_checks=(
+            can_debian_duke,
+            can_debian_forky,
+            can_debian_trixie,
+            can_debian_buster,
+        ),
         create_node=vastai_create_node,
         delete_node=vastai_delete_node,
         op_limit=1,

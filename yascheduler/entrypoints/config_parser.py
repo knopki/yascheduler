@@ -349,7 +349,7 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
         priority=sec.getint(fmt("priority"), fallback=0),
         server_type=sec.get(fmt("server_type"), "cx52"),
         location=sec.get(fmt("location"), None),
-        image_name=sec.get(fmt("image_name"), "debian-11"),
+        image_name=sec.get(fmt("image_name"), "debian-13"),
         idle_tolerance=idle_tolerance,
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),

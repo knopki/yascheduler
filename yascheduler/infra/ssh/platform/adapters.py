@@ -130,7 +130,7 @@ debian_10_adapter = replace(
 
 debian_11_adapter = replace(
     debian_adapter,
-    platform="debian-11",
+    platform="debian-13",
     checks=(*debian_adapter.checks, check_is_debian_11),
 )
 

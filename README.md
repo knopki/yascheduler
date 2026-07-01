@@ -306,7 +306,7 @@ Settings prefix is `hetzner`.
 
   Image name for new nodes.
 
-  _Default_: `debian-11`
+  _Default_: `debian-13`
 
 #### Azure
 

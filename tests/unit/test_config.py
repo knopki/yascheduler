@@ -197,7 +197,7 @@ def test_config_cloud_hetzner_parsing() -> None:
     assert hetzner.token == "abc123"
     assert hetzner.username == "root"
     assert hetzner.server_type == "cx52"  # default
-    assert hetzner.image_name == "debian-11"  # default
+    assert hetzner.image_name == "debian-13"  # default
 
 
 # START_CONTRACT: test_config_cloud_upcloud_parsing
