@@ -105,7 +105,10 @@ async def test_full_cycle(
 
         # START_BLOCK_VERIFY_OUTPUTS
         tasks = await _read_tasks(uow_factory, task_ids)
-        for tid, task in zip(task_ids, tasks, strict=True):
+        assert len(task_ids) == len(tasks), (
+            f"length mismatch: task_ids={len(task_ids)} tasks={len(tasks)}"
+        )
+        for tid, task in zip(task_ids, tasks):
             assert task is not None, f"task {tid} vanished from DB"
             assert task.status == DomainTaskStatus.DONE, (
                 f"task {tid} status={task.status}, expected DONE"
