@@ -1,5 +1,5 @@
 # FILE: tests/e2e/conftest.py
-# VERSION: 2.3.0
+# VERSION: 2.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test fixtures — PostgreSQL + SSH container pool, config, schema, log capture, and UoW-based DB access.
 #   SCOPE: Session-scoped containers (postgres + ssh_pool of two), config; function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE, log_records.
@@ -23,9 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - e2e-real-lifecycle: add session-scoped ssh_pool fixture (two SSH containers, one shared keypair, distinct bridge IPs) and function-scoped log_records fixture (in-memory LogCaptureHandler on the "yascheduler" logger). e2e_config consumes ssh_pool; ssh_container becomes a thin wrapper over ssh_pool[0] for backward compat with test_consume_retry.py.
-#   PREVIOUS_CHANGE: v2.2.0 - Replace DB fixture with layered pg_conn/pg_executor/uow_factory fixtures (remove-legacy-db).
-#   PREVIOUS_CHANGE: v2.1.0 - _init_schema uses sync apply_schema() instead of legacy DB.run/migrate.
+#   LAST_CHANGE: v2.4.0 - _init_schema applies pending migrations via apply_migrations after apply_schema (add-db-migrations).
+#   PREVIOUS_CHANGE: v2.3.0 - e2e-real-lifecycle: add session-scoped ssh_pool fixture (two SSH containers, one shared keypair, distinct bridge IPs) and function-scoped log_records fixture (in-memory LogCaptureHandler on the "yascheduler" logger). e2e_config consumes ssh_pool; ssh_container becomes a thin wrapper over ssh_pool[0] for backward compat with test_consume_retry.py.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ from testcontainers.postgres import PostgresContainer
 
 from yascheduler.application import MessageBus
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.infra.persistence import PostgresDbConfig
+from yascheduler.infra.persistence import PostgresDbConfig, apply_migrations
 from yascheduler.infra.persistence.postgres_schema import apply_schema
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
@@ -253,8 +252,9 @@ def e2e_config(
 def _init_schema(
     _db_config: PostgresDbConfig,
 ) -> None:
-    """Apply schema once per session via apply_schema()."""
+    """Apply schema once per session, then apply pending migrations."""
     apply_schema(_db_config)
+    apply_migrations(_db_config)
 
 
 @pytest.fixture(scope="session")

@@ -1,8 +1,8 @@
 # FILE: yascheduler/infra/__init__.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Adapters layer facade — sole public surface for cross-layer consumers (application, composition root).
-#   SCOPE: Re-exports SSHMachineRepository, SSHMachineOperations, retry exceptions, cloud provisioner + adapter protocol, schema initializer, webhook handler, Postgres UoW.
+#   SCOPE: Re-exports SSHMachineRepository, SSHMachineOperations, retry exceptions, cloud provisioner + adapter protocol, schema initializer, migration runner, webhook handler, Postgres UoW.
 #   DEPENDS: M-SSH, M-CLOUD, M-PERSISTENCE, M-NOTIFIER
 #   LINKS: M-SSH, M-CLOUD, M-PERSISTENCE, M-NOTIFIER
 # END_MODULE_CONTRACT
@@ -16,16 +16,18 @@
 #   CloudAdapter - Frozen attrs class wrapping create/delete callables + platform checks
 #   webhook_handler - Async webhook event handler
 #   PostgresUnitOfWork - Concrete UoW backed by Postgres (composition root wiring)
+#   apply_schema - Apply schema.sql in a transactional block (yainit / test fixtures)
+#   apply_migrations - Apply pending .sql/.py migrations from sql/migrations/ (yainit / test fixtures)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Re-export SSHMachineRepository + SSHMachineOperations instead of SSHMachineGateway (decompose-ssh-gateway). The god-class split into collection (repository) + operations; composition root and consumers now take two ports.
-#   PREVIOUS_CHANGE: v1.2.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.4.0 - Re-export apply_migrations alongside apply_schema (add-db-migrations); yainit and test fixtures call it after apply_schema.
+#   PREVIOUS_CHANGE: v1.3.0 - Re-export SSHMachineRepository + SSHMachineOperations instead of SSHMachineGateway (decompose-ssh-gateway).
 # END_CHANGE_SUMMARY
 
 from .cloud import CloudAdapter, CloudProvisionerImpl, resolve_adapter
 from .notifier import webhook_handler
-from .persistence import PostgresUnitOfWork, apply_schema
+from .persistence import PostgresUnitOfWork, apply_migrations, apply_schema
 from .ssh import (
     AllSSHRetryExc,
     SFTPRetryExc,
@@ -44,6 +46,7 @@ __all__ = [
     "SFTPRetryExc",
     "webhook_handler",
     "resolve_adapter",
+    "apply_migrations",
     "apply_schema",
     "list_private_keys",
 ]

@@ -1,24 +1,22 @@
 # FILE: yascheduler/entrypoints/cli/init.py
-# VERSION: 1.2.2
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
-#   PURPOSE: yainit CLI command — install service unit files and/or apply DB schema, with --schema/--daemon subset-selector flags.
-#   SCOPE: init command + argparse + systemd/sysv service install + DB schema application delegation.
-#   DEPENDS: M-PERSISTENCE-SCHEMA, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-INIT, M-PERSISTENCE-SCHEMA
+#   PURPOSE: yainit CLI command — install service unit files and/or apply DB schema + migrations, with --schema/--daemon subset-selector flags.
+#   SCOPE: init command + argparse + systemd/sysv service install + DB schema application + migration application delegation.
+#   DEPENDS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS
+#   LINKS: M-ENTRYPOINTS-CLI-INIT, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   init - Parse --schema/--daemon flags, install service and/or apply schema, exit 0/1/2
+#   init - Parse --schema/--daemon flags, install service and/or apply schema+migrations, exit 0/1/2
 #   _init_systemd - Render and write the systemd unit file (overwrite if exists)
 #   _init_sysv - Render and write the SysV init script (overwrite + chmod 0755)
-#   _init_schema - Apply schema.sql via apply_schema adapter (config_path param honors --config)
+#   _init_schema - Apply schema.sql then pending migrations (config_path param honors --config)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.2 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
-#   PREVIOUS_CHANGE: v1.2.1 - post-review fix: _init_schema signature widened to str | Path (argparse passes a Path via existing_path); MODULE_CONTRACT INPUTS aligned.
-#   PREVIOUS_CHANGE: v1.2.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser in init() now reads args.config and passes it to _init_schema(config_path); _init_schema now takes a config_path: str = CONFIG_FILE parameter; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig).
-#   PREVIOUS_CHANGE: v1.1.1 - Added `from __future__ import annotations` for Python 3.9 compatibility (init()'s `list[str] | None` annotation evaluated at import time, breaking 3.9 collection).
+#   LAST_CHANGE: v1.3.0 - Call apply_migrations(config.db) after apply_schema(config.db) in _init_schema (add-db-migrations).
+#   PREVIOUS_CHANGE: v1.2.2 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +31,7 @@ from pg8000 import DatabaseError
 
 from yascheduler.entrypoints import CONFIG_FILE
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.infra import apply_schema
+from yascheduler.infra import apply_migrations, apply_schema
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -88,11 +86,11 @@ def _init_sysv(
 
 
 # START_CONTRACT: _init_schema
-#   PURPOSE: Apply schema.sql via apply_schema adapter, honoring --config via config_path.
+#   PURPOSE: Apply schema.sql via apply_schema then pending migrations via apply_migrations, honoring --config via config_path.
 #   INPUTS: { config_path: str | Path - path to the config file (default CONFIG_FILE) }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates DB tables; raises SystemExit(1) on DatabaseError.
-#   LINKS: M-PERSISTENCE-SCHEMA
+#   SIDE_EFFECTS: Creates DB tables and the yascheduler_migrations tracker; applies pending migrations; raises SystemExit(1) on DatabaseError.
+#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
 # END_CONTRACT: _init_schema
 def _init_schema(config_path: str | Path = CONFIG_FILE) -> None:
     config = parse_config(config_path)
@@ -100,6 +98,9 @@ def _init_schema(config_path: str | Path = CONFIG_FILE) -> None:
         # START_BLOCK_APPLY_SCHEMA
         apply_schema(config.db)
         # END_BLOCK_APPLY_SCHEMA
+        # START_BLOCK_APPLY_MIGRATIONS
+        apply_migrations(config.db)
+        # END_BLOCK_APPLY_MIGRATIONS
     except DatabaseError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_init.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yainit init() flag parsing, dispatch, exit codes, and service overwrite behavior.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --config /custom.conf passed through _init_schema(config_path) to Config.from_config_parser; defaults CONFIG_FILE/WARNING). The daemon_systemd.py / daemon_sysv.py path assertions (lines 243, 259) remain unchanged.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yainit (entrypoints/cli/init.py) in relocate-init-command.
+#   LAST_CHANGE: v1.2.0 - Stub apply_migrations (autouse) so _init_schema tests don't open a real DB (add-db-migrations wiring).
+#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --config /custom.conf passed through _init_schema(config_path) to Config.from_config_parser; defaults CONFIG_FILE/WARNING). The daemon_systemd.py / daemon_sysv.py path assertions (lines 243, 259) remain unchanged.
 # END_CHANGE_SUMMARY
 
 """Unit tests for yainit (entrypoints/cli/init.py).
@@ -53,6 +53,20 @@ def _stub_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "yascheduler.entrypoints.cli.init.parse_config",
         MagicMock(return_value=MagicMock(db=MagicMock())),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_apply_migrations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub apply_migrations so _init_schema tests don't open a real DB connection.
+
+    add-db-migrations made _init_schema call apply_migrations after apply_schema.
+    Tests that assert on apply_schema call counts are unaffected; tests that need
+    apply_schema to raise keep their own apply_schema mock (it raises first, so
+    apply_migrations is never reached).
+    """
+    monkeypatch.setattr(
+        "yascheduler.entrypoints.cli.init.apply_migrations", MagicMock()
     )
 
 

@@ -181,14 +181,14 @@
     </M-DAEMON-COMMON>
 
     <M-ENTRYPOINTS-CLI-INIT NAME="yainit CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Bootstrap CLI command — install service unit files and/or apply DB schema with --schema/--daemon subset flags.</purpose>
+      <purpose>Bootstrap CLI command — install service unit files and/or apply DB schema + migrations with --schema/--daemon subset flags.</purpose>
       <path>yascheduler/entrypoints/cli/init.py</path>
-      <depends>M-ADAPTERS, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-PERSISTENCE-SCHEMA</depends>
+      <depends>M-ADAPTERS, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA</depends>
       <annotations>
-        <fn-init PURPOSE="Service + schema initialization (--schema/--daemon subset selectors)" />
+        <fn-init PURPOSE="Service + schema + migrations initialization (--schema/--daemon subset selectors)" />
         <fn-_init_systemd PURPOSE="Write systemd unit file (overwrite if exists)" />
         <fn-_init_sysv PURPOSE="Write SysV init script (overwrite + chmod 0755)" />
-        <fn-_init_schema PURPOSE="Apply schema.sql via apply_schema adapter" />
+        <fn-_init_schema PURPOSE="Apply schema.sql via apply_schema then pending migrations via apply_migrations" />
       </annotations>
     </M-ENTRYPOINTS-CLI-INIT>
 
@@ -592,11 +592,12 @@
     <M-PERSISTENCE NAME="Persistence subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Persistence subpackage facade — internal organization of the adapters layer; re-exported by M-ADAPTERS for cross-layer consumers and composition root.</purpose>
       <path>yascheduler/infra/persistence/__init__.py</path>
-      <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW</depends>
+      <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW</depends>
       <annotations>
         <export-UnitOfWorkNotInitializedError PURPOSE="Re-exported from exceptions" />
         <export-TaskRowNotFoundError PURPOSE="Re-exported from exceptions" />
-        <export-apply_schema PURPOSE="Apply DB schema migrations" />
+        <export-apply_schema PURPOSE="Apply schema.sql in a transactional block" />
+        <export-apply_migrations PURPOSE="Apply pending .sql/.py migrations from sql/migrations/" />
         <export-PostgresUnitOfWork PURPOSE="Concrete UoW backed by Postgres (consumed by composition root)" />
       </annotations>
     </M-PERSISTENCE>
@@ -642,13 +643,41 @@
     </M-PERSISTENCE-UOW>
 
     <M-PERSISTENCE-SCHEMA NAME="Schema applier" TYPE="DATA_LAYER" STATUS="implemented">
-      <purpose>Synchronous transactional application of schema.sql via pg8000 for CLI init and test fixtures.</purpose>
+      <purpose>Synchronous transactional application of schema.sql via pg8000 for CLI init and test fixtures. schema.sql is the full latest snapshot and begins with a DO block that bootstraps the yascheduler_migrations tracker (three-case logic: seed on fresh DB, empty on legacy DB, no-op on modern DB).</purpose>
       <path>yascheduler/infra/persistence/postgres_schema.py</path>
       <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-SQLLOADER</depends>
       <annotations>
-        <fn-apply_schema PURPOSE="Apply schema.sql in BEGIN/COMMIT transaction, rollback on failure" />
+        <fn-apply_schema PURPOSE="Apply schema.sql in BEGIN/COMMIT transaction, rollback on failure; the schema text bootstraps yascheduler_migrations via a DO block" />
       </annotations>
     </M-PERSISTENCE-SCHEMA>
+
+    <M-PERSISTENCE-MIGRATIONS NAME="Migration runner" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Forward-only migration runner — scans sql/migrations/, applies pending .sql/.py migrations in string-sorted prefix_id order, each in its own transaction, recording each in yascheduler_migrations. .sql migrations run as a multi-statement string; .py migrations discover exactly one Migration subclass via inspect.</purpose>
+      <path>yascheduler/infra/persistence/postgres_migrations.py</path>
+      <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-MIGRATION-BASE, M-PERSISTENCE-SCHEMA</depends>
+      <annotations>
+        <fn-apply_migrations PURPOSE="Apply pending migrations from sql/migrations/ to the DB behind config (one connection, one transaction per migration)" />
+        <fn-_prefix_id PURPOSE="Token before the first '_' in a migration filename" />
+        <fn-_scan_migrations PURPOSE="Glob *.sql + *.py under _MIGRATIONS_DIR sorted by filename" />
+        <fn-_last_applied PURPOSE="SELECT MAX(migration_id) from yascheduler_migrations (None if empty/absent)" />
+        <fn-_pending PURPOSE="Filter scanned files to prefix_id &gt; last (or all when last is None)" />
+        <fn-_one_migration_subclass PURPOSE="Discover exactly one Migration subclass in a .py migration module; RuntimeError on 0 or &gt;1" />
+        <fn-_apply_sql_migration PURPOSE="BEGIN → run sql text → INSERT tracker → COMMIT (rollback on error)" />
+        <fn-_apply_py_migration PURPOSE="BEGIN → load module → migrate() → best-effort tracker record (rollback on error)" />
+        <fn-_record_py_tracker PURPOSE="Record a .py migration in yascheduler_migrations; reopen a fresh transaction on a transient DatabaseError" />
+        <fn-_rollback PURPOSE="Best-effort ROLLBACK wrapper" />
+        <const-_MIGRATIONS_DIR PURPOSE="Path to the bundled sql/migrations/ directory" />
+      </annotations>
+    </M-PERSISTENCE-MIGRATIONS>
+
+    <M-PERSISTENCE-MIGRATION-BASE NAME="Migration base class" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Migration base class for .py migrations — injected (config, conn, log) with begin()/commit() helpers for non-transactional operations (CREATE INDEX CONCURRENTLY, VACUUM) and migrate() raising NotImplementedError.</purpose>
+      <path>yascheduler/infra/persistence/migration_base.py</path>
+      <depends>M-INFRA-DB-CONFIG</depends>
+      <annotations>
+        <class-Migration PURPOSE="Base class for .py migrations; instantiated by the runner with (config, conn, log); subclasses implement migrate()" />
+      </annotations>
+    </M-PERSISTENCE-MIGRATION-BASE>
 
     <!-- ═══════════════════════════════════════════════
          Configuration
@@ -704,7 +733,7 @@
          ═══════════════════════════════════════════════ -->
 
     <M-ADAPTERS NAME="Adapters layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Adapters layer facade — sole public surface for cross-layer consumers (application, composition root). Re-exports gateway, retry exceptions, cloud provisioner, and webhook handler.</purpose>
+      <purpose>Adapters layer facade — sole public surface for cross-layer consumers (application, composition root). Re-exports gateway, retry exceptions, cloud provisioner, schema/migration initializers, and webhook handler.</purpose>
       <path>yascheduler/infra/__init__.py</path>
       <depends>M-CLOUD, M-NOTIFIER, M-PERSISTENCE, M-SSH, M-SSH-KEYS</depends>
       <annotations>
@@ -714,6 +743,8 @@
         <export-SFTPRetryExc PURPOSE="Tuple of retryable SFTP exceptions" />
         <export-CloudProvisionerImpl PURPOSE="Cloud provisioner implementation" />
         <export-webhook_handler PURPOSE="Async webhook event handler" />
+        <export-apply_schema PURPOSE="Apply schema.sql in a transactional block (yainit / test fixtures)" />
+        <export-apply_migrations PURPOSE="Apply pending .sql/.py migrations from sql/migrations/ (yainit / test fixtures)" />
       </annotations>
     </M-ADAPTERS>
 
@@ -1234,6 +1265,10 @@
     <CrossLink from="M-CLI-COMMANDS" to="M-DI" relation="uses make_cli_deps for CLI node management; make_daemon for daemon entry" />
     <CrossLink from="M-CLI-COMMANDS" to="M-DOMAIN-MODEL" relation="imports Node, TaskStatus for CLI node management" />
     <CrossLink from="M-ENTRYPOINTS-CLI-INIT" to="M-PERSISTENCE-SCHEMA" relation="calls apply_schema for DB schema initialization" />
+    <CrossLink from="M-ENTRYPOINTS-CLI-INIT" to="M-PERSISTENCE-MIGRATIONS" relation="calls apply_migrations after apply_schema" />
+    <CrossLink from="M-PERSISTENCE-MIGRATIONS" to="M-PERSISTENCE-MIGRATION-BASE" relation="instantiates the single Migration subclass discovered in each .py migration module" />
+    <CrossLink from="M-PERSISTENCE-MIGRATIONS" to="M-PERSISTENCE-SCHEMA" relation="reads the yascheduler_migrations tracker created by schema.sql's bootstrap DO block" />
+    <CrossLink from="M-PERSISTENCE" to="M-PERSISTENCE-MIGRATIONS" relation="re-exports apply_migrations" />
     <CrossLink from="M-ENTRYPOINTS-CLI-SHOW-NODES" to="M-APPLICATION-UOW" relation="reads nodes and running tasks via UoW" />
     <CrossLink from="M-ENTRYPOINTS-CLI-SUBMIT" to="M-DI" relation="uses make_cli_deps for CLI submit" />
     <CrossLink from="M-ENTRYPOINTS-CLI-MANAGE-NODE" to="M-DI" relation="uses make_cli_deps for CLI manage_node" />

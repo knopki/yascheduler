@@ -57,6 +57,7 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
   `LocalSettings`/`RemoteDefaults`/`PostgresDbConfig`/`Config` dataclasses and
   the composition-root-only `Config` consumption rule
 - `openspec/specs/daemon-common`
+- `openspec/specs/db-migrations`
 - `openspec/specs/dependency-injection`
 - `openspec/specs/domain-engine-types`
 - `openspec/specs/domain-entities`

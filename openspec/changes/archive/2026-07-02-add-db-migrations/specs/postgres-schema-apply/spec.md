@@ -1,10 +1,4 @@
-# PostgreSQL Schema Application
-
-## Purpose
-
-Define the synchronous `apply_schema()` function that reads `schema.sql` and applies it transactionally to a PostgreSQL database via pg8000.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Transactional schema application
 
@@ -37,15 +31,6 @@ bootstraps the `yascheduler_migrations` tracker table using three-case logic
 - **WHEN** `apply_schema(config)` is called and SQL execution fails mid-way
 - **THEN** no tables are created (transaction is rolled back) and the exception is re-raised
 
-### Requirement: Error reporting on existing schema
-
-The system SHALL catch `DatabaseError` when tables already exist, print
-"Database already initialized!", and re-raise the exception.
-
-#### Scenario: Database already initialized
-- **WHEN** `apply_schema(config)` is called on a database where tables already exist
-- **THEN** "Database already initialized!" is printed and `DatabaseError` is raised
-
 ### Requirement: Connection lifecycle
 
 The function SHALL open a pg8000 native connection from the `PostgresDbConfig`,
@@ -59,6 +44,8 @@ or async is involved.
 #### Scenario: Connection is closed after failure
 - **WHEN** `apply_schema(config)` raises an exception
 - **THEN** the pg8000 connection is closed
+
+## ADDED Requirements
 
 ### Requirement: schema.sql begins with a bootstrap DO block
 

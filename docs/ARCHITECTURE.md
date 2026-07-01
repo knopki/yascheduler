@@ -154,18 +154,46 @@ tracker)` cleans up a never-connected cloud node: best-effort
   via the `MessageBus` **after** a successful commit.
 - **`postgres_schema.py`** — `apply_schema(config_db)` applies `schema.sql`
   in a `BEGIN/COMMIT` transaction (used by `yainit` and test fixtures).
+  `schema.sql` is the **full latest snapshot**: every `CREATE TABLE` carries
+  all current columns, no inline `ALTER`s, and it begins with a PL/pgSQL DO
+  block that bootstraps the `yascheduler_migrations` tracker with three-case
+  logic (seed to latest on a fresh DB; create empty on a legacy DB that
+  already has `yascheduler_nodes`; no-op on a modern DB that already has the
+  tracker).
+- **`postgres_migrations.py`** — `apply_migrations(config_db)` is the
+  forward-only migration runner. It scans `sql/migrations/` for `*.sql` and
+  `*.py` files named `{prefix_id}_{rest}.{sql,py}`, reads
+  `SELECT MAX(migration_id) FROM yascheduler_migrations`, and applies pending
+  migrations in string-sorted `prefix_id` order, each in its own transaction,
+  recording each in the tracker after success. `.sql` migrations run as a
+  multi-statement string (pg8000 Simple Query); `.py` migrations define
+  exactly one `Migration` subclass (discovered via `inspect`) instantiated
+  with `(config, conn, log)`. `yainit` calls `apply_migrations` immediately
+  after `apply_schema`. There is no "down"/rollback path and no generation
+  tool. `prefix_id` uniqueness is enforced by a unit test, not the runner.
+- **`migration_base.py`** — `Migration` base class for `.py` migrations:
+  injected `(config, conn, log)` with `begin()`/`commit()` helpers for
+  non-transactional operations (`CREATE INDEX CONCURRENTLY`, `VACUUM`).
 - **`db_config.py`** — `PostgresDbConfig` frozen dataclass.
 - **`sql_loader.py`** — `load_query(name)` with `@functools.cache`.
 - **`sql/`** — one file per query (`task/*.sql`, `node/*.sql`, `schema.sql`).
   `task/update_by_id.sql` and `task/update_status.sql` use
   `RETURNING task_id` so the repository can detect a 0-row outcome and
-  raise `TaskRowNotFoundError`.
+  raise `TaskRowNotFoundError`. `sql/migrations/` holds the migration files
+  (`001_add_username_port.sql` is the first; the inline ALTERs that used to
+  live in `schema.sql` were moved here).
 - **`exceptions.py`** — `UnitOfWorkNotInitializedError`,
   `TaskRowNotFoundError`. The latter is raised by
   `PostgresTaskRepository.save`/`update_status` when an `UPDATE` targets a
   non-existent `task_id` (the SQL uses `RETURNING task_id` so a 0-row
   outcome is detectable). Programming-error / contract precondition
   violation, not a domain exception — callers SHALL NOT catch it.
+
+When adding a migration, three edits are required (documented in the
+`db-migrations` spec): create the file under `sql/migrations/`, update the
+`last_migration` CONSTANT in the `schema.sql` DO block, and — if the
+migration changes the schema — update the snapshot DDL in `schema.sql`. A
+unit test asserts the CONSTANT matches the latest migration's `prefix_id`.
 
 pg8000 is synchronous. The single-worker executor serializes DB access within
 one UoW; concurrent use cases each create their own UoW and executor. This is
@@ -260,14 +288,14 @@ and swallowed after backoff exhausts.
 Six per-command modules, each parsing argparse, calling use cases via DI, and
 formatting output:
 
-| Script        | Module            | Purpose                                  |
-| ------------- | ----------------- | ---------------------------------------- |
-| `yasubmit`    | `submit.py`       | Parse AiiDA script, submit a task        |
-| `yastatus`    | `check_status.py` | Query tasks; verbose mode tails OUTPUT   |
-| `yanodes`     | `show_nodes.py`   | List nodes and running tasks             |
-| `yasetnode`   | `manage_node.py`  | Add / soft-remove / hard-remove a node   |
-| `yainit`      | `init.py`         | Install service unit files and/or schema |
-| `yascheduler` | `daemonize.py`    | Start the daemon in the foreground       |
+| Script        | Module            | Purpose                                                     |
+| ------------- | ----------------- | ----------------------------------------------------------- |
+| `yasubmit`    | `submit.py`       | Parse AiiDA script, submit a task                           |
+| `yastatus`    | `check_status.py` | Query tasks; verbose mode tails OUTPUT                      |
+| `yanodes`     | `show_nodes.py`   | List nodes and running tasks                                |
+| `yasetnode`   | `manage_node.py`  | Add / soft-remove / hard-remove a node                      |
+| `yainit`      | `init.py`         | Install service unit files and/or apply schema + migrations |
+| `yascheduler` | `daemonize.py`    | Start the daemon in the foreground                          |
 
 Three daemon launchers (`daemonize.py`, `daemon_systemd.py`, `daemon_sysv.py`)
 share the daemon core in `daemon_common.py` (`configure_logger` + `run_daemon`)
@@ -480,6 +508,13 @@ registering a new handler — no use case changes.
 - Lazy-loaded via `load_query(name)` → `@functools.cache` → plain string.
 - Parameter placeholders use pg8000 `:param` style.
 - Schema DDL lives in `sql/schema.sql`; applied by `apply_schema()`.
+  `schema.sql` is the **full latest snapshot** (all current columns in the
+  `CREATE TABLE`s, no inline `ALTER`s) and begins with a DO block that
+  bootstraps the `yascheduler_migrations` tracker.
+- Schema **evolution** is expressed via migration files under
+  `sql/migrations/` (`{prefix_id}_{rest}.sql` or `.py`), applied by
+  `apply_migrations()`. `yainit` runs `apply_schema` then `apply_migrations`.
+  See §2.3 for the migration model and edit procedure.
 - `TaskRepository.save(task)` runs `task/update_by_id.sql` with
   `RETURNING task_id`; a 0-row outcome raises `TaskRowNotFoundError`
   (predecessor-violation, not a domain error). `update_status` uses

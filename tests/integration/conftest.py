@@ -1,5 +1,5 @@
 # FILE: tests/integration/conftest.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Pytest fixtures for PostgreSQL integration tests via testcontainers.
@@ -11,7 +11,7 @@
 # START_MODULE_MAP
 #   postgres_container - session-scoped fixture: starts postgres:16-alpine container
 #   _db_config - session-scoped fixture: parses container URL into PostgresDbConfig
-#   _init_schema - session-scoped fixture: applies schema.sql via apply_schema() once
+#   _init_schema - session-scoped fixture: applies schema.sql then pending migrations once
 #   _bus - session-scoped fixture: bare MessageBus (no-op dispatch)
 #   pg_executor - function-scoped fixture: ThreadPoolExecutor(max_workers=1)
 #   pg_conn - function-scoped fixture: raw pg8000 connection, TRUNCATE + close on teardown
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Replace DB fixture with layered pg_conn/pg_executor/uow_factory fixtures (remove-legacy-db).
-#   PREVIOUS_CHANGE: v1.2.0 - _init_schema uses sync apply_schema() instead of legacy DB.run/migrate.
+#   LAST_CHANGE: v1.4.0 - _init_schema applies pending migrations via apply_migrations after apply_schema (add-db-migrations).
+#   PREVIOUS_CHANGE: v1.3.0 - Replace DB fixture with layered pg_conn/pg_executor/uow_factory fixtures (remove-legacy-db).
 # END_CHANGE_SUMMARY
 
 """Integration test fixtures."""
@@ -35,7 +35,7 @@ import pytest
 from testcontainers.postgres import PostgresContainer
 
 from yascheduler.application import MessageBus
-from yascheduler.infra.persistence import PostgresDbConfig
+from yascheduler.infra.persistence import PostgresDbConfig, apply_migrations
 from yascheduler.infra.persistence.postgres_schema import apply_schema
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
@@ -74,18 +74,19 @@ def _db_config(postgres_container: PostgresContainer) -> PostgresDbConfig:
 
 
 # START_CONTRACT: _init_schema
-#   PURPOSE: Apply schema.sql once per session so per-test DB connections start with ready tables.
+#   PURPOSE: Apply schema.sql then pending migrations once per session so per-test DB connections start with the latest schema.
 #   INPUTS: { _db_config: PostgresDbConfig }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates yascheduler_nodes/yascheduler_tasks tables
-#   LINKS: M-PERSISTENCE-SCHEMA
+#   SIDE_EFFECTS: Creates yascheduler_nodes/yascheduler_tasks tables and yascheduler_migrations tracker; applies pending migrations
+#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
 # END_CONTRACT: _init_schema
 @pytest.fixture(scope="session")
 def _init_schema(
     _db_config: PostgresDbConfig,
 ) -> None:
-    """Apply schema once per session via apply_schema()."""
+    """Apply schema once per session, then apply pending migrations."""
     apply_schema(_db_config)
+    apply_migrations(_db_config)
 
 
 # START_CONTRACT: _bus
