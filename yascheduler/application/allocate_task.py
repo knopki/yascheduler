@@ -216,7 +216,7 @@ async def _allocate_free_machine(
             ):
                 return True
         except Exception as err:
-            logger.error(
+            logger.debug(
                 "[AllocateTask][_allocate_free_machine][SESSION_FAILED] "
                 "task_id=%s ip=%s err=%s",
                 task.task_id,

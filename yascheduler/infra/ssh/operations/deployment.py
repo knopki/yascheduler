@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/deployment.py
-# VERSION: 1.1.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: TaskDeployer — upload task inputs and spawn the calculation process on a remote machine via MachineSession. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: TaskDeployer class + _write_remote_file + _safe_b64decode module-private helpers.
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - session-based-machine-handle section 5.2: Method bodies rewritten to operate via MachineSession parameter directly. _upload_task_data, _exec_spawn_command, start_task_on_machine all take `session: MachineSession` instead of `ip`/`machine`. All self._operations/self._repository references replaced with session methods (open_sftp, run_bg, quote, path, hostname, is_closed, machine.state, update, release, occupy).
+#   LAST_CHANGE: v1.3.0 - fix-submit-log-after-occupy: moved the "Submitting task_id=..." INFO log in start_task_on_machine from before session.occupy() to after it, so a CAS loser (MachineBusyError) never emits a misleading deploy-intent line. Ordering is now: assert remote_folder -> occupy() (CAS) -> "Submitting..." log -> deploy+spawn -> rollback on failure. assert kept before occupy for fail-fast with no side effects; rollback handler unchanged.
+#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle section 5.2: Method bodies rewritten to operate via MachineSession parameter directly. _upload_task_data, _exec_spawn_command, start_task_on_machine all take `session: MachineSession` instead of `ip`/`machine`. All self._operations/self._repository references replaced with session methods (open_sftp, run_bg, quote, path, hostname, is_closed, machine.state, update, release, occupy).
 #   PREVIOUS_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). Extracted from the dissolved SSHMachineGateway god-class; start_task_on_machine + _upload_task_data + _exec_spawn_command + _write_remote_file + _safe_b64decode moved verbatim.
 # END_CHANGE_SUMMARY
 
@@ -203,6 +204,9 @@ class TaskDeployer:
         from yascheduler.domain import MachineState
 
         # START_BLOCK_START_TASK
+        assert task.context.remote_folder is not None
+        session.occupy()
+
         self._log.info(
             "Submitting task_id=%s %s with %s to %s",
             task.task_id,
@@ -210,8 +214,6 @@ class TaskDeployer:
             engine.name,
             session.hostname,
         )
-        assert task.context.remote_folder is not None
-        session.occupy()
 
         # START_BLOCK_DEPLOY_SPAWN
         try:
