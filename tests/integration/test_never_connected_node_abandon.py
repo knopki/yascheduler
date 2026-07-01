@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_never_connected_node_abandon.py
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the never-connected-node abandon path against real PostgreSQL.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Integration coverage for fix-never-connected-node-leak: real-DB abandon flow + per-cloud grace lookup with real ConfigCloud DTOs.
-#   PREVIOUS_CHANGE: none
+#   LAST_CHANGE: v1.0.1 - Make DRIVE_PAST_GRACE robust on Python 3.12: the order-sensitive _fake_monotonic callable broke because asyncio calls time.monotonic during the await chain, consuming the callable's "first" value so the consumer recorded first_seen=200 and saw age=0 → retry (abandon never fired, DB row not removed). Replaced with a pre-seeded _connect_failures[dead_ip]=100 + constant return_value=200: age = 100 >= 60 → abandon, independent of how many times asyncio polls the mock.
+#   PREVIOUS_CHANGE: v1.0.0 - Integration coverage for fix-never-connected-node-leak: real-DB abandon flow + per-cloud grace lookup with real ConfigCloud DTOs.
 # END_CHANGE_SUMMARY
 """Integration tests for the never-connected-node abandon path.
 
@@ -180,19 +180,19 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     )
 
     # START_BLOCK_DRIVE_PAST_GRACE
-    # asyncio internals call time.monotonic() for scheduling, so we can't use a
-    # fixed side_effect list (StopIteration). Use a callable that returns the
-    # first-seen timestamp on its first invocation and a past-grace timestamp
-    # on every subsequent call: age = 100s >= grace = 60s → abandon fires.
-    state = {"calls": 0}
-
-    def _fake_monotonic() -> float:
-        state["calls"] += 1
-        return 100.0 if state["calls"] == 1 else 200.0
+    # Drive the failure timer past connect_grace robustly. Pre-seed first_seen
+    # and pin monotonic to a constant past-grace value via return_value (never
+    # exhausts). Both a side_effect list AND an order-sensitive callable break
+    # under Python 3.12, whose asyncio calls time.monotonic during the await
+    # chain: it would drain a list (StopIteration) or consume the callable's
+    # "first" value, shifting first_seen so the consumer sees age=0 → retry.
+    # Pre-seeding decouples first_seen from any call: age = 200 - 100 = 100s
+    # >= grace = 60s → abandon fires.
+    orch._connect_failures[dead_ip] = 100.0
 
     with patch(
         "yascheduler.application.orchestrator.time.monotonic",
-        side_effect=_fake_monotonic,
+        return_value=200.0,
     ):
         await orch._connect_machine_consumer(UMessage(dead_ip, node))
     # END_BLOCK_DRIVE_PAST_GRACE

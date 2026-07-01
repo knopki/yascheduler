@@ -460,7 +460,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         with (
             patch(
                 "yascheduler.application.orchestrator.time.monotonic",
-                side_effect=[100.0, 250.0],
+                return_value=250.0,
             ),
             patch(
                 "yascheduler.application.orchestrator.abandon_node",
