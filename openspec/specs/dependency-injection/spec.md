@@ -126,8 +126,8 @@ that connections opened during cloud allocation are visible to the
 orchestrator and are reaped by `Orchestrator.stop()` via
 `repository.disconnect_all()`.
 
-The pre-built-clouds (`clouds is not None`) branch is out of scope: it
-SHALL continue to construct a fresh `SSHMachineRepository` and
+The pre-built-clouds (`clouds is not None`) branch SHALL continue to
+construct a fresh `SSHMachineRepository` and
 `SSHMachineOperations` pair for the orchestrator while the caller-supplied
 `clouds` retain whatever repository/operations they were built with. This
 branch is exercised only by unit tests and performs no real allocations.

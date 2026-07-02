@@ -153,7 +153,7 @@ includes `ORDER BY node_id`); it returns ALL rows regardless of `enabled` or
 `allocate_task` counts tmp rows toward `max_nodes` capacity.
 
 `list_enabled()` SHALL run `node/list_enabled.sql` (`WHERE enabled = TRUE`)
-with **no python post-filter**. By the invariant (after this change,
+with **no python post-filter**. By the invariant,
 `ip == ''` IFF `enabled = FALSE` AND the node is tmp/pending), no enabled row
 has `ip=""`, so the prior `"." in r["ip"]` post-filter was dead code and is
 removed.
@@ -164,7 +164,7 @@ removed.
 real-disabled VM with a VM to delete, not a tmp/pending row), not a format
 check. The prior python `"." in r["ip"]` post-filter is removed. Callers
 outside `allocate_task` (e.g. `deallocate_nodes.py`) retain their own
-caller-side `"." in node.ip` post-filters; those are out of scope and remain
+caller-side `"." in node.ip` post-filters; they remain
 correct (redundant for `ip=""` rows now excluded by SQL, still filtering
 non-ipv4 hostnames).
 

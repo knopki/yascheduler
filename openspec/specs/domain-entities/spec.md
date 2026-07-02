@@ -198,9 +198,9 @@ After migration 003, `ip` is no longer `UNIQUE` on `yascheduler_nodes`
 `NodeRepository` mutators (`enable`/`disable`/`remove`/`update`) key on
 `node_id`, not `ip`. The ip-keyed lookup methods (`get(ip: str)`,
 `get_by_ips(ips: list[str])`) and the `list_*` methods remain ip-keyed or
-unkeyed — switching them to `node_id` is a deferred non-goal until the
-ip-keyed orchestrator queues that feed them are migrated. `node_id` is the
-primary identity; `ip` is an attribute that happens to serve the deferred
+unkeyed. Migrating them to `node_id` is gated on the ip-keyed orchestrator
+queues that feed them being migrated first. `node_id` is the
+primary identity; `ip` is an attribute that happens to serve the ip-keyed
 lookup paths.
 
 #### Scenario: Node creation with defaults

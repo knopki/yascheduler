@@ -422,7 +422,7 @@ established by `yanodes` applies to query-oriented commands only.
 - **THEN** it does NOT define `--json`, `--table`, or any other output-mode flag (the success output is fixed to `str(task_id)`)
 
 #### Scenario: AiiDA plugin is unchanged
-- **WHEN** `entrypoints/aiida_plugin.py` is inspected after this change
+- **WHEN** `entrypoints/aiida_plugin.py` is inspected
 - **THEN** `_get_submit_command` still returns `f"{_CMD_PREFIX}yasubmit {submit_script}"` and `_parse_submit_output` still does `int(stdout.strip())` (the AiiDA contract is not touched)
 
 ### Requirement: Entry points updated
@@ -874,7 +874,7 @@ requirement on existing commands that lack a machine consumer.
 
 #### Scenario: --json convention does not retroactively require changes to other commands
 - **WHEN** `yasubmit`, `yasetnode`, or `yascheduler` is inspected
-- **THEN** no `--json` flag is required to be present on those commands by this change (the convention is forward-looking; `yastatus` is the second instance, not a retroactive mandate)
+- **THEN** no `--json` flag is required on `yasubmit`, `yasetnode`, or `yascheduler`; the convention is forward-looking (yastatus is the second instance, not a retroactive mandate)
 
 ### Requirement: yasetnode parses host grammar via argparse type
 
@@ -904,8 +904,8 @@ with exit `2`.
 Purely-digit input (e.g. `"5"`) routes to the node_id branch described in
 the "yasetnode positional discriminates node_id from host" requirement; it
 does NOT pass through `_parse_host_spec`. The `_parse_host_spec` grammar
-rules and ALL error/rejection behavior tested below are UNCHANGED from
-before this change — only the positional `type=` was rewired to a wrapper
+rules and ALL error/rejection behavior tested below are stable —
+the positional `type=` is wired to a wrapper
 (`_parse_node_target`) that dispatches digit vs. non-digit input, so the
 scenarios below call `_parse_node_target` (which delegates non-digit input
 to the unchanged `_parse_host_spec`).
@@ -1318,7 +1318,7 @@ no-op / not-found → exit 1.
 The remove helpers SHALL accept `node: Node` (not `ip: str`); the validation
 UoW already fetched the `Node`, and passing it down avoids a re-fetch.
 `tasks.list_ids_by_ip_and_status(node.ip, RUNNING)` stays ip-keyed (Surface C
-— `TaskRepository` lookup, unchanged in this change). User-facing stdout
+— `TaskRepository` lookup is ip-keyed). User-facing stdout
 messages use `node.ip` (operators read ip, not node_id).
 
 The `Node` record constructed on the add path SHALL use
@@ -1458,7 +1458,7 @@ to change. `--json` is therefore safe to add (opt-in; AiiDA never passes it).
 - **THEN** every line yields exactly 2 elements and every `status` is a key of `_MAP_STATUS_YASCHEDULER` (`TO_DO`, `RUNNING`, or `DONE`) — no `ValueError`, no `KeyError`
 
 #### Scenario: AiiDA plugin is unchanged
-- **WHEN** `entrypoints/aiida_plugin.py` is inspected after this change
+- **WHEN** `entrypoints/aiida_plugin.py` is inspected
 - **THEN** `_get_joblist_command` still returns `yastatus` or `yastatus --jobs <ids>` and `_parse_joblist_output` still does `for job_id, status in job.split()` with `_MAP_STATUS_YASCHEDULER` (the AiiDA contract is not touched)
 
 ### Requirement: yastatus parses flags via argparse

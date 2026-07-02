@@ -360,7 +360,7 @@ categories of symbols as the public surface of the domain layer:
 - **Events** (already exported today; no regression): `DomainEvent`, `Event`, `TaskAbandoned`, `TaskAllocated`, `TaskCompleted`, `TaskCreated`, `TaskFailed`.
 - **Model**: `Task` and related domain entities defined in `yascheduler.domain.model`.
 - **Engine types**: `Engine`, `EngineRepository`, `LocalFilesDeploy`, `LocalArchiveDeploy`, `RemoteArchiveDeploy`, `Deploy` from `yascheduler.domain.engine` (re-exported via `yascheduler.domain.model`).
-- **Exceptions**: the existing `DomainError` tree from `yascheduler.domain.exceptions` (no new symbols added by this change).
+- **Exceptions**: the existing `DomainError` tree from `yascheduler.domain.exceptions`.
 - **Ports**: `TaskRepository`, `NodeRepository`, `MachineRepository`, `MachineSession`, `MachineOperations`, `CloudProvisioner` Protocols from `yascheduler.domain.ports`.
 
 #### Scenario: Domain facade exposes all required categories
@@ -372,8 +372,8 @@ categories of symbols as the public surface of the domain layer:
 - **THEN** all six symbols resolve without ImportError
 
 #### Scenario: Domain exception tree unchanged
-- **WHEN** the existing `DomainError` tree in `yascheduler/domain/exceptions.py` is inspected after the change
-- **THEN** no new exception classes are added by this change (existing hierarchy preserved)
+- **WHEN** the existing `DomainError` tree in `yascheduler/domain/exceptions.py` is inspected
+- **THEN** no exception classes exist beyond the existing hierarchy
 
 ### Requirement: Extended facade contents (lazy publication driven by consumers)
 

@@ -204,7 +204,7 @@ cloud delete ensures the DB row is only dropped once the VM is gone).
 `deallocate_node` SHALL call `uow.nodes.disable(node.node_id)` and
 `uow.nodes.remove(node.node_id)` (keying on `node_id`, not `ip`).
 `clouds.deallocate(node.cloud, node.ip)` SHALL continue to take `ip`
-(ip is the cloud host address, not node identity — out of scope to change).
+(ip is the cloud host address, not node identity).
 
 `deallocate_nodes` SHALL iterate `all_enabled_nodes.values()` and call
 `uow.nodes.disable(node.node_id)` for each node to disable (the `Node` is

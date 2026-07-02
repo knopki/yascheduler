@@ -80,12 +80,10 @@ SHALL use `insert` for tmp nodes too — constructing
 returned `Node.node_id` is the tmp-node handle for cleanup.
 
 `get_by_id(node_id: NodeId) -> Node | None` is the lookup by primary key.
-There is no batch `get_by_ids` (no consumer identified). A batch variant
-mirroring `get_by_ips` is explicitly out of scope.
+There is no batch `get_by_ids` (no consumer identified).
 
-`add_tmp` is **removed** by this change. The tmp-reservation flow that
-previously called `add_tmp(cloud) -> str` (returning a fake placeholder IP)
-now calls `insert(NewNode(cloud=..., enabled=False)) -> Node` (returning the
+The Protocol defines no `add_tmp` method. The tmp-reservation flow
+calls `insert(NewNode(cloud=..., enabled=False)) -> Node` (returning the
 `Node` whose `node_id` is the cleanup handle). There is exactly one
 node-insertion method on the port.
 
@@ -97,9 +95,9 @@ as the SQL key. The implementation runs `node/{enable,disable,remove,update}.sql
 with `WHERE node_id = :node_id`.
 
 The lookup methods `get(ip: str)`, `get_by_ips(ips: list[str])`, and the
-`list_*` methods remain ip-keyed / unkeyed — switching them to `node_id` is an
-explicit non-goal of this change (deferred until the ip-keyed orchestrator
-queues that feed them are migrated).
+`list_*` methods remain ip-keyed / unkeyed. Migrating them to `node_id` is
+gated on the ip-keyed orchestrator queues that feed them being migrated
+first.
 
 #### Scenario: Full node lifecycle through port
 - **WHEN** a consumer calls `insert`, `get`, `get_by_id`, `update`, `enable`, `disable`, `list_enabled`, `list_disabled`, `list_all`, `get_by_ips`, `remove` through the port
