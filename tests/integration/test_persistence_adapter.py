@@ -17,7 +17,7 @@
 #   test_repo_node_crud - full node lifecycle: add, get, enable, disable, remove
 #   test_repo_node_list_filters - list_enabled / list_disabled subsets
 #   test_repo_node_update - update persists all mutable node fields
-#   test_repo_node_add_tmp - add_tmp inserts disabled node with generated IP
+#   test_repo_node_tmp_via_insert - insert(NewNode(cloud=..., enabled=False)) inserts a tmp row carrying ip="" and node_id
 #   test_repo_node_count - count_by_cloud and count_by_status aggregates
 #   test_repo_node_get_by_ips - batch get_by_ips returns matching nodes
 #   test_repo_node_get_by_id - get_by_id lookup by primary key
@@ -27,8 +27,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.2 - Adapt to add-node-id-identity: Node(node_id=...) first field, NewNode for insert, repo.add→insert, NodeId assertions, add get_by_id + list_all ordering tests.
-#   PREVIOUS_CHANGE: v1.2.1 - Update save() docstring/contract comments from "upsert" to "update_by_id" to track the SQL rename (fix-save-silent-zero-rows).
+#   LAST_CHANGE: v1.3.0 - remove-tmp-node-fake-ip: replace test_repo_node_add_tmp with test_repo_node_tmp_via_insert (insert(NewNode(cloud=..., enabled=False)) → Node with ip="" sentinel and node_id; add_tmp abolished).
+#   PREVIOUS_CHANGE: v1.2.2 - Adapt to add-node-id-identity: Node(node_id=...) first field, NewNode for insert, repo.add→insert, NodeId assertions, add get_by_id + list_all ordering tests.
 # END_CHANGE_SUMMARY
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
@@ -347,26 +347,27 @@ async def test_repo_node_update(
     assert n.port == 2222
 
 
-# START_CONTRACT: test_repo_node_add_tmp
-#   PURPOSE: Verify add_tmp inserts a disabled node with generated IP and returns it.
+# START_CONTRACT: test_repo_node_tmp_via_insert
+#   PURPOSE: Verify insert(NewNode(cloud=..., enabled=False)) inserts a tmp row carrying ip="" sentinel and node_id (add_tmp abolished).
 #   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.add_tmp
-# END_CONTRACT: test_repo_node_add_tmp
-async def test_repo_node_add_tmp(
+#   LINKS: PostgresNodeRepository.insert
+# END_CONTRACT: test_repo_node_tmp_via_insert
+async def test_repo_node_tmp_via_insert(
     pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
 ) -> None:
-    """add_tmp inserts a disabled node with generated IP."""
+    """insert(NewNode(cloud=..., enabled=False)) inserts a tmp row with ip="" and node_id."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    ip = await repo.add_tmp("aws")
-    assert ip.startswith("prov")
-
-    n = await repo.get(ip)
-    assert n is not None
-    assert n.enabled is False
-    assert n.cloud == "aws"
-    assert n.username == "root"
+    node = await repo.insert(NewNode(cloud="aws", enabled=False))
+    assert isinstance(node, Node)
+    assert isinstance(node.node_id, NodeId)
+    assert node.node_id.value >= 1
+    assert node.ip == ""
+    assert node.enabled is False
+    assert node.cloud == "aws"
+    assert node.username == "root"
+    assert node.port == 22
 
 
 # START_CONTRACT: test_repo_node_count

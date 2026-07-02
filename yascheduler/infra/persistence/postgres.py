@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
@@ -10,12 +10,12 @@
 # START_MODULE_MAP
 #   _PgRepository - base class for pg8000-backed repositories (conn, executor, _run)
 #   PostgresTaskRepository - async task CRUD: get, save, update_status, insert (NewTask→Task), list_by_status, list_by_jobs, count_by_status; get/update_status/save/list_by_jobs take/return TaskId (.value passed as pg8000 param); list_ids_by_ip_and_status returns list[TaskId]; _row_to_task wraps TaskId; save/update_status raise TaskRowNotFoundError on 0-row UPDATE
-#   PostgresNodeRepository - async node CRUD: get, get_by_id, get_by_ips, list_*, insert (NewNode→Node), add_tmp, update (keys on node_id), enable/disable/remove (take NodeId, pass node_id.value), count_*
+#   PostgresNodeRepository - async node CRUD: get, get_by_id, get_by_ips, list_*, insert (NewNode→Node, sole insertion path — add_tmp removed), update (keys on node_id), enable/disable/remove (take NodeId, pass node_id.value), count_*; list_enabled/list_disabled have no python post-filter (list_disabled filters ip <> '' in SQL)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - NodeRepository mutators rekeyed from ip to node_id (node-id-keyed-mutators): enable(node_id: NodeId)/disable(node_id: NodeId)/remove(node_id: NodeId) pass node_id.value (pg8000 cannot adapt a NodeId dataclass, same as get_by_id); update(node: Node) keeps signature, now passes node_id=node.node_id.value as the WHERE key alongside the field params. SQL node/{enable,disable,remove,update}.sql keys on WHERE node_id = :node_id. Lookups get(ip)/get_by_ips/list_* remain ip-keyed.
-#   PREVIOUS_CHANGE: v1.6.0 - TaskRepository methods take/return TaskId (add-task-id-identity): insert(new_task: NewTask) -> Task (sole NewTask→Task conversion; the DB generates the id); get/update_status take TaskId and pass task_id.value as the pg8000 param; save passes task.task_id.value; list_ids_by_ip_and_status returns [TaskId(int(row[\"task_id\"]))]; list_by_jobs takes list[TaskId] and passes [tid.value]; _row_to_task wraps TaskId(int(row[\"task_id\"])).
+#   LAST_CHANGE: v1.8.0 - remove-tmp-node-fake-ip: PostgresNodeRepository.add_tmp removed (insert(NewNode) is the sole insertion path; the tmp-reservation flow calls insert(NewNode(cloud=..., enabled=False))); list_enabled/list_disabled drop the python '.' post-filters (list_enabled by the invariant enabled=TRUE ⇒ ip<>''; list_disabled filters ip <> '' in SQL via node/list_disabled.sql). node/insert_tmp.sql removed from the SQL layout.
+#   PREVIOUS_CHANGE: v1.7.0 - NodeRepository mutators rekeyed from ip to node_id (node-id-keyed-mutators): enable(node_id: NodeId)/disable(node_id: NodeId)/remove(node_id: NodeId) pass node_id.value (pg8000 cannot adapt a NodeId dataclass, same as get_by_id); update(node: Node) keeps signature, now passes node_id=node.node_id.value as the WHERE key alongside the field params. SQL node/{enable,disable,remove,update}.sql keys on WHERE node_id = :node_id. Lookups get(ip)/get_by_ips/list_* remain ip-keyed.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -266,7 +266,17 @@ class PostgresTaskRepository(_PgRepository):
 #   LINKS: M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL
 # END_CONTRACT: PostgresNodeRepository
 class PostgresNodeRepository(_PgRepository):
-    """PostgreSQL implementation of NodeRepository port."""
+    """PostgreSQL implementation of NodeRepository port.
+
+    ``insert(new_node: NewNode) -> Node`` is the sole node-insertion path
+    (``add_tmp`` is removed); the tmp-reservation flow calls
+    ``insert(NewNode(cloud=..., enabled=False))``. ``list_enabled`` and
+    ``list_disabled`` have no python post-filter — by the invariant
+    (``ip == ''`` IFF ``enabled = FALSE`` AND the node is tmp/pending), no
+    enabled row has ``ip == ""`` (so the prior ``"." in r["ip"]`` filter was
+    dead in ``list_enabled``); ``list_disabled`` filters ``ip <> ''`` in SQL
+    (``node/list_disabled.sql``) so tmp rows are excluded at the DB layer.
+    """
 
     # START_CONTRACT: get
     #   PURPOSE: Fetch a single node by IP address.
@@ -295,32 +305,32 @@ class PostgresNodeRepository(_PgRepository):
         return [self._row_to_node(r) for r in rows]
 
     # START_CONTRACT: list_enabled
-    #   PURPOSE: Return enabled nodes with valid IPs (containing ".").
+    #   PURPOSE: Return enabled nodes (WHERE enabled = TRUE; no python post-filter — by the invariant enabled=TRUE ⇒ ip<>'').
     #   INPUTS: { None }
     #   OUTPUTS: { list[Node] }
     #   SIDE_EFFECTS: None
     #   LINKS: node/list_enabled.sql, _row_to_node
     # END_CONTRACT: list_enabled
     async def list_enabled(self) -> list[Node]:
-        """Return enabled nodes (post-filtered for valid IPs)."""
+        """Return enabled nodes (SQL WHERE enabled = TRUE is the only filter)."""
         rows = await self._run(load_query("node/list_enabled"))
-        return [self._row_to_node(r) for r in rows if "." in r["ip"]]
+        return [self._row_to_node(r) for r in rows]
 
     # START_CONTRACT: list_disabled
-    #   PURPOSE: Return disabled nodes with valid IPs (containing ".").
+    #   PURPOSE: Return disabled nodes with a real IP (WHERE enabled = FALSE AND ip <> ''; the ip <> '' presence check excludes tmp rows at the SQL layer — no python post-filter).
     #   INPUTS: { None }
     #   OUTPUTS: { list[Node] }
     #   SIDE_EFFECTS: None
     #   LINKS: node/list_disabled.sql, _row_to_node
     # END_CONTRACT: list_disabled
     async def list_disabled(self) -> list[Node]:
-        """Return disabled nodes (post-filtered for valid IPs)."""
+        """Return disabled nodes with a real IP (filter is in SQL, not python)."""
         rows = await self._run(load_query("node/list_disabled"))
-        return [self._row_to_node(r) for r in rows if "." in r["ip"]]
+        return [self._row_to_node(r) for r in rows]
 
     # START_CONTRACT: insert
-    #   PURPOSE: Persist a NewNode and return the persisted Node with the DB-generated NodeId.
-    #   INPUTS: { new_node: NewNode - pre-persistence node record (no node_id) }
+    #   PURPOSE: Persist a NewNode and return the persisted Node with the DB-generated NodeId (sole node-insertion path — add_tmp removed).
+    #   INPUTS: { new_node: NewNode - pre-persistence node record (no node_id); serves the tmp-reservation path when called as NewNode(cloud=..., enabled=False) }
     #   OUTPUTS: { Node - the persisted node carrying the generated NodeId and matching the NewNode's other fields }
     #   SIDE_EFFECTS: Inserts row into yascheduler_nodes; assigns node_id via RETURNING node_id.
     #   LINKS: node/insert.sql RETURNING node_id, _row_to_node
@@ -368,18 +378,6 @@ class PostgresNodeRepository(_PgRepository):
         if not rows:
             return None
         return self._row_to_node(rows[0])
-
-    # START_CONTRACT: add_tmp
-    #   PURPOSE: Insert a temporary cloud node with a generated IP, return the IP.
-    #   INPUTS: { cloud: str }
-    #   OUTPUTS: { str - the generated IP }
-    #   SIDE_EFFECTS: Inserts row into yascheduler_nodes with enabled=FALSE; username falls back to DB DEFAULT 'root'.
-    #   LINKS: node/insert_tmp.sql
-    # END_CONTRACT: add_tmp
-    async def add_tmp(self, cloud: str) -> str:
-        """Insert a temp cloud node with generated IP, return the IP."""
-        rows = await self._run(load_query("node/insert_tmp"), cloud=cloud)
-        return rows[0]["ip"]
 
     # START_CONTRACT: get_by_ips
     #   PURPOSE: Return nodes keyed by IP for the given IP list (batch lookup).

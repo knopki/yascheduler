@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - add-node-id-identity: tracker assertions updated to '002' (the new last_migration CONSTANT); synthetic migrations renumbered 002_*→003_* to avoid colliding with the real 002_add_node_id.sql; column assertions now also check 'node_id'; added test_migration_002_adds_node_id_on_legacy_db confirming 002 backfills node_id SERIAL PRIMARY KEY.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial integration tests for apply_migrations (add-db-migrations).
+#   LAST_CHANGE: v1.2.0 - remove-tmp-node-fake-ip: tracker assertions updated to '003' (the new last_migration CONSTANT); synthetic migrations renumbered 003_*→004_* to avoid colliding with the real 003_drop_tmp_node_fake_ip.sql; fresh DB now seeds to '003' and apply_migrations applies 003 on legacy/modern DBs.
+#   PREVIOUS_CHANGE: v1.1.0 - add-node-id-identity: tracker assertions updated to '002' (the new last_migration CONSTANT); synthetic migrations renumbered 002_*→003_* to avoid colliding with the real 002_add_node_id.sql; column assertions now also check 'node_id'; added test_migration_002_adds_node_id_on_legacy_db confirming 002 backfills node_id SERIAL PRIMARY KEY.
 # END_CHANGE_SUMMARY
 
 """Integration tests for the migration runner against real PostgreSQL.
@@ -122,7 +122,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
         conn = _connect(config)
         try:
             seeded = _tracker_rows(conn)
-            assert seeded == ["002"]
+            assert seeded == ["003"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -133,7 +133,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["002"]
+            assert _tracker_rows(conn) == ["003"]
         finally:
             conn.close()
 
@@ -167,7 +167,7 @@ def test_legacy_db_runs_all_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["001", "002"]
+            assert _tracker_rows(conn) == ["001", "002", "003"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -209,7 +209,7 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["000", "001", "002"]
+            assert _tracker_rows(conn) == ["000", "001", "002", "003"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -230,7 +230,7 @@ def test_py_migration_best_effort_reopen(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "003_reopen.py").write_text(
+    (migrations_dir / "004_reopen.py").write_text(
         "from yascheduler.infra.persistence.migration_base import Migration\n"
         "class Reopen(Migration):\n"
         "    def migrate(self) -> None:\n"
@@ -249,7 +249,7 @@ def test_py_migration_best_effort_reopen(
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["002", "003"]
+            assert _tracker_rows(conn) == ["003", "004"]
             assert _table_exists(conn, "test_reopen")
         finally:
             conn.close()
@@ -268,7 +268,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "003_fail.sql").write_text(
+    (migrations_dir / "004_fail.sql").write_text(
         "CREATE TABLE fail_tbl (id int); CREATE TABLE fail_tbl (id int);"
     )
     monkeypatch.setattr(
@@ -285,7 +285,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 
         conn = _connect(config)
         try:
-            assert "003" not in _tracker_rows(conn)
+            assert "004" not in _tracker_rows(conn)
             assert not _table_exists(conn, "fail_tbl")
         finally:
             conn.close()
@@ -325,8 +325,8 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
 
         conn = _connect(config)
         try:
-            # Tracker records 001 and 002.
-            assert _tracker_rows(conn) == ["001", "002"]
+            # Tracker records 001, 002, 003.
+            assert _tracker_rows(conn) == ["001", "002", "003"]
             # node_id column now exists.
             cols = _columns(conn, "yascheduler_nodes")
             assert "node_id" in cols

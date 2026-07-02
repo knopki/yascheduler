@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.14.0
+# VERSION: 2.15.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -9,7 +9,7 @@
 #
 # START_MODULE_MAP
 #   TaskRepository - Async port for task persistence (get, save, insert NewTask→Task, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status); get/update_status take TaskId, list_ids_by_ip_and_status returns list[TaskId], list_by_jobs takes list[TaskId]
-#   NodeRepository - Async port for node persistence (insert NewNode→Node, get_by_id, full CRUD lifecycle, list_all, get_by_ips, count_by_status); mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups get/get_by_ips/list_* remain ip-keyed / unkeyed
+#   NodeRepository - Async port for node persistence (insert NewNode→Node is the sole insertion path — add_tmp removed; get_by_id, full CRUD lifecycle, list_all, get_by_ips, count_by_status); mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups get/get_by_ips/list_* remain ip-keyed / unkeyed; tmp-reservation uses insert(NewNode(cloud=..., enabled=False))
 #   CloudConfig - Structural Protocol for cloud provider config (7-field surface application consumers read: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host)
 #   MachineRepository - Async port for the connected-machine collection (lifecycle, queries); returns MachineSession; no state transitions/accessors/monitor (moved to MachineSession)
 #   MachineSession - Connected-machine entity handle (identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism); Engine-agnostic
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.14.0 - NodeRepository mutators rekeyed from ip to node_id (node-id-keyed-mutators): enable(node_id: NodeId), disable(node_id: NodeId), remove(node_id: NodeId); update(node: Node) signature unchanged (already carries node_id; its SQL keys on node_id). Lookup methods get(ip)/get_by_ips/list_* remain ip-keyed / unkeyed (deferred non-goal).
-#   PREVIOUS_CHANGE: v2.13.0 - TaskRepository: insert(task: Task) -> Task → insert(new_task: NewTask) -> Task (sole NewTask→Task conversion); get/update_status take TaskId; list_ids_by_ip_and_status returns list[TaskId]; list_by_jobs takes list[TaskId] (add-task-id-identity). The domain is type-safe end-to-end; the public Yascheduler facade is the sole int/TaskId boundary.
+#   LAST_CHANGE: v2.15.0 - NodeRepository.add_tmp removed (remove-tmp-node-fake-ip): insert(NewNode) -> Node is now the sole node-insertion path; the tmp-reservation flow constructs NewNode(cloud=..., enabled=False) (relying on NewNode.ip="" and NewNode.ncpus=0 defaults) and persists it via insert, using the returned Node.node_id as the cleanup handle. No second insertion path, no insert_tmp.sql.
+#   PREVIOUS_CHANGE: v2.14.0 - NodeRepository mutators rekeyed from ip to node_id (node-id-keyed-mutators): enable(node_id: NodeId), disable(node_id: NodeId), remove(node_id: NodeId); update(node: Node) signature unchanged (already carries node_id; its SQL keys on node_id). Lookup methods get(ip)/get_by_ips/list_* remain ip-keyed / unkeyed (deferred non-goal).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -84,17 +84,27 @@ class TaskRepository(Protocol):
 class NodeRepository(Protocol):
     """Async port for node persistence: full CRUD lifecycle.
 
-    ``insert(new_node: NewNode) -> Node`` is the create method (renamed from
-    ``add``); it mirrors ``TaskRepository.insert`` by returning the persisted
-    ``Node`` carrying the database-generated ``node_id``. ``get_by_id`` is an
-    additive lookup by primary key. The four mutators ``enable``,
-    ``disable``, ``remove``, and ``update`` key on ``node_id``:
-    ``enable``/``disable``/``remove`` take ``NodeId`` directly; ``update``
-    takes a ``Node`` (which carries ``node_id``) and the implementation binds
-    ``node.node_id.value`` as the SQL key. The lookup methods ``get(ip)``,
-    ``get_by_ips(ips)``, and the ``list_*`` methods remain ip-keyed / unkeyed
-    — switching them to ``node_id`` is a deferred non-goal (the ip-keyed
-    orchestrator queues that feed them must migrate first).
+    ``insert(new_node: NewNode) -> Node`` is the sole node-insertion path. It
+    takes a pre-persistence ``NewNode`` and returns the persisted ``Node``
+    carrying the database-generated ``node_id``. This mirrors
+    ``TaskRepository.insert``. The implementation runs
+    ``node/insert.sql ... RETURNING node_id``. The tmp-reservation flow (cloud
+    provisioning critical section in ``allocate_task``) uses ``insert`` for
+    tmp nodes too — constructing ``NewNode(cloud=selected_name,
+    enabled=False)`` (relying on ``NewNode``'s ``ip=""`` and ``ncpus=0``
+    defaults) and persisting it to reserve capacity; the returned
+    ``Node.node_id`` is the tmp-node handle for cleanup. There is exactly one
+    node-insertion method on the port — ``add_tmp`` is abolished.
+
+    ``get_by_id(node_id: NodeId) -> Node | None`` is an additive lookup by
+    primary key. The four mutators ``enable``, ``disable``, ``remove``, and
+    ``update`` key on ``node_id``: ``enable``/``disable``/``remove`` take
+    ``NodeId`` directly; ``update`` takes a ``Node`` (which carries
+    ``node_id``) and the implementation binds ``node.node_id.value`` as the SQL
+    key. The lookup methods ``get(ip)``, ``get_by_ips(ips)``, and the
+    ``list_*`` methods remain ip-keyed / unkeyed — switching them to
+    ``node_id`` is a deferred non-goal (the ip-keyed orchestrator queues that
+    feed them must migrate first).
     """
 
     async def get(self, ip: str) -> Node | None: ...
@@ -106,8 +116,6 @@ class NodeRepository(Protocol):
     async def list_disabled(self) -> list[Node]: ...
 
     async def insert(self, new_node: NewNode) -> Node: ...
-
-    async def add_tmp(self, cloud: str) -> str: ...
 
     async def update(self, node: Node) -> None: ...
 

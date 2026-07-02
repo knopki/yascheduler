@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.14.0
+# VERSION: 5.15.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
@@ -14,16 +14,17 @@
 #   _find_free_machines - Find free compatible machines for task allocation
 #   _try_start_on_machine - Attempt to start a task on a specific machine
 #   _count_nodes_by_cloud - Pure helper: count nodes by cloud prefix (shared with orchestrator)
-#   _select_and_insert_tmp - Under allocation_lock, compute capacity and insert tmp-node committed before lock release
-#   _cleanup_tmp_node_best_effort - Best-effort tmp-node removal; logs failures, never raises
-#   _allocate_cloud_node - Call clouds.allocate (returns NewNode); cleanup tmp-node on failure then re-raise
-#   _persist_node_with_cleanup - Persist final node (insert NewNode→Node + remove tmp + commit); on failure best-effort deallocate VM + tmp cleanup then re-raise
-#   _provision_and_persist - Orchestrate _allocate_cloud_node then _persist_node_with_cleanup
+#   _TmpSelection - NamedTuple(name: str, node_id: NodeId) — tmp-node handle is the NodeId from insert, NOT a placeholder ip
+#   _select_and_insert_tmp - Under allocation_lock, compute capacity, select provider, insert tmp-node via insert(NewNode(cloud=..., enabled=False)); returns _TmpSelection(name, node_id)
+#   _cleanup_tmp_node_best_effort - Best-effort tmp-node removal by NodeId (remove(tmp_node_id) directly — no get lookup); logs failures, never raises
+#   _allocate_cloud_node - Call clouds.allocate (returns NewNode); cleanup tmp-node by NodeId on failure then re-raise (takes tmp_node_id: NodeId)
+#   _persist_node_with_cleanup - Persist final node (insert NewNode→Node + remove(tmp_node_id) + commit); on failure best-effort deallocate VM + tmp cleanup then re-raise (takes tmp_node_id: NodeId)
+#   _provision_and_persist - Orchestrate _allocate_cloud_node then _persist_node_with_cleanup (takes tmp_node_id: NodeId)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.14.0 - tmp-node cleanup rekeyed from ip to node_id (node-id-keyed-mutators): _cleanup_tmp_node_best_effort and _persist_node_with_cleanup success path now resolve the tmp Node via uow.nodes.get(tmp_ip) before uow.nodes.remove(node.node_id); if get returns None (row already gone), remove is skipped (no rowcount check — matches prior no-op-on-0-rows behavior). The get lookup is best-effort inside the existing try/except wrapper.
-#   PREVIOUS_CHANGE: v5.13.0 - allocate_task entry and the cloud-fallback helpers (_cleanup_tmp_node_best_effort, _allocate_cloud_node, _persist_node_with_cleanup, _provision_and_persist) take task_id: TaskId (was int); logging "task_id=%s" renders the bare integer via TaskId.__str__ (add-task-id-identity). The orchestrator passes task.task_id (a TaskId) end-to-end with no conversion.
+#   LAST_CHANGE: v5.15.0 - remove-tmp-node-fake-ip: _TmpSelection.ip: str replaced with node_id: NodeId; the tmp-node handle is the NodeId returned by insert(NewNode(cloud=selected_name, enabled=False)) (add_tmp abolished). _cleanup_tmp_node_best_effort, _allocate_cloud_node, _persist_node_with_cleanup, _provision_and_persist, and the allocate_task outer body take tmp_node_id: NodeId (was tmp_ip: str). The two uow.nodes.get(tmp_ip) lookups + their if-node-is-not-None branches are removed; uow.nodes.remove(tmp_node_id) is called directly (idempotent — a 0-row DELETE is a no-op, matching prior no-op-on-0-rows behavior). Log markers tmp_ip → tmp_node_id.
+#   PREVIOUS_CHANGE: v5.14.0 - tmp-node cleanup rekeyed from ip to node_id (node-id-keyed-mutators): _cleanup_tmp_node_best_effort and _persist_node_with_cleanup success path now resolve the tmp Node via uow.nodes.get(tmp_ip) before uow.nodes.remove(node.node_id); if get returns None (row already gone), remove is skipped (no rowcount check — matches prior no-op-on-0-rows behavior). The get lookup is best-effort inside the existing try/except wrapper.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from yascheduler.domain import (
     MachineSession,
     NewNode,
     Node,
+    NodeId,
     Task,
     TaskAllocated,
     TaskFailed,
@@ -62,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 class _TmpSelection(NamedTuple):
     name: str
-    ip: str
+    node_id: NodeId
 
 
 # START_CONTRACT: _validate_engine
@@ -248,16 +250,16 @@ def _count_nodes_by_cloud(nodes: Sequence[Node]) -> dict[str, int]:
 
 
 # START_CONTRACT: _select_and_insert_tmp
-#   PURPOSE: Under allocation_lock, compute provider capacity, call select_provider port, and insert tmp-node in a single UoW committed before lock release.
+#   PURPOSE: Under allocation_lock, compute provider capacity, call select_provider port, and insert tmp-node via insert(NewNode(cloud=..., enabled=False)) in a single UoW committed before lock release.
 #   INPUTS: {
 #     clouds: CloudProvisioner - Cloud port (select_provider called sync),
 #     engine: Engine - Resolved engine config (source of platforms),
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     allocation_lock: asyncio.Lock - Critical-section lock
 #   }
-#   OUTPUTS: { _TmpSelection | None - selected provider name + tmp-node ip, or None if no provider available }
-#   SIDE_EFFECTS: Reads uow.nodes.list_all, inserts tmp-node, commits under lock. Concurrent selectors observe the tmp-node after lock release.
-#   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW
+#   OUTPUTS: { _TmpSelection | None - selected provider name + tmp-node NodeId, or None if no provider available }
+#   SIDE_EFFECTS: Reads uow.nodes.list_all, inserts tmp-node via uow.nodes.insert(NewNode(cloud=..., enabled=False)), commits under lock. Concurrent selectors observe the tmp-node after lock release.
+#   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
 # END_CONTRACT: _select_and_insert_tmp
 async def _select_and_insert_tmp(
     clouds: CloudProvisioner,
@@ -273,44 +275,44 @@ async def _select_and_insert_tmp(
             selected_name = clouds.select_provider(list(engine.platforms), counts)
             if selected_name is None:
                 return None
-            tmp_ip = await uow.nodes.add_tmp(selected_name)
+            tmp_node = await uow.nodes.insert(
+                NewNode(cloud=selected_name, enabled=False)
+            )
             await uow.commit()
-            return _TmpSelection(name=selected_name, ip=tmp_ip)
+            return _TmpSelection(name=selected_name, node_id=tmp_node.node_id)
     # END_BLOCK_CAPACITY_AND_SELECT
 
 
 # START_CONTRACT: _cleanup_tmp_node_best_effort
-#   PURPOSE: Best-effort tmp-node removal; logs failures, never raises.
+#   PURPOSE: Best-effort tmp-node removal by NodeId; logs failures, never raises.
 #   INPUTS: {
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     tmp_ip: str - The tmp-node IP to resolve and remove,
+#     tmp_node_id: NodeId - The tmp-node's primary key (from insert's RETURNING node_id),
 #     task_id: TaskId - For log correlation,
 #     context: str - Why cleanup is running (e.g. "cloud-alloc-failed")
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens UoW, resolves the tmp Node via uow.nodes.get(tmp_ip), and if found removes it via uow.nodes.remove(node.node_id), then commits. If get returns None (row already gone), remove is skipped (no rowcount check — matches prior no-op-on-0-rows behavior). Failures logged only — never re-raised.
+#   SIDE_EFFECTS: Opens UoW, removes the tmp-node by node_id directly (uow.nodes.remove(tmp_node_id) — no get(ip) lookup), then commits. remove is idempotent (a 0-row DELETE is a no-op, matching prior no-op-on-0-rows behavior). Failures logged only — never re-raised.
 #   LINKS: M-APPLICATION-UOW
 # END_CONTRACT: _cleanup_tmp_node_best_effort
 async def _cleanup_tmp_node_best_effort(
     uow_factory: Callable[[], AbstractUnitOfWork],
-    tmp_ip: str,
+    tmp_node_id: NodeId,
     task_id: TaskId,
     context: str,
 ) -> None:
     # START_BLOCK_BEST_EFFORT_TMP_CLEANUP
     try:
         async with uow_factory() as uow:
-            node = await uow.nodes.get(tmp_ip)
-            if node is not None:
-                await uow.nodes.remove(node.node_id)
-                await uow.commit()
+            await uow.nodes.remove(tmp_node_id)
+            await uow.commit()
     except Exception as cleanup_err:
         logger.error(
             "[AllocateTask][allocate_task][TMP_CLEANUP_FAILED] "
-            "task_id=%s ctx=%s tmp_ip=%s err=%s",
+            "task_id=%s ctx=%s tmp_node_id=%s err=%s",
             task_id,
             context,
-            tmp_ip,
+            tmp_node_id,
             cleanup_err,
         )
     # END_BLOCK_BEST_EFFORT_TMP_CLEANUP
@@ -322,11 +324,11 @@ async def _cleanup_tmp_node_best_effort(
 #     clouds: CloudProvisioner - Cloud port (allocate),
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory (for cleanup),
 #     selected_name: str - Provider name to allocate,
-#     tmp_ip: str - tmp-node IP committed by _select_and_insert_tmp,
+#     tmp_node_id: NodeId - tmp-node primary key committed by _select_and_insert_tmp,
 #     task_id: TaskId - For log correlation
 #   }
 #   OUTPUTS: { NewNode - The provisioned cloud node (not yet persisted; no node_id) }
-#   SIDE_EFFECTS: Calls clouds.allocate. On failure opens a UoW to remove+commit the tmp-node (best-effort, logged not raised).
+#   SIDE_EFFECTS: Calls clouds.allocate. On failure opens a UoW to remove+commit the tmp-node by node_id (best-effort, logged not raised).
 #   RAISES: { Exception - Original cloud-allocation exception, never a cleanup exception }
 #   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
 # END_CONTRACT: _allocate_cloud_node
@@ -334,7 +336,7 @@ async def _allocate_cloud_node(
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
     selected_name: str,
-    tmp_ip: str,
+    tmp_node_id: NodeId,
     task_id: TaskId,
 ) -> NewNode:
     # START_BLOCK_CLOUD_ALLOCATE
@@ -349,7 +351,7 @@ async def _allocate_cloud_node(
         # Best-effort tmp-node cleanup; failure here is logged but does
         # not mask the original cloud-allocation exception.
         await _cleanup_tmp_node_best_effort(
-            uow_factory, tmp_ip, task_id, "cloud-alloc-failed"
+            uow_factory, tmp_node_id, task_id, "cloud-alloc-failed"
         )
         raise
     # END_BLOCK_CLOUD_ALLOCATE
@@ -357,17 +359,17 @@ async def _allocate_cloud_node(
 
 
 # START_CONTRACT: _persist_node_with_cleanup
-#   PURPOSE: Persist the final node (insert NewNode→Node + remove tmp + commit); on failure best-effort delete the billable orphan VM and remove the tmp-node, then re-raise the original persist error.
+#   PURPOSE: Persist the final node (insert NewNode→Node + remove(tmp_node_id) + commit); on failure best-effort delete the billable orphan VM and remove the tmp-node, then re-raise the original persist error.
 #   INPUTS: {
 #     node: NewNode - Provisioned (but not yet persisted) cloud node (no node_id),
 #     clouds: CloudProvisioner - Cloud port (deallocate on persist failure),
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     selected_name: str - Provider name (fallback if node.cloud is None),
-#     tmp_ip: str - tmp-node IP to resolve and remove,
+#     tmp_node_id: NodeId - tmp-node primary key to remove,
 #     task_id: TaskId - For log correlation
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens UoW, inserts the NewNode (receiving the persisted Node), resolves the tmp Node via uow.nodes.get(tmp_ip), and if found removes it via uow.nodes.remove(node.node_id), then commits. If get returns None (row already gone), remove is skipped (no rowcount check — matches prior no-op-on-0-rows behavior). On failure: best-effort clouds.deallocate + tmp-node cleanup (logged not raised), then re-raises.
+#   SIDE_EFFECTS: Opens UoW, inserts the NewNode (receiving the persisted Node), removes the tmp-node by node_id directly (uow.nodes.remove(tmp_node_id) — no get(ip) lookup), then commits. remove is idempotent (a 0-row DELETE is a no-op, matching prior no-op-on-0-rows behavior). On failure: best-effort clouds.deallocate + tmp-node cleanup (logged not raised), then re-raises.
 #   RAISES: { Exception - Original persist exception, never a cleanup exception }
 #   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
 # END_CONTRACT: _persist_node_with_cleanup
@@ -376,16 +378,14 @@ async def _persist_node_with_cleanup(
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
     selected_name: str,
-    tmp_ip: str,
+    tmp_node_id: NodeId,
     task_id: TaskId,
 ) -> None:
     # START_BLOCK_FINAL_PERSIST
     try:
         async with uow_factory() as uow:
             await uow.nodes.insert(node)
-            tmp_node = await uow.nodes.get(tmp_ip)
-            if tmp_node is not None:
-                await uow.nodes.remove(tmp_node.node_id)
+            await uow.nodes.remove(tmp_node_id)
             await uow.commit()
     except Exception as persist_err:
         logger.error(
@@ -410,7 +410,7 @@ async def _persist_node_with_cleanup(
                 dealloc_err,
             )
         await _cleanup_tmp_node_best_effort(
-            uow_factory, tmp_ip, task_id, "persist-failed"
+            uow_factory, tmp_node_id, task_id, "persist-failed"
         )
         raise
     # END_BLOCK_FINAL_PERSIST
@@ -429,7 +429,7 @@ async def _persist_node_with_cleanup(
 #     clouds: CloudProvisioner - Cloud port (allocate/deallocate),
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     selected_name: str - Provider name to allocate,
-#     tmp_ip: str - tmp-node IP committed by _select_and_insert_tmp,
+#     tmp_node_id: NodeId - tmp-node primary key committed by _select_and_insert_tmp,
 #     task_id: TaskId - For log correlation
 #   }
 #   OUTPUTS: { NewNode - The provisioned cloud node (now persisted; the DB-generated node_id lives in the committed row, not on this object) }
@@ -441,14 +441,14 @@ async def _provision_and_persist(
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
     selected_name: str,
-    tmp_ip: str,
+    tmp_node_id: NodeId,
     task_id: TaskId,
 ) -> NewNode:
     node = await _allocate_cloud_node(
-        clouds, uow_factory, selected_name, tmp_ip, task_id
+        clouds, uow_factory, selected_name, tmp_node_id, task_id
     )
     await _persist_node_with_cleanup(
-        node, clouds, uow_factory, selected_name, tmp_ip, task_id
+        node, clouds, uow_factory, selected_name, tmp_node_id, task_id
     )
     return node
 
@@ -466,7 +466,7 @@ async def _provision_and_persist(
 #     allocation_lock: asyncio.Lock - Lock for critical section coordination
 #   }
 #   OUTPUTS: { bool - True if allocated to a machine, False if cloud requested or error }
-#   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), tracker.add/discard lifecycle, tmp-node insertion, cloud allocation via port. On cloud-fallback failure the VM and tmp-node are best-effort cleaned up by _provision_and_persist.
+#   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), tracker.add/discard lifecycle, tmp-node insertion via uow.nodes.insert(NewNode(cloud=..., enabled=False)), cloud allocation via port. On cloud-fallback failure the VM and tmp-node (by node_id) are best-effort cleaned up by _provision_and_persist.
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: allocate_task
 async def allocate_task(
@@ -527,11 +527,11 @@ async def allocate_task(
         return False
 
     # success-flag guarantees tracker.discard on any exception escaping the
-    # cloud-fallback (step1 commit/add_tmp fail, step2 cloud-alloc fail, step3
-    # final persist fail) while preserving the entry on the success path
+    # cloud-fallback (step1 commit/insert-tmp fail, step2 cloud-alloc fail,
+    # step3 final persist fail) while preserving the entry on the success path
     # (VM provisioned, awaiting consume_task / next-cycle free-machine start).
     cloud_allocated = False
-    tmp_ip: str | None = None
+    tmp_node_id: NodeId | None = None
     tmp_owned_by_provisioner = False
     try:
         selected = await _select_and_insert_tmp(
@@ -544,22 +544,22 @@ async def allocate_task(
             )
             return False
         selected_name = selected.name
-        tmp_ip = selected.ip
+        tmp_node_id = selected.node_id
         # _provision_and_persist and its internals own tmp-node cleanup on
         # any exception they raise. The outer finally only cleans up when
         # the hand-off never happened (defensive against an unexpected raise
         # between tmp commit and provisioner entry).
         tmp_owned_by_provisioner = True
         await _provision_and_persist(
-            clouds, uow_factory, selected_name, tmp_ip, task.task_id
+            clouds, uow_factory, selected_name, tmp_node_id, task.task_id
         )
         cloud_allocated = True
         return False
     finally:
         if not cloud_allocated:
             tracker.discard(task.task_id)
-            if tmp_ip is not None and not tmp_owned_by_provisioner:
+            if tmp_node_id is not None and not tmp_owned_by_provisioner:
                 await _cleanup_tmp_node_best_effort(
-                    uow_factory, tmp_ip, task.task_id, "allocator-unexpected"
+                    uow_factory, tmp_node_id, task.task_id, "allocator-unexpected"
                 )
     # END_BLOCK_ALLOCATE_CLOUD_CRITICAL_SECTION

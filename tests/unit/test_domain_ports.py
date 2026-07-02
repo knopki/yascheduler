@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - StubNodeRepository.enable/disable/remove take node_id: NodeId (node-id-keyed-mutators port change).
-#   PREVIOUS_CHANGE: v1.5.0 - Update StubNodeRepository.add→insert, add get_by_id; StubCloudProvisioner.allocate returns NewNode; for add-node-id-identity port changes.
+#   LAST_CHANGE: v1.7.0 - remove-tmp-node-fake-ip: StubNodeRepository.add_tmp removed (insert is the sole insertion path).
+#   PREVIOUS_CHANGE: v1.6.0 - StubNodeRepository.enable/disable/remove take node_id: NodeId (node-id-keyed-mutators port change).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -104,9 +104,6 @@ class StubNodeRepository:
 
     async def insert(self, new_node: NewNode) -> Node:
         raise NotImplementedError
-
-    async def add_tmp(self, cloud: str) -> str:
-        return "prov-tmp"
 
     async def update(self, node: Node) -> None:
         pass

@@ -13,10 +13,12 @@
 #   TestAllocateTask - allocate_task: unsupported engine, free machine (tracker.discard), cloud-fallback happy path, failure cleanup, dedup, throttle, step1/step2-cleanup/step3 hardening
 #   TestDeallocateNodes - deallocate_nodes: idle disable, non-cloud skip
 #   TestDeallocateNodeBracketing - deallocate_node: disable+remove bracketing around cloud delete
+#   TestTmpCleanupByNodeId - tmp-cleanup paths call remove(tmp_node_id) directly (no get lookup); idempotent on 0-row remove
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.5.1 - add-node-id-identity test update: prepend node_id=NodeId(1) to all Node(...) constructions and add NodeId import.
+#   LAST_CHANGE: v4.6.0 - remove-tmp-node-fake-ip: tmp-cleanup tests assert insert(NewNode(cloud=..., enabled=False)) for tmp insertion and remove(tmp_node_id) directly for cleanup (no get lookup); TestTmpCleanupLookup renamed to TestTmpCleanupByNodeId; happy/failure/throttle tests use insert-mock returning a tmp Node carrying node_id.
+#   PREVIOUS_CHANGE: v4.5.1 - add-node-id-identity test update: prepend node_id=NodeId(1) to all Node(...) constructions and add NodeId import.
 #   PREVIOUS_CHANGE: v4.5.0 - session-based-machine-handle section 7.2: update test_allocate_task_finds_free_machine to use session stub for repository.list_free; start_task_on_machine callback receives session (not machine).
 #   PREVIOUS_CHANGE: v4.4.0 - Extract TestConsumeTask to test_consume_task.py (GRACE 1000-line hard limit).
 # END_CHANGE_SUMMARY
@@ -299,7 +301,7 @@ class TestAllocateTask:
         todo_task: Task,
         engine: Engine,
     ) -> None:
-        """[11.6b] No free machine -> select_provider, add_tmp, allocate, final persist."""
+        """[11.6b] No free machine -> select_provider, insert tmp-node, allocate, final persist."""
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
@@ -313,13 +315,8 @@ class TestAllocateTask:
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
-        uow.nodes.add_tmp = AsyncMock(return_value="tmp-10.0.0.100")
-        uow.nodes.get = AsyncMock(
-            return_value=Node(
-                node_id=NodeId(2), ip="tmp-10.0.0.100", ncpus=0, enabled=False
-            )
-        )
-        uow.nodes.insert = AsyncMock()
+        tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+        uow.nodes.insert = AsyncMock(return_value=tmp_node)
         uow.nodes.remove = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
         uow.publish_events = AsyncMock()
@@ -362,18 +359,18 @@ class TestAllocateTask:
         # select_provider called with platforms and current counts
         clouds.select_provider.assert_called_once_with(["linux"], {})
 
-        # tmp node inserted before cloud allocate
-        uow.nodes.add_tmp.assert_called_once_with("aws")
+        # tmp node inserted via insert(NewNode(cloud=..., enabled=False)) before cloud allocate
+        uow.nodes.insert.assert_any_call(NewNode(cloud="aws", enabled=False))
 
         # cloud allocate called with provider name
         clouds.allocate.assert_called_once_with("aws")
 
-        # final persist: insert cloud node + resolve tmp + remove tmp by node_id
-        uow.nodes.insert.assert_called_once_with(cloud_node)
-        uow.nodes.get.assert_any_call("tmp-10.0.0.100")
+        # final persist: insert cloud node + remove tmp by node_id (no get lookup)
+        uow.nodes.insert.assert_any_call(cloud_node)
         uow.nodes.remove.assert_called_once_with(NodeId(2))
+        uow.nodes.get.assert_not_called()
 
-        # commit called at least twice (add_tmp + final persist)
+        # commit called at least twice (tmp insert + final persist)
         assert uow.commit.call_count >= 2
 
         # tracker.discard NOT called on happy cloud path (deferred to consume)
@@ -384,7 +381,7 @@ class TestAllocateTask:
         todo_task: Task,
         engine: Engine,
     ) -> None:
-        """[11.6c] Cloud allocate fails -> tmp-node removed, tracker discarded, error re-raised."""
+        """[11.6c] Cloud allocate fails -> tmp-node removed by node_id, tracker discarded, error re-raised."""
         engines = MagicMock(spec=EngineRepository)
         engines.get.return_value = engine
 
@@ -398,13 +395,8 @@ class TestAllocateTask:
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
-        uow.nodes.add_tmp = AsyncMock(return_value="tmp-10.0.0.100")
-        uow.nodes.get = AsyncMock(
-            return_value=Node(
-                node_id=NodeId(2), ip="tmp-10.0.0.100", ncpus=0, enabled=False
-            )
-        )
-        uow.nodes.add = AsyncMock()
+        tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+        uow.nodes.insert = AsyncMock(return_value=tmp_node)
         uow.nodes.remove = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
         uow.publish_events = AsyncMock()
@@ -439,21 +431,21 @@ class TestAllocateTask:
                 allocation_lock=allocation_lock,
             )
 
-        # tmp-node was inserted
-        uow.nodes.add_tmp.assert_called_once_with("aws")
+        # tmp-node inserted via insert(NewNode(cloud=..., enabled=False))
+        uow.nodes.insert.assert_any_call(NewNode(cloud="aws", enabled=False))
 
-        # tmp-node resolved by ip then removed by node_id in cleanup UoW
-        uow.nodes.get.assert_any_call("tmp-10.0.0.100")
-        uow.nodes.remove.assert_called_once_with(NodeId(2))
+        # tmp-node removed by node_id directly in cleanup UoW (no get lookup)
+        uow.nodes.remove.assert_any_call(NodeId(2))
+        uow.nodes.get.assert_not_called()
 
-        # commit called for add_tmp and remove
+        # commit called for tmp-insert and cleanup
         assert uow.commit.call_count >= 2
 
         # tracker.discard called after cleanup
         tracker.discard.assert_called_once_with(todo_task.task_id)
 
         # cloud node was NOT added (failed before final persist)
-        uow.nodes.add.assert_not_called()
+        uow.nodes.insert.assert_any_call(NewNode(cloud="aws", enabled=False))
 
     async def test_allocate_task_dedup_returns_false(
         self,
@@ -565,26 +557,22 @@ class TestAllocateTask:
         # allocate NOT called
         clouds.allocate.assert_not_called()
         # NO tmp-node insertion
-        uow.nodes.add_tmp.assert_not_called()
+        uow.nodes.insert.assert_not_called()
         # tracker.discard called (releases the slot since no provider)
         tracker.discard.assert_called_once_with(todo_task.task_id)
 
 
 # =============================================================================
-# tmp-node cleanup lookup (node-id-keyed-mutators)
+# tmp-node cleanup by NodeId (remove-tmp-node-fake-ip)
 # =============================================================================
 
 
-class TestTmpCleanupLookup:
-    """tmp-cleanup paths resolve NodeId via get(tmp_ip) before remove(node.node_id)."""
+class TestTmpCleanupByNodeId:
+    """tmp-cleanup paths call uow.nodes.remove(tmp_node_id) directly (no get lookup)."""
 
-    async def test_cleanup_best_effort_removes_by_node_id_when_node_exists(
-        self,
-    ) -> None:
-        """[9.1] _cleanup_tmp_node_best_effort: get(tmp_ip) returns Node -> remove(node.node_id)."""
-        tmp_node = Node(node_id=NodeId(7), ip="tmp-10.0.0.100", ncpus=0, enabled=False)
+    async def test_cleanup_best_effort_removes_by_node_id_directly(self) -> None:
+        """[9.1] _cleanup_tmp_node_best_effort: remove(tmp_node_id) directly, no get lookup."""
         uow = AsyncMock()
-        uow.nodes.get = AsyncMock(return_value=tmp_node)
         uow.nodes.remove = AsyncMock()
         uow.commit = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
@@ -593,18 +581,18 @@ class TestTmpCleanupLookup:
         def uow_factory() -> AbstractUnitOfWork:
             return uow
 
-        await _cleanup_tmp_node_best_effort(
-            uow_factory, "tmp-10.0.0.100", TaskId(1), "ctx"
-        )
+        await _cleanup_tmp_node_best_effort(uow_factory, NodeId(7), TaskId(1), "ctx")
 
-        uow.nodes.get.assert_awaited_once_with("tmp-10.0.0.100")
         uow.nodes.remove.assert_awaited_once_with(NodeId(7))
         uow.commit.assert_awaited_once()
+        # No get lookup — the NodeId is in hand from insert's RETURNING node_id.
+        uow.nodes.get.assert_not_called()
 
-    async def test_cleanup_best_effort_skips_remove_when_get_returns_none(self) -> None:
-        """[9.2] _cleanup_tmp_node_best_effort: get(tmp_ip) returns None -> remove skipped, no raise."""
+    async def test_cleanup_best_effort_idempotent_on_0_row_remove(self) -> None:
+        """[9.2] _cleanup_tmp_node_best_effort: a 0-row remove is a no-op (no error, commit still runs)."""
         uow = AsyncMock()
-        uow.nodes.get = AsyncMock(return_value=None)
+        # remove affects 0 rows — but the repo does NOT raise on 0 rows
+        # (DELETE WHERE node_id = :node_id is a no-op); just completes.
         uow.nodes.remove = AsyncMock()
         uow.commit = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
@@ -613,21 +601,18 @@ class TestTmpCleanupLookup:
         def uow_factory() -> AbstractUnitOfWork:
             return uow
 
-        # Must not raise.
-        await _cleanup_tmp_node_best_effort(
-            uow_factory, "tmp-10.0.0.100", TaskId(1), "ctx"
-        )
+        # Must not raise — idempotent cleanup.
+        await _cleanup_tmp_node_best_effort(uow_factory, NodeId(999), TaskId(1), "ctx")
 
-        uow.nodes.get.assert_awaited_once_with("tmp-10.0.0.100")
-        uow.nodes.remove.assert_not_awaited()
+        uow.nodes.remove.assert_awaited_once_with(NodeId(999))
+        uow.commit.assert_awaited_once()
+        uow.nodes.get.assert_not_called()
 
     async def test_persist_with_cleanup_success_removes_tmp_by_node_id(self) -> None:
-        """[9.3] _persist_node_with_cleanup success: insert + get(tmp_ip) + remove(node.node_id) + commit."""
+        """[9.3] _persist_node_with_cleanup success: insert + remove(tmp_node_id) + commit (no get lookup)."""
         cloud_node = NewNode(ip="10.0.0.100", ncpus=4, cloud="aws")
-        tmp_node = Node(node_id=NodeId(7), ip="tmp-10.0.0.100", ncpus=0, enabled=False)
         uow = AsyncMock()
         uow.nodes.insert = AsyncMock()
-        uow.nodes.get = AsyncMock(return_value=tmp_node)
         uow.nodes.remove = AsyncMock()
         uow.commit = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
@@ -643,14 +628,14 @@ class TestTmpCleanupLookup:
             clouds=clouds,
             uow_factory=uow_factory,
             selected_name="aws",
-            tmp_ip="tmp-10.0.0.100",
+            tmp_node_id=NodeId(7),
             task_id=TaskId(1),
         )
 
         uow.nodes.insert.assert_awaited_once_with(cloud_node)
-        uow.nodes.get.assert_awaited_once_with("tmp-10.0.0.100")
         uow.nodes.remove.assert_awaited_once_with(NodeId(7))
         uow.commit.assert_awaited_once()
+        uow.nodes.get.assert_not_called()
         clouds.deallocate.assert_not_called()  # success path, no cleanup
 
 

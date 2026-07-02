@@ -25,8 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - add-node-id-identity: import NewNode/NodeId, rename _FakeNodeRepo.add → insert(NewNode) -> Node, fix add_tmp/enable/disable to include node_id, update FakeCloudProvisioner.allocate to return NewNode and call insert, add node_id to all Node(...) constructions in tests.
-#   PREVIOUS_CHANGE: none.
+#   LAST_CHANGE: v1.2.0 - remove-tmp-node-fake-ip: _FakeNodeRepo.add_tmp removed (insert is the sole insertion path); enable/disable/remove take node_id: NodeId (not ip) to match the NodeRepository port.
+#   PREVIOUS_CHANGE: v1.1.0 - add-node-id-identity: import NewNode/NodeId, rename _FakeNodeRepo.add → insert(NewNode) -> Node, fix add_tmp/enable/disable to include node_id, update FakeCloudProvisioner.allocate to return NewNode and call insert, add node_id to all Node(...) constructions in tests.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -169,8 +169,6 @@ class _FakeNodeRepo:
 
     def __init__(self, store: dict[str, Node]) -> None:
         self._store = store
-        self.add_tmp_calls: list[str] = []
-        self._tmp_counter = 0
         self._id_counter = 0
 
     async def get(self, ip: str) -> Node | None:
@@ -196,25 +194,14 @@ class _FakeNodeRepo:
         self._store[node.ip] = node
         return node
 
-    async def add_tmp(self, cloud: str) -> str:
-        self._tmp_counter += 1
-        tmp_ip = f"tmp-{cloud}-{self._tmp_counter}"
-        self._store[tmp_ip] = Node(
-            node_id=NodeId(self._tmp_counter),
-            ip=tmp_ip,
-            ncpus=0,
-            enabled=False,
-            cloud=cloud,
-        )
-        return tmp_ip
-
     async def update(self, node: Node) -> None:
         self._store[node.ip] = node
 
-    async def enable(self, ip: str) -> None:
-        node = self._store.get(ip)
+    async def enable(self, node_id: NodeId) -> None:
+        ip = self._ip_for(node_id)
+        node = self._store.get(ip) if ip is not None else None
         if node is not None:
-            self._store[ip] = Node(
+            self._store[node.ip] = Node(
                 node_id=node.node_id,
                 ip=node.ip,
                 ncpus=node.ncpus,
@@ -224,10 +211,11 @@ class _FakeNodeRepo:
                 port=node.port,
             )
 
-    async def disable(self, ip: str) -> None:
-        node = self._store.get(ip)
+    async def disable(self, node_id: NodeId) -> None:
+        ip = self._ip_for(node_id)
+        node = self._store.get(ip) if ip is not None else None
         if node is not None:
-            self._store[ip] = Node(
+            self._store[node.ip] = Node(
                 node_id=node.node_id,
                 ip=node.ip,
                 ncpus=node.ncpus,
@@ -237,8 +225,16 @@ class _FakeNodeRepo:
                 port=node.port,
             )
 
-    async def remove(self, ip: str) -> None:
-        self._store.pop(ip, None)
+    async def remove(self, node_id: NodeId) -> None:
+        ip = self._ip_for(node_id)
+        if ip is not None:
+            self._store.pop(ip, None)
+
+    def _ip_for(self, node_id: NodeId) -> str | None:
+        for ip, node in self._store.items():
+            if node.node_id == node_id:
+                return ip
+        return None
 
     async def list_all(self) -> list[Node]:
         return list(self._store.values())

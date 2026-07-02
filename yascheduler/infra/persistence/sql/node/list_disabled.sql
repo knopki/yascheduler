@@ -7,4 +7,4 @@ SELECT
     username,
     port
 FROM yascheduler_nodes
-WHERE enabled = FALSE;
+WHERE enabled = FALSE AND ip <> '';

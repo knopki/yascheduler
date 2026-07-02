@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.17.0
+# VERSION: 1.18.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
@@ -17,7 +17,7 @@
 #   NewTask - Pre-persistence task record (no task_id)
 #   Task - Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
 #   NodeId - Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
-#   NewNode - Pre-persistence node record (no node_id)
+#   NewNode - Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) for the tmp-reservation call site
 #   Node - Post-persistence node record; always carries node_id: NodeId (first field, identity-first)
 #   ConnectedMachine - Runtime connected machine with state transitions
 #   Engine - Calculation engine value object (re-exported from M-DOMAIN-ENGINE; see domain/engine.py)
@@ -26,8 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.17.0 - Add TaskId value object (frozen dataclass wrapping int, validates >0, __str__ renders bare int) and NewTask pre-persistence record; Task gains task_id: TaskId as first field (post-persistence shape). Conversion NewTask→Task happens only in TaskRepository.insert (add-task-id-identity).
-#   PREVIOUS_CHANGE: v1.16.0 - Add NodeId value object (frozen dataclass wrapping int, validates >0, __str__ renders bare int) and NewNode pre-persistence record; Node gains node_id: NodeId as first field (post-persistence shape). Conversion NewNode→Node happens only in NodeRepository.insert (add-node-id-identity).
+#   LAST_CHANGE: v1.18.0 - NewNode gains ip: str = "" and ncpus: int = 0 defaults (remove-tmp-node-fake-ip); field order unchanged (ip and ncpus still first, now with defaults) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False) without naming them. Node.ip stays str (no Optional ripple); tmp rows carry the empty-string sentinel.
+#   PREVIOUS_CHANGE: v1.17.0 - Add TaskId value object (frozen dataclass wrapping int, validates >0, __str__ renders bare int) and NewTask pre-persistence record; Task gains task_id: TaskId as first field (post-persistence shape). Conversion NewTask→Task happens only in TaskRepository.insert (add-task-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -474,7 +474,7 @@ class NodeId:
 
 # START_CONTRACT: NewNode
 #   PURPOSE: Pre-persistence node record — no identity yet; converted to Node only by NodeRepository.insert.
-#   INPUTS: { ip: str, ncpus: int, enabled: bool, cloud: str | None, username: str, port: int }
+#   INPUTS: { ip: str = "", ncpus: int = 0, enabled: bool = True, cloud: str | None = None, username: str = "root", port: int = 22 }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: NodeRepository.insert
@@ -483,15 +483,18 @@ class NodeId:
 class NewNode:
     """Pre-persistence node record — no identity yet.
 
-    Mirrors the non-``node_id`` fields of :class:`Node` with identical defaults. A
-    caller builds a ``NewNode`` to prepare a node for insertion; the conversion to
-    :class:`Node` happens in exactly one place: ``NodeRepository.insert``.
-    ``CloudProvisioner.allocate`` returns a ``NewNode`` (a freshly-built VM that has
-    not been persisted).
+    Mirrors the non-``node_id`` fields of :class:`Node`. ``ip`` and ``ncpus``
+    carry defaults (``""`` and ``0``) so the tmp-reservation call site can
+    construct ``NewNode(cloud=selected_name, enabled=False)`` without naming
+    them (the empty-string sentinel marks a tmp/pending row); field types are
+    unchanged (``ip: str``, ``ncpus: int`` — no Optional ripple). A caller
+    building a real ``NewNode`` (from ``CloudProvisioner.allocate``) passes a
+    real ``ip`` and ``ncpus`` explicitly; the conversion to :class:`Node`
+    happens in exactly one place: ``NodeRepository.insert``.
     """
 
-    ip: str
-    ncpus: int
+    ip: str = ""
+    ncpus: int = 0
     enabled: bool = True
     cloud: str | None = None
     username: str = "root"
@@ -512,9 +515,12 @@ class Node:
     ``node_id`` is the FIRST field (identity first); a ``Node`` only ever comes from
     the database (via ``_row_to_node``) or from ``NodeRepository.insert``'s return.
     ``NodeRepository`` mutators (``enable``/``disable``/``remove``/``update``) key
-    on ``node_id``; ``ip`` remains ``UNIQUE`` (a transition-window guard) and is
-    still the key for the ip-keyed lookup methods (``get``/``get_by_ips``) and the
-    SSH/Task surfaces — those migrations are deferred non-goals.
+    on ``node_id``; ``ip`` is no longer ``UNIQUE`` (dropped by migration 003 —
+    duplicate IPs are valid behind different jump hosts; ``node_id`` is the
+    identity) and is still the key for the ip-keyed lookup methods
+    (``get``/``get_by_ips``) and the SSH/Task surfaces — those migrations are
+    deferred non-goals. Tmp/pending rows carry ``ip == ""`` (the empty-string
+    sentinel; ``ip == ""`` IFF ``enabled = FALSE`` AND the node is tmp/pending).
     """
 
     node_id: NodeId

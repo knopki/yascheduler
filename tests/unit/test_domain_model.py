@@ -38,8 +38,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Add TaskId/NewTask test suites and update Task construction for add-task-id-identity.
-#   PREVIOUS_CHANGE: v1.4.0 - Add NodeId/NewNode test suites and update Node construction for add-node-id-identity.
+#   LAST_CHANGE: v1.6.0 - remove-tmp-node-fake-ip: add TestNewNode.tmp_reservation_defaults and test_explicit_ip_ncpus_override_defaults for NewNode ip="" / ncpus=0 defaults.
+#   PREVIOUS_CHANGE: v1.5.0 - Add TaskId/NewTask test suites and update Task construction for add-task-id-identity.
 # END_CHANGE_SUMMARY
 
 import time
@@ -418,7 +418,7 @@ class TestNodeId:
 
 
 # START_CONTRACT: test_new_node
-#   PURPOSE: Verify NewNode dataclass defaults and full construction, absence of node_id.
+#   PURPOSE: Verify NewNode dataclass defaults (including ip/ncpus defaults), full construction, absence of node_id.
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertions }
 #   SIDE_EFFECTS: None
@@ -451,6 +451,23 @@ class TestNewNode:
         assert n.cloud == "aws"
         assert n.username == "admin"
         assert n.port == 2222
+
+    def test_tmp_reservation_defaults(self) -> None:
+        # remove-tmp-node-fake-ip: NewNode(cloud=..., enabled=False) yields the
+        # tmp-reservation defaults — empty-string ip sentinel, ncpus=0.
+        n = NewNode(cloud="aws", enabled=False)
+        assert n.ip == ""
+        assert n.ncpus == 0
+        assert n.username == "root"
+        assert n.port == 22
+        assert n.enabled is False
+        assert n.cloud == "aws"
+
+    def test_explicit_ip_ncpus_override_defaults(self) -> None:
+        # Explicit ip/ncpus override the new defaults.
+        n = NewNode(ip="10.0.0.1", ncpus=4)
+        assert n.ip == "10.0.0.1"
+        assert n.ncpus == 4
 
 
 # START_CONTRACT: test_connected_machine

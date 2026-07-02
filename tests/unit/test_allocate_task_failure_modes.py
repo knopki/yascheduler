@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.4.1
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
@@ -14,9 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.4.1 - add-node-id-identity test update: prepend node_id=NodeId(1) to Node(...) construction and add NodeId import.]
-#   PREVIOUS_CHANGE: [v1.4.0 - session-based-machine-handle section 7.3: no behavioral changes needed (all failure-mode tests use empty list_free which is session-agnostic).]
-#   PREVIOUS_CHANGE: [v1.3.0 - select_provider returns str; _make_clouds helper signature uses str selection; replace ProviderSelection(name="aws", username="root") with "aws" literal (collapse-provider-selection).]
+#   LAST_CHANGE: [v1.5.0 - remove-tmp-node-fake-ip: _make_uow sets uow.nodes.insert to return a tmp Node (NewNode(cloud=..., enabled=False) → Node with node_id); step2/step3 cleanup asserts remove(tmp_node_id) directly (no get lookup).]
+#   PREVIOUS_CHANGE: [v1.4.1 - add-node-id-identity test update: prepend node_id=NodeId(1) to Node(...) construction and add NodeId import.]
 # END_CHANGE_SUMMARY
 #
 """Failure-mode tests for allocate_task cloud-fallback hardening.
@@ -55,7 +54,10 @@ def _make_uow(todo_task: Task) -> AsyncMock:
     uow.tasks.list_by_status = AsyncMock(return_value=[])
     uow.nodes = AsyncMock()
     uow.nodes.list_all = AsyncMock(return_value=[])
-    uow.nodes.add_tmp = AsyncMock(return_value="tmp-10.0.0.100")
+    # remove-tmp-node-fake-ip: tmp-node insertion is insert(NewNode(cloud=...,
+    # enabled=False)) → Node carrying the generated node_id (the cleanup handle).
+    tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+    uow.nodes.insert = AsyncMock(return_value=tmp_node)
     uow.collect_events = AsyncMock(return_value=[])
     uow.publish_events = AsyncMock()
     uow.__aenter__ = AsyncMock(return_value=uow)
@@ -155,7 +157,6 @@ class TestAllocateTaskFailureModes:
         operations = MagicMock()
 
         uow = _make_uow(todo_task)
-        uow.nodes.add = AsyncMock()
         uow.nodes.remove = AsyncMock(side_effect=RuntimeError("cleanup db lost"))
 
         tracker = MagicMock(spec=AllocationTracker)
@@ -181,7 +182,10 @@ class TestAllocateTaskFailureModes:
 
         # Original CloudAllocateError propagates, not the cleanup RuntimeError.
         tracker.discard.assert_called_once_with(todo_task.task_id)
+        # cleanup called remove(tmp_node_id) directly (no get lookup); the
+        # RuntimeError is swallowed by the best-effort wrapper.
         assert uow.nodes.remove.call_count >= 1
+        uow.nodes.get.assert_not_called()
 
     async def test_step3_persist_failure_discards_tracker(
         self,
@@ -198,7 +202,6 @@ class TestAllocateTaskFailureModes:
 
         uow = _make_uow(todo_task)
         cloud_node = Node(node_id=NodeId(1), ip="10.0.0.100", ncpus=4, cloud="aws")
-        uow.nodes.add = AsyncMock()
         uow.nodes.remove = AsyncMock()
         # First commit (step 1) succeeds; second commit (step 3 persist) fails;
         # subsequent commits (best-effort tmp cleanup) succeed.
@@ -238,8 +241,11 @@ class TestAllocateTaskFailureModes:
         clouds.allocate.assert_called_once_with("aws")
         # VM is best-effort deallocated so no billable orphan leaks.
         clouds.deallocate.assert_called_once_with("aws", "10.0.0.100")
-        # tmp-node best-effort cleanup also runs (once during step-3 failure path).
+        # tmp-node best-effort cleanup also runs (remove(tmp_node_id) is called
+        # directly — once in the persist attempt before commit raises, once in
+        # the best-effort cleanup path after persist fails).
         assert uow.nodes.remove.call_count >= 2
+        uow.nodes.get.assert_not_called()
 
     async def test_empty_platforms_short_circuits_cloud_fallback(
         self,

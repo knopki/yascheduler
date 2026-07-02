@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_persistence_adapter.py
-# VERSION: 1.5.0
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yascheduler.infra.persistence.
@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Update PostgresTaskRepository tests for add-task-id-identity: get/update_status/list_by_jobs take TaskId; _row_to_task wraps TaskId; insert takes NewTask and returns Task carrying TaskId. Row dicts keep task_id as int (DB value); save passes task.task_id.value so kwargs["task_id"] stays int.
-#   PREVIOUS_CHANGE: v1.5.0 - Update PostgresNodeRepository tests for add-node-id-identity: add node_id to row dicts, rename add→insert with NewNode, add get_by_id tests.
+#   LAST_CHANGE: v1.7.0 - remove-tmp-node-fake-ip: list_enabled/list_disabled tests assert no python post-filter (test_list_enabled_no_python_post_filter, test_list_disabled_no_python_post_filter); the "." in ip filter is gone — the SQL layer is the sole filter (list_disabled filters ip <> '' in SQL).
+#   PREVIOUS_CHANGE: v1.6.0 - Update PostgresTaskRepository tests for add-task-id-identity: get/update_status/list_by_jobs take TaskId; _row_to_task wraps TaskId; insert takes NewTask and returns Task carrying TaskId. Row dicts keep task_id as int (DB value); save passes task.task_id.value so kwargs["task_id"] stays int.
 # END_CHANGE_SUMMARY
 
 import json
@@ -769,10 +769,16 @@ class TestPostgresNodeRepository:
         # All rows have "." in IP, so all 3 pass the filter
         assert len(nodes) == 3
 
-    async def test_list_enabled_filters_invalid_ips(
+    async def test_list_enabled_no_python_post_filter(
         self, mocker: MockerFixture
     ) -> None:
-        """list_enabled excludes rows whose ip does not contain '.'."""
+        """list_enabled returns all enabled rows from SQL — no python post-filter (remove-tmp-node-fake-ip).
+
+        By the invariant (ip == '' IFF enabled=FALSE AND tmp/pending), no
+        enabled row has ip == "", so the prior "." in ip post-filter was dead
+        and is removed. The SQL WHERE enabled = TRUE is the only filter; a
+        row with a non-ipv4 hostname like "localhost" is returned unchanged.
+        """
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
@@ -797,8 +803,8 @@ class TestPostgresNodeRepository:
 
         nodes = await repo.list_enabled()
 
-        assert len(nodes) == 1
-        assert nodes[0].ip == "10.0.0.1"
+        # No python post-filter — both enabled rows are returned.
+        assert len(nodes) == 2
 
     async def test_list_disabled_returns_disabled_with_valid_ips(
         self, mocker: MockerFixture
@@ -831,10 +837,17 @@ class TestPostgresNodeRepository:
         assert len(nodes) == 2
         assert all(n.enabled is False for n in nodes)
 
-    async def test_list_disabled_filters_invalid_ips(
+    async def test_list_disabled_no_python_post_filter(
         self, mocker: MockerFixture
     ) -> None:
-        """list_disabled excludes rows whose ip does not contain '.'."""
+        """list_disabled returns all rows from SQL — no python post-filter (remove-tmp-node-fake-ip).
+
+        The ip <> '' presence check is in SQL (node/list_disabled.sql), not
+        python. The repo returns whatever SQL returns; a row with a non-ipv4
+        hostname like "localhost" passes (it is a real-disabled VM with a real
+        address). Only ip == "" tmp rows are excluded, and that happens at
+        the SQL layer.
+        """
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
@@ -859,8 +872,9 @@ class TestPostgresNodeRepository:
 
         nodes = await repo.list_disabled()
 
-        assert len(nodes) == 1
-        assert nodes[0].ip == "10.0.0.1"
+        # No python post-filter — both disabled rows with non-empty ip are returned.
+        assert len(nodes) == 2
+        assert all(n.enabled is False for n in nodes)
 
     # -- add -------------------------------------------------------------------
 

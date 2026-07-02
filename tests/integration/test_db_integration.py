@@ -1,9 +1,9 @@
 # FILE: tests/integration/test_db_integration.py
-# VERSION: 2.1.1
+# VERSION: 2.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
-#   SCOPE: Node CRUD, Task CRUD, status transitions, UoW-based composition queries (list_by_jobs, get_by_ips, add_tmp).
+#   SCOPE: Node CRUD, Task CRUD, status transitions, UoW-based composition queries (list_by_jobs, get_by_ips), tmp-node lifecycle via insert, migration 003 backfill + constraint drop.
 #   DEPENDS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL, M-CONFIG-DB
 #   LINKS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
@@ -22,12 +22,14 @@
 #   test_get_tasks_by_jobs - array parameter with unnest
 #   test_get_task_ids_by_ip_and_status - filtered by IP and status
 #   test_get_tasks_with_cloud_by_id_status - in-test composition: list_by_jobs + get_by_ips
-#   test_add_tmp_node - provisional IP, disabled, correct cloud/username
+#   test_tmp_node_lifecycle_via_insert - tmp-node inserted via insert(NewNode(cloud=..., enabled=False)) carries ip="", enabled=False, node_id; remove cleans up
+#   test_migration_003_backfills_prov_ips_and_drops_unique - migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key
+#   test_list_filters_empty_ip_in_sql - list_enabled/list_disabled exclude ip='' rows at the SQL layer (no python post-filter)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.1 - Adapt to add-node-id-identity: NewNode for insert, repo.add→insert, NodeId assertions.
-#   PREVIOUS_CHANGE: v2.1.0 - add_tmp("azure") drops username arg; row falls back to DB DEFAULT 'root' (collapse-provider-selection).
+#   LAST_CHANGE: v2.2.0 - remove-tmp-node-fake-ip: replace test_add_tmp_node with test_tmp_node_lifecycle_via_insert (insert(NewNode(cloud=..., enabled=False)) → Node carrying node_id); add test_migration_003_backfills_prov_ips_and_drops_unique (backfill + DROP CONSTRAINT); add test_list_filters_empty_ip_in_sql (no python post-filter; SQL is the sole filter). The schema now seeds to migration 003 and drops ip UNIQUE.
+#   PREVIOUS_CHANGE: v2.1.1 - Adapt to add-node-id-identity: NewNode for insert, repo.add→insert, NodeId assertions.
 # END_CHANGE_SUMMARY
 
 """Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL."""
@@ -565,23 +567,182 @@ async def test_get_tasks_with_cloud_by_id_status(
 # ---------------------------------------------------------------------------
 
 
-# START_CONTRACT: test_add_tmp_node
-#   PURPOSE: Verify add_tmp generates a provisional IP and inserts a disabled node.
+# START_CONTRACT: test_tmp_node_lifecycle_via_insert
+#   PURPOSE: Verify insert(NewNode(cloud=..., enabled=False)) creates a tmp-node row with ip="" sentinel and enabled=False, returning a Node carrying node_id; remove(node_id) cleans up.
 #   INPUTS: { uow_factory: UoW factory fixture }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_add_tmp_node
-async def test_add_tmp_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
-    """add_tmp creates a disabled node with provisional IP."""
+# END_CONTRACT: test_tmp_node_lifecycle_via_insert
+async def test_tmp_node_lifecycle_via_insert(
+    uow_factory: Callable[[], PostgresUnitOfWork],
+) -> None:
+    """insert(NewNode(cloud=..., enabled=False)) creates a tmp-node row; remove(node_id) cleans up."""
     async with uow_factory() as uow:
-        ip = await uow.nodes.add_tmp("azure")
+        node = await uow.nodes.insert(NewNode(cloud="azure", enabled=False))
         await uow.commit()
-        assert ip.startswith("prov")
-
-    async with uow_factory() as uow:
-        node = await uow.nodes.get(ip)
-        assert node is not None
+        assert isinstance(node, Node)
+        assert isinstance(node.node_id, NodeId)
+        assert node.node_id.value >= 1
+        assert node.ip == ""
         assert node.enabled is False
         assert node.cloud == "azure"
         assert node.username == "root"
+        assert node.port == 22
+
+    async with uow_factory() as uow:
+        # The tmp row is invisible to list_disabled (ip <> '' SQL filter excludes ip="").
+        disabled = await uow.nodes.list_disabled()
+        assert all(n.ip != "" for n in disabled)
+        # But visible to list_all (counts toward capacity).
+        all_nodes = await uow.nodes.list_all()
+        assert any(n.node_id == node.node_id for n in all_nodes)
+
+    async with uow_factory() as uow:
+        await uow.nodes.remove(node.node_id)
+        await uow.commit()
+
+    async with uow_factory() as uow:
+        all_nodes = await uow.nodes.list_all()
+        assert all(n.node_id != node.node_id for n in all_nodes)
+
+
+# START_CONTRACT: test_migration_003_backfills_prov_ips_and_drops_unique
+#   PURPOSE: Verify migration 003 backfills prov... → '' and drops the yascheduler_nodes_ip_key UNIQUE constraint (duplicate real ip insert succeeds post-migration).
+#   INPUTS: { None - starts its own PostgresContainer }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: Starts a Postgres container; seeds a prov... row; applies schema + migrations (003 backfills + drops constraint)
+#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
+# END_CONTRACT: test_migration_003_backfills_prov_ips_and_drops_unique
+async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
+    """Migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key."""
+    from urllib.parse import urlparse
+
+    from testcontainers.postgres import PostgresContainer
+
+    from yascheduler.infra.persistence import PostgresDbConfig, apply_migrations
+    from yascheduler.infra.persistence.postgres_schema import apply_schema
+
+    with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
+        url = urlparse(pg.get_connection_url())
+        config = PostgresDbConfig(
+            user=url.username or "test",
+            password=url.password or "test",
+            database=url.path.lstrip("/"),
+            host=url.hostname or "localhost",
+            port=url.port or 5432,
+        )
+
+        # Seed a legacy-style DB already at migration 002 (with the UNIQUE
+        # constraint, a node_id column, and a prov... row that the old add_tmp
+        # would have produced). The tracker is seeded to '002' so apply_migrations
+        # only runs 003 (backfill + DROP CONSTRAINT).
+        import pg8000.native
+
+        conn = pg8000.native.Connection(
+            user=config.user,
+            host=config.host,
+            database=config.database,
+            port=config.port,
+            password=config.password,
+        )
+        try:
+            conn.run(
+                "CREATE TABLE yascheduler_migrations "
+                "(migration_id TEXT PRIMARY KEY, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+            )
+            conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('002')")
+            conn.run(
+                "CREATE TABLE yascheduler_nodes ("
+                "node_id SERIAL PRIMARY KEY, ip VARCHAR(15) UNIQUE, "
+                "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
+                "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
+                "cloud VARCHAR(32) DEFAULT NULL)"
+            )
+            conn.run(
+                "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
+                "VALUES ('provabc1234567', FALSE, 'aws')"
+            )
+        finally:
+            conn.close()
+
+        # apply_schema is a no-op on the existing table (CREATE TABLE IF NOT
+        # EXISTS); apply_migrations runs only 003 (backfill + DROP CONSTRAINT).
+        apply_schema(config)
+        apply_migrations(config)
+
+        conn = pg8000.native.Connection(
+            user=config.user,
+            host=config.host,
+            database=config.database,
+            port=config.port,
+            password=config.password,
+        )
+        try:
+            conn.run("BEGIN")
+            try:
+                rows = conn.run(
+                    "SELECT ip, enabled, cloud FROM yascheduler_nodes "
+                    "WHERE cloud = 'aws'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            # The prov... row was backfilled to ''.
+            assert len(rows) == 1
+            assert rows[0][0] == ""
+            assert rows[0][1] is False
+
+            # The UNIQUE constraint is gone — a duplicate real ip insert succeeds.
+            conn.run("BEGIN")
+            try:
+                conn.run(
+                    "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
+                    "VALUES ('10.0.0.99', TRUE, 'aws')"
+                )
+                conn.run(
+                    "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
+                    "VALUES ('10.0.0.99', TRUE, 'hetzner')"
+                )
+            finally:
+                conn.run("ROLLBACK")
+        finally:
+            conn.close()
+
+
+# START_CONTRACT: test_list_filters_empty_ip_in_sql
+#   PURPOSE: Verify list_enabled returns only enabled rows (no python post-filter) and list_disabled excludes ip='' rows at the SQL layer (no python post-filter).
+#   INPUTS: { uow_factory: UoW factory fixture }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-PERSISTENCE-POSTGRES
+# END_CONTRACT: test_list_filters_empty_ip_in_sql
+async def test_list_filters_empty_ip_in_sql(
+    uow_factory: Callable[[], PostgresUnitOfWork],
+) -> None:
+    """list_enabled/list_disabled filtering is in SQL, not python (remove-tmp-node-fake-ip)."""
+    async with uow_factory() as uow:
+        # A real enabled node (has a real ip).
+        await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=4, enabled=True))
+        # A tmp/pending row (ip="", enabled=False) — excluded by list_disabled SQL.
+        await uow.nodes.insert(NewNode(cloud="aws", enabled=False))
+        # A real-disabled VM (ip<>"", enabled=False) — included by list_disabled.
+        await uow.nodes.insert(NewNode(ip="10.0.0.2", ncpus=4, enabled=False))
+        await uow.commit()
+
+    async with uow_factory() as uow:
+        enabled = await uow.nodes.list_enabled()
+        # Only the enabled real node; no python post-filter needed (invariant:
+        # no enabled row has ip="").
+        assert len(enabled) == 1
+        assert enabled[0].ip == "10.0.0.1"
+
+        disabled = await uow.nodes.list_disabled()
+        # Only the real-disabled VM (ip <> '' is filtered in SQL); the tmp row
+        # with ip="" is excluded at the SQL layer.
+        assert len(disabled) == 1
+        assert disabled[0].ip == "10.0.0.2"
+
+        all_nodes = await uow.nodes.list_all()
+        # list_all returns everything (including the tmp row with ip="").
+        assert len(all_nodes) == 3

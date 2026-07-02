@@ -5,7 +5,7 @@
 -- last_migration is the single manual edit point when a migration is added.
 DO $$
 DECLARE
-  last_migration CONSTANT TEXT := '002';
+  last_migration CONSTANT TEXT := '003';
 BEGIN
   IF to_regclass('yascheduler_migrations') IS NULL THEN
     EXECUTE 'CREATE TABLE yascheduler_migrations (
@@ -20,7 +20,7 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS yascheduler_nodes (
     node_id SERIAL PRIMARY KEY,
-    ip VARCHAR(15) UNIQUE,
+    ip VARCHAR(15),
     port INTEGER DEFAULT 22,
     username VARCHAR(255) DEFAULT 'root',
     ncpus SMALLINT DEFAULT NULL,

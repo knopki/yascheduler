@@ -40,8 +40,8 @@ then `with_context(remote_folder based on task.task_id)` and
 ### Requirement: AllocateTask use case
 
 The system SHALL provide an `allocate_task` async function that matches a
-TO_DO task to a free machine or requests cloud provisioning. The function
-SHALL accept `task_id: TaskId` (was `int`), `uow_factory`, `repository:
+TO_DO task to a free machine or requests cloud provisioning. The function SHALL
+accept `task_id: TaskId` (was `int`), `uow_factory`, `repository:
 MachineRepository` (Protocol type), `operations: MachineOperations` (Protocol
 type), `clouds: CloudProvisioner` (Protocol type), `tracker: AllocationTracker`,
 and `allocation_lock: asyncio.Lock`. It SHALL NOT import from `yascheduler.infra` at
@@ -57,18 +57,36 @@ are `TaskId` (the tracker's internal `set` becomes `set[TaskId]`).
 For the cloud-fallback path, the use case SHALL own the full flow:
 tracker dedup, capacity check, provider selection (via
 `clouds.select_provider` port method returning `str | None`), tmp-node
-insertion, cloud allocation (via `clouds.allocate(selection)`), final
-node persistence, and tmp-node cleanup on failure. The
-`allocation_lock` SHALL serialize the capacity-read + select + add_tmp
-critical section as a single UoW with commit before lock release.
+insertion via `uow.nodes.insert` (NOT `add_tmp`), cloud allocation (via
+`clouds.allocate(selection)`), final node persistence, and tmp-node cleanup on
+failure. The `allocation_lock` SHALL serialize the capacity-read + select +
+tmp-insert critical section as a single UoW with commit before lock release.
 
-The tmp-node cleanup paths (`_cleanup_tmp_node_best_effort` and the
-`_persist_node_with_cleanup` failure/success paths) SHALL resolve the
-`NodeId` by calling `uow.nodes.get(tmp_ip)` before `uow.nodes.remove(node.node_id)`.
-If `get` returns `None` (row already removed), the `remove` call SHALL be
-skipped (no rowcount check — matches prior no-op-on-0-rows behavior). The
-`get` lookup is best-effort inside the existing `try/except` wrapper;
-failures are logged, not raised.
+The tmp-node handle is a `NodeId`, not a placeholder IP. The internal
+`_TmpSelection` NamedTuple SHALL carry `name: str` and `node_id: NodeId` (NOT
+`ip: str`). `_select_and_insert_tmp` SHALL call
+`uow.nodes.insert(NewNode(cloud=selected_name, enabled=False)) -> Node` and
+return `_TmpSelection(name=selected_name, node_id=tmp_node.node_id)`. The
+`NewNode.ip=""` and `NewNode.ncpus=0` defaults supply the tmp-row's `ip` and
+`ncpus` columns.
+
+The tmp-node cleanup paths (`_cleanup_tmp_node_best_effort`,
+`_allocate_cloud_node`, `_persist_node_with_cleanup`, `_provision_and_persist`)
+SHALL take `tmp_node_id: NodeId` (NOT `tmp_ip: str`) and call
+`uow.nodes.remove(tmp_node_id)` directly. The `uow.nodes.get(tmp_ip)` lookup
+and its `if node is not None` None-branch SHALL NOT run — the `NodeId` is
+already in hand from `insert`'s return. `remove(tmp_node_id)` is idempotent:
+`DELETE WHERE node_id = :node_id` affecting 0 rows is a no-op, matching the
+prior no-op-on-0-rows behavior (no rowcount check added). Failures in
+best-effort cleanup are logged, not raised.
+
+The final-persistence path (`_persist_node_with_cleanup`) SHALL
+`uow.nodes.insert(node)` (the real `NewNode` from `clouds.allocate`, carrying
+a real `ip` and `ncpus`), then `uow.nodes.remove(tmp_node_id)` (the tmp-row
+cleanup), then commit, in one UoW. If the persist fails, the VM is
+best-effort deallocated via `clouds.deallocate(cloud_name, node.ip)` and the
+tmp-node is best-effort cleaned up via `_cleanup_tmp_node_best_effort`; the
+original exception is re-raised.
 
 #### Scenario: Allocate to free machine
 - **WHEN** `allocate_task(task_id, engines, uow_factory, repository, operations, clouds, start_task_on_machine, tracker, allocation_lock)` is called (with `task_id: TaskId`) and a free compatible machine exists
@@ -76,15 +94,23 @@ failures are logged, not raised.
 
 #### Scenario: No free machine — cloud fallback with full ownership
 - **WHEN** `allocate_task(...)` is called and no free machine matches
-- **THEN** the use case calls `tracker.add(task_id)` (returns False → return immediately if already in-flight). Then opens a UoW under `allocation_lock`, reads `uow.nodes.list_all()`, calls `clouds.select_provider(platforms, counts)` (port method). If `selection is None`, calls `tracker.discard(task_id)` and returns False. Otherwise inserts a tmp-node via `uow.nodes.add_tmp(selection)`, commits, calls `clouds.allocate(selection)` outside the lock, then opens a second UoW to persist the final Node and remove the tmp-node. Returns False.
+- **THEN** the use case calls `tracker.add(task_id)` (returns False → return immediately if already in-flight). Then opens a UoW under `allocation_lock`, reads `uow.nodes.list_all()`, calls `clouds.select_provider(platforms, counts)` (port method). If `selection is None`, calls `tracker.discard(task_id)` and returns False. Otherwise inserts a tmp-node via `uow.nodes.insert(NewNode(cloud=selection, enabled=False)) -> Node`, commits (lock released), calls `clouds.allocate(selection)` outside the lock, then opens a second UoW to persist the final Node and remove the tmp-node by `node_id`. Returns False.
 
-#### Scenario: Cloud allocation failure cleans up tmp-node
+#### Scenario: Tmp-node insertion uses insert not add_tmp
+- **WHEN** the cloud-fallback critical section inserts a tmp-node
+- **THEN** it calls `uow.nodes.insert(NewNode(cloud=selected_name, enabled=False))` (NOT `uow.nodes.add_tmp(...)`); the returned `Node.node_id` becomes the `_TmpSelection.node_id` cleanup handle
+
+#### Scenario: Tmp-node cleanup removes by node_id directly
+- **WHEN** any tmp-node cleanup path (`_cleanup_tmp_node_best_effort`, `_persist_node_with_cleanup`, or the `_allocate_cloud_node`/`_provision_and_persist` failure paths) runs
+- **THEN** it calls `uow.nodes.remove(tmp_node_id)` directly with the `NodeId`; it does NOT call `uow.nodes.get(tmp_ip)` first; the `if node is not None` None-branch is gone; a 0-row DELETE is a no-op (idempotent)
+
+#### Scenario: Cloud allocation failure cleans up tmp-node by node_id
 - **WHEN** `clouds.allocate(selection)` raises `CloudAllocateError` or `CloudSetupError` after tmp-node insertion
-- **THEN** the use case opens a UoW, resolves the tmp-node via `uow.nodes.get(tmp_ip)`, and if found removes it via `uow.nodes.remove(node.node_id)`, commits, calls `tracker.discard(task_id)`, and re-raises
+- **THEN** the use case calls `_cleanup_tmp_node_best_effort(uow_factory, tmp_node_id, ...)` which calls `uow.nodes.remove(tmp_node_id)` and commits (no `get` lookup, no None-branch), calls `tracker.discard(task_id)`, and re-raises
 
-#### Scenario: Tmp-node cleanup looks up NodeId before remove
-- **WHEN** any tmp-node cleanup path (`_cleanup_tmp_node_best_effort` or `_persist_node_with_cleanup`) runs
-- **THEN** it calls `uow.nodes.get(tmp_ip)` to obtain the `Node`, and if the node exists calls `uow.nodes.remove(node.node_id)`; if `get` returns `None`, `remove` is skipped
+#### Scenario: Final persistence removes tmp-node by node_id
+- **WHEN** `_persist_node_with_cleanup` runs after `clouds.allocate` succeeded
+- **THEN** it opens a UoW, calls `uow.nodes.insert(node)` (the real `NewNode`), calls `uow.nodes.remove(tmp_node_id)` (the tmp cleanup, no `get` lookup), and commits
 
 #### Scenario: Duplicate allocation rejected by tracker
 - **WHEN** `allocate_task` is called for a `task_id: TaskId` already in `AllocationTracker`
