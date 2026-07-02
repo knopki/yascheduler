@@ -273,17 +273,17 @@ async def test_repo_node_crud(
     assert retrieved.enabled is True
 
     # Disable
-    await repo.disable("10.0.0.10")
+    await repo.disable(persisted.node_id)
     n = await repo.get("10.0.0.10")
     assert n is not None and n.enabled is False
 
     # Enable
-    await repo.enable("10.0.0.10")
+    await repo.enable(persisted.node_id)
     n = await repo.get("10.0.0.10")
     assert n is not None and n.enabled is True
 
     # Remove
-    await repo.remove("10.0.0.10")
+    await repo.remove(persisted.node_id)
     assert await repo.get("10.0.0.10") is None
 
 

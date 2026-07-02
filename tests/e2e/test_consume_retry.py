@@ -323,5 +323,7 @@ async def _cleanup_node(
     ssh_container: dict[str, Any],
 ) -> None:
     async with uow_factory() as uow:
-        await uow.nodes.remove(ssh_container["host"])
+        node = await uow.nodes.get(ssh_container["host"])
+        if node is not None:
+            await uow.nodes.remove(node.node_id)
         await uow.commit()

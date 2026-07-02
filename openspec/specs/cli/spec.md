@@ -1203,14 +1203,15 @@ nor `--remove-hard` is set (i.e. the add path), `manage_node` SHALL call
 (exit `2` — an argument-combination error, consistent with the existing
 `--skip-setup × remove` `parser.error`).
 
-On the remove-by-id path, the validation UoW resolves the node via
-`uow.nodes.get_by_id(node_target.node_id) -> Node | None`. If `None`, the
-existing "NOT in DB" body validation raises (exit `1`). If found, the
-remove helpers (`_remove_node_soft`, `_remove_node_hard`) use `node.ip` for
-`tasks.list_ids_by_ip_and_status(node.ip, TaskStatus.RUNNING)` and for the
-ip-keyed `nodes.disable(node.ip)` / `nodes.remove(node.ip)` mutators — the
-ip-keyed mutators are unchanged; `ip` is just now obtained from the
-looked-up `Node` rather than the CLI positional.
+On the remove path, the validation UoW resolves the `Node` early —
+`uow.nodes.get_by_id(node_target.node_id) -> Node | None` on the node_id path,
+`uow.nodes.get(spec.host) -> Node | None` on the host_spec path. If `None`, the
+existing "NOT in DB" body validation raises (exit `1`). If found, the `Node`
+is passed to the remove helpers (`_remove_node_soft`, `_remove_node_hard`),
+which use `node.node_id` for the `nodes.disable(node.node_id)` /
+`nodes.remove(node.node_id)` mutators and `node.ip` for
+`tasks.list_ids_by_ip_and_status(node.ip, TaskStatus.RUNNING)` (Surface C —
+ip-keyed, unchanged) and for user-facing stdout messages.
 
 #### Scenario: yasetnode pure-digit positional is a node_id
 - **WHEN** `_parse_node_target("5")` is called
@@ -1224,9 +1225,13 @@ looked-up `Node` rather than the CLI positional.
 - **WHEN** `yasetnode 5` is invoked (no `--remove-soft`/`--remove-hard`)
 - **THEN** argparse surfaces `parser.error(...)` with exit `2` and a message stating a node cannot be added by id
 
-#### Scenario: yasetnode remove-by-id soft resolves via get_by_id
+#### Scenario: yasetnode remove-by-id soft resolves Node via get_by_id
 - **WHEN** `yasetnode 5 --remove-soft` is invoked and a node with node_id=5 exists with no RUNNING tasks
-- **THEN** `uow.nodes.get_by_id(NodeId(5))` resolves the `Node`, and `uow.nodes.remove(node.ip)` removes it (ip-keyed mutator, unchanged)
+- **THEN** `uow.nodes.get_by_id(NodeId(5))` resolves the `Node`, the `Node` is passed to `_remove_node_soft`, and `uow.nodes.remove(node.node_id)` removes it (node_id-keyed mutator)
+
+#### Scenario: yasetnode remove-by-host soft resolves Node via get
+- **WHEN** `yasetnode 10.0.0.1 --remove-soft` is invoked and a node with ip=10.0.0.1 exists with no RUNNING tasks
+- **THEN** `uow.nodes.get("10.0.0.1")` resolves the `Node`, the `Node` is passed to `_remove_node_soft`, and `uow.nodes.remove(node.node_id)` removes it (node_id-keyed mutator)
 
 #### Scenario: yasetnode remove-by-id unknown id is a body error
 - **WHEN** `yasetnode 999 --remove-hard` is invoked and no node with node_id=999 exists
@@ -1279,8 +1284,9 @@ on the classes).
 
 After argparse succeeds and the `HostSpec` is parsed, `manage_node()` SHALL
 open a short, read-only validation UoW via
-`async with deps.uow_factory() as uow:`, read
-`already_there = await uow.nodes.get(spec.host) is not None`, and close it
+`async with deps.uow_factory() as uow:`, resolve the `Node` (via
+`get(spec.host)` on the host_spec path, via `get_by_id(target.node_id)` on the
+node_id path), and close it
 (without commit — nothing was mutated). It SHALL then dispatch to exactly one
 helper, each of which opens its OWN UoW via `deps.uow_factory()` to perform
 its mutations, commit, and print:
@@ -1291,12 +1297,13 @@ its mutations, commit, and print:
   remove + add cycle, not by re-adding.)
 - If NOT `already_there` and a remove flag is set: raise `ValueError` →
   top-level handler prints `Error: ...` to stderr, exits `1`.
-- If `--remove-hard`: call `_remove_node_hard(deps, spec)` — inside its own
-  UoW, list RUNNING task ids for the host, mark each DONE, remove the node,
-  commit.
-- If `--remove-soft`: call `_remove_node_soft(deps, spec)` — inside its own
-  UoW, if RUNNING tasks exist, disable the node; else remove the node;
-  commit.
+- If `--remove-hard`: call `_remove_node_hard(deps, node: Node)` — inside its
+  own UoW, list RUNNING task ids for `node.ip`, mark each DONE, remove the node
+  via `uow.nodes.remove(node.node_id)`, commit.
+- If `--remove-soft`: call `_remove_node_soft(deps, node: Node)` — inside its
+  own UoW, if RUNNING tasks exist, disable the node via
+  `uow.nodes.disable(node.node_id)`; else remove the node via
+  `uow.nodes.remove(node.node_id)`; commit.
 - Otherwise (add): resolve `username = spec.username or
   config.remote.username`, call `_add_node(deps, gateway, spec, config,
   skip_setup)` — inside its own UoW, connect + optional setup +
@@ -1307,6 +1314,12 @@ dispatch helper's UoW; for a single-operator CLI this is accepted (see design
 D18). Failure modes are benign and non-corrupting: add-on-already-present →
 unique-constraint / helper re-check → exit 1; remove-on-just-removed →
 no-op / not-found → exit 1.
+
+The remove helpers SHALL accept `node: Node` (not `ip: str`); the validation
+UoW already fetched the `Node`, and passing it down avoids a re-fetch.
+`tasks.list_ids_by_ip_and_status(node.ip, RUNNING)` stays ip-keyed (Surface C
+— `TaskRepository` lookup, unchanged in this change). User-facing stdout
+messages use `node.ip` (operators read ip, not node_id).
 
 The `Node` record constructed on the add path SHALL use
 `ip=spec.host`, `port=spec.port`, `username=<resolved>`,
@@ -1324,17 +1337,21 @@ The `Node` record constructed on the add path SHALL use
 - **WHEN** `yasetnode 10.0.0.1~4` is invoked
 - **THEN** `uow.nodes.add(...)` is called (inside `_add_node`'s own UoW) with a `Node(ip="10.0.0.1", port=22, username=<resolved>, ncpus=4, enabled=True)`
 
-#### Scenario: yasetnode remove-hard marks running tasks DONE then removes node
-- **WHEN** `yasetnode 10.0.0.1 --remove-hard` is invoked against a node with RUNNING task ids `[1, 2]`
-- **THEN** inside `_remove_node_hard`'s own UoW, `uow.tasks.update_status(1, TaskStatus.DONE)` and `uow.tasks.update_status(2, TaskStatus.DONE)` are called, then `uow.nodes.remove("10.0.0.1")` is called, then `uow.commit()` is called
+#### Scenario: yasetnode remove-hard marks running tasks DONE then removes node by node_id
+- **WHEN** `yasetnode 10.0.0.1 --remove-hard` is invoked against a node with `node_id=7`, ip=10.0.0.1, and RUNNING task ids `[1, 2]`
+- **THEN** inside `_remove_node_hard`'s own UoW, `uow.tasks.update_status(1, TaskStatus.DONE)` and `uow.tasks.update_status(2, TaskStatus.DONE)` are called, then `uow.nodes.remove(NodeId(7))` is called (node_id-keyed), then `uow.commit()` is called
 
-#### Scenario: yasetnode remove-soft with tasks disables node
-- **WHEN** `yasetnode 10.0.0.1 --remove-soft` is invoked against a node with at least one RUNNING task
-- **THEN** inside `_remove_node_soft`'s own UoW, `uow.nodes.disable("10.0.0.1")` is called, `uow.nodes.remove(...)` is NOT called, and `uow.commit()` is called
+#### Scenario: yasetnode remove-soft with tasks disables node by node_id
+- **WHEN** `yasetnode 10.0.0.1 --remove-soft` is invoked against a node with `node_id=7`, ip=10.0.0.1, and at least one RUNNING task
+- **THEN** inside `_remove_node_soft`'s own UoW, `uow.nodes.disable(NodeId(7))` is called (node_id-keyed), `uow.nodes.remove(...)` is NOT called, and `uow.commit()` is called
 
-#### Scenario: yasetnode remove-soft without tasks removes node
-- **WHEN** `yasetnode 10.0.0.1 --remove-soft` is invoked against a node with no RUNNING tasks
-- **THEN** inside `_remove_node_soft`'s own UoW, `uow.nodes.remove("10.0.0.1")` is called, `uow.nodes.disable(...)` is NOT called, and `uow.commit()` is called
+#### Scenario: yasetnode remove-soft without tasks removes node by node_id
+- **WHEN** `yasetnode 10.0.0.1 --remove-soft` is invoked against a node with `node_id=7`, ip=10.0.0.1, and no RUNNING tasks
+- **THEN** inside `_remove_node_soft`'s own UoW, `uow.nodes.remove(NodeId(7))` is called (node_id-keyed), `uow.nodes.disable(...)` is NOT called, and `uow.commit()` is called
+
+#### Scenario: yasetnode remove helpers take Node not ip
+- **WHEN** `_remove_node_hard` or `_remove_node_soft` is inspected
+- **THEN** the signature is `(deps, node: Node)` (not `(deps, ip: str)`); the validation UoW resolved the `Node` and passed it down
 
 #### Scenario: yasetnode logging captures warnings
 - **WHEN** `manage_node()` is invoked
@@ -1355,8 +1372,8 @@ function contracts, and block anchors) versioned `1.0.0`. The stale
 `# FIXME: split adapter and application layer` comment from the old
 `infra/cli/manage_node.py` SHALL NOT be carried to the new file. The logic
 SHALL be split into private pure functions: `_parse_host_spec(s)`,
-`_parse_node_args(argv)`, `_remove_node_hard(deps, spec)`,
-`_remove_node_soft(deps, spec)`, `_add_node(deps, repository, operations,
+`_parse_node_args(argv)`, `_remove_node_hard(deps, node: Node)`,
+`_remove_node_soft(deps, node: Node)`, `_add_node(deps, repository, operations,
 spec, config, skip_setup)`, and the `HostSpec` frozen dataclass. Each
 mutate helper opens its own UoW via `deps.uow_factory()` (see the dispatch
 requirement); the validation read uses a separate read-only UoW closed

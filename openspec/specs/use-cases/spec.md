@@ -62,6 +62,14 @@ node persistence, and tmp-node cleanup on failure. The
 `allocation_lock` SHALL serialize the capacity-read + select + add_tmp
 critical section as a single UoW with commit before lock release.
 
+The tmp-node cleanup paths (`_cleanup_tmp_node_best_effort` and the
+`_persist_node_with_cleanup` failure/success paths) SHALL resolve the
+`NodeId` by calling `uow.nodes.get(tmp_ip)` before `uow.nodes.remove(node.node_id)`.
+If `get` returns `None` (row already removed), the `remove` call SHALL be
+skipped (no rowcount check — matches prior no-op-on-0-rows behavior). The
+`get` lookup is best-effort inside the existing `try/except` wrapper;
+failures are logged, not raised.
+
 #### Scenario: Allocate to free machine
 - **WHEN** `allocate_task(task_id, engines, uow_factory, repository, operations, clouds, start_task_on_machine, tracker, allocation_lock)` is called (with `task_id: TaskId`) and a free compatible machine exists
 - **THEN** the task is loaded via UoW (`uow.tasks.get(task_id)`), allocated via `task.allocate_to(ip)`, transitioned to RUNNING via `task.mark_running()`, saved via `uow.tasks.save()`, committed, and `tracker.discard(task_id)` is called
@@ -72,7 +80,11 @@ critical section as a single UoW with commit before lock release.
 
 #### Scenario: Cloud allocation failure cleans up tmp-node
 - **WHEN** `clouds.allocate(selection)` raises `CloudAllocateError` or `CloudSetupError` after tmp-node insertion
-- **THEN** the use case opens a UoW, removes the tmp-node via `uow.nodes.remove(tmp_ip)`, commits, calls `tracker.discard(task_id)`, and re-raises
+- **THEN** the use case opens a UoW, resolves the tmp-node via `uow.nodes.get(tmp_ip)`, and if found removes it via `uow.nodes.remove(node.node_id)`, commits, calls `tracker.discard(task_id)`, and re-raises
+
+#### Scenario: Tmp-node cleanup looks up NodeId before remove
+- **WHEN** any tmp-node cleanup path (`_cleanup_tmp_node_best_effort` or `_persist_node_with_cleanup`) runs
+- **THEN** it calls `uow.nodes.get(tmp_ip)` to obtain the `Node`, and if the node exists calls `uow.nodes.remove(node.node_id)`; if `get` returns `None`, `remove` is skipped
 
 #### Scenario: Duplicate allocation rejected by tracker
 - **WHEN** `allocate_task` is called for a `task_id: TaskId` already in `AllocationTracker`
@@ -163,9 +175,20 @@ uow_factory)` SHALL own the disable + remove bracketing around the pure
 delete protects against allocator re-selection on failure; remove after
 cloud delete ensures the DB row is only dropped once the VM is gone).
 
+`deallocate_node` SHALL call `uow.nodes.disable(node.node_id)` and
+`uow.nodes.remove(node.node_id)` (keying on `node_id`, not `ip`).
+`clouds.deallocate(node.cloud, node.ip)` SHALL continue to take `ip`
+(ip is the cloud host address, not node identity — out of scope to change).
+
+`deallocate_nodes` SHALL iterate `all_enabled_nodes.values()` and call
+`uow.nodes.disable(node.node_id)` for each node to disable (the `Node` is
+the dict value; today the loop uses the ip key — switch to the value).
+
+Internal log lines SHALL include both `node_id` and `ip` for correlation.
+
 #### Scenario: Idle cloud node disabled
 - **WHEN** `deallocate_nodes(uow_factory, config_clouds, idle_machines)` is called and an idle cloud node exceeds tolerance
-- **THEN** the node is disabled via `uow.nodes.disable(ip)` and committed; the IP is returned for orchestrator-level SSH cleanup and cloud deallocation
+- **THEN** the node is disabled via `uow.nodes.disable(node.node_id)` and committed; the IP is returned for orchestrator-level SSH cleanup and cloud deallocation
 
 #### Scenario: Non-cloud node skipped
 - **WHEN** a non-cloud node is idle
@@ -177,7 +200,11 @@ cloud delete ensures the DB row is only dropped once the VM is gone).
 
 #### Scenario: Deallocate node brackets cloud delete with disable+remove
 - **WHEN** `deallocate_node(node, repository, operations, clouds, uow_factory)` is called for a cloud node
-- **THEN** the node is disabled via UoW and committed, then `clouds.deallocate(node.cloud, node.ip)` is called, then the node is removed via a second UoW and committed
+- **THEN** the node is disabled via `uow.nodes.disable(node.node_id)` and committed, then `clouds.deallocate(node.cloud, node.ip)` is called, then the node is removed via `uow.nodes.remove(node.node_id)` and committed
+
+#### Scenario: Internal logs include node_id and ip
+- **WHEN** `deallocate_node` logs any line
+- **THEN** the line includes both `node_id=%s` and `ip=%s` fields
 
 ### Requirement: AbandonNode use case
 
@@ -197,10 +224,10 @@ abandoned). The use case SHALL:
 
 1. If `node.cloud` is non-None, call `clouds.deallocate(node.cloud, node.ip)`
    as a best-effort cloud VM deletion. Failure here SHALL be logged at
-   `error` level with `ip`, `cloud`, and the exception, and SHALL NOT
+   `error` level with `node_id`, `ip`, `cloud`, and the exception, and SHALL NOT
    suppress the subsequent DB-row removal.
-2. Open a UoW, call `uow.nodes.remove(node.ip)`, and commit. Failure here
-   SHALL be logged at `error` level with `ip` and the exception and
+2. Open a UoW, call `uow.nodes.remove(node.node_id)`, and commit. Failure here
+   SHALL be logged at `error` level with `node_id`, `ip`, and the exception and
    re-raised.
 3. Open a second UoW, call `uow.tasks.list_by_status({TaskStatus.TO_DO})`,
    and in-memory filter for the task whose `allocated_ip == node.ip`. If
@@ -212,21 +239,27 @@ task re-enters `allocate_task` on the next cycle. The use case SHALL NOT
 modify `node.enabled` or call `uow.nodes.disable` — the row is removed
 directly.
 
+Internal log lines SHALL include both `node_id` and `ip` for correlation.
+
 #### Scenario: Happy path — VM deleted, DB row removed, tracker released
 - **WHEN** `abandon_node(node, repository, operations, clouds, uow_factory, tracker)` is called for a cloud node (`node.cloud` non-None) with one TO_DO task whose `allocated_ip == node.ip`
-- **THEN** `clouds.deallocate(node.cloud, node.ip)` is called, `uow.nodes.remove(node.ip)` is called and committed, `tracker.discard(task.task_id)` is called for the matching task, and the function returns without raising
+- **THEN** `clouds.deallocate(node.cloud, node.ip)` is called, `uow.nodes.remove(node.node_id)` is called and committed, `tracker.discard(task.task_id)` is called for the matching task, and the function returns without raising
 
 #### Scenario: Non-cloud node skips VM deletion
 - **WHEN** `abandon_node(...)` is called with `node.cloud is None`
-- **THEN** `clouds.deallocate` is NOT called, `uow.nodes.remove(node.ip)` is still called and committed, and the stuck-task lookup still runs
+- **THEN** `clouds.deallocate` is NOT called, `uow.nodes.remove(node.node_id)` is still called and committed, and the stuck-task lookup still runs
 
 #### Scenario: Cloud deletion failure does not block DB cleanup
 - **WHEN** `clouds.deallocate(node.cloud, node.ip)` raises an exception
-- **THEN** the exception is logged at `error` level with `ip`, `cloud`, and the message, `uow.nodes.remove(node.ip)` is still called and committed, and the function continues to the stuck-task lookup
+- **THEN** the exception is logged at `error` level with `node_id`, `ip`, `cloud`, and the message, `uow.nodes.remove(node.node_id)` is still called and committed, and the function continues to the stuck-task lookup
 
 #### Scenario: DB remove failure is re-raised
-- **WHEN** `uow.nodes.remove(node.ip)` or its commit raises an exception
-- **THEN** the exception is logged at `error` level with `ip` and the message, and the exception is re-raised
+- **WHEN** `uow.nodes.remove(node.node_id)` or its commit raises an exception
+- **THEN** the exception is logged at `error` level with `node_id`, `ip`, and the message, and the exception is re-raised
+
+#### Scenario: Internal logs include node_id and ip
+- **WHEN** `abandon_node` logs any line
+- **THEN** the line includes both `node_id=%s` and `ip=%s` fields
 
 #### Scenario: No matching TO_DO task
 - **WHEN** the stuck-task lookup finds zero TO_DO tasks with `allocated_ip == node.ip`

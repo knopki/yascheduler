@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
@@ -10,12 +10,12 @@
 # START_MODULE_MAP
 #   _PgRepository - base class for pg8000-backed repositories (conn, executor, _run)
 #   PostgresTaskRepository - async task CRUD: get, save, update_status, insert (NewTask→Task), list_by_status, list_by_jobs, count_by_status; get/update_status/save/list_by_jobs take/return TaskId (.value passed as pg8000 param); list_ids_by_ip_and_status returns list[TaskId]; _row_to_task wraps TaskId; save/update_status raise TaskRowNotFoundError on 0-row UPDATE
-#   PostgresNodeRepository - async node CRUD: get, get_by_id, get_by_ips, list_*, insert (NewNode→Node), add_tmp, enable, disable, remove, count_*
+#   PostgresNodeRepository - async node CRUD: get, get_by_id, get_by_ips, list_*, insert (NewNode→Node), add_tmp, update (keys on node_id), enable/disable/remove (take NodeId, pass node_id.value), count_*
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - TaskRepository methods take/return TaskId (add-task-id-identity): insert(new_task: NewTask) -> Task (sole NewTask→Task conversion; the DB generates the id); get/update_status take TaskId and pass task_id.value as the pg8000 param; save passes task.task_id.value; list_ids_by_ip_and_status returns [TaskId(int(row[\"task_id\"]))]; list_by_jobs takes list[TaskId] and passes [tid.value]; _row_to_task wraps TaskId(int(row[\"task_id\"])).
-#   PREVIOUS_CHANGE: v1.5.0 - Rename add(node: Node) → insert(new_node: NewNode) -> Node (runs node/insert.sql RETURNING node_id; mirrors TaskRepository.insert); add get_by_id(node_id: NodeId) -> Node | None (node/get_by_id.sql; passes node_id.value as pg8000 cannot adapt a dataclass); _row_to_node wraps NodeId(int(row["node_id"])) (add-node-id-identity).
+#   LAST_CHANGE: v1.7.0 - NodeRepository mutators rekeyed from ip to node_id (node-id-keyed-mutators): enable(node_id: NodeId)/disable(node_id: NodeId)/remove(node_id: NodeId) pass node_id.value (pg8000 cannot adapt a NodeId dataclass, same as get_by_id); update(node: Node) keeps signature, now passes node_id=node.node_id.value as the WHERE key alongside the field params. SQL node/{enable,disable,remove,update}.sql keys on WHERE node_id = :node_id. Lookups get(ip)/get_by_ips/list_* remain ip-keyed.
+#   PREVIOUS_CHANGE: v1.6.0 - TaskRepository methods take/return TaskId (add-task-id-identity): insert(new_task: NewTask) -> Task (sole NewTask→Task conversion; the DB generates the id); get/update_status take TaskId and pass task_id.value as the pg8000 param; save passes task.task_id.value; list_ids_by_ip_and_status returns [TaskId(int(row[\"task_id\"]))]; list_by_jobs takes list[TaskId] and passes [tid.value]; _row_to_task wraps TaskId(int(row[\"task_id\"])).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -397,17 +397,17 @@ class PostgresNodeRepository(_PgRepository):
         return {row["ip"]: self._row_to_node(row) for row in rows}
 
     # START_CONTRACT: update
-    #   PURPOSE: Persist all mutable node fields by IP via UPDATE.
-    #   INPUTS: { node: Node }
+    #   PURPOSE: Persist all mutable node fields by node_id via UPDATE.
+    #   INPUTS: { node: Node - carries node_id (used as the WHERE key) and the fields to set }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Updates yascheduler_nodes row.
+    #   SIDE_EFFECTS: Updates yascheduler_nodes row (WHERE node_id = :node_id).
     #   LINKS: node/update.sql
     # END_CONTRACT: update
     async def update(self, node: Node) -> None:
-        """Persist all mutable node fields by IP."""
+        """Persist all mutable node fields by node_id."""
         await self._run(
             load_query("node/update"),
-            ip=node.ip,
+            node_id=node.node_id.value,
             ncpus=node.ncpus,
             enabled=node.enabled,
             cloud=node.cloud,
@@ -416,37 +416,37 @@ class PostgresNodeRepository(_PgRepository):
         )
 
     # START_CONTRACT: enable
-    #   PURPOSE: Set a node's enabled flag to TRUE.
-    #   INPUTS: { ip: str }
+    #   PURPOSE: Set a node's enabled flag to TRUE by node_id.
+    #   INPUTS: { node_id: NodeId - the primary-key value object }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Updates yascheduler_nodes.enabled.
+    #   SIDE_EFFECTS: Updates yascheduler_nodes.enabled (WHERE node_id = :node_id).
     #   LINKS: node/enable.sql
     # END_CONTRACT: enable
-    async def enable(self, ip: str) -> None:
-        """Enable a node by IP."""
-        await self._run(load_query("node/enable"), ip=ip)
+    async def enable(self, node_id: NodeId) -> None:
+        """Enable a node by node_id (passes node_id.value — pg8000 cannot adapt a NodeId)."""
+        await self._run(load_query("node/enable"), node_id=node_id.value)
 
     # START_CONTRACT: disable
-    #   PURPOSE: Set a node's enabled flag to FALSE.
-    #   INPUTS: { ip: str }
+    #   PURPOSE: Set a node's enabled flag to FALSE by node_id.
+    #   INPUTS: { node_id: NodeId - the primary-key value object }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Updates yascheduler_nodes.enabled.
+    #   SIDE_EFFECTS: Updates yascheduler_nodes.enabled (WHERE node_id = :node_id).
     #   LINKS: node/disable.sql
     # END_CONTRACT: disable
-    async def disable(self, ip: str) -> None:
-        """Disable a node by IP."""
-        await self._run(load_query("node/disable"), ip=ip)
+    async def disable(self, node_id: NodeId) -> None:
+        """Disable a node by node_id (passes node_id.value — pg8000 cannot adapt a NodeId)."""
+        await self._run(load_query("node/disable"), node_id=node_id.value)
 
     # START_CONTRACT: remove
-    #   PURPOSE: Delete a node row by IP.
-    #   INPUTS: { ip: str }
+    #   PURPOSE: Delete a node row by node_id.
+    #   INPUTS: { node_id: NodeId - the primary-key value object }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Deletes row from yascheduler_nodes.
+    #   SIDE_EFFECTS: Deletes row from yascheduler_nodes (WHERE node_id = :node_id).
     #   LINKS: node/remove.sql
     # END_CONTRACT: remove
-    async def remove(self, ip: str) -> None:
-        """Delete a node by IP."""
-        await self._run(load_query("node/remove"), ip=ip)
+    async def remove(self, node_id: NodeId) -> None:
+        """Delete a node by node_id (passes node_id.value — pg8000 cannot adapt a NodeId)."""
+        await self._run(load_query("node/remove"), node_id=node_id.value)
 
     # START_CONTRACT: count_by_cloud
     #   PURPOSE: Aggregate node counts grouped by cloud provider.

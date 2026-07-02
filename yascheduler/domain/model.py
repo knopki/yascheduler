@@ -511,9 +511,10 @@ class Node:
 
     ``node_id`` is the FIRST field (identity first); a ``Node`` only ever comes from
     the database (via ``_row_to_node``) or from ``NodeRepository.insert``'s return.
-    The ``ip``-based identity legacy is deliberately not removed in this change:
-    ``ip`` remains ``UNIQUE`` and remains the key for ip-keyed ``NodeRepository``
-    mutators; ``node_id`` is carried alongside ``ip``, not swapped for it.
+    ``NodeRepository`` mutators (``enable``/``disable``/``remove``/``update``) key
+    on ``node_id``; ``ip`` remains ``UNIQUE`` (a transition-window guard) and is
+    still the key for the ip-keyed lookup methods (``get``/``get_by_ips``) and the
+    SSH/Task surfaces — those migrations are deferred non-goals.
     """
 
     node_id: NodeId

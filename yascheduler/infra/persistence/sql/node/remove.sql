@@ -1,2 +1,2 @@
 DELETE FROM yascheduler_nodes
-WHERE ip = :ip;
+WHERE node_id = :node_id;

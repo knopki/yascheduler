@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/abandon_node.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Abandon never-connected cloud node use case — VM delete + DB-row remove + release stuck TO_DO task.
 #   SCOPE: abandon_node async function.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Drop the unused gateway parameter (decompose-ssh-gateway). The node was never registered with the repository, so no SSH-side call is needed; the previous gateway param was present only for symmetry with deallocate_node and was never used in the body.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial use case extracted from the never-connected-node-leak fix (fix-never-connected-node-leak).
+#   LAST_CHANGE: v1.2.0 - Mutator rekeyed from ip to node_id (node-id-keyed-mutators): uow.nodes.remove(node.node_id) (was node.ip). Internal log lines add node_id=%s alongside ip=%s. clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host, out of scope).
+#   PREVIOUS_CHANGE: v1.1.0 - Drop the unused gateway parameter (decompose-ssh-gateway). The node was never registered with the repository, so no SSH-side call is needed; the previous gateway param was present only for symmetry with deallocate_node and was never used in the body.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -59,7 +59,8 @@ async def abandon_node(
             await clouds.deallocate(node.cloud, node.ip)
         except Exception as err:
             logger.error(
-                "[abandon_node][CLOUD_DELETE_FAILED] ip=%s cloud=%s err=%s",
+                "[abandon_node][CLOUD_DELETE_FAILED] node_id=%s ip=%s cloud=%s err=%s",
+                node.node_id,
                 node.ip,
                 node.cloud,
                 err,
@@ -69,11 +70,12 @@ async def abandon_node(
     # START_BLOCK_REMOVE_ROW
     try:
         async with uow_factory() as uow:
-            await uow.nodes.remove(node.ip)
+            await uow.nodes.remove(node.node_id)
             await uow.commit()
     except Exception as err:
         logger.error(
-            "[abandon_node][REMOVE_FAILED] ip=%s err=%s",
+            "[abandon_node][REMOVE_FAILED] node_id=%s ip=%s err=%s",
+            node.node_id,
             node.ip,
             err,
         )
@@ -88,7 +90,8 @@ async def abandon_node(
         tracker.discard(matching[0].task_id)
     elif len(matching) > 1:
         logger.warning(
-            "[abandon_node][AMBIGUOUS_TASK] ip=%s count=%d",
+            "[abandon_node][AMBIGUOUS_TASK] node_id=%s ip=%s count=%d",
+            node.node_id,
             node.ip,
             len(matching),
         )

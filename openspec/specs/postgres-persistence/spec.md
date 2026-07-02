@@ -24,6 +24,10 @@ at most once per process).
 - `sql/node/insert.sql` — `INSERT ... VALUES (...) RETURNING node_id`.
 - `sql/node/get_by_id.sql` — `WHERE node_id = :node_id`.
 - `sql/node/list_all.sql` — includes `ORDER BY node_id` (deterministic CLI output).
+- `sql/node/enable.sql` — `UPDATE yascheduler_nodes SET enabled=TRUE WHERE node_id = :node_id`.
+- `sql/node/disable.sql` — `UPDATE yascheduler_nodes SET enabled=FALSE WHERE node_id = :node_id`.
+- `sql/node/remove.sql` — `DELETE FROM yascheduler_nodes WHERE node_id = :node_id`.
+- `sql/node/update.sql` — `UPDATE yascheduler_nodes SET ... WHERE node_id = :node_id`.
 - Every node SELECT (`get_by_ip`, `list_all`, `get_by_ips`, `list_enabled`, `list_disabled`, `get_by_id`) SHALL include `node_id` in its column list.
 
 SQL files SHALL use `:param_name` syntax for pg8000 named-parameter binding.
@@ -39,6 +43,10 @@ SQL files SHALL use `:param_name` syntax for pg8000 named-parameter binding.
 #### Scenario: Node SELECTs include node_id
 - **WHEN** any of `get_by_ip.sql`, `list_all.sql`, `get_by_ips.sql`, `list_enabled.sql`, `list_disabled.sql`, `get_by_id.sql` is inspected
 - **THEN** the column list includes `node_id`
+
+#### Scenario: Node mutator SQL keys on node_id
+- **WHEN** any of `sql/node/enable.sql`, `sql/node/disable.sql`, `sql/node/remove.sql`, `sql/node/update.sql` is inspected
+- **THEN** the `WHERE` clause is `WHERE node_id = :node_id` (not `WHERE ip = :ip`)
 
 ### Requirement: PostgresUnitOfWork transactional boundaries
 
@@ -135,8 +143,16 @@ construct `NodeId(int(row["node_id"]))`. `list_all()` SHALL return nodes ordered
 by `node_id` ascending; `list_enabled()` / `list_disabled()` continue to
 post-filter rows whose `ip` contains `"."` (excluding `prov*` placeholders).
 
-`update(node)` keeps `WHERE ip = :ip` (ip-keyed mutators unchanged; `ip UNIQUE`
-protects the write). `add_tmp(cloud)` inserts a disabled tmp-node with a
+`enable(node_id: NodeId)`, `disable(node_id: NodeId)`, and
+`remove(node_id: NodeId)` SHALL run `node/{enable,disable,remove}.sql` with
+`WHERE node_id = :node_id`, binding `node_id.value` as the SQL parameter
+(pg8000 cannot adapt a `NodeId` dataclass — same pattern as `get_by_id`).
+
+`update(node: Node)` SHALL run `node/update.sql` with `WHERE node_id = :node_id`,
+binding `node.node_id.value` as the key parameter alongside the field params
+(`ip`, `ncpus`, `enabled`, `cloud`, `username`, `port`).
+
+`add_tmp(cloud)` inserts a disabled tmp-node with a
 generated `prov*` IP and `username` left to the DB default (`'root'`); it SHALL
 NOT bind a `:username` parameter.
 
@@ -159,6 +175,22 @@ NOT bind a `:username` parameter.
 #### Scenario: Add temporary node
 - **WHEN** `add_tmp(cloud)` is called
 - **THEN** a node row is inserted with a `prov*` IP, `enabled=FALSE`, the given cloud, and `username` defaulting to `'root'` (DB default, no caller-supplied value)
+
+#### Scenario: Enable binds node_id.value
+- **WHEN** `enable(NodeId(7))` is called
+- **THEN** `node/enable.sql` runs with `:node_id` bound to `7` (the bare int from `NodeId.value`)
+
+#### Scenario: Disable binds node_id.value
+- **WHEN** `disable(NodeId(7))` is called
+- **THEN** `node/disable.sql` runs with `:node_id` bound to `7` (the bare int from `NodeId.value`)
+
+#### Scenario: Remove binds node_id.value
+- **WHEN** `remove(NodeId(7))` is called
+- **THEN** `node/remove.sql` runs with `:node_id` bound to `7` (the bare int from `NodeId.value`)
+
+#### Scenario: Update binds node.node_id.value as key
+- **WHEN** `update(node)` is called with a `Node` whose `node_id == NodeId(7)`
+- **THEN** `node/update.sql` runs with `:node_id` bound to `7` (from `node.node_id.value`) as the `WHERE` key, alongside the field params
 
 ### Requirement: JSONB metadata roundtrip
 

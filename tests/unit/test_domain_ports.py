@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Update StubNodeRepository.add→insert, add get_by_id; StubCloudProvisioner.allocate returns NewNode; for add-node-id-identity port changes.
-#   PREVIOUS_CHANGE: v1.3.1 - Narrowed StubMachineRepository lockstep with MachineRepository Protocol per cleanup-unused-repository-symbols (removed get_conn, get_adapter, get_platforms, get_data_dir, get_engines_dir, get_tasks_dir). MODULE_MAP/SCOPE corrected: MachineGateway replaced by MachineRepository+MachineOperations.
+#   LAST_CHANGE: v1.6.0 - StubNodeRepository.enable/disable/remove take node_id: NodeId (node-id-keyed-mutators port change).
+#   PREVIOUS_CHANGE: v1.5.0 - Update StubNodeRepository.add→insert, add get_by_id; StubCloudProvisioner.allocate returns NewNode; for add-node-id-identity port changes.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -111,13 +111,13 @@ class StubNodeRepository:
     async def update(self, node: Node) -> None:
         pass
 
-    async def enable(self, ip: str) -> None:
+    async def enable(self, node_id: NodeId) -> None:
         pass
 
-    async def disable(self, ip: str) -> None:
+    async def disable(self, node_id: NodeId) -> None:
         pass
 
-    async def remove(self, ip: str) -> None:
+    async def remove(self, node_id: NodeId) -> None:
         pass
 
     async def list_all(self) -> list[Node]:

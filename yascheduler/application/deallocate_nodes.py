@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 4.4.0
+# VERSION: 4.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return IPs for VM deletion.
 #   SCOPE: deallocate_node, deallocate_nodes async functions.
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.4.0 - Retype repository: MachineRepository, operations: MachineOperations -> repository: MachineRepository (deallocate uses list_connected, disconnect) per decompose-ssh-gateway.
-#   PREVIOUS_CHANGE: v4.3.0 - TYPE_CHECKING import CloudConfig from yascheduler.domain instead of ConfigCloud from yascheduler.config (cloud-configs-to-infra-registry).
+#   LAST_CHANGE: v4.5.0 - Mutators rekeyed from ip to node_id (node-id-keyed-mutators): deallocate_node calls uow.nodes.disable(node.node_id) and uow.nodes.remove(node.node_id); deallocate_nodes disable loop iterates all_enabled_nodes.values() and calls uow.nodes.disable(node.node_id) (was ip-keyed). Internal log lines add node_id=%s alongside ip=%s. clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host, out of scope).
+#   PREVIOUS_CHANGE: v4.4.0 - Retype repository: MachineRepository, operations: MachineOperations -> repository: MachineRepository (deallocate uses list_connected, disconnect) per decompose-ssh-gateway.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Disconnects remote machine, disables node via UoW, deletes cloud VM via port, removes node via second UoW. If the second UoW fails after cloud delete succeeded, logs loudly for manual reconciliation (row stays disabled) and does not re-raise — the cloud VM is already gone.
+#   SIDE_EFFECTS: Disconnects remote machine, disables node (by node_id) via UoW, deletes cloud VM via port, removes node (by node_id) via second UoW. If the second UoW fails after cloud delete succeeded, logs loudly for manual reconciliation (row stays disabled) and does not re-raise — the cloud VM is already gone.
 #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-UOW
 # END_CONTRACT: deallocate_node
 async def deallocate_node(
@@ -56,24 +56,27 @@ async def deallocate_node(
     if repository.contains(node.ip):
         await repository.disconnect(node.ip)
         logger.debug(
-            "[deallocate_node][DISCONNECT] ip=%s gateway disconnected",
+            "[deallocate_node][DISCONNECT] node_id=%s ip=%s gateway disconnected",
+            node.node_id,
             node.ip,
         )
     if node.cloud:
         # START_BLOCK_DISABLE
         logger.debug(
-            "[deallocate_node][DISABLE] ip=%s cloud=%s",
+            "[deallocate_node][DISABLE] node_id=%s ip=%s cloud=%s",
+            node.node_id,
             node.ip,
             node.cloud,
         )
         async with uow_factory() as uow:
-            await uow.nodes.disable(node.ip)
+            await uow.nodes.disable(node.node_id)
             await uow.commit()
         # END_BLOCK_DISABLE
 
         # START_BLOCK_CLOUD_DELETE
         logger.debug(
-            "[deallocate_node][CLOUD_DELETE] ip=%s cloud=%s",
+            "[deallocate_node][CLOUD_DELETE] node_id=%s ip=%s cloud=%s",
+            node.node_id,
             node.ip,
             node.cloud,
         )
@@ -82,13 +85,14 @@ async def deallocate_node(
 
         # START_BLOCK_REMOVE
         logger.debug(
-            "[deallocate_node][REMOVE] ip=%s cloud=%s",
+            "[deallocate_node][REMOVE] node_id=%s ip=%s cloud=%s",
+            node.node_id,
             node.ip,
             node.cloud,
         )
         try:
             async with uow_factory() as uow:
-                await uow.nodes.remove(node.ip)
+                await uow.nodes.remove(node.node_id)
                 await uow.commit()
         except Exception as remove_err:
             # Cloud VM is already gone; the disabled DB row is stale. Log
@@ -97,9 +101,10 @@ async def deallocate_node(
             # will re-attempt (cloud-SDK delete-idempotency dependent) plus
             # this remove.
             logger.error(
-                "[deallocate_node][REMOVE_FAILED] ip=%s cloud=%s err=%s "
+                "[deallocate_node][REMOVE_FAILED] node_id=%s ip=%s cloud=%s err=%s "
                 "— VM is deleted but DB row left disabled; "
                 "manual reconciliation needed",
+                node.node_id,
                 node.ip,
                 node.cloud,
                 remove_err,
@@ -134,15 +139,15 @@ async def deallocate_nodes(
     now = time.monotonic()
     for ccfg in config_clouds:
         nodes_to_disable = [
-            ip
-            for ip, node in all_enabled_nodes.items()
+            node
+            for node in all_enabled_nodes.values()
             if node.cloud == ccfg.prefix
-            and ip in idle_machines
-            and (now - idle_machines[ip]) >= ccfg.idle_tolerance
+            and node.ip in idle_machines
+            and (now - idle_machines[node.ip]) >= ccfg.idle_tolerance
         ]
-        for ip in nodes_to_disable:
+        for node in nodes_to_disable:
             async with uow_factory() as uow:
-                await uow.nodes.disable(ip)
+                await uow.nodes.disable(node.node_id)
                 await uow.commit()
     # END_BLOCK_DISABLE_IDLE
 

@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
 #   SCOPE: manage_node command + argparse + node-target parser + host-spec parser + node add/remove helpers (each helper owns its UoW).
@@ -15,14 +15,14 @@
 #   _parse_host_spec - argparse type: parse [user@]host[:port][~ncpus] grammar (UNCHANGED)
 #   _parse_node_target - argparse type: digit → NodeTarget(node_id=NodeId(n)); else delegate to _parse_host_spec
 #   _parse_node_args - argparse → Namespace (prog="yasetnode", flags, mutex group); add-by-id rejected via parser.error
-#   _remove_node_hard - Hard-remove: own UoW, mark RUNNING tasks DONE, remove node, commit, print (takes ip; node_id path resolves via get_by_id)
-#   _remove_node_soft - Soft-remove: own UoW, disable (if tasks) or remove node, commit, print (takes ip)
+#   _remove_node_hard - Hard-remove: own UoW, mark RUNNING tasks DONE, remove node (by node_id), commit, print (takes Node; node.ip for task lookup + print)
+#   _remove_node_soft - Soft-remove: own UoW, disable (if tasks) or remove node (by node_id), commit, print (takes Node; node.ip for task lookup + print)
 #   _add_node - Add node: own UoW, connect, optional setup, insert NewNode, commit, print; try/finally disconnect
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Positional accepts a node_id (purely-digit) via _parse_node_target/NodeTarget (discriminator: s.isdigit()); add-by-id is rejected via parser.error (exit 2); remove-by-id resolves node.ip via uow.nodes.get_by_id and uses ip-keyed mutators unchanged; add path builds NewNode and persists via uow.nodes.insert (renamed from add). Success messages unchanged; {host} on the node_id path is the resolved node.ip (add-node-id-identity).
-#   PREVIOUS_CHANGE: v1.4.0 - session-based-machine-handle: _add_node captures session from repository.connect() and passes it to operations.setup_node(session, engines).
+#   LAST_CHANGE: v1.6.0 - Mutators rekeyed from ip to node_id (node-id-keyed-mutators): validation UoW resolves the Node early on both paths (get_by_id on the node_id path, get(spec.host) on the host_spec path) and passes it to the remove helpers; _remove_node_hard/_remove_node_soft take (deps, node: Node) and call uow.nodes.disable(node.node_id)/uow.nodes.remove(node.node_id); node.ip stays for tasks.list_ids_by_ip_and_status (Surface C) and user-facing print. Dropped the now-dead _get_by_ip and _remove_ip helpers (their callers are replaced by direct Node resolution).
+#   PREVIOUS_CHANGE: v1.5.0 - Positional accepts a node_id (purely-digit) via _parse_node_target/NodeTarget (discriminator: s.isdigit()); add-by-id is rejected via parser.error (exit 2); remove-by-id resolves node.ip via uow.nodes.get_by_id and uses ip-keyed mutators unchanged; add path builds NewNode and persists via uow.nodes.insert (renamed from add). Success messages unchanged; {host} on the node_id path is the resolved node.ip (add-node-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -63,8 +63,10 @@ class NodeTarget:
 
     Produced by :func:`_parse_node_target`. On the node_id path
     (``node_id is not None``), ``host_spec`` is ``None`` and the node is
-    resolved via :meth:`NodeRepository.get_by_id` to obtain its ``ip`` for the
-    ip-keyed mutators. On the host_spec path, ``node_id`` is ``None``.
+    resolved via :meth:`NodeRepository.get_by_id` to obtain the ``Node``
+    (carrying both ``node_id`` and ``ip``) for the node_id-keyed mutators.
+    On the host_spec path, ``node_id`` is ``None`` and the node is resolved
+    via :meth:`NodeRepository.get(ip)`.
     """
 
     node_id: NodeId | None
@@ -222,49 +224,53 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 # START_CONTRACT: _remove_node_hard
-#   PURPOSE: Hard-remove a node by ip — in its own UoW, mark RUNNING tasks DONE, remove the node, commit, then announce.
-#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, ip: str - the node's ip (host_spec.host or resolved node.ip) }
+#   PURPOSE: Hard-remove a node — in its own UoW, mark RUNNING tasks DONE, remove the node (by node_id), commit, then announce.
+#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, node: Node - the resolved node (node.node_id keys the mutator; node.ip keys the task lookup + print) }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens its own UoW; updates task statuses and removes the node; commits; prints success messages to stdout AFTER commit.
+#   SIDE_EFFECTS: Opens its own UoW; updates task statuses and removes the node (by node_id); commits; prints success messages to stdout AFTER commit.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DI
 # END_CONTRACT: _remove_node_hard
-async def _remove_node_hard(deps: CLIDeps, ip: str) -> None:
+async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
     # START_BLOCK_MARK_AND_REMOVE
     async with deps.uow_factory() as uow:
-        task_ids = await uow.tasks.list_ids_by_ip_and_status(ip, TaskStatus.RUNNING)
+        task_ids = await uow.tasks.list_ids_by_ip_and_status(
+            node.ip, TaskStatus.RUNNING
+        )
         for task_id in task_ids:
             await uow.tasks.update_status(task_id, TaskStatus.DONE)
-        await uow.nodes.remove(ip)
+        await uow.nodes.remove(node.node_id)
         await uow.commit()
     # END_BLOCK_MARK_AND_REMOVE
     # START_BLOCK_ANNOUNCE
     for task_id in task_ids:
-        print(f"An associated task {task_id} at {ip} is now marked done!")
-    print(f"Removed host from yascheduler: {ip}")
+        print(f"An associated task {task_id} at {node.ip} is now marked done!")
+    print(f"Removed host from yascheduler: {node.ip}")
     # END_BLOCK_ANNOUNCE
 
 
 # START_CONTRACT: _remove_node_soft
-#   PURPOSE: Soft-remove a node by ip — in its own UoW, disable if RUNNING tasks exist, else remove; commit, then announce.
-#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, ip: str - the node's ip (host_spec.host or resolved node.ip) }
+#   PURPOSE: Soft-remove a node — in its own UoW, disable (by node_id) if RUNNING tasks exist, else remove (by node_id); commit, then announce.
+#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, node: Node - the resolved node (node.node_id keys the mutator; node.ip keys the task lookup + print) }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens its own UoW; disables or removes the node; commits; prints success messages to stdout AFTER commit.
+#   SIDE_EFFECTS: Opens its own UoW; disables or removes the node (by node_id); commits; prints success messages to stdout AFTER commit.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DI
 # END_CONTRACT: _remove_node_soft
-async def _remove_node_soft(deps: CLIDeps, ip: str) -> None:
+async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
     # START_BLOCK_DISABLE_OR_REMOVE
     async with deps.uow_factory() as uow:
-        task_ids = await uow.tasks.list_ids_by_ip_and_status(ip, TaskStatus.RUNNING)
+        task_ids = await uow.tasks.list_ids_by_ip_and_status(
+            node.ip, TaskStatus.RUNNING
+        )
         if task_ids:
-            await uow.nodes.disable(ip)
+            await uow.nodes.disable(node.node_id)
             await uow.commit()
             print("A task associated, prevent from assigning the new tasks")
-            print(f"Prevented from assigning the new tasks: {ip}")
+            print(f"Prevented from assigning the new tasks: {node.ip}")
         else:
-            await uow.nodes.remove(ip)
+            await uow.nodes.remove(node.node_id)
             await uow.commit()
             print("No tasks associated, remove node immediately")
-            print(f"Removed host from yascheduler: {ip}")
+            print(f"Removed host from yascheduler: {node.ip}")
     # END_BLOCK_DISABLE_OR_REMOVE
 
 
@@ -350,20 +356,20 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         # Read-only validation UoW: closed without commit (nothing mutated).
         # A TOCTOU window exists between this close and the helper's own UoW open;
         # accepted for a single-operator CLI (design D18).
-        # Branch on the node_id path (resolve via get_by_id → node.ip) vs the
-        # host_spec path (current behavior: get(spec.host)). The ip-keyed
-        # mutators in the remove helpers stay unchanged — only the source of the
-        # ip differs (resolved node.ip vs spec.host_spec.host).
-        resolved_ip: str | None = None
+        # Resolve the Node early on both paths: get_by_id on the node_id path,
+        # get(spec.host) on the host_spec path. The resolved Node (carrying both
+        # node_id and ip) is passed to the remove helpers — node.node_id keys the
+        # node_id-keyed mutators; node.ip keys the ip-keyed task lookup + print.
+        resolved_node: Node | None = None
         if target.node_id is not None:
             async with deps.uow_factory() as uow:
-                node = await uow.nodes.get_by_id(target.node_id)
-            already_there = node is not None
-            if node is not None:
-                resolved_ip = node.ip
+                resolved_node = await uow.nodes.get_by_id(target.node_id)
+            already_there = resolved_node is not None
         else:
             assert target.host_spec is not None  # exactly one of the two is set
-            already_there = await _get_by_ip(deps, target.host_spec.host) is not None
+            async with deps.uow_factory() as uow:
+                resolved_node = await uow.nodes.get(target.host_spec.host)
+            already_there = resolved_node is not None
         # On the node_id path the "already in DB" check is meaningless (add-by-id
         # is already rejected in _parse_node_args), so only the remove-path
         # "NOT in DB" check applies.
@@ -385,12 +391,15 @@ async def _manage_node_async(argv: list[str] | None) -> None:
 
         # START_BLOCK_DISPATCH
         # Exactly one helper runs; each opens its own UoW, commits, and prints.
-        # The helpers take the ip to act on (ip-keyed mutators are unchanged):
-        # node_id path → resolved_ip (from get_by_id); host_spec path → spec.host.
+        # The remove helpers take the resolved Node (carrying both node_id and ip):
+        # node.node_id keys the node_id-keyed mutators; node.ip keys the
+        # ip-keyed task lookup (Surface C) and user-facing stdout.
         if args.remove_hard:
-            await _remove_node_hard(deps, _remove_ip(target, resolved_ip))
+            assert resolved_node is not None  # validated present before dispatch
+            await _remove_node_hard(deps, resolved_node)
         elif args.remove_soft:
-            await _remove_node_soft(deps, _remove_ip(target, resolved_ip))
+            assert resolved_node is not None  # validated present before dispatch
+            await _remove_node_soft(deps, resolved_node)
         else:
             assert target.host_spec is not None  # add path is host-only
             await _add_node(
@@ -401,25 +410,6 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
-
-
-async def _get_by_ip(deps: CLIDeps, ip: str) -> Node | None:
-    """Read-only helper: resolve a node by ip within a short validation UoW."""
-    async with deps.uow_factory() as uow:
-        return await uow.nodes.get(ip)
-
-
-def _remove_ip(target: NodeTarget, resolved_ip: str | None) -> str:
-    """Resolve the ip to act on for a remove helper.
-
-    On the node_id path ``resolved_ip`` is the looked-up ``node.ip``; on the
-    host_spec path it is the parsed ``HostSpec.host``.
-    """
-    if target.node_id is not None:
-        assert resolved_ip is not None  # validated present before dispatch
-        return resolved_ip
-    assert target.host_spec is not None
-    return target.host_spec.host
 
 
 # START_CONTRACT: manage_node

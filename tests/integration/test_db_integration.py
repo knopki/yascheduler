@@ -146,26 +146,26 @@ async def test_enable_disable_node(
 ) -> None:
     """Toggle node enabled status and verify."""
     async with uow_factory() as uow:
-        await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0, enabled=False))
+        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0, enabled=False))
         await uow.commit()
 
     async with uow_factory() as uow:
-        await uow.nodes.enable("10.0.0.1")
+        await uow.nodes.enable(node.node_id)
         await uow.commit()
 
     async with uow_factory() as uow:
-        node = await uow.nodes.get("10.0.0.1")
-        assert node is not None
-        assert node.enabled is True
+        fetched = await uow.nodes.get("10.0.0.1")
+        assert fetched is not None
+        assert fetched.enabled is True
 
     async with uow_factory() as uow:
-        await uow.nodes.disable("10.0.0.1")
+        await uow.nodes.disable(node.node_id)
         await uow.commit()
 
     async with uow_factory() as uow:
-        node = await uow.nodes.get("10.0.0.1")
-        assert node is not None
-        assert node.enabled is False
+        fetched = await uow.nodes.get("10.0.0.1")
+        assert fetched is not None
+        assert fetched.enabled is False
 
 
 # START_CONTRACT: test_remove_node
@@ -178,12 +178,12 @@ async def test_enable_disable_node(
 async def test_remove_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Remove a node and verify it is gone."""
     async with uow_factory() as uow:
-        await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0))
+        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0))
         await uow.commit()
 
     async with uow_factory() as uow:
-        assert bool(await uow.nodes.get("10.0.0.1")) is True
-        await uow.nodes.remove("10.0.0.1")
+        assert await uow.nodes.get("10.0.0.1") is not None
+        await uow.nodes.remove(node.node_id)
         await uow.commit()
 
     async with uow_factory() as uow:

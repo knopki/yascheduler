@@ -1,3 +1,3 @@
 UPDATE yascheduler_nodes
 SET ncpus=:ncpus, enabled=:enabled, cloud=:cloud, username=:username, port=:port
-WHERE ip=:ip;
+WHERE node_id=:node_id;

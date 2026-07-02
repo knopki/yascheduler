@@ -41,7 +41,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from yascheduler.application.allocate_task import allocate_task
+from yascheduler.application.allocate_task import (
+    _cleanup_tmp_node_best_effort,
+    _persist_node_with_cleanup,
+    allocate_task,
+)
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.deallocate_nodes import deallocate_node, deallocate_nodes
 from yascheduler.application.submit_task import submit_task
@@ -53,6 +57,7 @@ from yascheduler.domain.exceptions import (
     UnsupportedEngineError,
 )
 from yascheduler.domain.model import (
+    NewNode,
     NewTask,
     Node,
     NodeId,
@@ -309,6 +314,11 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
         uow.nodes.add_tmp = AsyncMock(return_value="tmp-10.0.0.100")
+        uow.nodes.get = AsyncMock(
+            return_value=Node(
+                node_id=NodeId(2), ip="tmp-10.0.0.100", ncpus=0, enabled=False
+            )
+        )
         uow.nodes.insert = AsyncMock()
         uow.nodes.remove = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -358,9 +368,10 @@ class TestAllocateTask:
         # cloud allocate called with provider name
         clouds.allocate.assert_called_once_with("aws")
 
-        # final persist: insert cloud node + remove tmp
+        # final persist: insert cloud node + resolve tmp + remove tmp by node_id
         uow.nodes.insert.assert_called_once_with(cloud_node)
-        uow.nodes.remove.assert_called_once_with("tmp-10.0.0.100")
+        uow.nodes.get.assert_any_call("tmp-10.0.0.100")
+        uow.nodes.remove.assert_called_once_with(NodeId(2))
 
         # commit called at least twice (add_tmp + final persist)
         assert uow.commit.call_count >= 2
@@ -388,6 +399,11 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
         uow.nodes.add_tmp = AsyncMock(return_value="tmp-10.0.0.100")
+        uow.nodes.get = AsyncMock(
+            return_value=Node(
+                node_id=NodeId(2), ip="tmp-10.0.0.100", ncpus=0, enabled=False
+            )
+        )
         uow.nodes.add = AsyncMock()
         uow.nodes.remove = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -426,8 +442,9 @@ class TestAllocateTask:
         # tmp-node was inserted
         uow.nodes.add_tmp.assert_called_once_with("aws")
 
-        # tmp-node removed in cleanup UoW
-        uow.nodes.remove.assert_called_once_with("tmp-10.0.0.100")
+        # tmp-node resolved by ip then removed by node_id in cleanup UoW
+        uow.nodes.get.assert_any_call("tmp-10.0.0.100")
+        uow.nodes.remove.assert_called_once_with(NodeId(2))
 
         # commit called for add_tmp and remove
         assert uow.commit.call_count >= 2
@@ -554,6 +571,90 @@ class TestAllocateTask:
 
 
 # =============================================================================
+# tmp-node cleanup lookup (node-id-keyed-mutators)
+# =============================================================================
+
+
+class TestTmpCleanupLookup:
+    """tmp-cleanup paths resolve NodeId via get(tmp_ip) before remove(node.node_id)."""
+
+    async def test_cleanup_best_effort_removes_by_node_id_when_node_exists(
+        self,
+    ) -> None:
+        """[9.1] _cleanup_tmp_node_best_effort: get(tmp_ip) returns Node -> remove(node.node_id)."""
+        tmp_node = Node(node_id=NodeId(7), ip="tmp-10.0.0.100", ncpus=0, enabled=False)
+        uow = AsyncMock()
+        uow.nodes.get = AsyncMock(return_value=tmp_node)
+        uow.nodes.remove = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        await _cleanup_tmp_node_best_effort(
+            uow_factory, "tmp-10.0.0.100", TaskId(1), "ctx"
+        )
+
+        uow.nodes.get.assert_awaited_once_with("tmp-10.0.0.100")
+        uow.nodes.remove.assert_awaited_once_with(NodeId(7))
+        uow.commit.assert_awaited_once()
+
+    async def test_cleanup_best_effort_skips_remove_when_get_returns_none(self) -> None:
+        """[9.2] _cleanup_tmp_node_best_effort: get(tmp_ip) returns None -> remove skipped, no raise."""
+        uow = AsyncMock()
+        uow.nodes.get = AsyncMock(return_value=None)
+        uow.nodes.remove = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        # Must not raise.
+        await _cleanup_tmp_node_best_effort(
+            uow_factory, "tmp-10.0.0.100", TaskId(1), "ctx"
+        )
+
+        uow.nodes.get.assert_awaited_once_with("tmp-10.0.0.100")
+        uow.nodes.remove.assert_not_awaited()
+
+    async def test_persist_with_cleanup_success_removes_tmp_by_node_id(self) -> None:
+        """[9.3] _persist_node_with_cleanup success: insert + get(tmp_ip) + remove(node.node_id) + commit."""
+        cloud_node = NewNode(ip="10.0.0.100", ncpus=4, cloud="aws")
+        tmp_node = Node(node_id=NodeId(7), ip="tmp-10.0.0.100", ncpus=0, enabled=False)
+        uow = AsyncMock()
+        uow.nodes.insert = AsyncMock()
+        uow.nodes.get = AsyncMock(return_value=tmp_node)
+        uow.nodes.remove = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        clouds = MagicMock(spec=CloudProvisioner)
+
+        await _persist_node_with_cleanup(
+            node=cloud_node,
+            clouds=clouds,
+            uow_factory=uow_factory,
+            selected_name="aws",
+            tmp_ip="tmp-10.0.0.100",
+            task_id=TaskId(1),
+        )
+
+        uow.nodes.insert.assert_awaited_once_with(cloud_node)
+        uow.nodes.get.assert_awaited_once_with("tmp-10.0.0.100")
+        uow.nodes.remove.assert_awaited_once_with(NodeId(7))
+        uow.commit.assert_awaited_once()
+        clouds.deallocate.assert_not_called()  # success path, no cleanup
+
+
+# =============================================================================
 # deallocate_nodes  (2 tests)
 # =============================================================================
 
@@ -593,8 +694,8 @@ class TestDeallocateNodes:
             idle_machines=idle_machines,
         )
 
-        # First phase: node should be disabled
-        uow.nodes.disable.assert_called_once_with("10.0.0.1")
+        # First phase: node should be disabled (by node_id)
+        uow.nodes.disable.assert_called_once_with(NodeId(1))
         uow.commit.assert_called()
 
         # Second phase: disabled node qualifies (has cloud, valid ip) -> returned
@@ -656,8 +757,12 @@ class TestDeallocateNodeBracketing:
         calls: list[str] = []
 
         uow = AsyncMock()
-        uow.nodes.disable = AsyncMock(side_effect=lambda ip: calls.append("disable"))
-        uow.nodes.remove = AsyncMock(side_effect=lambda ip: calls.append("remove"))
+        uow.nodes.disable = AsyncMock(
+            side_effect=lambda _node_id: calls.append("disable")
+        )
+        uow.nodes.remove = AsyncMock(
+            side_effect=lambda _node_id: calls.append("remove")
+        )
         uow.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
         uow.__aenter__ = AsyncMock(return_value=uow)
         uow.__aexit__ = AsyncMock(return_value=False)
@@ -685,8 +790,12 @@ class TestDeallocateNodeBracketing:
         calls: list[str] = []
 
         uow = AsyncMock()
-        uow.nodes.disable = AsyncMock(side_effect=lambda ip: calls.append("disable"))
-        uow.nodes.remove = AsyncMock(side_effect=lambda ip: calls.append("remove"))
+        uow.nodes.disable = AsyncMock(
+            side_effect=lambda _node_id: calls.append("disable")
+        )
+        uow.nodes.remove = AsyncMock(
+            side_effect=lambda _node_id: calls.append("remove")
+        )
         uow.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
         uow.__aenter__ = AsyncMock(return_value=uow)
         uow.__aexit__ = AsyncMock(return_value=False)
@@ -749,8 +858,8 @@ class TestDeallocateNodeBracketing:
 
         # Cloud delete happened; disable happened; remove attempted.
         clouds.deallocate.assert_awaited_once_with("aws", "10.0.0.1")
-        uow.nodes.disable.assert_awaited_once_with("10.0.0.1")
-        uow.nodes.remove.assert_awaited_once_with("10.0.0.1")
+        uow.nodes.disable.assert_awaited_once_with(NodeId(1))
+        uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         # Reconciliation marker logged.
         assert any(
             "REMOVE_FAILED" in r.message and "10.0.0.1" in r.message

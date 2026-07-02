@@ -513,7 +513,7 @@ class TestManageNodeRemovePath:
         uow.tasks.update_status.assert_any_call(1, TaskStatus.DONE)
         uow.tasks.update_status.assert_any_call(2, TaskStatus.DONE)
         assert uow.tasks.update_status.call_count == 2
-        uow.nodes.remove.assert_called_once_with("10.0.0.1")
+        uow.nodes.remove.assert_called_once_with(NodeId(1))
         uow.commit.assert_called_once()
         # add path not triggered
         repo.connect.assert_not_called()
@@ -535,7 +535,7 @@ class TestManageNodeRemovePath:
 
         _run(["10.0.0.1", "--remove-soft"])
 
-        uow.nodes.disable.assert_called_once_with("10.0.0.1")
+        uow.nodes.disable.assert_called_once_with(NodeId(1))
         uow.nodes.remove.assert_not_called()
         uow.commit.assert_called_once()
         out, _ = capsys.readouterr()
@@ -555,7 +555,7 @@ class TestManageNodeRemovePath:
 
         _run(["10.0.0.1", "--remove-soft"])
 
-        uow.nodes.remove.assert_called_once_with("10.0.0.1")
+        uow.nodes.remove.assert_called_once_with(NodeId(1))
         uow.nodes.disable.assert_not_called()
         uow.commit.assert_called_once()
         out, _ = capsys.readouterr()
@@ -599,7 +599,25 @@ class TestManageNodeRemovePath:
         assert "Removed host" not in out
         # The mark-DONE update and remove ran before commit; only the prints are gated.
         uow.tasks.update_status.assert_called_once_with(1, TaskStatus.DONE)
-        uow.nodes.remove.assert_called_once_with("10.0.0.1")
+        uow.nodes.remove.assert_called_once_with(NodeId(1))
+
+    def test_remove_by_host_resolves_node_and_passes_node_to_helper(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
+    ) -> None:
+        """[9.4] remove-by-host: get(spec.host) resolves Node; helper receives Node, not str."""
+        _config, uow, _deps, _repo, _ops = stub_env
+        resolved = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        uow.nodes.get = AsyncMock(return_value=resolved)
+        uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
+
+        _run(["10.0.0.1", "--remove-soft"])
+
+        # The validation UoW resolved the Node via get(host) (ip-keyed lookup, unchanged).
+        uow.nodes.get.assert_awaited_once_with("10.0.0.1")
+        # The mutator received node.node_id (NodeId), not the ip string.
+        uow.nodes.remove.assert_called_once_with(NodeId(1))
 
 
 # ---------------------------------------------------------------------------
@@ -872,7 +890,7 @@ class TestManageNodeIdPath:
         _run(["5", "--remove-soft"])
 
         uow.nodes.get_by_id.assert_awaited_once_with(NodeId(5))
-        uow.nodes.remove.assert_called_once_with("10.0.0.5")
+        uow.nodes.remove.assert_called_once_with(NodeId(5))
         out, _ = capsys.readouterr()
         assert "Removed host from yascheduler: 10.0.0.5" in out
 

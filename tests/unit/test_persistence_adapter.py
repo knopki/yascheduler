@@ -914,25 +914,25 @@ class TestPostgresNodeRepository:
     # -- enable / disable / remove ---------------------------------------------
 
     async def test_enable_executes_update(self, mocker: MockerFixture) -> None:
-        """enable calls _run with the enable query and ip."""
+        """enable calls _run with the enable query and node_id.value."""
         repo = self._make_repo(mocker)
 
-        await repo.enable("10.0.0.1")
+        await repo.enable(NodeId(7))
 
-        repo._run.assert_awaited_once_with(load_query("node/enable"), ip="10.0.0.1")  # type: ignore[attr-defined]
+        repo._run.assert_awaited_once_with(load_query("node/enable"), node_id=7)  # type: ignore[attr-defined]
 
     async def test_disable_executes_update(self, mocker: MockerFixture) -> None:
-        """disable calls _run with the disable query and ip."""
+        """disable calls _run with the disable query and node_id.value."""
         repo = self._make_repo(mocker)
 
-        await repo.disable("10.0.0.1")
+        await repo.disable(NodeId(7))
 
-        repo._run.assert_awaited_once_with(load_query("node/disable"), ip="10.0.0.1")  # type: ignore[attr-defined]
+        repo._run.assert_awaited_once_with(load_query("node/disable"), node_id=7)  # type: ignore[attr-defined]
 
     async def test_remove_executes_delete(self, mocker: MockerFixture) -> None:
-        """remove calls _run with the remove (delete) query and ip."""
+        """remove calls _run with the remove (delete) query and node_id.value."""
         repo = self._make_repo(mocker)
 
-        await repo.remove("10.0.0.1")
+        await repo.remove(NodeId(7))
 
-        repo._run.assert_awaited_once_with(load_query("node/remove"), ip="10.0.0.1")  # type: ignore[attr-defined]
+        repo._run.assert_awaited_once_with(load_query("node/remove"), node_id=7)  # type: ignore[attr-defined]

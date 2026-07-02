@@ -1,2 +1,2 @@
 UPDATE yascheduler_nodes SET enabled = FALSE
-WHERE ip = :ip;
+WHERE node_id = :node_id;

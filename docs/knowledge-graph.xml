@@ -356,7 +356,7 @@
         <type-NewTask PURPOSE="Pre-persistence task record (no task_id); converted to Task only by TaskRepository.insert" />
         <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
         <type-NewNode PURPOSE="Pre-persistence node record (no node_id); converted to Node only by NodeRepository.insert" />
-        <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); ip remains UNIQUE and ip-keyed mutators unchanged" />
+        <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); ip remains UNIQUE; NodeRepository mutators key on node_id" />
         <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
       </annotations>
     </M-DOMAIN-MODEL>
@@ -385,7 +385,10 @@
       <depends>M-DOMAIN-ENGINE, M-DOMAIN-MODEL</depends>
       <annotations>
         <class-TaskRepository PURPOSE="Async port for task persistence: insert(NewTask)->Task (sole NewTask→Task conversion), get/update_status take TaskId, list_ids_by_ip_and_status returns list[TaskId], list_by_jobs takes list[TaskId]; the public Yascheduler facade is the sole int/TaskId boundary" />
-        <class-NodeRepository PURPOSE="Async port for node persistence: insert(NewNode)->Node (renamed from add), get_by_id(NodeId), full CRUD lifecycle; ip-keyed mutators unchanged" />
+        <class-NodeRepository PURPOSE="Async port for node persistence: insert(NewNode)->Node (renamed from add), get_by_id(NodeId), full CRUD lifecycle; mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups get/get_by_ips/list_* remain ip-keyed / unkeyed" />
+        <fn-enable PURPOSE="Enable a node by NodeId (node-id-keyed mutator; was ip-keyed)" />
+        <fn-disable PURPOSE="Disable a node by NodeId (node-id-keyed mutator; was ip-keyed)" />
+        <fn-remove PURPOSE="Delete a node row by NodeId (node-id-keyed mutator; was ip-keyed)" />
         <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries)" />
         <class-MachineSession PURPOSE="Connected-machine entity handle Protocol (domain identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)" />
         <class-MachineOperations PURPOSE="Async port for operations on a single machine (facade pass-throughs + use-case methods forwarding to stateless collaborators)" />
@@ -636,7 +639,7 @@
       <depends>M-DOMAIN, M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS</depends>
       <annotations>
         <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, update_status, list_by_status, list_by_jobs, count_by_status); save/update_status raise TaskRowNotFoundError on 0-row UPDATE" />
-        <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port (full CRUD lifecycle)" />
+        <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port (full CRUD lifecycle); mutators enable/disable/remove take NodeId and pass node_id.value (pg8000 cannot adapt a NodeId), update takes Node and keys WHERE node_id = node.node_id.value" />
       </annotations>
     </M-PERSISTENCE-POSTGRES>
 
