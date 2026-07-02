@@ -1,8 +1,8 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.3.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
-#   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path).
-#   SCOPE: manage_node command + argparse + host-spec parser + node add/remove helpers (each helper owns its UoW).
+#   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
+#   SCOPE: manage_node command + argparse + node-target parser + host-spec parser + node add/remove helpers (each helper owns its UoW).
 #   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-UOW, M-SSH-KEYS
 # END_MODULE_CONTRACT
@@ -11,18 +11,18 @@
 #   manage_node - Sync entry point: asyncio.run(_manage_node_async(argv))
 #   _manage_node_async - Add/soft-remove/hard-remove a node; validation UoW read-only, dispatch to per-helper UoW; exit 0/1/2
 #   HostSpec - Frozen parsed host spec (host, username, port, ncpus)
-#   _parse_host_spec - argparse type: parse [user@]host[:port][~ncpus] grammar
-#   _parse_node_args - argparse → Namespace (prog="yasetnode", flags, mutex group)
-#   _remove_node_hard - Hard-remove: own UoW, mark RUNNING tasks DONE, remove node, commit, print
-#   _remove_node_soft - Soft-remove: own UoW, disable (if tasks) or remove node, commit, print
-#   _add_node - Add node: own UoW, connect, optional setup, insert, commit, print; try/finally disconnect
+#   NodeTarget - Frozen parsed node target (node_id: NodeId | None, host_spec: HostSpec | None; exactly one set)
+#   _parse_host_spec - argparse type: parse [user@]host[:port][~ncpus] grammar (UNCHANGED)
+#   _parse_node_target - argparse type: digit → NodeTarget(node_id=NodeId(n)); else delegate to _parse_host_spec
+#   _parse_node_args - argparse → Namespace (prog="yasetnode", flags, mutex group); add-by-id rejected via parser.error
+#   _remove_node_hard - Hard-remove: own UoW, mark RUNNING tasks DONE, remove node, commit, print (takes ip; node_id path resolves via get_by_id)
+#   _remove_node_soft - Soft-remove: own UoW, disable (if tasks) or remove node, commit, print (takes ip)
+#   _add_node - Add node: own UoW, connect, optional setup, insert NewNode, commit, print; try/finally disconnect
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - session-based-machine-handle: _add_node captures session from repository.connect() and passes it to operations.setup_node(session, engines).
-#   PREVIOUS_CHANGE: v1.2.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
-#   PREVIOUS_CHANGE: v1.2.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName; converted @to_sync async def manage_node to def manage_node(argv): asyncio.run(_manage_node_async(argv)) + async def _manage_node_async(argv).
-#   PREVIOUS_CHANGE: v1.1.0 - Per-helper UoW (design D18): validation read uses a short read-only UoW closed before dispatch; each mutate helper opens its OWN UoW via deps.uow_factory(), commits, and prints inside it. Eliminates the double-commit footgun of a single shared async-with UoW with commits scattered across helpers. Accepted TOCTOU window between validation and dispatch (single-operator CLI; benign non-corrupting failure modes).
+#   LAST_CHANGE: v1.5.0 - Positional accepts a node_id (purely-digit) via _parse_node_target/NodeTarget (discriminator: s.isdigit()); add-by-id is rejected via parser.error (exit 2); remove-by-id resolves node.ip via uow.nodes.get_by_id and uses ip-keyed mutators unchanged; add path builds NewNode and persists via uow.nodes.insert (renamed from add). Success messages unchanged; {host} on the node_id path is the resolved node.ip (add-node-id-identity).
+#   PREVIOUS_CHANGE: v1.4.0 - session-based-machine-handle: _add_node captures session from repository.connect() and passes it to operations.setup_node(session, engines).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import logging
 import sys
 from dataclasses import dataclass
 
-from yascheduler.domain import Node, TaskStatus
+from yascheduler.domain import NewNode, Node, NodeId, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.infra import SSHMachineOperations, SSHMachineRepository
@@ -55,6 +55,20 @@ class HostSpec:
     username: str | None
     port: int
     ncpus: int | None
+
+
+@dataclass(frozen=True)
+class NodeTarget:
+    """Parsed node target — EITHER a node_id OR a host spec (exactly one set).
+
+    Produced by :func:`_parse_node_target`. On the node_id path
+    (``node_id is not None``), ``host_spec`` is ``None`` and the node is
+    resolved via :meth:`NodeRepository.get_by_id` to obtain its ``ip`` for the
+    ip-keyed mutators. On the host_spec path, ``node_id`` is ``None``.
+    """
+
+    node_id: NodeId | None
+    host_spec: HostSpec | None
 
 
 # START_CONTRACT: _parse_host_spec
@@ -143,11 +157,24 @@ def _parse_host_spec(s: str) -> HostSpec:
     return HostSpec(host=host, username=username, port=port, ncpus=ncpus)
 
 
+# START_CONTRACT: _parse_node_target
+#   PURPOSE: argparse type — discriminate a purely-digit node_id from a host-spec grammar; return a frozen NodeTarget (exactly one field set).
+#   INPUTS: { s: str - raw positional string from argparse }
+#   OUTPUTS: { NodeTarget - node_id set when s.isdigit() (NodeId(int(s))); else host_spec set via _parse_host_spec }
+#   SIDE_EFFECTS: None — raises argparse.ArgumentTypeError on malformed host grammar (argparse surfaces as exit 2); raises ValueError from NodeId.__post_init__ when the digit is <= 0 (argparse surfaces as exit 2).
+#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
+# END_CONTRACT: _parse_node_target
+def _parse_node_target(s: str) -> NodeTarget:
+    if s.isdigit():
+        return NodeTarget(node_id=NodeId(int(s)), host_spec=None)
+    return NodeTarget(node_id=None, host_spec=_parse_host_spec(s))
+
+
 # START_CONTRACT: _parse_node_args
-#   PURPOSE: Parse yasetnode argparse — one positional host (type=_parse_host_spec) + three store_true flags.
+#   PURPOSE: Parse yasetnode argparse — one positional host (type=_parse_node_target → NodeTarget) + three store_true flags.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
-#   OUTPUTS: { argparse.Namespace - parsed args with .host as HostSpec }
-#   SIDE_EFFECTS: argparse may call sys.exit on --help/error (exit 0/2); body-level parser.error for --skip-setup × remove.
+#   OUTPUTS: { argparse.Namespace - parsed args with .host as NodeTarget }
+#   SIDE_EFFECTS: argparse may call sys.exit on --help/error (exit 0/2); body-level parser.error for --skip-setup × remove and node_id-positional × add-path.
 #   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
 # END_CONTRACT: _parse_node_args
 def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -157,8 +184,8 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "host",
-        type=_parse_host_spec,
-        help="[user@]host[:port][~ncpus] (IPv6 must be bracketed, e.g. [::1])",
+        type=_parse_node_target,
+        help="node_id (purely-digit) OR [user@]host[:port][~ncpus] (IPv6 must be bracketed, e.g. [::1])",
     )
     parser.add_argument(
         "--skip-setup",
@@ -183,73 +210,76 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.skip_setup and (args.remove_soft or args.remove_hard):
         parser.error("--skip-setup cannot be combined with --remove-soft/--remove-hard")
+    # A node cannot be added by id (adding requires a real host). The node_id
+    # positional is valid ONLY on a remove path; reject the add-by-id
+    # combination here (exit 2, consistent with the --skip-setup × remove check).
+    if args.host.node_id is not None and not (args.remove_soft or args.remove_hard):
+        parser.error(
+            "a node cannot be added by id; provide a host like user@host[:port][~ncpus]"
+        )
     # END_BLOCK_PARSE_ARGS
     return args
 
 
 # START_CONTRACT: _remove_node_hard
-#   PURPOSE: Hard-remove a node — in its own UoW, mark RUNNING tasks DONE, remove the node, commit, then announce.
-#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, spec: HostSpec - parsed host }
+#   PURPOSE: Hard-remove a node by ip — in its own UoW, mark RUNNING tasks DONE, remove the node, commit, then announce.
+#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, ip: str - the node's ip (host_spec.host or resolved node.ip) }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Opens its own UoW; updates task statuses and removes the node; commits; prints success messages to stdout AFTER commit.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DI
 # END_CONTRACT: _remove_node_hard
-async def _remove_node_hard(deps: CLIDeps, spec: HostSpec) -> None:
+async def _remove_node_hard(deps: CLIDeps, ip: str) -> None:
     # START_BLOCK_MARK_AND_REMOVE
     async with deps.uow_factory() as uow:
-        task_ids = await uow.tasks.list_ids_by_ip_and_status(
-            spec.host, TaskStatus.RUNNING
-        )
+        task_ids = await uow.tasks.list_ids_by_ip_and_status(ip, TaskStatus.RUNNING)
         for task_id in task_ids:
             await uow.tasks.update_status(task_id, TaskStatus.DONE)
-        await uow.nodes.remove(spec.host)
+        await uow.nodes.remove(ip)
         await uow.commit()
     # END_BLOCK_MARK_AND_REMOVE
     # START_BLOCK_ANNOUNCE
     for task_id in task_ids:
-        print(f"An associated task {task_id} at {spec.host} is now marked done!")
-    print(f"Removed host from yascheduler: {spec.host}")
+        print(f"An associated task {task_id} at {ip} is now marked done!")
+    print(f"Removed host from yascheduler: {ip}")
     # END_BLOCK_ANNOUNCE
 
 
 # START_CONTRACT: _remove_node_soft
-#   PURPOSE: Soft-remove a node — in its own UoW, disable if RUNNING tasks exist, else remove; commit, then announce.
-#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, spec: HostSpec - parsed host }
+#   PURPOSE: Soft-remove a node by ip — in its own UoW, disable if RUNNING tasks exist, else remove; commit, then announce.
+#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, ip: str - the node's ip (host_spec.host or resolved node.ip) }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Opens its own UoW; disables or removes the node; commits; prints success messages to stdout AFTER commit.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DI
 # END_CONTRACT: _remove_node_soft
-async def _remove_node_soft(deps: CLIDeps, spec: HostSpec) -> None:
+async def _remove_node_soft(deps: CLIDeps, ip: str) -> None:
     # START_BLOCK_DISABLE_OR_REMOVE
     async with deps.uow_factory() as uow:
-        task_ids = await uow.tasks.list_ids_by_ip_and_status(
-            spec.host, TaskStatus.RUNNING
-        )
+        task_ids = await uow.tasks.list_ids_by_ip_and_status(ip, TaskStatus.RUNNING)
         if task_ids:
-            await uow.nodes.disable(spec.host)
+            await uow.nodes.disable(ip)
             await uow.commit()
             print("A task associated, prevent from assigning the new tasks")
-            print(f"Prevented from assigning the new tasks: {spec.host}")
+            print(f"Prevented from assigning the new tasks: {ip}")
         else:
-            await uow.nodes.remove(spec.host)
+            await uow.nodes.remove(ip)
             await uow.commit()
             print("No tasks associated, remove node immediately")
-            print(f"Removed host from yascheduler: {spec.host}")
+            print(f"Removed host from yascheduler: {ip}")
     # END_BLOCK_DISABLE_OR_REMOVE
 
 
 # START_CONTRACT: _add_node
-#   PURPOSE: Add a node — in its own UoW, connect gateway, optional setup, insert Node, commit, announce; disconnect in finally.
+#   PURPOSE: Add a node — in its own UoW, connect gateway, optional setup, insert NewNode, commit, announce; disconnect in finally.
 #   INPUTS: {
 #     deps: CLIDeps - DI holder providing uow_factory,
 #     repository: SSHMachineRepository, operations: SSHMachineOperations - gateway constructed by manage_node (mockable),
-#     spec: HostSpec - parsed host,
+#     spec: HostSpec - parsed host spec (the add path is host-only; add-by-id is rejected in _parse_node_args),
 #     config: Config - for username default + private keys + engines,
 #     skip_setup: bool - skip gateway.setup_node when True
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens its own UoW; opens SSH, optionally sets up the remote node, inserts a Node, commits, prints to stdout;
-#                ALWAYS calls repository.disconnect(host) via try/finally (resource-leak fix).
+#   SIDE_EFFECTS: Opens its own UoW; opens SSH, optionally sets up the remote node, inserts a NewNode (receiving the persisted Node), commits, prints to stdout;
+#                ALWAYS calls repository.disconnect(spec.host) via try/finally (resource-leak fix).
 #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-UOW, M-DOMAIN-MODEL, M-ENTRYPOINTS-CONFIG, M-DI
 # END_CONTRACT: _add_node
 async def _add_node(
@@ -275,8 +305,8 @@ async def _add_node(
             print("Setup host...")
             await operations.setup_node(session, config.engines)
         async with deps.uow_factory() as uow:
-            await uow.nodes.add(
-                Node(
+            await uow.nodes.insert(
+                NewNode(
                     ip=spec.host,
                     port=spec.port,
                     username=username,
@@ -300,7 +330,7 @@ async def _add_node(
 # END_CONTRACT: _manage_node_async
 async def _manage_node_async(argv: list[str] | None) -> None:
     args = _parse_node_args(argv)
-    spec: HostSpec = args.host
+    target: NodeTarget = args.host
     # START_BLOCK_HANDLE_FAILURE
     try:
         logging.captureWarnings(True)
@@ -320,27 +350,76 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         # Read-only validation UoW: closed without commit (nothing mutated).
         # A TOCTOU window exists between this close and the helper's own UoW open;
         # accepted for a single-operator CLI (design D18).
-        async with deps.uow_factory() as uow:
-            already_there = await uow.nodes.get(spec.host) is not None
-        if already_there and not args.remove_soft and not args.remove_hard:
-            raise ValueError(f"Host already in DB: {spec.host}")
+        # Branch on the node_id path (resolve via get_by_id → node.ip) vs the
+        # host_spec path (current behavior: get(spec.host)). The ip-keyed
+        # mutators in the remove helpers stay unchanged — only the source of the
+        # ip differs (resolved node.ip vs spec.host_spec.host).
+        resolved_ip: str | None = None
+        if target.node_id is not None:
+            async with deps.uow_factory() as uow:
+                node = await uow.nodes.get_by_id(target.node_id)
+            already_there = node is not None
+            if node is not None:
+                resolved_ip = node.ip
+        else:
+            assert target.host_spec is not None  # exactly one of the two is set
+            already_there = await _get_by_ip(deps, target.host_spec.host) is not None
+        # On the node_id path the "already in DB" check is meaningless (add-by-id
+        # is already rejected in _parse_node_args), so only the remove-path
+        # "NOT in DB" check applies.
+        if (
+            target.host_spec is not None
+            and already_there
+            and not (args.remove_soft or args.remove_hard)
+        ):
+            raise ValueError(f"Host already in DB: {target.host_spec.host}")
         if not already_there and (args.remove_soft or args.remove_hard):
-            raise ValueError(f"Host NOT in DB: {spec.host}")
+            # Distinguish the two not-in-DB paths: node_id (no HostSpec parsed)
+            # vs host_spec (current behavior). The spec lists "node_id NOT in DB"
+            # as a separate exit-1 scenario from "host NOT in DB".
+            if target.node_id is not None:
+                raise ValueError(f"Node ID not in DB: {target.node_id}")
+            assert target.host_spec is not None
+            raise ValueError(f"Host NOT in DB: {target.host_spec.host}")
         # END_BLOCK_VALIDATE
 
         # START_BLOCK_DISPATCH
         # Exactly one helper runs; each opens its own UoW, commits, and prints.
+        # The helpers take the ip to act on (ip-keyed mutators are unchanged):
+        # node_id path → resolved_ip (from get_by_id); host_spec path → spec.host.
         if args.remove_hard:
-            await _remove_node_hard(deps, spec)
+            await _remove_node_hard(deps, _remove_ip(target, resolved_ip))
         elif args.remove_soft:
-            await _remove_node_soft(deps, spec)
+            await _remove_node_soft(deps, _remove_ip(target, resolved_ip))
         else:
-            await _add_node(deps, repository, operations, spec, config, args.skip_setup)
+            assert target.host_spec is not None  # add path is host-only
+            await _add_node(
+                deps, repository, operations, target.host_spec, config, args.skip_setup
+            )
         # END_BLOCK_DISPATCH
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
+
+
+async def _get_by_ip(deps: CLIDeps, ip: str) -> Node | None:
+    """Read-only helper: resolve a node by ip within a short validation UoW."""
+    async with deps.uow_factory() as uow:
+        return await uow.nodes.get(ip)
+
+
+def _remove_ip(target: NodeTarget, resolved_ip: str | None) -> str:
+    """Resolve the ip to act on for a remove helper.
+
+    On the node_id path ``resolved_ip`` is the looked-up ``node.ip``; on the
+    host_spec path it is the parsed ``HostSpec.host``.
+    """
+    if target.node_id is not None:
+        assert resolved_ip is not None  # validated present before dispatch
+        return resolved_ip
+    assert target.host_spec is not None
+    return target.host_spec.host
 
 
 # START_CONTRACT: manage_node

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.6.0
+# VERSION: 1.6.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -23,7 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - session-based-machine-handle section 7.5: replace repository.get_machine_state with repository.get_session returning session stub (session.machine = ConnectedMachine).
+#   LAST_CHANGE: v1.6.1 - add-node-id-identity test update: prepend node_id=NodeId(<n>) to all Node(...) constructions and add NodeId to 3 local imports.
+#   PREVIOUS_CHANGE: v1.6.0 - session-based-machine-handle section 7.5: replace repository.get_machine_state with repository.get_session returning session stub (session.machine = ConnectedMachine).
 #   PREVIOUS_CHANGE: v1.5.2 - Update test_start_creates_background_tasks: _bg_jobs now includes worker tasks (5 parents + 7 workers = 12 with default limits) since fix-orchestrator-producer-silent-death registers workers in self._bg_jobs.
 # END_CHANGE_SUMMARY
 #
@@ -498,12 +499,12 @@ class TestCloudsGetCapacity:
         cfg_aws.prefix = "aws"
         orch = make_orchestrator(active_clouds=[cfg_aws])
 
-        from yascheduler.domain.model import Node
+        from yascheduler.domain.model import Node, NodeId
 
         nodes = [
-            Node(ip="1", ncpus=2, cloud="aws"),
-            Node(ip="2", ncpus=2, cloud="aws"),
-            Node(ip="3", ncpus=2, cloud="gcp"),
+            Node(node_id=NodeId(1), ip="1", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(2), ip="2", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(3), ip="3", ncpus=2, cloud="gcp"),
         ]
         mock_uow = AsyncMock()
         mock_uow.nodes.list_all = AsyncMock(return_value=nodes)
@@ -522,9 +523,12 @@ class TestCloudsGetCapacity:
         cfg_aws.prefix = "aws"
         orch = make_orchestrator(active_clouds=[cfg_aws])
 
-        from yascheduler.domain.model import Node
+        from yascheduler.domain.model import Node, NodeId
 
-        nodes = [Node(ip=str(i), ncpus=2, cloud="aws") for i in range(10)]
+        nodes = [
+            Node(node_id=NodeId(i + 1), ip=str(i), ncpus=2, cloud="aws")
+            for i in range(10)
+        ]
         mock_uow = AsyncMock()
         mock_uow.nodes.list_all = AsyncMock(return_value=nodes)
         mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
@@ -542,12 +546,12 @@ class TestCloudsGetCapacity:
         cfg_aws.prefix = "aws"
         orch = make_orchestrator(active_clouds=[cfg_aws])
 
-        from yascheduler.domain.model import Node
+        from yascheduler.domain.model import Node, NodeId
 
         nodes = [
-            Node(ip="1", ncpus=2, cloud="gcp"),
-            Node(ip="2", ncpus=2, cloud="azure"),
-            Node(ip="3", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(1), ip="1", ncpus=2, cloud="gcp"),
+            Node(node_id=NodeId(2), ip="2", ncpus=2, cloud="azure"),
+            Node(node_id=NodeId(3), ip="3", ncpus=2, cloud="aws"),
         ]
         mock_uow = AsyncMock()
         mock_uow.nodes.list_all = AsyncMock(return_value=nodes)

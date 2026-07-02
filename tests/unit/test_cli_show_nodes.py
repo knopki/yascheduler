@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_show_nodes.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yanodes show_nodes() flag parsing, filtering, table/JSON rendering, and exit codes.
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yanodes (entrypoints/cli/show_nodes.py) in relocate-show-nodes-command.
+#   LAST_CHANGE: v1.2.0 - add-node-id-identity: added node_id=NodeId(...) to all Node() constructions, updated _ips_from_table() column index (NODE_ID is now column 0, IP is column 1), added NODE_ID header and JSON assertions.
+#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 show_nodes_mod = importlib.import_module("yascheduler.entrypoints.cli.show_nodes")
@@ -183,8 +183,15 @@ class TestShowNodesRendering:
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
     ) -> None:
         _config, uow, _deps = stub_config_deps
-        node1 = Node(ip="10.0.0.1", ncpus=4, enabled=True, port=22)
-        node2 = Node(ip="10.0.0.2", ncpus=0, enabled=False, port=2222, cloud="hetzner")
+        node1 = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22)
+        node2 = Node(
+            node_id=NodeId(2),
+            ip="10.0.0.2",
+            ncpus=0,
+            enabled=False,
+            port=2222,
+            cloud="hetzner",
+        )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[make_task(task_id=1, label="my_job", ip="10.0.0.1")]
         )
@@ -195,6 +202,7 @@ class TestShowNodesRendering:
         out, _ = capsys.readouterr()
         lines = out.splitlines()
         # Header
+        assert "NODE_ID" in lines[0]
         assert "IP" in lines[0]
         assert "PORT" in lines[0]
         assert "NCPUS" in lines[0]
@@ -204,8 +212,9 @@ class TestShowNodesRendering:
         assert "LABEL" in lines[0]
         # Two data rows
         assert len(lines) == 3
-        # Row 1: busy node, port 22 -> '-', ncpus=4, enabled yes, cloud None -> '-',
+        # Row 1: NODE_ID=1, busy node, port 22 -> '-', ncpus=4, enabled yes, cloud None -> '-',
         # task_id=1, label=my_job
+        assert "1" in lines[1]
         assert "10.0.0.1" in lines[1]
         assert "-" in lines[1]  # port rendered as '-'
         assert "yes" in lines[1]
@@ -226,8 +235,17 @@ class TestShowNodesRendering:
         import json as _json
 
         _config, uow, _deps = stub_config_deps
-        node1 = Node(ip="10.0.0.1", ncpus=0, enabled=True, port=22, cloud=None)
-        node2 = Node(ip="10.0.0.2", ncpus=4, enabled=False, port=2222, cloud="hetzner")
+        node1 = Node(
+            node_id=NodeId(1), ip="10.0.0.1", ncpus=0, enabled=True, port=22, cloud=None
+        )
+        node2 = Node(
+            node_id=NodeId(2),
+            ip="10.0.0.2",
+            ncpus=4,
+            enabled=False,
+            port=2222,
+            cloud="hetzner",
+        )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[make_task(task_id=7, label="job7", ip="10.0.0.1")]
         )
@@ -239,6 +257,8 @@ class TestShowNodesRendering:
         data = _json.loads(out)
         assert isinstance(data, list)
         assert len(data) == 2
+        assert list(data[0])[0] == "node_id"
+        assert data[0]["node_id"] == 1
         # Busy node: raw port=22 (not "-" or null), ncpus=0 (not "MAX"), enabled bool,
         # cloud null, occupied_by object.
         assert data[0]["ip"] == "10.0.0.1"
@@ -248,6 +268,8 @@ class TestShowNodesRendering:
         assert data[0]["cloud"] is None
         assert data[0]["occupied_by"] == {"task_id": 7, "label": "job7"}
         # Free node: occupied_by null.
+        assert list(data[1])[0] == "node_id"
+        assert data[1]["node_id"] == 2
         assert data[1]["ip"] == "10.0.0.2"
         assert data[1]["port"] == 2222
         assert data[1]["ncpus"] == 4
@@ -286,6 +308,7 @@ class TestShowNodesRendering:
         lines = out.splitlines()
         # Header only, no data rows.
         assert len(lines) == 1
+        assert "NODE_ID" in lines[0]
         assert "IP" in lines[0]
 
 
@@ -297,10 +320,33 @@ class TestShowNodesRendering:
 def _three_mixed_nodes() -> list[Node]:
     """Return nodes varying on enabled/busy/cloud for filter tests."""
     return [
-        Node(ip="10.0.0.1", ncpus=4, enabled=True, port=22, cloud="hetzner"),
-        Node(ip="10.0.0.2", ncpus=4, enabled=False, port=22, cloud="hetzner"),
-        Node(ip="10.0.0.3", ncpus=4, enabled=True, port=22, cloud=None),
-        Node(ip="10.0.0.4", ncpus=4, enabled=False, port=22, cloud="exoscale"),
+        Node(
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=4,
+            enabled=True,
+            port=22,
+            cloud="hetzner",
+        ),
+        Node(
+            node_id=NodeId(2),
+            ip="10.0.0.2",
+            ncpus=4,
+            enabled=False,
+            port=22,
+            cloud="hetzner",
+        ),
+        Node(
+            node_id=NodeId(3), ip="10.0.0.3", ncpus=4, enabled=True, port=22, cloud=None
+        ),
+        Node(
+            node_id=NodeId(4),
+            ip="10.0.0.4",
+            ncpus=4,
+            enabled=False,
+            port=22,
+            cloud="exoscale",
+        ),
     ]
 
 
@@ -314,8 +360,8 @@ def _ips_from_table(out: str) -> list[str]:
     lines = out.splitlines()
     ips: list[str] = []
     for line in lines[1:]:
-        # IP is the first column; ljust leaves trailing spaces — strip and split.
-        ip = line.split()[0]
+        # NODE_ID is column 0, IP is column 1; strip and split.
+        ip = line.split()[1]
         ips.append(ip)
     return ips
 
@@ -445,9 +491,9 @@ class TestShowNodesOrder:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         nodes = [
-            Node(ip="10.0.0.3", ncpus=4, enabled=True, port=22),
-            Node(ip="10.0.0.1", ncpus=4, enabled=True, port=22),
-            Node(ip="10.0.0.2", ncpus=4, enabled=True, port=22),
+            Node(node_id=NodeId(3), ip="10.0.0.3", ncpus=4, enabled=True, port=22),
+            Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22),
+            Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=4, enabled=True, port=22),
         ]
         _wire(uow, nodes)
         _run([])
@@ -519,7 +565,7 @@ class TestShowNodesStructure:
         _config, uow, _deps = stub_config_deps
         _wire(
             uow,
-            [Node(ip="10.0.0.1", ncpus=4, enabled=True, port=22)],
+            [Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22)],
             [make_task(task_id=1, label="j1", ip="10.0.0.1")],
         )
         _run([])

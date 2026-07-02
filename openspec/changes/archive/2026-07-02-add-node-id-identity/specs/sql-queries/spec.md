@@ -1,10 +1,4 @@
-# sql-queries
-
-## Purpose
-
-SQL query file organization and lazy-loading utility for the persistence adapter.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: SQL files organized by entity
 
@@ -59,30 +53,3 @@ at `sql/node/get_by_id.sql`. Every node SELECT (`get_by_ip`, `list_all`,
 #### Scenario: Node list_all is ordered by node_id
 - **WHEN** `sql/node/list_all.sql` is inspected
 - **THEN** it contains `ORDER BY node_id` (deterministic listing for CLI output)
-
-### Requirement: Lazy SQL loading with caching
-
-The system SHALL provide a `load_query(name: str) -> str` function that
-reads `.sql` files from the package directory and caches the result
-so each file is read at most once per process.
-
-#### Scenario: First load reads from disk
-- **WHEN** `load_query("task/get_by_id")` is called for the first time
-- **THEN** the file `sql/task/get_by_id.sql` is read and its contents returned
-
-#### Scenario: Subsequent load uses cache
-- **WHEN** `load_query("task/get_by_id")` is called a second time
-- **THEN** the file is NOT re-read; the cached string is returned
-
-#### Scenario: Renamed partial-update query loads under new name
-- **WHEN** `load_query("task/update_by_id")` is called
-- **THEN** the file `sql/task/update_by_id.sql` is returned (the previous `load_query("task/upsert")` reference is updated to the new name)
-
-### Requirement: pg8000 named parameter syntax
-
-The system SHALL use `:param_name` syntax in SQL files for pg8000
-parameter binding.
-
-#### Scenario: Parameterized query
-- **WHEN** a query file contains `WHERE task_id = :task_id`
-- **THEN** the repository passes `task_id=42` and pg8000 binds the value

@@ -38,7 +38,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 check_status_mod = importlib.import_module("yascheduler.entrypoints.cli.check_status")
@@ -390,7 +390,14 @@ class TestCheckStatusJson:
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
     ) -> None:
         _config, uow, _deps = stub_config_deps
-        node = Node(ip="10.0.0.1", ncpus=4, enabled=True, port=22, cloud="hetzner")
+        node = Node(
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=4,
+            enabled=True,
+            port=22,
+            cloud="hetzner",
+        )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
                 make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
@@ -438,7 +445,9 @@ class TestCheckStatusJson:
             ]
         )
         uow.nodes.get_by_ips = AsyncMock(
-            return_value={"10.0.0.1": Node(ip="10.0.0.1", ncpus=4, port=22)}
+            return_value={
+                "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=22)
+            }
         )
 
         _run(["--json"])
@@ -492,7 +501,9 @@ class TestCheckStatusJson:
             ]
         )
         uow.nodes.get_by_ips = AsyncMock(
-            return_value={"10.0.0.1": Node(ip="10.0.0.1", ncpus=4, port=22)}
+            return_value={
+                "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=22)
+            }
         )
 
         _run(["--json", "-j", "1"])
@@ -608,7 +619,12 @@ class TestResolveConnParams:
             remote_jump_username="fallback",
         )
         node = Node(
-            ip="10.0.0.1", ncpus=4, cloud="hetzner", username="yascheduler", port=2222
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=4,
+            cloud="hetzner",
+            username="yascheduler",
+            port=2222,
         )
 
         params = check_status_mod._resolve_conn_params(node, config)
@@ -626,7 +642,7 @@ class TestResolveConnParams:
             remote_jump_host="fallback.example.com",
             remote_jump_username="fallback",
         )
-        node = Node(ip="10.0.0.1", ncpus=4, cloud=None)
+        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud=None)
 
         params = check_status_mod._resolve_conn_params(node, config)
 
@@ -638,7 +654,12 @@ class TestResolveConnParams:
             clouds=[make_cloud("hetzner", username="hcloud-user")],
         )
         node = Node(
-            ip="10.0.0.1", ncpus=4, cloud="hetzner", username="yascheduler", port=22
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=4,
+            cloud="hetzner",
+            username="yascheduler",
+            port=22,
         )
 
         params = check_status_mod._resolve_conn_params(node, config)
@@ -647,7 +668,7 @@ class TestResolveConnParams:
 
     def test_returns_node_port(self) -> None:
         config = make_mock_config()
-        node = Node(ip="10.0.0.1", ncpus=4, port=2222)
+        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=2222)
 
         params = check_status_mod._resolve_conn_params(node, config)
 
@@ -673,6 +694,7 @@ class TestCheckStatusViewHappyPath:
             make_cloud("hetzner", jump_host="jump.example.com", jump_username="jumper")
         ]
         node = Node(
+            node_id=NodeId(1),
             ip="10.0.0.1",
             ncpus=4,
             cloud="hetzner",
@@ -725,7 +747,7 @@ class TestCheckStatusViewHappyPath:
             ]
         )
         uow.nodes.get_by_ips = AsyncMock(
-            return_value={"10.0.0.1": Node(ip="10.0.0.1", ncpus=4)}
+            return_value={"10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)}
         )
         monkeypatch.setattr(
             check_status_mod,
@@ -791,7 +813,7 @@ class TestCheckStatusQueryRenderSeparation:
             ]
         )
         uow.nodes.get_by_ips = AsyncMock(
-            return_value={"10.0.0.1": Node(ip="10.0.0.1", ncpus=4)}
+            return_value={"10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)}
         )
 
         repo = make_mock_repository()

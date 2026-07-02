@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.14.0
+# VERSION: 1.16.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
-#   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; Task, Node, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
+#   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
 #   DEPENDS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 #   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -14,7 +14,9 @@
 #   TaskContext - Typed task metadata with arbitrary extras; .replace() typed copy-with
 #   TaskContextOverrides - TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra
 #   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
-#   Node - Persistent compute node record
+#   NodeId - Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
+#   NewNode - Pre-persistence node record (no node_id)
+#   Node - Post-persistence node record; always carries node_id: NodeId (first field, identity-first)
 #   ConnectedMachine - Runtime connected machine with state transitions
 #   Engine - Calculation engine value object (re-exported from M-DOMAIN-ENGINE; see domain/engine.py)
 #   EngineRepository - Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)
@@ -22,8 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.15.0 - Add _get_opt_str helper for TaskContext.from_metadata JSONB boundary; route 4 str|None field assignments (remote_folder, local_folder, webhook_url, error) through it (raises TypeError on non-str/non-None); drop 5 # type: ignore[arg-type] (4 routed through helper, 1 dropped as over-cautious on webhook_custom_params) (resolve-type-bridge-debt / D5).
-#   PREVIOUS_CHANGE: v1.14.0 - Relocate Engine, EngineRepository, Deploy* to domain/engine.py (M-DOMAIN-ENGINE); re-export them here for backward compatibility with `from yascheduler.domain.model import Engine` imports. Engine merged from 7-field domain.Engine + 4 fields from config.Engine (deployable, platform_packages, check_cmd_code, sleep_interval); validate_inputs preserved (engine-to-domain-frozen).
+#   LAST_CHANGE: v1.16.0 - Add NodeId value object (frozen dataclass wrapping int, validates >0, __str__ renders bare int) and NewNode pre-persistence record; Node gains node_id: NodeId as first field (post-persistence shape). Conversion NewNode→Node happens only in NodeRepository.insert (add-node-id-identity).
+#   PREVIOUS_CHANGE: v1.15.0 - Add _get_opt_str helper for TaskContext.from_metadata JSONB boundary; route 4 str|None field assignments (remote_folder, local_folder, webhook_url, error) through it (raises TypeError on non-str/non-None); drop 5 # type: ignore[arg-type] (4 routed through helper, 1 dropped as over-cautious on webhook_custom_params) (resolve-type-bridge-debt / D5).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -369,10 +371,82 @@ class Task:
         return replace(self, _events=()), self._events
 
 
+# START_CONTRACT: NodeId
+#   PURPOSE: Node primary-key value object — frozen dataclass wrapping int; validates >0; __str__ renders bare int.
+#   INPUTS: { value: int - the database-generated node_id (SERIAL starts at 1) }
+#   OUTPUTS: { None - raises ValueError in __post_init__ when value <= 0 }
+#   SIDE_EFFECTS: None
+#   RAISES: ValueError - when value <= 0 (a non-positive id indicates a bug)
+#   LINKS: M-DOMAIN-MODEL
+# END_CONTRACT: NodeId
+@dataclass(frozen=True)
+class NodeId:
+    """Node primary-key value object.
+
+    Wraps a single ``value: int`` (the DB-generated ``node_id``). ``__post_init__``
+    enforces ``value > 0`` (SERIAL starts at 1, so a non-positive value indicates a
+    bug). ``__str__`` returns the bare integer string so CLI rendering and logging
+    produce ``5``, not ``NodeId(value=5)``. Frozen → hashable → usable as a dict key.
+    Intentionally NOT equal to a bare ``int`` (``NodeId(5) == 5`` is ``False``) — the
+    type-safety point of a dedicated value object; callers must unwrap ``.value``
+    explicitly at external boundaries (pg8000 params, JSON, argparse).
+    """
+
+    value: int
+
+    def __post_init__(self) -> None:
+        if self.value <= 0:
+            raise ValueError(f"NodeId must be > 0, got {self.value}")
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+
+# START_CONTRACT: NewNode
+#   PURPOSE: Pre-persistence node record — no identity yet; converted to Node only by NodeRepository.insert.
+#   INPUTS: { ip: str, ncpus: int, enabled: bool, cloud: str | None, username: str, port: int }
+#   OUTPUTS: { None - dataclass }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: NodeRepository.insert
+# END_CONTRACT: NewNode
+@dataclass(frozen=True)
+class NewNode:
+    """Pre-persistence node record — no identity yet.
+
+    Mirrors the non-``node_id`` fields of :class:`Node` with identical defaults. A
+    caller builds a ``NewNode`` to prepare a node for insertion; the conversion to
+    :class:`Node` happens in exactly one place: ``NodeRepository.insert``.
+    ``CloudProvisioner.allocate`` returns a ``NewNode`` (a freshly-built VM that has
+    not been persisted).
+    """
+
+    ip: str
+    ncpus: int
+    enabled: bool = True
+    cloud: str | None = None
+    username: str = "root"
+    port: int = 22
+
+
+# START_CONTRACT: Node
+#   PURPOSE: Post-persistence node record — always carries its database-generated node_id (identity-first).
+#   INPUTS: { node_id: NodeId, ip: str, ncpus: int, enabled: bool, cloud: str | None, username: str, port: int }
+#   OUTPUTS: { None - dataclass }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: NodeRepository.insert (the only NewNode→Node conversion site)
+# END_CONTRACT: Node
 @dataclass(frozen=True)
 class Node:
-    """Persistent compute node record with connection details."""
+    """Post-persistence node record — always carries its identity.
 
+    ``node_id`` is the FIRST field (identity first); a ``Node`` only ever comes from
+    the database (via ``_row_to_node``) or from ``NodeRepository.insert``'s return.
+    The ``ip``-based identity legacy is deliberately not removed in this change:
+    ``ip`` remains ``UNIQUE`` and remains the key for ip-keyed ``NodeRepository``
+    mutators; ``node_id`` is carried alongside ``ip``, not swapped for it.
+    """
+
+    node_id: NodeId
     ip: str
     ncpus: int
     enabled: bool = True

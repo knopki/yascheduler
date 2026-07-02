@@ -204,7 +204,7 @@
         <fn-_filter_rows PURPOSE="AND-compose active filters" />
         <fn-_render_nodes_table PURPOSE="Fixed-width table with display transformations" />
         <fn-_render_nodes_json PURPOSE="Raw-domain-values JSON" />
-        <type-_NodeView PURPOSE="Private CLI-only node+task projection DTO" />
+        <type-_NodeView PURPOSE="Private CLI-only node+task projection DTO carrying node_id: NodeId first" />
       </annotations>
     </M-ENTRYPOINTS-CLI-SHOW-NODES>
 
@@ -228,13 +228,15 @@
       <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-ADAPTERS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-PERSISTENCE-UOW</depends>
       <annotations>
         <fn-manage_node PURPOSE="Sync entry point: asyncio.run(_manage_node_async)" />
-        <fn-_manage_node_async PURPOSE="Add/soft-remove/hard-remove a node; validation UoW read-only, dispatch to per-helper UoW; exit 0/1/2" />
-        <fn-_parse_host_spec PURPOSE="argparse type: parse [user@]host[:port][~ncpus] grammar into HostSpec" />
-        <fn-_parse_node_args PURPOSE="argparse → Namespace (prog=yasetnode, store_true flags, --remove-soft/--remove-hard mutex)" />
-        <fn-_remove_node_hard PURPOSE="Hard-remove: mark RUNNING tasks DONE, remove node, commit, announce" />
-        <fn-_remove_node_soft PURPOSE="Soft-remove: disable (if tasks) or remove node, commit, announce" />
-        <fn-_add_node PURPOSE="Add node: connect, optional setup, insert, commit, announce; try/finally disconnect" />
+        <fn-_manage_node_async PURPOSE="Add/soft-remove/hard-remove a node; validation UoW read-only, dispatch to per-helper UoW; exit 0/1/2; node_id path resolves via get_by_id" />
+        <fn-_parse_host_spec PURPOSE="argparse type: parse [user@]host[:port][~ncpus] grammar into HostSpec (UNCHANGED)" />
+        <fn-_parse_node_target PURPOSE="argparse type: digit→NodeTarget(node_id=NodeId(n)); else delegate to _parse_host_spec" />
+        <fn-_parse_node_args PURPOSE="argparse → Namespace: host positional via _parse_node_target (NodeTarget), store_true flags, --remove-soft/--remove-hard mutex; add-by-id rejected via parser.error (exit 2)" />
+        <fn-_remove_node_hard PURPOSE="Hard-remove by ip: mark RUNNING tasks DONE, remove node, commit, announce" />
+        <fn-_remove_node_soft PURPOSE="Soft-remove by ip: disable (if tasks) or remove node, commit, announce" />
+        <fn-_add_node PURPOSE="Add node: connect, optional setup, insert NewNode, commit, announce; try/finally disconnect" />
         <type-HostSpec PURPOSE="Frozen parsed host spec (host, username, port, ncpus)" />
+        <type-NodeTarget PURPOSE="Frozen parsed node target (node_id: NodeId|None, host_spec: HostSpec|None; exactly one set)" />
       </annotations>
     </M-ENTRYPOINTS-CLI-MANAGE-NODE>
 
@@ -281,7 +283,9 @@
         <export-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
         <export-Engine PURPOSE="Calculation engine specification with platform support" />
         <export-Task PURPOSE="Task entity with lifecycle methods" />
-        <export-Node PURPOSE="Persistent compute node record" />
+        <export-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)" />
+        <export-NewNode PURPOSE="Pre-persistence node record (no node_id); converted to Node by NodeRepository.insert" />
+        <export-Node PURPOSE="Post-persistence node record; carries node_id: NodeId" />
         <export-ConnectedMachine PURPOSE="Runtime connected machine with state transitions" />
         <export-DomainError PURPOSE="Base class for all domain exceptions" />
         <export-ValidationError PURPOSE="Input validation errors" />
@@ -348,7 +352,9 @@
         <class-EngineRepository PURPOSE="Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)" />
         <class-Task PURPOSE="Task entity with lifecycle methods and event recording (record_event, with_event factory, pull_events, _events tuple)" />
         <fn-with_context PURPOSE="Wholesale-replace task context, returning new Task" />
-        <class-Node PURPOSE="Persistent compute node record" />
+        <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
+        <type-NewNode PURPOSE="Pre-persistence node record (no node_id); converted to Node only by NodeRepository.insert" />
+        <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); ip remains UNIQUE and ip-keyed mutators unchanged" />
         <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
       </annotations>
     </M-DOMAIN-MODEL>
@@ -377,12 +383,12 @@
       <depends>M-DOMAIN-ENGINE, M-DOMAIN-MODEL</depends>
       <annotations>
         <class-TaskRepository PURPOSE="Async port for task persistence" />
-        <class-NodeRepository PURPOSE="Async port for node persistence (full CRUD lifecycle)" />
+        <class-NodeRepository PURPOSE="Async port for node persistence: insert(NewNode)->Node (renamed from add), get_by_id(NodeId), full CRUD lifecycle; ip-keyed mutators unchanged" />
         <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries)" />
         <class-MachineSession PURPOSE="Connected-machine entity handle Protocol (domain identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)" />
         <class-MachineOperations PURPOSE="Async port for operations on a single machine (facade pass-throughs + use-case methods forwarding to stateless collaborators)" />
         <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host) — 7-field surface application consumers read" />
-        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider), deallocate(cloud, ip), select_provider(platforms, counts) -> str | None (sync)" />
+        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider) returns NewNode (pre-persistence; caller persists via NodeRepository.insert), deallocate(cloud, ip), select_provider(platforms, counts) -> str | None (sync)" />
         <type-connect_grace PURPOSE="Per-cloud SSH connect-failure deadline in seconds (declared on CloudConfig Protocol + each ConfigCloud* DTO with provider-specific default)" />
       </annotations>
     </M-DOMAIN-PORTS>

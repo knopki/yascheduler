@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_connect_machine_consumer.py
-# VERSION: 1.2.1
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator._connect_machine_consumer never-connected-node grace timer + abandon dispatch.
@@ -16,7 +16,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.1 - Fix TestConnectMachineConsumerGraceTimer on Python 3.12: asyncio calls time.monotonic during the await chain (run_in_executor), draining a side_effect=[a,b] list before the consumer reaches the grace-check → StopIteration → RuntimeError. Replaced exhausting list side_effects with non-exhausting return_value constants and pre-seeded _connect_failures for past-grace tests; dropped the fragile mock_mono.call_count==2 assertion. Behavior under test unchanged.
+#   LAST_CHANGE: v1.3.0 - add-node-id-identity: import NodeId, add node_id=NodeId(...) to _make_node helper and all inline Node(...) constructions.
 #   PREVIOUS_CHANGE: v1.2.0 - Rewrite TestConnectMachineProducerExcludesStaticNodes → TestConnectMachineProducerYieldsStaticNodes for fix-static-node-connect-exclusion: the producer filter no longer excludes cloud=None nodes (over-broad v6.2.1 FILTER_CLOUD_ONLY filter broke the yasetnode → daemon handoff, leaving tasks stuck in TO_DO). New contract: static nodes ARE yielded; a consumer-side guard before the grace-check retries them indefinitely without ever calling abandon_node. Added test_static_node_past_grace_does_not_abandon temporal guard.
 # END_CHANGE_SUMMARY
 """Unit tests for Orchestrator._connect_machine_consumer grace timer + abandon dispatch.
@@ -48,7 +48,7 @@ from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UMessage
 from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.domain.exceptions import MachineConnectionError
-from yascheduler.domain.model import Node
+from yascheduler.domain.model import Node, NodeId
 from yascheduler.entrypoints import Config
 from yascheduler.infra.cloud.cloud_configs import (
     ConfigCloudAzure,
@@ -60,7 +60,15 @@ if TYPE_CHECKING:
 
 
 def _make_node(ip: str = "10.0.0.5", cloud: str | None = "hetzner") -> Node:
-    return Node(ip=ip, ncpus=2, cloud=cloud, username="root", port=22, enabled=True)
+    return Node(
+        node_id=NodeId(1),
+        ip=ip,
+        ncpus=2,
+        cloud=cloud,
+        username="root",
+        port=22,
+        enabled=True,
+    )
 
 
 def make_orchestrator(
@@ -340,9 +348,16 @@ class TestConnectMachineProducerYieldsStaticNodes:
         from yascheduler.domain.model import Node
 
         static_node = Node(
-            ip="10.0.0.9", ncpus=2, cloud=None, username="root", port=22, enabled=True
+            node_id=NodeId(1),
+            ip="10.0.0.9",
+            ncpus=2,
+            cloud=None,
+            username="root",
+            port=22,
+            enabled=True,
         )
         cloud_node = Node(
+            node_id=NodeId(2),
             ip="10.0.0.10",
             ncpus=2,
             cloud="hetzner",
@@ -372,7 +387,13 @@ class TestConnectMachineProducerYieldsStaticNodes:
         from yascheduler.domain.model import Node
 
         static_node = Node(
-            ip="10.0.0.9", ncpus=2, cloud=None, username="root", port=22, enabled=True
+            node_id=NodeId(1),
+            ip="10.0.0.9",
+            ncpus=2,
+            cloud=None,
+            username="root",
+            port=22,
+            enabled=True,
         )
 
         orch = make_orchestrator(config_clouds=[])
@@ -403,7 +424,13 @@ class TestConnectMachineProducerYieldsStaticNodes:
         from yascheduler.domain.model import Node
 
         static_node = Node(
-            ip="10.0.0.9", ncpus=2, cloud=None, username="root", port=22, enabled=True
+            node_id=NodeId(1),
+            ip="10.0.0.9",
+            ncpus=2,
+            cloud=None,
+            username="root",
+            port=22,
+            enabled=True,
         )
 
         orch = make_orchestrator(config_clouds=[])
@@ -449,7 +476,13 @@ class TestConnectMachineProducerYieldsStaticNodes:
         from yascheduler.domain.model import Node
 
         static_node = Node(
-            ip="10.0.0.9", ncpus=2, cloud=None, username="root", port=22, enabled=True
+            node_id=NodeId(1),
+            ip="10.0.0.9",
+            ncpus=2,
+            cloud=None,
+            username="root",
+            port=22,
+            enabled=True,
         )
 
         orch = make_orchestrator(config_clouds=[])

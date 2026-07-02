@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/show_nodes.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output.
 #   SCOPE: show_nodes command + argparse + in-memory node-to-task join + table/JSON renderers.
@@ -13,14 +13,14 @@
 #   _parse_nodes_args - Parse yanodes argparse flags
 #   _fetch_nodes_view - Read nodes+tasks within one UoW, join in memory
 #   _filter_rows - AND-compose active filters
-#   _render_nodes_table - Fixed-width table with display transformations
-#   _render_nodes_json - Raw-domain-values JSON
-#   _NodeView - Private CLI-only node+task projection DTO
+#   _render_nodes_table - Fixed-width table with display transformations (NODE_ID first column)
+#   _render_nodes_json - Raw-domain-values JSON (node_id via .value first field)
+#   _NodeView - Private CLI-only node+task projection DTO (node_id: NodeId first)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def show_nodes to def show_nodes(argv): asyncio.run(_show_nodes_async(argv)) + async def _show_nodes_async(argv).
-#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-show-nodes-command: moved from infra/cli/show_nodes.py, added --json/--enabled/--disabled/--busy/--free/--cloud/--no-cloud argparse flags, exit-code contract 0/1/2, fixed-width table + raw-values JSON renderers, in-memory O(n+m) join, _NodeView private DTO.
+#   LAST_CHANGE: v1.2.0 - _NodeView gains node_id: NodeId as first field (identity-first); table renderer adds NODE_ID as the first column rendering str(row.node_id); JSON renderer adds "node_id": r.node_id.value as the first field (add-node-id-identity).
+#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def show_nodes to def show_nodes(argv): asyncio.run(_show_nodes_async(argv)) + async def _show_nodes_async(argv).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import TaskStatus
+from yascheduler.domain import NodeId, TaskStatus
 from yascheduler.entrypoints import make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class _NodeView:
+    node_id: NodeId
     ip: str
     port: int
     ncpus: int
@@ -144,6 +145,7 @@ async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
         task = tasks_by_ip.get(node.ip)
         rows.append(
             _NodeView(
+                node_id=node.node_id,
                 ip=node.ip,
                 port=node.port,
                 ncpus=node.ncpus,
@@ -192,11 +194,12 @@ def _filter_rows(rows: list[_NodeView], args: argparse.Namespace) -> list[_NodeV
 # END_CONTRACT: _render_nodes_table
 def _render_nodes_table(rows: list[_NodeView]) -> str:
     # START_BLOCK_RENDER_TABLE
-    headers = ["IP", "PORT", "NCPUS", "ENABLED", "CLOUD", "TASK_ID", "LABEL"]
+    headers = ["NODE_ID", "IP", "PORT", "NCPUS", "ENABLED", "CLOUD", "TASK_ID", "LABEL"]
     sep = "  "
 
     def _cells(row: _NodeView) -> list[str]:
         return [
+            str(row.node_id),
             row.ip,
             "-" if row.port == 22 else str(row.port),
             "MAX" if row.ncpus == 0 else str(row.ncpus),
@@ -232,6 +235,7 @@ def _render_nodes_json(rows: list[_NodeView]) -> str:
     # START_BLOCK_RENDER_JSON
     objects = [
         {
+            "node_id": r.node_id.value,
             "ip": r.ip,
             "port": r.port,
             "ncpus": r.ncpus,

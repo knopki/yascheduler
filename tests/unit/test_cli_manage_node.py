@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_manage_node.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yasetnode manage_node() host-spec grammar, argparse, exit codes, helpers, and add/remove paths.
@@ -15,11 +15,13 @@
 #   TestManageNodeAddPath - happy path, --skip-setup, resource-leak fix, already-in-DB, Node construction
 #   TestManageNodeRemovePath - remove-hard, remove-soft with/without tasks, nonexistent, prints-after-commit
 #   TestManageNodeExitCodesAndChannels - 0 success, 1 SSH/DB/config failure, stderr Error:, logging setup
+#   TestParseNodeTarget - _parse_node_target: digit→NodeId, non-digit→HostSpec, zero→ValueError, negative→host_spec
+#   TestManageNodeIdPath - add-by-id→exit2, remove-by-id resolves via get_by_id, unknown id→exit1
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: deleted test_manage_node_is_to_sync_decorated (manage_node is no longer @to_sync; it's a sync def that calls asyncio.run); added --config/--log-level scenarios.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yasetnode (entrypoints/cli/manage_node.py) in relocate-manage-node-command.
+#   LAST_CHANGE: v1.2.0 - add-node-id-identity: added node_id=NodeId(...) to all Node() constructions; renamed all add→insert calls (NodeRepository.add→insert, NewNode arg); added TestParseNodeTarget and TestManageNodeIdPath test classes.
+#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: deleted test_manage_node_is_to_sync_decorated (manage_node is no longer @to_sync; it's a sync def that calls asyncio.run); added --config/--log-level scenarios.
 # END_CHANGE_SUMMARY
 
 import argparse
@@ -31,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, TaskStatus
+from yascheduler.domain.model import Node, NodeId, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 manage_node_mod = importlib.import_module("yascheduler.entrypoints.cli.manage_node")
@@ -351,7 +353,7 @@ class TestManageNodeAddPath:
         assert setup_call_args[0] is repo.connect.return_value
         assert setup_call_args[1] is _config.engines
         repo.disconnect.assert_called_once_with("10.0.0.1")
-        uow.nodes.add.assert_called_once()
+        uow.nodes.insert.assert_called_once()
         uow.commit.assert_called_once()
         out, _ = capsys.readouterr()
         assert "Setup host..." in out
@@ -370,7 +372,7 @@ class TestManageNodeAddPath:
         repo.connect.assert_called_once()
         ops.setup_node.assert_not_called()
         repo.disconnect.assert_called_once_with("10.0.0.1")
-        uow.nodes.add.assert_called_once()
+        uow.nodes.insert.assert_called_once()
         uow.commit.assert_called_once()
         out, _ = capsys.readouterr()
         assert "Setup host..." not in out
@@ -391,7 +393,7 @@ class TestManageNodeAddPath:
         # Resource-leak fix: disconnect ran even though setup raised.
         repo.connect.assert_called_once()
         repo.disconnect.assert_called_once_with("10.0.0.1")
-        uow.nodes.add.assert_not_called()
+        uow.nodes.insert.assert_not_called()
         _, err = capsys.readouterr()
         assert "Error:" in err
 
@@ -402,13 +404,13 @@ class TestManageNodeAddPath:
     ) -> None:
         _config, uow, _deps, repo, ops = stub_env
         uow.nodes.get = AsyncMock(
-            return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
+            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
         )
 
         with pytest.raises(SystemExit) as exc:
             _run(["10.0.0.1"])
         assert exc.value.code == 1
-        uow.nodes.add.assert_not_called()
+        uow.nodes.insert.assert_not_called()
         repo.connect.assert_not_called()
         out, err = capsys.readouterr()
         assert out == ""
@@ -425,7 +427,7 @@ class TestManageNodeAddPath:
 
         _run(["10.0.0.1"])
 
-        added_node = uow.nodes.add.call_args[0][0]
+        added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.username == "opsuser"
 
     def test_node_uses_user_override_when_present(
@@ -439,7 +441,7 @@ class TestManageNodeAddPath:
 
         _run(["deploy@10.0.0.1"])
 
-        added_node = uow.nodes.add.call_args[0][0]
+        added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.username == "deploy"
 
     def test_node_default_ncpus_zero_when_absent(
@@ -452,7 +454,7 @@ class TestManageNodeAddPath:
 
         _run(["10.0.0.1"])
 
-        added_node = uow.nodes.add.call_args[0][0]
+        added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.ncpus == 0
         assert added_node.ip == "10.0.0.1"
         assert added_node.port == 22
@@ -468,7 +470,7 @@ class TestManageNodeAddPath:
 
         _run(["10.0.0.1~4"])
 
-        added_node = uow.nodes.add.call_args[0][0]
+        added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.ncpus == 4
 
     def test_node_construction_uses_port(
@@ -481,7 +483,7 @@ class TestManageNodeAddPath:
 
         _run(["10.0.0.1:2222"])
 
-        added_node = uow.nodes.add.call_args[0][0]
+        added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.port == 2222
         out, _ = capsys.readouterr()
         assert "Added host to yascheduler: 10.0.0.1:2222" in out
@@ -502,7 +504,7 @@ class TestManageNodeRemovePath:
     ) -> None:
         _config, uow, _deps, repo, ops = stub_env
         uow.nodes.get = AsyncMock(
-            return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
+            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
         )
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1, 2])
 
@@ -527,7 +529,7 @@ class TestManageNodeRemovePath:
     ) -> None:
         _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(
-            return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
+            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
         )
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1])
 
@@ -547,7 +549,7 @@ class TestManageNodeRemovePath:
     ) -> None:
         _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(
-            return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
+            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
         )
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
 
@@ -583,7 +585,7 @@ class TestManageNodeRemovePath:
     ) -> None:
         _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(
-            return_value=Node(ip="10.0.0.1", ncpus=4, enabled=True)
+            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
         )
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1])
         # Failing commit proves the success prints live AFTER commit, not before.
@@ -640,7 +642,7 @@ class TestManageNodeExitCodesAndChannels:
     ) -> None:
         _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
-        uow.nodes.add = AsyncMock(side_effect=RuntimeError("db down"))
+        uow.nodes.insert = AsyncMock(side_effect=RuntimeError("db down"))
 
         with pytest.raises(SystemExit) as exc:
             _run(["10.0.0.1"])
@@ -672,7 +674,7 @@ class TestManageNodeExitCodesAndChannels:
     ) -> None:
         _config, uow, _deps, _repo, _ops = stub_env
         uow.nodes.get = AsyncMock(return_value=None)
-        uow.nodes.add = AsyncMock(side_effect=RuntimeError("db down"))
+        uow.nodes.insert = AsyncMock(side_effect=RuntimeError("db down"))
 
         with pytest.raises(SystemExit):
             _run(["10.0.0.1"])
@@ -812,3 +814,79 @@ class TestManageNodeConfigLogLevel:
             assert root.level == logging.WARNING
         finally:
             root.setLevel(original_level)
+
+
+# ---------------------------------------------------------------------------
+# _parse_node_target (add-node-id-identity)
+# ---------------------------------------------------------------------------
+
+
+class TestParseNodeTarget:
+    """_parse_node_target: digit→NodeId, non-digit→HostSpec, zero→ValueError, negative→host_spec."""
+
+    def test_digit_returns_node_id_target(self) -> None:
+        nt = manage_node_mod._parse_node_target("5")
+        assert nt == manage_node_mod.NodeTarget(node_id=NodeId(5), host_spec=None)
+
+    def test_non_digit_returns_host_spec_target(self) -> None:
+        nt = manage_node_mod._parse_node_target("10.0.0.1")
+        assert nt.node_id is None
+        assert nt.host_spec == manage_node_mod.HostSpec(
+            host="10.0.0.1", username=None, port=22, ncpus=None
+        )
+
+    def test_zero_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="NodeId must be > 0"):
+            manage_node_mod._parse_node_target("0")
+
+    def test_negative_falls_through_to_host_spec(self) -> None:
+        nt = manage_node_mod._parse_node_target("-5")
+        assert nt.node_id is None
+        assert nt.host_spec.host == "-5"
+
+
+# ---------------------------------------------------------------------------
+# node_id remove path (add-node-id-identity)
+# ---------------------------------------------------------------------------
+
+
+class TestManageNodeIdPath:
+    """add-by-id→exit2, remove-by-id resolves via get_by_id, unknown id→exit1."""
+
+    def test_add_by_id_exits_two(self) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _run(["5"])
+        assert exc.value.code == 2
+
+    def test_remove_by_id_soft_resolves_via_get_by_id(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
+    ) -> None:
+        _config, uow, _deps, _repo, _ops = stub_env
+        uow.nodes.get_by_id = AsyncMock(
+            return_value=Node(node_id=NodeId(5), ip="10.0.0.5", ncpus=4, enabled=True)
+        )
+        uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
+
+        _run(["5", "--remove-soft"])
+
+        uow.nodes.get_by_id.assert_awaited_once_with(NodeId(5))
+        uow.nodes.remove.assert_called_once_with("10.0.0.5")
+        out, _ = capsys.readouterr()
+        assert "Removed host from yascheduler: 10.0.0.5" in out
+
+    def test_remove_by_id_unknown_exits_one(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
+    ) -> None:
+        _config, uow, _deps, _repo, _ops = stub_env
+        uow.nodes.get_by_id = AsyncMock(return_value=None)
+
+        with pytest.raises(SystemExit) as exc:
+            _run(["999", "--remove-hard"])
+        assert exc.value.code == 1
+        _, err = capsys.readouterr()
+        assert "not in DB" in err
+        assert "999" in err

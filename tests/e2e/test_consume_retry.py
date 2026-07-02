@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from asyncssh.sftp import SFTPFailure
 
-from yascheduler.domain.model import Node, Task
+from yascheduler.domain.model import NewNode, Task
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
 from yascheduler.infra.ssh.operations import SSHMachineOperations
@@ -66,8 +66,8 @@ async def _setup_node_and_submit(
     await repository.disconnect(ssh_container["host"])
 
     async with uow_factory() as uow:
-        await uow.nodes.add(
-            Node(
+        await uow.nodes.insert(
+            NewNode(
                 ip=ssh_container["host"],
                 username=ssh_container["username"],
                 port=ssh_container["port"],

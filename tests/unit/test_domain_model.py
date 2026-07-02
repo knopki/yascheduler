@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_model.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, TaskContext, Engine, Task, Node, ConnectedMachine.
@@ -25,6 +25,8 @@
 #   test_task_fail_not_running - raises TaskNotRunningError
 #   test_node_defaults - username, port, cloud, enabled defaults
 #   test_node_full_construction - all positional args
+#   TestNodeId - validation, str, equality, hashability
+#   TestNewNode - NewNode dataclass defaults, full construction, no node_id
 #   test_connected_machine_is_compatible - FREE+match, BUSY regardless, no match
 #   test_connected_machine_occupy - FREE->BUSY
 #   test_connected_machine_occupy_busy - raises MachineBusyError
@@ -34,7 +36,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Delete TestProviderSelection suite (ProviderSelection type removed in collapse-provider-selection).
+#   LAST_CHANGE: v1.4.0 - Add NodeId/NewNode test suites and update Node construction for add-node-id-identity.
 #   PREVIOUS_CHANGE: v1.2.0 - Add TestTaskContextReplace suite (task-context-replace).
 # END_CHANGE_SUMMARY
 
@@ -54,7 +56,9 @@ from yascheduler.domain.model import (
     ConnectedMachine,
     Engine,
     MachineState,
+    NewNode,
     Node,
+    NodeId,
     ProcessResult,
     Task,
     TaskContext,
@@ -346,7 +350,8 @@ class TestTask:
 # END_CONTRACT: test_node
 class TestNode:
     def test_defaults(self) -> None:
-        node = Node(ip="10.0.0.1", ncpus=4)
+        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)
+        assert node.node_id == NodeId(1)
         assert node.ip == "10.0.0.1"
         assert node.ncpus == 4
         assert node.enabled is True
@@ -356,6 +361,7 @@ class TestNode:
 
     def test_full_construction(self) -> None:
         node = Node(
+            node_id=NodeId(7),
             ip="10.0.0.1",
             ncpus=8,
             enabled=False,
@@ -363,12 +369,84 @@ class TestNode:
             username="admin",
             port=2222,
         )
+        assert node.node_id == NodeId(7)
         assert node.ip == "10.0.0.1"
         assert node.ncpus == 8
         assert node.enabled is False
         assert node.cloud == "hetzner"
         assert node.username == "admin"
         assert node.port == 2222
+
+
+# START_CONTRACT: test_node_id
+#   PURPOSE: Verify NodeId value object validation, str, equality, hashability.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-MODEL: NodeId]
+# END_CONTRACT: test_node_id
+class TestNodeId:
+    def test_post_init_rejects_non_positive(self) -> None:
+        for bad in (0, -1, -100):
+            with pytest.raises(ValueError):
+                NodeId(bad)
+
+    def test_post_init_accepts_positive(self) -> None:
+        NodeId(1)
+        NodeId(99999)
+
+    def test_str_renders_bare_int(self) -> None:
+        assert str(NodeId(5)) == "5"
+        assert f"{NodeId(42)}" == "42"
+
+    def test_not_equal_to_int(self) -> None:
+        assert (NodeId(5) == 5) is False
+        assert (NodeId(5) != 5) is True
+
+    def test_hashable_and_usable_as_dict_key(self) -> None:
+        assert hash(NodeId(5)) == hash(NodeId(5))
+        d = {NodeId(1): "a"}
+        assert d[NodeId(1)] == "a"
+
+    def test_equality_same_value(self) -> None:
+        assert NodeId(5) == NodeId(5)
+        assert NodeId(5) != NodeId(6)
+
+
+# START_CONTRACT: test_new_node
+#   PURPOSE: Verify NewNode dataclass defaults and full construction, absence of node_id.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-MODEL: NewNode]
+# END_CONTRACT: test_new_node
+class TestNewNode:
+    def test_has_no_node_id_attribute(self) -> None:
+        n = NewNode(ip="10.0.0.1", ncpus=4)
+        assert not hasattr(n, "node_id")
+
+    def test_defaults(self) -> None:
+        n = NewNode(ip="x", ncpus=4)
+        assert n.enabled is True
+        assert n.cloud is None
+        assert n.username == "root"
+        assert n.port == 22
+
+    def test_full_construction(self) -> None:
+        n = NewNode(
+            ip="10.0.0.1",
+            ncpus=8,
+            enabled=False,
+            cloud="aws",
+            username="admin",
+            port=2222,
+        )
+        assert n.ip == "10.0.0.1"
+        assert n.ncpus == 8
+        assert n.enabled is False
+        assert n.cloud == "aws"
+        assert n.username == "admin"
+        assert n.port == 2222
 
 
 # START_CONTRACT: test_connected_machine

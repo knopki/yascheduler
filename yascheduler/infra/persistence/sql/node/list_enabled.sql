@@ -1,4 +1,5 @@
 SELECT
+    node_id,
     ip,
     ncpus,
     enabled,

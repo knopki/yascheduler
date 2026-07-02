@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.5.0
+# VERSION: 4.5.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -16,7 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.5.0 - session-based-machine-handle section 7.2: update test_allocate_task_finds_free_machine to use session stub for repository.list_free; start_task_on_machine callback receives session (not machine).
+#   LAST_CHANGE: v4.5.1 - add-node-id-identity test update: prepend node_id=NodeId(1) to all Node(...) constructions and add NodeId import.
+#   PREVIOUS_CHANGE: v4.5.0 - session-based-machine-handle section 7.2: update test_allocate_task_finds_free_machine to use session stub for repository.list_free; start_task_on_machine callback receives session (not machine).
 #   PREVIOUS_CHANGE: v4.4.0 - Extract TestConsumeTask to test_consume_task.py (GRACE 1000-line hard limit).
 # END_CHANGE_SUMMARY
 #
@@ -54,6 +55,7 @@ from yascheduler.domain.exceptions import (
 )
 from yascheduler.domain.model import (
     Node,
+    NodeId,
     Task,
     TaskContext,
     TaskStatus,
@@ -235,7 +237,7 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
-            return_value=[Node(ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -301,7 +303,7 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
         uow.nodes.add_tmp = AsyncMock(return_value="tmp-10.0.0.100")
-        uow.nodes.add = AsyncMock()
+        uow.nodes.insert = AsyncMock()
         uow.nodes.remove = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
         uow.publish_events = AsyncMock()
@@ -319,7 +321,7 @@ class TestAllocateTask:
 
         clouds = MagicMock(spec=CloudProvisioner)
         clouds.select_provider.return_value = "aws"
-        cloud_node = Node(ip="10.0.0.100", ncpus=4, cloud="aws")
+        cloud_node = Node(node_id=NodeId(1), ip="10.0.0.100", ncpus=4, cloud="aws")
         clouds.allocate = AsyncMock(return_value=cloud_node)
 
         start_on_machine = AsyncMock()
@@ -350,8 +352,8 @@ class TestAllocateTask:
         # cloud allocate called with provider name
         clouds.allocate.assert_called_once_with("aws")
 
-        # final persist: add cloud node + remove tmp
-        uow.nodes.add.assert_called_once_with(cloud_node)
+        # final persist: insert cloud node + remove tmp
+        uow.nodes.insert.assert_called_once_with(cloud_node)
         uow.nodes.remove.assert_called_once_with("tmp-10.0.0.100")
 
         # commit called at least twice (add_tmp + final persist)
@@ -556,7 +558,7 @@ class TestDeallocateNodes:
     async def test_deallocate_nodes_disables_idle_cloud_nodes(self) -> None:
         """Enabled cloud node idle beyond tolerance -> disable_node called, IP returned."""
         # An enabled Azure node
-        az_node = Node(ip="10.0.0.1", ncpus=4, cloud="az")
+        az_node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="az")
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -596,7 +598,7 @@ class TestDeallocateNodes:
     async def test_deallocate_nodes_skips_non_cloud_nodes(self) -> None:
         """Node with cloud=None -> NOT disabled, NOT in returned list."""
         # An enabled node without cloud
-        local_node = Node(ip="10.0.0.1", ncpus=4, cloud=None)
+        local_node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud=None)
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -641,7 +643,7 @@ class TestDeallocateNodeBracketing:
 
     async def test_bracketing_order_disable_cloud_delete_remove(self) -> None:
         """[12.4] disable+commit -> cloud deallocate -> remove+commit ordering."""
-        node = Node(ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False  # Skip disconnect
 
@@ -670,7 +672,7 @@ class TestDeallocateNodeBracketing:
 
     async def test_failure_in_cloud_delete_leaves_node_disabled(self) -> None:
         """[12.4] clouds.deallocate raises -> node stays disabled, remove NOT called."""
-        node = Node(ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False
 
@@ -710,7 +712,7 @@ class TestDeallocateNodeBracketing:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """[review-hardening] remove UoW fails after clouds.deallocate succeeded -> exception swallowed, REMOVE_FAILED logged; cloud VM is gone so worker stays alive for reconciliation."""
-        node = Node(ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False
 

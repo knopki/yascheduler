@@ -51,6 +51,7 @@ from yascheduler.domain.events import (
 )
 from yascheduler.domain.model import (
     Node,
+    NodeId,
     Task,
     TaskContext,
     TaskStatus,
@@ -176,7 +177,7 @@ class TestAllocateTaskEvents:
         uow.nodes = AsyncMock()
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
-            return_value=[Node(ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
@@ -18,7 +18,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - session-based-machine-handle: StubMachineRepository narrowed to 9-method Protocol (returns StubMachineSession; removed get_machine_state/update_machine/occupy/release/get_path/get_quote/get_hostname/install_monitor/cancel_monitor). Added StubMachineSession covering the full MachineSession Protocol surface. StubMachineOperations takes StubMachineSession and drops removed upload/get_sftp/pgrep/list_processes.
+#   LAST_CHANGE: v1.5.0 - Update StubNodeRepository.add→insert, add get_by_id; StubCloudProvisioner.allocate returns NewNode; for add-node-id-identity port changes.
 #   PREVIOUS_CHANGE: v1.3.1 - Narrowed StubMachineRepository lockstep with MachineRepository Protocol per cleanup-unused-repository-symbols (removed get_conn, get_adapter, get_platforms, get_data_dir, get_engines_dir, get_tasks_dir). MODULE_MAP/SCOPE corrected: MachineGateway replaced by MachineRepository+MachineOperations.
 # END_CHANGE_SUMMARY
 
@@ -33,7 +33,9 @@ from unittest.mock import MagicMock
 
 from yascheduler.domain.model import (
     ConnectedMachine,
+    NewNode,
     Node,
+    NodeId,
     ProcessResult,
     Task,
     TaskStatus,
@@ -93,8 +95,11 @@ class StubNodeRepository:
     async def list_disabled(self) -> list[Node]:
         return []
 
-    async def add(self, node: Node) -> None:
-        pass
+    async def get_by_id(self, node_id: NodeId) -> Node | None:
+        raise NotImplementedError
+
+    async def insert(self, new_node: NewNode) -> Node:
+        raise NotImplementedError
 
     async def add_tmp(self, cloud: str) -> str:
         return "prov-tmp"
@@ -332,7 +337,7 @@ class StubMachineOperations:
 
 
 class StubCloudProvisioner:
-    async def allocate(self, provider: str) -> Node:
+    async def allocate(self, provider: str) -> NewNode:
         raise NotImplementedError
 
     async def deallocate(self, cloud: str, ip: str) -> None:

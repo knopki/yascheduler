@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_alloc_session_lifecycle.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Regression-guard the four fixes in fix-cloud-alloc-session-lifecycle (DB-enabled free-machine gate, setup-failure disconnect, per-session loop isolation, stdout in cloud-init error).
@@ -25,7 +25,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial file: timing-aware fakes + 12 tests covering Fixes A/B/C/D (fix-cloud-alloc-session-lifecycle).
+#   LAST_CHANGE: v1.1.0 - add-node-id-identity: import NewNode/NodeId, rename _FakeNodeRepo.add → insert(NewNode) -> Node, fix add_tmp/enable/disable to include node_id, update FakeCloudProvisioner.allocate to return NewNode and call insert, add node_id to all Node(...) constructions in tests.
 #   PREVIOUS_CHANGE: none.
 # END_CHANGE_SUMMARY
 
@@ -45,7 +45,9 @@ from yascheduler.domain.exceptions import CloudSetupError
 from yascheduler.domain.model import (
     ConnectedMachine,
     MachineState,
+    NewNode,
     Node,
+    NodeId,
     Task,
     TaskContext,
     TaskStatus,
@@ -167,6 +169,7 @@ class _FakeNodeRepo:
         self._store = store
         self.add_tmp_calls: list[str] = []
         self._tmp_counter = 0
+        self._id_counter = 0
 
     async def get(self, ip: str) -> Node | None:
         return self._store.get(ip)
@@ -177,13 +180,30 @@ class _FakeNodeRepo:
     async def list_disabled(self) -> list[Node]:
         return [n for n in self._store.values() if not n.enabled]
 
-    async def add(self, node: Node) -> None:
+    async def insert(self, new_node: NewNode) -> Node:
+        self._id_counter += 1
+        node = Node(
+            node_id=NodeId(self._id_counter),
+            ip=new_node.ip,
+            ncpus=new_node.ncpus,
+            enabled=new_node.enabled,
+            cloud=new_node.cloud,
+            username=new_node.username,
+            port=new_node.port,
+        )
         self._store[node.ip] = node
+        return node
 
     async def add_tmp(self, cloud: str) -> str:
         self._tmp_counter += 1
         tmp_ip = f"tmp-{cloud}-{self._tmp_counter}"
-        self._store[tmp_ip] = Node(ip=tmp_ip, ncpus=0, enabled=False, cloud=cloud)
+        self._store[tmp_ip] = Node(
+            node_id=NodeId(self._tmp_counter),
+            ip=tmp_ip,
+            ncpus=0,
+            enabled=False,
+            cloud=cloud,
+        )
         return tmp_ip
 
     async def update(self, node: Node) -> None:
@@ -193,6 +213,7 @@ class _FakeNodeRepo:
         node = self._store.get(ip)
         if node is not None:
             self._store[ip] = Node(
+                node_id=node.node_id,
                 ip=node.ip,
                 ncpus=node.ncpus,
                 enabled=True,
@@ -205,6 +226,7 @@ class _FakeNodeRepo:
         node = self._store.get(ip)
         if node is not None:
             self._store[ip] = Node(
+                node_id=node.node_id,
                 ip=node.ip,
                 ncpus=node.ncpus,
                 enabled=False,
@@ -343,14 +365,14 @@ class FakeCloudProvisioner:
         self._select_result = select_provider_result
         self.allocate_calls: list[str] = []
 
-    async def allocate(self, provider: str) -> Node:
+    async def allocate(self, provider: str) -> NewNode:
         self.allocate_calls.append(provider)
         session = await self._repo.connect(self._new_ip, platform=self._new_platform)
         if self._fail:
             raise CloudSetupError(f"setup failed on {session.ip}")
         async with self._uow_factory() as uow:
-            await uow.nodes.add(
-                Node(
+            await uow.nodes.insert(
+                NewNode(
                     ip=self._new_ip,
                     ncpus=4,
                     enabled=True,
@@ -358,7 +380,7 @@ class FakeCloudProvisioner:
                 )
             )
             await uow.commit()
-        return Node(ip=self._new_ip, ncpus=4, enabled=True, cloud=provider)
+        return NewNode(ip=self._new_ip, ncpus=4, enabled=True, cloud=provider)
 
     async def deallocate(self, cloud: str, ip: str) -> None:
         pass
@@ -613,7 +635,9 @@ class TestFixA:
         """A connected session whose DB row is enabled=TRUE IS allocated."""
         repo = FakeMachineRepository()
         await repo.connect("10.0.0.1")
-        nodes_store: dict[str, Node] = {"10.0.0.1": Node("10.0.0.1", 4, enabled=True)}
+        nodes_store: dict[str, Node] = {
+            "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        }
         tasks_store: dict[int, Task] = {1: _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
@@ -632,7 +656,9 @@ class TestFixA:
         """A connected session whose DB row was flipped to enabled=FALSE is excluded."""
         repo = FakeMachineRepository()
         await repo.connect("10.0.0.1")
-        nodes_store: dict[str, Node] = {"10.0.0.1": Node("10.0.0.1", 4, enabled=False)}
+        nodes_store: dict[str, Node] = {
+            "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=False)
+        }
         tasks_store: dict[int, Task] = {1: _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
@@ -789,8 +815,8 @@ class TestFixC:
         await repo.connect("10.0.0.1")  # stale
         await repo.connect("10.0.0.2")  # healthy
         nodes_store: dict[str, Node] = {
-            "10.0.0.1": Node("10.0.0.1", 4, enabled=True),
-            "10.0.0.2": Node("10.0.0.2", 4, enabled=True),
+            "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True),
+            "10.0.0.2": Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=4, enabled=True),
         }
         tasks_store: dict[int, Task] = {1: _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
@@ -816,7 +842,9 @@ class TestFixC:
         """When every free session fails, the cloud branch is reached (fake CloudProvisioner.allocate is invoked)."""
         repo = FakeMachineRepository()
         await repo.connect("10.0.0.1")  # stale
-        nodes_store: dict[str, Node] = {"10.0.0.1": Node("10.0.0.1", 4, enabled=True)}
+        nodes_store: dict[str, Node] = {
+            "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        }
         tasks_store: dict[int, Task] = {1: _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 

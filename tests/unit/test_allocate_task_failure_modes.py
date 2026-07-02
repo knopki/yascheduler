@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.4.0
+# VERSION: 1.4.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.4.0 - session-based-machine-handle section 7.3: no behavioral changes needed (all failure-mode tests use empty list_free which is session-agnostic).]
+#   LAST_CHANGE: [v1.4.1 - add-node-id-identity test update: prepend node_id=NodeId(1) to Node(...) construction and add NodeId import.]
+#   PREVIOUS_CHANGE: [v1.4.0 - session-based-machine-handle section 7.3: no behavioral changes needed (all failure-mode tests use empty list_free which is session-agnostic).]
 #   PREVIOUS_CHANGE: [v1.3.0 - select_provider returns str; _make_clouds helper signature uses str selection; replace ProviderSelection(name="aws", username="root") with "aws" literal (collapse-provider-selection).]
 # END_CHANGE_SUMMARY
 #
@@ -38,6 +39,7 @@ from yascheduler.domain import Engine, EngineRepository
 from yascheduler.domain.exceptions import CloudAllocateError
 from yascheduler.domain.model import (
     Node,
+    NodeId,
     Task,
     TaskContext,
     TaskStatus,
@@ -194,7 +196,7 @@ class TestAllocateTaskFailureModes:
         operations = MagicMock()
 
         uow = _make_uow(todo_task)
-        cloud_node = Node(ip="10.0.0.100", ncpus=4, cloud="aws")
+        cloud_node = Node(node_id=NodeId(1), ip="10.0.0.100", ncpus=4, cloud="aws")
         uow.nodes.add = AsyncMock()
         uow.nodes.remove = AsyncMock()
         # First commit (step 1) succeeds; second commit (step 3 persist) fails;

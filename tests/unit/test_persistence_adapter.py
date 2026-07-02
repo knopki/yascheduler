@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_persistence_adapter.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yascheduler.infra.persistence.
@@ -21,9 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Update test_uow_commit_after_exit_raises to catch UnitOfWorkNotInitializedError.
-#   PREVIOUS_CHANGE: v1.3.0 - Convert all mock _run return values from tuples to dicts to match
-#                         dict-based row mapping refactor in PostgresRepository.
+#   LAST_CHANGE: v1.5.0 - Update PostgresNodeRepository tests for add-node-id-identity: add node_id to row dicts, rename add→insert with NewNode, add get_by_id tests.
+#   PREVIOUS_CHANGE: v1.4.0 - Update test_uow_commit_after_exit_raises to catch UnitOfWorkNotInitializedError.
 # END_CHANGE_SUMMARY
 
 import json
@@ -34,7 +33,9 @@ from pytest_mock import MockerFixture
 
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
+    NewNode,
     Node,
+    NodeId,
     Task,
     TaskContext,
 )
@@ -584,6 +585,7 @@ class TestPostgresNodeRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
+                "node_id": 1,
                 "ip": "10.0.0.1",
                 "ncpus": 8,
                 "enabled": True,
@@ -596,6 +598,7 @@ class TestPostgresNodeRepository:
         node = await repo.get("10.0.0.1")
 
         assert node is not None
+        assert node.node_id == NodeId(1)
         assert node.ip == "10.0.0.1"
         assert node.ncpus == 8
         assert node.enabled is True
@@ -617,6 +620,7 @@ class TestPostgresNodeRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
+                "node_id": 2,
                 "ip": "10.0.0.2",
                 "ncpus": None,
                 "enabled": False,
@@ -629,11 +633,47 @@ class TestPostgresNodeRepository:
         node = await repo.get("10.0.0.2")
 
         assert node is not None
+        assert node.node_id == NodeId(2)
         assert node.ip == "10.0.0.2"
         assert node.ncpus == 0
         assert node.enabled is False
         assert node.cloud is None
         assert node.port == 2222
+
+    # -- get_by_id -------------------------------------------------------------
+
+    async def test_get_by_id_returns_node(self, mocker: MockerFixture) -> None:
+        """get_by_id returns a Node hydrated from the row returned by _run."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = [  # type: ignore[attr-defined]
+            {
+                "node_id": 5,
+                "ip": "10.0.0.5",
+                "ncpus": 4,
+                "enabled": True,
+                "cloud": "aws",
+                "username": "root",
+                "port": 22,
+            }
+        ]
+
+        result = await repo.get_by_id(NodeId(5))
+
+        assert result is not None
+        assert result.node_id == NodeId(5)
+        assert result.ip == "10.0.0.5"
+        repo._run.assert_awaited_once_with(  # type: ignore[attr-defined]
+            load_query("node/get_by_id"), node_id=5
+        )
+
+    async def test_get_by_id_missing_returns_none(self, mocker: MockerFixture) -> None:
+        """get_by_id returns None when _run returns empty."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = []  # type: ignore[attr-defined]
+
+        result = await repo.get_by_id(NodeId(999))
+
+        assert result is None
 
     # -- get_by_ips ------------------------------------------------------------
 
@@ -656,6 +696,7 @@ class TestPostgresNodeRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
+                "node_id": 1,
                 "ip": "10.0.0.1",
                 "ncpus": 4,
                 "enabled": True,
@@ -664,6 +705,7 @@ class TestPostgresNodeRepository:
                 "port": 22,
             },
             {
+                "node_id": 2,
                 "ip": "10.0.0.2",
                 "ncpus": 8,
                 "enabled": False,
@@ -676,7 +718,9 @@ class TestPostgresNodeRepository:
         nodes = await repo.list_all()
 
         assert len(nodes) == 2
+        assert nodes[0].node_id == NodeId(1)
         assert nodes[0].ip == "10.0.0.1"
+        assert nodes[1].node_id == NodeId(2)
         assert nodes[1].ip == "10.0.0.2"
 
     # -- list_enabled / list_disabled ------------------------------------------
@@ -688,6 +732,7 @@ class TestPostgresNodeRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
+                "node_id": 1,
                 "ip": "10.0.0.1",
                 "ncpus": 4,
                 "enabled": True,
@@ -696,6 +741,7 @@ class TestPostgresNodeRepository:
                 "port": 22,
             },
             {
+                "node_id": 2,
                 "ip": "10.0.0.2",
                 "ncpus": 8,
                 "enabled": True,
@@ -704,6 +750,7 @@ class TestPostgresNodeRepository:
                 "port": 2222,
             },
             {
+                "node_id": 3,
                 "ip": "10.0.0.3",
                 "ncpus": 2,
                 "enabled": False,
@@ -725,6 +772,7 @@ class TestPostgresNodeRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
+                "node_id": 1,
                 "ip": "10.0.0.1",
                 "ncpus": 4,
                 "enabled": True,
@@ -733,6 +781,7 @@ class TestPostgresNodeRepository:
                 "port": 22,
             },
             {
+                "node_id": 2,
                 "ip": "localhost",
                 "ncpus": 4,
                 "enabled": True,
@@ -754,6 +803,7 @@ class TestPostgresNodeRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
+                "node_id": 1,
                 "ip": "10.0.0.1",
                 "ncpus": 4,
                 "enabled": False,
@@ -762,6 +812,7 @@ class TestPostgresNodeRepository:
                 "port": 22,
             },
             {
+                "node_id": 2,
                 "ip": "10.0.0.2",
                 "ncpus": 8,
                 "enabled": False,
@@ -783,6 +834,7 @@ class TestPostgresNodeRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
+                "node_id": 1,
                 "ip": "10.0.0.1",
                 "ncpus": 4,
                 "enabled": False,
@@ -791,6 +843,7 @@ class TestPostgresNodeRepository:
                 "port": 22,
             },
             {
+                "node_id": 2,
                 "ip": "localhost",
                 "ncpus": 8,
                 "enabled": False,
@@ -807,10 +860,11 @@ class TestPostgresNodeRepository:
 
     # -- add -------------------------------------------------------------------
 
-    async def test_add_inserts_node(self, mocker: MockerFixture) -> None:
-        """add calls _run with the insert query and node fields."""
+    async def test_insert_returns_node_with_id(self, mocker: MockerFixture) -> None:
+        """insert runs INSERT SQL and returns Node with generated NodeId."""
         repo = self._make_repo(mocker)
-        node = Node(
+        repo._run.return_value = [{"node_id": 42}]  # type: ignore[attr-defined]
+        new_node = NewNode(
             ip="10.0.0.1",
             ncpus=8,
             enabled=True,
@@ -819,8 +873,10 @@ class TestPostgresNodeRepository:
             port=22,
         )
 
-        await repo.add(node)
+        result = await repo.insert(new_node)
 
+        assert isinstance(result, Node)
+        assert result.node_id == NodeId(42)
         repo._run.assert_awaited_once()  # type: ignore[attr-defined]
         _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
         assert kwargs["ip"] == "10.0.0.1"
@@ -830,10 +886,11 @@ class TestPostgresNodeRepository:
         assert kwargs["username"] == "root"
         assert kwargs["port"] == 22
 
-    async def test_add_inserts_cloud_node(self, mocker: MockerFixture) -> None:
-        """add persists a cloud-provisioned node."""
+    async def test_insert_inserts_cloud_node(self, mocker: MockerFixture) -> None:
+        """insert persists a cloud-provisioned node."""
         repo = self._make_repo(mocker)
-        node = Node(
+        repo._run.return_value = [{"node_id": 7}]  # type: ignore[attr-defined]
+        new_node = NewNode(
             ip="10.0.0.5",
             ncpus=2,
             enabled=False,
@@ -842,8 +899,10 @@ class TestPostgresNodeRepository:
             port=2222,
         )
 
-        await repo.add(node)
+        result = await repo.insert(new_node)
 
+        assert isinstance(result, Node)
+        assert result.node_id == NodeId(7)
         _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
         assert kwargs["cloud"] == "upcloud"
         assert kwargs["enabled"] is False

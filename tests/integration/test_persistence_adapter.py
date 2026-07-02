@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_persistence_adapter.py
-# VERSION: 1.2.1
+# VERSION: 1.2.2
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
 #   SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
@@ -20,13 +20,15 @@
 #   test_repo_node_add_tmp - add_tmp inserts disabled node with generated IP
 #   test_repo_node_count - count_by_cloud and count_by_status aggregates
 #   test_repo_node_get_by_ips - batch get_by_ips returns matching nodes
+#   test_repo_node_get_by_id - get_by_id lookup by primary key
+#   test_repo_node_list_all_ordered_by_node_id - list_all ordering by node_id
 #   test_uow_integration - UoW creates repos, commit persists, exit closes
 #   test_uow_rollback_integration - rollback discards uncommitted changes on exception
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.1 - Update save() docstring/contract comments from "upsert" to "update_by_id" to track the SQL rename (fix-save-silent-zero-rows).
-#   PREVIOUS_CHANGE: v1.2.0 - add_tmp("aws") drops username arg; tmp row falls back to DB DEFAULT 'root' (collapse-provider-selection).
+#   LAST_CHANGE: v1.2.2 - Adapt to add-node-id-identity: Node(node_id=...) first field, NewNode for insert, repo.add→insert, NodeId assertions, add get_by_id + list_all ordering tests.
+#   PREVIOUS_CHANGE: v1.2.1 - Update save() docstring/contract comments from "upsert" to "update_by_id" to track the SQL rename (fix-save-silent-zero-rows).
 # END_CHANGE_SUMMARY
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
@@ -38,7 +40,9 @@ import pytest
 
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
+    NewNode,
     Node,
+    NodeId,
     Task,
     TaskContext,
 )
@@ -257,10 +261,13 @@ async def test_repo_node_crud(
     """Full node lifecycle through repository."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
 
-    node = Node(
+    new_node = NewNode(
         ip="10.0.0.10", ncpus=4, enabled=True, cloud="aws", username="admin", port=2222
     )
-    await repo.add(node)
+    persisted = await repo.insert(new_node)
+    assert isinstance(persisted, Node)
+    assert isinstance(persisted.node_id, NodeId)
+    assert persisted.node_id.value >= 1
 
     # Get
     retrieved = await repo.get("10.0.0.10")
@@ -298,8 +305,8 @@ async def test_repo_node_list_filters(
 ) -> None:
     """list_enabled/disabled return correct subsets."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    await repo.add(Node(ip="10.0.0.1", ncpus=2, enabled=True))
-    await repo.add(Node(ip="10.0.0.2", ncpus=2, enabled=False))
+    await repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
+    await repo.insert(NewNode(ip="10.0.0.2", ncpus=2, enabled=False))
 
     enabled = await repo.list_enabled()
     disabled = await repo.list_disabled()
@@ -322,10 +329,13 @@ async def test_repo_node_update(
 ) -> None:
     """update persists all mutable fields."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    await repo.add(Node(ip="10.0.0.1", ncpus=2, enabled=True, cloud="aws"))
+    persisted = await repo.insert(
+        NewNode(ip="10.0.0.1", ncpus=2, enabled=True, cloud="aws")
+    )
 
     await repo.update(
         Node(
+            node_id=NodeId(persisted.node_id.value),
             ip="10.0.0.1",
             ncpus=8,
             enabled=False,
@@ -377,9 +387,9 @@ async def test_repo_node_count(
 ) -> None:
     """Count aggregations work correctly."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    await repo.add(Node(ip="10.0.0.1", ncpus=2, cloud="aws", enabled=True))
-    await repo.add(Node(ip="10.0.0.2", ncpus=2, cloud="aws", enabled=False))
-    await repo.add(Node(ip="10.0.0.3", ncpus=2, cloud="azure", enabled=True))
+    await repo.insert(NewNode(ip="10.0.0.1", ncpus=2, cloud="aws", enabled=True))
+    await repo.insert(NewNode(ip="10.0.0.2", ncpus=2, cloud="aws", enabled=False))
+    await repo.insert(NewNode(ip="10.0.0.3", ncpus=2, cloud="azure", enabled=True))
 
     clouds = await repo.count_by_cloud()
     assert clouds["aws"] == 2
@@ -402,15 +412,63 @@ async def test_repo_node_get_by_ips(
 ) -> None:
     """Batch get_by_ips returns only matching nodes."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    await repo.add(Node(ip="10.0.0.1", ncpus=2, cloud="aws"))
-    await repo.add(Node(ip="10.0.0.2", ncpus=2, cloud="gcp"))
-    await repo.add(Node(ip="10.0.0.3", ncpus=2, cloud="azure"))
+    await repo.insert(NewNode(ip="10.0.0.1", ncpus=2, cloud="aws"))
+    await repo.insert(NewNode(ip="10.0.0.2", ncpus=2, cloud="gcp"))
+    await repo.insert(NewNode(ip="10.0.0.3", ncpus=2, cloud="azure"))
 
     nodes = await repo.get_by_ips(["10.0.0.1", "10.0.0.3", "10.0.0.99"])
     assert len(nodes) == 2
     assert nodes["10.0.0.1"].cloud == "aws"
     assert nodes["10.0.0.3"].cloud == "azure"
     assert "10.0.0.99" not in nodes
+
+
+# START_CONTRACT: test_repo_node_get_by_id
+#   PURPOSE: Verify get_by_id lookup by primary key, including None for non-existing id.
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: PostgresNodeRepository.get_by_id
+# END_CONTRACT: test_repo_node_get_by_id
+async def test_repo_node_get_by_id(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
+    """get_by_id returns node by primary key, None for missing id."""
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
+    persisted = await repo.insert(
+        NewNode(ip="10.0.0.20", ncpus=4, enabled=True, cloud="aws")
+    )
+
+    fetched = await repo.get_by_id(persisted.node_id)
+    assert fetched is not None
+    assert fetched.node_id == persisted.node_id
+    assert fetched.ip == "10.0.0.20"
+    assert fetched.ncpus == 4
+    assert fetched.cloud == "aws"
+
+    missing = await repo.get_by_id(NodeId(99999))
+    assert missing is None
+
+
+# START_CONTRACT: test_repo_node_list_all_ordered_by_node_id
+#   PURPOSE: Verify list_all returns nodes sorted by node_id ascending.
+#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: PostgresNodeRepository.list_all
+# END_CONTRACT: test_repo_node_list_all_ordered_by_node_id
+async def test_repo_node_list_all_ordered_by_node_id(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
+    """list_all returns nodes ordered by node_id ascending."""
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
+    await repo.insert(NewNode(ip="10.0.0.1", ncpus=2))
+    await repo.insert(NewNode(ip="10.0.0.2", ncpus=2))
+    await repo.insert(NewNode(ip="10.0.0.3", ncpus=2))
+
+    all_nodes = await repo.list_all()
+    node_ids = [n.node_id.value for n in all_nodes]
+    assert node_ids == sorted(node_ids)
 
 
 # ====================================================================
@@ -437,9 +495,12 @@ async def test_uow_integration(
         assert uow.nodes is not None
 
         # Insert through repo
-        node = Node(ip="10.0.0.50", ncpus=2, enabled=True)
-        await uow.nodes.add(node)
+        new_node = NewNode(ip="10.0.0.50", ncpus=2, enabled=True)
+        persisted = await uow.nodes.insert(new_node)
         await uow.commit()
+        assert isinstance(persisted, Node)
+        assert isinstance(persisted.node_id, NodeId)
+        assert persisted.node_id.value >= 1
 
         # Verify persisted
         retrieved = await uow.nodes.get("10.0.0.50")
@@ -463,7 +524,7 @@ async def test_uow_rollback_integration(
 
     with pytest.raises(ValueError):
         async with PostgresUnitOfWork(config, MessageBus()) as uow:
-            await uow.nodes.add(Node(ip="10.0.0.99", ncpus=2, enabled=True))
+            await uow.nodes.insert(NewNode(ip="10.0.0.99", ncpus=2, enabled=True))
             raise ValueError("simulated error")
 
     # After rollback, node should NOT exist

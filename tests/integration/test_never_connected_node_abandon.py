@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_never_connected_node_abandon.py
-# VERSION: 1.0.1
+# VERSION: 1.0.2
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the never-connected-node abandon path against real PostgreSQL.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Make DRIVE_PAST_GRACE robust on Python 3.12: the order-sensitive _fake_monotonic callable broke because asyncio calls time.monotonic during the await chain, consuming the callable's "first" value so the consumer recorded first_seen=200 and saw age=0 → retry (abandon never fired, DB row not removed). Replaced with a pre-seeded _connect_failures[dead_ip]=100 + constant return_value=200: age = 100 >= 60 → abandon, independent of how many times asyncio polls the mock.
-#   PREVIOUS_CHANGE: v1.0.0 - Integration coverage for fix-never-connected-node-leak: real-DB abandon flow + per-cloud grace lookup with real ConfigCloud DTOs.
+#   LAST_CHANGE: v1.0.2 - Adapt to add-node-id-identity: NewNode for insert, repo.add→insert, persist result used for message flow.
+#   PREVIOUS_CHANGE: v1.0.1 - Make DRIVE_PAST_GRACE robust on Python 3.12: the order-sensitive _fake_monotonic callable broke because asyncio calls time.monotonic during the await chain, consuming the callable's "first" value so the consumer recorded first_seen=100 and saw age=0 → retry (abandon never fired, DB row not removed). Replaced with a pre-seeded _connect_failures[dead_ip]=100 + constant return_value=200: age = 100 >= 60 → abandon, independent of how many times asyncio polls the mock.
 # END_CHANGE_SUMMARY
 """Integration tests for the never-connected-node abandon path.
 
@@ -57,7 +57,12 @@ from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UMessage
 from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.domain.exceptions import MachineConnectionError
-from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
+from yascheduler.domain.model import (
+    NewNode,
+    Task,
+    TaskContext,
+    TaskStatus,
+)
 from yascheduler.infra.cloud.cloud_configs import (
     ConfigCloudAzure,
     ConfigCloudHetzner,
@@ -145,7 +150,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     # START_BLOCK_SEED
     # Use a TEST-NET-1 address so the gateway mock's failure is realistic.
     dead_ip = "192.0.2.7"
-    node = Node(
+    node = NewNode(
         ip=dead_ip,
         ncpus=2,
         cloud="hetzner",
@@ -154,7 +159,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
         enabled=True,
     )
     async with uow_factory() as uow:
-        await uow.nodes.add(node)
+        persisted_node = await uow.nodes.insert(node)
         inserted_task = await uow.tasks.insert(
             Task(
                 task_id=0,
@@ -194,7 +199,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
         "yascheduler.application.orchestrator.time.monotonic",
         return_value=200.0,
     ):
-        await orch._connect_machine_consumer(UMessage(dead_ip, node))
+        await orch._connect_machine_consumer(UMessage(dead_ip, persisted_node))
     # END_BLOCK_DRIVE_PAST_GRACE
 
     # START_BLOCK_VERIFY_DB_ROW_REMOVED

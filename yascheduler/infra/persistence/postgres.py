@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
@@ -10,12 +10,12 @@
 # START_MODULE_MAP
 #   _PgRepository - base class for pg8000-backed repositories (conn, executor, _run)
 #   PostgresTaskRepository - async task CRUD: get, save, update_status, insert, list_by_status, list_by_jobs, count_by_status; save/update_status raise TaskRowNotFoundError on 0-row UPDATE
-#   PostgresNodeRepository - async node CRUD: get, get_by_ips, list_*, add, add_tmp, enable, disable, remove, count_*
+#   PostgresNodeRepository - async node CRUD: get, get_by_id, get_by_ips, list_*, insert (NewNode→Node), add_tmp, enable, disable, remove, count_*
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - save/update_status use RETURNING task_id to detect 0-row UPDATE; raise TaskRowNotFoundError before _saved_tasks.append; upsert.sql renamed to update_by_id.sql (fix-save-silent-zero-rows).
-#   PREVIOUS_CHANGE: v1.3.0 - add_tmp drops username param; insert_tmp.sql binds only :cloud, username falls back to DB DEFAULT 'root' (collapse-provider-selection).
+#   LAST_CHANGE: v1.5.0 - Rename add(node: Node) → insert(new_node: NewNode) -> Node (runs node/insert.sql RETURNING node_id; mirrors TaskRepository.insert); add get_by_id(node_id: NodeId) -> Node | None (node/get_by_id.sql; passes node_id.value as pg8000 cannot adapt a dataclass); _row_to_node wraps NodeId(int(row["node_id"])) (add-node-id-identity).
+#   PREVIOUS_CHANGE: v1.4.0 - save/update_status use RETURNING task_id to detect 0-row UPDATE; raise TaskRowNotFoundError before _saved_tasks.append; upsert.sql renamed to update_by_id.sql (fix-save-silent-zero-rows).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
-from yascheduler.domain import Node, Task, TaskContext, TaskStatus
+from yascheduler.domain import NewNode, Node, NodeId, Task, TaskContext, TaskStatus
 
 from .exceptions import TaskRowNotFoundError
 from .sql_loader import load_query
@@ -301,24 +301,56 @@ class PostgresNodeRepository(_PgRepository):
         rows = await self._run(load_query("node/list_disabled"))
         return [self._row_to_node(r) for r in rows if "." in r["ip"]]
 
-    # START_CONTRACT: add
-    #   PURPOSE: Insert a new persistent node row.
-    #   INPUTS: { node: Node }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Inserts row into yascheduler_nodes.
-    #   LINKS: node/insert.sql
-    # END_CONTRACT: add
-    async def add(self, node: Node) -> None:
-        """Insert a new node."""
-        await self._run(
+    # START_CONTRACT: insert
+    #   PURPOSE: Persist a NewNode and return the persisted Node with the DB-generated NodeId.
+    #   INPUTS: { new_node: NewNode - pre-persistence node record (no node_id) }
+    #   OUTPUTS: { Node - the persisted node carrying the generated NodeId and matching the NewNode's other fields }
+    #   SIDE_EFFECTS: Inserts row into yascheduler_nodes; assigns node_id via RETURNING node_id.
+    #   LINKS: node/insert.sql RETURNING node_id, _row_to_node
+    # END_CONTRACT: insert
+    async def insert(self, new_node: NewNode) -> Node:
+        """Insert a NewNode, return the persisted Node with the generated NodeId."""
+        rows = await self._run(
             load_query("node/insert"),
-            ip=node.ip,
-            ncpus=node.ncpus,
-            enabled=node.enabled,
-            cloud=node.cloud,
-            username=node.username,
-            port=node.port,
+            ip=new_node.ip,
+            ncpus=new_node.ncpus,
+            enabled=new_node.enabled,
+            cloud=new_node.cloud,
+            username=new_node.username,
+            port=new_node.port,
         )
+        # RETURNING node_id yields a single row; _row_to_node reads node_id and
+        # rebuilds the full Node from it + the input fields (the only columns
+        # the RETURNING clause emits is node_id, so fall back to new_node values
+        # for the non-returned fields).
+        row = {
+            **rows[0],
+            "ip": new_node.ip,
+            "ncpus": new_node.ncpus,
+            "enabled": new_node.enabled,
+            "cloud": new_node.cloud,
+            "username": new_node.username,
+            "port": new_node.port,
+        }
+        return self._row_to_node(row)
+
+    # START_CONTRACT: get_by_id
+    #   PURPOSE: Fetch a single node by its primary key.
+    #   INPUTS: { node_id: NodeId - the primary-key value object }
+    #   OUTPUTS: { Node | None - the node, or None if no row matches }
+    #   SIDE_EFFECTS: None
+    #   LINKS: node/get_by_id.sql, _row_to_node
+    # END_CONTRACT: get_by_id
+    async def get_by_id(self, node_id: NodeId) -> Node | None:
+        """Retrieve a node by primary key, or None if not found.
+
+        Passes ``node_id.value`` (the bare int) as the SQL param — pg8000 cannot
+        adapt a ``NodeId`` dataclass.
+        """
+        rows = await self._run(load_query("node/get_by_id"), node_id=node_id.value)
+        if not rows:
+            return None
+        return self._row_to_node(rows[0])
 
     # START_CONTRACT: add_tmp
     #   PURPOSE: Insert a temporary cloud node with a generated IP, return the IP.
@@ -424,16 +456,17 @@ class PostgresNodeRepository(_PgRepository):
         return {bool(row["enabled"]): row["count"] for row in rows}
 
     # START_CONTRACT: _row_to_node
-    #   PURPOSE: Map a DB row dict to a domain Node.
-    #   INPUTS: { row: dict[str, Any] - row with keys ip, ncpus, enabled, cloud, username, port }
-    #   OUTPUTS: { Node }
+    #   PURPOSE: Map a DB row dict to a domain Node, wrapping NodeId from the node_id column.
+    #   INPUTS: { row: dict[str, Any] - row with keys node_id, ip, ncpus, enabled, cloud, username, port }
+    #   OUTPUTS: { Node - carries node_id: NodeId }
     #   SIDE_EFFECTS: None
-    #   LINKS: Node
+    #   LINKS: Node, NodeId
     # END_CONTRACT: _row_to_node
     @staticmethod
     def _row_to_node(row: dict[str, Any]) -> Node:
         """Convert a DB row dict to a domain Node."""
         return Node(
+            node_id=NodeId(int(row["node_id"])),
             ip=row["ip"],
             ncpus=row.get("ncpus") or 0,
             enabled=bool(row.get("enabled", False)),

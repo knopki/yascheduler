@@ -1,9 +1,9 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.13.0
+# VERSION: 2.14.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
-#   SCOPE: CloudProvisionerImpl class implementing allocate, deallocate, select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineRepository + SSHMachineOperations.
+#   SCOPE: CloudProvisionerImpl class implementing allocate (returns NewNode), deallocate, select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineRepository + SSHMachineOperations.
 #   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-DOMAIN-SETTINGS
 #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE, M-CLOUD-INIT
 # END_MODULE_CONTRACT
@@ -11,12 +11,12 @@
 # START_MODULE_MAP
 #   CloudAllocateError         # Cloud node allocation error (re-exported from domain.exceptions)
 #   CloudSetupError            # Cloud node setup error (re-exported from domain.exceptions)
-#   CloudProvisionerImpl       # Pure cloud-API adapter implementing CloudProvisioner port (no DB)
+#   CloudProvisionerImpl       # Pure cloud-API adapter implementing CloudProvisioner port (no DB); allocate returns NewNode
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.13.0 - _get_cloud_config_data gains a config: ConfigCloud parameter and sources CloudInitConfig.package_upgrade from config.package_upgrade instead of self.local_config.cloud_package_upgrade (move-cloud-package-upgrade); the LocalSettings.cloud_package_upgrade field was relocated to the per-provider ConfigCloud* DTOs (package_upgrade: bool = True, infra-only, NOT on the CloudConfig Protocol). allocate passes the config it already resolves at the top of the method.
-#   PREVIOUS_CHANGE: v2.12.0 - _get_cloud_config_data sources CloudInitConfig.package_upgrade from self.local_config.cloud_package_upgrade instead of hardcoding True (add-hetzner-live-e2e); lets operators and tests skip the slow cloud-init apt-get upgrade on freshly-provisioned VMs. The LocalSettings field defaults to True so pre-change cloud-init behavior is preserved.
+#   LAST_CHANGE: v2.14.0 - allocate/_setup_vm return NewNode (pre-persistence) instead of Node; node_id now required on Node, so the old return was a type fiction. The caller (allocate_task) persists the NewNode via NodeRepository.insert and receives the persisted Node (add-node-id-identity).
+#   PREVIOUS_CHANGE: v2.13.0 - _get_cloud_config_data gains a config: ConfigCloud parameter and sources CloudInitConfig.package_upgrade from config.package_upgrade instead of self.local_config.cloud_package_upgrade (move-cloud-package-upgrade); the LocalSettings.cloud_package_upgrade field was relocated to the per-provider ConfigCloud* DTOs (package_upgrade: bool = True, infra-only, NOT on the CloudConfig Protocol). allocate passes the config it already resolves at the top of the method.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -31,7 +31,7 @@ from yascheduler.domain import (
     CloudAllocateError,
     CloudSetupError,
     MachineSession,
-    Node,
+    NewNode,
 )
 from yascheduler.infra.ssh.keys import list_private_keys
 
@@ -138,15 +138,15 @@ class CloudProvisionerImpl:
         return adapter.name
 
     # START_CONTRACT: CloudProvisionerImpl.allocate
-    #   PURPOSE: Create VM on named provider, wait SSH, cloud-init, setup, return Node (no DB write).
+    #   PURPOSE: Create VM on named provider, wait SSH, cloud-init, setup, return NewNode (no DB write; caller persists via NodeRepository.insert).
     #   INPUTS: { provider: str - selected provider name (matches adapters dict key) }
-    #   OUTPUTS: { Node - new node record (caller persists) }
+    #   OUTPUTS: { NewNode - pre-persistence node record (no node_id); caller persists and receives a Node }
     #   SIDE_EFFECTS: Creates cloud VM, writes SSH key, installs engines. On setup failure: best-effort disconnect of the machine_repository session for the failed IP (failures logged and swallowed so delete_node is never skipped), then deletes the VM.
     #   RAISES: CloudAllocateError - if provider unknown or VM creation fails;
     #           CloudSetupError - if SSH/cloud-init/setup fails
     #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS
     # END_CONTRACT: CloudProvisionerImpl.allocate
-    async def allocate(self, provider: str) -> Node:
+    async def allocate(self, provider: str) -> NewNode:
         """Allocate a new cloud node on the named provider — satisfies CloudProvisioner port."""
         # START_BLOCK_RESOLVE_ALLOCATE_PROVIDER
         adapter = self.adapters.get(provider)
@@ -333,7 +333,7 @@ class CloudProvisionerImpl:
     #     adapter: CloudAdapter - provider adapter (for timeout settings),
     #     config: ConfigCloud - provider config (for SSH username/jump)
     #   }
-    #   OUTPUTS: { Node - node model with ncpus populated }
+    #   OUTPUTS: { NewNode - pre-persistence node record (no node_id); the caller persists it via NodeRepository.insert }
     #   SIDE_EFFECTS: Connects to VM, runs cloud-init, installs engines.
     #   RAISES: CloudSetupError - on any SSH/cloud-init/setup failure
     #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
@@ -343,8 +343,8 @@ class CloudProvisionerImpl:
         ip_addr: str,
         adapter: CloudAdapter,
         config: ConfigCloud,
-    ) -> Node:
-        """Connect to VM, wait for cloud-init, install engines, return Node."""
+    ) -> NewNode:
+        """Connect to VM, wait for cloud-init, install engines, return NewNode."""
         # START_BLOCK_SSH_CONNECT_SETUP
         session = await self._connect_to_vm(ip_addr, adapter, config)
         # END_BLOCK_SSH_CONNECT_SETUP
@@ -399,7 +399,7 @@ class CloudProvisionerImpl:
             ip_addr,
             ncpus,
         )
-        return Node(
+        return NewNode(
             ip=ip_addr,
             ncpus=ncpus,
             enabled=True,

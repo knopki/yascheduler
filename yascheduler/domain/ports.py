@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.11.0
+# VERSION: 2.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -9,17 +9,17 @@
 #
 # START_MODULE_MAP
 #   TaskRepository - Async port for task persistence (get, save, insert, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status)
-#   NodeRepository - Async port for node persistence (full CRUD lifecycle, list_all, get_by_ips, count_by_status)
+#   NodeRepository - Async port for node persistence (insert NewNode→Node, get_by_id, full CRUD lifecycle, list_all, get_by_ips, count_by_status)
 #   CloudConfig - Structural Protocol for cloud provider config (7-field surface application consumers read: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host)
 #   MachineRepository - Async port for the connected-machine collection (lifecycle, queries); returns MachineSession; no state transitions/accessors/monitor (moved to MachineSession)
 #   MachineSession - Connected-machine entity handle (identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism); Engine-agnostic
 #   MachineOperations - Async port for operations on a single machine; methods take session: MachineSession (use-case methods + facade pass-throughs)
-#   CloudProvisioner - Async port for cloud node provisioning (allocate, deallocate, select_provider)
+#   CloudProvisioner - Async port for cloud node provisioning (allocate returns NewNode, deallocate, select_provider)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.11.0 - Session-based-machine-handle sections 3-4. Narrowed MachineRepository Protocol to 9-method surface (connect/disconnect/disconnect_all/list_free/list_connected/get_session/contains/__contains__/__len__) returning MachineSession; removed get_machine_state, update_machine, occupy, release, get_path, get_quote, get_hostname, install_monitor, cancel_monitor (migrated to MachineSession). Rewrote MachineOperations Protocol: methods now take session: MachineSession (was ConnectedMachine/ip); use-case methods (start_task_on_machine, download_outputs, occupancy_check, start_occupancy_check) + facade pass-throughs (run, run_full, run_bg, get_cpu_cores, setup_node); removed upload, get_sftp, pgrep, list_processes (accessed via session parameter by collaborators).
-#   PREVIOUS_CHANGE: v2.10.0 - Add MachineSession Protocol (session-based-machine-handle section 2). Connected-machine entity handle: identity (ip, machine, is_closed), state transitions (occupy/release/update), connect-time config (adapter, platforms, data_dir, engines_dir, tasks_dir), adapter-derived accessors (path, quote, hostname), base primitives (run/run_full/run_bg/upload/open_sftp/get_cpu_cores/setup_node/pgrep/list_processes), monitor mechanism (install_monitor/cancel_monitor). @runtime_checkable. Engine-agnostic.
+#   LAST_CHANGE: v2.12.0 - NodeRepository: rename add(node: Node) -> None to insert(new_node: NewNode) -> Node (mirrors TaskRepository.insert; runs RETURNING node_id); add get_by_id(node_id: NodeId) -> Node | None (additive primary-key lookup). CloudProvisioner.allocate return type narrows Node → NewNode (pre-persistence; caller persists via NodeRepository.insert). ip-keyed mutators unchanged (add-node-id-identity).
+#   PREVIOUS_CHANGE: v2.11.0 - Session-based-machine-handle sections 3-4. Narrowed MachineRepository Protocol to 9-method surface (connect/disconnect/disconnect_all/list_free/list_connected/get_session/contains/__contains__/__len__) returning MachineSession; removed get_machine_state, update_machine, occupy, release, get_path, get_quote, get_hostname, install_monitor, cancel_monitor (migrated to MachineSession). Rewrote MachineOperations Protocol: methods now take session: MachineSession (was ConnectedMachine/ip); use-case methods (start_task_on_machine, download_outputs, occupancy_check, start_occupancy_check) + facade pass-throughs (run, run_full, run_bg, get_cpu_cores, setup_node); removed upload, get_sftp, pgrep, list_processes (accessed via session parameter by collaborators).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -37,7 +37,9 @@ if TYPE_CHECKING:
     from .engine import Engine, EngineRepository
     from .model import (
         ConnectedMachine,
+        NewNode,
         Node,
+        NodeId,
         ProcessResult,
         Task,
         TaskStatus,
@@ -71,15 +73,26 @@ class TaskRepository(Protocol):
 
 @runtime_checkable
 class NodeRepository(Protocol):
-    """Async port for node persistence: full CRUD lifecycle."""
+    """Async port for node persistence: full CRUD lifecycle.
+
+    ``insert(new_node: NewNode) -> Node`` is the create method (renamed from
+    ``add``); it mirrors ``TaskRepository.insert`` by returning the persisted
+    ``Node`` carrying the database-generated ``node_id``. ``get_by_id`` is an
+    additive lookup by primary key. All ip-keyed mutators (``get``, ``enable``,
+    ``disable``, ``remove``, ``update``, ``get_by_ips``) keep their ip keying —
+    this change carries ``node_id`` alongside ``ip``; it does not replace
+    ip-based identification.
+    """
 
     async def get(self, ip: str) -> Node | None: ...
+
+    async def get_by_id(self, node_id: NodeId) -> Node | None: ...
 
     async def list_enabled(self) -> list[Node]: ...
 
     async def list_disabled(self) -> list[Node]: ...
 
-    async def add(self, node: Node) -> None: ...
+    async def insert(self, new_node: NewNode) -> Node: ...
 
     async def add_tmp(self, cloud: str) -> str: ...
 
@@ -335,12 +348,15 @@ class MachineOperations(Protocol):
 class CloudProvisioner(Protocol):
     """Port for cloud node provisioning.
 
-    Provider selection is sync (no I/O); allocate/deallocate are async.
-    select_provider returns None when no provider has capacity OR when the
-    selected provider is throttled (op semaphore locked).
+    ``allocate`` returns a ``NewNode`` (pre-persistence) — a freshly-built VM that
+    has NOT been written to ``yascheduler_nodes``. The caller (``allocate_task``)
+    persists it via ``NodeRepository.insert(new_node) -> Node``. Provider selection
+    is sync (no I/O); ``allocate``/``deallocate`` are async. ``select_provider``
+    returns None when no provider has capacity OR when the selected provider is
+    throttled (op semaphore locked).
     """
 
-    async def allocate(self, provider: str) -> Node: ...
+    async def allocate(self, provider: str) -> NewNode: ...
 
     async def deallocate(self, cloud: str, ip: str) -> None: ...
 

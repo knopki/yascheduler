@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.8.0
+# VERSION: 2.9.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -20,7 +20,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.8.0 - move-cloud-package-upgrade: rename test_cloud_config_package_upgrade_sourced_from_local_config → test_cloud_config_package_upgrade_sourced_from_per_cloud_config and rewrite both _get_cloud_config_data tests to pass a real ConfigCloudHetzner(package_upgrade=...) DTO as the new config arg (package_upgrade now sourced from config.package_upgrade, not local_config.cloud_package_upgrade).
+#   LAST_CHANGE: v2.9.0 - add-node-id-identity: import NewNode, update allocate return type assertion (Node → NewNode) for test_allocate_happy_path.
 #   PREVIOUS_CHANGE: v2.7.0 - add-hetzner-live-e2e: update test_cloud_config_with_engine_packages to inject a MagicMock local_config with cloud_package_upgrade=True (now sourced from local_config instead of hardcoded True); add test_cloud_config_package_upgrade_sourced_from_local_config asserting False propagates to CloudInitConfig.package_upgrade.
 # END_CHANGE_SUMMARY
 
@@ -37,7 +37,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.domain.model import Node
+from yascheduler.domain.model import NewNode
 from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
 from yascheduler.infra.cloud.cloud_init import CloudInitConfig
 from yascheduler.infra.cloud.manager import (
@@ -266,7 +266,7 @@ class TestAllocate:
         ):
             node = await prov.allocate("test")
 
-        assert isinstance(node, Node)
+        assert isinstance(node, NewNode)
         assert node.ip == "10.0.0.1"
         assert node.ncpus == 4
         assert node.cloud == "test"

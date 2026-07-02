@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_abandon_node.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup).
@@ -13,7 +13,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for the abandon_node use case (fix-never-connected-node-leak).
+#   LAST_CHANGE: v1.1.0 - add-node-id-identity: import NodeId, add node_id=NodeId(1) to _cloud_node Node(...) helper.
 #   PREVIOUS_CHANGE: none
 # END_CHANGE_SUMMARY
 """Unit tests for the abandon_node use case.
@@ -38,7 +38,7 @@ import pytest
 
 from yascheduler.application.abandon_node import abandon_node
 from yascheduler.application.allocation_tracker import AllocationTracker
-from yascheduler.domain.model import Node, Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -47,7 +47,15 @@ if TYPE_CHECKING:
 
 
 def _cloud_node(ip: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
-    return Node(ip=ip, ncpus=2, cloud=cloud, username="root", port=22, enabled=True)
+    return Node(
+        node_id=NodeId(1),
+        ip=ip,
+        ncpus=2,
+        cloud=cloud,
+        username="root",
+        port=22,
+        enabled=True,
+    )
 
 
 def _todo_task(task_id: int, allocated_ip: str = "10.0.0.5") -> Task:

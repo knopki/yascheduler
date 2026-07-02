@@ -1,0 +1,2 @@
+ALTER TABLE yascheduler_nodes
+ADD COLUMN node_id SERIAL PRIMARY KEY;

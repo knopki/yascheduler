@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.11.0
+# VERSION: 5.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
@@ -16,14 +16,14 @@
 #   _count_nodes_by_cloud - Pure helper: count nodes by cloud prefix (shared with orchestrator)
 #   _select_and_insert_tmp - Under allocation_lock, compute capacity and insert tmp-node committed before lock release
 #   _cleanup_tmp_node_best_effort - Best-effort tmp-node removal; logs failures, never raises
-#   _allocate_cloud_node - Call clouds.allocate; cleanup tmp-node on failure then re-raise
-#   _persist_node_with_cleanup - Persist final node + remove tmp; on failure best-effort deallocate VM + tmp cleanup then re-raise
+#   _allocate_cloud_node - Call clouds.allocate (returns NewNode); cleanup tmp-node on failure then re-raise
+#   _persist_node_with_cleanup - Persist final node (insert NewNode→Node + remove tmp + commit); on failure best-effort deallocate VM + tmp cleanup then re-raise
 #   _provision_and_persist - Orchestrate _allocate_cloud_node then _persist_node_with_cleanup
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.11.0 - fix-cloud-alloc-session-lifecycle: Fix A in _find_free_machines intersects list_free with DB-enabled IPs (uow.nodes.list_enabled) so setup-in-flight tmp-nodes (enabled=FALSE) and disabled-but-not-disconnected nodes are invisible to the allocator; Fix C in _allocate_free_machine wraps each _try_start_on_machine in try/except (log + continue) so a single stale/unreachable session cannot abort the free-machine loop and starve the cloud branch.
-#   PREVIOUS_CHANGE: v5.10.0 - session-based-machine-handle: _try_start_on_machine takes MachineSession instead of ConnectedMachine; callback type changed to Callable[[MachineSession, Engine, Task], Awaitable[bool]]; _find_free_machines returns list[MachineSession]; _allocate_free_machine iterates sessions.
+#   LAST_CHANGE: v5.12.0 - Cloud-fallback now persists via uow.nodes.insert(NewNode) (renamed from add); _allocate_cloud_node/_provision_and_persist return NewNode (pre-persistence; node_id is DB-generated and lives on the persisted row, not on the local object). The insert call site captures the persisted Node internally; the caller discards the NewNode (add-node-id-identity).
+#   PREVIOUS_CHANGE: v5.11.0 - fix-cloud-alloc-session-lifecycle: Fix A in _find_free_machines intersects list_free with DB-enabled IPs (uow.nodes.list_enabled) so setup-in-flight tmp-nodes (enabled=FALSE) and disabled-but-not-disconnected nodes are invisible to the allocator; Fix C in _allocate_free_machine wraps each _try_start_on_machine in try/except (log + continue) so a single stale/unreachable session cannot abort the free-machine loop and starve the cloud branch.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from yascheduler.domain import (
     MachineSession,
+    NewNode,
     Node,
     Task,
     TaskAllocated,
@@ -321,7 +322,7 @@ async def _cleanup_tmp_node_best_effort(
 #     tmp_ip: str - tmp-node IP committed by _select_and_insert_tmp,
 #     task_id: int - For log correlation
 #   }
-#   OUTPUTS: { Node - The provisioned cloud node (not yet persisted) }
+#   OUTPUTS: { NewNode - The provisioned cloud node (not yet persisted; no node_id) }
 #   SIDE_EFFECTS: Calls clouds.allocate. On failure opens a UoW to remove+commit the tmp-node (best-effort, logged not raised).
 #   RAISES: { Exception - Original cloud-allocation exception, never a cleanup exception }
 #   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
@@ -332,7 +333,7 @@ async def _allocate_cloud_node(
     selected_name: str,
     tmp_ip: str,
     task_id: int,
-) -> Node:
+) -> NewNode:
     # START_BLOCK_CLOUD_ALLOCATE
     try:
         node = await clouds.allocate(selected_name)
@@ -353,9 +354,9 @@ async def _allocate_cloud_node(
 
 
 # START_CONTRACT: _persist_node_with_cleanup
-#   PURPOSE: Persist the final node (add + remove tmp + commit); on failure best-effort delete the billable orphan VM and remove the tmp-node, then re-raise the original persist error.
+#   PURPOSE: Persist the final node (insert NewNode→Node + remove tmp + commit); on failure best-effort delete the billable orphan VM and remove the tmp-node, then re-raise the original persist error.
 #   INPUTS: {
-#     node: Node - Provisioned (but not yet persisted) cloud node,
+#     node: NewNode - Provisioned (but not yet persisted) cloud node (no node_id),
 #     clouds: CloudProvisioner - Cloud port (deallocate on persist failure),
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     selected_name: str - Provider name (fallback if node.cloud is None),
@@ -363,12 +364,12 @@ async def _allocate_cloud_node(
 #     task_id: int - For log correlation
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens UoW, adds node, removes tmp, commits. On failure: best-effort clouds.deallocate + tmp-node cleanup (logged not raised), then re-raises.
+#   SIDE_EFFECTS: Opens UoW, inserts the NewNode (receiving the persisted Node), removes tmp, commits. On failure: best-effort clouds.deallocate + tmp-node cleanup (logged not raised), then re-raises.
 #   RAISES: { Exception - Original persist exception, never a cleanup exception }
 #   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
 # END_CONTRACT: _persist_node_with_cleanup
 async def _persist_node_with_cleanup(
-    node: Node,
+    node: NewNode,
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
     selected_name: str,
@@ -378,7 +379,7 @@ async def _persist_node_with_cleanup(
     # START_BLOCK_FINAL_PERSIST
     try:
         async with uow_factory() as uow:
-            await uow.nodes.add(node)
+            await uow.nodes.insert(node)
             await uow.nodes.remove(tmp_ip)
             await uow.commit()
     except Exception as persist_err:
@@ -426,8 +427,8 @@ async def _persist_node_with_cleanup(
 #     tmp_ip: str - tmp-node IP committed by _select_and_insert_tmp,
 #     task_id: int - For log correlation
 #   }
-#   OUTPUTS: { Node - The provisioned and persisted cloud node }
-#   SIDE_EFFECTS: Calls clouds.allocate; opens UoW to add+remove+commit. On persist failure calls clouds.deallocate (best-effort) + tmp-node cleanup (best-effort), then re-raises original.
+#   OUTPUTS: { NewNode - The provisioned cloud node (now persisted; the DB-generated node_id lives in the committed row, not on this object) }
+#   SIDE_EFFECTS: Calls clouds.allocate; opens UoW to insert+remove+commit. On persist failure calls clouds.deallocate (best-effort) + tmp-node cleanup (best-effort), then re-raises original.
 #   RAISES: { Exception - Original cloud-allocate or persist exception, never a cleanup exception }
 #   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
 # END_CONTRACT: _provision_and_persist
@@ -437,7 +438,7 @@ async def _provision_and_persist(
     selected_name: str,
     tmp_ip: str,
     task_id: int,
-) -> Node:
+) -> NewNode:
     node = await _allocate_cloud_node(
         clouds, uow_factory, selected_name, tmp_ip, task_id
     )
