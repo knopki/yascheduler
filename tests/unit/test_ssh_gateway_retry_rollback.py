@@ -35,6 +35,7 @@ from yascheduler.domain.model import (
     MachineState,
     Task,
     TaskContext,
+    TaskId,
 )
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.platform.protocol import (
@@ -67,7 +68,7 @@ def _make_engine() -> Engine:
 def _make_task(remote_folder: str = "/remote/tasks/1") -> Task:
     """Minimal Task with a remote_folder set (required by start_task_on_machine)."""
     return Task(
-        task_id=1,
+        task_id=TaskId(1),
         label="test-task",
         context=TaskContext(engine="test_engine", remote_folder=remote_folder),
     )

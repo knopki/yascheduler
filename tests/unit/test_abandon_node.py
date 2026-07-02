@@ -38,7 +38,7 @@ import pytest
 
 from yascheduler.application.abandon_node import abandon_node
 from yascheduler.application.allocation_tracker import AllocationTracker
-from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskId, TaskStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,7 +60,7 @@ def _cloud_node(ip: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
 
 def _todo_task(task_id: int, allocated_ip: str = "10.0.0.5") -> Task:
     return Task(
-        task_id=task_id,
+        task_id=TaskId(task_id),
         label="t",
         context=TaskContext(engine="e"),
         status=TaskStatus.TO_DO,
@@ -119,7 +119,7 @@ class TestAbandonNode:
         clouds.deallocate.assert_awaited_once_with("aws", "10.0.0.5")
         uow.nodes.remove.assert_awaited_once_with("10.0.0.5")
         uow.commit.assert_awaited_once()
-        tracker.discard.assert_called_once_with(42)
+        tracker.discard.assert_called_once_with(TaskId(42))
 
     @pytest.mark.asyncio
     async def test_abandon_node_non_cloud_skips_vm_deletion(self) -> None:

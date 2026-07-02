@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/exceptions.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Adapter-layer exceptions for persistence operations.
 #   SCOPE: Exception classes for UoW state-contract violations and repository row-existence precondition violations.
@@ -13,9 +13,16 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Added TaskRowNotFoundError(RuntimeError) raised by PostgresTaskRepository.save/update_status on 0-row UPDATE outcome (fix-save-silent-zero-rows).
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - TaskRowNotFoundError takes task_id: TaskId (was int); f"task row not found for task_id={task_id}" renders the bare integer via TaskId.__str__ (add-task-id-identity). Added `from __future__ import annotations` + TYPE_CHECKING import (no runtime cycle: this module is a leaf; annotations are strings so no NameError).
+#   PREVIOUS_CHANGE: v1.1.0 - Added TaskRowNotFoundError(RuntimeError) raised by PostgresTaskRepository.save/update_status on 0-row UPDATE outcome (fix-save-silent-zero-rows).
 # END_CHANGE_SUMMARY
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from yascheduler.domain.model import TaskId
 
 
 class UnitOfWorkNotInitializedError(RuntimeError):
@@ -24,7 +31,7 @@ class UnitOfWorkNotInitializedError(RuntimeError):
 
 # START_CONTRACT: TaskRowNotFoundError
 #   PURPOSE: Signal that an UPDATE targeting a task_id affected 0 rows (the row does not exist).
-#   INPUTS: { task_id: int - the task_id that was targeted but not found }
+#   INPUTS: { task_id: TaskId - the task_id that was targeted but not found }
 #   OUTPUTS: { None - no return value }
 #   SIDE_EFFECTS: None — raises self; stores task_id on the instance
 #   LINKS: M-PERSISTENCE-POSTGRES (PostgresTaskRepository.save/update_status)
@@ -36,6 +43,6 @@ class TaskRowNotFoundError(RuntimeError):
     recovery logic. Sibling of UnitOfWorkNotInitializedError.
     """
 
-    def __init__(self, task_id: int) -> None:
+    def __init__(self, task_id: TaskId) -> None:
         self.task_id = task_id
         super().__init__(f"task row not found for task_id={task_id}")

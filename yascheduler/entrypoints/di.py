@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.12.0
+# VERSION: 5.12.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
 #   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.12.0 - make_daemon now constructs SSHMachineRepository + SSHMachineOperations (two ports) instead of a single SSHMachineRepository / SSHMachineOperations (decompose-ssh-gateway). Both are shared between CloudProvisionerImpl (machine_repository + machine_operations) and Orchestrator (repository + operations) on the clouds is None branch. CloudProvisionerImpl.machine_gateway renamed to machine_repository; machine_operations parameter added.
-#   PREVIOUS_CHANGE: v5.11.0 - make_daemon now constructs one SSHMachineRepository / SSHMachineOperations on the clouds is None branch and injects the same instance into both CloudProvisionerImpl.machine_gateway and Orchestrator.gateway (share-ssh-gateway).
+#   LAST_CHANGE: v5.12.1 - CLIDeps.submit return type int -> TaskId (forwards submit_task which now returns TaskId); import TaskId (add-task-id-identity). The public Yascheduler.queue_submit_task_async facade extracts .value to preserve the public -> int contract.
+#   PREVIOUS_CHANGE: v5.12.0 - make_daemon now constructs SSHMachineRepository + SSHMachineOperations (two ports) instead of a single SSHMachineRepository / SSHMachineOperations (decompose-ssh-gateway). Both are shared between CloudProvisionerImpl (machine_repository + machine_operations) and Orchestrator (repository + operations) on the clouds is None branch. CloudProvisionerImpl.machine_gateway renamed to machine_repository; machine_operations parameter added.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from yascheduler.domain import (
     TaskCompleted,
     TaskCreated,
     TaskFailed,
+    TaskId,
 )
 from yascheduler.infra import (
     CloudAdapter,
@@ -80,7 +81,7 @@ class CLIDeps:
     # START_CONTRACT: CLIDeps.submit
     #   PURPOSE: Submit a new task via the submit_task use case.
     #   INPUTS: { label, metadata, engine_name }
-    #   OUTPUTS: { int - task_id }
+    #   OUTPUTS: { TaskId - the generated task_id (the public Yascheduler.queue_submit_task facade extracts .value to keep the public -> int contract; yasubmit prints str(TaskId) → bare integer) }
     #   SIDE_EFFECTS: Creates task in database.
     #   LINKS: M-APPLICATION-SUBMIT
     # END_CONTRACT: CLIDeps.submit
@@ -89,7 +90,7 @@ class CLIDeps:
         label: str,
         metadata: dict[str, object],
         engine_name: str,
-    ) -> int:
+    ) -> TaskId:
         return await submit_task(
             label,
             metadata,

@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/client.py
-# VERSION: 2.6.0
+# VERSION: 2.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.7.0 - Import Config from yascheduler.entrypoints.config (not yascheduler.config, deleted); replace Config.from_config_parser with parse_config from entrypoints.config_parser (config-aggregate-to-entrypoints / P4).
-#   PREVIOUS_CHANGE: v2.6.0 - Inline to_sync from yascheduler.shared.async_utils; import CONFIG_FILE from .paths; drop yascheduler.shared dependency (prune-shared-kernel).
+#   LAST_CHANGE: v2.8.0 - Facade is the sole int/TaskId marshalling boundary (add-task-id-identity): _task_to_dict extracts "task_id": t.task_id.value (public dict stays int); queue_submit_task_async returns (await deps.submit(...)).value (public -> int preserved); queue_get_tasks_async wraps [TaskId(i) for i in jobs] before calling query_tasks (public jobs: list[int] preserved). The domain is type-safe end-to-end; the public API signatures are unchanged.
+#   PREVIOUS_CHANGE: v2.7.0 - Import Config from yascheduler.entrypoints.config (not yascheduler.config, deleted); replace Config.from_config_parser with parse_config from entrypoints.config_parser (config-aggregate-to-entrypoints / P4).
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -31,7 +31,7 @@ from pathlib import PurePath
 from typing import Any, Optional, TypeVar, Union
 
 from yascheduler.application import query_tasks
-from yascheduler.domain import Task, TaskStatus
+from yascheduler.domain import Task, TaskId, TaskStatus
 from yascheduler.entrypoints.config import Config
 from yascheduler.entrypoints.config_parser import parse_config
 
@@ -81,14 +81,14 @@ def to_sync(
 
 # START_CONTRACT: _task_to_dict
 #   PURPOSE: Project a domain Task to the public 6-key Mapping shape returned by query methods.
-#   INPUTS: { t: Task - domain Task aggregate }
-#   OUTPUTS: { Mapping[str, Any] - {task_id, label, ip, status, metadata, cloud} }
+#   INPUTS: { t: Task - domain Task aggregate (t.task_id: TaskId) }
+#   OUTPUTS: { Mapping[str, Any] - {task_id (bare int via .value), label, ip, status, metadata, cloud} }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL
 # END_CONTRACT: _task_to_dict
 def _task_to_dict(t: Task) -> Mapping[str, Any]:
     return {
-        "task_id": t.task_id,
+        "task_id": t.task_id.value,
         "label": t.label,
         "ip": t.allocated_ip or "",
         "status": t.status,
@@ -145,7 +145,8 @@ class Yascheduler:
     ) -> int:
         """Submit new task"""
         deps = self._deps_factory(self.config)
-        return await deps.submit(label, dict(metadata), engine_name)
+        # deps.submit (-> TaskId) → extract .value so the public contract stays int.
+        return (await deps.submit(label, dict(metadata), engine_name)).value
 
     # START_CONTRACT: queue_submit_task
     #   PURPOSE: Submit a new task synchronously
@@ -183,8 +184,11 @@ class Yascheduler:
         statuses: Optional[list[TaskStatus]] = (
             [TaskStatus(x) for x in status] if status else None
         )
+        # The facade is the sole int/TaskId boundary: wrap job ints → TaskId
+        # before crossing into the use case (public jobs: list[int] preserved).
+        job_ids: Optional[list[TaskId]] = [TaskId(i) for i in jobs] if jobs else None
         deps = self._deps_factory(self.config)
-        tasks = await query_tasks(jobs, statuses, deps.uow_factory)
+        tasks = await query_tasks(job_ids, statuses, deps.uow_factory)
         return [_task_to_dict(t) for t in tasks]
 
     # START_CONTRACT: queue_get_tasks

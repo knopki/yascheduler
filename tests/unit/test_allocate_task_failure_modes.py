@@ -42,6 +42,7 @@ from yascheduler.domain.model import (
     NodeId,
     Task,
     TaskContext,
+    TaskId,
     TaskStatus,
 )
 from yascheduler.domain.ports import CloudProvisioner
@@ -82,7 +83,7 @@ class TestAllocateTaskFailureModes:
     @pytest.fixture
     def todo_task(self) -> Task:
         return Task(
-            task_id=1,
+            task_id=TaskId(1),
             label="test",
             context=TaskContext(engine="test_engine"),
             status=TaskStatus.TO_DO,

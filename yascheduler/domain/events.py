@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/events.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain events for task lifecycle transitions.
 #   SCOPE: DomainEvent base, TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned, Event union type.
@@ -8,7 +8,7 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   DomainEvent - Base frozen dataclass with task_id, webhook_url, webhook_custom_params (all required)
+#   DomainEvent - Base frozen dataclass with task_id (TaskId), webhook_url, webhook_custom_params (all required)
 #   TaskCreated - Task submitted event with engine_name
 #   TaskAllocated - Task assigned to node with node_ip and engine_name
 #   TaskCompleted - Task finished with local_folder and has_errors
@@ -18,19 +18,22 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Restore Python 3.9 compatibility: drop dataclass kw_only (3.10+), make webhook_custom_params required (avoids non-default-after-default inheritance error), use typing.Union instead of PEP 604 X|Y at runtime.
-#   PREVIOUS_CHANGE: v1.0.0 - Create domain events for task lifecycle transitions.
+#   LAST_CHANGE: v1.2.0 - DomainEvent.task_id: int -> TaskId (add-task-id-identity); the 5 subclasses inherit the new type. TaskId imported under TYPE_CHECKING (annotations are strings via from __future__ import annotations). Python 3.9 compat preserved: typing.Union for the Event alias, no PEP 604.
+#   PREVIOUS_CHANGE: v1.1.0 - Restore Python 3.9 compatibility: drop dataclass kw_only (3.10+), make webhook_custom_params required (avoids non-default-after-default inheritance error), use typing.Union instead of PEP 604 X|Y at runtime.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
+from typing import TYPE_CHECKING, Union
+
+if TYPE_CHECKING:
+    from .model import TaskId
 
 
 @dataclass(frozen=True)
 class DomainEvent:
-    task_id: int
+    task_id: TaskId
     webhook_url: str | None
     webhook_custom_params: dict[str, object]
 

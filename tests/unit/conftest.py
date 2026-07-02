@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
 from yascheduler.infra.persistence.sql_loader import load_query
 
 
@@ -84,7 +84,7 @@ def mock_uow_factory() -> MagicMock:
 def running_task() -> Task:
     """A RUNNING domain Task for use with consume_task."""
     return Task(
-        task_id=1,
+        task_id=TaskId(1),
         label="test",
         context=TaskContext(
             engine="test_engine",

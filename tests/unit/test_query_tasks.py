@@ -27,7 +27,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from yascheduler.application.query_tasks import query_tasks
-from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -41,7 +41,7 @@ class FakeTaskRepository:
     def __init__(self, tasks: list[Task] | None = None) -> None:
         self._tasks = tasks or []
         self.list_by_status_calls: list[set[TaskStatus]] = []
-        self.list_by_jobs_calls: list[list[int]] = []
+        self.list_by_jobs_calls: list[list[TaskId]] = []
 
     async def list_by_status(
         self, statuses: set[TaskStatus], *, limit: int | None = None
@@ -49,7 +49,7 @@ class FakeTaskRepository:
         self.list_by_status_calls.append(statuses)
         return self._tasks
 
-    async def list_by_jobs(self, job_ids: list[int]) -> list[Task]:
+    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
         self.list_by_jobs_calls.append(job_ids)
         return self._tasks
 
@@ -73,7 +73,7 @@ class FakeUnitOfWork:
 
 def _make_task(task_id: int = 1, status: TaskStatus = TaskStatus.TO_DO) -> Task:
     return Task(
-        task_id=task_id,
+        task_id=TaskId(task_id),
         label=f"task-{task_id}",
         context=TaskContext(engine="test_engine"),
         status=status,
@@ -101,7 +101,7 @@ class TestQueryTasks:
         )
 
         assert len(result) == 1
-        assert result[0].task_id == 1
+        assert result[0].task_id == TaskId(1)
         assert repo.list_by_status_calls == [{TaskStatus.TO_DO}]
         assert repo.list_by_jobs_calls == []
 
@@ -110,11 +110,13 @@ class TestQueryTasks:
         uow = FakeUnitOfWork(repo)
 
         result = await query_tasks(
-            jobs=[1, 2, 3], statuses=None, uow_factory=_factory(uow)
+            jobs=[TaskId(1), TaskId(2), TaskId(3)],
+            statuses=None,
+            uow_factory=_factory(uow),
         )
 
         assert len(result) == 1
-        assert repo.list_by_jobs_calls == [[1, 2, 3]]
+        assert repo.list_by_jobs_calls == [[TaskId(1), TaskId(2), TaskId(3)]]
         assert repo.list_by_status_calls == []
 
     async def test_both_jobs_and_statuses_raises_value_error(self) -> None:
@@ -122,7 +124,7 @@ class TestQueryTasks:
 
         with pytest.raises(ValueError, match="mutually exclusive"):
             await query_tasks(
-                jobs=[1], statuses=[TaskStatus.TO_DO], uow_factory=factory
+                jobs=[TaskId(1)], statuses=[TaskStatus.TO_DO], uow_factory=factory
             )
 
         factory.assert_not_called()
@@ -142,6 +144,6 @@ class TestQueryTasks:
         repo = FakeTaskRepository(tasks=[_make_task()])
         uow = FakeUnitOfWork(repo)
 
-        await query_tasks(jobs=[1], statuses=None, uow_factory=_factory(uow))
+        await query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=_factory(uow))
 
         assert uow.commit_calls == 0

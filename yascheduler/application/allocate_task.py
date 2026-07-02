@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.12.0
+# VERSION: 5.13.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.12.0 - Cloud-fallback now persists via uow.nodes.insert(NewNode) (renamed from add); _allocate_cloud_node/_provision_and_persist return NewNode (pre-persistence; node_id is DB-generated and lives on the persisted row, not on the local object). The insert call site captures the persisted Node internally; the caller discards the NewNode (add-node-id-identity).
-#   PREVIOUS_CHANGE: v5.11.0 - fix-cloud-alloc-session-lifecycle: Fix A in _find_free_machines intersects list_free with DB-enabled IPs (uow.nodes.list_enabled) so setup-in-flight tmp-nodes (enabled=FALSE) and disabled-but-not-disconnected nodes are invisible to the allocator; Fix C in _allocate_free_machine wraps each _try_start_on_machine in try/except (log + continue) so a single stale/unreachable session cannot abort the free-machine loop and starve the cloud branch.
+#   LAST_CHANGE: v5.13.0 - allocate_task entry and the cloud-fallback helpers (_cleanup_tmp_node_best_effort, _allocate_cloud_node, _persist_node_with_cleanup, _provision_and_persist) take task_id: TaskId (was int); logging "task_id=%s" renders the bare integer via TaskId.__str__ (add-task-id-identity). The orchestrator passes task.task_id (a TaskId) end-to-end with no conversion.
+#   PREVIOUS_CHANGE: v5.12.0 - Cloud-fallback now persists via uow.nodes.insert(NewNode) (renamed from add); _allocate_cloud_node/_provision_and_persist return NewNode (pre-persistence; node_id is DB-generated and lives on the persisted row, not on the local object). The insert call site captures the persisted Node internally; the caller discards the NewNode (add-node-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from yascheduler.domain import (
     Task,
     TaskAllocated,
     TaskFailed,
+    TaskId,
     TaskStatus,
 )
 
@@ -283,7 +284,7 @@ async def _select_and_insert_tmp(
 #   INPUTS: {
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     tmp_ip: str - The tmp-node IP to remove,
-#     task_id: int - For log correlation,
+#     task_id: TaskId - For log correlation,
 #     context: str - Why cleanup is running (e.g. "cloud-alloc-failed")
 #   }
 #   OUTPUTS: { None }
@@ -293,7 +294,7 @@ async def _select_and_insert_tmp(
 async def _cleanup_tmp_node_best_effort(
     uow_factory: Callable[[], AbstractUnitOfWork],
     tmp_ip: str,
-    task_id: int,
+    task_id: TaskId,
     context: str,
 ) -> None:
     # START_BLOCK_BEST_EFFORT_TMP_CLEANUP
@@ -320,7 +321,7 @@ async def _cleanup_tmp_node_best_effort(
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory (for cleanup),
 #     selected_name: str - Provider name to allocate,
 #     tmp_ip: str - tmp-node IP committed by _select_and_insert_tmp,
-#     task_id: int - For log correlation
+#     task_id: TaskId - For log correlation
 #   }
 #   OUTPUTS: { NewNode - The provisioned cloud node (not yet persisted; no node_id) }
 #   SIDE_EFFECTS: Calls clouds.allocate. On failure opens a UoW to remove+commit the tmp-node (best-effort, logged not raised).
@@ -332,7 +333,7 @@ async def _allocate_cloud_node(
     uow_factory: Callable[[], AbstractUnitOfWork],
     selected_name: str,
     tmp_ip: str,
-    task_id: int,
+    task_id: TaskId,
 ) -> NewNode:
     # START_BLOCK_CLOUD_ALLOCATE
     try:
@@ -361,7 +362,7 @@ async def _allocate_cloud_node(
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     selected_name: str - Provider name (fallback if node.cloud is None),
 #     tmp_ip: str - tmp-node IP to remove,
-#     task_id: int - For log correlation
+#     task_id: TaskId - For log correlation
 #   }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Opens UoW, inserts the NewNode (receiving the persisted Node), removes tmp, commits. On failure: best-effort clouds.deallocate + tmp-node cleanup (logged not raised), then re-raises.
@@ -374,7 +375,7 @@ async def _persist_node_with_cleanup(
     uow_factory: Callable[[], AbstractUnitOfWork],
     selected_name: str,
     tmp_ip: str,
-    task_id: int,
+    task_id: TaskId,
 ) -> None:
     # START_BLOCK_FINAL_PERSIST
     try:
@@ -425,7 +426,7 @@ async def _persist_node_with_cleanup(
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     selected_name: str - Provider name to allocate,
 #     tmp_ip: str - tmp-node IP committed by _select_and_insert_tmp,
-#     task_id: int - For log correlation
+#     task_id: TaskId - For log correlation
 #   }
 #   OUTPUTS: { NewNode - The provisioned cloud node (now persisted; the DB-generated node_id lives in the committed row, not on this object) }
 #   SIDE_EFFECTS: Calls clouds.allocate; opens UoW to insert+remove+commit. On persist failure calls clouds.deallocate (best-effort) + tmp-node cleanup (best-effort), then re-raises original.
@@ -437,7 +438,7 @@ async def _provision_and_persist(
     uow_factory: Callable[[], AbstractUnitOfWork],
     selected_name: str,
     tmp_ip: str,
-    task_id: int,
+    task_id: TaskId,
 ) -> NewNode:
     node = await _allocate_cloud_node(
         clouds, uow_factory, selected_name, tmp_ip, task_id
@@ -451,7 +452,7 @@ async def _provision_and_persist(
 # START_CONTRACT: allocate_task
 #   PURPOSE: Match a TO_DO task to a free compatible machine or request cloud allocation.
 #   INPUTS: {
-#     task_id: int - The task id to allocate,
+#     task_id: TaskId - The task id to allocate,
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     repository: MachineRepository, operations: MachineOperations - SSH gateway with connected machines,
@@ -465,7 +466,7 @@ async def _provision_and_persist(
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: allocate_task
 async def allocate_task(
-    task_id: int,
+    task_id: TaskId,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
     repository: MachineRepository,

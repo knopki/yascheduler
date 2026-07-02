@@ -35,7 +35,6 @@ are in test_application_events.py.
 
 import asyncio
 import time
-from dataclasses import replace
 from pathlib import PurePath
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -54,10 +53,12 @@ from yascheduler.domain.exceptions import (
     UnsupportedEngineError,
 )
 from yascheduler.domain.model import (
+    NewTask,
     Node,
     NodeId,
     Task,
     TaskContext,
+    TaskId,
     TaskStatus,
 )
 from yascheduler.domain.ports import CloudProvisioner
@@ -112,8 +113,13 @@ class TestSubmitTask:
         """Happy path: validates, inserts, saves with remote_folder, commits, returns id."""
         uow = mock_uow_factory.return_value
 
-        def _insert_side_effect(task: Task) -> Task:
-            return replace(task, task_id=42)
+        def _insert_side_effect(new_task: NewTask) -> Task:
+            return Task(
+                task_id=TaskId(42),
+                label=new_task.label,
+                context=new_task.context,
+                status=new_task.status,
+            )
 
         uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
 
@@ -126,11 +132,11 @@ class TestSubmitTask:
             remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
-        assert task_id == 42
+        assert task_id == TaskId(42)
 
         # insert was called with a TO_DO task
         uow.tasks.insert.assert_called_once()
-        inserted_arg: Task = uow.tasks.insert.call_args[0][0]
+        inserted_arg: NewTask = uow.tasks.insert.call_args[0][0]
         assert inserted_arg.label == "my_job"
         assert inserted_arg.status == TaskStatus.TO_DO
         assert inserted_arg.context.extra == {"inp": "content"}
@@ -139,7 +145,7 @@ class TestSubmitTask:
         # save was called with the task that now has remote_folder set
         uow.tasks.save.assert_called_once()
         saved_arg: Task = uow.tasks.save.call_args[0][0]
-        assert saved_arg.task_id == 42
+        assert saved_arg.task_id == TaskId(42)
         assert saved_arg.context.remote_folder is not None
         assert str(saved_arg.context.remote_folder).startswith("/remote/tasks/")
         assert saved_arg.context.remote_folder.endswith("_42")  # dt_str_taskid
@@ -158,7 +164,7 @@ class TestAllocateTask:
     @pytest.fixture
     def todo_task(self) -> Task:
         return Task(
-            task_id=1,
+            task_id=TaskId(1),
             label="test",
             context=TaskContext(engine="test_engine"),
             status=TaskStatus.TO_DO,

@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from asyncssh.sftp import SFTPFailure
 
-from yascheduler.domain.model import NewNode, Task
+from yascheduler.domain.model import NewNode, Task, TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
 from yascheduler.infra.ssh.operations import SSHMachineOperations
@@ -49,7 +49,7 @@ async def _setup_node_and_submit(
     e2e_config: Config,
     uow_factory: Callable[[], PostgresUnitOfWork],
     ssh_container: dict[str, Any],
-) -> int:
+) -> TaskId:
     """Connect, deploy engine, add node row, submit a task. Returns task_id."""
     repository = SSHMachineRepository(log=log)
     operations = SSHMachineOperations(repository=repository)
@@ -81,13 +81,13 @@ async def _setup_node_and_submit(
     task_id = await deps.submit(
         "e2e retry test", {"1.input": "hello e2e"}, "test_shell"
     )
-    assert task_id > 0
+    assert task_id.value > 0
     return task_id
 
 
 async def _wait_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
-    task_id: int,
+    task_id: TaskId,
     target: DomainTaskStatus,
     timeout_s: float = 30.0,
 ) -> Task | None:
@@ -127,7 +127,7 @@ async def test_consume_retry_then_success(
         remote_dir: str,
         local_dir: Path,
         files: list[str],
-        task_id: int | None = None,
+        task_id: TaskId | None = None,
     ) -> tuple[
         list[tuple[str, Any]],
         list[tuple[str | None, Exception]],
@@ -193,7 +193,7 @@ async def test_consume_permanent_marks_done_with_error(
         remote_dir: str,
         local_dir: Path,
         files: list[str],
-        task_id: int | None = None,
+        task_id: TaskId | None = None,
     ) -> tuple[
         list[tuple[str, Any]],
         list[tuple[str | None, Exception]],
@@ -250,7 +250,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
         remote_dir: str,
         local_dir: Path,
         files: list[str],
-        task_id: int | None = None,
+        task_id: TaskId | None = None,
     ) -> tuple[
         list[tuple[str, Any]],
         list[tuple[str | None, Exception]],

@@ -27,6 +27,7 @@ from yascheduler.domain.model import (
     MachineState,
     Task,
     TaskContext,
+    TaskId,
 )
 from yascheduler.domain.services import match_task_to_node
 
@@ -40,7 +41,7 @@ from yascheduler.domain.services import match_task_to_node
 # END_CONTRACT: test_match_found
 def test_match_found() -> None:
     ctx = TaskContext(engine="fleur")
-    task = Task(task_id=1, label="test", context=ctx)
+    task = Task(task_id=TaskId(1), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
     m1 = ConnectedMachine(ip="10.0.0.1", platform="linux", ncpus=4)
     result = match_task_to_node(task, engine, [m1])
@@ -56,7 +57,7 @@ def test_match_found() -> None:
 # END_CONTRACT: test_no_compatible_machine
 def test_no_compatible_machine() -> None:
     ctx = TaskContext(engine="fleur")
-    task = Task(task_id=2, label="test", context=ctx)
+    task = Task(task_id=TaskId(2), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
     m1 = ConnectedMachine(ip="10.0.0.1", platform="windows", ncpus=4)
     result = match_task_to_node(task, engine, [m1])
@@ -72,7 +73,7 @@ def test_no_compatible_machine() -> None:
 # END_CONTRACT: test_all_busy_machines
 def test_all_busy_machines() -> None:
     ctx = TaskContext(engine="fleur")
-    task = Task(task_id=3, label="test", context=ctx)
+    task = Task(task_id=TaskId(3), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
     m1 = ConnectedMachine(
         ip="10.0.0.1", platform="linux", ncpus=4, state=MachineState.BUSY
@@ -93,7 +94,7 @@ def test_all_busy_machines() -> None:
 # END_CONTRACT: test_empty_list
 def test_empty_list() -> None:
     ctx = TaskContext(engine="fleur")
-    task = Task(task_id=4, label="test", context=ctx)
+    task = Task(task_id=TaskId(4), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
     result = match_task_to_node(task, engine, [])
     assert result is None
@@ -108,7 +109,7 @@ def test_empty_list() -> None:
 # END_CONTRACT: test_multiple_compatible_returns_first
 def test_multiple_compatible_returns_first() -> None:
     ctx = TaskContext(engine="fleur")
-    task = Task(task_id=5, label="test", context=ctx)
+    task = Task(task_id=TaskId(5), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
     m1 = ConnectedMachine(ip="10.0.0.1", platform="linux", ncpus=4)
     m2 = ConnectedMachine(ip="10.0.0.2", platform="linux", ncpus=8)
@@ -126,7 +127,7 @@ def test_multiple_compatible_returns_first() -> None:
 # END_CONTRACT: test_multiple_machines_skips_busy
 def test_multiple_machines_skips_busy() -> None:
     ctx = TaskContext(engine="fleur")
-    task = Task(task_id=6, label="test", context=ctx)
+    task = Task(task_id=TaskId(6), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
     m1 = ConnectedMachine(
         ip="10.0.0.1", platform="linux", ncpus=4, state=MachineState.BUSY

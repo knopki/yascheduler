@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 5.6.0
+# VERSION: 5.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
 #   SCOPE: consume_task async function returning bool (True=finalised, False=deferred for retry).
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.7.0 - session-based-machine-handle: consume_task takes session: MachineSession instead of ip: str; delegates session to operations.download_outputs(session=session).
-#   PREVIOUS_CHANGE: v5.5.0 - consume_task returns bool (True=finalised, False=deferred for retry); unpacks 3-tuple (meta_add, transient_errors, permanent_errors) from gateway.download_outputs; transient-only errors defer (no status change, no save, no event, no tracker.discard) so the orchestrator re-consumes the RUNNING task; permanent errors or full success finalise (task.fail with combined msg when both lists present, or task.complete); tracker.discard moved into finalise branch only (fix-download-rmtree-data-loss). Renamed _record_finalization_event -> _decide_finalisation.
+#   LAST_CHANGE: v5.8.0 - consume_task entry takes task_id: TaskId (was int); download_outputs receives task_id=task.task_id (a TaskId) for logging/folder naming (TaskId.__str__ renders the bare int, no .value needed); tracker.discard keys become TaskId (add-task-id-identity).
+#   PREVIOUS_CHANGE: v5.7.0 - session-based-machine-handle: consume_task takes session: MachineSession instead of ip: str; delegates session to operations.download_outputs(session=session).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         MachineOperations,
         MachineSession,
         Task,
+        TaskId,
     )
 
     from .allocation_tracker import AllocationTracker
@@ -200,7 +201,7 @@ async def _finalize_task(
 # START_CONTRACT: consume_task
 #   PURPOSE: Load task by id via UoW, download outputs from remote machine, finalise or defer.
 #   INPUTS: {
-#     task_id: int - ID of the task to consume,
+#     task_id: TaskId - ID of the task to consume,
 #     session: MachineSession - Session of the machine where the task ran,
 #     operations: MachineOperations - SSH operations for output download,
 #     engines: EngineRepository - Config engine repository,
@@ -213,7 +214,7 @@ async def _finalize_task(
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: consume_task
 async def consume_task(
-    task_id: int,
+    task_id: TaskId,
     session: MachineSession,
     operations: MachineOperations,
     engines: EngineRepository,

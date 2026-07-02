@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.9.0
+# VERSION: 2.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain layer entry point — re-exports events, model entities, engine types, exception hierarchy, port interfaces, and cross-layer settings.
 #   SCOPE: Re-exports domain events from .events, domain entities from .model, engine types from .engine (via .model), exception tree from .exceptions, port Protocols from .ports (including CloudConfig, MachineRepository, MachineSession, MachineOperations), and LocalSettings/RemoteDefaults from .settings.
@@ -23,6 +23,8 @@
 #   EngineRepository - Frozen collection of engines (from M-DOMAIN-ENGINE)
 #   LocalFilesDeploy / LocalArchiveDeploy / RemoteArchiveDeploy / Deploy - Deploy strategies (from M-DOMAIN-ENGINE)
 #   Task - Task entity with lifecycle methods
+#   TaskId - Task primary-key value object (frozen dataclass wrapping int)
+#   NewTask - Pre-persistence task record (no task_id)
 #   NodeId - Node primary-key value object (frozen dataclass wrapping int)
 #   NewNode - Pre-persistence node record (no node_id)
 #   Node - Post-persistence node record; carries node_id: NodeId
@@ -56,8 +58,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.9.0 - Re-export NewNode and NodeId from .model (add-node-id-identity). Node now carries node_id: NodeId as its first field (post-persistence shape); NewNode is the pre-persistence input shape; CloudProvisioner.allocate returns NewNode (caller persists via NodeRepository.insert).
-#   PREVIOUS_CHANGE: v2.8.0 - Re-export MachineSession Protocol (session-based-machine-handle section 2). Joined __all__ and .ports re-export next to MachineRepository and MachineOperations.
+#   LAST_CHANGE: v2.10.0 - Re-export NewTask and TaskId from .model (add-task-id-identity). Task now carries task_id: TaskId as its first field (post-persistence shape); NewTask is the pre-persistence input shape; the NewTask→Task conversion happens only in TaskRepository.insert. DomainEvent.task_id and the task-keyed exceptions now carry TaskId.
+#   PREVIOUS_CHANGE: v2.9.0 - Re-export NewNode and NodeId from .model (add-node-id-identity). Node now carries node_id: NodeId as its first field (post-persistence shape); NewNode is the pre-persistence input shape; CloudProvisioner.allocate returns NewNode (caller persists via NodeRepository.insert).
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -80,6 +82,8 @@ __all__ = [
     "LocalArchiveDeploy",
     "RemoteArchiveDeploy",
     "Deploy",
+    "TaskId",
+    "NewTask",
     "Task",
     "NodeId",
     "NewNode",
@@ -156,11 +160,13 @@ from .model import (
     ConnectedMachine,
     MachineState,
     NewNode,
+    NewTask,
     Node,
     NodeId,
     ProcessResult,
     Task,
     TaskContext,
+    TaskId,
     TaskStatus,
 )
 from .ports import (

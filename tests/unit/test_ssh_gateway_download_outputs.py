@@ -35,6 +35,7 @@ import pytest
 from asyncssh.sftp import SFTPFailure
 
 from tests.unit.test_ssh_gateway import _make_state
+from yascheduler.domain.model import TaskId
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.operations import download as download_module
 from yascheduler.infra.ssh.platform.protocol import SFTPConnectionLost
@@ -92,7 +93,7 @@ async def test_download_outputs_success() -> None:
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
         files=["f1.out", "f2.out"],
-        task_id=42,
+        task_id=TaskId(42),
     )
 
     assert meta_add == [
@@ -119,7 +120,7 @@ async def test_download_outputs_per_file_permanent_error() -> None:
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
         files=["f1.out", "f2.out"],
-        task_id=42,
+        task_id=TaskId(42),
     )
 
     assert meta_add == [
@@ -148,7 +149,7 @@ async def test_download_outputs_per_file_transient_error() -> None:
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
         files=["f1.out", "f2.out"],
-        task_id=42,
+        task_id=TaskId(42),
     )
 
     assert meta_add == [
@@ -182,7 +183,7 @@ async def test_download_outputs_session_error() -> None:
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
         files=["f1.out", "f2.out"],
-        task_id=42,
+        task_id=TaskId(42),
     )
 
     assert meta_add == [
@@ -210,7 +211,7 @@ async def test_download_outputs_task_id_in_signature() -> None:
         remote_dir="/r",
         local_dir=Path("/l"),
         files=["f.out"],
-        task_id=99,
+        task_id=TaskId(99),
     )
     assert len(transient_errors) == 0
     assert len(permanent_errors) == 0
@@ -297,7 +298,7 @@ async def test_download_outputs_per_file_sftp_isolation() -> None:
         remote_dir="/r",
         local_dir=Path("/l"),
         files=["f1", "f2", "f3"],
-        task_id=7,
+        task_id=TaskId(7),
     )
 
     # 3 per-file clients opened (rmtree NOT reached: a transient error exists).
@@ -330,7 +331,7 @@ async def test_download_outputs_session_level_failure_transient() -> None:
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
         files=["f1.out", "f2.out"],
-        task_id=42,
+        task_id=TaskId(42),
     )
 
     assert meta_add == [

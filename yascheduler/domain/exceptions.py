@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.9.0
+# VERSION: 1.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
 #   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling, connection.
@@ -28,9 +28,16 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Add CloudError(DomainError) intermediate root; reparent CloudAllocateError/CloudSetupError under it (cloud-error-hierarchy).
-#   PREVIOUS_CHANGE: v1.8.0 - Add CloudAllocateError, CloudSetupError relocated from infra/cloud/manager.py (cloud-provisioner-pure).
+#   LAST_CHANGE: v1.10.0 - The 6 task-keyed exceptions (TaskAlreadyAllocatedError, TaskNotAllocatedError, TaskNotTodoError, TaskNotRunningError, NoCompatibleNodeError, CloudCapacityExhaustedError) take task_id: TaskId (was int); f"task {task_id} ..." messages render the bare integer via TaskId.__str__ (add-task-id-identity). Added `from __future__ import annotations` and import TaskId under TYPE_CHECKING to break the model↔exceptions runtime import cycle (annotations are strings, so no NameError; f-string messages use the parameter, not the annotation).
+#   PREVIOUS_CHANGE: v1.9.0 - Add CloudError(DomainError) intermediate root; reparent CloudAllocateError/CloudSetupError under it (cloud-error-hierarchy).
 # END_CHANGE_SUMMARY
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from yascheduler.domain.model import TaskId
 
 
 class DomainError(Exception):
@@ -65,7 +72,7 @@ class TaskError(DomainError):
 class TaskAlreadyAllocatedError(TaskError):
     """Task already bound to a node."""
 
-    def __init__(self, task_id: int) -> None:
+    def __init__(self, task_id: TaskId) -> None:
         self.task_id = task_id
         super().__init__(f"task {task_id} is already allocated to a node")
 
@@ -73,7 +80,7 @@ class TaskAlreadyAllocatedError(TaskError):
 class TaskNotAllocatedError(TaskError):
     """Task not yet allocated to a node."""
 
-    def __init__(self, task_id: int) -> None:
+    def __init__(self, task_id: TaskId) -> None:
         self.task_id = task_id
         super().__init__(f"task {task_id} is not allocated to any node")
 
@@ -81,7 +88,7 @@ class TaskNotAllocatedError(TaskError):
 class TaskNotTodoError(TaskError):
     """Task not in TODO status."""
 
-    def __init__(self, task_id: int) -> None:
+    def __init__(self, task_id: TaskId) -> None:
         self.task_id = task_id
         super().__init__(f"task {task_id} is not in TODO status")
 
@@ -89,7 +96,7 @@ class TaskNotTodoError(TaskError):
 class TaskNotRunningError(TaskError):
     """Task not running."""
 
-    def __init__(self, task_id: int) -> None:
+    def __init__(self, task_id: TaskId) -> None:
         self.task_id = task_id
         super().__init__(f"task {task_id} is not in running status")
 
@@ -118,7 +125,7 @@ class SchedulingError(DomainError):
 class NoCompatibleNodeError(SchedulingError):
     """No matching node found for task."""
 
-    def __init__(self, task_id: int, platforms: list[str]) -> None:
+    def __init__(self, task_id: TaskId, platforms: list[str]) -> None:
         self.task_id = task_id
         self.platforms = platforms
         super().__init__(
@@ -129,7 +136,7 @@ class NoCompatibleNodeError(SchedulingError):
 class CloudCapacityExhaustedError(SchedulingError):
     """Cloud provider at capacity."""
 
-    def __init__(self, task_id: int) -> None:
+    def __init__(self, task_id: TaskId) -> None:
         self.task_id = task_id
         super().__init__(f"cloud capacity exhausted for task {task_id}")
 

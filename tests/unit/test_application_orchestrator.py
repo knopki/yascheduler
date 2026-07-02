@@ -58,7 +58,7 @@ from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UniqueQueue
 from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.domain.events import TaskAbandoned
-from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
 from yascheduler.entrypoints import Config
 from yascheduler.infra.persistence import PostgresDbConfig
 
@@ -435,7 +435,7 @@ class TestOrchestratorTaskAbandoned:
         orch._repository.get_session = MagicMock(return_value=None)  # type: ignore[method-assign]
 
         task = Task(
-            task_id=42,
+            task_id=TaskId(42),
             label="test",
             context=TaskContext(
                 engine="test_engine",
@@ -445,17 +445,17 @@ class TestOrchestratorTaskAbandoned:
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
         )
-        msg = UMessage(42, task)
+        msg = UMessage(TaskId(42), task)
         machine_not_found: Counter[str] = Counter()
 
         # First call: counter is 1, not enough yet
         await orch._task_consumer_consumer(msg, machine_not_found)
-        assert machine_not_found[42] == 1  # type: ignore[index]
+        assert machine_not_found[TaskId(42)] == 1  # type: ignore[index]
         uow.tasks.save.assert_not_called()
         tracker.discard.assert_not_called()
 
         # Call enough times to exceed broken_tasks_passes (20)
-        machine_not_found[42] = 21  # type: ignore[index]
+        machine_not_found[TaskId(42)] = 21  # type: ignore[index]
         await orch._task_consumer_consumer(msg, machine_not_found)
 
         # save should have been called with a task that has TaskAbandoned event
@@ -466,13 +466,13 @@ class TestOrchestratorTaskAbandoned:
         assert len(saved_task._events) == 1
         event = saved_task._events[0]
         assert isinstance(event, TaskAbandoned)
-        assert event.task_id == 42
+        assert event.task_id == TaskId(42)
         assert event.node_ip == "10.0.0.1"
         assert event.webhook_url == "https://hook.example.com"
         assert event.webhook_custom_params == {"k": "v"}
         uow.commit.assert_called_once()
         # Tracker slot released on abandon so the int doesn't leak forever.
-        tracker.discard.assert_called_once_with(42)
+        tracker.discard.assert_called_once_with(TaskId(42))
 
 
 class TestCloudsGetCapacity:
@@ -661,12 +661,12 @@ class TestAllocatorConsumer:
         orch = make_orchestrator()
 
         task_payload = Task(
-            task_id=1,
+            task_id=TaskId(1),
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.TO_DO,
         )
-        msg = UMessage(1, task_payload)
+        msg = UMessage(TaskId(1), task_payload)
 
         with patch(
             "yascheduler.application.orchestrator.allocate_task",
@@ -687,12 +687,12 @@ class TestAllocatorConsumer:
         orch = make_orchestrator()
 
         task_payload = Task(
-            task_id=42,
+            task_id=TaskId(42),
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.TO_DO,
         )
-        msg = UMessage(42, task_payload)
+        msg = UMessage(TaskId(42), task_payload)
 
         with patch(
             "yascheduler.application.orchestrator.allocate_task",
@@ -711,12 +711,12 @@ class TestAllocatorConsumer:
         orch = make_orchestrator()
 
         task_payload = Task(
-            task_id=7,
+            task_id=TaskId(7),
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.TO_DO,
         )
-        msg = UMessage(7, task_payload)
+        msg = UMessage(TaskId(7), task_payload)
 
         with patch(
             "yascheduler.application.orchestrator.allocate_task",
@@ -725,7 +725,7 @@ class TestAllocatorConsumer:
             await orch._allocator_consumer(msg)
 
         mock_alloc.assert_called_once_with(
-            task_id=7,
+            task_id=TaskId(7),
             engines=orch._engines,
             uow_factory=orch._uow_factory,
             repository=orch._repository,
@@ -759,13 +759,13 @@ class TestConsumeConditionalDiscard:
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
-            task_id=5,
+            task_id=TaskId(5),
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
         )
-        msg = UMessage(5, task)
+        msg = UMessage(TaskId(5), task)
 
         with patch(
             "yascheduler.application.orchestrator.consume_task",
@@ -794,13 +794,13 @@ class TestConsumeConditionalDiscard:
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
-            task_id=5,
+            task_id=TaskId(5),
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
         )
-        msg = UMessage(5, task)
+        msg = UMessage(TaskId(5), task)
 
         with patch(
             "yascheduler.application.orchestrator.consume_task",
@@ -823,14 +823,14 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
 
         task_a = Task(
-            task_id=1,
+            task_id=TaskId(1),
             label="a",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
         )
         task_b = Task(
-            task_id=2,
+            task_id=TaskId(2),
             label="b",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
@@ -844,15 +844,15 @@ class TestConsumeInFlightGuard:
         orch._uow_factory = lambda: mock_uow  # type: ignore[method-assign]
 
         # Mark task_a as in-flight
-        orch._consuming.add(1)
+        orch._consuming.add(TaskId(1))
 
-        yielded: list[UMessage[int, Task]] = []
+        yielded: list[UMessage[TaskId, Task]] = []
         async for msg in orch._task_consumer_producer():
             yielded.append(msg)
 
         # Only task_b (id=2) is yielded; task_a (id=1) is skipped
         assert len(yielded) == 1
-        assert yielded[0].id == 2
+        assert yielded[0].id == TaskId(2)
 
     @pytest.mark.asyncio
     async def test_guard_released_after_consume_true(self) -> None:
@@ -873,13 +873,13 @@ class TestConsumeInFlightGuard:
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
-            task_id=5,
+            task_id=TaskId(5),
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
         )
-        msg = UMessage(5, task)
+        msg = UMessage(TaskId(5), task)
 
         with patch(
             "yascheduler.application.orchestrator.consume_task",
@@ -887,7 +887,7 @@ class TestConsumeInFlightGuard:
         ):
             await orch._task_consumer_consumer(msg, Counter())
 
-        assert 5 not in orch._consuming
+        assert TaskId(5) not in orch._consuming
 
     @pytest.mark.asyncio
     async def test_guard_released_after_consume_false(self) -> None:
@@ -908,13 +908,13 @@ class TestConsumeInFlightGuard:
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
-            task_id=5,
+            task_id=TaskId(5),
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
         )
-        msg = UMessage(5, task)
+        msg = UMessage(TaskId(5), task)
 
         with patch(
             "yascheduler.application.orchestrator.consume_task",
@@ -923,7 +923,7 @@ class TestConsumeInFlightGuard:
             await orch._task_consumer_consumer(msg, Counter())
 
         # Deferred keeps the ip in _occupancy_started but releases the in-flight guard
-        assert 5 not in orch._consuming
+        assert TaskId(5) not in orch._consuming
         assert "10.0.0.1" in orch._occupancy_started
 
     @pytest.mark.asyncio
@@ -945,13 +945,13 @@ class TestConsumeInFlightGuard:
         orch._occupancy_started.add("10.0.0.1")
 
         task = Task(
-            task_id=5,
+            task_id=TaskId(5),
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
         )
-        msg = UMessage(5, task)
+        msg = UMessage(TaskId(5), task)
 
         with patch(
             "yascheduler.application.orchestrator.consume_task",
@@ -961,4 +961,4 @@ class TestConsumeInFlightGuard:
                 await orch._task_consumer_consumer(msg, Counter())
 
         # finally released the guard even on exception
-        assert 5 not in orch._consuming
+        assert TaskId(5) not in orch._consuming

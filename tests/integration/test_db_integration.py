@@ -34,7 +34,14 @@
 
 from collections.abc import Callable
 
-from yascheduler.domain.model import NewNode, Node, NodeId, Task, TaskContext
+from yascheduler.domain.model import (
+    NewNode,
+    NewTask,
+    Node,
+    NodeId,
+    Task,
+    TaskContext,
+)
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
@@ -234,8 +241,7 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
 
     async with uow_factory() as uow:
         task = await uow.tasks.insert(
-            Task(
-                task_id=0,
+            NewTask(
                 label="calc",
                 context=ctx,
                 status=DomainTaskStatus.TO_DO,
@@ -243,7 +249,7 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
             )
         )
         await uow.commit()
-        assert task.task_id >= 1
+        assert task.task_id.value >= 1
         assert task.label == "calc"
         assert task.allocated_ip == "10.0.0.1"
         assert task.status == DomainTaskStatus.TO_DO
@@ -273,7 +279,7 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
 
     async with uow_factory() as uow:
         task = await uow.tasks.insert(
-            Task(task_id=0, label="sim", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(label="sim", context=ctx, status=DomainTaskStatus.TO_DO)
         )
         await uow.commit()
         assert task.status == DomainTaskStatus.TO_DO
@@ -329,9 +335,7 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     # With error message
     async with uow_factory() as uow:
         task = await uow.tasks.insert(
-            Task(
-                task_id=0, label="fail-job", context=ctx, status=DomainTaskStatus.TO_DO
-            )
+            NewTask(label="fail-job", context=ctx, status=DomainTaskStatus.TO_DO)
         )
         await uow.commit()
         task_id = task.task_id
@@ -361,9 +365,7 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     # Without error message (use a new task for clarity)
     async with uow_factory() as uow:
         task2 = await uow.tasks.insert(
-            Task(
-                task_id=0, label="fail-job2", context=ctx, status=DomainTaskStatus.TO_DO
-            )
+            NewTask(label="fail-job2", context=ctx, status=DomainTaskStatus.TO_DO)
         )
         await uow.commit()
         task2_id = task2.task_id
@@ -404,15 +406,13 @@ async def test_get_tasks_by_status(
     ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
         await uow.tasks.insert(
-            Task(task_id=0, label="todo", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(label="todo", context=ctx, status=DomainTaskStatus.TO_DO)
         )
         await uow.tasks.insert(
-            Task(
-                task_id=0, label="running", context=ctx, status=DomainTaskStatus.RUNNING
-            )
+            NewTask(label="running", context=ctx, status=DomainTaskStatus.RUNNING)
         )
         await uow.tasks.insert(
-            Task(task_id=0, label="done", context=ctx, status=DomainTaskStatus.DONE)
+            NewTask(label="done", context=ctx, status=DomainTaskStatus.DONE)
         )
         await uow.commit()
 
@@ -448,13 +448,13 @@ async def test_get_tasks_by_jobs(uow_factory: Callable[[], PostgresUnitOfWork]) 
     ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
         t1 = await uow.tasks.insert(
-            Task(task_id=0, label="a", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(label="a", context=ctx, status=DomainTaskStatus.TO_DO)
         )
         await uow.tasks.insert(
-            Task(task_id=0, label="b", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(label="b", context=ctx, status=DomainTaskStatus.TO_DO)
         )
         t3 = await uow.tasks.insert(
-            Task(task_id=0, label="c", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(label="c", context=ctx, status=DomainTaskStatus.TO_DO)
         )
         await uow.commit()
 
@@ -480,8 +480,7 @@ async def test_get_task_ids_by_ip_and_status(
     ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
         t1 = await uow.tasks.insert(
-            Task(
-                task_id=0,
+            NewTask(
                 label="x",
                 context=ctx,
                 status=DomainTaskStatus.RUNNING,
@@ -489,8 +488,7 @@ async def test_get_task_ids_by_ip_and_status(
             )
         )
         await uow.tasks.insert(
-            Task(
-                task_id=0,
+            NewTask(
                 label="y",
                 context=ctx,
                 status=DomainTaskStatus.RUNNING,
@@ -498,8 +496,7 @@ async def test_get_task_ids_by_ip_and_status(
             )
         )
         await uow.tasks.insert(
-            Task(
-                task_id=0,
+            NewTask(
                 label="z",
                 context=ctx,
                 status=DomainTaskStatus.DONE,
@@ -533,8 +530,7 @@ async def test_get_tasks_with_cloud_by_id_status(
 
     async with uow_factory() as uow:
         t = await uow.tasks.insert(
-            Task(
-                task_id=0,
+            NewTask(
                 label="",
                 context=ctx,
                 status=DomainTaskStatus.RUNNING,
@@ -542,8 +538,7 @@ async def test_get_tasks_with_cloud_by_id_status(
             )
         )
         t2 = await uow.tasks.insert(
-            Task(
-                task_id=0,
+            NewTask(
                 label="",
                 context=ctx,
                 status=DomainTaskStatus.DONE,

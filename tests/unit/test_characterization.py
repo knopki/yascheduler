@@ -23,6 +23,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from yascheduler.domain import TaskId
+
 
 class TestClientQueueSubmitTaskAsync:
     """Client.queue_submit_task_async delegates to deps.submit via the deps_factory seam."""
@@ -35,9 +37,10 @@ class TestClientQueueSubmitTaskAsync:
         """queue_submit_task_async calls deps.submit() via the injected deps_factory, not Scheduler."""
         from yascheduler.entrypoints.client import Yascheduler
 
-        # Arrange — inject fake deps via the constructor seam
+        # Arrange — inject fake deps via the constructor seam.
+        # deps.submit returns TaskId; the facade extracts .value → public int contract.
         mock_deps = MagicMock()
-        mock_deps.submit = AsyncMock(return_value=99)
+        mock_deps.submit = AsyncMock(return_value=TaskId(99))
         factory_calls: list = []
         mock_from_cfg.return_value = MagicMock()
 

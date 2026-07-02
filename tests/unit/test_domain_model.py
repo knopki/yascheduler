@@ -33,11 +33,13 @@
 #   test_connected_machine_release - FREE + free_since
 #   TestTaskWithContext - with_context wholesale replace, immutability, event preservation, no-status-validation, chaining
 #   TestTaskContextReplace - replace typed copy-with: single/multi override, original unchanged, equal copy, drift-lock, fail integration, with_context chain
+#   TestTaskId - TaskId value object: validation, str, equality, hashability
+#   TestNewTask - NewTask dataclass: defaults, no task_id, no lifecycle methods
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Add NodeId/NewNode test suites and update Node construction for add-node-id-identity.
-#   PREVIOUS_CHANGE: v1.2.0 - Add TestTaskContextReplace suite (task-context-replace).
+#   LAST_CHANGE: v1.5.0 - Add TaskId/NewTask test suites and update Task construction for add-task-id-identity.
+#   PREVIOUS_CHANGE: v1.4.0 - Add NodeId/NewNode test suites and update Node construction for add-node-id-identity.
 # END_CHANGE_SUMMARY
 
 import time
@@ -57,12 +59,14 @@ from yascheduler.domain.model import (
     Engine,
     MachineState,
     NewNode,
+    NewTask,
     Node,
     NodeId,
     ProcessResult,
     Task,
     TaskContext,
     TaskContextOverrides,
+    TaskId,
     TaskStatus,
 )
 
@@ -276,13 +280,13 @@ class TestEngine:
 class TestTask:
     def make_task(self, **overrides: object) -> Task:
         ctx = TaskContext(engine="cp2k")
-        base: dict[str, object] = dict(task_id=1, label="test", context=ctx)
+        base: dict[str, object] = dict(task_id=TaskId(1), label="test", context=ctx)
         base.update(overrides)
         return Task(**base)  # type: ignore[arg-type]
 
     def test_construction_default_status(self) -> None:
         task = self.make_task()
-        assert task.task_id == 1
+        assert task.task_id == TaskId(1)
         assert task.label == "test"
         assert task.context.engine == "cp2k"
         assert task.status == TaskStatus.TO_DO
@@ -514,7 +518,7 @@ class TestConnectedMachine:
 class TestTaskWithContext:
     def make_task(self, **overrides: object) -> Task:
         ctx = TaskContext(engine="fleur")
-        base: dict[str, object] = dict(task_id=1, label="test", context=ctx)
+        base: dict[str, object] = dict(task_id=TaskId(1), label="test", context=ctx)
         base.update(overrides)
         return Task(**base)  # type: ignore[arg-type]
 
@@ -532,7 +536,10 @@ class TestTaskWithContext:
     def test_with_context_preserves_events(self) -> None:
         task = self.make_task()
         event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="fleur",
         )
         task = task.record_event(event)
         new_context = TaskContext(engine="cp2k")
@@ -647,7 +654,7 @@ class TestTaskContextReplace:
         assert new is not ctx
 
     def test_replace_error_field_override_chains_into_fail(self) -> None:
-        task = Task(task_id=1, label="x", context=TaskContext(engine="fleur"))
+        task = Task(task_id=TaskId(1), label="x", context=TaskContext(engine="fleur"))
         running = task.allocate_to("10.0.0.1").mark_running()
         result = running.fail("disk full")
         assert result.status == TaskStatus.DONE
@@ -662,8 +669,83 @@ class TestTaskContextReplace:
         }
 
     def test_replace_chains_through_with_context(self) -> None:
-        task = Task(task_id=1, label="x", context=TaskContext(engine="fleur"))
+        task = Task(task_id=TaskId(1), label="x", context=TaskContext(engine="fleur"))
         new_ctx = task.context.replace(remote_folder="/r")
         new_task = task.with_context(new_ctx)
         assert new_task.context is new_ctx
         assert new_task.context.remote_folder == "/r"
+
+
+# START_CONTRACT: test_task_id
+#   PURPOSE: Verify TaskId value object validation, str, equality, hashability.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-MODEL: TaskId]
+# END_CONTRACT: test_task_id
+class TestTaskId:
+    def test_post_init_rejects_non_positive(self) -> None:
+        for bad in (0, -1):
+            with pytest.raises(ValueError):
+                TaskId(bad)
+
+    def test_post_init_accepts_positive(self) -> None:
+        TaskId(1)
+        TaskId(99999)
+
+    def test_str_renders_bare_int(self) -> None:
+        assert str(TaskId(5)) == "5"
+        assert f"{TaskId(5)}" == "5"
+
+    def test_not_equal_to_int(self) -> None:
+        assert (TaskId(5) == 5) is False
+        assert (TaskId(5) != 5) is True
+
+    def test_hashable_and_usable_as_dict_key(self) -> None:
+        assert hash(TaskId(5)) == hash(TaskId(5))
+        d = {TaskId(1): "a"}
+        assert d[TaskId(1)] == "a"
+
+    def test_equality_same_value(self) -> None:
+        assert TaskId(5) == TaskId(5)
+        assert TaskId(5) != TaskId(6)
+
+
+# START_CONTRACT: test_new_task
+#   PURPOSE: Verify NewTask dataclass defaults, no task_id, no lifecycle methods.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-MODEL: NewTask]
+# END_CONTRACT: test_new_task
+class TestNewTask:
+    def test_constructs_with_defaults(self) -> None:
+        ctx = TaskContext(engine="cp2k")
+        nt = NewTask(label="x", context=ctx)
+        assert nt.label == "x"
+        assert nt.context is ctx
+        assert nt.status == TaskStatus.TO_DO
+        assert nt.allocated_ip is None
+
+    def test_has_no_task_id(self) -> None:
+        nt = NewTask(label="x", context=TaskContext(engine="cp2k"))
+        assert not hasattr(nt, "task_id")
+
+    def test_has_no_events_attribute(self) -> None:
+        nt = NewTask(label="x", context=TaskContext(engine="cp2k"))
+        assert not hasattr(nt, "_events")
+
+    def test_has_no_lifecycle_methods(self) -> None:
+        nt = NewTask(label="x", context=TaskContext(engine="cp2k"))
+        for method in (
+            "allocate_to",
+            "mark_running",
+            "complete",
+            "fail",
+            "reject",
+            "with_context",
+            "with_event",
+            "pull_events",
+            "record_event",
+        ):
+            assert not hasattr(nt, method)

@@ -38,7 +38,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskId, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 check_status_mod = importlib.import_module("yascheduler.entrypoints.cli.check_status")
@@ -114,7 +114,7 @@ def make_mock_deps(config: MagicMock, uow: AsyncMock) -> MagicMock:
     """Return a MagicMock CLIDeps wired to the given uow."""
     deps = MagicMock(spec=CLIDeps)
     deps.uow_factory = MagicMock(return_value=uow)
-    deps.submit = AsyncMock(return_value=42)
+    deps.submit = AsyncMock(return_value=TaskId(42))
     deps.engines = config.engines
     deps.remote_tasks_dir = PurePosixPath("/tmp/tasks")
     return deps
@@ -129,7 +129,7 @@ def make_task(
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
     return Task(
-        task_id=task_id,
+        task_id=TaskId(task_id),
         label=label,
         context=TaskContext(
             engine=engine,
@@ -330,6 +330,7 @@ class TestCheckStatusDefault:
     def test_jobs_filter_calls_list_by_jobs(
         self,
         capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
     ) -> None:
         _config, uow, _deps = stub_config_deps
@@ -337,9 +338,12 @@ class TestCheckStatusDefault:
             return_value=[make_task(task_id=1, status=TaskStatus.RUNNING, label="x")]
         )
 
+        # argparse --jobs has type=int, so args.jobs are ints; _query_tasks
+        # wraps them to TaskId before calling list_by_jobs.
+
         _run(["-j", "1", "2"])
 
-        uow.tasks.list_by_jobs.assert_called_once_with(job_ids=["1", "2"])
+        uow.tasks.list_by_jobs.assert_called_once_with(job_ids=[TaskId(1), TaskId(2)])
         out, _ = capsys.readouterr()
         assert "1   RUNNING" in out
 
@@ -492,6 +496,7 @@ class TestCheckStatusJson:
     def test_json_composes_with_jobs(
         self,
         capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
     ) -> None:
         _config, uow, _deps = stub_config_deps
@@ -506,9 +511,12 @@ class TestCheckStatusJson:
             }
         )
 
+        # argparse --jobs has type=int, so args.jobs are ints; _query_tasks
+        # wraps them to TaskId before calling list_by_jobs.
+
         _run(["--json", "-j", "1"])
 
-        uow.tasks.list_by_jobs.assert_called_once_with(job_ids=["1"])
+        uow.tasks.list_by_jobs.assert_called_once_with(job_ids=[TaskId(1)])
         out, _ = capsys.readouterr()
         assert _json.loads(out)  # non-empty JSON list
 

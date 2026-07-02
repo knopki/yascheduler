@@ -59,7 +59,7 @@ from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDe
 from yascheduler.domain.exceptions import MachineConnectionError
 from yascheduler.domain.model import (
     NewNode,
-    Task,
+    NewTask,
     TaskContext,
     TaskStatus,
 )
@@ -161,8 +161,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     async with uow_factory() as uow:
         persisted_node = await uow.nodes.insert(node)
         inserted_task = await uow.tasks.insert(
-            Task(
-                task_id=0,
+            NewTask(
                 label="stuck",
                 context=TaskContext(engine="test_engine"),
                 status=TaskStatus.TO_DO,

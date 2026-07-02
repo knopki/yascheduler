@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskId, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 show_nodes_mod = importlib.import_module("yascheduler.entrypoints.cli.show_nodes")
@@ -88,7 +88,7 @@ def make_mock_deps(config: MagicMock, uow: AsyncMock) -> MagicMock:
     """Return a MagicMock CLIDeps wired to the given uow."""
     deps = MagicMock(spec=CLIDeps)
     deps.uow_factory = MagicMock(return_value=uow)
-    deps.submit = AsyncMock(return_value=42)
+    deps.submit = AsyncMock(return_value=TaskId(42))
     deps.engines = config.engines
     deps.remote_tasks_dir = PurePosixPath("/tmp/tasks")
     return deps
@@ -102,7 +102,7 @@ def make_task(
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
     return Task(
-        task_id=task_id,
+        task_id=TaskId(task_id),
         label=label,
         context=TaskContext(
             engine="g09",

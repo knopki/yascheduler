@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.7.1
+# VERSION: 6.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.7.1 - fix(orchestrator): _print_stats used ncounters[True] which raised KeyError(True) every 10s (logged as err=True, str(KeyError(True))=='True') when yascheduler_nodes is empty or has no enabled rows. Switched to ncounters.get(True, 0). The stats-resilience try/except masked it (loop continued), so the daemon spammed err=True instead of printing stats on a fresh/empty DB. Regression test added in test_orchestrator_producer_resilience.py.
-#   PREVIOUS_CHANGE: v6.7.0 - fix(orchestrator): connect static nodes (cloud=None) again; the v6.2.1 FILTER_CLOUD_ONLY producer filter (fix-never-connected-node-leak task 4.7) excluded static nodes from auto-connect, breaking the yasetnode → daemon handoff (static nodes persisted by _add_node are never reconnected by the daemon, tasks stuck in TO_DO). Replaced with a precise consumer-side guard before the grace-check that retries static nodes indefinitely without ever calling abandon_node. Same intent as task 4.7 (static never abandoned), narrower mechanism, restores pre-3c3f7e0 connectivity.
+#   LAST_CHANGE: v6.8.0 - Carry TaskId end-to-end through the producer/consumer loops (add-task-id-identity): _consuming is set[TaskId]; _allocate_q/_consume_q are UniqueQueue[TaskId, Task]; the allocator/task-consumer producers yield UMessage[TaskId, Task]; allocate_task/consume_task are called with task.task_id (a TaskId) and the tracker/add/discard keys are TaskId. No .value extraction (TaskId flows internally; logging task_id=%s renders the bare integer).
+#   PREVIOUS_CHANGE: v6.7.1 - fix(orchestrator): _print_stats used ncounters[True] which raised KeyError(True) every 10s (logged as err=True, str(KeyError(True))=='True') when yascheduler_nodes is empty or has no enabled rows. Switched to ncounters.get(True, 0). The stats-resilience try/except masked it (loop continued), so the daemon spammed err=True instead of printing stats on a fresh/empty DB. Regression test added in test_orchestrator_producer_resilience.py.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from yascheduler.domain import (
     Node,
     Task,
     TaskAbandoned,
+    TaskId,
     TaskStatus,
 )
 
@@ -138,7 +139,7 @@ class Orchestrator:
         # consuming the same RUNNING task across overlapping producer cycles.
         # Same-event-loop check/add/remove are atomic (no await between check
         # and add). In-memory only; daemon restart resets the guard.
-        self._consuming: set[int] = set()
+        self._consuming: set[TaskId] = set()
         # Per-IP first-seen monotonic timestamp of a consecutive connect
         # failure; in-memory only (daemon restart resets grace windows).
         self._connect_failures: dict[str, float] = {}
@@ -152,10 +153,10 @@ class Orchestrator:
         self._conn_machine_q: UniqueQueue[str, Node] = UniqueQueue(
             "conn_machine", maxsize=lcfg.conn_machine_pending
         )
-        self._allocate_q: UniqueQueue[int, Task] = UniqueQueue(
+        self._allocate_q: UniqueQueue[TaskId, Task] = UniqueQueue(
             "allocate", maxsize=lcfg.allocate_pending
         )
-        self._consume_q: UniqueQueue[int, Task] = UniqueQueue(
+        self._consume_q: UniqueQueue[TaskId, Task] = UniqueQueue(
             "consume", maxsize=lcfg.consume_pending
         )
         self._deallocate_q: UniqueQueue[str, str] = UniqueQueue(
@@ -365,7 +366,7 @@ class Orchestrator:
 
     async def _allocator_producer(
         self,
-    ) -> AsyncGenerator[UMessage[int, Task], None]:
+    ) -> AsyncGenerator[UMessage[TaskId, Task], None]:
         ccap = await self._clouds_get_capacity()
         tlim = max(ccap, len(self._repository.list_free(None)), 10)
         async with self._uow_factory() as uow:
@@ -380,12 +381,12 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._allocator_consumer
     #   PURPOSE: Run allocate_task for one queued task; swallow exceptions to keep the worker alive.
-    #   INPUTS: { msg: UMessage[int, Task] }
+    #   INPUTS: { msg: UMessage[TaskId, Task] }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Delegates all allocation side effects to allocate_task; logs and swallows any exception so the allocator worker is not killed (mirrors _deallocator_consumer).
     #   LINKS: M-APPLICATION-ALLOCATE
     # END_CONTRACT: Orchestrator._allocator_consumer
-    async def _allocator_consumer(self, msg: UMessage[int, Task]) -> None:
+    async def _allocator_consumer(self, msg: UMessage[TaskId, Task]) -> None:
         # START_BLOCK_ALLOCATE
         self._log.debug(
             "[Orchestrator][_allocator_consumer][ALLOCATE] task_id=%s",
@@ -409,7 +410,7 @@ class Orchestrator:
 
     async def _task_consumer_producer(
         self,
-    ) -> AsyncGenerator[UMessage[int, Task], None]:
+    ) -> AsyncGenerator[UMessage[TaskId, Task], None]:
         async with self._uow_factory() as uow:
             tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
         # START_BLOCK_SKIP_IN_FLIGHT
@@ -424,7 +425,7 @@ class Orchestrator:
 
     # START_CONTRACT: Orchestrator._task_consumer_consumer
     #   PURPOSE: Check task machine state, record TaskAbandoned for lost nodes, or consume completed tasks.
-    #   INPUTS: { msg: UMessage[int, Task], machine_not_found: Counter }
+    #   INPUTS: { msg: UMessage[TaskId, Task], machine_not_found: Counter[TaskId] }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Records TaskAbandoned event for lost nodes; calls consume_task use case for free machines;
     #     guards the task id in self._consuming around the await; discards ip from _occupancy_started only when
@@ -432,7 +433,7 @@ class Orchestrator:
     #   LINKS: M-APPLICATION-CONSUME, M-DOMAIN-EVENTS
     # END_CONTRACT: Orchestrator._task_consumer_consumer
     async def _task_consumer_consumer(
-        self, msg: UMessage[int, Task], machine_not_found: Counter
+        self, msg: UMessage[TaskId, Task], machine_not_found: Counter
     ) -> None:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
@@ -748,7 +749,7 @@ class Orchestrator:
         )
         self._bg_jobs.add(asyncio.create_task(allocate_co))
 
-        machine_not_found: Counter[str] = Counter()
+        machine_not_found: Counter[TaskId] = Counter()
         consume_co = self._create_producer_consumers(
             queue=self._consume_q,
             producer=self._task_consumer_producer,

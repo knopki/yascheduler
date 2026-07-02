@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
@@ -9,13 +9,13 @@
 #
 # START_MODULE_MAP
 #   _PgRepository - base class for pg8000-backed repositories (conn, executor, _run)
-#   PostgresTaskRepository - async task CRUD: get, save, update_status, insert, list_by_status, list_by_jobs, count_by_status; save/update_status raise TaskRowNotFoundError on 0-row UPDATE
+#   PostgresTaskRepository - async task CRUD: get, save, update_status, insert (NewTask→Task), list_by_status, list_by_jobs, count_by_status; get/update_status/save/list_by_jobs take/return TaskId (.value passed as pg8000 param); list_ids_by_ip_and_status returns list[TaskId]; _row_to_task wraps TaskId; save/update_status raise TaskRowNotFoundError on 0-row UPDATE
 #   PostgresNodeRepository - async node CRUD: get, get_by_id, get_by_ips, list_*, insert (NewNode→Node), add_tmp, enable, disable, remove, count_*
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Rename add(node: Node) → insert(new_node: NewNode) -> Node (runs node/insert.sql RETURNING node_id; mirrors TaskRepository.insert); add get_by_id(node_id: NodeId) -> Node | None (node/get_by_id.sql; passes node_id.value as pg8000 cannot adapt a dataclass); _row_to_node wraps NodeId(int(row["node_id"])) (add-node-id-identity).
-#   PREVIOUS_CHANGE: v1.4.0 - save/update_status use RETURNING task_id to detect 0-row UPDATE; raise TaskRowNotFoundError before _saved_tasks.append; upsert.sql renamed to update_by_id.sql (fix-save-silent-zero-rows).
+#   LAST_CHANGE: v1.6.0 - TaskRepository methods take/return TaskId (add-task-id-identity): insert(new_task: NewTask) -> Task (sole NewTask→Task conversion; the DB generates the id); get/update_status take TaskId and pass task_id.value as the pg8000 param; save passes task.task_id.value; list_ids_by_ip_and_status returns [TaskId(int(row[\"task_id\"]))]; list_by_jobs takes list[TaskId] and passes [tid.value]; _row_to_task wraps TaskId(int(row[\"task_id\"])).
+#   PREVIOUS_CHANGE: v1.5.0 - Rename add(node: Node) → insert(new_node: NewNode) -> Node (runs node/insert.sql RETURNING node_id; mirrors TaskRepository.insert); add get_by_id(node_id: NodeId) -> Node | None (node/get_by_id.sql; passes node_id.value as pg8000 cannot adapt a dataclass); _row_to_node wraps NodeId(int(row["node_id"])) (add-node-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -24,7 +24,16 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
-from yascheduler.domain import NewNode, Node, NodeId, Task, TaskContext, TaskStatus
+from yascheduler.domain import (
+    NewNode,
+    NewTask,
+    Node,
+    NodeId,
+    Task,
+    TaskContext,
+    TaskId,
+    TaskStatus,
+)
 
 from .exceptions import TaskRowNotFoundError
 from .sql_loader import load_query
@@ -81,24 +90,28 @@ class PostgresTaskRepository(_PgRepository):
         self._saved_tasks = saved_tasks
 
     # START_CONTRACT: get
-    #   PURPOSE: Fetch a single task by its database ID.
-    #   INPUTS: { task_id: int }
+    #   PURPOSE: Fetch a single task by its primary key.
+    #   INPUTS: { task_id: TaskId - the primary-key value object }
     #   OUTPUTS: { Task | None - the task or None if not found }
     #   SIDE_EFFECTS: None
     #   LINKS: task/get_by_id.sql, _row_to_task
     # END_CONTRACT: get
-    async def get(self, task_id: int) -> Task | None:
-        """Retrieve a task by ID, or None if not found."""
-        rows = await self._run(load_query("task/get_by_id"), task_id=task_id)
+    async def get(self, task_id: TaskId) -> Task | None:
+        """Retrieve a task by ID, or None if not found.
+
+        Passes ``task_id.value`` (the bare int) as the SQL param — pg8000 cannot
+        adapt a ``TaskId`` dataclass.
+        """
+        rows = await self._run(load_query("task/get_by_id"), task_id=task_id.value)
         if not rows:
             return None
         return self._row_to_task(rows[0])
 
     # START_CONTRACT: save
     #   PURPOSE: Update mutable fields of an existing task row by task_id; raise TaskRowNotFoundError if the row does not exist.
-    #   INPUTS: { task: Task - domain task with serialized context }
+    #   INPUTS: { task: Task - domain task with serialized context (task.task_id: TaskId) }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Writes to yascheduler_tasks row; metadata serialized as JSON; raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist.
+    #   SIDE_EFFECTS: Writes to yascheduler_tasks row (SQL param task_id=task.task_id.value); metadata serialized as JSON; raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist.
     #   LINKS: task/update_by_id.sql, TaskContext.to_metadata, TaskRowNotFoundError
     # END_CONTRACT: save
     async def save(self, task: Task) -> None:
@@ -107,7 +120,7 @@ class PostgresTaskRepository(_PgRepository):
         # START_BLOCK_DETECT_ZERO_ROWS
         rows = await self._run(
             load_query("task/update_by_id"),
-            task_id=task.task_id,
+            task_id=task.task_id.value,
             label=task.label,
             status=task.status.value,
             ip=task.allocated_ip,
@@ -121,17 +134,17 @@ class PostgresTaskRepository(_PgRepository):
 
     # START_CONTRACT: update_status
     #   PURPOSE: Atomically update only the status field of a task; raise TaskRowNotFoundError if the row does not exist.
-    #   INPUTS: { task_id: int - task to update, status: TaskStatus - new status }
+    #   INPUTS: { task_id: TaskId - task to update, status: TaskStatus - new status }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Executes atomic UPDATE on yascheduler_tasks.status; raises TaskRowNotFoundError when the targeted task_id does not exist.
+    #   SIDE_EFFECTS: Executes atomic UPDATE on yascheduler_tasks.status (SQL param task_id=task_id.value); raises TaskRowNotFoundError when the targeted task_id does not exist.
     #   LINKS: task/update_status.sql, TaskRowNotFoundError
     # END_CONTRACT: update_status
-    async def update_status(self, task_id: int, status: TaskStatus) -> None:
+    async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
         """Atomically update only the status field; raises on missing row."""
         # START_BLOCK_DETECT_ZERO_ROWS
         rows = await self._run(
             load_query("task/update_status"),
-            task_id=task_id,
+            task_id=task_id.value,
             status=status.value,
         )
         if not rows:
@@ -141,35 +154,37 @@ class PostgresTaskRepository(_PgRepository):
     # START_CONTRACT: list_ids_by_ip_and_status
     #   PURPOSE: Return task IDs matching the given IP and status.
     #   INPUTS: { ip: str, status: TaskStatus }
-    #   OUTPUTS: { list[int] - task IDs }
+    #   OUTPUTS: { list[TaskId] - task IDs (the caller feeds them to update_status(TaskId, ...)) }
     #   SIDE_EFFECTS: None
     #   LINKS: task/get_ids_by_ip_and_status.sql
     # END_CONTRACT: list_ids_by_ip_and_status
-    async def list_ids_by_ip_and_status(self, ip: str, status: TaskStatus) -> list[int]:
+    async def list_ids_by_ip_and_status(
+        self, ip: str, status: TaskStatus
+    ) -> list[TaskId]:
         """Return task IDs matching the given IP and status."""
         rows = await self._run(
             load_query("task/get_ids_by_ip_and_status"),
             ip=ip,
             status=status.value,
         )
-        return [row["task_id"] for row in rows]
+        return [TaskId(int(row["task_id"])) for row in rows]
 
     # START_CONTRACT: insert
-    #   PURPOSE: Insert a new task row and return a Task with the generated task_id.
-    #   INPUTS: { task: Task - domain task (task_id is ignored, generated by DB) }
-    #   OUTPUTS: { Task - the newly created task with real task_id }
+    #   PURPOSE: Insert a new task row and return a Task with the DB-generated task_id (sole NewTask→Task conversion).
+    #   INPUTS: { new_task: NewTask - pre-persistence task record (no task_id; the DB generates it) }
+    #   OUTPUTS: { Task - the newly created task carrying the generated TaskId }
     #   SIDE_EFFECTS: Inserts row into yascheduler_tasks; assigns task_id via RETURNING.
     #   LINKS: task/insert.sql, _row_to_task
     # END_CONTRACT: insert
-    async def insert(self, task: Task) -> Task:
-        """Insert a new task, return it with the generated ID."""
-        metadata = json.dumps(task.context.to_metadata())
+    async def insert(self, new_task: NewTask) -> Task:
+        """Insert a NewTask, return the persisted Task with the generated ID."""
+        metadata = json.dumps(new_task.context.to_metadata())
         rows = await self._run(
             load_query("task/insert"),
-            label=task.label,
+            label=new_task.label,
             metadata=metadata,
-            ip=task.allocated_ip,
-            status=task.status.value,
+            ip=new_task.allocated_ip,
+            status=new_task.status.value,
         )
         return self._row_to_task(rows[0])
 
@@ -193,14 +208,16 @@ class PostgresTaskRepository(_PgRepository):
 
     # START_CONTRACT: list_by_jobs
     #   PURPOSE: Query tasks by a list of task IDs (used by Yascheduler client facade).
-    #   INPUTS: { job_ids: list[int] }
-    #   OUTPUTS: { list[Task] }
+    #   INPUTS: { job_ids: list[TaskId] - task IDs to look up }
+    #   OUTPUTS: { list[Task] - tasks carrying TaskId }
     #   SIDE_EFFECTS: None
     #   LINKS: task/list_by_jobs.sql, _row_to_task
     # END_CONTRACT: list_by_jobs
-    async def list_by_jobs(self, job_ids: list[int]) -> list[Task]:
+    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
         """Return tasks whose IDs are in the given list."""
-        rows = await self._run(load_query("task/list_by_jobs"), task_ids=job_ids)
+        rows = await self._run(
+            load_query("task/list_by_jobs"), task_ids=[tid.value for tid in job_ids]
+        )
         return [self._row_to_task(r) for r in rows]
 
     # START_CONTRACT: count_by_status
@@ -216,11 +233,11 @@ class PostgresTaskRepository(_PgRepository):
         return {TaskStatus(row["status"]): row["count"] for row in rows}
 
     # START_CONTRACT: _row_to_task
-    #   PURPOSE: Map a DB row dict to a domain Task, parsing JSONB metadata.
+    #   PURPOSE: Map a DB row dict to a domain Task, parsing JSONB metadata and wrapping TaskId from the task_id column.
     #   INPUTS: { row: dict[str, Any] - row with keys task_id, label, ip, status, metadata }
-    #   OUTPUTS: { Task }
+    #   OUTPUTS: { Task - carries task_id: TaskId }
     #   SIDE_EFFECTS: None
-    #   LINKS: TaskContext.from_metadata
+    #   LINKS: TaskContext.from_metadata, TaskId
     # END_CONTRACT: _row_to_task
     @staticmethod
     def _row_to_task(row: dict[str, Any]) -> Task:
@@ -233,7 +250,7 @@ class PostgresTaskRepository(_PgRepository):
         ctx = TaskContext.from_metadata(metadata)
         # Events are transient — always empty when loaded from DB.
         return Task(
-            task_id=row["task_id"],
+            task_id=TaskId(int(row["task_id"])),
             label=row.get("label", ""),
             context=ctx,
             status=TaskStatus(row["status"]),

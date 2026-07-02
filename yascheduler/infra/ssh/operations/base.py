@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/base.py
-# VERSION: 2.1.0
+# VERSION: 2.1.1
 # START_MODULE_CONTRACT
 #   PURPOSE: SSHMachineOperations — facade over MachineSession. Use-case methods forward to stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker); facade pass-throughs delegate to session.*. No base primitives declared on the facade (moved to SSHMachineSession).
 #   SCOPE: SSHMachineOperations class only. Narrow local Protocols (CommandExecutor/SftpProvider/StateAccessors) deleted — collaborators take sessions directly. my_backoff_exc canonical copy lives in ../session.py (consumers import from there directly).
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - Drop the back-compat re-import of my_backoff_exc (no consumer imports it from operations.base; canonical copy lives in ../session.py and is imported directly by its users).
-#   PREVIOUS_CHANGE: v2.0.0 - Session-based-machine-handle section 4. SSHMachineOperations becomes a facade: base primitives (run/run_full/run_bg/upload/get_sftp/pgrep/list_processes/get_cpu_cores/setup_node) deleted (moved to SSHMachineSession). Narrow local Protocols (CommandExecutor/SftpProvider/StateAccessors) deleted — collaborators take sessions directly. __init__ now composes TaskDeployer(log)/OutputDownloader(log)/OccupancyChecker(log) (stateless; no repository/operations refs). Facade pass-throughs (run/run_full/run_bg/get_cpu_cores/setup_node) delegate to session.*. Use-case methods (start_task_on_machine/download_outputs/occupancy_check/start_occupancy_check) forward to collaborators with session.
+#   LAST_CHANGE: v2.1.1 - download_outputs pass-through takes task_id: TaskId | None (was int | None) to match the collaborator + domain port (add-task-id-identity).
+#   PREVIOUS_CHANGE: v2.1.0 - Drop the back-compat re-import of my_backoff_exc (no consumer imports it from operations.base; canonical copy lives in ../session.py and is imported directly by its users).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         MachineSession,
         ProcessResult,
         Task,
+        TaskId,
     )
 
 
@@ -108,7 +109,7 @@ class SSHMachineOperations:
         remote_dir: str,
         local_dir: Path,
         files: list[str],
-        task_id: int | None = None,
+        task_id: TaskId | None = None,
     ) -> tuple[
         list[tuple[str, Any]],
         list[tuple[str | None, Exception]],

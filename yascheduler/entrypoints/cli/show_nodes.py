@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/show_nodes.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output.
 #   SCOPE: show_nodes command + argparse + in-memory node-to-task join + table/JSON renderers.
@@ -15,12 +15,12 @@
 #   _filter_rows - AND-compose active filters
 #   _render_nodes_table - Fixed-width table with display transformations (NODE_ID first column)
 #   _render_nodes_json - Raw-domain-values JSON (node_id via .value first field)
-#   _NodeView - Private CLI-only node+task projection DTO (node_id: NodeId first)
+#   _NodeView - Private CLI-only node+task projection DTO (node_id: NodeId first; task_id: TaskId | None)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - _NodeView gains node_id: NodeId as first field (identity-first); table renderer adds NODE_ID as the first column rendering str(row.node_id); JSON renderer adds "node_id": r.node_id.value as the first field (add-node-id-identity).
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def show_nodes to def show_nodes(argv): asyncio.run(_show_nodes_async(argv)) + async def _show_nodes_async(argv).
+#   LAST_CHANGE: v1.3.0 - _NodeView.task_id narrows int | None -> TaskId | None; _fetch_nodes_view carries task.task_id (a TaskId) through the join; JSON renderer extracts r.task_id.value (json.dumps would raise TypeError on a TaskId); table renderer str(row.task_id) unchanged via __str__ (add-task-id-identity).
+#   PREVIOUS_CHANGE: v1.2.0 - _NodeView gains node_id: NodeId as first field (identity-first); table renderer adds NODE_ID as the first column rendering str(row.node_id); JSON renderer adds "node_id": r.node_id.value as the first field (add-node-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import NodeId, TaskStatus
+from yascheduler.domain import NodeId, TaskId, TaskStatus
 from yascheduler.entrypoints import make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 
@@ -54,7 +54,7 @@ class _NodeView:
     ncpus: int
     enabled: bool
     cloud: str | None
-    task_id: int | None
+    task_id: TaskId | None
     label: str | None
 
 
@@ -242,7 +242,7 @@ def _render_nodes_json(rows: list[_NodeView]) -> str:
             "enabled": r.enabled,
             "cloud": r.cloud,
             "occupied_by": (
-                {"task_id": r.task_id, "label": r.label}
+                {"task_id": r.task_id.value, "label": r.label}
                 if r.task_id is not None
                 else None
             ),

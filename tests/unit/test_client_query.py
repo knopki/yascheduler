@@ -37,7 +37,7 @@ from unittest.mock import patch
 
 import pytest
 
-from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
 from yascheduler.entrypoints.client import Yascheduler
 
 EXPECTED_KEYS = {"task_id", "label", "ip", "status", "metadata", "cloud"}
@@ -49,7 +49,7 @@ class FakeTaskRepository:
     def __init__(self, tasks: list[Task] | None = None) -> None:
         self._tasks = tasks or []
         self.list_by_status_calls: list[set[TaskStatus]] = []
-        self.list_by_jobs_calls: list[list[int]] = []
+        self.list_by_jobs_calls: list[list[TaskId]] = []
 
     async def list_by_status(
         self, statuses: set[TaskStatus], *, limit: int | None = None
@@ -57,7 +57,7 @@ class FakeTaskRepository:
         self.list_by_status_calls.append(statuses)
         return self._tasks
 
-    async def list_by_jobs(self, job_ids: list[int]) -> list[Task]:
+    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
         self.list_by_jobs_calls.append(job_ids)
         return self._tasks
 
@@ -95,7 +95,7 @@ def _make_task(
     allocated_ip: str | None = None,
 ) -> Task:
     return Task(
-        task_id=task_id,
+        task_id=TaskId(task_id),
         label=f"task-{task_id}",
         context=TaskContext(engine="test_engine"),
         status=status,
@@ -134,7 +134,7 @@ class TestClientQueryDispatch:
         result = await client.queue_get_tasks_async(jobs=[7])
 
         assert len(result) == 1
-        assert repo.list_by_jobs_calls == [[7]]
+        assert repo.list_by_jobs_calls == [[TaskId(7)]]
         assert repo.list_by_status_calls == []
 
     async def test_both_filters_raises_value_error(self) -> None:

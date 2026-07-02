@@ -44,7 +44,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import TaskStatus
+from yascheduler.domain.model import TaskId, TaskStatus
 from yascheduler.infra.notifier.webhook import WebhookPayload, webhook_handler
 
 URL = "https://example.com/hook"
@@ -111,7 +111,9 @@ async def test_event_dispatches_correct_status(
     extra_kw: dict[str, Any],
     expected_status: TaskStatus,
 ) -> None:
-    event = event_cls(task_id=42, webhook_url=URL, webhook_custom_params={}, **extra_kw)
+    event = event_cls(
+        task_id=TaskId(42), webhook_url=URL, webhook_custom_params={}, **extra_kw
+    )
     with patch(
         "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
     ) as mock_send:
@@ -129,7 +131,10 @@ async def test_event_dispatches_correct_status(
 
 async def test_skip_when_no_webhook_url() -> None:
     event = TaskCreated(
-        task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+        task_id=TaskId(1),
+        webhook_url=None,
+        webhook_custom_params={},
+        engine_name="fleur",
     )
     with patch(
         "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
@@ -141,7 +146,10 @@ async def test_skip_when_no_webhook_url() -> None:
 async def test_custom_params_forwarded() -> None:
     params: dict[str, object] = {"key": "val", "n": 42}
     event = TaskCreated(
-        task_id=7, webhook_url=URL, webhook_custom_params=params, engine_name="fleur"
+        task_id=TaskId(7),
+        webhook_url=URL,
+        webhook_custom_params=params,
+        engine_name="fleur",
     )
     with patch(
         "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
@@ -154,7 +162,10 @@ async def test_custom_params_forwarded() -> None:
 
 async def test_send_error_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
     event = TaskCreated(
-        task_id=99, webhook_url=URL, webhook_custom_params={}, engine_name="fleur"
+        task_id=TaskId(99),
+        webhook_url=URL,
+        webhook_custom_params={},
+        engine_name="fleur",
     )
     resp = AsyncMock()
     resp.ok = False

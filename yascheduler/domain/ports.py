@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.12.0
+# VERSION: 2.13.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -8,7 +8,7 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TaskRepository - Async port for task persistence (get, save, insert, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status)
+#   TaskRepository - Async port for task persistence (get, save, insert NewTask→Task, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status); get/update_status take TaskId, list_ids_by_ip_and_status returns list[TaskId], list_by_jobs takes list[TaskId]
 #   NodeRepository - Async port for node persistence (insert NewNode→Node, get_by_id, full CRUD lifecycle, list_all, get_by_ips, count_by_status)
 #   CloudConfig - Structural Protocol for cloud provider config (7-field surface application consumers read: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host)
 #   MachineRepository - Async port for the connected-machine collection (lifecycle, queries); returns MachineSession; no state transitions/accessors/monitor (moved to MachineSession)
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.12.0 - NodeRepository: rename add(node: Node) -> None to insert(new_node: NewNode) -> Node (mirrors TaskRepository.insert; runs RETURNING node_id); add get_by_id(node_id: NodeId) -> Node | None (additive primary-key lookup). CloudProvisioner.allocate return type narrows Node → NewNode (pre-persistence; caller persists via NodeRepository.insert). ip-keyed mutators unchanged (add-node-id-identity).
-#   PREVIOUS_CHANGE: v2.11.0 - Session-based-machine-handle sections 3-4. Narrowed MachineRepository Protocol to 9-method surface (connect/disconnect/disconnect_all/list_free/list_connected/get_session/contains/__contains__/__len__) returning MachineSession; removed get_machine_state, update_machine, occupy, release, get_path, get_quote, get_hostname, install_monitor, cancel_monitor (migrated to MachineSession). Rewrote MachineOperations Protocol: methods now take session: MachineSession (was ConnectedMachine/ip); use-case methods (start_task_on_machine, download_outputs, occupancy_check, start_occupancy_check) + facade pass-throughs (run, run_full, run_bg, get_cpu_cores, setup_node); removed upload, get_sftp, pgrep, list_processes (accessed via session parameter by collaborators).
+#   LAST_CHANGE: v2.13.0 - TaskRepository: insert(task: Task) -> Task → insert(new_task: NewTask) -> Task (sole NewTask→Task conversion); get/update_status take TaskId; list_ids_by_ip_and_status returns list[TaskId]; list_by_jobs takes list[TaskId] (add-task-id-identity). The domain is type-safe end-to-end; the public Yascheduler facade is the sole int/TaskId boundary.
+#   PREVIOUS_CHANGE: v2.12.0 - NodeRepository: rename add(node: Node) -> None to insert(new_node: NewNode) -> Node (mirrors TaskRepository.insert; runs RETURNING node_id); add get_by_id(node_id: NodeId) -> Node | None (additive primary-key lookup). CloudProvisioner.allocate return type narrows Node → NewNode (pre-persistence; caller persists via NodeRepository.insert). ip-keyed mutators unchanged (add-node-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -38,19 +38,28 @@ if TYPE_CHECKING:
     from .model import (
         ConnectedMachine,
         NewNode,
+        NewTask,
         Node,
         NodeId,
         ProcessResult,
         Task,
+        TaskId,
         TaskStatus,
     )
 
 
 @runtime_checkable
 class TaskRepository(Protocol):
-    """Async port for task persistence: get, save, list_by_status."""
+    """Async port for task persistence.
 
-    async def get(self, task_id: int) -> Task | None: ...
+    ``insert(new_task: NewTask) -> Task`` is the sole ``NewTask → Task`` conversion
+    site (the DB-generated ``TaskId`` lives on the returned ``Task``). ``get``,
+    ``update_status``, ``list_ids_by_ip_and_status`` (return), and ``list_by_jobs``
+    (input) use ``TaskId`` — the domain is type-safe end-to-end. The public
+    ``Yascheduler`` facade is the sole ``int``/``TaskId`` boundary.
+    """
+
+    async def get(self, task_id: TaskId) -> Task | None: ...
 
     async def save(self, task: Task) -> None: ...
 
@@ -58,15 +67,15 @@ class TaskRepository(Protocol):
         self, statuses: set[TaskStatus], *, limit: int | None = None
     ) -> list[Task]: ...
 
-    async def insert(self, task: Task) -> Task: ...
+    async def insert(self, new_task: NewTask) -> Task: ...
 
-    async def list_by_jobs(self, job_ids: list[int]) -> list[Task]: ...
+    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]: ...
 
-    async def update_status(self, task_id: int, status: TaskStatus) -> None: ...
+    async def update_status(self, task_id: TaskId, status: TaskStatus) -> None: ...
 
     async def list_ids_by_ip_and_status(
         self, ip: str, status: TaskStatus
-    ) -> list[int]: ...
+    ) -> list[TaskId]: ...
 
     async def count_by_status(self) -> Mapping[TaskStatus, int]: ...
 
@@ -313,7 +322,7 @@ class MachineOperations(Protocol):
         remote_dir: str,
         local_dir: Path,
         files: list[str],
-        task_id: int | None = None,
+        task_id: TaskId | None = None,
     ) -> tuple[
         list[tuple[str, Any]],
         list[tuple[str | None, Exception]],

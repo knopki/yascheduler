@@ -37,7 +37,7 @@ import asyncssh
 import pytest
 
 from yascheduler.domain import Engine
-from yascheduler.domain.model import Task, TaskContext
+from yascheduler.domain.model import Task, TaskContext, TaskId
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.operations.deployment import _write_remote_file
 from yascheduler.infra.ssh.repository import SSHMachineRepository
@@ -122,7 +122,7 @@ def _make_engine(input_files: tuple[str, ...] = ("input.txt",)) -> Engine:
 
 def _make_task(extra: dict[str, object] | None = None) -> Task:
     return Task(
-        task_id=7,
+        task_id=TaskId(7),
         label="t7",
         context=TaskContext(
             engine="test_engine",

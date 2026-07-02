@@ -36,6 +36,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
+from yascheduler.domain.model import TaskId
 from yascheduler.entrypoints import Config
 from yascheduler.entrypoints.di import CLIDeps, make_cli_deps, make_daemon
 from yascheduler.infra.persistence import PostgresDbConfig
@@ -101,11 +102,12 @@ class TestCLIDeps:
         )
 
         with patch(
-            "yascheduler.entrypoints.di.submit_task", new=AsyncMock(return_value=42)
+            "yascheduler.entrypoints.di.submit_task",
+            new=AsyncMock(return_value=TaskId(42)),
         ) as mock_submit:
             result = await deps.submit("my-label", {"key": "val"}, "g09")
 
-        assert result == 42
+        assert result == TaskId(42)
         mock_submit.assert_awaited_once_with(
             "my-label",
             {"key": "val"},

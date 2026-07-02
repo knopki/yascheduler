@@ -29,7 +29,6 @@ Tests cover:
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path, PurePath
 from types import SimpleNamespace
 from typing import Any
@@ -50,10 +49,12 @@ from yascheduler.domain.events import (
     TaskFailed,
 )
 from yascheduler.domain.model import (
+    NewTask,
     Node,
     NodeId,
     Task,
     TaskContext,
+    TaskId,
     TaskStatus,
 )
 from yascheduler.domain.ports import CloudProvisioner
@@ -71,8 +72,13 @@ class TestSubmitTaskEvents:
     ) -> None:
         uow = mock_uow_factory.return_value
 
-        def _insert_side_effect(task: Task) -> Task:
-            return replace(task, task_id=55)
+        def _insert_side_effect(new_task: NewTask) -> Task:
+            return Task(
+                task_id=TaskId(55),
+                label=new_task.label,
+                context=new_task.context,
+                status=new_task.status,
+            )
 
         uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
 
@@ -89,7 +95,7 @@ class TestSubmitTaskEvents:
         assert len(saved_arg._events) == 1
         event = saved_arg._events[0]
         assert isinstance(event, TaskCreated)
-        assert event.task_id == 55
+        assert event.task_id == TaskId(55)
         assert event.engine_name == "test_engine"
 
 
@@ -102,7 +108,7 @@ class TestAllocateTaskEvents:
         engines.get.return_value = None
 
         todo_task = Task(
-            task_id=1,
+            task_id=TaskId(1),
             label="t",
             context=TaskContext(engine="bad"),
             status=TaskStatus.TO_DO,
@@ -124,7 +130,7 @@ class TestAllocateTaskEvents:
         allocation_lock = asyncio.Lock()
 
         await allocate_task(
-            task_id=1,
+            task_id=TaskId(1),
             engines=engines,
             uow_factory=uow_factory,
             repository=MagicMock(),
@@ -164,7 +170,7 @@ class TestAllocateTaskEvents:
         operations.start_occupancy_check = MagicMock()
 
         todo_task = Task(
-            task_id=1,
+            task_id=TaskId(1),
             label="t",
             context=TaskContext(engine="test_engine"),
             status=TaskStatus.TO_DO,
@@ -194,7 +200,7 @@ class TestAllocateTaskEvents:
         start_on_machine = AsyncMock(return_value=True)
 
         await allocate_task(
-            task_id=1,
+            task_id=TaskId(1),
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
@@ -215,7 +221,7 @@ class TestAllocateTaskEvents:
         assert allocated_events[0].node_ip == "10.0.0.1"
         assert allocated_events[0].engine_name == "test_engine"
         # tracker.discard called (machine path discards immediately)
-        tracker.discard.assert_called_once_with(1)
+        tracker.discard.assert_called_once_with(TaskId(1))
 
 
 class TestConsumeTaskEvents:
@@ -283,8 +289,8 @@ class TestConsumeTaskEvents:
         assert len(saved_task._events) == 1
         event = saved_task._events[0]
         assert isinstance(event, TaskCompleted)
-        assert event.task_id == 1
-        tracker.discard.assert_called_once_with(1)
+        assert event.task_id == TaskId(1)
+        tracker.discard.assert_called_once_with(TaskId(1))
 
     async def test_consume_failure_records_task_failed_event(
         self,
@@ -326,5 +332,5 @@ class TestConsumeTaskEvents:
         assert len(saved_task._events) == 1
         event = saved_task._events[0]
         assert isinstance(event, TaskFailed)
-        assert event.task_id == 1
-        tracker.discard.assert_called_once_with(1)
+        assert event.task_id == TaskId(1)
+        tracker.discard.assert_called_once_with(TaskId(1))

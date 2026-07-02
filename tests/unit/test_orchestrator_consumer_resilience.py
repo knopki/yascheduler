@@ -32,7 +32,13 @@ import pytest
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UMessage, UniqueQueue
-from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
+from yascheduler.domain import (
+    Engine,
+    EngineRepository,
+    LocalSettings,
+    RemoteDefaults,
+    TaskId,
+)
 from yascheduler.entrypoints import Config
 from yascheduler.infra.persistence import TaskRowNotFoundError
 
@@ -149,7 +155,7 @@ class TestConsumerResilience:
                 first_call["n"] += 1
                 # Mirror the fix-save-silent-zero-rows race: save() on a
                 # concurrently-deleted task raises TaskRowNotFoundError.
-                raise TaskRowNotFoundError(msg.id)
+                raise TaskRowNotFoundError(TaskId(msg.id))
             processed.append(msg.id)
 
         def producer() -> _EmptyAsyncGen:

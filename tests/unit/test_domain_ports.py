@@ -34,10 +34,12 @@ from unittest.mock import MagicMock
 from yascheduler.domain.model import (
     ConnectedMachine,
     NewNode,
+    NewTask,
     Node,
     NodeId,
     ProcessResult,
     Task,
+    TaskId,
     TaskStatus,
 )
 from yascheduler.domain.ports import (
@@ -58,7 +60,7 @@ if TYPE_CHECKING:
 
 
 class StubTaskRepository:
-    async def get(self, task_id: int) -> Task | None:
+    async def get(self, task_id: TaskId) -> Task | None:
         raise NotImplementedError
 
     async def save(self, task: Task) -> None:
@@ -69,16 +71,18 @@ class StubTaskRepository:
     ) -> list[Task]:
         return []
 
-    async def insert(self, task: Task) -> Task:
+    async def insert(self, new_task: NewTask) -> Task:
         raise NotImplementedError
 
-    async def list_by_jobs(self, job_ids: list[int]) -> list[Task]:
+    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
         return []
 
-    async def update_status(self, task_id: int, status: TaskStatus) -> None:
+    async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
         pass
 
-    async def list_ids_by_ip_and_status(self, ip: str, status: TaskStatus) -> list[int]:
+    async def list_ids_by_ip_and_status(
+        self, ip: str, status: TaskStatus
+    ) -> list[TaskId]:
         return []
 
     async def count_by_status(self) -> dict[TaskStatus, int]:
@@ -309,7 +313,7 @@ class StubMachineOperations:
         remote_dir: str,
         local_dir: Path,
         files: list[str],
-        task_id: int | None = None,
+        task_id: TaskId | None = None,
     ) -> tuple[
         list[tuple[str, Any]],
         list[tuple[str | None, Exception]],

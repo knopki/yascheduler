@@ -41,10 +41,12 @@ import pytest
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
     NewNode,
+    NewTask,
     Node,
     NodeId,
     Task,
     TaskContext,
+    TaskId,
 )
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
@@ -81,11 +83,9 @@ async def test_repo_task_insert_and_get(
         webhook_url="https://hook.example.com",
         extra={"param": 42},
     )
-    task = Task(
-        task_id=0, label="test-task", context=ctx, status=DomainTaskStatus.TO_DO
-    )
-    inserted = await repo.insert(task)
-    assert inserted.task_id >= 1
+    new_task = NewTask(label="test-task", context=ctx, status=DomainTaskStatus.TO_DO)
+    inserted = await repo.insert(new_task)
+    assert inserted.task_id.value >= 1
     assert inserted.label == "test-task"
     assert inserted.status == DomainTaskStatus.TO_DO
     assert inserted.context.engine == "fleur"
@@ -115,7 +115,7 @@ async def test_repo_task_get_none(
 ) -> None:
     """get() returns None for non-existent task."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    assert await repo.get(99999) is None
+    assert await repo.get(TaskId(99999)) is None
 
 
 # START_CONTRACT: test_repo_task_save_updates
@@ -132,7 +132,7 @@ async def test_repo_task_save_updates(
     repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
     task = await repo.insert(
-        Task(task_id=0, label="initial", context=ctx, status=DomainTaskStatus.TO_DO)
+        NewTask(label="initial", context=ctx, status=DomainTaskStatus.TO_DO)
     )
 
     updated = Task(
@@ -165,11 +165,11 @@ async def test_repo_task_list_by_status(
     repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
     t1 = await repo.insert(
-        Task(task_id=0, label="todo", context=ctx, status=DomainTaskStatus.TO_DO)
+        NewTask(label="todo", context=ctx, status=DomainTaskStatus.TO_DO)
     )
     t2_id = (
         await repo.insert(
-            Task(task_id=0, label="running", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(label="running", context=ctx, status=DomainTaskStatus.TO_DO)
         )
     ).task_id
     await repo.save(
@@ -204,15 +204,9 @@ async def test_repo_task_count_by_status(
     """count_by_status returns correct aggregates."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
-    await repo.insert(
-        Task(task_id=0, label="t1", context=ctx, status=DomainTaskStatus.TO_DO)
-    )
-    await repo.insert(
-        Task(task_id=0, label="t2", context=ctx, status=DomainTaskStatus.TO_DO)
-    )
-    await repo.insert(
-        Task(task_id=0, label="t3", context=ctx, status=DomainTaskStatus.DONE)
-    )
+    await repo.insert(NewTask(label="t1", context=ctx, status=DomainTaskStatus.TO_DO))
+    await repo.insert(NewTask(label="t2", context=ctx, status=DomainTaskStatus.TO_DO))
+    await repo.insert(NewTask(label="t3", context=ctx, status=DomainTaskStatus.DONE))
 
     counts = await repo.count_by_status()
     assert counts.get(DomainTaskStatus.TO_DO) == 2
@@ -233,7 +227,7 @@ async def test_repo_task_update_status_atomic(
     repo = PostgresTaskRepository(pg_conn, pg_executor)
     ctx = TaskContext(engine="fleur")
     task = await repo.insert(
-        Task(task_id=0, label="keep-label", context=ctx, status=DomainTaskStatus.TO_DO)
+        NewTask(label="keep-label", context=ctx, status=DomainTaskStatus.TO_DO)
     )
 
     await repo.update_status(task.task_id, DomainTaskStatus.RUNNING)

@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pg8000.native
 import pytest
 
-from yascheduler.domain.model import Task, TaskContext
+from yascheduler.domain.model import Task, TaskContext, TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.infra.persistence import TaskRowNotFoundError
 from yascheduler.infra.persistence.postgres import PostgresTaskRepository
@@ -43,7 +43,7 @@ async def test_save_nonexistent_task_raises(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """save() on a non-existent task_id raises TaskRowNotFoundError and skips _saved_tasks.append."""
-    nonexistent_id = 999_999
+    nonexistent_id = TaskId(999_999)
 
     async with uow_factory() as uow:
         # The UoW wires its _saved_tasks list into the repository so that
@@ -77,7 +77,7 @@ async def test_update_status_nonexistent_task_raises(
 ) -> None:
     """update_status() on a non-existent task_id raises TaskRowNotFoundError."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    nonexistent_id = 999_998
+    nonexistent_id = TaskId(999_998)
     with pytest.raises(TaskRowNotFoundError) as excinfo:
         await repo.update_status(nonexistent_id, DomainTaskStatus.RUNNING)
     assert excinfo.value.task_id == nonexistent_id

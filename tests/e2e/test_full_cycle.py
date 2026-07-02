@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from yascheduler.domain.model import TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.cli.manage_node import _manage_node_async
 from yascheduler.entrypoints.cli.submit import _submit_async
@@ -239,7 +240,7 @@ async def _assert_all_status(
 ) -> None:
     async with uow_factory() as uow:
         for tid in task_ids:
-            task = await uow.tasks.get(tid)
+            task = await uow.tasks.get(TaskId(tid))
             assert task is not None, f"task {tid} missing ({label})"
             assert task.status == expected, (
                 f"task {tid} status={task.status}, expected {expected} ({label})"
@@ -293,7 +294,7 @@ async def _wait_all_done(
         async with uow_factory() as uow:
             statuses = []
             for tid in task_ids:
-                t = await uow.tasks.get(tid)
+                t = await uow.tasks.get(TaskId(tid))
                 statuses.append(t.status if t else None)
                 if t and t.status == DomainTaskStatus.RUNNING and t.allocated_ip:
                     seen_running[tid] = t.allocated_ip
@@ -318,7 +319,7 @@ async def _read_tasks(
     task_ids: list[int],
 ) -> list[Any]:
     async with uow_factory() as uow:
-        tasks: list[Any] = [await uow.tasks.get(tid) for tid in task_ids]
+        tasks: list[Any] = [await uow.tasks.get(TaskId(tid)) for tid in task_ids]
     return tasks
 
 

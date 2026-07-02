@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/check_status.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
 #   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
@@ -24,9 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - session-based-machine-handle: _download_convergence_snippet takes MachineSession instead of (repository, operations, ip); _display_remote_output uses session directly (session.path, session.quote, session.run_full) and returns (session, remote_folder, repository) triple; _render_view unpacking updated.
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config (type=existing_path, default=CONFIG_FILE) and --log-level (default WARNING) via args.py helpers; Config.from_config_parser now reads args.config; root logger level from args.log_level via logging.getLevelName with a StreamHandler→stderr (no basicConfig); converted @to_sync async def check_status to def check_status(argv): asyncio.run(_check_status_async(argv)) + async def _check_status_async(argv).
-#   PREVIOUS_CHANGE: v1.0.0 - Reimplemented at entrypoints/cli/ in relocate-check-status-command (moved from infra/cli/, added prog/argv/exit-codes/--json/full mutex/-o requires -v/connection-params bugfix/UoW lifecycle fix/tempfile).
+#   LAST_CHANGE: v1.3.0 - Carry TaskId through the query/render path (add-task-id-identity): _query_tasks wraps [TaskId(j) for j in args.jobs] before list_by_jobs (CLI-internal int→TaskId wrap, same pattern as the facade); _render_json extracts task.task_id.value (json.dumps would raise TypeError on a TaskId); _render_default/_render_info render via __str__ unchanged.
+#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle: _download_convergence_snippet takes MachineSession instead of (repository, operations, ip); _display_remote_output uses session directly (session.path, session.quote, session.run_full) and returns (session, remote_folder, repository) triple; _render_view unpacking updated.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import TaskStatus
+from yascheduler.domain import TaskId, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.infra import SSHMachineRepository
@@ -71,6 +70,7 @@ def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-j",
         "--jobs",
         nargs="*",
+        type=int,
         default=None,
         help="Filter to the given job ids (composes with any renderer)",
     )
@@ -124,7 +124,9 @@ def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> list[Task]:
     # START_BLOCK_QUERY
     if args.jobs:
-        return await uow.tasks.list_by_jobs(job_ids=args.jobs)
+        # argparse yields list[int]; wrap to TaskId before crossing into the
+        # repository (same int→TaskId marshalling pattern as the facade).
+        return await uow.tasks.list_by_jobs(job_ids=[TaskId(j) for j in args.jobs])
     return await uow.tasks.list_by_status(
         statuses={TaskStatus.RUNNING, TaskStatus.TO_DO}
     )
@@ -178,7 +180,7 @@ def _render_json(tasks: list[Task], nodes_by_ip: dict[str, Node]) -> str:
         node = nodes_by_ip.get(task.allocated_ip) if task.allocated_ip else None
         objects.append(
             {
-                "task_id": task.task_id,
+                "task_id": task.task_id.value,
                 "status": task.status.name,
                 "label": task.label,
                 "allocated_ip": task.allocated_ip,

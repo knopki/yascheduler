@@ -350,8 +350,10 @@
         <type-TaskContextOverrides PURPOSE="TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs() (re-exported from M-DOMAIN-ENGINE)" />
         <class-EngineRepository PURPOSE="Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)" />
-        <class-Task PURPOSE="Task entity with lifecycle methods and event recording (record_event, with_event factory, pull_events, _events tuple)" />
+        <class-Task PURPOSE="Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); lifecycle methods (allocate_to, mark_running, complete, fail, reject) and event recording (record_event, with_event factory, pull_events, _events tuple)" />
         <fn-with_context PURPOSE="Wholesale-replace task context, returning new Task" />
+        <type-TaskId PURPOSE="Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
+        <type-NewTask PURPOSE="Pre-persistence task record (no task_id); converted to Task only by TaskRepository.insert" />
         <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
         <type-NewNode PURPOSE="Pre-persistence node record (no node_id); converted to Node only by NodeRepository.insert" />
         <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); ip remains UNIQUE and ip-keyed mutators unchanged" />
@@ -382,7 +384,7 @@
       <path>yascheduler/domain/ports.py</path>
       <depends>M-DOMAIN-ENGINE, M-DOMAIN-MODEL</depends>
       <annotations>
-        <class-TaskRepository PURPOSE="Async port for task persistence" />
+        <class-TaskRepository PURPOSE="Async port for task persistence: insert(NewTask)->Task (sole NewTask→Task conversion), get/update_status take TaskId, list_ids_by_ip_and_status returns list[TaskId], list_by_jobs takes list[TaskId]; the public Yascheduler facade is the sole int/TaskId boundary" />
         <class-NodeRepository PURPOSE="Async port for node persistence: insert(NewNode)->Node (renamed from add), get_by_id(NodeId), full CRUD lifecycle; ip-keyed mutators unchanged" />
         <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries)" />
         <class-MachineSession PURPOSE="Connected-machine entity handle Protocol (domain identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)" />
@@ -398,7 +400,7 @@
       <path>yascheduler/domain/events.py</path>
       <depends>none</depends>
       <annotations>
-        <class-DomainEvent PURPOSE="Base frozen dataclass with task_id, webhook_url, webhook_custom_params" />
+        <class-DomainEvent PURPOSE="Base frozen dataclass with task_id: TaskId, webhook_url, webhook_custom_params" />
         <class-TaskCreated PURPOSE="Task submitted event with engine_name" />
         <class-TaskAllocated PURPOSE="Task assigned to node with node_ip and engine_name" />
         <class-TaskCompleted PURPOSE="Task finished with local_folder and has_errors" />
@@ -541,7 +543,7 @@
         <const-active_clouds PURPOSE="Filtered Sequence[ConfigCloud] with max_nodes>0 and resolved adapter" />
         <const-allocation_lock PURPOSE="Owned asyncio.Lock serializing allocate_task critical section" />
         <const-_connect_failures PURPOSE="Per-IP monotonic first-seen failure timestamp (in-memory only; daemon restart resets grace windows)" />
-        <const-_consuming PURPOSE="In-flight consume task ids (set[int]); producer skips yielding these, consumer adds/discards around consume_task await (in-memory only; same-event-loop atomic)" />
+        <const-_consuming PURPOSE="In-flight consume task ids (set[TaskId]); producer skips yielding these, consumer adds/discards around consume_task await (in-memory only; same-event-loop atomic)" />
       </annotations>
     </M-APPLICATION-ORCHESTRATOR>
 

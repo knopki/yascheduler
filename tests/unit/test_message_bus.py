@@ -28,7 +28,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import Task, TaskContext
+from yascheduler.domain.model import Task, TaskContext, TaskId
 
 if TYPE_CHECKING:
     from yascheduler.shared import Self
@@ -44,7 +44,10 @@ class TestMessageBus:
 
         bus.register(TaskCreated, on_created)
         event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="cp2k"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="cp2k",
         )
         await bus.dispatch([event])
         assert received == [event]
@@ -52,7 +55,7 @@ class TestMessageBus:
     async def test_dispatch_with_no_handlers(self) -> None:
         bus = MessageBus()
         event = TaskFailed(
-            task_id=1, webhook_url=None, webhook_custom_params={}, reason="err"
+            task_id=TaskId(1), webhook_url=None, webhook_custom_params={}, reason="err"
         )
         await bus.dispatch([event])  # no error raised
 
@@ -70,7 +73,10 @@ class TestMessageBus:
         bus.register(TaskCreated, handler_a)
         bus.register(TaskCreated, handler_b)
         event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="cp2k"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="cp2k",
         )
         await bus.dispatch([event])
         assert log_a == [event]
@@ -85,7 +91,10 @@ class TestMessageBus:
 
         bus.register(TaskCreated, functools.partial(handler, label="test"))
         event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="cp2k"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="cp2k",
         )
         await bus.dispatch([event])
         assert results == [(event, "test")]
@@ -93,7 +102,7 @@ class TestMessageBus:
     async def test_handler_failure_does_not_prevent_others(self) -> None:
         """A failing handler must not prevent subsequent handlers from running."""
         bus = MessageBus()
-        results: list[int] = []
+        results: list[TaskId] = []
 
         async def handler_a(event: DomainEvent) -> None:
             raise RuntimeError("handler A failed")
@@ -105,11 +114,14 @@ class TestMessageBus:
         bus.register(TaskCreated, handler_b)
 
         event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="vasp"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="vasp",
         )
         await bus.dispatch([event])
 
-        assert results == [1]
+        assert results == [TaskId(1)]
 
 
 class TestUoWEventDispatch:
@@ -126,9 +138,12 @@ class TestUoWEventDispatch:
         bus.register(TaskCreated, on_created)
 
         event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="fleur",
         )
-        task = Task(task_id=1, label="t", context=TaskContext(engine="fleur"))
+        task = Task(task_id=TaskId(1), label="t", context=TaskContext(engine="fleur"))
         task = task.record_event(event)
 
         bus_dispatch = bus.dispatch
@@ -196,15 +211,21 @@ class TestUoWEventDispatch:
         bus.register(TaskCreated, on_created)
 
         e1 = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="fleur",
         )
         e2 = TaskCreated(
-            task_id=2, webhook_url=None, webhook_custom_params={}, engine_name="vasp"
+            task_id=TaskId(2),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="vasp",
         )
 
-        t1 = Task(task_id=1, label="t1", context=TaskContext(engine="fleur"))
+        t1 = Task(task_id=TaskId(1), label="t1", context=TaskContext(engine="fleur"))
         t1 = t1.record_event(e1)
-        t2 = Task(task_id=2, label="t2", context=TaskContext(engine="vasp"))
+        t2 = Task(task_id=TaskId(2), label="t2", context=TaskContext(engine="vasp"))
         t2 = t2.record_event(e2)
 
         bus_dispatch = bus.dispatch

@@ -32,25 +32,25 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
 
 
 class TestDomainEvents:
     def test_task_created_all_fields(self) -> None:
         evt = TaskCreated(
-            task_id=1,
+            task_id=TaskId(1),
             webhook_url="https://example.com/hook",
             webhook_custom_params={"key": "val"},
             engine_name="fleur",
         )
-        assert evt.task_id == 1
+        assert evt.task_id == TaskId(1)
         assert evt.webhook_url == "https://example.com/hook"
         assert evt.webhook_custom_params == {"key": "val"}
         assert evt.engine_name == "fleur"
 
     def test_webhook_custom_params_stored(self) -> None:
         evt = TaskCreated(
-            task_id=2,
+            task_id=TaskId(2),
             webhook_url=None,
             webhook_custom_params={"k": "v"},
             engine_name="cp2k",
@@ -59,19 +59,19 @@ class TestDomainEvents:
 
     def test_task_allocated_all_fields(self) -> None:
         evt = TaskAllocated(
-            task_id=3,
+            task_id=TaskId(3),
             webhook_url=None,
             webhook_custom_params={},
             engine_name="fleur",
             node_ip="10.0.0.1",
         )
-        assert evt.task_id == 3
+        assert evt.task_id == TaskId(3)
         assert evt.node_ip == "10.0.0.1"
         assert evt.engine_name == "fleur"
 
     def test_task_completed_all_fields(self) -> None:
         evt = TaskCompleted(
-            task_id=4,
+            task_id=TaskId(4),
             webhook_url=None,
             webhook_custom_params={},
             local_folder="/results/4",
@@ -82,46 +82,58 @@ class TestDomainEvents:
 
     def test_task_failed_all_fields(self) -> None:
         evt = TaskFailed(
-            task_id=5, webhook_url=None, webhook_custom_params={}, reason="OOM"
+            task_id=TaskId(5), webhook_url=None, webhook_custom_params={}, reason="OOM"
         )
         assert evt.reason == "OOM"
 
     def test_task_abandoned_all_fields(self) -> None:
         evt = TaskAbandoned(
-            task_id=6, webhook_url=None, webhook_custom_params={}, node_ip="10.0.0.5"
+            task_id=TaskId(6),
+            webhook_url=None,
+            webhook_custom_params={},
+            node_ip="10.0.0.5",
         )
         assert evt.node_ip == "10.0.0.5"
 
     def test_frozen_enforcement(self) -> None:
         evt = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="cp2k"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="cp2k",
         )
         with pytest.raises(FrozenInstanceError):
-            evt.task_id = 99  # type: ignore[misc]
+            evt.task_id = TaskId(99)  # type: ignore[misc]
 
     def test_event_union_isinstance(self) -> None:
         created: Event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="cp2k"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="cp2k",
         )
         allocated: Event = TaskAllocated(
-            task_id=1,
+            task_id=TaskId(1),
             webhook_url=None,
             webhook_custom_params={},
             engine_name="cp2k",
             node_ip="10.0.0.1",
         )
         completed: Event = TaskCompleted(
-            task_id=1,
+            task_id=TaskId(1),
             webhook_url=None,
             webhook_custom_params={},
             local_folder="/r",
             has_errors=False,
         )
         failed: Event = TaskFailed(
-            task_id=1, webhook_url=None, webhook_custom_params={}, reason="err"
+            task_id=TaskId(1), webhook_url=None, webhook_custom_params={}, reason="err"
         )
         abandoned: Event = TaskAbandoned(
-            task_id=1, webhook_url=None, webhook_custom_params={}, node_ip="10.0.0.1"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            node_ip="10.0.0.1",
         )
 
         assert isinstance(created, TaskCreated)
@@ -134,30 +146,33 @@ class TestDomainEvents:
     def test_all_events_are_domain_event(self) -> None:
         for evt in (
             TaskCreated(
-                task_id=1,
+                task_id=TaskId(1),
                 webhook_url=None,
                 webhook_custom_params={},
                 engine_name="cp2k",
             ),
             TaskAllocated(
-                task_id=1,
+                task_id=TaskId(1),
                 webhook_url=None,
                 webhook_custom_params={},
                 engine_name="cp2k",
                 node_ip="10.0.0.1",
             ),
             TaskCompleted(
-                task_id=1,
+                task_id=TaskId(1),
                 webhook_url=None,
                 webhook_custom_params={},
                 local_folder="/r",
                 has_errors=False,
             ),
             TaskFailed(
-                task_id=1, webhook_url=None, webhook_custom_params={}, reason="err"
+                task_id=TaskId(1),
+                webhook_url=None,
+                webhook_custom_params={},
+                reason="err",
             ),
             TaskAbandoned(
-                task_id=1,
+                task_id=TaskId(1),
                 webhook_url=None,
                 webhook_custom_params={},
                 node_ip="10.0.0.1",
@@ -168,7 +183,7 @@ class TestDomainEvents:
 
 def _make_task(**overrides: object) -> Task:
     ctx = TaskContext(engine="fleur")
-    base: dict[str, object] = dict(task_id=1, label="test", context=ctx)
+    base: dict[str, object] = dict(task_id=TaskId(1), label="test", context=ctx)
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 
@@ -177,7 +192,10 @@ class TestTaskEvents:
     def test_record_event_returns_new_task(self) -> None:
         task = _make_task()
         event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="fleur",
         )
         updated = task.record_event(event)
         assert updated._events == (event,)
@@ -185,7 +203,10 @@ class TestTaskEvents:
 
     def test_pull_events_returns_clean_task_and_events(self) -> None:
         event = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="fleur",
         )
         task = _make_task(_events=(event,))
         clean, events = task.pull_events()
@@ -203,17 +224,20 @@ class TestTaskEvents:
     def test_record_and_pull_integration(self) -> None:
         task = _make_task()
         e1 = TaskCreated(
-            task_id=1, webhook_url=None, webhook_custom_params={}, engine_name="fleur"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            engine_name="fleur",
         )
         e2 = TaskAllocated(
-            task_id=1,
+            task_id=TaskId(1),
             webhook_url=None,
             webhook_custom_params={},
             engine_name="fleur",
             node_ip="10.0.0.1",
         )
         e3 = TaskCompleted(
-            task_id=1,
+            task_id=TaskId(1),
             webhook_url=None,
             webhook_custom_params={},
             local_folder="/r",
@@ -227,7 +251,7 @@ class TestTaskEvents:
         clean, events = task.pull_events()
         assert events == (e1, e2, e3)
         assert clean._events == ()
-        assert clean.task_id == 1
+        assert clean.task_id == TaskId(1)
         assert clean.status == TaskStatus.TO_DO
 
 
@@ -237,7 +261,7 @@ def _make_task_with_webhook(**overrides: object) -> Task:
         webhook_url="https://hook.example.com",
         webhook_custom_params={"k": "v"},
     )
-    base: dict[str, object] = dict(task_id=42, label="test", context=ctx)
+    base: dict[str, object] = dict(task_id=TaskId(42), label="test", context=ctx)
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 
@@ -251,7 +275,7 @@ class TestTaskWithEvent:
         assert len(updated._events) == 1
         evt = updated._events[0]
         assert isinstance(evt, TaskAllocated)
-        assert evt.task_id == 42
+        assert evt.task_id == TaskId(42)
         assert evt.webhook_url == "https://hook.example.com"
         assert evt.webhook_custom_params == {"k": "v"}
         assert evt.node_ip == "10.0.0.1"
@@ -284,7 +308,7 @@ class TestTaskWithEvent:
         assert isinstance(evt, TaskCompleted)
         assert evt.local_folder == "/out"
         assert evt.has_errors is False
-        assert evt.task_id == 42
+        assert evt.task_id == TaskId(42)
 
     def test_with_event_after_fail_reads_preserved_webhook_fields(self) -> None:
         running = _make_task_with_webhook(
@@ -301,7 +325,7 @@ class TestTaskWithEvent:
     def test_record_event_still_works_as_low_level_primitive(self) -> None:
         task = _make_task_with_webhook()
         event = TaskFailed(
-            task_id=42,
+            task_id=TaskId(42),
             webhook_url=None,
             webhook_custom_params={},
             reason="manual",

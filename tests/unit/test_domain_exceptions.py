@@ -62,6 +62,7 @@ from yascheduler.domain.exceptions import (
     UnsupportedEngineError,
     ValidationError,
 )
+from yascheduler.domain.model import TaskId
 
 
 # START_CONTRACT: test_domain_error_is_exception
@@ -149,8 +150,8 @@ def test_task_error_hierarchy() -> None:
 #   LINKS:
 # END_CONTRACT: test_task_already_allocated_error
 def test_task_already_allocated_error() -> None:
-    exc = TaskAlreadyAllocatedError(task_id=42)
-    assert exc.task_id == 42
+    exc = TaskAlreadyAllocatedError(task_id=TaskId(42))
+    assert exc.task_id == TaskId(42)
     assert "already allocated" in str(exc)
     assert "42" in str(exc)
 
@@ -163,8 +164,8 @@ def test_task_already_allocated_error() -> None:
 #   LINKS:
 # END_CONTRACT: test_task_not_allocated_error
 def test_task_not_allocated_error() -> None:
-    exc = TaskNotAllocatedError(task_id=99)
-    assert exc.task_id == 99
+    exc = TaskNotAllocatedError(task_id=TaskId(99))
+    assert exc.task_id == TaskId(99)
     assert "not allocated" in str(exc)
     assert "99" in str(exc)
 
@@ -238,8 +239,8 @@ def test_scheduling_error_hierarchy() -> None:
 # END_CONTRACT: test_no_compatible_node_error
 def test_no_compatible_node_error() -> None:
     platforms = ["linux", "gpu"]
-    exc = NoCompatibleNodeError(task_id=7, platforms=platforms)
-    assert exc.task_id == 7
+    exc = NoCompatibleNodeError(task_id=TaskId(7), platforms=platforms)
+    assert exc.task_id == TaskId(7)
     assert exc.platforms == platforms
     assert "no compatible node" in str(exc)
 
@@ -252,8 +253,8 @@ def test_no_compatible_node_error() -> None:
 #   LINKS:
 # END_CONTRACT: test_cloud_capacity_exhausted_error
 def test_cloud_capacity_exhausted_error() -> None:
-    exc = CloudCapacityExhaustedError(task_id=5)
-    assert exc.task_id == 5
+    exc = CloudCapacityExhaustedError(task_id=TaskId(5))
+    assert exc.task_id == TaskId(5)
     assert "capacity exhausted" in str(exc)
     assert "5" in str(exc)
 
@@ -470,13 +471,13 @@ def test_all_exceptions_importable() -> None:
         UnsupportedEngineError(engine_name="x"),
         MissingInputFileError(engine_name="x", filename="f"),
         TaskError(),
-        TaskAlreadyAllocatedError(task_id=1),
-        TaskNotAllocatedError(task_id=2),
+        TaskAlreadyAllocatedError(task_id=TaskId(1)),
+        TaskNotAllocatedError(task_id=TaskId(2)),
         MachineBusyError(ip="0.0.0.0"),
         MachineConnectionError(ip="0.0.0.0", reason="x"),
         SchedulingError(),
-        NoCompatibleNodeError(task_id=3, platforms=["a"]),
-        CloudCapacityExhaustedError(task_id=4),
+        NoCompatibleNodeError(task_id=TaskId(3), platforms=["a"]),
+        CloudCapacityExhaustedError(task_id=TaskId(4)),
         CloudError("test"),
         CloudAllocateError("test"),
         CloudSetupError("test"),

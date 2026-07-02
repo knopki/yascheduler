@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/notifier/webhook.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Webhook event handler and outbound payload DTO — sends HTTP notifications for task lifecycle events.
 #   SCOPE: WebhookPayload frozen dataclass, webhook_handler async function dispatching webhooks per event type, _send_webhook retry helper.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Absorb WebhookPayload from yascheduler/webhook.py (relocate-webhook-payload); root module deleted, M-WEBHOOK graph record removed.
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - webhook_handler extracts .value when building WebhookPayload: task_id=event.task_id.value (add-task-id-identity). event.task_id is now a TaskId; dataclasses.asdict recurses into nested dataclasses, so passing the TaskId directly would produce {"task_id": {"value": 42}, ...} (a wire-shape break). WebhookPayload.task_id stays int (the correct target type); the .value extraction is the domain→transport boundary unwrap.
+#   PREVIOUS_CHANGE: v1.1.0 - Absorb WebhookPayload from yascheduler/webhook.py (relocate-webhook-payload); root module deleted, M-WEBHOOK graph record removed.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -66,9 +66,9 @@ def _get_semaphore() -> Semaphore:
 
 # START_CONTRACT: webhook_handler
 #   PURPOSE: Async handler that sends webhooks for task lifecycle events.
-#   INPUTS: { event: DomainEvent - domain event with optional webhook_url, http: aiohttp.ClientSession }
+#   INPUTS: { event: DomainEvent - domain event (event.task_id is a TaskId) with optional webhook_url, http: aiohttp.ClientSession }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Sends HTTP POST via _send_webhook; suppresses final errors after backoff exhausts.
+#   SIDE_EFFECTS: Sends HTTP POST via _send_webhook (body built via asdict(WebhookPayload(task_id=event.task_id.value, ...))); suppresses final errors after backoff exhausts.
 #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
 # END_CONTRACT: webhook_handler
 async def webhook_handler(event: DomainEvent, http: aiohttp.ClientSession) -> None:
@@ -83,7 +83,7 @@ async def webhook_handler(event: DomainEvent, http: aiohttp.ClientSession) -> No
         status = TaskStatus.DONE
 
     payload = WebhookPayload(
-        task_id=event.task_id,
+        task_id=event.task_id.value,
         status=status.value,
         custom_params=event.webhook_custom_params,
     )

@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/download.py
-# VERSION: 1.1.0
+# VERSION: 1.2.1
 # START_MODULE_CONTRACT
 #   PURPOSE: OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OutputDownloader class + my_backoff_sftp partial (canonical location — its first user is download_outputs).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - session-based-machine-handle section 5.4: download_outputs rewritten to operate via MachineSession parameter. Uses session.open_sftp() instead of self._operations.get_sftp(ip), session.path instead of self._repository.get_path(ip).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). Extracted from the dissolved SSHMachineGateway god-class; download_outputs moved verbatim with self.get_sftp → self._operations.get_sftp, self.get_path → self._repository.get_path.
+#   LAST_CHANGE: v1.2.1 - download_outputs takes task_id: TaskId | None (was int | None); used only for logging (task_id=%s renders the bare integer via TaskId.__str__) (add-task-id-identity).
+#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle section 5.4: download_outputs rewritten to operate via MachineSession parameter. Uses session.open_sftp() instead of self._operations.get_sftp(ip), session.path instead of self._repository.get_path(ip).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     import logging
     from pathlib import Path
 
-    from yascheduler.domain import MachineSession
+    from yascheduler.domain import MachineSession, TaskId
 
 my_backoff_sftp = partial(
     backoff.on_exception,
@@ -64,7 +64,7 @@ class OutputDownloader:
 
     # START_CONTRACT: OutputDownloader.download_outputs
     #   PURPOSE: Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.
-    #   INPUTS: { session: MachineSession, remote_dir: str, local_dir: Path, files: list[str], task_id: int | None }
+    #   INPUTS: { session: MachineSession, remote_dir: str, local_dir: Path, files: list[str], task_id: TaskId | None }
     #   OUTPUTS: { tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]] - (meta_add, transient_errors, permanent_errors) }
     #   SIDE_EFFECTS: Downloads files via SFTP using a FRESH client per file; removes the remote directory tree ONCE after the loop ONLY when both transient_errors and permanent_errors are empty.
     #   LINKS: M-SSH-OPS-DOWNLOAD, M-SSH-SESSION
@@ -75,7 +75,7 @@ class OutputDownloader:
         remote_dir: str,
         local_dir: Path,
         files: list[str],
-        task_id: int | None = None,
+        task_id: TaskId | None = None,
     ) -> tuple[
         list[tuple[str, Any]],
         list[tuple[str | None, Exception]],

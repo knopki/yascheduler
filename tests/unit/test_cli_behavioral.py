@@ -33,7 +33,7 @@ from pathlib import PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Task, TaskContext, TaskStatus
+from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ def make_task(
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
     return Task(
-        task_id=task_id,
+        task_id=TaskId(task_id),
         label=label,
         context=TaskContext(
             engine="g09",

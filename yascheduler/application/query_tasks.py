@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/query_tasks.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Query tasks use case — read-only task queries by status or job IDs via UoW.
 #   SCOPE: query_tasks async function.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Update stale M-CLIENT graph reference to M-ENTRYPOINTS-CLIENT after client relocation (add-entrypoints-layer).
-#   PREVIOUS_CHANGE: v1.0.0 - Extract query use case from Yascheduler.queue_get_tasks_async (client-query-uow).
+#   LAST_CHANGE: v1.1.0 - query_tasks jobs param narrows Sequence[int] | None -> Sequence[TaskId] | None; forwards list(jobs) to list_by_jobs(list[TaskId]) (add-task-id-identity). The public Yascheduler.queue_get_tasks_async(jobs: list[int]) facade is the sole int/TaskId boundary on this path (wraps [TaskId(i) for i in jobs]).
+#   PREVIOUS_CHANGE: v1.0.1 - Update stale M-CLIENT graph reference to M-ENTRYPOINTS-CLIENT after client relocation (add-entrypoints-layer).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from yascheduler.domain import Task, TaskStatus
+    from yascheduler.domain import Task, TaskId, TaskStatus
 
     from .uow import AbstractUnitOfWork
 
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # START_CONTRACT: query_tasks
 #   PURPOSE: Read-only task query by statuses XOR job IDs within a single UoW.
 #   INPUTS: {
-#     jobs: Sequence[int] | None - Job IDs to query (mutually exclusive with statuses),
+#     jobs: Sequence[TaskId] | None - Job IDs to query (mutually exclusive with statuses),
 #     statuses: Sequence[TaskStatus] | None - Statuses to query (mutually exclusive with jobs),
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory for DB access
 #   }
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL
 # END_CONTRACT: query_tasks
 async def query_tasks(
-    jobs: Sequence[int] | None,
+    jobs: Sequence[TaskId] | None,
     statuses: Sequence[TaskStatus] | None,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> list[Task]:

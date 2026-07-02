@@ -38,7 +38,7 @@ from asyncssh.sftp import SFTPFailure
 
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.consume_task import consume_task
-from yascheduler.domain.model import Task, TaskStatus
+from yascheduler.domain.model import Task, TaskId, TaskStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -118,7 +118,7 @@ class TestConsumeTask:
             mock_operations.download_outputs.call_args[1]["remote_dir"]
             == "/remote/tasks/20250101_120000_42"
         )
-        assert mock_operations.download_outputs.call_args[1]["task_id"] == 1
+        assert mock_operations.download_outputs.call_args[1]["task_id"] == TaskId(1)
         # DB saved with DONE status
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
@@ -126,7 +126,7 @@ class TestConsumeTask:
         assert saved_task.context.error is None
         uow.commit.assert_called_once()
         # tracker.discard called instead of clouds.mark_task_done
-        tracker.discard.assert_called_once_with(1)
+        tracker.discard.assert_called_once_with(TaskId(1))
         # finalised -> True
         assert result is True
 
@@ -174,7 +174,7 @@ class TestConsumeTask:
         assert saved_task.status == TaskStatus.DONE
         assert saved_task.context.error is not None
         # tracker.discard called on permanent failure path too
-        tracker.discard.assert_called_once_with(1)
+        tracker.discard.assert_called_once_with(TaskId(1))
         # finalised -> True
         assert result is True
 
@@ -277,7 +277,7 @@ class TestConsumeTask:
         assert "permanent missing" in error_str
         assert "transient" in error_str
         uow.commit.assert_called_once()
-        tracker.discard.assert_called_once_with(1)
+        tracker.discard.assert_called_once_with(TaskId(1))
         assert result is True
 
     async def test_consume_task_not_found_discards_tracker_returns_true(
@@ -303,7 +303,7 @@ class TestConsumeTask:
         local_tasks_dir = MagicMock(spec=Path)
 
         result = await consume_task(
-            task_id=999,
+            task_id=TaskId(999),
             session=session_mock,
             operations=mock_operations,
             engines=mock_engine_repo,
@@ -316,6 +316,6 @@ class TestConsumeTask:
         mock_operations.download_outputs.assert_not_called()
         uow.tasks.save.assert_not_called()
         uow.commit.assert_not_called()
-        tracker.discard.assert_called_once_with(999)
+        tracker.discard.assert_called_once_with(TaskId(999))
         # Vacuously finalised -> True
         assert result is True

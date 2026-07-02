@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from yascheduler.domain import Engine, EngineRepository
+from yascheduler.domain import Engine, EngineRepository, TaskId
 from yascheduler.entrypoints.di import CLIDeps
 
 submit_mod = importlib.import_module("yascheduler.entrypoints.cli.submit")
@@ -76,7 +76,7 @@ def make_mock_config(webhook_url: str | None = None) -> MagicMock:
 def make_mock_deps(config: MagicMock) -> MagicMock:
     """Return a MagicMock CLIDeps with deps.submit returning 42."""
     deps = MagicMock(spec=CLIDeps)
-    deps.submit = AsyncMock(return_value=42)
+    deps.submit = AsyncMock(return_value=TaskId(42))
     deps.engines = config.engines
     deps.remote_tasks_dir = Path("/tmp/tasks")
     return deps

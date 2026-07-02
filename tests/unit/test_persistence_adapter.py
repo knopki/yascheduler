@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Update PostgresNodeRepository tests for add-node-id-identity: add node_id to row dicts, rename add→insert with NewNode, add get_by_id tests.
-#   PREVIOUS_CHANGE: v1.4.0 - Update test_uow_commit_after_exit_raises to catch UnitOfWorkNotInitializedError.
+#   LAST_CHANGE: v1.6.0 - Update PostgresTaskRepository tests for add-task-id-identity: get/update_status/list_by_jobs take TaskId; _row_to_task wraps TaskId; insert takes NewTask and returns Task carrying TaskId. Row dicts keep task_id as int (DB value); save passes task.task_id.value so kwargs["task_id"] stays int.
+#   PREVIOUS_CHANGE: v1.5.0 - Update PostgresNodeRepository tests for add-node-id-identity: add node_id to row dicts, rename add→insert with NewNode, add get_by_id tests.
 # END_CHANGE_SUMMARY
 
 import json
@@ -34,10 +34,12 @@ from pytest_mock import MockerFixture
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
     NewNode,
+    NewTask,
     Node,
     NodeId,
     Task,
     TaskContext,
+    TaskId,
 )
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
@@ -326,10 +328,10 @@ class TestPostgresTaskRepository:
             }
         ]
 
-        task = await repo.get(42)
+        task = await repo.get(TaskId(42))
 
         assert task is not None
-        assert task.task_id == 42
+        assert task.task_id == TaskId(42)
         assert task.label == "test_label"
         assert task.allocated_ip == "10.0.0.1"
         assert task.context.engine == "fleur"
@@ -340,7 +342,7 @@ class TestPostgresTaskRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
 
-        task = await repo.get(999)
+        task = await repo.get(TaskId(999))
 
         assert task is None
 
@@ -368,10 +370,10 @@ class TestPostgresTaskRepository:
             }
         ]
 
-        task = await repo.get(1)
+        task = await repo.get(TaskId(1))
 
         assert task is not None
-        assert task.task_id == 1
+        assert task.task_id == TaskId(1)
         assert task.label == "no-ip-task"
         assert task.allocated_ip is None
         assert task.status == DomainTaskStatus.TO_DO
@@ -397,15 +399,14 @@ class TestPostgresTaskRepository:
             }
         ]
 
-        task = Task(
-            task_id=0,
+        new_task = NewTask(
             label="label",
             context=TaskContext(engine="fleur"),
             status=DomainTaskStatus.TO_DO,
         )
-        result = await repo.insert(task)
+        result = await repo.insert(new_task)
 
-        assert result.task_id == 99
+        assert result.task_id == TaskId(99)
         assert result.label == "label"
         assert "INSERT INTO yascheduler_tasks" in repo._run.call_args[0][0]  # type: ignore[attr-defined]
 
@@ -416,7 +417,10 @@ class TestPostgresTaskRepository:
         repo = self._make_repo(mocker)
         ctx = TaskContext(engine="fleur", remote_folder="/remote")
         task = Task(
-            task_id=7, label="my-job", context=ctx, status=DomainTaskStatus.TO_DO
+            task_id=TaskId(7),
+            label="my-job",
+            context=ctx,
+            status=DomainTaskStatus.TO_DO,
         )
 
         await repo.save(task)
@@ -439,7 +443,7 @@ class TestPostgresTaskRepository:
         repo = self._make_repo(mocker)
         ctx = TaskContext(engine="vasp")
         task = Task(
-            task_id=3,
+            task_id=TaskId(3),
             label="running-job",
             context=ctx,
             status=DomainTaskStatus.RUNNING,
@@ -479,9 +483,9 @@ class TestPostgresTaskRepository:
         )
 
         assert len(tasks) == 2
-        assert tasks[0].task_id == 1
+        assert tasks[0].task_id == TaskId(1)
         assert tasks[0].status == DomainTaskStatus.TO_DO
-        assert tasks[1].task_id == 2
+        assert tasks[1].task_id == TaskId(2)
         assert tasks[1].status == DomainTaskStatus.RUNNING
 
     async def test_list_by_status_empty(self, mocker: MockerFixture) -> None:
@@ -515,19 +519,19 @@ class TestPostgresTaskRepository:
             },
         ]
 
-        tasks = await repo.list_by_jobs([10, 20])
+        tasks = await repo.list_by_jobs([TaskId(10), TaskId(20)])
 
         assert len(tasks) == 2
-        assert tasks[0].task_id == 10
+        assert tasks[0].task_id == TaskId(10)
         assert tasks[0].status == DomainTaskStatus.DONE
-        assert tasks[1].task_id == 20
+        assert tasks[1].task_id == TaskId(20)
 
     async def test_list_by_jobs_empty(self, mocker: MockerFixture) -> None:
         """list_by_jobs returns empty list when _run returns no rows."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
 
-        tasks = await repo.list_by_jobs([999])
+        tasks = await repo.list_by_jobs([TaskId(999)])
 
         assert tasks == []
 

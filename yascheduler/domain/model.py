@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.16.0
+# VERSION: 1.17.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
-#   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
+#   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
 #   DEPENDS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 #   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -13,7 +13,9 @@
 #   ProcessResult - Exit code and captured output from remote execution
 #   TaskContext - Typed task metadata with arbitrary extras; .replace() typed copy-with
 #   TaskContextOverrides - TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra
-#   Task - Task entity with allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
+#   TaskId - Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
+#   NewTask - Pre-persistence task record (no task_id)
+#   Task - Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
 #   NodeId - Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
 #   NewNode - Pre-persistence node record (no node_id)
 #   Node - Post-persistence node record; always carries node_id: NodeId (first field, identity-first)
@@ -24,8 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.16.0 - Add NodeId value object (frozen dataclass wrapping int, validates >0, __str__ renders bare int) and NewNode pre-persistence record; Node gains node_id: NodeId as first field (post-persistence shape). Conversion NewNode→Node happens only in NodeRepository.insert (add-node-id-identity).
-#   PREVIOUS_CHANGE: v1.15.0 - Add _get_opt_str helper for TaskContext.from_metadata JSONB boundary; route 4 str|None field assignments (remote_folder, local_folder, webhook_url, error) through it (raises TypeError on non-str/non-None); drop 5 # type: ignore[arg-type] (4 routed through helper, 1 dropped as over-cautious on webhook_custom_params) (resolve-type-bridge-debt / D5).
+#   LAST_CHANGE: v1.17.0 - Add TaskId value object (frozen dataclass wrapping int, validates >0, __str__ renders bare int) and NewTask pre-persistence record; Task gains task_id: TaskId as first field (post-persistence shape). Conversion NewTask→Task happens only in TaskRepository.insert (add-task-id-identity).
+#   PREVIOUS_CHANGE: v1.16.0 - Add NodeId value object (frozen dataclass wrapping int, validates >0, __str__ renders bare int) and NewNode pre-persistence record; Node gains node_id: NodeId as first field (post-persistence shape). Conversion NewNode→Node happens only in NodeRepository.insert (add-node-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -192,11 +194,79 @@ class TaskContext:
         return replace(self, **overrides)
 
 
+# START_CONTRACT: TaskId
+#   PURPOSE: Task primary-key value object — frozen dataclass wrapping int; validates >0; __str__ renders bare int.
+#   INPUTS: { value: int - the database-generated task_id (SERIAL starts at 1) }
+#   OUTPUTS: { None - raises ValueError in __post_init__ when value <= 0 }
+#   SIDE_EFFECTS: None
+#   RAISES: ValueError - when value <= 0 (a non-positive id indicates a bug)
+#   LINKS: M-DOMAIN-MODEL
+# END_CONTRACT: TaskId
+@dataclass(frozen=True)
+class TaskId:
+    """Task primary-key value object.
+
+    Wraps a single ``value: int`` (the DB-generated ``task_id``). ``__post_init__``
+    enforces ``value > 0`` (SERIAL starts at 1, so a non-positive value indicates a
+    bug). ``__str__`` returns the bare integer string so CLI rendering and logging
+    produce ``5``, not ``TaskId(value=5)``. Frozen → hashable → usable as a dict key.
+    Intentionally NOT equal to a bare ``int`` (``TaskId(5) == 5`` is ``False``) — the
+    type-safety point of a dedicated value object; callers must unwrap ``.value``
+    explicitly at external boundaries (pg8000 params, JSON, argparse).
+    """
+
+    value: int
+
+    def __post_init__(self) -> None:
+        if self.value <= 0:
+            raise ValueError(f"TaskId must be > 0, got {self.value}")
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+
+# START_CONTRACT: NewTask
+#   PURPOSE: Pre-persistence task record — no identity yet; converted to Task only by TaskRepository.insert.
+#   INPUTS: { label: str, context: TaskContext, status: TaskStatus, allocated_ip: str | None }
+#   OUTPUTS: { None - dataclass }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert
+# END_CONTRACT: NewTask
+@dataclass(frozen=True)
+class NewTask:
+    """Pre-persistence task record — no identity yet.
+
+    Mirrors the non-``task_id``/non-``_events`` fields of :class:`Task` with identical
+    defaults. A caller builds a ``NewTask`` to prepare a task for insertion; the
+    conversion to :class:`Task` happens in exactly one place: ``TaskRepository.insert``.
+    It is a pure data carrier with no lifecycle methods (those are nonsensical on an
+    unpersisted task and stay on ``Task``).
+    """
+
+    label: str
+    context: TaskContext
+    status: TaskStatus = TaskStatus.TO_DO
+    allocated_ip: str | None = None
+
+
+# START_CONTRACT: Task
+#   PURPOSE: Post-persistence task entity — always carries its database-generated task_id (identity-first) and a status lifecycle.
+#   INPUTS: { task_id: TaskId, label: str, context: TaskContext, status: TaskStatus, allocated_ip: str | None }
+#   OUTPUTS: { None - dataclass }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert (the only NewTask→Task conversion site)
+# END_CONTRACT: Task
 @dataclass(frozen=True)
 class Task:
-    """Schedulable task entity with lifecycle methods and allocation state."""
+    """Post-persistence task entity with lifecycle methods and allocation state.
 
-    task_id: int
+    ``task_id`` is the FIRST field (identity first); a ``Task`` only ever comes from
+    the database (via ``_row_to_task``) or from ``TaskRepository.insert``'s return.
+    The ``task_id=0`` sentinel is unrepresentable: ``Task``'s ``task_id: TaskId`` field
+    is required, and ``TaskId(0)`` raises ``ValueError``.
+    """
+
+    task_id: TaskId
     label: str
     context: TaskContext
     status: TaskStatus = TaskStatus.TO_DO

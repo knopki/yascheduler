@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from yascheduler.domain.model import TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.cli.submit import _submit_async
 from yascheduler.entrypoints.config_parser import parse_config
@@ -354,7 +355,7 @@ async def _wait_both_done(
         async with uow_factory() as uow:
             statuses = []
             for tid in task_ids:
-                t = await uow.tasks.get(tid)
+                t = await uow.tasks.get(TaskId(tid))
                 statuses.append(t.status if t else None)
                 if t and t.status == DomainTaskStatus.RUNNING and t.allocated_ip:
                     seen_running[tid] = t.allocated_ip
@@ -383,7 +384,7 @@ async def _assert_outputs(
     payloads: list[str],
 ) -> None:
     async with uow_factory() as uow:
-        tasks = [await uow.tasks.get(tid) for tid in task_ids]
+        tasks = [await uow.tasks.get(TaskId(tid)) for tid in task_ids]
     for idx, (tid, task) in enumerate(zip(task_ids, tasks)):
         assert task is not None, f"task {tid} vanished from DB"
         assert task.status == DomainTaskStatus.DONE, (
@@ -507,7 +508,7 @@ async def test_hetzner_live(
         # Assert both queued before any node exists.
         async with uow_factory() as uow:
             for tid in task_ids:
-                t = await uow.tasks.get(tid)
+                t = await uow.tasks.get(TaskId(tid))
                 assert t is not None, f"task {tid} missing after submit"
                 assert t.status == DomainTaskStatus.TO_DO, (
                     f"task {tid} status={t.status}, expected TO_DO after submit"

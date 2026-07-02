@@ -46,10 +46,12 @@ from yascheduler.domain.model import (
     ConnectedMachine,
     MachineState,
     NewNode,
+    NewTask,
     Node,
     NodeId,
     Task,
     TaskContext,
+    TaskId,
     TaskStatus,
 )
 from yascheduler.infra.cloud.manager import CloudProvisionerImpl
@@ -254,10 +256,10 @@ class _FakeNodeRepo:
 class _FakeTaskRepo:
     """In-memory TaskRepository backed by a shared store dict."""
 
-    def __init__(self, store: dict[int, Task]) -> None:
+    def __init__(self, store: dict[TaskId, Task]) -> None:
         self._store = store
 
-    async def get(self, task_id: int) -> Task | None:
+    async def get(self, task_id: TaskId) -> Task | None:
         return self._store.get(task_id)
 
     async def save(self, task: Task) -> None:
@@ -269,21 +271,32 @@ class _FakeTaskRepo:
         result = [t for t in self._store.values() if t.status in statuses]
         return result[:limit] if limit is not None else result
 
-    async def insert(self, task: Task) -> Task:
-        self._store[task.task_id] = task
+    async def insert(self, new_task: NewTask) -> Task:
+        # Assign a fresh TaskId (one past the current max, min 1).
+        next_id = TaskId(max((tid.value for tid in self._store), default=0) + 1)
+        task = Task(
+            task_id=next_id,
+            label=new_task.label,
+            context=new_task.context,
+            status=new_task.status,
+            allocated_ip=new_task.allocated_ip,
+        )
+        self._store[next_id] = task
         return task
 
-    async def list_by_jobs(self, job_ids: list[int]) -> list[Task]:
+    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
         return [t for t in self._store.values() if t.task_id in job_ids]
 
-    async def update_status(self, task_id: int, status: TaskStatus) -> None:
+    async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
         t = self._store.get(task_id)
         if t is not None:
             from dataclasses import replace
 
             self._store[task_id] = replace(t, status=status)
 
-    async def list_ids_by_ip_and_status(self, ip: str, status: TaskStatus) -> list[int]:
+    async def list_ids_by_ip_and_status(
+        self, ip: str, status: TaskStatus
+    ) -> list[TaskId]:
         return [
             t.task_id
             for t in self._store.values()
@@ -306,7 +319,7 @@ class FakeUnitOfWork:
 
     def __init__(
         self,
-        tasks_store: dict[int, Task] | None = None,
+        tasks_store: dict[TaskId, Task] | None = None,
         nodes_store: dict[str, Node] | None = None,
     ) -> None:
         self._tasks_store = tasks_store if tasks_store is not None else {}
@@ -530,7 +543,7 @@ def _make_engine() -> Engine:
 
 def _make_todo_task(task_id: int = 1) -> Task:
     return Task(
-        task_id=task_id,
+        task_id=TaskId(task_id),
         label="test",
         context=TaskContext(engine="test_engine"),
         status=TaskStatus.TO_DO,
@@ -554,7 +567,7 @@ def _patch_ssh_key() -> Any:
 
 
 async def _allocate(
-    task_id: int,
+    task_id: TaskId,
     repo: Any,
     uow: Any,
     clouds: Any,
@@ -591,7 +604,7 @@ class TestFixA:
         repo = FakeMachineRepository()
         await repo.connect("10.0.0.1")  # setup-in-flight, DB not yet enabled
         nodes_store: dict[str, Node] = {}  # no enabled node for 10.0.0.1
-        tasks_store: dict[int, Task] = {1: _make_todo_task()}
+        tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
         start_cb: AsyncMock = AsyncMock(return_value=True)
@@ -599,7 +612,7 @@ class TestFixA:
             repo, lambda: uow, provider="aws", fail=False, select_provider_result=None
         )
 
-        result = await _allocate(1, repo, uow, clouds, start_cb)
+        result = await _allocate(TaskId(1), repo, uow, clouds, start_cb)
 
         assert result is False
         start_cb.assert_not_called()
@@ -609,7 +622,10 @@ class TestFixA:
         repo = FakeMachineRepository()
         await repo.connect("10.0.0.1")  # setup-in-flight
         nodes_store: dict[str, Node] = {}
-        tasks_store: dict[int, Task] = {1: _make_todo_task(), 2: _make_todo_task(2)}
+        tasks_store: dict[TaskId, Task] = {
+            TaskId(1): _make_todo_task(),
+            TaskId(2): _make_todo_task(2),
+        }
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
         start_cb: AsyncMock = AsyncMock(return_value=True)
@@ -624,8 +640,8 @@ class TestFixA:
             )
 
         results = await asyncio.gather(
-            _allocate(1, repo, uow, _make_clouds(1), start_cb),
-            _allocate(2, repo, uow, _make_clouds(2), start_cb),
+            _allocate(TaskId(1), repo, uow, _make_clouds(1), start_cb),
+            _allocate(TaskId(2), repo, uow, _make_clouds(2), start_cb),
         )
 
         assert list(results) == [False, False]
@@ -638,7 +654,7 @@ class TestFixA:
         nodes_store: dict[str, Node] = {
             "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
         }
-        tasks_store: dict[int, Task] = {1: _make_todo_task()}
+        tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
         captured_ip: list[str] = []
@@ -647,7 +663,7 @@ class TestFixA:
             captured_ip.append(session.ip)
             return True
 
-        result = await _allocate(1, repo, uow, MagicMock(), _start)
+        result = await _allocate(TaskId(1), repo, uow, MagicMock(), _start)
 
         assert result is True
         assert captured_ip == ["10.0.0.1"]
@@ -659,7 +675,7 @@ class TestFixA:
         nodes_store: dict[str, Node] = {
             "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=False)
         }
-        tasks_store: dict[int, Task] = {1: _make_todo_task()}
+        tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
         start_cb: AsyncMock = AsyncMock(return_value=True)
@@ -667,7 +683,7 @@ class TestFixA:
             repo, lambda: uow, provider="aws", select_provider_result=None
         )
 
-        result = await _allocate(1, repo, uow, clouds, start_cb)
+        result = await _allocate(TaskId(1), repo, uow, clouds, start_cb)
 
         assert result is False
         start_cb.assert_not_called()
@@ -818,7 +834,7 @@ class TestFixC:
             "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True),
             "10.0.0.2": Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=4, enabled=True),
         }
-        tasks_store: dict[int, Task] = {1: _make_todo_task()}
+        tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
         call_log: list[str] = []
@@ -829,7 +845,7 @@ class TestFixC:
                 raise RuntimeError("stale session channel closed")
             return True
 
-        result = await _allocate(1, repo, uow, MagicMock(), _start)
+        result = await _allocate(TaskId(1), repo, uow, MagicMock(), _start)
 
         assert result is True
         # Both sessions were attempted; the first failed but the loop continued.
@@ -845,7 +861,7 @@ class TestFixC:
         nodes_store: dict[str, Node] = {
             "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
         }
-        tasks_store: dict[int, Task] = {1: _make_todo_task()}
+        tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
         async def _start_fails(session: Any, engine: Any, task: Any) -> bool:
@@ -855,7 +871,7 @@ class TestFixC:
             repo, lambda: uow, provider="aws", new_ip="10.0.0.99", fail=False
         )
 
-        result = await _allocate(1, repo, uow, clouds, _start_fails)
+        result = await _allocate(TaskId(1), repo, uow, clouds, _start_fails)
 
         # Cloud branch was reached: the fake CloudProvisioner.allocate ran.
         assert clouds.allocate_calls == ["aws"]
