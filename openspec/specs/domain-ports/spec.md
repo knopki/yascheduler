@@ -188,7 +188,7 @@ The system SHALL define a `@runtime_checkable` `CloudConfig` Protocol in
 application-layer consumers (`deallocate_nodes`, `orchestrator`) read.
 
 The authoritative field list, the explicit-inheritance contract with the
-`ConfigCloud*` DTOs, and the importability scenarios live in the `cloud-config`
+`ConfigCloud*` DTOs, and the importability scenarios live in the `cloud`
 capability. `domain-ports` asserts only that the Protocol is defined here, is
 `@runtime_checkable`, and is exposed via `yascheduler.domain.ports` and
 `yascheduler.domain` facades.

@@ -108,104 +108,73 @@ drive the real entrypoint code paths (`make_daemon` from `entrypoints/di.py`,
 NOT bypass the orchestrator, the cloud provisioner, the SSH layer, or the persistence
 layer.
 
-The test SHALL be OFF by default and SHALL run ONLY when both of these environment
-variables are set:
-
-- `YASCHEDULER_TEST_HETZNER` — equal to the literal string `1` (the deliberate opt-in
-  gate);
-- `YASCHEDULER_CLOUDS_HETZNER_TOKEN` — a non-empty Hetzner API token.
-
-If either is absent, the test SHALL `pytest.skip(...)` with a message naming the missing
-variable. The test SHALL carry the existing `e2e` marker (auto-applied by
-`tests/e2e/conftest.py::pytest_collection_modifyitems` for files under `tests/e2e/`); the
-project SHALL NOT add any new pytest marker for this test — the gate is purely
-env-based. The default `pytest` / CI `-m e2e` run SHALL collect and skip the test
-(`pytest.skip` is not a failure) and SHALL make no Hetzner API call.
+The test SHALL be OFF by default and SHALL run ONLY when both `YASCHEDULER_TEST_HETZNER`
+(literal `1`, the opt-in gate) and `YASCHEDULER_CLOUDS_HETZNER_TOKEN` (a non-empty Hetzner
+API token) are set. If either is absent, the test SHALL `pytest.skip(...)` naming the
+missing variable; no Hetzner API call is made. The test carries the existing `e2e` marker
+(auto-applied for files under `tests/e2e/`); the project SHALL NOT add any new pytest
+marker — the gate is purely env-based.
 
 The provider image/size knobs SHALL be overridable via environment variables with cheap
-defaults:
-
-- `YASCHEDULER_CLOUDS_HETZNER_LOCATION` (default `hel1`);
-- `YASCHEDULER_CLOUDS_HETZNER_SERVER_TYPE` (default `cx23`);
-- `YASCHEDULER_CLOUDS_HETZNER_IMAGE_NAME` (default `debian-13`).
+defaults: `YASCHEDULER_CLOUDS_HETZNER_LOCATION` (default `hel1`),
+`YASCHEDULER_CLOUDS_HETZNER_SERVER_TYPE` (default `cx23`),
+`YASCHEDULER_CLOUDS_HETZNER_IMAGE_NAME` (default `debian-13`).
 
 The test SHALL provide a session-scoped `hetzner_config` fixture (defined in the test
-file, NOT in the shared `tests/e2e/conftest.py`) that depends ONLY on session-scoped
-shared fixtures (`postgres_container`, `_db_config`, `_init_schema`) — it SHALL NOT
-depend on `ssh_pool` (Hetzner provisions its own VM) and SHALL NOT depend on the
-function-scoped `uow_factory` or `log_records` (a session fixture depending on
-function-scoped fixtures raises pytest `ScopeMismatch`). The fixture SHALL write a temp
-INI containing the `[db]`, `[local]`, `[remote]`,
-and `[engine.test_shell]` sections (same shape as the static-node `e2e_config` fixture)
-plus a `[clouds]` section with: `hetzner_token` (from env), `hetzner_max_nodes = 1`,
-`hetzner_server_type` (from env/default), `hetzner_location` (from env/default),
-`hetzner_image_name` (from env/default), `hetzner_idle_tolerance` set to a small
-value (start near 5; raise toward 10 if the deallocate window proves too tight), and
-`hetzner_package_upgrade = false` (skips the slow cloud-init `apt-get upgrade`). The
-fixture SHALL set `YASCHEDULER_CONF_PATH` to the temp INI for the test duration and
-return the parsed `Config`. `connect_grace` SHALL NOT be set in the INI (it is not an
-INI-parsed key; the `ConfigCloudHetzner` DTO default applies and is ample because
-`hetzner_package_upgrade = false` skips the slow `apt-get upgrade`).
+file, NOT in the shared `tests/e2e/conftest.py`) depending ONLY on session-scoped shared
+fixtures (`postgres_container`, `_db_config`, `_init_schema`) — it SHALL NOT depend on
+`ssh_pool`, `uow_factory`, or `log_records` (session-on-function raises pytest
+`ScopeMismatch`). The fixture writes a temp INI with `[db]`, `[local]`, `[remote]`,
+`[engine.test_shell]`, plus a `[clouds]` section (`hetzner_token`, `hetzner_max_nodes = 1`,
+`hetzner_server_type`, `hetzner_location`, `hetzner_image_name`, `hetzner_idle_tolerance`
+near 5–10, `hetzner_package_upgrade = false`), sets `YASCHEDULER_CONF_PATH` for the test
+duration, and returns the parsed `Config`. `connect_grace` is NOT set in the INI (the
+`ConfigCloudHetzner` DTO default applies). Status assertions SHALL use
+`yascheduler.domain.TaskStatus`. The fixture reuses a fresh `keys_dir` so the daemon
+generates its own SSH key; the test SHALL NOT reuse the static-node `ssh_pool` keypair.
+The test module SHALL import `hcloud` lazily inside helpers (only after the gate passes)
+so module collection succeeds even when `hcloud` is not installed.
 
 The test scenario SHALL be:
 
 1. **Start daemon**: `orchestrator = await make_daemon(hetzner_config)`; start it as a
-   background `asyncio.Task` via `orchestrator.start()`. The test SHALL NOT call
-   `run_daemon`.
+   background `asyncio.Task` via `orchestrator.start()` (the test SHALL NOT call
+   `run_daemon`).
 2. **Submit jobs**: submit TWO tasks via `_submit_async(["<script>", "--config",
    "<ini_path>"])`, each in its own temp CWD holding a distinct `1.input` payload,
    capturing `task_id` from stdout.
-3. **Assert queued**: assert both tasks are `TO_DO` before any node exists.
-4. **Assert autoscale**: poll `uow.nodes.list_all()` until a node row with
-   `cloud == "hetzner"` appears (the orchestrator provisioned a VM); record its IP into
-   `observed_ips`; timeout at least 600 seconds.
+3. **Assert queued**: both tasks are `TO_DO` before any node exists.
+4. **Assert autoscale**: poll `uow.nodes.list_all()` until a `cloud == "hetzner"` node row
+   appears; record its IP into `observed_ips`; timeout ≥ 600s.
 5. **Wait for completion**: poll until both tasks reach `DONE`, capturing each task's
-   `RUNNING` snapshot (`allocated_ip`); timeout at least 600 seconds.
+   `RUNNING` snapshot `allocated_ip`; timeout ≥ 600s.
 6. **Assert outputs**: for each task, assert `status == DONE`, `context.error is None`,
-   `context.local_folder` is set, and `<local_folder>/1.input.out` exists with content
-   matching the per-job payload.
-7. **Assert tasks ran on cloud nodes**: assert each task's `allocated_ip` is the IP of
-   some `cloud == "hetzner"` node observed in the DB during the test (proves both ran on
-   real Hetzner VMs). The test SHALL NOT assert both `allocated_ip` values are identical:
-   with `max_nodes = 1` the idle-deallocate loop MAY provision a second VM for the second
-   task if the deallocate window wins the race against the allocator (see design Risks);
-   that outcome is non-fatal and is tuned via `hetzner_idle_tolerance`, not by asserting a
-   single shared IP.
-8. **Assert cloud-path logs**: grep the captured `log_records` for an
-   `[AllocateTask][allocate_task][CLOUD_DONE]` debug record (emitted by
-   `_persist_node_with_cleanup` on the `yascheduler.application.allocate_task` logger)
-   whose `ip=` matches the provisioned node and whose `provider=hetzner`, and for a
-   `[deallocate_node][CLOUD_DELETE]` debug record (emitted by `deallocate_node` on the
-   `yascheduler.application.deallocate_nodes` logger) whose `ip=` and `cloud=hetzner`
-   reference the provisioned node. Both markers are on `yascheduler.*` module loggers
-   and therefore capturable by the `log_records` fixture (which attaches to the
-   `"yascheduler"` logger only); the test SHALL NOT assert on the `CREATED <ip>` line or
-   any `[CloudProvisionerImpl]` line, which are emitted on the top-level `"Orchestrator"`
-   logger and are not visible to `log_records`.
+   `context.local_folder` is set, and `<local_folder>/1.input.out` exists matching the
+   per-job payload.
+7. **Assert tasks ran on cloud nodes**: each task's `allocated_ip` is the IP of some
+   `cloud == "hetzner"` node observed during the test. The test SHALL NOT assert both
+   `allocated_ip` values are identical (with `max_nodes = 1` the idle-deallocate loop MAY
+   provision a second VM for the second task; that outcome is non-fatal, tuned via
+   `hetzner_idle_tolerance`).
+8. **Assert cloud-path logs**: grep `log_records` for an
+   `[AllocateTask][allocate_task][CLOUD_DONE]` record whose `ip=` matches the provisioned
+   node and `provider=hetzner`, and a `[deallocate_node][CLOUD_DELETE]` record whose `ip=`
+   and `cloud=hetzner` reference the node. The test SHALL NOT assert on the `CREATED <ip>`
+   line or any `[CloudProvisionerImpl]` line (those are on the top-level `"Orchestrator"`
+   logger, invisible to `log_records`).
 9. **Assert idle deallocation (strong)**: poll `uow.nodes.list_all()` until the
-   `cloud == "hetzner"` node row is gone (the idle-deallocate loop fired); timeout at
-   least `idle_tolerance + 120` seconds. THEN poll `find_srv(client, ip)` (Hetzner API)
-   until it returns `None`, proving the billed VM is actually deleted; this SHALL be a
-   separate, explicit assertion (DB-row removal alone is insufficient).
+   `cloud == "hetzner"` node row is gone (timeout ≥ `idle_tolerance + 120`s). THEN poll
+   `find_srv(client, ip)` (Hetzner API) until it returns `None`, proving the billed VM is
+   actually deleted — a separate, explicit assertion (DB-row removal alone is
+   insufficient).
 10. **Guaranteed cleanup with loud-fail-on-leak**: in a `finally` block, the test SHALL
     (a) call `orchestrator.stop()` and await the background task best-effort, and (b) for
-    every IP in `observed_ips`, call `hetzner_delete_node` to delete the VM. After each
-    delete attempt, the test SHALL call `find_srv(client, ip)`; if the call raised OR
-    `find_srv` still returns the server, the test SHALL `pytest.fail(...)` with a message
-    of the form naming the leaked IP (e.g. `Hetzner VM <ip> was NOT deleted — manual
-    cleanup required`) and emit an ERROR log with the same IP. The project SHALL NOT
-    implement any name-prefix "sweep" of unrelated servers (it is unsafe under parallel
-    runs and useless after a hard process kill, which is the only case `finally` does not
-    cover). Cleanup deletion calls SHALL be best-effort across multiple IPs (one failure
-    does not skip remaining deletion attempts) BUT a failure to actually delete a VM MUST
-    surface as a test failure, not be swallowed.
-
-Status assertions SHALL use `yascheduler.domain.TaskStatus`. The `hetzner_config`
-fixture SHALL reuse a fresh keys_dir so the daemon generates its own SSH key
-(`get_or_create_ssh_key`) registered into the Hetzner project by `get_ssh_key_id`; the
-test SHALL NOT reuse the static-node `ssh_pool` keypair. The test module SHALL import
-`hcloud` lazily inside helpers (only after the gate passes) so module collection succeeds
-even when the optional `hcloud` extra is not installed.
+    every IP in `observed_ips`, call `hetzner_delete_node`. After each delete attempt, call
+    `find_srv(client, ip)`; if it raised OR still returns the server, the test SHALL
+    `pytest.fail(...)` naming the leaked IP and emit an ERROR log. The project SHALL NOT
+    implement any name-prefix "sweep" of unrelated servers. Cleanup deletion calls SHALL be
+    best-effort across multiple IPs BUT a failure to actually delete a VM MUST surface as a
+    test failure, not be swallowed.
 
 #### Scenario: Test is skipped when the opt-in gate is absent
 - **WHEN** `YASCHEDULER_TEST_HETZNER` is unset (or not equal to `1`) and the test is collected

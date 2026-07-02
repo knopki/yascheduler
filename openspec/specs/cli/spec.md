@@ -1,11 +1,88 @@
-# CLI Commands
+# CLI
 
 ## Purpose
 
-Define how CLI commands are wired to use cases via dependency injection,
-how entry points resolve to the correct module, and how each command is a
-synchronous `def` entry point that calls `asyncio.run(_<name>_async(argv))`.
+The six CLI command entry points (`yasubmit`, `yastatus`, `yanodes`, `yasetnode`,
+`yainit`, `yascheduler`), the three daemon launchers (`daemonize`,
+`daemon_systemd`, `daemon_sysv`), the shared argparse helpers, and the async
+daemon core. Each CLI command is a synchronous `def` entry point that calls
+`asyncio.run(_<name>_async(argv))` and delegates to use cases via dependency
+injection (`yainit` is a bootstrap exception).
+
 ## Requirements
+
+### Requirement: Shared argparse helpers
+
+`yascheduler/entrypoints/cli/args.py` SHALL provide reusable argparse helpers
+consumed by all six CLI command entry points and the three daemon launchers:
+
+- `existing_path(s: str) -> Path` — argparse type validator returning `Path(s)` if `s` is an existing file, else raising `argparse.ArgumentTypeError` (→ exit 2). Single source of truth for the "file must exist" validator.
+- `add_config_arg(parser, *, default=CONFIG_FILE, dest="config")` — adds `--config PATH` with `type=existing_path`, so a missing config exits 2 with `not a file: <path>` (not a cryptic parse error). Default `CONFIG_FILE` is env-aware via `YASCHEDULER_CONF_PATH`.
+- `add_log_level_arg(parser, *, default="WARNING", short=None)` — adds `--log-level` with explicit `choices=["DEBUG","INFO","WARNING","ERROR","CRITICAL"]`. When `short` is given (e.g. `"-l"`), it registers the short flag as alias. The caller MUST ensure no collision; `daemon_sysv.py` SHALL NOT pass `short="-l"` (it registers `-l`/`--log-file`). Resolves via `logging.getLevelName(args.log_level)` (NOT private `logging._nameToLevel`).
+- `add_log_file_arg(parser, *, default=None)` — adds `--log-file PATH` (path string, no existence check; `FileHandler` fails loudly if unwritable). Used only by the three daemon entry points.
+
+Each helper SHALL be a function mutating the passed parser (composing with the
+caller's bespoke parser), NOT a base `ArgumentParser` subclass and NOT a single
+shared dispatcher.
+
+#### Scenario: existing_path returns Path for an existing file
+- **WHEN** `existing_path("/etc/yascheduler/yascheduler.conf")` is called and the file exists
+- **THEN** it returns `Path("/etc/yascheduler/yascheduler.conf")`
+
+#### Scenario: existing_path raises ArgumentTypeError for a missing file
+- **WHEN** `existing_path("/nonexistent.conf")` is called
+- **THEN** it raises `argparse.ArgumentTypeError` with a message containing `not a file: /nonexistent.conf`
+
+#### Scenario: add_log_level_arg rejects WARN alias
+- **WHEN** a parser built with `add_log_level_arg(parser)` is given `--log-level WARN`
+- **THEN** argparse rejects it with exit 2 (only `WARNING` is accepted, not the `WARN` alias)
+
+#### Scenario: add_log_level_arg registers a short alias
+- **WHEN** a parser built with `add_log_level_arg(parser, short="-l")` is given `-l DEBUG`
+- **THEN** `args.log_level == "DEBUG"` (the `-l` short flag is an alias for `--log-level`)
+
+#### Scenario: add_log_level_arg long-only by default
+- **WHEN** a parser built with `add_log_level_arg(parser)` (no `short`) is given `-l DEBUG`
+- **THEN** argparse rejects it with exit 2 (no short flag registered)
+
+### Requirement: Shared daemon core for entry points
+
+`yascheduler/entrypoints/cli/daemon_common.py` SHALL provide the shared daemon
+runtime consumed by all three daemon entry points:
+
+- `configure_logger(log_file: str | Path | None, level: int) -> logging.Logger` — configures the ROOT logger (so warnings from `aiohttp`, `pg8000`, `asyncio` reach the log file): always adds a `StreamHandler(sys.stderr)`, adds a `FileHandler(log_file)` only when `log_file is not None`, sets `backoff` and `asyncssh` loggers to `ERROR`, and calls `logging.captureWarnings(True)`. SHALL NOT call `logging.basicConfig`.
+- `async def run_daemon(config: Config, logger: logging.Logger) -> None` — the async daemon core: `await make_daemon(config, logger)` to build the `Orchestrator`, register SIGTERM/SIGINT handlers on the running event loop (cancel outstanding tasks, sleep 250ms for SSL close, log "Done"), then `await orch.start()` wrapped in a `try/finally` whose `finally` clause awaits `orch.stop()`. Signal-handler registration lives in `run_daemon` (not the entry points) because `loop.add_signal_handler` requires a running loop.
+
+Each daemon entry point SHALL be a synchronous `def` that builds its own argparse
+parser via the `args.py` helpers, calls `configure_logger`, loads
+`Config.from_config_parser(args.config)`, and invokes
+`asyncio.run(run_daemon(config, logger))`. The entry points SHALL NOT register
+signal handlers themselves.
+
+#### Scenario: configure_logger writes to stderr when log_file is None
+- **WHEN** `configure_logger(log_file=None, level=logging.INFO)` is called
+- **THEN** the root logger has a `StreamHandler(sys.stderr)` and no `FileHandler`
+
+#### Scenario: configure_logger writes to file and stderr when log_file is set
+- **WHEN** `configure_logger(log_file="/tmp/y.log", level=logging.INFO)` is called
+- **THEN** the root logger has both a `StreamHandler(sys.stderr)` and a `FileHandler` pointed at `/tmp/y.log`
+
+#### Scenario: run_daemon is async
+- **WHEN** `run_daemon` is inspected
+- **THEN** it is declared `async def run_daemon(config, logger) -> None`
+
+#### Scenario: run_daemon awaits make_daemon and orch.start
+- **WHEN** `run_daemon(config, logger)` is awaited
+- **THEN** `make_daemon(config, logger)` is awaited, SIGTERM/SIGINT handlers are registered on the running event loop, `orch.start()` is awaited, and the `finally` block awaits `orch.stop()` (idempotent per the `orchestrator` capability)
+
+#### Scenario: start() exception propagates after cleanup
+- **WHEN** `orch.start()` raises an exception
+- **THEN** the `finally` block's `orch.stop()` still runs (cancelling early background jobs, closing the HTTP session) before the exception propagates out of `run_daemon`
+
+#### Scenario: entry points call asyncio.run
+- **WHEN** any of `daemonize.py`, `daemon_systemd.py`, `daemon_sysv.py` is inspected
+- **THEN** the entry point is a synchronous `def` that calls `asyncio.run(run_daemon(...))`
+
 ### Requirement: CLI commands call use cases via DI
 
 The system SHALL implement each CLI command as a function that obtains

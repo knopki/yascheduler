@@ -282,34 +282,25 @@ checked for layer direction by R3) but SHALL still be subject to R2
 - `yascheduler.client` — compat shim re-exporting `Yascheduler` from
   `yascheduler.entrypoints.client`; preserves the deep import path
   `from yascheduler.client import Yascheduler` for external downstream
-  consumers. Not a composition root (the real client implementation now
-  lives in `yascheduler.entrypoints.client`).
+  consumers.
 
-The composition root formerly at `yascheduler.di` (package root) now lives
-at `yascheduler.entrypoints.di` and is therefore inside the
-`yascheduler.entrypoints` layer; it is no longer in the outside-layer-set
-and is subject to R3. Its imports (`yascheduler.infra`,
-`yascheduler.application`, `yascheduler.domain`) flow in the layer
-direction and pass the contract.
+The composition root `yascheduler.entrypoints.di` is a resident of the
+`yascheduler.entrypoints` layer and is subject to R3; its imports
+(`yascheduler.infra`, `yascheduler.application`, `yascheduler.domain`) flow in
+the layer direction and pass the contract.
 
 `yascheduler.shared` is the shared kernel: it SHALL contain only typing
 shims (and similar cross-cutting primitives) consumed by ≥2 architectural
 layers. A module whose consumers are all within a single architectural
-layer belongs to that layer, not to `yascheduler.shared`. This positive
-definition is the primary membership rule. As a second guardrail,
+layer belongs to that layer, not to `yascheduler.shared`. As a second guardrail,
 `yascheduler.shared` SHALL NOT contain business logic, domain types, or
-SSH/DB/HTTP/cloud I/O — defense-in-depth beyond the layer-direction
-enforcement in the `layers` contract (the `layers` contract blocks
-`shared → {entrypoints, adapters, application, domain}`, but the contract cannot
-detect a contributor adding business logic or I/O that imports only
-stdlib/third-party; the clause gives reviewers a spec-grounded basis to
-reject such accretion).
+SSH/DB/HTTP/cloud I/O — defense-in-depth beyond the `layers` contract.
 
 #### Scenario: Outside-set modules not flagged for layer direction
 - **WHEN** the `layers` contract runs
 - **THEN** modules in the outside-set list (`yascheduler.data`, `yascheduler.client`) are not checked for R3 violations
 
-#### Scenario: Composition root is layer-checked after migration
+#### Scenario: Composition root is layer-checked
 - **WHEN** the `layers` contract runs
 - **THEN** `yascheduler.entrypoints.di` (a resident of the `yascheduler.entrypoints` layer) IS checked for R3 violations like any other entrypoints-layer module, and passes because its imports (`yascheduler.infra`, `yascheduler.application`, `yascheduler.domain`) flow downward through the layer direction
 
@@ -329,9 +320,9 @@ reject such accretion).
 - **WHEN** a contributor proposes to add a module to `yascheduler/shared/` whose production consumers are all within one architectural layer (e.g., only `entrypoints`, or only `application`)
 - **THEN** the reviewer rejects the addition and directs the contributor to place the module in the consuming layer; the positive membership rule ("≥2 architectural layers") is the primary criterion, and the "no SSH/DB/HTTP/cloud I/O" clause is the secondary guardrail
 
-#### Scenario: Daemon launchers are layer-checked after migration
+#### Scenario: Daemon launchers are layer-checked
 - **WHEN** the `layers` contract runs
-- **THEN** `yascheduler.entrypoints.cli.daemon_systemd` and `yascheduler.entrypoints.cli.daemon_sysv` (under the `yascheduler.entrypoints` layer) ARE checked for R3 violations like any other entrypoints-layer module, and pass because their imports (`yascheduler.infra.cli.daemonize`, `yascheduler.shared` typing shims, `yascheduler.entrypoints` path constants) flow downward through the layer direction
+- **THEN** `yascheduler.entrypoints.cli.daemon_systemd` and `yascheduler.entrypoints.cli.daemon_sysv` (under the `yascheduler.entrypoints` layer) ARE checked for R3 violations like any other entrypoints-layer module, and pass because their imports (`yascheduler.shared` typing shims, `yascheduler.entrypoints` path constants) flow downward through the layer direction
 
 ### Requirement: Layers contract configuration
 
@@ -360,38 +351,6 @@ No `forbidden` contract entry exists; the `layers` contract is the sole import-l
 #### Scenario: import-linter version compatible with Python 3.9
 - **WHEN** the dev environment installs with `python >=3.9`
 - **THEN** `import-linter >=2.5,<2.6` is installed and `lint-imports` runs without Python-version errors, and the `layers` contract type is recognized
-
-### Requirement: Documented residual edges
-
-The layers contract SHALL include `ignore_imports` entries for two
-specific module-level edges that violate R3, documented as residual
-until the follow-up change `gateway-sftp-wrapping` removes them:
-
-- `"yascheduler.application.consume_task -> yascheduler.infra"`
-- `"yascheduler.application.orchestrator -> yascheduler.infra"`
-
-These edges exist because the application code uses `backoff.on_exception(...)`
-with the SSH exception tuples (`SFTPRetryExc`, `AllSSHRetryExc`), and the
-gateway currently exposes a raw asyncssh `SFTPClient` via `get_sftp()` —
-so gateway-side exception translation cannot reach the SFTP call sites.
-Properly fixing the violations requires a gateway SFTP refactor tracked
-in the follow-up change `gateway-sftp-wrapping`. These two edges are
-**R2-resolved and R3-residual**: the symbols are now reached through the
-`yascheduler.infra` layer facade (R2-compliant), but the
-application→adapters layer crossing itself remains an R3 violation that
-only the follow-up change can remove.
-
-#### Scenario: Residual edges suppressed by layers contract
-- **WHEN** the `layers` contract runs against the current codebase
-- **THEN** the two specific edges are not flagged as violations
-
-#### Scenario: Residual edges removed by follow-up change
-- **WHEN** the follow-up change `gateway-sftp-wrapping` lands (gateway wraps SFTP operations and raises `RetryableOperationError`, application backoff retries on the domain exception)
-- **THEN** the two `ignore_imports` entries are removed from the contract
-
-#### Scenario: No new ignore_imports entries
-- **WHEN** a new R3 violation is discovered during implementation
-- **THEN** the violation is NOT silently added to `ignore_imports`; either it is fixed forward, or (if same shape as the residual) it is added with a matching follow-up note in the spec
 
 ### Requirement: Domain package facade contents
 
@@ -485,43 +444,6 @@ composition-root (`yascheduler.entrypoints.di`) wiring.
 #### Scenario: Persistence subpackage facade exposes apply_schema and PostgresUnitOfWork
 - **WHEN** a consumer imports `from yascheduler.infra.persistence import apply_schema, PostgresUnitOfWork`
 - **THEN** both symbols resolve without ImportError
-
-### Requirement: Documented private-symbol carve-outs
-
-The system SHALL maintain an explicit, spec-documented list of deep-path
-imports that are exempt from R2 (facade) enforcement because the symbols
-are deliberately private (leading underscore) and MUST NOT be promoted to
-any facade. As of this change, the list is empty: the prior carve-out for
-`yascheduler/di.py: from .infra.cloud.adapters import _resolve_adapter`
-is removed because the symbol was renamed to public `resolve_adapter` (in
-the `review-hardening` change) and is now imported by the composition root
-via the `infra` layer facade (`from yascheduler.infra import
-resolve_adapter`), which is R2-compliant.
-
-#### Scenario: No private-symbol carve-outs remain
-- **WHEN** the R2 carve-out list is inspected
-- **THEN** it is empty; every cross-package import in the codebase goes through a layer facade
-
-#### Scenario: Private symbols stay on deep paths
-- **WHEN** a leading-underscore symbol is needed by the composition root
-- **THEN** it is NOT imported via a deep path that bypasses the layer facade; either it is promoted to public and re-exported by the facade, or it is not used across package boundaries at all
-
-### Requirement: Broad ignore_imports tradeoff
-
-The two `ignore_imports` entries in the `layers` contract SHALL use the
-**layer facade path** (`yascheduler.application.{consume_task,orchestrator} -> yascheduler.infra`)
-rather than a deep path. This is broader than a deep-path carve-out:
-any future module-level `from yascheduler.infra import <anything>`
-added to `consume_task.py` or `orchestrator.py` would be silently
-suppressed by the same edge — not just the SSH-exception tuples the
-prose justifies. The tradeoff is deliberate (matches the layer-facade
-import form); reviewers MUST scrutinize any new adapter import in
-those two files until the follow-up change `gateway-sftp-wrapping`
-removes the residuals entirely.
-
-#### Scenario: Reviewer scrutinizes new adapter imports in residual files
-- **WHEN** a contributor adds a new module-level `from yascheduler.infra import X` to `consume_task.py` or `orchestrator.py`
-- **THEN** the reviewer verifies the import is justified (same shape as the residual) or requires the contributor to fix forward
 
 ### Requirement: Public API stability
 

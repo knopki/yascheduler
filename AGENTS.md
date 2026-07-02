@@ -45,41 +45,35 @@ implementation.
 If the user requests changes outside the OpenSpec workflow, offer to use
 OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 
-- `openspec/specs/abstract-uow` — `AbstractUnitOfWork` Protocol and the
-  transaction-boundary contract shared by use cases
-- `openspec/specs/cli-args`
-- `openspec/specs/cli-commands`
-- `openspec/specs/cloud-config`
-- `openspec/specs/cloud-providers`
-- `openspec/specs/cloud-provisioner`
-- `openspec/specs/config-parser-assembly`
+- `openspec/specs/cli` — the six CLI command entry points, the three daemon
+  launchers, the shared argparse helpers, and the async daemon core
+- `openspec/specs/cloud` — the `CloudConfig` Protocol, `ConfigCloud*` DTOs, the
+  per-prefix parser registry, provider VM lifecycle modules, and
+  `CloudProvisionerImpl`
 - `openspec/specs/config-value-objects` — frozen
   `LocalSettings`/`RemoteDefaults`/`PostgresDbConfig`/`Config` dataclasses and
   the composition-root-only `Config` consumption rule
-- `openspec/specs/daemon-common`
 - `openspec/specs/db-migrations`
 - `openspec/specs/dependency-injection`
 - `openspec/specs/domain-engine-types`
 - `openspec/specs/domain-entities`
-- `openspec/specs/domain-events`
+- `openspec/specs/domain-events-and-dispatch` — domain event types, the
+  `MessageBus`, UoW collect/publish hooks, and the `webhook_handler` adapter
 - `openspec/specs/domain-exceptions`
 - `openspec/specs/domain-ports`
-- `openspec/specs/domain-services`
 - `openspec/specs/e2e-testing`
-- `openspec/specs/message-bus`
 - `openspec/specs/orchestrator`
 - `openspec/specs/package-facades`
 - `openspec/specs/platform-adapters`
-- `openspec/specs/postgres-repositories`
+- `openspec/specs/postgres-persistence` — `PostgresUnitOfWork`,
+  `PostgresTaskRepository`/`PostgresNodeRepository`, the SQL file layout and
+  `load_query` caching, and the `TaskRowNotFoundError`/
+  `UnitOfWorkNotInitializedError` persistence exceptions
 - `openspec/specs/postgres-schema-apply`
-- `openspec/specs/postgres-uow`
-- `openspec/specs/sql-queries`
 - `openspec/specs/ssh-infrastructure`
-- `openspec/specs/ssh-keys-loading`
 - `openspec/specs/test-db-integration`
 - `openspec/specs/testing-unit`
 - `openspec/specs/use-cases`
-- `openspec/specs/webhook-handler`
 
 ## Verification
 

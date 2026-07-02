@@ -1,0 +1,182 @@
+# PostgreSQL Persistence
+
+## Purpose
+
+PostgreSQL-backed persistence adapter: `PostgresUnitOfWork` (transaction
+boundaries, connection lifecycle), `PostgresTaskRepository` /
+`PostgresNodeRepository` (satisfying the domain ports), the SQL file layout and
+`load_query` caching, and the `TaskRowNotFoundError` /
+`UnitOfWorkNotInitializedError` persistence exceptions. Built on pg8000 with all
+synchronous calls dispatched through a `ThreadPoolExecutor`.
+
+## Requirements
+
+### Requirement: SQL file layout and lazy loading
+
+The system SHALL store all SQL queries in `infra/persistence/sql/` organized as
+`sql/<entity>/<operation>.sql`, loaded via `load_query(name: str) -> str` which
+reads the file from the package directory and caches the result (each file read
+at most once per process).
+
+- `sql/task/update_by_id.sql` — `UPDATE yascheduler_tasks SET ... WHERE task_id = :task_id ... RETURNING task_id` (partial update keyed by `task_id`; NOT an upsert).
+- `sql/task/update_status.sql` — includes `RETURNING task_id` so the repository detects a 0-row outcome.
+- `sql/task/insert.sql` — `... RETURNING task_id, label, ip, status, metadata`.
+- `sql/node/insert.sql` — `INSERT ... VALUES (...) RETURNING node_id`.
+- `sql/node/get_by_id.sql` — `WHERE node_id = :node_id`.
+- `sql/node/list_all.sql` — includes `ORDER BY node_id` (deterministic CLI output).
+- Every node SELECT (`get_by_ip`, `list_all`, `get_by_ips`, `list_enabled`, `list_disabled`, `get_by_id`) SHALL include `node_id` in its column list.
+
+SQL files SHALL use `:param_name` syntax for pg8000 named-parameter binding.
+
+#### Scenario: load_query reads then caches
+- **WHEN** `load_query("task/get_by_id")` is called twice
+- **THEN** the file `sql/task/get_by_id.sql` is read from disk once; the second call returns the cached string
+
+#### Scenario: Node list_all is ordered by node_id
+- **WHEN** `sql/node/list_all.sql` is inspected
+- **THEN** it contains `ORDER BY node_id`
+
+#### Scenario: Node SELECTs include node_id
+- **WHEN** any of `get_by_ip.sql`, `list_all.sql`, `get_by_ips.sql`, `list_enabled.sql`, `list_disabled.sql`, `get_by_id.sql` is inspected
+- **THEN** the column list includes `node_id`
+
+### Requirement: PostgresUnitOfWork transactional boundaries
+
+`PostgresUnitOfWork` (`infra/persistence/postgres_uow.py`) SHALL manage a shared
+pg8000 connection across `PostgresTaskRepository` and `PostgresNodeRepository`
+with commit/rollback semantics, satisfying the `AbstractUnitOfWork` Protocol. It
+SHALL be constructed from a `PostgresDbConfig`, creating a fresh connection on
+each context entry, and SHALL close the connection on context exit regardless of
+success or failure.
+
+Accessing `tasks` / `nodes`, or calling `commit()` / `rollback()` without
+entering the `async with` context SHALL raise
+`UnitOfWorkNotInitializedError` (`infra/persistence/exceptions.py`, a
+`RuntimeError` subclass).
+
+#### Scenario: Enter context creates connection and repositories
+- **WHEN** `async with PostgresUnitOfWork(config) as uow`
+- **THEN** `uow.tasks` is a `PostgresTaskRepository` and `uow.nodes` is a `PostgresNodeRepository`, both sharing the same connection
+
+#### Scenario: Exception triggers rollback
+- **WHEN** an exception occurs inside the `async with` block
+- **THEN** the transaction is rolled back before the connection is closed
+
+#### Scenario: Normal exit without explicit commit loses changes
+- **WHEN** the `async with` block completes without exception and without calling `commit()`
+- **THEN** the transaction is not committed; the connection is still closed
+
+#### Scenario: Accessing repositories outside context raises UnitOfWorkNotInitializedError
+- **WHEN** `uow.tasks`/`uow.nodes`/`uow.commit()`/`uow.rollback()` is accessed without entering the context (or after exit)
+- **THEN** `UnitOfWorkNotInitializedError` is raised (NOT `RuntimeError`); `isinstance(exc, RuntimeError)` is `True`
+
+#### Scenario: Connection closed after use
+- **WHEN** `async with uow: ...` completes (success or failure)
+- **THEN** the underlying pg8000 connection is closed
+
+### Requirement: PostgresTaskRepository implements TaskRepository
+
+`PostgresTaskRepository` SHALL satisfy the `TaskRepository` Protocol with async
+methods `get`, `save`, `insert`, `update_status`, `list_by_status`,
+`list_by_jobs`, `list_ids_by_ip_and_status`, `count_by_status`.
+
+`save(task)` and `update_status(task_id, status)` SHALL execute
+`UPDATE ... WHERE task_id = :task_id ... RETURNING task_id`, passing
+`task_id.value` as the SQL param (pg8000 cannot adapt a `TaskId` dataclass).
+When the UPDATE affects 0 rows (the `task_id` does not exist), they SHALL raise
+`TaskRowNotFoundError` (`infra/persistence/exceptions.py`, a `RuntimeError`
+subclass taking `task_id: TaskId`). The row-existence check SHALL happen BEFORE
+`save()` appends the task to the UoW's `_saved_tasks` list, so a raise never
+leaves an orphan task that `publish_events` would later dispatch for.
+
+`insert(new_task: NewTask) -> Task` SHALL run `task/insert.sql ... RETURNING
+task_id, label, ip, status, metadata` and return `_row_to_task(rows[0])` (the
+`NewTask.task_id` is ignored — none exists; the DB generates it), avoiding a
+second `get` round-trip. `get`, `_row_to_task`, `list_by_jobs`,
+`list_ids_by_ip_and_status` SHALL wrap `TaskId(int(row["task_id"]))` /
+`task_id.value` at the boundary.
+
+#### Scenario: Get non-existent task
+- **WHEN** `get(TaskId(999))` is called and no such row exists
+- **THEN** returns `None`
+
+#### Scenario: Save non-existent task raises
+- **WHEN** `save(task)` is called with a `task.task_id` that does not exist
+- **THEN** `TaskRowNotFoundError` is raised (carrying the `TaskId`) and the task is NOT appended to `_saved_tasks`
+
+#### Scenario: Insert returns Task with generated TaskId
+- **WHEN** `insert(NewTask(label="job", context=ctx))` is called
+- **THEN** a `Task` with the DB-generated `task_id=TaskId(int(row["task_id"]))` is returned
+
+#### Scenario: Update status non-existent task raises
+- **WHEN** `update_status(TaskId(999), TaskStatus.RUNNING)` is called and no row with task_id=999 exists
+- **THEN** `TaskRowNotFoundError` is raised (carrying `TaskId(999)`)
+
+#### Scenario: List IDs by IP and status returns TaskIds
+- **WHEN** `list_ids_by_ip_and_status("10.0.0.1", TaskStatus.RUNNING)` is called
+- **THEN** returns a `list[TaskId]` (each `TaskId(int(row["task_id"]))`), NOT a `list[int]`
+
+#### Scenario: _row_to_task wraps TaskId
+- **WHEN** `_row_to_task(row)` is called with a row whose `task_id` is the int `7`
+- **THEN** the returned `Task` has `task_id=TaskId(7)`
+
+### Requirement: PostgresNodeRepository implements NodeRepository
+
+`PostgresNodeRepository` SHALL satisfy the `NodeRepository` Protocol with async
+methods `get`, `get_by_id`, `list_enabled`, `list_disabled`, `list_all`,
+`insert`, `add_tmp`, `update`, `enable`, `disable`, `remove`, `get_by_ips`,
+`count_by_cloud`, `count_by_status`.
+
+`insert(new_node: NewNode) -> Node` SHALL run `node/insert.sql` with `RETURNING
+node_id` and return a `Node` carrying the generated `NodeId`. `get_by_id(node_id:
+NodeId)` SHALL run `node/get_by_id.sql` (`WHERE node_id = :node_id`), passing
+`node_id.value`. `_row_to_node` SHALL read `node_id` from every node row and
+construct `NodeId(int(row["node_id"]))`. `list_all()` SHALL return nodes ordered
+by `node_id` ascending; `list_enabled()` / `list_disabled()` continue to
+post-filter rows whose `ip` contains `"."` (excluding `prov*` placeholders).
+
+`update(node)` keeps `WHERE ip = :ip` (ip-keyed mutators unchanged; `ip UNIQUE`
+protects the write). `add_tmp(cloud)` inserts a disabled tmp-node with a
+generated `prov*` IP and `username` left to the DB default (`'root'`); it SHALL
+NOT bind a `:username` parameter.
+
+#### Scenario: Insert returns Node with generated id
+- **WHEN** `insert(NewNode(ip="10.0.0.1", ncpus=4))` is called
+- **THEN** a `Node` is returned with `node_id == NodeId(<generated>)` and matching non-id fields
+
+#### Scenario: Get by id returns None when missing
+- **WHEN** `get_by_id(NodeId(999))` is called and no row matches
+- **THEN** returns `None`; the SQL parameter is bound as `node_id.value` (the bare int)
+
+#### Scenario: Row mapping wraps NodeId
+- **WHEN** any node SELECT returns a row `{"node_id": 7, "ip": "10.0.0.1", ...}`
+- **THEN** `_row_to_node` returns a `Node` with `node_id == NodeId(7)`
+
+#### Scenario: List all is ordered by node_id
+- **WHEN** `list_all()` is called
+- **THEN** returns all nodes regardless of enabled status, ordered by `node_id` ascending
+
+#### Scenario: Add temporary node
+- **WHEN** `add_tmp(cloud)` is called
+- **THEN** a node row is inserted with a `prov*` IP, `enabled=FALSE`, the given cloud, and `username` defaulting to `'root'` (DB default, no caller-supplied value)
+
+### Requirement: JSONB metadata roundtrip
+
+The system SHALL serialize `TaskContext` to/from JSONB correctly for all known
+fields (`engine`, `remote_folder`, `local_folder`, `webhook_url`,
+`webhook_custom_params`, `error`) and preserve unknown keys in `extra`. Known
+`None` values are omitted on serialization; on deserialization keys not matching
+known fields populate `extra`.
+
+#### Scenario: Roundtrip preserves extra
+- **WHEN** a `TaskContext` with `extra={"fort.9": "data"}` is saved and retrieved
+- **THEN** `extra["fort.9"]` is preserved
+
+### Requirement: All repository methods avoid blocking the event loop
+
+All repository methods SHALL be async and dispatch synchronous pg8000 calls
+through a `ThreadPoolExecutor` to avoid blocking the event loop.
+
+#### Scenario: Async method does not block
+- **WHEN** `get(task_id)` is called from an async context
+- **THEN** the event loop is not blocked during the database call

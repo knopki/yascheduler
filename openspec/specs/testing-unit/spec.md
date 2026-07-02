@@ -325,14 +325,12 @@ callables, and `debian_adapter.checks` is a superset of `debian_like_adapter.che
 
 The project SHALL provide spec-compliant mock factories in
 `tests/fixtures/mock_remote_machine.py` and `tests/fixtures/mock_clouds.py`.
-The `tests/fixtures/models.py` module (`make_task` / `make_node` returning
-legacy `TaskModel` / `NodeModel`) is removed; tests SHALL construct domain
-entities directly (`yascheduler.domain.Task`, `yascheduler.domain.Node`) or
-via local helpers in each test file.
+Tests SHALL construct domain entities directly (`yascheduler.domain.Task`,
+`yascheduler.domain.Node`) or via local helpers in each test file.
 
 #### Scenario: Domain entities constructed directly in tests
 - **WHEN** a unit test needs a `Task` or `Node` instance
-- **THEN** it constructs `yascheduler.domain.Task(...)` / `yascheduler.domain.Node(...)` directly (or via a file-local helper), not via a deleted `make_task`/`make_node` fixture
+- **THEN** it constructs `yascheduler.domain.Task(...)` / `yascheduler.domain.Node(...)` directly (or via a file-local helper)
 
 ### Requirement: WebhookPayload
 
