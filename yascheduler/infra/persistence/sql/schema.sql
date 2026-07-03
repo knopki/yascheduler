@@ -5,10 +5,12 @@
 -- last_migration is the single manual edit point when a migration is added.
 -- Migration 004 (add-allocated-node-id) added allocated_node_id to
 -- yascheduler_tasks; the snapshot below includes it so a fresh DB has it
--- without running the migration.
+-- without running the migration. Migration 005 (serial-to-generated-identity)
+-- converted the two PK columns to GENERATED ALWAYS AS IDENTITY; the snapshot
+-- below declares them that way so a fresh DB has identity columns directly.
 DO $$
 DECLARE
-  last_migration CONSTANT TEXT := '004';
+  last_migration CONSTANT TEXT := '005';
 BEGIN
   IF to_regclass('yascheduler_migrations') IS NULL THEN
     EXECUTE 'CREATE TABLE yascheduler_migrations (
@@ -22,7 +24,7 @@ BEGIN
 END $$;
 
 CREATE TABLE IF NOT EXISTS yascheduler_nodes (
-    node_id SERIAL PRIMARY KEY,
+    node_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     ip VARCHAR(15),
     port INTEGER DEFAULT 22,
     username VARCHAR(255) DEFAULT 'root',
@@ -32,7 +34,7 @@ CREATE TABLE IF NOT EXISTS yascheduler_nodes (
 );
 
 CREATE TABLE IF NOT EXISTS yascheduler_tasks (
-    task_id SERIAL PRIMARY KEY,
+    task_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     label VARCHAR(256),
     metadata JSONB,
     ip VARCHAR(15),

@@ -18,12 +18,13 @@
 #   test_migration_004_backfills_existing_tasks - migration 004 backfills allocated_node_id by joining ip
 #   test_migration_004_leaves_unallocated_tasks_null - ip IS NULL tasks stay NULL
 #   test_fk_on_delete_set_null - deleting a node nulls the task's allocated_node_id (row + allocated_ip preserved)
-#   test_fresh_db_seeds_to_004 - fresh DB seeds yascheduler_migrations to '004'; apply_migrations skips 004
+#   test_fresh_db_seeds_to_005 - fresh DB seeds yascheduler_migrations to '005'; apply_migrations skips 005
 #   test_schema_sql_create_table_includes_allocated_node_id - schema.sql CREATE TABLE includes the column
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - task-allocated-node-id: initial integration tests for migration 004 (column add, backfill, NULL-preserve, FK ON DELETE SET NULL, fresh-DB seed-to-004, schema.sql column presence).
+#   LAST_CHANGE: v1.1.0 - serial-to-generated-identity: fresh-DB seed bumped to '005' (new last_migration CONSTANT after migration 005); test_fresh_db_seeds_to_004 renamed to test_fresh_db_seeds_to_005; the schema.sql CONSTANT assertion bumped to '005'.
+#   PREVIOUS_CHANGE: v1.0.0 - task-allocated-node-id: initial integration tests for migration 004 (column add, backfill, NULL-preserve, FK ON DELETE SET NULL, fresh-DB seed-to-004, schema.sql column presence).
 # END_CHANGE_SUMMARY
 
 """Integration tests for migration 004 (add-allocated-node-id) via testcontainers.
@@ -37,7 +38,7 @@ specs/postgres-schema-apply/spec.md:
 * unallocated tasks (ip IS NULL) stay allocated_node_id = NULL
 * FK ON DELETE SET NULL nulls allocated_node_id when the node is removed
   (the task row + allocated_ip are preserved)
-* a fresh DB seeds yascheduler_migrations to '004' and apply_migrations skips 004
+* a fresh DB seeds yascheduler_migrations to '005' and apply_migrations skips 005
 * schema.sql CREATE TABLE includes the allocated_node_id column
 """
 
@@ -215,13 +216,15 @@ def test_migration_004_backfills_existing_tasks() -> None:
         finally:
             conn.close()
 
-        # apply_schema is a no-op on existing tables; apply_migrations runs 004.
+        # apply_schema is a no-op on existing tables; apply_migrations runs 004
+        # (adds allocated_node_id + backfills) and 005 (converts SERIAL PKs to
+        # GENERATED ALWAYS AS IDENTITY).
         apply_schema(config)
         apply_migrations(config)
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["003", "004"]
+            assert _tracker_rows(conn) == ["003", "004", "005"]
             conn.run("BEGIN")
             try:
                 rows = conn.run(
@@ -350,31 +353,31 @@ def test_fk_on_delete_set_null() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_fresh_db_seeds_to_004
-#   PURPOSE: On a fresh DB, apply_schema seeds yascheduler_migrations to '004'; apply_migrations skips 004 (already seeded).
+# START_CONTRACT: test_fresh_db_seeds_to_005
+#   PURPOSE: On a fresh DB, apply_schema seeds yascheduler_migrations to '005'; apply_migrations skips 005 (already seeded).
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based }
 #   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
 #   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_fresh_db_seeds_to_004
-def test_fresh_db_seeds_to_004() -> None:
+# END_CONTRACT: test_fresh_db_seeds_to_005
+def test_fresh_db_seeds_to_005() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
         apply_schema(config)
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["004"]
+            assert _tracker_rows(conn) == ["005"]
             assert "allocated_node_id" in _columns(conn, "yascheduler_tasks")
         finally:
             conn.close()
 
-        # apply_migrations finds MAX='004' and skips 004 (already seeded).
+        # apply_migrations finds MAX='005' and skips 005 (already seeded).
         apply_migrations(config)
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["004"]
+            assert _tracker_rows(conn) == ["005"]
         finally:
             conn.close()
 
@@ -393,8 +396,8 @@ def test_schema_sql_create_table_includes_allocated_node_id() -> None:
         "allocated_node_id INTEGER REFERENCES yascheduler_nodes(node_id) "
         "ON DELETE SET NULL" in schema
     )
-    # The last_migration CONSTANT is '004'.
-    assert "last_migration CONSTANT TEXT := '004'" in schema
+    # The last_migration CONSTANT is '005'.
+    assert "last_migration CONSTANT TEXT := '005'" in schema
 
 
 # START_CONTRACT: test_schema_sql_create_table_includes_allocated_node_id_via_load_query

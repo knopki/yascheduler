@@ -16,10 +16,12 @@
 #   test_one_migration_subclass_* - discover exactly one/zero/two Migration subclass(es)
 #   test_prefix_id_uniqueness_across_migrations - real migrations/ has unique prefix_ids
 #   test_schema_sql_last_migration_constant_matches_latest_migration - schema.sql CONSTANT matches max prefix_id
+#   test_schema_sql_uses_identity_not_serial - schema.sql uses GENERATED ALWAYS AS IDENTITY, not SERIAL PRIMARY KEY
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial unit tests for the migration runner (add-db-migrations).
+#   LAST_CHANGE: v1.1.0 - serial-to-generated-identity: add test_schema_sql_uses_identity_not_serial guarding identity-column DDL in schema.sql.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for the migration runner (add-db-migrations).
 # END_CHANGE_SUMMARY
 
 """Unit tests for the migration runner (yascheduler.infra.persistence.postgres_migrations).
@@ -201,3 +203,16 @@ def test_schema_sql_last_migration_constant_matches_latest_migration() -> None:
         f"schema.sql last_migration CONSTANT '{constant}' does not match "
         f"the latest migration prefix_id '{latest}' (forgot edit step 2?)"
     )
+
+
+# START_CONTRACT: test_schema_sql_uses_identity_not_serial
+#   PURPOSE: Guard that schema.sql declares both PKs as GENERATED ALWAYS AS IDENTITY and never as SERIAL PRIMARY KEY.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: None — reads schema.sql only
+#   LINKS: M-PERSISTENCE-SCHEMA
+# END_CONTRACT: test_schema_sql_uses_identity_not_serial
+def test_schema_sql_uses_identity_not_serial() -> None:
+    schema_text = (_MIGRATIONS_DIR.parent / "schema.sql").read_text()
+    assert "GENERATED ALWAYS AS IDENTITY" in schema_text
+    assert "SERIAL PRIMARY KEY" not in schema_text
