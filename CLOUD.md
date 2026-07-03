@@ -116,9 +116,13 @@ Create an API key in the [Vultr customer portal][vultr_api_key] and set
 `vultr_api_key` in the `[clouds]` section of the config.
 
 The default plan is `vbm-24c-256gb-amd` (AMD EPYC 7443P, 24C/48T, 256 GB RAM,
-2x 480 GB SSD + 2x 1.92 TB NVMe) in the `ams` region on Debian 12 (`os_id=2284`).
-Bare-metal provisioning is slow (up to ~20 minutes), so `create_node_timeout`
-is set to 1200 s and `op_limit` to 2.
+2x 480 GB SSD + 2x 1.92 TB NVMe) in the `ams` region on Ubuntu 24.04 LTS
+(`os_id=2284`). Bare-metal provisioning is slow (up to ~20 minutes), so
+`create_node_timeout` is set to 1200 s and `op_limit` to 2.
+
+> **Note:** `os_id=2284` is Ubuntu 24.04 LTS x64, not Debian 12.
+> Debian 12 (bookworm) is `os_id=2136`. The cloud-init setup works on both,
+> but Ubuntu 24.04 is recommended (newer packages).
 
 ### Bare-metal setup (automatic via cloud-init)
 
