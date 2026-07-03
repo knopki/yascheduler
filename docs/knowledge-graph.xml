@@ -350,10 +350,11 @@
         <type-TaskContextOverrides PURPOSE="TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs() (re-exported from M-DOMAIN-ENGINE)" />
         <class-EngineRepository PURPOSE="Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)" />
-        <class-Task PURPOSE="Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); lifecycle methods (allocate_to, mark_running, complete, fail, reject) and event recording (record_event, with_event factory, pull_events, _events tuple)" />
+        <class-Task PURPOSE="Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocated_node_id: NodeId | None (None for unallocated tasks and tasks whose node was deleted — DB FK is ON DELETE SET NULL); lifecycle methods (allocate_to, mark_running, complete, fail, reject) and event recording (record_event, with_event factory, pull_events, _events tuple)" />
+        <fn-allocate_to PURPOSE="Bind task to a Node: allocate_to(node) sets both allocated_ip=node.ip and allocated_node_id=node.node_id atomically in one replace() call (guard stays on allocated_ip)" />
         <fn-with_context PURPOSE="Wholesale-replace task context, returning new Task" />
         <type-TaskId PURPOSE="Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
-        <type-NewTask PURPOSE="Pre-persistence task record (no task_id); converted to Task only by TaskRepository.insert" />
+        <type-NewTask PURPOSE="Pre-persistence task record (no task_id); carries allocated_node_id: NodeId | None = None (written by Task.allocate_to, not NewTask construction); converted to Task only by TaskRepository.insert" />
         <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
         <type-NewNode PURPOSE="Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False); converted to Node only by NodeRepository.insert" />
         <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); NodeRepository mutators key on node_id; ip no longer UNIQUE (dropped by migration 003); tmp rows carry ip='' sentinel" />
@@ -486,8 +487,8 @@
         <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or own full cloud-fallback flow via CloudProvisioner port" />
         <fn-_validate_engine PURPOSE="Validate task engine is configured and supported" />
         <fn-_allocate_free_machine PURPOSE="Find free machine and start task on it" />
-        <fn-_find_free_machines PURPOSE="Find free compatible machines for task allocation" />
-        <fn-_try_start_on_machine PURPOSE="Attempt to start a task on a specific machine" />
+        <fn-_find_free_machines PURPOSE="Find free compatible machines for task allocation; returns list[tuple[MachineSession, Node]] paired by ip (nodes_by_ip = {n.ip: n}; dup-IP collapses to one Node — same ambiguity as today; Surface A fixes disambiguation)" />
+        <fn-_try_start_on_machine PURPOSE="Attempt to start a task on a specific (session, node) pair; calls allocate_to(node) (binds both allocated_ip and allocated_node_id); log lines include node_id=%s alongside ip=%s" />
         <type-_TmpSelection PURPOSE="NamedTuple(name: str, node_id: NodeId) — tmp-node handle is the NodeId from insert(NewNode(cloud=..., enabled=False)), NOT a placeholder ip (remove-tmp-node-fake-ip)" />
         <fn-_select_and_insert_tmp PURPOSE="Under allocation_lock, compute capacity, select provider, and insert tmp-node via insert(NewNode(cloud=..., enabled=False)) committed before lock release; returns _TmpSelection(name, node_id=tmp_node.node_id)" />
         <fn-_cleanup_tmp_node_best_effort PURPOSE="Best-effort tmp-node removal by NodeId (remove(tmp_node_id) directly — no get(ip) lookup); logs failures, never raises" />
@@ -646,7 +647,7 @@
       <path>yascheduler/infra/persistence/postgres.py</path>
       <depends>M-DOMAIN, M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS</depends>
       <annotations>
-        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, update_status, list_by_status, list_by_jobs, count_by_status); save/update_status raise TaskRowNotFoundError on 0-row UPDATE" />
+        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, update_status, list_by_status, list_by_jobs, count_by_status); save and insert bind allocated_node_id via :node_id param; _row_to_task reads allocated_node_id and wraps NodeId; save/update_status raise TaskRowNotFoundError on 0-row UPDATE" />
         <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port (full CRUD lifecycle); add_tmp removed — insert(NewNode) is the sole insertion path (serves tmp-reservation via NewNode(cloud=..., enabled=False)); list_enabled/list_disabled drop the python '.' post-filters (list_disabled filters ip != '' in SQL); mutators enable/disable/remove take NodeId and pass node_id.value (pg8000 cannot adapt a NodeId), update takes Node and keys WHERE node_id = node.node_id.value" />
       </annotations>
     </M-PERSISTENCE-POSTGRES>

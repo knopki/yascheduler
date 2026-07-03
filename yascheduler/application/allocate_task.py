@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.15.0
+# VERSION: 5.16.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
@@ -10,9 +10,9 @@
 # START_MODULE_MAP
 #   allocate_task - Assign a TO_DO task to a free machine or request cloud node (UoW-based)
 #   _validate_engine - Validate task engine is configured and supported
-#   _allocate_free_machine - Find free machine and start task on it
-#   _find_free_machines - Find free compatible machines for task allocation
-#   _try_start_on_machine - Attempt to start a task on a specific machine
+#   _allocate_free_machine - Find free machine and start task on it; iterates (session, node) pairs
+#   _find_free_machines - Find free compatible machines for task allocation; returns list[tuple[MachineSession, Node]] paired by ip (dup-IP collapses to one Node — same ambiguity as today)
+#   _try_start_on_machine - Attempt to start a task on a specific (session, node) pair; calls allocate_to(node) binding both allocated_ip and allocated_node_id
 #   _count_nodes_by_cloud - Pure helper: count nodes by cloud prefix (shared with orchestrator)
 #   _TmpSelection - NamedTuple(name: str, node_id: NodeId) — tmp-node handle is the NodeId from insert, NOT a placeholder ip
 #   _select_and_insert_tmp - Under allocation_lock, compute capacity, select provider, insert tmp-node via insert(NewNode(cloud=..., enabled=False)); returns _TmpSelection(name, node_id)
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.15.0 - remove-tmp-node-fake-ip: _TmpSelection.ip: str replaced with node_id: NodeId; the tmp-node handle is the NodeId returned by insert(NewNode(cloud=selected_name, enabled=False)) (add_tmp abolished). _cleanup_tmp_node_best_effort, _allocate_cloud_node, _persist_node_with_cleanup, _provision_and_persist, and the allocate_task outer body take tmp_node_id: NodeId (was tmp_ip: str). The two uow.nodes.get(tmp_ip) lookups + their if-node-is-not-None branches are removed; uow.nodes.remove(tmp_node_id) is called directly (idempotent — a 0-row DELETE is a no-op, matching prior no-op-on-0-rows behavior). Log markers tmp_ip → tmp_node_id.
-#   PREVIOUS_CHANGE: v5.14.0 - tmp-node cleanup rekeyed from ip to node_id (node-id-keyed-mutators): _cleanup_tmp_node_best_effort and _persist_node_with_cleanup success path now resolve the tmp Node via uow.nodes.get(tmp_ip) before uow.nodes.remove(node.node_id); if get returns None (row already gone), remove is skipped (no rowcount check — matches prior no-op-on-0-rows behavior). The get lookup is best-effort inside the existing try/except wrapper.
+#   LAST_CHANGE: v5.16.0 - task-allocated-node-id: _find_free_machines returns list[tuple[MachineSession, Node]] (was list[MachineSession]); builds nodes_by_ip = {n.ip: n for n in enabled_nodes} (dup-IP collapses to one Node — last wins, same ambiguity as the prior enabled_ips set membership) and pairs each free session with its matching Node. _try_start_on_machine takes (session, node) and calls task.allocate_to(node) (was allocate_to(session.ip)) binding both allocated_ip and allocated_node_id; log lines add node_id=%s alongside ip=%s. _allocate_free_machine iterates (session, node) pairs. Session↔Node matching stays by ip (MachineSession does not yet carry node_id — Surface A ssh-rekey-node-id fixes the disambiguation).
+#   PREVIOUS_CHANGE: v5.15.0 - remove-tmp-node-fake-ip: _TmpSelection.ip: str replaced with node_id: NodeId; the tmp-node handle is the NodeId returned by insert(NewNode(cloud=selected_name, enabled=False)) (add_tmp abolished). _cleanup_tmp_node_best_effort, _allocate_cloud_node, _persist_node_with_cleanup, _provision_and_persist, and the allocate_task outer body take tmp_node_id: NodeId (was tmp_ip: str). The two uow.nodes.get(tmp_ip) lookups + their if-node-is-not-None branches are removed; uow.nodes.remove(tmp_node_id) is called directly (idempotent — a 0-row DELETE is a no-op, matching prior no-op-on-0-rows behavior). Log markers tmp_ip → tmp_node_id.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -102,9 +102,10 @@ async def _validate_engine(
 
 
 # START_CONTRACT: _try_start_on_machine
-#   PURPOSE: Attempt to start a task on a specific free machine.
+#   PURPOSE: Attempt to start a task on a specific (session, node) pair.
 #   INPUTS: {
 #     session: MachineSession - The machine session to try,
+#     node: Node - The Node paired with the session (carries node_id for allocate_to),
 #     engine: Engine - The resolved engine config,
 #     task: Task - The task to allocate,
 #     operations: MachineOperations - SSH operations for occupancy checks,
@@ -113,11 +114,12 @@ async def _validate_engine(
 #     tracker: AllocationTracker - In-flight cloud allocation tracker
 #   }
 #   OUTPUTS: { bool - True if task started successfully on this machine }
-#   SIDE_EFFECTS: Sets task running, starts occupancy check, records TaskAllocated event, discards tracker slot.
+#   SIDE_EFFECTS: Sets task running via allocate_to(node) (binding both allocated_ip and allocated_node_id), starts occupancy check, records TaskAllocated event, discards tracker slot. Log lines include node_id=%s alongside ip=%s.
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _try_start_on_machine
 async def _try_start_on_machine(
     session: MachineSession,
+    node: Node,
     engine: Engine,
     task: Task,
     operations: MachineOperations,
@@ -125,18 +127,21 @@ async def _try_start_on_machine(
     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
 ) -> bool:
-    task = task.allocate_to(session.ip).mark_running()
+    task = task.allocate_to(node).mark_running()
     logger.debug(
-        "[AllocateTask][_try_allocate_to_machine] task_id=%s ip=%s",
+        "[AllocateTask][_try_allocate_to_machine] task_id=%s ip=%s node_id=%s",
         task.task_id,
         session.ip,
+        node.node_id,
     )
     if not await start_task_on_machine(session, engine, task):
         return False
     logger.debug(
-        "[AllocateTask][_try_allocate_to_machine][ALLOCATED] task_id=%s ip=%s",
+        "[AllocateTask][_try_allocate_to_machine][ALLOCATED] "
+        "task_id=%s ip=%s node_id=%s",
         task.task_id,
         session.ip,
+        node.node_id,
     )
     operations.start_occupancy_check(session, engine)
     task = task.with_event(
@@ -150,31 +155,31 @@ async def _try_start_on_machine(
 
 
 # START_CONTRACT: _find_free_machines
-#   PURPOSE: Find free compatible machines eligible for task allocation.
+#   PURPOSE: Find free compatible machines eligible for task allocation, paired with their Node.
 #   INPUTS: {
 #     engine: Engine - The resolved engine config,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     repository: MachineRepository - SSH repository with connected machines
 #   }
-#   OUTPUTS: { list[MachineSession] - Free sessions matching platforms whose IP is DB-enabled and not busy }
-#   SIDE_EFFECTS: Reads uow.tasks.list_by_status({RUNNING}) and uow.nodes.list_enabled() in the same UoW. Enabled-gate invariant: a session is returned ONLY if its machine.ip is in the set of DB-enabled node IPs, so setup-in-flight tmp-nodes (enabled=FALSE) and disabled-but-not-disconnected nodes are excluded.
+#   OUTPUTS: { list[tuple[MachineSession, Node]] - Free sessions paired with their matching Node (by ip), Node carries node_id }
+#   SIDE_EFFECTS: Reads uow.tasks.list_by_status({RUNNING}) and uow.nodes.list_enabled() in the same UoW. Builds nodes_by_ip = {n.ip: n for n in enabled_nodes} (dup-IP collapses to one Node — last wins, the same ambiguity as the prior enabled_ips set membership; full disambiguation lands with Surface A when sessions carry node_id). Enabled-gate invariant: a session is returned ONLY if its machine.ip is in nodes_by_ip, so setup-in-flight tmp-nodes (enabled=FALSE) and disabled-but-not-disconnected nodes are excluded.
 #   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-PERSISTENCE-UOW
 # END_CONTRACT: _find_free_machines
 async def _find_free_machines(
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
     repository: MachineRepository,
-) -> list[MachineSession]:
+) -> list[tuple[MachineSession, Node]]:
     # START_BLOCK_FIND_FREE_MACHINES
     async with uow_factory() as uow:
         running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
         enabled_nodes = await uow.nodes.list_enabled()
     busy_node_ips = {t.allocated_ip for t in running_tasks if t.allocated_ip}
-    enabled_ips = {n.ip for n in enabled_nodes}
+    nodes_by_ip = {n.ip: n for n in enabled_nodes}
     free_sessions = [
-        s
+        (s, nodes_by_ip[s.machine.ip])
         for s in repository.list_free(platforms=list(engine.platforms))
-        if s.machine.ip in enabled_ips and s.machine.ip not in busy_node_ips
+        if s.machine.ip in nodes_by_ip and s.machine.ip not in busy_node_ips
     ]
     return free_sessions
     # END_BLOCK_FIND_FREE_MACHINES
@@ -185,7 +190,7 @@ async def _find_free_machines(
 #   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, repository: MachineRepository, operations: MachineOperations,
 #     start_task_on_machine: Callable, tracker: AllocationTracker }
 #   OUTPUTS: { bool - True if allocated to a machine, False if not }
-#   SIDE_EFFECTS: Updates task status, starts occupancy check, records TaskAllocated event, discards tracker slot. Per-session failures are isolated: each _try_start_on_machine call is wrapped in try/except Exception, logged at error with task_id and ip, and the loop continues to the next session. A transient SSH failure does NOT call repository.disconnect — the monitor task owns session lifecycle. No exception propagates out of the loop.
+#   SIDE_EFFECTS: Updates task status via allocate_to(node), starts occupancy check, records TaskAllocated event, discards tracker slot. Iterates (session, node) pairs from _find_free_machines. Per-pair failures are isolated: each _try_start_on_machine call is wrapped in try/except Exception, logged at error with task_id and ip, and the loop continues to the next pair. A transient SSH failure does NOT call repository.disconnect — the monitor task owns session lifecycle. No exception propagates out of the loop.
 #   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _allocate_free_machine
 async def _allocate_free_machine(
@@ -200,7 +205,7 @@ async def _allocate_free_machine(
     free_sessions = await _find_free_machines(engine, uow_factory, repository)
 
     # START_BLOCK_ALLOCATE_MACHINE
-    for session in free_sessions:
+    for session, node in free_sessions:
         # START_BLOCK_TRY_START_ISOLATED
         # Defense-in-depth: a single stale or transiently-unreachable session
         # must not abort the loop and starve the cloud-provisioning branch.
@@ -211,6 +216,7 @@ async def _allocate_free_machine(
         try:
             if await _try_start_on_machine(
                 session,
+                node,
                 engine,
                 task,
                 operations,

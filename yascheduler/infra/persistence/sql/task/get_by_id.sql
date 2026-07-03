@@ -3,6 +3,7 @@ SELECT
     label,
     ip,
     status,
-    metadata
+    metadata,
+    allocated_node_id
 FROM yascheduler_tasks
 WHERE task_id = :task_id;

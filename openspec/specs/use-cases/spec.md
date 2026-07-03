@@ -88,9 +88,27 @@ best-effort deallocated via `clouds.deallocate(cloud_name, node.ip)` and the
 tmp-node is best-effort cleaned up via `_cleanup_tmp_node_best_effort`; the
 original exception is re-raised.
 
+`_find_free_machines` SHALL return `list[tuple[MachineSession, Node]]` (NOT
+`list[MachineSession]`). It SHALL build `nodes_by_ip = {n.ip: n for n in
+enabled_nodes}` from `uow.nodes.list_enabled()` and pair each free session
+with its matching `Node`: `[(s, nodes_by_ip[s.machine.ip]) for s in
+repository.list_free(platforms=...) if s.machine.ip in nodes_by_ip and
+s.machine.ip not in busy_node_ips]`. Session↔Node matching is by ip (dup-IP
+nodes collapse to one entry in `nodes_by_ip` — the same ambiguity as the prior
+`enabled_ips` set membership; full disambiguation lands with Surface A when
+sessions carry `node_id`).
+
+`_try_start_on_machine` SHALL take `(session: MachineSession, node: Node)` and
+call `task.allocate_to(node)` (NOT `task.allocate_to(ip)`), binding both
+`allocated_ip` and `allocated_node_id` in the single `allocate_to` call. The
+`_allocate_free_machine` loop SHALL iterate `(session, node)` pairs from
+`_find_free_machines` and pass both to `_try_start_on_machine`. Internal log
+lines in `_try_start_on_machine` SHALL include `node_id=%s` alongside
+`ip=%s` (matching the `node-id-keyed-mutators` convention).
+
 #### Scenario: Allocate to free machine
 - **WHEN** `allocate_task(task_id, engines, uow_factory, repository, operations, clouds, start_task_on_machine, tracker, allocation_lock)` is called (with `task_id: TaskId`) and a free compatible machine exists
-- **THEN** the task is loaded via UoW (`uow.tasks.get(task_id)`), allocated via `task.allocate_to(ip)`, transitioned to RUNNING via `task.mark_running()`, saved via `uow.tasks.save()`, committed, and `tracker.discard(task_id)` is called
+- **THEN** the task is loaded via UoW (`uow.tasks.get(task_id)`), `_find_free_machines` returns `list[(MachineSession, Node)]`, `_try_start_on_machine(session, node)` is called, the task is allocated via `task.allocate_to(node)` (binding both `allocated_ip` and `allocated_node_id`), transitioned to RUNNING via `task.mark_running()`, saved via `uow.tasks.save()` (which writes both `allocated_ip` and `allocated_node_id`), committed, and `tracker.discard(task_id)` is called
 
 #### Scenario: No free machine — cloud fallback with full ownership
 - **WHEN** `allocate_task(...)` is called and no free machine matches
@@ -123,6 +141,14 @@ original exception is re-raised.
 #### Scenario: Unsupported engine
 - **WHEN** `allocate_task(...)` is called and the task's engine is not in `EngineRepository`
 - **THEN** the task is marked DONE with error via `task.reject("unsupported engine")`, saved, committed, and `TaskFailed` event is recorded (carrying `task_id: TaskId`)
+
+#### Scenario: _find_free_machines returns session-node pairs
+- **WHEN** `_find_free_machines(engine, uow_factory, repository)` is called and free compatible machines exist
+- **THEN** it returns `list[tuple[MachineSession, Node]]` where each `Node` carries `node_id`, paired by `s.machine.ip == node.ip`; the `Node` is sourced from `uow.nodes.list_enabled()` and carried forward so the bind site has `node.node_id`
+
+#### Scenario: _find_free_machines matching stays by ip
+- **WHEN** two enabled nodes share the same ip (dup-IP configuration) and a free session exists for that ip
+- **THEN** `nodes_by_ip = {n.ip: n}` collapses the duplicates to one `Node` (last wins); the session is paired with that one `Node`; the same ambiguity as the prior `enabled_ips` set-membership approach (full disambiguation lands with Surface A)
 
 ### Requirement: ConsumeTask use case
 

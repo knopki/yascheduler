@@ -1,10 +1,9 @@
 # FILE: tests/unit/test_persistence_adapter.py
-# VERSION: 1.7.0
+# VERSION: 1.8.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yascheduler.infra.persistence.
-#   SCOPE: load_query file-reading and caching behaviour; PostgresUnitOfWork lifecycle;
-#          PostgresTaskRepository and PostgresNodeRepository CRUD via fake _run.
+#   SCOPE: load_query file-reading and caching behaviour; PostgresUnitOfWork lifecycle; PostgresTaskRepository and PostgresNodeRepository CRUD via fake _run.
 #   DEPENDS: none
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -21,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - remove-tmp-node-fake-ip: list_enabled/list_disabled tests assert no python post-filter (test_list_enabled_no_python_post_filter, test_list_disabled_no_python_post_filter); the "." in ip filter is gone — the SQL layer is the sole filter (list_disabled filters ip <> '' in SQL).
-#   PREVIOUS_CHANGE: v1.6.0 - Update PostgresTaskRepository tests for add-task-id-identity: get/update_status/list_by_jobs take TaskId; _row_to_task wraps TaskId; insert takes NewTask and returns Task carrying TaskId. Row dicts keep task_id as int (DB value); save passes task.task_id.value so kwargs["task_id"] stays int.
+#   LAST_CHANGE: v1.8.1 - task-allocated-node-id: extract allocated_node_id bind/read tests + SQL-content tests into tests/unit/test_persistence_allocated_node_id.py (this file exceeded the 1000-line GRACE-lite hard limit after the v1.8.0 additions).
+#   PREVIOUS_CHANGE: v1.8.0 - task-allocated-node-id: add test_row_to_task_reads_allocated_node_id, test_row_to_task_handles_null_allocated_node_id, test_insert_binds_allocated_node_id, test_save_binds_allocated_node_id, test_save_binds_null_allocated_node_id, and TestTaskSqlIncludesAllocatedNodeId (verifies insert/update_by_id/get_by_id/list_by_status/list_by_jobs SQL files include allocated_node_id; update_status/get_ids_by_ip_and_status/count_by_status do NOT).
 # END_CHANGE_SUMMARY
 
 import json

@@ -3,9 +3,12 @@
 -- presence of yascheduler_nodes is the signal distinguishing a fresh DB
 -- (seed to latest) from a legacy DB (no seed, run all migrations).
 -- last_migration is the single manual edit point when a migration is added.
+-- Migration 004 (add-allocated-node-id) added allocated_node_id to
+-- yascheduler_tasks; the snapshot below includes it so a fresh DB has it
+-- without running the migration.
 DO $$
 DECLARE
-  last_migration CONSTANT TEXT := '003';
+  last_migration CONSTANT TEXT := '004';
 BEGIN
   IF to_regclass('yascheduler_migrations') IS NULL THEN
     EXECUTE 'CREATE TABLE yascheduler_migrations (
@@ -33,5 +36,6 @@ CREATE TABLE IF NOT EXISTS yascheduler_tasks (
     label VARCHAR(256),
     metadata JSONB,
     ip VARCHAR(15),
-    status SMALLINT
+    status SMALLINT,
+    allocated_node_id INTEGER REFERENCES yascheduler_nodes(node_id) ON DELETE SET NULL
 );

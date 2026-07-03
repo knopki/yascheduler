@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_migrations.py
-# VERSION: 1.1.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the migration runner against real PostgreSQL via testcontainers.
@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - remove-tmp-node-fake-ip: tracker assertions updated to '003' (the new last_migration CONSTANT); synthetic migrations renumbered 003_*→004_* to avoid colliding with the real 003_drop_tmp_node_fake_ip.sql; fresh DB now seeds to '003' and apply_migrations applies 003 on legacy/modern DBs.
-#   PREVIOUS_CHANGE: v1.1.0 - add-node-id-identity: tracker assertions updated to '002' (the new last_migration CONSTANT); synthetic migrations renumbered 002_*→003_* to avoid colliding with the real 002_add_node_id.sql; column assertions now also check 'node_id'; added test_migration_002_adds_node_id_on_legacy_db confirming 002 backfills node_id SERIAL PRIMARY KEY.
+#   LAST_CHANGE: v1.3.0 - task-allocated-node-id: tracker assertions updated to '004' (the new last_migration CONSTANT); synthetic migrations renumbered 004_*→005_* to avoid colliding with the real 004_add_allocated_node_id.sql; fresh DB now seeds to '004' and apply_migrations applies 004 on legacy/modern DBs.
+#   PREVIOUS_CHANGE: v1.2.0 - remove-tmp-node-fake-ip: tracker assertions updated to '003' (the new last_migration CONSTANT); synthetic migrations renumbered 003_*→004_* to avoid colliding with the real 003_drop_tmp_node_fake_ip.sql; fresh DB now seeds to '003' and apply_migrations applies 003 on legacy/modern DBs.
 # END_CHANGE_SUMMARY
 
 """Integration tests for the migration runner against real PostgreSQL.
@@ -122,7 +122,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
         conn = _connect(config)
         try:
             seeded = _tracker_rows(conn)
-            assert seeded == ["003"]
+            assert seeded == ["004"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -133,7 +133,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["003"]
+            assert _tracker_rows(conn) == ["004"]
         finally:
             conn.close()
 
@@ -152,6 +152,16 @@ def test_legacy_db_runs_all_migrations() -> None:
         conn = _connect(config)
         try:
             conn.run("CREATE TABLE yascheduler_nodes (ip VARCHAR(15) UNIQUE)")
+            # Pre-create yascheduler_tasks at the pre-004 era schema (no
+            # allocated_node_id) so migration 004's ALTER ADD COLUMN is
+            # valid (apply_schema's CREATE TABLE IF NOT EXISTS is a no-op
+            # on the existing table; without this, schema.sql would create
+            # yascheduler_tasks WITH allocated_node_id and 004 would collide).
+            conn.run(
+                "CREATE TABLE yascheduler_tasks ("
+                "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+            )
         finally:
             conn.close()
 
@@ -167,7 +177,7 @@ def test_legacy_db_runs_all_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["001", "002", "003"]
+            assert _tracker_rows(conn) == ["001", "002", "003", "004"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -194,6 +204,13 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
             )
             conn.run("CREATE TABLE yascheduler_nodes (ip VARCHAR(15) UNIQUE)")
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('000')")
+            # Pre-create yascheduler_tasks at the pre-004 era schema (no
+            # allocated_node_id) so migration 004's ALTER ADD COLUMN is valid.
+            conn.run(
+                "CREATE TABLE yascheduler_tasks ("
+                "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+            )
         finally:
             conn.close()
 
@@ -209,7 +226,7 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["000", "001", "002", "003"]
+            assert _tracker_rows(conn) == ["000", "001", "002", "003", "004"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -230,7 +247,7 @@ def test_py_migration_best_effort_reopen(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "004_reopen.py").write_text(
+    (migrations_dir / "005_reopen.py").write_text(
         "from yascheduler.infra.persistence.migration_base import Migration\n"
         "class Reopen(Migration):\n"
         "    def migrate(self) -> None:\n"
@@ -249,7 +266,7 @@ def test_py_migration_best_effort_reopen(
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["003", "004"]
+            assert _tracker_rows(conn) == ["004", "005"]
             assert _table_exists(conn, "test_reopen")
         finally:
             conn.close()
@@ -268,7 +285,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "004_fail.sql").write_text(
+    (migrations_dir / "005_fail.sql").write_text(
         "CREATE TABLE fail_tbl (id int); CREATE TABLE fail_tbl (id int);"
     )
     monkeypatch.setattr(
@@ -285,7 +302,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 
         conn = _connect(config)
         try:
-            assert "004" not in _tracker_rows(conn)
+            assert "005" not in _tracker_rows(conn)
             assert not _table_exists(conn, "fail_tbl")
         finally:
             conn.close()
@@ -314,19 +331,28 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
             )
             conn.run("INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.1')")
             conn.run("INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.2')")
+            # Pre-create yascheduler_tasks at the pre-004 era schema (no
+            # allocated_node_id) so migration 004's ALTER ADD COLUMN is valid.
+            conn.run(
+                "CREATE TABLE yascheduler_tasks ("
+                "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+            )
         finally:
             conn.close()
 
-        # apply_schema is a no-op on the existing table (CREATE TABLE IF NOT EXISTS);
-        # apply_migrations runs 001 (adds username/port IF NOT EXISTS — already present) and
-        # 002 (adds node_id SERIAL PRIMARY KEY, backfilling existing rows).
+        # apply_schema is a no-op on the existing tables (CREATE TABLE IF NOT
+        # EXISTS); apply_migrations runs 001 (adds username/port IF NOT EXISTS
+        # — already present), 002 (adds node_id SERIAL PRIMARY KEY, backfilling
+        # existing rows), 003 (backfill prov→'' + DROP ip UNIQUE), and 004
+        # (adds allocated_node_id).
         apply_schema(config)
         apply_migrations(config)
 
         conn = _connect(config)
         try:
-            # Tracker records 001, 002, 003.
-            assert _tracker_rows(conn) == ["001", "002", "003"]
+            # Tracker records 001, 002, 003, 004.
+            assert _tracker_rows(conn) == ["001", "002", "003", "004"]
             # node_id column now exists.
             cols = _columns(conn, "yascheduler_nodes")
             assert "node_id" in cols

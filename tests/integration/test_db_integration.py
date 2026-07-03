@@ -1,9 +1,9 @@
 # FILE: tests/integration/test_db_integration.py
-# VERSION: 2.2.0
+# VERSION: 2.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
-#   SCOPE: Node CRUD, Task CRUD, status transitions, UoW-based composition queries (list_by_jobs, get_by_ips), tmp-node lifecycle via insert, migration 003 backfill + constraint drop.
+#   SCOPE: Node CRUD, Task CRUD, status transitions, UoW-based composition queries (list_by_jobs, get_by_ips), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
 #   DEPENDS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL, M-CONFIG-DB
 #   LINKS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
@@ -16,20 +16,20 @@
 #   test_remove_node - node removed after removal
 #   test_count_aggregations - count_by_cloud, count_by_status
 #   test_add_and_get_task - round-trip insert + get with JSONB metadata
-#   test_task_lifecycle - insert -> allocate_to/mark_running -> DONE with metadata merge
+#   test_task_lifecycle - insert -> allocate_to(node)/mark_running -> DONE with metadata merge (preserves allocated_node_id)
 #   test_set_task_error - with and without error message
 #   test_get_tasks_by_status - filtering across statuses
 #   test_get_tasks_by_jobs - array parameter with unnest
 #   test_get_task_ids_by_ip_and_status - filtered by IP and status
 #   test_get_tasks_with_cloud_by_id_status - in-test composition: list_by_jobs + get_by_ips
 #   test_tmp_node_lifecycle_via_insert - tmp-node inserted via insert(NewNode(cloud=..., enabled=False)) carries ip="", enabled=False, node_id; remove cleans up
-#   test_migration_003_backfills_prov_ips_and_drops_unique - migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key
+#   test_migration_003_backfills_prov_ips_and_drops_unique - migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key; pre-creates yascheduler_tasks at 002-era schema so 004 ALTER is valid
 #   test_list_filters_empty_ip_in_sql - list_enabled/list_disabled exclude ip='' rows at the SQL layer (no python post-filter)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - remove-tmp-node-fake-ip: replace test_add_tmp_node with test_tmp_node_lifecycle_via_insert (insert(NewNode(cloud=..., enabled=False)) → Node carrying node_id); add test_migration_003_backfills_prov_ips_and_drops_unique (backfill + DROP CONSTRAINT); add test_list_filters_empty_ip_in_sql (no python post-filter; SQL is the sole filter). The schema now seeds to migration 003 and drops ip UNIQUE.
-#   PREVIOUS_CHANGE: v2.1.1 - Adapt to add-node-id-identity: NewNode for insert, repo.add→insert, NodeId assertions.
+#   LAST_CHANGE: v2.3.0 - task-allocated-node-id: test_task_lifecycle inserts a Node and calls allocate_to(node) (was allocate_to(ip) — signature changed); the DONE transition preserves allocated_node_id from the loaded task (manual Task construction passes allocated_node_id=task.allocated_node_id). test_migration_003_backfills_prov_ips_and_drops_unique pre-creates yascheduler_tasks at the 002-era schema (no allocated_node_id) so migration 004's ALTER ADD COLUMN does not collide with the fresh-snapshot CREATE TABLE.
+#   PREVIOUS_CHANGE: v2.2.0 - remove-tmp-node-fake-ip: replace test_add_tmp_node with test_tmp_node_lifecycle_via_insert (insert(NewNode(cloud=..., enabled=False)) → Node carrying node_id); add test_migration_003_backfills_prov_ips_and_drops_unique (backfill + DROP CONSTRAINT); add test_list_filters_empty_ip_in_sql (no python post-filter; SQL is the sole filter). The schema now seeds to migration 003 and drops ip UNIQUE.
 # END_CHANGE_SUMMARY
 
 """Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL."""
@@ -280,17 +280,23 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     ctx = TaskContext.from_metadata(meta)
 
     async with uow_factory() as uow:
+        # Insert a node first so allocate_to(node) can bind a real node_id
+        # (the DB FK allocated_node_id REFERENCES yascheduler_nodes(node_id)).
+        node = await uow.nodes.insert(NewNode(ip="10.0.0.5", ncpus=4, enabled=True))
         task = await uow.tasks.insert(
             NewTask(label="sim", context=ctx, status=DomainTaskStatus.TO_DO)
         )
         await uow.commit()
         assert task.status == DomainTaskStatus.TO_DO
         task_id = task.task_id
+        node_id = node.node_id
 
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
         assert task is not None
-        updated = task.allocate_to("10.0.0.5").mark_running()
+        # Construct the Node for allocate_to using the DB-assigned node_id.
+        alloc_node = Node(node_id=node_id, ip="10.0.0.5", ncpus=4)
+        updated = task.allocate_to(alloc_node).mark_running()
         await uow.tasks.save(updated)
         await uow.commit()
 
@@ -311,6 +317,7 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
             context=TaskContext.from_metadata(merged),
             status=DomainTaskStatus.DONE,
             allocated_ip=task.allocated_ip,
+            allocated_node_id=task.allocated_node_id,
         )
         await uow.tasks.save(updated)
         await uow.commit()
@@ -664,11 +671,21 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
                 "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
                 "VALUES ('provabc1234567', FALSE, 'aws')"
             )
+            # Pre-create yascheduler_tasks at the 002-era schema (no
+            # allocated_node_id) so apply_migrations runs 003 then 004
+            # (004 ALTERs ADD COLUMN allocated_node_id — would collide with
+            # the fresh-snapshot CREATE TABLE if the table were absent).
+            conn.run(
+                "CREATE TABLE yascheduler_tasks ("
+                "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+            )
         finally:
             conn.close()
 
-        # apply_schema is a no-op on the existing table (CREATE TABLE IF NOT
-        # EXISTS); apply_migrations runs only 003 (backfill + DROP CONSTRAINT).
+        # apply_schema is a no-op on the existing tables (CREATE TABLE IF NOT
+        # EXISTS); apply_migrations runs 003 (backfill + DROP CONSTRAINT) then
+        # 004 (add allocated_node_id).
         apply_schema(config)
         apply_migrations(config)
 

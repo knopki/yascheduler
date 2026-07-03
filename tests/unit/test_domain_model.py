@@ -1,9 +1,9 @@
 # FILE: tests/unit/test_domain_model.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, TaskContext, Engine, Task, Node, ConnectedMachine.
-#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_context, TaskContext.replace.
+#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_context, TaskContext.replace, Task.allocate_to(node) binding both allocated_ip and allocated_node_id, allocated_node_id field defaults/preservation.
 #   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -16,13 +16,15 @@
 #   test_engine_validate_inputs - ok when files present, raises MissingInputFileError when missing
 #   test_task_construction - default TO_DO status
 #   test_task_immutability - FrozenInstanceError on mutation
-#   test_task_allocate_to - returns new Task with ip
-#   test_task_allocate_to_already_allocated - raises TaskAlreadyAllocatedError
+#   test_allocate_to_takes_node_and_binds_both_fields - allocate_to(node) sets allocated_ip and allocated_node_id
+#   test_allocate_to_rejects_already_allocated - raises TaskAlreadyAllocatedError, neither field changed
 #   test_task_mark_running - transitions to RUNNING
 #   test_task_complete - transitions RUNNING->DONE
 #   test_task_complete_not_running - raises TaskNotAllocatedError
 #   test_task_fail - transitions to DONE with context.error set
 #   test_task_fail_not_running - raises TaskNotRunningError
+#   test_new_task_has_allocated_node_id_default_none - NewTask defaults allocated_node_id to None
+#   test_task_with_context_preserves_allocated_node_id - with_context retains allocated_node_id
 #   test_node_defaults - username, port, cloud, enabled defaults
 #   test_node_full_construction - all positional args
 #   TestNodeId - validation, str, equality, hashability
@@ -38,8 +40,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - remove-tmp-node-fake-ip: add TestNewNode.tmp_reservation_defaults and test_explicit_ip_ncpus_override_defaults for NewNode ip="" / ncpus=0 defaults.
-#   PREVIOUS_CHANGE: v1.5.0 - Add TaskId/NewTask test suites and update Task construction for add-task-id-identity.
+#   LAST_CHANGE: v1.5.0 - task-allocated-node-id: update test_task_allocate_to* tests to call allocate_to(node) with a constructed Node (was allocate_to("ip") — signature changed); add test_allocate_to_takes_node_and_binds_both_fields, test_allocate_to_rejects_already_allocated (asserts neither field changed), test_new_task_has_allocated_node_id_default_none, test_task_with_context_preserves_allocated_node_id.
+#   PREVIOUS_CHANGE: v1.4.0 - remove-tmp-node-fake-ip: add TestNewNode.tmp_reservation_defaults and test_explicit_ip_ncpus_override_defaults for NewNode ip="" / ncpus=0 defaults.
 # END_CHANGE_SUMMARY
 
 import time
@@ -69,6 +71,11 @@ from yascheduler.domain.model import (
     TaskId,
     TaskStatus,
 )
+
+
+def _node(node_id: int = 7, ip: str = "10.0.0.1") -> Node:
+    """Construct a minimal Node for allocate_to tests (task-allocated-node-id)."""
+    return Node(node_id=NodeId(node_id), ip=ip, ncpus=4)
 
 
 # START_CONTRACT: test_task_status_values
@@ -284,6 +291,10 @@ class TestTask:
         base.update(overrides)
         return Task(**base)  # type: ignore[arg-type]
 
+    @staticmethod
+    def _node(node_id: int = 7, ip: str = "10.0.0.1") -> Node:
+        return Node(node_id=NodeId(node_id), ip=ip, ncpus=4)
+
     def test_construction_default_status(self) -> None:
         task = self.make_task()
         assert task.task_id == TaskId(1)
@@ -291,36 +302,44 @@ class TestTask:
         assert task.context.engine == "cp2k"
         assert task.status == TaskStatus.TO_DO
         assert task.allocated_ip is None
+        assert task.allocated_node_id is None
 
     def test_immutability(self) -> None:
         task = self.make_task()
         with pytest.raises(FrozenInstanceError):
             task.status = TaskStatus.RUNNING  # type: ignore[misc]
 
-    def test_allocate_to(self) -> None:
+    def test_allocate_to_takes_node_and_binds_both_fields(self) -> None:
         task = self.make_task()
-        allocated = task.allocate_to("10.0.0.1")
+        node = self._node(node_id=7, ip="10.0.0.1")
+        allocated = task.allocate_to(node)
         assert allocated.allocated_ip == "10.0.0.1"
+        assert allocated.allocated_node_id == NodeId(7)
         assert allocated.task_id == task.task_id
         assert allocated.status == task.status
         # original unchanged
         assert task.allocated_ip is None
+        assert task.allocated_node_id is None
 
-    def test_allocate_to_already_allocated(self) -> None:
-        task = self.make_task(allocated_ip="10.0.0.1")
+    def test_allocate_to_rejects_already_allocated(self) -> None:
+        task = self.make_task(allocated_ip="10.0.0.1", allocated_node_id=NodeId(7))
+        node = self._node(node_id=8, ip="10.0.0.2")
         with pytest.raises(TaskAlreadyAllocatedError) as exc_info:
-            task.allocate_to("10.0.0.2")
+            task.allocate_to(node)
         assert "1" in str(exc_info.value)
+        # neither field changed
+        assert task.allocated_ip == "10.0.0.1"
+        assert task.allocated_node_id == NodeId(7)
 
     def test_mark_running(self) -> None:
         task = self.make_task()
-        running = task.allocate_to("1.2.3.4").mark_running()
+        running = task.allocate_to(self._node()).mark_running()
         assert running.status == TaskStatus.RUNNING
         assert running.task_id == task.task_id
 
     def test_complete_on_running(self) -> None:
         task = self.make_task()
-        running = task.allocate_to("1.2.3.4").mark_running()
+        running = task.allocate_to(self._node()).mark_running()
         done = running.complete()
         assert done.status == TaskStatus.DONE
         assert done.context.error is None
@@ -333,7 +352,7 @@ class TestTask:
 
     def test_fail_on_running(self) -> None:
         task = self.make_task()
-        running = task.allocate_to("1.2.3.4").mark_running()
+        running = task.allocate_to(self._node()).mark_running()
         failed = running.fail("out of memory")
         assert failed.status == TaskStatus.DONE
         assert failed.context.error == "out of memory"
@@ -550,6 +569,15 @@ class TestTaskWithContext:
         assert result.allocated_ip == task.allocated_ip
         assert result._events == task._events
 
+    def test_with_context_preserves_allocated_node_id(self) -> None:
+        # task-allocated-node-id: with_context preserves allocated_node_id
+        # alongside the other non-context fields.
+        task = self.make_task(allocated_ip="10.0.0.1", allocated_node_id=NodeId(5))
+        new_context = TaskContext(engine="cp2k")
+        result = task.with_context(new_context)
+        assert result.allocated_node_id == NodeId(5)
+        assert result.allocated_ip == "10.0.0.1"
+
     def test_with_context_preserves_events(self) -> None:
         task = self.make_task()
         event = TaskCreated(
@@ -610,7 +638,7 @@ class TestTaskWithContext:
             local_folder="/l",
             extra={"inp": "data"},
         )
-        running = task.allocate_to("10.0.0.1").mark_running()
+        running = task.allocate_to(_node()).mark_running()
         result = running.with_context(new_context).fail("reason")
         assert result.status == TaskStatus.DONE
         assert result.context.error == "reason"
@@ -622,7 +650,7 @@ class TestTaskWithContext:
     def test_with_context_chains_with_complete(self) -> None:
         task = self.make_task()
         new_context = TaskContext(engine="cp2k", remote_folder="/r")
-        running = task.allocate_to("10.0.0.1").mark_running()
+        running = task.allocate_to(_node()).mark_running()
         result = running.with_context(new_context).complete()
         assert result.status == TaskStatus.DONE
         assert result.context is new_context
@@ -672,7 +700,7 @@ class TestTaskContextReplace:
 
     def test_replace_error_field_override_chains_into_fail(self) -> None:
         task = Task(task_id=TaskId(1), label="x", context=TaskContext(engine="fleur"))
-        running = task.allocate_to("10.0.0.1").mark_running()
+        running = task.allocate_to(_node()).mark_running()
         result = running.fail("disk full")
         assert result.status == TaskStatus.DONE
         assert result.context.error == "disk full"
@@ -743,6 +771,7 @@ class TestNewTask:
         assert nt.context is ctx
         assert nt.status == TaskStatus.TO_DO
         assert nt.allocated_ip is None
+        assert nt.allocated_node_id is None
 
     def test_has_no_task_id(self) -> None:
         nt = NewTask(label="x", context=TaskContext(engine="cp2k"))
@@ -751,6 +780,12 @@ class TestNewTask:
     def test_has_no_events_attribute(self) -> None:
         nt = NewTask(label="x", context=TaskContext(engine="cp2k"))
         assert not hasattr(nt, "_events")
+
+    def test_new_task_has_allocated_node_id_default_none(self) -> None:
+        # task-allocated-node-id: NewTask defaults allocated_node_id to None
+        # (no node is bound until allocation; written by Task.allocate_to).
+        nt = NewTask(label="x", context=TaskContext(engine="cp2k"))
+        assert nt.allocated_node_id is None
 
     def test_has_no_lifecycle_methods(self) -> None:
         nt = NewTask(label="x", context=TaskContext(engine="cp2k"))

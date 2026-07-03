@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.18.0
+# VERSION: 1.19.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
@@ -14,8 +14,8 @@
 #   TaskContext - Typed task metadata with arbitrary extras; .replace() typed copy-with
 #   TaskContextOverrides - TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra
 #   TaskId - Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
-#   NewTask - Pre-persistence task record (no task_id)
-#   Task - Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocate_to, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
+#   NewTask - Pre-persistence task record (no task_id); carries allocated_node_id: NodeId | None = None (written by Task.allocate_to, not NewTask construction)
+#   Task - Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocated_node_id: NodeId | None; allocate_to(node: Node) binds both allocated_ip and allocated_node_id, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
 #   NodeId - Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
 #   NewNode - Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) for the tmp-reservation call site
 #   Node - Post-persistence node record; always carries node_id: NodeId (first field, identity-first)
@@ -26,8 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.18.0 - NewNode gains ip: str = "" and ncpus: int = 0 defaults (remove-tmp-node-fake-ip); field order unchanged (ip and ncpus still first, now with defaults) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False) without naming them. Node.ip stays str (no Optional ripple); tmp rows carry the empty-string sentinel.
-#   PREVIOUS_CHANGE: v1.17.0 - Add TaskId value object (frozen dataclass wrapping int, validates >0, __str__ renders bare int) and NewTask pre-persistence record; Task gains task_id: TaskId as first field (post-persistence shape). Conversion NewTask→Task happens only in TaskRepository.insert (add-task-id-identity).
+#   LAST_CHANGE: v1.19.0 - task-allocated-node-id: NewTask and Task gain allocated_node_id: NodeId | None = None (nullable FK to yascheduler_nodes.node_id; None for unallocated tasks and tasks whose node was deleted — the DB FK is ON DELETE SET NULL). Task.allocate_to signature changes from allocate_to(ip: str) to allocate_to(node: Node); the single replace() call binds both allocated_ip=node.ip and allocated_node_id=node.node_id atomically (the guard stays on allocated_ip). Read paths keep using allocated_ip until Surface A (ssh-rekey-node-id).
+#   PREVIOUS_CHANGE: v1.18.0 - NewNode gains ip: str = "" and ncpus: int = 0 defaults (remove-tmp-node-fake-ip); field order unchanged (ip and ncpus still first, now with defaults) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False) without naming them. Node.ip stays str (no Optional ripple); tmp rows carry the empty-string sentinel.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -227,7 +227,7 @@ class TaskId:
 
 # START_CONTRACT: NewTask
 #   PURPOSE: Pre-persistence task record — no identity yet; converted to Task only by TaskRepository.insert.
-#   INPUTS: { label: str, context: TaskContext, status: TaskStatus, allocated_ip: str | None }
+#   INPUTS: { label: str, context: TaskContext, status: TaskStatus, allocated_ip: str | None, allocated_node_id: NodeId | None }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert
@@ -241,17 +241,22 @@ class NewTask:
     conversion to :class:`Task` happens in exactly one place: ``TaskRepository.insert``.
     It is a pure data carrier with no lifecycle methods (those are nonsensical on an
     unpersisted task and stay on ``Task``).
+
+    ``allocated_node_id`` is ``None`` on a ``NewTask`` (no node is bound until
+    allocation). It is written by :meth:`Task.allocate_to`, not by ``NewTask``
+    construction.
     """
 
     label: str
     context: TaskContext
     status: TaskStatus = TaskStatus.TO_DO
     allocated_ip: str | None = None
+    allocated_node_id: NodeId | None = None
 
 
 # START_CONTRACT: Task
 #   PURPOSE: Post-persistence task entity — always carries its database-generated task_id (identity-first) and a status lifecycle.
-#   INPUTS: { task_id: TaskId, label: str, context: TaskContext, status: TaskStatus, allocated_ip: str | None }
+#   INPUTS: { task_id: TaskId, label: str, context: TaskContext, status: TaskStatus, allocated_ip: str | None, allocated_node_id: NodeId | None }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert (the only NewTask→Task conversion site)
@@ -264,6 +269,13 @@ class Task:
     the database (via ``_row_to_task``) or from ``TaskRepository.insert``'s return.
     The ``task_id=0`` sentinel is unrepresentable: ``Task``'s ``task_id: TaskId`` field
     is required, and ``TaskId(0)`` raises ``ValueError``.
+
+    ``allocated_node_id`` is ``None`` for unallocated tasks (TO_DO with no node bound)
+    and for tasks whose node was deleted (the DB FK is ``ON DELETE SET NULL``). It is
+    set by :meth:`allocate_to` alongside ``allocated_ip``; the two fields are bound
+    together in a single :meth:`allocate_to` call. The read path continues to use
+    ``allocated_ip`` until Surface A (``ssh-rekey-node-id``) switches the read sites
+    to ``allocated_node_id``.
     """
 
     task_id: TaskId
@@ -271,24 +283,31 @@ class Task:
     context: TaskContext
     status: TaskStatus = TaskStatus.TO_DO
     allocated_ip: str | None = None
+    allocated_node_id: NodeId | None = None
     _events: tuple[DomainEvent, ...] = field(default=(), repr=False)
 
     # START_CONTRACT: Task.allocate_to
-    #   PURPOSE: Bind task to a node IP if not already allocated.
-    #   INPUTS: { ip: str - Node IP address }
-    #   OUTPUTS: { Task - New Task instance with allocated_ip set }
+    #   PURPOSE: Bind task to a Node if not already allocated — sets both allocated_ip and allocated_node_id atomically in one replace() call.
+    #   INPUTS: { node: Node - the node to bind (carries ip and node_id) }
+    #   OUTPUTS: { Task - new Task with allocated_ip and allocated_node_id set }
     #   SIDE_EFFECTS: None
-    #   RAISES: TaskAlreadyAllocatedError - if already allocated
+    #   RAISES: TaskAlreadyAllocatedError - if already allocated (guard checks self.allocated_ip is not None)
     #   LINKS: M-DOMAIN-EXCEPTIONS: TaskAlreadyAllocatedError
     # END_CONTRACT: Task.allocate_to
-    def allocate_to(self, ip: str) -> Task:
-        """Bind task to a node IP, raising TaskAlreadyAllocatedError if already allocated."""
+    def allocate_to(self, node: Node) -> Task:
+        """Bind task to a node, raising TaskAlreadyAllocatedError if already allocated.
+
+        Binds both ``allocated_ip = node.ip`` and ``allocated_node_id = node.node_id``
+        in a single :func:`replace` call so the two fields are never out of sync. The
+        guard stays on ``self.allocated_ip`` for continuity with
+        :meth:`mark_running`'s existing ``allocated_ip is None`` check.
+        """
         # START_BLOCK_VALIDATE_NOT_ALLOCATED
         if self.allocated_ip is not None:
             raise TaskAlreadyAllocatedError(self.task_id)
         # END_BLOCK_VALIDATE_NOT_ALLOCATED
         # START_BLOCK_APPLY_ALLOCATION
-        return replace(self, allocated_ip=ip)
+        return replace(self, allocated_ip=node.ip, allocated_node_id=node.node_id)
         # END_BLOCK_APPLY_ALLOCATION
 
     # START_CONTRACT: Task.mark_running

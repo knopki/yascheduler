@@ -3,7 +3,8 @@ SELECT
     label,
     ip,
     status,
-    metadata
+    metadata,
+    allocated_node_id
 FROM yascheduler_tasks
 WHERE task_id IN (SELECT unnest(cast(:task_ids AS int [])))
 ORDER BY task_id;

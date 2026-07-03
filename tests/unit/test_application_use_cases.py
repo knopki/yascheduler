@@ -1,24 +1,24 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.6.1
+# VERSION: 4.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
-#   SCOPE: submit_task validation and success, allocate_task free/cloud/error paths, deallocate_nodes disable/skip. (consume_task tests in test_consume_task.py.)
+#   SCOPE: submit_task validation and success, allocate_task free/cloud/error paths (session-node pairing, allocate_to(node), node_id logging), deallocate_nodes disable/skip. (consume_task tests in test_consume_task.py.)
 #   DEPENDS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
 #   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   TestSubmitTask - submit_task: unknown engine, missing input, success path
-#   TestAllocateTask - allocate_task: unsupported engine, free machine (tracker.discard), cloud-fallback happy path, failure cleanup, dedup, throttle, step1/step2-cleanup/step3 hardening
+#   TestAllocateTask - allocate_task: unsupported engine, free machine (session-node pair, allocate_to(node), tracker.discard), cloud-fallback happy path, failure cleanup, dedup, throttle, step1/step2-cleanup/step3 hardening
 #   TestDeallocateNodes - deallocate_nodes: idle disable, non-cloud skip, returns Node objects, no-dot-filter
 #   TestDeallocateNodeBracketing - deallocate_node: disable+remove bracketing around cloud delete
 #   TestTmpCleanupByNodeId - tmp-cleanup paths call remove(tmp_node_id) directly (no get lookup); idempotent on 0-row remove
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.6.1 - deallocate-node-id-identity test update: TestDeallocateNodes asserts on Node objects (was bare ip strings) — test_deallocate_nodes_disables_idle_cloud_nodes checks the returned list contains a Node with node_id=NodeId(1) and ip="10.0.0.1"; test_deallocate_nodes_skips_non_cloud_nodes asserts the list is empty; added test_deallocate_nodes_returns_node_objects (return type is list[Node] carrying node_id/ip/cloud — proves D1) and test_deallocate_nodes_no_dot_filter (phase 2 filter is `node.ip not in busy_ips and node.cloud`, no `.` guard — proves D4).
-#   PREVIOUS_CHANGE: v4.6.0 - remove-tmp-node-fake-ip: tmp-cleanup tests assert insert(NewNode(cloud=..., enabled=False)) for tmp insertion and remove(tmp_node_id) directly for cleanup (no get lookup); TestTmpCleanupLookup renamed to TestTmpCleanupByNodeId; happy/failure/throttle tests use insert-mock returning a tmp Node carrying node_id.
+#   LAST_CHANGE: v4.7.1 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests into tests/unit/test_allocate_task_node_pairing.py (this file exceeded the 1000-line GRACE-lite hard limit after the v4.7.0 additions). The free-machine test still asserts saved_task.allocated_node_id == NodeId(1) here.
+#   PREVIOUS_CHANGE: v4.7.0 - task-allocated-node-id: TestAllocateTask updated for _find_free_machines returning list[tuple[MachineSession, Node]] and _try_start_on_machine taking (session, node); test_allocate_task_finds_free_machine asserts saved_task.allocated_node_id == NodeId(1) (allocate_to(node) binds both fields); added test_find_free_machines_pairs_session_with_node_by_ip, test_find_free_machines_dup_ip_collapses_to_one_node (last-wins ambiguity), test_try_start_on_machine_logs_node_id.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for application use cases.
@@ -283,10 +283,12 @@ class TestAllocateTask:
         assert _call_session is free_session
         assert _call_engine is engine
         assert _call_task.allocated_ip == "10.0.0.1"
+        assert _call_task.allocated_node_id == NodeId(1)
         operations.start_occupancy_check.assert_called_once_with(free_session, engine)
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.allocated_ip == "10.0.0.1"
+        assert saved_task.allocated_node_id == NodeId(1)
         assert saved_task.status == TaskStatus.RUNNING
         uow.commit.assert_called_once()
         # tracker.discard called instead of clouds.mark_task_done
