@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.6.1
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -16,16 +16,15 @@
 #   TestOrchestratorTaskAbandoned - TaskAbandoned event recorded when machine is gone
 #   TestCloudsGetCapacity - _clouds_get_capacity inline UoW arithmetic over active_clouds
 #   TestOrchestratorConstructor - Constructor stores allocation_tracker, active_clouds, allocation_lock; no _adapters/_configs
-#   TestDeallocatorConsumer - _deallocator_consumer calls deallocate_node with uow_factory
+#   TestDeallocatorConsumer - _deallocator_consumer takes Node from msg.payload (no UoW lookup); does not duplicate SSH teardown; logs node_id+ip on error; queue dedups on NodeId not ip
 #   TestAllocatorConsumer - _allocator_consumer swallows allocate_task exceptions to keep worker alive
 #   TestConsumeConditionalDiscard - _task_consumer_consumer discards _occupancy_started only when consume_task returns True
 #   TestConsumeInFlightGuard - producer skips in-flight task ids; consumer adds/discards around consume_task await
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.1 - add-node-id-identity test update: prepend node_id=NodeId(<n>) to all Node(...) constructions and add NodeId to 3 local imports.
-#   PREVIOUS_CHANGE: v1.6.0 - session-based-machine-handle section 7.5: replace repository.get_machine_state with repository.get_session returning session stub (session.machine = ConnectedMachine).
-#   PREVIOUS_CHANGE: v1.5.2 - Update test_start_creates_background_tasks: _bg_jobs now includes worker tasks (5 parents + 7 workers = 12 with default limits) since fix-orchestrator-producer-silent-death registers workers in self._bg_jobs.
+#   LAST_CHANGE: v1.7.0 - deallocate-node-id-identity test update: TestDeallocatorConsumer passes UMessage(NodeId, Node) (was UMessage(ip, ip)); test_calls_deallocate_node_with_uow_factory drops the mock_uow.nodes.get mock (consumer no longer opens a UoW); test_disconnects_when_node_not_found replaced by test_consumer_does_not_duplicate_ssh_teardown (asserts the consumer does NOT call repository.contains/disconnect directly — SSH teardown owned by deallocate_node); added test_consumer_logs_node_id_and_ip_on_error (error log carries node_id=%s ip=%s) and test_queue_dedup_on_node_id_not_ip (two UMessages with distinct NodeId but the same ip are both kept).
+#   PREVIOUS_CHANGE: v1.6.1 - add-node-id-identity test update: prepend node_id=NodeId(<n>) to all Node(...) constructions and add NodeId to 3 local imports.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for Orchestrator lifecycle management.
@@ -596,28 +595,23 @@ class TestOrchestratorConstructor:
 
 
 class TestDeallocatorConsumer:
-    """_deallocator_consumer calls deallocate_node with uow_factory."""
+    """_deallocator_consumer takes Node from msg.payload and calls deallocate_node (no UoW lookup)."""
 
     @pytest.mark.asyncio
     async def test_calls_deallocate_node_with_uow_factory(self) -> None:
-        """deallocate_node called with (node, gateway, clouds, uow_factory)."""
+        """deallocate_node called with the Node from msg.payload directly (no uow.nodes.get)."""
+        from yascheduler.application.queue import UMessage
+        from yascheduler.domain.model import Node, NodeId
+
         orch = make_orchestrator()
 
-        mock_uow = AsyncMock()
-        node = MagicMock()
-        node.ip = "10.0.0.1"
-        node.cloud = "aws"
-        mock_uow.nodes.get = AsyncMock(return_value=node)
-        mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
-        mock_uow.__aexit__ = AsyncMock(return_value=False)
-        orch._uow_factory = lambda: mock_uow  # type: ignore[method-assign]
-
-        from yascheduler.application.queue import UMessage
+        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        msg = UMessage(NodeId(1), node)
 
         with patch(
             "yascheduler.application.orchestrator.deallocate_node",
+            new=AsyncMock(),
         ) as mock_dealloc:
-            msg = UMessage("10.0.0.1", "10.0.0.1")
             await orch._deallocator_consumer(msg)
 
         mock_dealloc.assert_called_once_with(
@@ -625,28 +619,54 @@ class TestDeallocatorConsumer:
         )
 
     @pytest.mark.asyncio
-    async def test_disconnects_when_node_not_found(self) -> None:
-        """When node is None, gateway.disconnect is called, deallocate_node is NOT called."""
-        orch = make_orchestrator()
+    async def test_consumer_does_not_duplicate_ssh_teardown(self) -> None:
+        """Consumer does NOT call repository.contains/disconnect directly (owned by deallocate_node)."""
+        from yascheduler.application.queue import UMessage
+        from yascheduler.domain.model import Node, NodeId
 
-        mock_uow = AsyncMock()
-        mock_uow.nodes.get = AsyncMock(return_value=None)
-        mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
-        mock_uow.__aexit__ = AsyncMock(return_value=False)
-        orch._uow_factory = lambda: mock_uow  # type: ignore[method-assign]
+        orch = make_orchestrator()
         orch._repository.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
         orch._repository.disconnect = AsyncMock()  # type: ignore[method-assign]
 
-        from yascheduler.application.queue import UMessage
+        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        msg = UMessage(NodeId(1), node)
 
         with patch(
             "yascheduler.application.orchestrator.deallocate_node",
-        ) as mock_dealloc:
-            msg = UMessage("10.0.0.1", "10.0.0.1")
+            new=AsyncMock(),
+        ):
             await orch._deallocator_consumer(msg)
 
-        orch._repository.disconnect.assert_called_once_with("10.0.0.1")
-        mock_dealloc.assert_not_called()
+        orch._repository.contains.assert_not_called()
+        orch._repository.disconnect.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_consumer_logs_node_id_and_ip_on_error(self) -> None:
+        """deallocate_node raises -> error log includes both node_id=%s and ip=%s (proves D5)."""
+        from yascheduler.application.queue import UMessage
+        from yascheduler.domain.model import Node, NodeId
+
+        orch = make_orchestrator()
+
+        node = Node(node_id=NodeId(7), ip="10.0.0.7", ncpus=4, cloud="aws")
+        msg = UMessage(NodeId(7), node)
+
+        with patch(
+            "yascheduler.application.orchestrator.deallocate_node",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            # Must not raise — consumer swallows to keep worker alive.
+            await orch._deallocator_consumer(msg)
+
+        orch._log.error.assert_called_once()  # type: ignore[attr-defined]
+        args, _ = orch._log.error.call_args  # type: ignore[attr-defined]
+        fmt = args[0]
+        # The format string carries both node_id and ip fields.
+        assert "node_id=%s" in fmt
+        assert "ip=%s" in fmt
+        # The rendered args supply node_id and ip in order.
+        assert args[1] == NodeId(7)
+        assert args[2] == "10.0.0.7"
 
 
 class TestAllocatorConsumer:

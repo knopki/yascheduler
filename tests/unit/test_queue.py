@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_queue.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for UniqueQueue and UMessage covering deduplication, item lifecycle, and edge cases.
 #   SCOPE: put/get, deduplication, item_done tracking, psize, task_done NotImplementedError.
@@ -20,11 +20,12 @@
 #   test_dedup_first_wins - on duplicate id the first-inserted message is retained
 #   test_unhashable_payload - unhashable payload is accepted through full lifecycle
 #   test_put_race_full_queue - concurrent puts on full queue deduplicate under lock
+#   test_dedup_on_node_id_not_ip - two UMessages with distinct NodeId but same ip are both kept (NodeId-keyed dedup strength)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Added test_put_race_full_queue covering concurrent-put dedup under lock (check-then-act race fix).
-#   PREVIOUS_CHANGE: v1.1.0 - Added test_dedup_by_id, test_dedup_first_wins, test_unhashable_payload pinning the id-only dedup invariant (payload excluded from __eq__/__hash__).
+#   LAST_CHANGE: v1.3.0 - Added test_dedup_on_node_id_not_ip covering the NodeId-keyed dedup contract used by the deallocator queue (UniqueQueue[NodeId, Node]): two messages with distinct NodeId but the same ip are both kept — proves the rekey from ip (non-unique post migration 003) to NodeId (strictly unique SERIAL PK) does not collapse same-IP nodes.
+#   PREVIOUS_CHANGE: v1.2.0 - Added test_put_race_full_queue covering concurrent-put dedup under lock (check-then-act race fix).
 # END_CHANGE_SUMMARY
 
 import asyncio
@@ -231,3 +232,32 @@ async def test_put_race_full_queue() -> None:
     assert q.qsize() == 0
     # Exactly one _put call succeeded (the other was dedup'd under lock)
     assert put_count == 1
+
+
+# START_CONTRACT: test_dedup_on_node_id_not_ip
+#   PURPOSE: Prove NodeId-keyed dedup keeps two same-IP nodes distinct (deallocator queue contract).
+#   INPUTS: { None }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: None
+#   LINKS: M-QUEUE, M-APPLICATION-ORCHESTRATOR
+# END_CONTRACT: test_dedup_on_node_id_not_ip
+@pytest.mark.asyncio
+async def test_dedup_on_node_id_not_ip() -> None:
+    """Two UMessages with distinct NodeId but the same ip are both kept (NodeId-keyed dedup).
+
+    UniqueQueue dedups on UMessage.id; with id == node.node_id (strictly unique
+    SERIAL PK) two distinct nodes sharing an ip do NOT collapse to one entry —
+    the rekey from ip (non-unique post migration 003) to NodeId is strictly
+    stronger and prevents silent VM/row leaks.
+    """
+    from yascheduler.domain.model import Node, NodeId
+
+    q: UniqueQueue[NodeId, Node] = UniqueQueue("deallocate_test", maxsize=10)
+
+    node_a = Node(node_id=NodeId(1), ip="10.0.0.9", ncpus=2, cloud="aws")
+    node_b = Node(node_id=NodeId(2), ip="10.0.0.9", ncpus=2, cloud="aws")
+
+    await q.put(UMessage(node_a.node_id, node_a))
+    await q.put(UMessage(node_b.node_id, node_b))
+
+    assert q.qsize() == 2

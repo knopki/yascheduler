@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.8.0
+# VERSION: 6.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.8.0 - Carry TaskId end-to-end through the producer/consumer loops (add-task-id-identity): _consuming is set[TaskId]; _allocate_q/_consume_q are UniqueQueue[TaskId, Task]; the allocator/task-consumer producers yield UMessage[TaskId, Task]; allocate_task/consume_task are called with task.task_id (a TaskId) and the tracker/add/discard keys are TaskId. No .value extraction (TaskId flows internally; logging task_id=%s renders the bare integer).
-#   PREVIOUS_CHANGE: v6.7.1 - fix(orchestrator): _print_stats used ncounters[True] which raised KeyError(True) every 10s (logged as err=True, str(KeyError(True))=='True') when yascheduler_nodes is empty or has no enabled rows. Switched to ncounters.get(True, 0). The stats-resilience try/except masked it (loop continued), so the daemon spammed err=True instead of printing stats on a fresh/empty DB. Regression test added in test_orchestrator_producer_resilience.py.
+#   LAST_CHANGE: v6.9.0 - deallocate-node-id-identity: _deallocate_q rekeyed from UniqueQueue[str, str] to UniqueQueue[NodeId, Node] (dedup on NodeId, the strictly-unique SERIAL PK, instead of ip which is non-unique post migration 003 — duplicate IPs behind different jump hosts no longer collapse to one queue entry). _deallocator_producer yields UMessage(node.node_id, node) for each Node returned by deallocate_nodes (which now returns list[Node]). _deallocator_consumer takes node = msg.payload directly and drops the uow.nodes.get(ip) round-trip lookup — deallocate_node(node, ...) is called with the already-held Node. The consumer's elif self._repository.contains(ip): disconnect(ip) fallback is removed (SSH teardown is owned by deallocate_node's internal repository.contains/disconnect, which runs before the if node.cloud: guard). Consumer error log adds node_id=%s alongside ip=%s. NodeId added to the domain import block.
+#   PREVIOUS_CHANGE: v6.8.0 - Carry TaskId end-to-end through the producer/consumer loops (add-task-id-identity): _consuming is set[TaskId]; _allocate_q/_consume_q are UniqueQueue[TaskId, Task]; the allocator/task-consumer producers yield UMessage[TaskId, Task]; allocate_task/consume_task are called with task.task_id (a TaskId) and the tracker/add/discard keys are TaskId. No .value extraction (TaskId flows internally; logging task_id=%s renders the bare integer).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from yascheduler.domain import (
     MachineSession,
     MachineState,
     Node,
+    NodeId,
     Task,
     TaskAbandoned,
     TaskId,
@@ -159,7 +160,7 @@ class Orchestrator:
         self._consume_q: UniqueQueue[TaskId, Task] = UniqueQueue(
             "consume", maxsize=lcfg.consume_pending
         )
-        self._deallocate_q: UniqueQueue[str, str] = UniqueQueue(
+        self._deallocate_q: UniqueQueue[NodeId, Node] = UniqueQueue(
             "deallocate", maxsize=lcfg.deallocate_pending
         )
 
@@ -514,15 +515,15 @@ class Orchestrator:
     # ---- Deallocator producer-consumer ----
 
     # START_CONTRACT: Orchestrator._deallocator_producer
-    #   PURPOSE: Find idle nodes exceeding tolerance, disable them via use case, yield disabled IPs for deallocation.
+    #   PURPOSE: Find idle nodes exceeding tolerance, disable them via use case, yield disabled Node objects for deallocation.
     #   INPUTS: { None }
-    #   OUTPUTS: { AsyncGenerator[UMessage[str, str], None] - yields disabled cloud node IPs }
+    #   OUTPUTS: { AsyncGenerator[UMessage[NodeId, Node], None] - yields disabled cloud Node objects (id == node.node_id) }
     #   SIDE_EFFECTS: Disables idle nodes in DB via deallocate_nodes use case.
     #   LINKS: M-APPLICATION-DEALLOCATE
     # END_CONTRACT: Orchestrator._deallocator_producer
     async def _deallocator_producer(
         self,
-    ) -> AsyncGenerator[UMessage[str, str], None]:
+    ) -> AsyncGenerator[UMessage[NodeId, Node], None]:
         # START_BLOCK_COLLECT_IDLE
         # free_since is monotonic; pass it through unchanged so deallocate_nodes
         # compares against time.monotonic() and stays immune to wall-clock jumps.
@@ -536,36 +537,36 @@ class Orchestrator:
         # END_BLOCK_COLLECT_IDLE
 
         # START_BLOCK_DEALLOCATE_USE_CASE
-        disabled_ips = await deallocate_nodes(
+        disabled_nodes = await deallocate_nodes(
             self._uow_factory, self._config_clouds, idle_machines
         )
         # END_BLOCK_DEALLOCATE_USE_CASE
 
         # START_BLOCK_YIELD_DISABLED
-        for ip in disabled_ips:
-            yield UMessage(ip, ip)
+        for node in disabled_nodes:
+            yield UMessage(node.node_id, node)
         # END_BLOCK_YIELD_DISABLED
 
     # START_CONTRACT: Orchestrator._deallocator_consumer
-    #   PURPOSE: Disconnect and cloud-deallocate a single disabled node.
-    #   INPUTS: { msg: UMessage[str, str] - disabled node IP }
+    #   PURPOSE: Cloud-deallocate a single disabled node via deallocate_node.
+    #   INPUTS: { msg: UMessage[NodeId, Node] - disabled node (payload is the Node object) }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Disconnects remote machine, deletes cloud VM.
+    #   SIDE_EFFECTS: Delegates SSH disconnect + disable + cloud delete + remove to deallocate_node (which owns SSH teardown internally); logs and swallows any Exception so the worker survives.
     #   LINKS: M-APPLICATION-DEALLOCATE
     # END_CONTRACT: Orchestrator._deallocator_consumer
-    async def _deallocator_consumer(self, msg: UMessage[str, str]) -> None:
-        ip = msg.payload
+    async def _deallocator_consumer(self, msg: UMessage[NodeId, Node]) -> None:
+        node = msg.payload
         try:
-            async with self._uow_factory() as uow:
-                node = await uow.nodes.get(ip)
-            if node is not None:
-                await deallocate_node(
-                    node, self._repository, self._clouds, self._uow_factory
-                )
-            elif self._repository.contains(ip):
-                await self._repository.disconnect(ip)
+            await deallocate_node(
+                node, self._repository, self._clouds, self._uow_factory
+            )
         except Exception as err:
-            self._log.error("Deallocator error for %s: %s", ip, err)
+            self._log.error(
+                "Deallocator error for node_id=%s ip=%s: %s",
+                node.node_id,
+                node.ip,
+                err,
+            )
 
     # ---- Infrastructure ----
 

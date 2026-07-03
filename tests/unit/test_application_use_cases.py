@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.5.1
+# VERSION: 4.6.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -11,16 +11,14 @@
 # START_MODULE_MAP
 #   TestSubmitTask - submit_task: unknown engine, missing input, success path
 #   TestAllocateTask - allocate_task: unsupported engine, free machine (tracker.discard), cloud-fallback happy path, failure cleanup, dedup, throttle, step1/step2-cleanup/step3 hardening
-#   TestDeallocateNodes - deallocate_nodes: idle disable, non-cloud skip
+#   TestDeallocateNodes - deallocate_nodes: idle disable, non-cloud skip, returns Node objects, no-dot-filter
 #   TestDeallocateNodeBracketing - deallocate_node: disable+remove bracketing around cloud delete
 #   TestTmpCleanupByNodeId - tmp-cleanup paths call remove(tmp_node_id) directly (no get lookup); idempotent on 0-row remove
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.6.0 - remove-tmp-node-fake-ip: tmp-cleanup tests assert insert(NewNode(cloud=..., enabled=False)) for tmp insertion and remove(tmp_node_id) directly for cleanup (no get lookup); TestTmpCleanupLookup renamed to TestTmpCleanupByNodeId; happy/failure/throttle tests use insert-mock returning a tmp Node carrying node_id.
-#   PREVIOUS_CHANGE: v4.5.1 - add-node-id-identity test update: prepend node_id=NodeId(1) to all Node(...) constructions and add NodeId import.
-#   PREVIOUS_CHANGE: v4.5.0 - session-based-machine-handle section 7.2: update test_allocate_task_finds_free_machine to use session stub for repository.list_free; start_task_on_machine callback receives session (not machine).
-#   PREVIOUS_CHANGE: v4.4.0 - Extract TestConsumeTask to test_consume_task.py (GRACE 1000-line hard limit).
+#   LAST_CHANGE: v4.6.1 - deallocate-node-id-identity test update: TestDeallocateNodes asserts on Node objects (was bare ip strings) — test_deallocate_nodes_disables_idle_cloud_nodes checks the returned list contains a Node with node_id=NodeId(1) and ip="10.0.0.1"; test_deallocate_nodes_skips_non_cloud_nodes asserts the list is empty; added test_deallocate_nodes_returns_node_objects (return type is list[Node] carrying node_id/ip/cloud — proves D1) and test_deallocate_nodes_no_dot_filter (phase 2 filter is `node.ip not in busy_ips and node.cloud`, no `.` guard — proves D4).
+#   PREVIOUS_CHANGE: v4.6.0 - remove-tmp-node-fake-ip: tmp-cleanup tests assert insert(NewNode(cloud=..., enabled=False)) for tmp insertion and remove(tmp_node_id) directly for cleanup (no get lookup); TestTmpCleanupLookup renamed to TestTmpCleanupByNodeId; happy/failure/throttle tests use insert-mock returning a tmp Node carrying node_id.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for application use cases.
@@ -640,15 +638,15 @@ class TestTmpCleanupByNodeId:
 
 
 # =============================================================================
-# deallocate_nodes  (2 tests)
+# deallocate_nodes  (4 tests)
 # =============================================================================
 
 
 class TestDeallocateNodes:
-    """deallocate_nodes — disable idle cloud nodes, return IPs for VM deletion."""
+    """deallocate_nodes — disable idle cloud nodes, return Node objects for VM deletion."""
 
     async def test_deallocate_nodes_disables_idle_cloud_nodes(self) -> None:
-        """Enabled cloud node idle beyond tolerance -> disable_node called, IP returned."""
+        """Enabled cloud node idle beyond tolerance -> disable_node called, Node returned."""
         # An enabled Azure node
         az_node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="az")
 
@@ -683,9 +681,12 @@ class TestDeallocateNodes:
         uow.nodes.disable.assert_called_once_with(NodeId(1))
         uow.commit.assert_called()
 
-        # Second phase: disabled node qualifies (has cloud, valid ip) -> returned
+        # Second phase: disabled Node qualifies (has cloud, valid ip) -> returned
         assert isinstance(result, list)
-        assert "10.0.0.1" in result
+        assert any(
+            isinstance(n, Node) and n.node_id == NodeId(1) and n.ip == "10.0.0.1"
+            for n in result
+        )
 
     async def test_deallocate_nodes_skips_non_cloud_nodes(self) -> None:
         """Node with cloud=None -> NOT disabled, NOT in returned list."""
@@ -722,7 +723,85 @@ class TestDeallocateNodes:
         uow.nodes.disable.assert_not_called()
         # In second phase: node.cloud is None -> filtered out, not returned
         assert isinstance(result, list)
-        assert "10.0.0.1" not in result
+        assert result == []
+        assert all(not (isinstance(n, Node) and n.node_id == NodeId(1)) for n in result)
+
+    async def test_deallocate_nodes_returns_node_objects(self) -> None:
+        """Return type is list[Node]; each element carries node_id, ip, cloud (proves D1)."""
+        cloud_node = Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=2, cloud="aws")
+
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.nodes = AsyncMock()
+        uow.nodes.list_enabled = AsyncMock(return_value=[cloud_node])
+        uow.nodes.list_disabled = AsyncMock(return_value=[cloud_node])
+        uow.nodes.disable = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        config_clouds = [
+            MagicMock(spec=ConfigCloudAzure, prefix="aws", idle_tolerance=300)
+        ]
+        idle_machines = {"10.0.0.2": time.monotonic() - 3600}
+
+        result = await deallocate_nodes(
+            uow_factory=uow_factory,
+            config_clouds=config_clouds,
+            idle_machines=idle_machines,
+        )
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        only = result[0]
+        assert isinstance(only, Node)
+        assert only.node_id == NodeId(2)
+        assert only.ip == "10.0.0.2"
+        assert only.cloud == "aws"
+
+    async def test_deallocate_nodes_no_dot_filter(self) -> None:
+        """Phase 2 filter is `node.ip not in busy_ips and node.cloud` — no `.` guard (proves D4).
+
+        A disabled cloud node with a valid ipv4 ip (dots present) is returned; the
+        old `and "." in node.ip` guard would also have passed it, but this test
+        pins the filter shape so a future regression reintroducing the guard fails.
+        """
+        cloud_node = Node(node_id=NodeId(3), ip="10.0.0.3", ncpus=2, cloud="aws")
+
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.nodes = AsyncMock()
+        uow.nodes.list_enabled = AsyncMock(return_value=[])
+        uow.nodes.list_disabled = AsyncMock(return_value=[cloud_node])
+        uow.nodes.disable = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        config_clouds = [
+            MagicMock(spec=ConfigCloudAzure, prefix="aws", idle_tolerance=300)
+        ]
+        idle_machines: dict[str, float] = {}
+
+        result = await deallocate_nodes(
+            uow_factory=uow_factory,
+            config_clouds=config_clouds,
+            idle_machines=idle_machines,
+        )
+
+        assert isinstance(result, list)
+        assert any(
+            isinstance(n, Node) and n.node_id == NodeId(3) and n.ip == "10.0.0.3"
+            for n in result
+        )
 
 
 # =============================================================================

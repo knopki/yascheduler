@@ -510,12 +510,12 @@
     </M-APPLICATION-CONSUME>
 
     <M-APPLICATION-DEALLOCATE NAME="Deallocate idle nodes use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Disable idle cloud nodes and return IPs for VM deletion; per-node wrapper owns disable+remove bracketing around pure cloud delete.</purpose>
+      <purpose>Disable idle cloud nodes and return Node objects (carrying node_id) for VM deletion; per-node wrapper owns disable+remove bracketing around pure cloud delete.</purpose>
       <path>yascheduler/application/deallocate_nodes.py</path>
       <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-CLOUD-PROVISIONER</depends>
       <annotations>
         <fn-deallocate_node PURPOSE="Per-node wrapper: gateway disconnect -> UoW disable+commit -> clouds.deallocate(cloud, ip) -> UoW remove+commit" />
-        <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and return IPs for VM deletion (idle-disable sweep)" />
+        <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and return list[Node] (each carrying node_id) for orchestrator-level SSH disconnect + cloud deallocation (idle-disable sweep)" />
       </annotations>
     </M-APPLICATION-DEALLOCATE>
 
@@ -554,6 +554,7 @@
         <const-allocation_lock PURPOSE="Owned asyncio.Lock serializing allocate_task critical section" />
         <const-_connect_failures PURPOSE="Per-IP monotonic first-seen failure timestamp (in-memory only; daemon restart resets grace windows)" />
         <const-_consuming PURPOSE="In-flight consume task ids (set[TaskId]); producer skips yielding these, consumer adds/discards around consume_task await (in-memory only; same-event-loop atomic)" />
+        <const-_deallocate_q PURPOSE="UniqueQueue[NodeId, Node] keyed on node.node_id (strictly unique SERIAL PK) — dedup on NodeId, not ip (ip is non-unique post migration 003); payload is the Node object so the consumer calls deallocate_node without a uow.nodes.get(ip) round-trip" />
       </annotations>
     </M-APPLICATION-ORCHESTRATOR>
 
