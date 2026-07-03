@@ -103,3 +103,79 @@ Save the `publicIpAddress` as `az_jump_host`, and `az_jump_user` will be `yasche
 [az_cli_install]: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli
 [az_manage_rg]: https://docs.microsoft.com/en-us/cli/azure/manage-azure-groups-azure-cli
 [az_app_create]: https://docs.microsoft.com/en-us/cli/azure/ad/app?view=azure-cli-latest#az-ad-app-create
+
+## Vultr
+
+### Setup
+
+Vultr provides **bare-metal** instances suitable for heavy `ab initio`
+calculations (CRYSTAL Seebeck/TDF, FLEUR). This integration uses the Vultr
+REST API v2 directly via `urllib` (no extra Python dependency is required).
+
+Create an API key in the [Vultr customer portal][vultr_api_key] and set
+`vultr_api_key` in the `[clouds]` section of the config.
+
+The default plan is `vbm-24c-256gb-amd` (AMD EPYC 7443P, 24C/48T, 256 GB RAM,
+2x 480 GB SSD + 2x 1.92 TB NVMe) in the `ams` region on Debian 12 (`os_id=2284`).
+Bare-metal provisioning is slow (up to ~20 minutes), so `create_node_timeout`
+is set to 1200 s and `op_limit` to 2.
+
+### Bare-metal setup (automatic via cloud-init)
+
+The following steps from the [Vultr setup README][vultr_setup] are applied
+automatically via cloud-init `user_data` on instance creation:
+
+- **RAID0 NVMe** — `mdadm --create /dev/md0` from `nvme0n1` + `nvme1n1`,
+  `mkfs.ext4`, mount at `/data`, persist via `/etc/fstab`, save to
+  `mdadm.conf` and `update-initramfs -u`.
+- **`/dev/shm` 200G** — required by CRYSTAL pproperties for inter-process
+  communication during parallel Seebeck/TDF runs.
+- **ulimit 65536** — required by FLEUR/CRYSTAL parallel runs that open many
+  files simultaneously.
+- **ScaLAPACK symlink** — `libscalapack-openmpi.so.2.2 -> .so.2.1` expected
+  by FLEUR and CRYSTAL.
+- **apt packages** — `openmpi-bin`, `libopenmpi-dev`, `libscalapack-openmpi-dev`,
+  `libxml2-dev`, `libblas-dev`, `liblapack-dev`, `build-essential`, `gfortran`,
+  `cmake`, `git`, `mdadm`, plus engine-specific packages from `[engine.*]`
+  `platform_packages`.
+
+Engines are deployed to `/data/engines` (per `[remote] engines_dir`) by the
+scheduler after the instance becomes active.
+
+### Cost control
+
+The default plan costs **$0.993/hour**. Nodes are deleted automatically after
+`vultr_idle_tolerance` seconds of idleness (default 3600 s = 1 hour) by the
+existing `deallocator_producer`. Setting `vultr_idle_tolerance` too low may
+cause frequent provisioning cycles; too high wastes money. Tune per your
+workload pattern.
+
+### Config example
+
+```ini
+[clouds]
+vultr_api_key = YOUR_VULTR_API_KEY
+vultr_region = ams
+vultr_plan = vbm-24c-256gb-amd
+vultr_os_id = 2284
+vultr_max_nodes = 2
+vultr_idle_tolerance = 3600
+```
+
+### Standalone test script
+
+A standalone script is provided to verify the Vultr API and instance lifecycle
+without running the full scheduler:
+
+```sh
+export VULTR_API_KEY='your_api_key_here'
+python examples/vultr_test.py test
+```
+
+This creates a bare-metal instance, waits for it to become active, checks that
+the SSH port is open, then deletes it. Use `--keep` to leave the instance
+running, and `python examples/vultr_test.py list` / `delete --id <id>` to manage
+instances manually.
+
+[vultr_api_key]: https://my.vultr.com/settings/#settingsapi
+[vultr_setup]: https://github.com/mpds-io/ab_initio_calculations/blob/main/scripts/vultr/README.md

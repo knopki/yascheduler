@@ -8,7 +8,13 @@ from typing import Union
 
 from attrs import define, field, validators
 
-from .cloud import ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud
+from .cloud import (
+    ConfigCloud,
+    ConfigCloudAzure,
+    ConfigCloudHetzner,
+    ConfigCloudUpcloud,
+    ConfigCloudVultr,
+)
 from .db import ConfigDb
 from .engine_repository import EngineRepository
 from .local import ConfigLocal
@@ -52,6 +58,7 @@ class Config:
             ConfigCloudAzure,
             ConfigCloudHetzner,
             ConfigCloudUpcloud,
+            ConfigCloudVultr,
         )
         # intersection
         cloud_variants_match = filter(
