@@ -209,11 +209,65 @@ def vultr_create_node_sync(
     if not ssh_ready:
         raise APIError(f"Bare-metal {instance_id} SSH not ready on {ip_addr} in time")
 
-    # Give cloud-init time to install SSH keys and configure root access.
-    # Bare metal boots slowly and SSH may accept connections before
-    # authorized_keys is populated, causing Permission denied on first try.
-    log.info("Bare-metal %s SSH port open, waiting for cloud-init", instance_id)
-    time.sleep(90)
+    # Bare metal boots slowly: SSH port may open before cloud-init has
+    # installed authorized_keys, causing Permission denied on first try.
+    # Actively poll SSH authentication with the configured key until it
+    # succeeds, so create_node does not fail and the scheduler does not
+    # spin up redundant instances.
+    log.info(
+        "Bare-metal %s SSH port open, waiting for cloud-init to install keys",
+        instance_id,
+    )
+    import os
+    import tempfile
+
+    import paramiko
+
+    key_pem = key.export_private_key("openssh")
+    with tempfile.NamedTemporaryFile(suffix=".key", delete=False) as tf:
+        tf.write(key_pem)
+        tf.flush()
+        os.chmod(tf.name, 0o600)
+        key_path = tf.name
+    try:
+        ssh_ok = False
+        attempts = 12
+        for attempt in range(1, attempts + 1):
+            if time.time() >= deadline:
+                break
+            try:
+                transport = paramiko.Transport((ip_addr, 22))
+                transport.set_log_channel("paramiko.vultr")
+                transport.use_compression(True)
+                transport.connect(
+                    username=cfg.username,
+                    pkey=paramiko.RSAKey.from_private_key_file(key_path),
+                )
+                transport.close()
+                ssh_ok = True
+                log.info(
+                    "Bare-metal %s SSH auth OK on attempt %s/%s",
+                    instance_id,
+                    attempt,
+                    attempts,
+                )
+                break
+            except Exception as exc:
+                log.debug(
+                    "Bare-metal %s SSH auth attempt %s/%s failed: %s",
+                    instance_id,
+                    attempt,
+                    attempts,
+                    exc,
+                )
+                time.sleep(15)
+        if not ssh_ok:
+            raise APIError(
+                f"Bare-metal {instance_id} SSH auth failed on {ip_addr} "
+                f"after {attempts} attempts"
+            )
+    finally:
+        os.unlink(key_path)
 
     log.info("CREATED %s", ip_addr)
     return cast(str, ip_addr)
