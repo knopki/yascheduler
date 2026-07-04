@@ -1,9 +1,9 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.14.0
+# VERSION: 2.15.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
-#   SCOPE: CloudProvisionerImpl class implementing allocate (returns NewNode), deallocate, select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineRepository + SSHMachineOperations.
+#   SCOPE: CloudProvisionerImpl class implementing allocate(provider, tmp_node_id)->Node (reuses tmp_node_id as node identity), deallocate, select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineRepository + SSHMachineOperations.
 #   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-DOMAIN-SETTINGS
 #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE, M-CLOUD-INIT
 # END_MODULE_CONTRACT
@@ -11,12 +11,12 @@
 # START_MODULE_MAP
 #   CloudAllocateError         # Cloud node allocation error (re-exported from domain.exceptions)
 #   CloudSetupError            # Cloud node setup error (re-exported from domain.exceptions)
-#   CloudProvisionerImpl       # Pure cloud-API adapter implementing CloudProvisioner port (no DB); allocate returns NewNode
+#   CloudProvisionerImpl       # Pure cloud-API adapter implementing CloudProvisioner port (no DB); allocate(provider, tmp_node_id)->Node reuses tmp_node_id as node identity (single-row UPDATE lifecycle)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.14.0 - allocate/_setup_vm return NewNode (pre-persistence) instead of Node; node_id now required on Node, so the old return was a type fiction. The caller (allocate_task) persists the NewNode via NodeRepository.insert and receives the persisted Node (add-node-id-identity).
-#   PREVIOUS_CHANGE: v2.13.0 - _get_cloud_config_data gains a config: ConfigCloud parameter and sources CloudInitConfig.package_upgrade from config.package_upgrade instead of self.local_config.cloud_package_upgrade (move-cloud-package-upgrade); the LocalSettings.cloud_package_upgrade field was relocated to the per-provider ConfigCloud* DTOs (package_upgrade: bool = True, infra-only, NOT on the CloudConfig Protocol). allocate passes the config it already resolves at the top of the method.
+#   LAST_CHANGE: v2.15.0 - ssh-rekey-node-id: allocate/_setup_vm/_connect_to_vm take tmp_node_id: NodeId and allocate returns Node (was NewNode) carrying node_id == tmp_node_id — the tmp-node row inserted by _select_and_insert_tmp is reused as the real node's identity (single-row UPDATE lifecycle, not insert+remove). _connect_to_vm calls machine_repository.connect(node=Node(node_id=tmp_node_id, ip=ip_addr, …)) — the setup session registers under tmp_node_id. _setup_vm returns Node(node_id=tmp_node_id, enabled=True, …). allocate's two setup-failure except blocks call disconnect(tmp_node_id) (was disconnect(ip_addr)) BEFORE adapter.delete_node. deallocate(cloud, ip) unchanged (ip = cloud SDK host). stop() unchanged.
+#   PREVIOUS_CHANGE: v2.14.0 - allocate/_setup_vm return NewNode (pre-persistence) instead of Node; node_id now required on Node, so the old return was a type fiction. The caller (allocate_task) persists the NewNode via NodeRepository.insert and receives the persisted Node (add-node-id-identity).
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -31,7 +31,8 @@ from yascheduler.domain import (
     CloudAllocateError,
     CloudSetupError,
     MachineSession,
-    NewNode,
+    Node,
+    NodeId,
 )
 from yascheduler.infra.ssh.keys import list_private_keys
 
@@ -138,16 +139,26 @@ class CloudProvisionerImpl:
         return adapter.name
 
     # START_CONTRACT: CloudProvisionerImpl.allocate
-    #   PURPOSE: Create VM on named provider, wait SSH, cloud-init, setup, return NewNode (no DB write; caller persists via NodeRepository.insert).
-    #   INPUTS: { provider: str - selected provider name (matches adapters dict key) }
-    #   OUTPUTS: { NewNode - pre-persistence node record (no node_id); caller persists and receives a Node }
-    #   SIDE_EFFECTS: Creates cloud VM, writes SSH key, installs engines. On setup failure: best-effort disconnect of the machine_repository session for the failed IP (failures logged and swallowed so delete_node is never skipped), then deletes the VM.
+    #   PURPOSE: Create VM on named provider, wait SSH, cloud-init, setup, return Node reusing tmp_node_id as its node_id (no DB write; the row already exists; caller flips enabled=TRUE via NodeRepository.update).
+    #   INPUTS: {
+    #     provider: str - selected provider name (matches adapters dict key),
+    #     tmp_node_id: NodeId - the tmp-node row's node_id inserted by _select_and_insert_tmp; reused as the real node's identity (session registers under it; returned Node carries it)
+    #   }
+    #   OUTPUTS: { Node - post-persistence identity (node_id == tmp_node_id, enabled=True, real ip, ncpus); the caller flips enabled=TRUE + sets ip/ncpus via uow.nodes.update }
+    #   SIDE_EFFECTS: Creates cloud VM, writes SSH key, installs engines. On setup failure: best-effort disconnect of the machine_repository session for the failed tmp_node_id (failures logged and swallowed so delete_node is never skipped), then deletes the VM.
     #   RAISES: CloudAllocateError - if provider unknown or VM creation fails;
     #           CloudSetupError - if SSH/cloud-init/setup fails
     #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS
     # END_CONTRACT: CloudProvisionerImpl.allocate
-    async def allocate(self, provider: str) -> NewNode:
-        """Allocate a new cloud node on the named provider — satisfies CloudProvisioner port."""
+    async def allocate(self, provider: str, tmp_node_id: NodeId) -> Node:
+        """Allocate a new cloud node on the named provider — satisfies CloudProvisioner port.
+
+        Reuses ``tmp_node_id`` as the real node's identity: the cloud setup
+        SSH session registers under ``tmp_node_id``, and the returned
+        :class:`Node` carries ``node_id == tmp_node_id``. The caller persists
+        via a single ``uow.nodes.update(node)`` (flipping enabled=TRUE, setting
+        ip/ncpus) — one row per cloud allocation lifecycle, not two.
+        """
         # START_BLOCK_RESOLVE_ALLOCATE_PROVIDER
         adapter = self.adapters.get(provider)
         if adapter is None:
@@ -176,44 +187,46 @@ class CloudProvisionerImpl:
 
         # START_BLOCK_SETUP_VM
         # On either setup-failure path, disconnect the machine_repository
-        # session for ip_addr BEFORE deleting the VM. A failed allocation
-        # would otherwise leak a stale FREE session pointing at the deleted
-        # VM's IP, which the allocator would pick up via list_free() and
-        # fail against. disconnect is a safe no-op when _connect_to_vm
-        # itself failed (never registered a session — see
+        # session for tmp_node_id BEFORE deleting the VM. A failed allocation
+        # would otherwise leak a stale FREE session under tmp_node_id pointing
+        # at the deleted VM's IP, which the allocator would pick up via
+        # list_free() and fail against. disconnect is a safe no-op when
+        # _connect_to_vm itself failed (never registered a session — see
         # SSHMachineRepository.disconnect). The disconnect is best-effort:
         # SSHMachineSession._close can raise (e.g. wait_closed on a broken
         # transport), and such a failure MUST NOT skip delete_node or a
         # billable VM would be orphaned — so disconnect failures are logged
         # and swallowed, then delete_node always runs.
         try:
-            node = await self._setup_vm(ip_addr, adapter, config)
+            node = await self._setup_vm(ip_addr, tmp_node_id, adapter, config)
         except CloudSetupError:
             self.log.warning(
-                "[CloudProvisionerImpl][allocate][SETUP_FAILED] ip=%s - removing VM",
+                "[CloudProvisionerImpl][allocate][SETUP_FAILED] ip=%s node_id=%s - removing VM",
                 ip_addr,
+                tmp_node_id,
             )
             try:
-                await self.machine_repository.disconnect(ip_addr)
+                await self.machine_repository.disconnect(tmp_node_id)
             except Exception as disc_err:
                 self.log.warning(
-                    "[CloudProvisionerImpl][allocate][DISCONNECT_FAILED] ip=%s err=%s",
-                    ip_addr,
+                    "[CloudProvisionerImpl][allocate][DISCONNECT_FAILED] node_id=%s err=%s",
+                    tmp_node_id,
                     disc_err,
                 )
             await adapter.delete_node(log=self.log, cfg=config, host=ip_addr)
             raise
         except Exception as err:
             self.log.warning(
-                "[CloudProvisionerImpl][allocate][SETUP_FAILED] ip=%s - removing VM",
+                "[CloudProvisionerImpl][allocate][SETUP_FAILED] ip=%s node_id=%s - removing VM",
                 ip_addr,
+                tmp_node_id,
             )
             try:
-                await self.machine_repository.disconnect(ip_addr)
+                await self.machine_repository.disconnect(tmp_node_id)
             except Exception as disc_err:
                 self.log.warning(
-                    "[CloudProvisionerImpl][allocate][DISCONNECT_FAILED] ip=%s err=%s",
-                    ip_addr,
+                    "[CloudProvisionerImpl][allocate][DISCONNECT_FAILED] node_id=%s err=%s",
+                    tmp_node_id,
                     disc_err,
                 )
             await adapter.delete_node(log=self.log, cfg=config, host=ip_addr)
@@ -221,8 +234,9 @@ class CloudProvisionerImpl:
         # END_BLOCK_SETUP_VM
 
         self.log.debug(
-            "[CloudProvisionerImpl][allocate][DONE] ip=%s provider=%s ncpus=%d",
+            "[CloudProvisionerImpl][allocate][DONE] ip=%s node_id=%s provider=%s ncpus=%d",
             node.ip,
+            node.node_id,
             node.cloud,
             node.ncpus,
         )
@@ -327,26 +341,28 @@ class CloudProvisionerImpl:
         )
 
     # START_CONTRACT: CloudProvisionerImpl._setup_vm
-    #   PURPOSE: Connect via SSH, wait for cloud-init, install engines, get CPU count.
+    #   PURPOSE: Connect via SSH (registering the session under tmp_node_id), wait for cloud-init, install engines, get CPU count, return Node reusing tmp_node_id.
     #   INPUTS: {
     #     ip_addr: str - VM IP address,
+    #     tmp_node_id: NodeId - reused as the real node's identity (session registers under it; returned Node carries it),
     #     adapter: CloudAdapter - provider adapter (for timeout settings),
     #     config: ConfigCloud - provider config (for SSH username/jump)
     #   }
-    #   OUTPUTS: { NewNode - pre-persistence node record (no node_id); the caller persists it via NodeRepository.insert }
-    #   SIDE_EFFECTS: Connects to VM, runs cloud-init, installs engines.
+    #   OUTPUTS: { Node - post-persistence identity (node_id == tmp_node_id, enabled=True, real ip, ncpus); the caller flips enabled=TRUE + sets ip/ncpus via uow.nodes.update }
+    #   SIDE_EFFECTS: Connects to VM (session registers under tmp_node_id), runs cloud-init, installs engines.
     #   RAISES: CloudSetupError - on any SSH/cloud-init/setup failure
     #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
     # END_CONTRACT: CloudProvisionerImpl._setup_vm
     async def _setup_vm(
         self,
         ip_addr: str,
+        tmp_node_id: NodeId,
         adapter: CloudAdapter,
         config: ConfigCloud,
-    ) -> NewNode:
-        """Connect to VM, wait for cloud-init, install engines, return NewNode."""
+    ) -> Node:
+        """Connect to VM, wait for cloud-init, install engines, return Node reusing tmp_node_id."""
         # START_BLOCK_SSH_CONNECT_SETUP
-        session = await self._connect_to_vm(ip_addr, adapter, config)
+        session = await self._connect_to_vm(ip_addr, tmp_node_id, adapter, config)
         # END_BLOCK_SSH_CONNECT_SETUP
 
         # START_BLOCK_CLOUD_INIT
@@ -395,33 +411,41 @@ class CloudProvisionerImpl:
         # END_BLOCK_GET_CPUS
 
         self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][READY] ip=%s ncpus=%d",
+            "[CloudProvisionerImpl][setup_vm][READY] ip=%s node_id=%s ncpus=%d",
             ip_addr,
+            tmp_node_id,
             ncpus,
         )
-        return NewNode(
+        return Node(
+            node_id=tmp_node_id,
             ip=ip_addr,
-            ncpus=ncpus,
             enabled=True,
+            ncpus=ncpus,
             cloud=adapter.name,
             username=config.username,
             port=22,
         )
 
     # START_CONTRACT: CloudProvisionerImpl._connect_to_vm
-    #   PURPOSE: Connect to VM via SSH gateway with retry-friendly error wrapping.
+    #   PURPOSE: Connect to VM via SSH gateway (registering the session under tmp_node_id) with retry-friendly error wrapping.
     #   INPUTS: {
     #     ip_addr: str - VM IP address,
+    #     tmp_node_id: NodeId - session registers under it (reused as the real node identity),
     #     adapter: CloudAdapter - provider adapter (for timeout settings),
     #     config: ConfigCloud - provider config (for SSH username/jump)
     #   }
     #   OUTPUTS: { MachineSession - connected machine session instance }
-    #   SIDE_EFFECTS: Opens SSH connection to VM.
+    #   SIDE_EFFECTS: Opens SSH connection to VM (session registered under tmp_node_id).
     #   RAISES: CloudSetupError - if SSH connection fails
     #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
     # END_CONTRACT: CloudProvisionerImpl._connect_to_vm
+    # FIXME: just use Node if you are already construct Node inside
     async def _connect_to_vm(
-        self, ip_addr: str, adapter: CloudAdapter, config: ConfigCloud
+        self,
+        ip_addr: str,
+        tmp_node_id: NodeId,
+        adapter: CloudAdapter,
+        config: ConfigCloud,
     ) -> MachineSession:
         """Connect to VM via SSH gateway with retry-friendly error wrapping."""
         # START_BLOCK_GET_KEYS
@@ -432,13 +456,22 @@ class CloudProvisionerImpl:
 
         # START_BLOCK_SSH_CONNECT_VM
         self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][CONNECT] ip=%s username=%s",
+            "[CloudProvisionerImpl][setup_vm][CONNECT] ip=%s node_id=%s username=%s",
             ip_addr,
+            tmp_node_id,
             config.username,
         )
         try:
             session = await self.machine_repository.connect(
-                ip=ip_addr,
+                node=Node(
+                    node_id=tmp_node_id,
+                    ip=ip_addr,
+                    ncpus=0,
+                    enabled=False,
+                    cloud=adapter.name,
+                    username=config.username,
+                    port=22,
+                ),
                 username=config.username,
                 client_keys=keys,
                 connect_timeout=adapter.create_node_conn_timeout,

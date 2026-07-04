@@ -25,6 +25,7 @@ from yascheduler.domain.model import (
     ConnectedMachine,
     Engine,
     MachineState,
+    NodeId,
     Task,
     TaskContext,
     TaskId,
@@ -43,7 +44,7 @@ def test_match_found() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=TaskId(1), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
-    m1 = ConnectedMachine(ip="10.0.0.1", platform="linux", ncpus=4)
+    m1 = ConnectedMachine(node_id=NodeId(1), ip="10.0.0.1", platform="linux", ncpus=4)
     result = match_task_to_node(task, engine, [m1])
     assert result is m1
 
@@ -59,7 +60,7 @@ def test_no_compatible_machine() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=TaskId(2), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
-    m1 = ConnectedMachine(ip="10.0.0.1", platform="windows", ncpus=4)
+    m1 = ConnectedMachine(node_id=NodeId(1), ip="10.0.0.1", platform="windows", ncpus=4)
     result = match_task_to_node(task, engine, [m1])
     assert result is None
 
@@ -76,10 +77,18 @@ def test_all_busy_machines() -> None:
     task = Task(task_id=TaskId(3), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
     m1 = ConnectedMachine(
-        ip="10.0.0.1", platform="linux", ncpus=4, state=MachineState.BUSY
+        node_id=NodeId(1),
+        ip="10.0.0.1",
+        platform="linux",
+        ncpus=4,
+        state=MachineState.BUSY,
     )
     m2 = ConnectedMachine(
-        ip="10.0.0.2", platform="linux", ncpus=8, state=MachineState.BUSY
+        node_id=NodeId(2),
+        ip="10.0.0.2",
+        platform="linux",
+        ncpus=8,
+        state=MachineState.BUSY,
     )
     result = match_task_to_node(task, engine, [m1, m2])
     assert result is None
@@ -111,8 +120,8 @@ def test_multiple_compatible_returns_first() -> None:
     ctx = TaskContext(engine="fleur")
     task = Task(task_id=TaskId(5), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
-    m1 = ConnectedMachine(ip="10.0.0.1", platform="linux", ncpus=4)
-    m2 = ConnectedMachine(ip="10.0.0.2", platform="linux", ncpus=8)
+    m1 = ConnectedMachine(node_id=NodeId(1), ip="10.0.0.1", platform="linux", ncpus=4)
+    m2 = ConnectedMachine(node_id=NodeId(2), ip="10.0.0.2", platform="linux", ncpus=8)
     result = match_task_to_node(task, engine, [m1, m2])
     assert result is m1
     assert result is not m2
@@ -130,8 +139,12 @@ def test_multiple_machines_skips_busy() -> None:
     task = Task(task_id=TaskId(6), label="test", context=ctx)
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
     m1 = ConnectedMachine(
-        ip="10.0.0.1", platform="linux", ncpus=4, state=MachineState.BUSY
+        node_id=NodeId(1),
+        ip="10.0.0.1",
+        platform="linux",
+        ncpus=4,
+        state=MachineState.BUSY,
     )
-    m2 = ConnectedMachine(ip="10.0.0.2", platform="linux", ncpus=8)
+    m2 = ConnectedMachine(node_id=NodeId(2), ip="10.0.0.2", platform="linux", ncpus=8)
     result = match_task_to_node(task, engine, [m1, m2])
     assert result is m2

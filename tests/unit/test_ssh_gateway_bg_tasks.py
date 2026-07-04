@@ -34,7 +34,7 @@ import pytest
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
 from yascheduler.domain import Engine
-from yascheduler.domain.model import ConnectedMachine, MachineState
+from yascheduler.domain.model import ConnectedMachine, MachineState, NodeId
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 from yascheduler.infra.ssh.session import SSHMachineSession
@@ -77,6 +77,7 @@ def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
 
 def _make_state(
     ip: str = "10.0.0.1",
+    node_id: int = 1,
     platform: str = "linux",
     ncpus: int = 4,
     state: MachineState = MachineState.FREE,
@@ -86,6 +87,7 @@ def _make_state(
     conn, conn_opts = _make_mock_connection(ip=ip)
 
     machine = ConnectedMachine(
+        node_id=NodeId(node_id),
         ip=ip,
         platform=platform,
         ncpus=ncpus,
@@ -149,9 +151,9 @@ class TestBgTaskScoping:
         """
         ip_a, ip_b, ip_c = "10.0.0.1", "10.0.0.2", "10.0.0.3"
         sessions = {}
-        for ip in (ip_a, ip_b, ip_c):
-            session = _make_state(ip=ip, state=MachineState.FREE)
-            repository._sessions[ip] = session
+        for idx, ip in enumerate((ip_a, ip_b, ip_c), 1):
+            session = _make_state(ip=ip, node_id=idx, state=MachineState.FREE)
+            repository._sessions[NodeId(idx)] = session
             sessions[ip] = session
         session_a, session_b, session_c = sessions[ip_a], sessions[ip_b], sessions[ip_c]
         mock_pengine.check_pname = None
@@ -174,21 +176,21 @@ class TestBgTaskScoping:
             assert task_a is not None
             assert task_c is not None
 
-            await repository.disconnect(ip_b)
+            await repository.disconnect(NodeId(2))
 
             # B is gone from the sessions registry
-            assert ip_b not in repository._sessions
+            assert NodeId(2) not in repository._sessions
             # A and C monitors are still alive and registered
             assert not task_a.cancelled(), "A monitor must survive disconnect(B)"
             assert not task_c.cancelled(), "C monitor must survive disconnect(B)"
             assert session_a._monitor_task is task_a  # noqa: SLF001
             assert session_c._monitor_task is task_c  # noqa: SLF001
-            assert ip_a in repository._sessions
-            assert ip_c in repository._sessions
+            assert NodeId(1) in repository._sessions
+            assert NodeId(3) in repository._sessions
 
             # cleanup: cancel surviving monitors
-            await repository.disconnect(ip_a)
-            await repository.disconnect(ip_c)
+            await repository.disconnect(NodeId(1))
+            await repository.disconnect(NodeId(3))
 
     @pytest.mark.asyncio
     async def test_start_occupancy_check_replaces_prior_monitor(
@@ -203,8 +205,8 @@ class TestBgTaskScoping:
         _monitors[ip]; the first is cancelled.
         """
         ip = "10.0.0.1"
-        session = _make_state(ip=ip, state=MachineState.FREE)
-        repository._sessions[ip] = session
+        session = _make_state(ip=ip, node_id=1, state=MachineState.FREE)
+        repository._sessions[NodeId(1)] = session
         mock_pengine.check_pname = None
         mock_pengine.check_cmd = None
         mock_pengine.sleep_interval = 0.01
@@ -236,10 +238,10 @@ class TestBgTaskScoping:
             assert session._monitor_task is second  # noqa: SLF001
             assert not second.done()
 
-            await repository.disconnect(ip)
+            await repository.disconnect(NodeId(1))
 
         # After disconnect, the session's monitor task is cleared
-        assert ip not in repository._sessions
+        assert NodeId(1) not in repository._sessions
         assert session._monitor_task is None  # noqa: SLF001
 
     @pytest.mark.asyncio
@@ -252,9 +254,9 @@ class TestBgTaskScoping:
         """disconnect on an unknown IP is a no-op for every other monitor."""
         ip_a, ip_b = "10.0.0.1", "10.0.0.2"
         sessions = {}
-        for ip in (ip_a, ip_b):
-            session = _make_state(ip=ip, state=MachineState.FREE)
-            repository._sessions[ip] = session
+        for idx, ip in enumerate((ip_a, ip_b), 1):
+            session = _make_state(ip=ip, node_id=idx, state=MachineState.FREE)
+            repository._sessions[NodeId(idx)] = session
             sessions[ip] = session
         session_a, session_b = sessions[ip_a], sessions[ip_b]
         mock_pengine.check_pname = None
@@ -274,14 +276,14 @@ class TestBgTaskScoping:
             assert task_a is not None
             assert task_b is not None
 
-            await repository.disconnect("10.0.0.99")
+            await repository.disconnect(NodeId(99))
 
             assert not task_a.cancelled()
             assert not task_b.cancelled()
             assert session_a._monitor_task is task_a  # noqa: SLF001
             assert session_b._monitor_task is task_b  # noqa: SLF001
-            assert ip_a in repository._sessions
-            assert ip_b in repository._sessions
+            assert NodeId(1) in repository._sessions
+            assert NodeId(2) in repository._sessions
 
-            await repository.disconnect(ip_a)
-            await repository.disconnect(ip_b)
+            await repository.disconnect(NodeId(1))
+            await repository.disconnect(NodeId(2))

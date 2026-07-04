@@ -36,7 +36,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from yascheduler.domain import Engine
-from yascheduler.domain.model import ConnectedMachine, MachineState, ProcessResult
+from yascheduler.domain.model import (
+    ConnectedMachine,
+    MachineState,
+    Node,
+    NodeId,
+    ProcessResult,
+)
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.platform.protocol import ProcessInfo
 from yascheduler.infra.ssh.repository import SSHMachineRepository
@@ -145,6 +151,7 @@ def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
 
 def _make_state(
     ip: str = "10.0.0.1",
+    node_id: int = 1,
     platform: str = "linux",
     ncpus: int = 4,
     state: MachineState = MachineState.FREE,
@@ -158,6 +165,7 @@ def _make_state(
     conn, conn_opts = _make_mock_connection(ip=ip)
 
     machine = ConnectedMachine(
+        node_id=NodeId(node_id),
         ip=ip,
         platform=platform,
         ncpus=ncpus,
@@ -277,14 +285,17 @@ class TestConnectionLifecycle:
                 ),
             ),
         ):
+            node = Node(
+                node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22
+            )
             session = await repository.connect(
-                ip="10.0.0.1",
+                node=node,
                 username="root",
                 client_keys=[],
             )
 
-        assert "10.0.0.1" in repository
-        stored = repository._sessions["10.0.0.1"]
+        assert NodeId(1) in repository
+        stored = repository._sessions[NodeId(1)]
         assert stored is session
         assert isinstance(session, SSHMachineSession)
         assert session.ip == "10.0.0.1"
@@ -297,9 +308,9 @@ class TestConnectionLifecycle:
     ) -> None:
         """disconnect() removes the session from the repository."""
         session = _make_state()
-        repository._sessions["10.0.0.1"] = session
-        await repository.disconnect("10.0.0.1")
-        assert "10.0.0.1" not in repository
+        repository._sessions[NodeId(1)] = session
+        await repository.disconnect(NodeId(1))
+        assert NodeId(1) not in repository
 
     @pytest.mark.asyncio
     async def test_disconnect_closes_connection(
@@ -307,8 +318,8 @@ class TestConnectionLifecycle:
     ) -> None:
         """disconnect() delegates teardown to session._close() (which closes conn)."""
         session = _make_state()
-        repository._sessions["10.0.0.1"] = session
-        await repository.disconnect("10.0.0.1")
+        repository._sessions[NodeId(1)] = session
+        await repository.disconnect(NodeId(1))
         session._conn.close.assert_called_once()  # type: ignore[attr-defined]
         session._conn.wait_closed.assert_awaited_once()  # type: ignore[attr-defined]
 
@@ -317,10 +328,10 @@ class TestConnectionLifecycle:
         self, repository: SSHMachineRepository
     ) -> None:
         """disconnect_all() clears all sessions."""
-        s1 = _make_state(ip="10.0.0.1")
-        s2 = _make_state(ip="10.0.0.2")
-        repository._sessions["10.0.0.1"] = s1
-        repository._sessions["10.0.0.2"] = s2
+        s1 = _make_state(ip="10.0.0.1", node_id=1)
+        s2 = _make_state(ip="10.0.0.2", node_id=2)
+        repository._sessions[NodeId(1)] = s1
+        repository._sessions[NodeId(2)] = s2
         await repository.disconnect_all()
         assert len(repository) == 0
 
@@ -329,7 +340,7 @@ class TestConnectionLifecycle:
         self, repository: SSHMachineRepository
     ) -> None:
         """disconnect() with no session does not raise."""
-        await repository.disconnect("10.0.0.99")  # should not raise
+        await repository.disconnect(NodeId(99))  # should not raise
 
 
 # =============================================================================
@@ -344,10 +355,10 @@ class TestListFree:
         self, repository: SSHMachineRepository
     ) -> None:
         """list_free returns only FREE sessions."""
-        s_free = _make_state(ip="10.0.0.1", state=MachineState.FREE)
-        s_busy = _make_state(ip="10.0.0.2", state=MachineState.BUSY)
-        repository._sessions["10.0.0.1"] = s_free
-        repository._sessions["10.0.0.2"] = s_busy
+        s_free = _make_state(ip="10.0.0.1", node_id=1, state=MachineState.FREE)
+        s_busy = _make_state(ip="10.0.0.2", node_id=2, state=MachineState.BUSY)
+        repository._sessions[NodeId(1)] = s_free
+        repository._sessions[NodeId(2)] = s_busy
 
         result = repository.list_free(platforms=None)
         assert len(result) == 1
@@ -357,10 +368,14 @@ class TestListFree:
         self, repository: SSHMachineRepository
     ) -> None:
         """list_free filters sessions by platform."""
-        s_linux = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.FREE)
-        s_win = _make_state(ip="10.0.0.2", platform="windows", state=MachineState.FREE)
-        repository._sessions["10.0.0.1"] = s_linux
-        repository._sessions["10.0.0.2"] = s_win
+        s_linux = _make_state(
+            ip="10.0.0.1", node_id=1, platform="linux", state=MachineState.FREE
+        )
+        s_win = _make_state(
+            ip="10.0.0.2", node_id=2, platform="windows", state=MachineState.FREE
+        )
+        repository._sessions[NodeId(1)] = s_linux
+        repository._sessions[NodeId(2)] = s_win
 
         result = repository.list_free(platforms=["linux"])
         assert len(result) == 1
@@ -370,8 +385,10 @@ class TestListFree:
         self, repository: SSHMachineRepository
     ) -> None:
         """list_free returns empty list when no sessions match."""
-        s_linux = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.FREE)
-        repository._sessions["10.0.0.1"] = s_linux
+        s_linux = _make_state(
+            ip="10.0.0.1", node_id=1, platform="linux", state=MachineState.FREE
+        )
+        repository._sessions[NodeId(1)] = s_linux
 
         result = repository.list_free(platforms=["windows"])
         assert len(result) == 0
@@ -380,8 +397,10 @@ class TestListFree:
         self, repository: SSHMachineRepository
     ) -> None:
         """list_free excludes BUSY sessions even when platform matches."""
-        s = _make_state(ip="10.0.0.1", platform="linux", state=MachineState.BUSY)
-        repository._sessions["10.0.0.1"] = s
+        s = _make_state(
+            ip="10.0.0.1", node_id=1, platform="linux", state=MachineState.BUSY
+        )
+        repository._sessions[NodeId(1)] = s
         result = repository.list_free(platforms=["linux"])
         assert len(result) == 0
 
@@ -391,11 +410,12 @@ class TestListFree:
         """list_free sorts by session.machine.free_since ascending (oldest first)."""
         older = time.monotonic() - 100
         newer = time.monotonic() - 10
-        s1 = _make_state(ip="10.0.0.1", state=MachineState.FREE)
-        s2 = _make_state(ip="10.0.0.2", state=MachineState.FREE)
+        s1 = _make_state(ip="10.0.0.1", node_id=1, state=MachineState.FREE)
+        s2 = _make_state(ip="10.0.0.2", node_id=2, state=MachineState.FREE)
         # Override free_since for ordering via session.update
         s1.update(
             ConnectedMachine(
+                node_id=NodeId(1),
                 ip="10.0.0.1",
                 platform="linux",
                 ncpus=4,
@@ -405,6 +425,7 @@ class TestListFree:
         )
         s2.update(
             ConnectedMachine(
+                node_id=NodeId(2),
                 ip="10.0.0.2",
                 platform="linux",
                 ncpus=4,
@@ -412,8 +433,8 @@ class TestListFree:
                 free_since=newer,
             )
         )
-        repository._sessions["10.0.0.1"] = s1
-        repository._sessions["10.0.0.2"] = s2
+        repository._sessions[NodeId(1)] = s1
+        repository._sessions[NodeId(2)] = s2
 
         result = repository.list_free(platforms=None)
         assert result[0].machine.ip == "10.0.0.1"  # older free_since first
@@ -511,33 +532,33 @@ class TestRepositoryCollection:
     """contains, len, get_session."""
 
     def test_contains(self, repository: SSHMachineRepository) -> None:
-        """__contains__ checks by IP."""
-        session = _make_state(ip="10.0.0.1")
-        repository._sessions["10.0.0.1"] = session
-        assert "10.0.0.1" in repository
-        assert "10.0.0.2" not in repository
+        """__contains__ checks by NodeId."""
+        session = _make_state(ip="10.0.0.1", node_id=1)
+        repository._sessions[NodeId(1)] = session
+        assert NodeId(1) in repository
+        assert NodeId(2) not in repository
 
     def test_len(self, repository: SSHMachineRepository) -> None:
         """__len__ returns session count."""
-        repository._sessions["10.0.0.1"] = _make_state(ip="10.0.0.1")
-        repository._sessions["10.0.0.2"] = _make_state(ip="10.0.0.2")
+        repository._sessions[NodeId(1)] = _make_state(ip="10.0.0.1", node_id=1)
+        repository._sessions[NodeId(2)] = _make_state(ip="10.0.0.2", node_id=2)
         assert len(repository) == 2
 
     def test_contains_method(self, repository: SSHMachineRepository) -> None:
-        """contains() checks by IP (explicit method)."""
-        session = _make_state(ip="10.0.0.1")
-        repository._sessions["10.0.0.1"] = session
-        assert repository.contains("10.0.0.1") is True
-        assert repository.contains("10.0.0.2") is False
+        """contains() checks by NodeId (explicit method)."""
+        session = _make_state(ip="10.0.0.1", node_id=1)
+        repository._sessions[NodeId(1)] = session
+        assert repository.contains(NodeId(1)) is True
+        assert repository.contains(NodeId(2)) is False
 
     def test_get_session_returns_live_or_none(
         self, repository: SSHMachineRepository
     ) -> None:
-        """get_session(ip) returns the registered session or None."""
-        session = _make_state(ip="10.0.0.1")
-        repository._sessions["10.0.0.1"] = session
-        assert repository.get_session("10.0.0.1") is session
-        assert repository.get_session("10.0.0.2") is None
+        """get_session(node_id) returns the registered session or None."""
+        session = _make_state(ip="10.0.0.1", node_id=1)
+        repository._sessions[NodeId(1)] = session
+        assert repository.get_session(NodeId(1)) is session
+        assert repository.get_session(NodeId(2)) is None
 
 
 # =============================================================================

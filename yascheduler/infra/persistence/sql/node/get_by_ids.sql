@@ -7,4 +7,4 @@ SELECT
     username,
     port
 FROM yascheduler_nodes
-WHERE ip IN (SELECT unnest(cast(:ips AS text [])));
+WHERE node_id = ANY(:node_ids);

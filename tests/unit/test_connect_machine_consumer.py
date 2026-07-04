@@ -171,11 +171,11 @@ class TestConnectMachineConsumerGraceTimer:
                 new=AsyncMock(),
             ) as mock_abandon,
         ):
-            await orch._connect_machine_consumer(UMessage("10.0.0.5", _make_node()))
+            await orch._connect_machine_consumer(UMessage(NodeId(1), _make_node()))
 
         mock_abandon.assert_not_called()
         # IP stays in the timer (retry path)
-        assert "10.0.0.5" in orch._connect_failures
+        assert NodeId(1) in orch._connect_failures
         orch._log.warning.assert_called_once()  # type: ignore[attr-defined]
         # CONNECT_RETRY marker is logged
         warning_args = orch._log.warning.call_args.args  # type: ignore[attr-defined]
@@ -193,7 +193,7 @@ class TestConnectMachineConsumerGraceTimer:
         )
 
         # Pre-seed first_seen so age = 165 - 100 = 65s >= 60s grace → abandon.
-        orch._connect_failures["10.0.0.5"] = 100.0
+        orch._connect_failures[NodeId(1)] = 100.0
         with (
             patch(
                 "yascheduler.application.orchestrator.time.monotonic",
@@ -204,7 +204,7 @@ class TestConnectMachineConsumerGraceTimer:
                 new=AsyncMock(),
             ) as mock_abandon,
         ):
-            await orch._connect_machine_consumer(UMessage("10.0.0.5", _make_node()))
+            await orch._connect_machine_consumer(UMessage(NodeId(1), _make_node()))
 
         mock_abandon.assert_awaited_once()
         # abandon_node called with (node, clouds, uow_factory, tracker) — gateway dropped
@@ -212,7 +212,7 @@ class TestConnectMachineConsumerGraceTimer:
         assert args[1] is orch._clouds
         assert args[3] is orch._tracker
         # IP popped after abandon
-        assert "10.0.0.5" not in orch._connect_failures
+        assert NodeId(1) not in orch._connect_failures
         # CONNECT_ABANDON logged at error level
         error_calls = orch._log.error.call_args_list  # type: ignore[attr-defined]
         assert any("CONNECT_ABANDON" in c.args[0] for c in error_calls)
@@ -237,13 +237,13 @@ class TestConnectMachineConsumerGraceTimer:
             ),
             patch("yascheduler.application.orchestrator.abandon_node", new=AsyncMock()),
         ):
-            await orch._connect_machine_consumer(UMessage("10.0.0.5", _make_node()))
-        assert "10.0.0.5" in orch._connect_failures
+            await orch._connect_machine_consumer(UMessage(NodeId(1), _make_node()))
+        assert NodeId(1) in orch._connect_failures
 
         # Second call: success → IP popped.
         orch._repository.connect = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]  # success
-        await orch._connect_machine_consumer(UMessage("10.0.0.5", _make_node()))
-        assert "10.0.0.5" not in orch._connect_failures
+        await orch._connect_machine_consumer(UMessage(NodeId(1), _make_node()))
+        assert NodeId(1) not in orch._connect_failures
 
     @pytest.mark.asyncio
     async def test_abandon_failed_does_not_kill_worker(self) -> None:
@@ -258,7 +258,7 @@ class TestConnectMachineConsumerGraceTimer:
 
         # Pre-seed first_seen so age = 200 - 100 = 100s >= 60s → abandon path
         # (abandon_node raises and is caught by the consumer).
-        orch._connect_failures["10.0.0.5"] = 100.0
+        orch._connect_failures[NodeId(1)] = 100.0
         with (
             patch(
                 "yascheduler.application.orchestrator.time.monotonic",
@@ -270,11 +270,11 @@ class TestConnectMachineConsumerGraceTimer:
             ) as mock_abandon,
         ):
             # Must NOT raise — consumer swallows to keep the worker alive.
-            await orch._connect_machine_consumer(UMessage("10.0.0.5", _make_node()))
+            await orch._connect_machine_consumer(UMessage(NodeId(1), _make_node()))
 
         mock_abandon.assert_awaited_once()
         # IP is still popped after a failed abandon (no infinite loop on next cycle)
-        assert "10.0.0.5" not in orch._connect_failures
+        assert NodeId(1) not in orch._connect_failures
         # ABANDON_FAILED marker logged at error level
         error_calls = orch._log.error.call_args_list  # type: ignore[attr-defined]
         assert any("ABANDON_FAILED" in c.args[0] for c in error_calls)
@@ -373,13 +373,13 @@ class TestConnectMachineProducerYieldsStaticNodes:
             return_value=_uow_with_nodes([static_node, cloud_node])
         )
 
-        yielded_ips = [msg.id async for msg in orch._connect_machine_producer()]
+        yielded_ids = [msg.id async for msg in orch._connect_machine_producer()]
 
-        assert "10.0.0.9" in yielded_ips, (
+        assert NodeId(1) in yielded_ids, (
             "static node (cloud=None) MUST be yielded to the connect consumer — "
             "the daemon must connect operator-managed nodes"
         )
-        assert "10.0.0.10" in yielded_ips, "cloud node must still be yielded normally"
+        assert NodeId(2) in yielded_ids, "cloud node must still be yielded normally"
 
     @pytest.mark.asyncio
     async def test_gateway_registered_static_node_not_yielded(self) -> None:
@@ -447,10 +447,10 @@ class TestConnectMachineProducerYieldsStaticNodes:
                 new=AsyncMock(),
             ) as mock_abandon,
         ):
-            await orch._connect_machine_consumer(UMessage("10.0.0.9", static_node))
+            await orch._connect_machine_consumer(UMessage(NodeId(1), static_node))
 
         mock_abandon.assert_not_called()
-        assert "10.0.0.9" not in orch._connect_failures, (
+        assert NodeId(1) not in orch._connect_failures, (
             "static node IP must never enter the failure timer "
             "(consumer-side guard bypasses the grace-check)"
         )
@@ -500,14 +500,14 @@ class TestConnectMachineProducerYieldsStaticNodes:
                 new=AsyncMock(),
             ) as mock_abandon,
         ):
-            await orch._connect_machine_consumer(UMessage("10.0.0.9", static_node))
+            await orch._connect_machine_consumer(UMessage(NodeId(1), static_node))
 
         mock_abandon.assert_not_called()
         # The DB row is preserved because abandon_node (the only path that
         # removes the yascheduler_nodes row) is structurally unreachable for
         # static nodes — the consumer-side guard returns before the
         # grace-check / abandon block.
-        assert "10.0.0.9" not in orch._connect_failures
+        assert NodeId(1) not in orch._connect_failures
 
 
 def _uow_with_nodes(nodes: list) -> AsyncMock:

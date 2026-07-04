@@ -58,13 +58,18 @@ def _cloud_node(ip: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
     )
 
 
-def _todo_task(task_id: int, allocated_ip: str = "10.0.0.5") -> Task:
+def _todo_task(
+    task_id: int,
+    allocated_ip: str = "10.0.0.5",
+    allocated_node_id: NodeId | None = None,
+) -> Task:
     return Task(
         task_id=TaskId(task_id),
         label="t",
         context=TaskContext(engine="e"),
         status=TaskStatus.TO_DO,
         allocated_ip=allocated_ip,
+        allocated_node_id=allocated_node_id,
     )
 
 
@@ -103,7 +108,7 @@ class TestAbandonNode:
     async def test_happy_path_vm_deleted_row_removed_tracker_discarded(self) -> None:
         """cloud node + one matching TO_DO task → all three actions fire, no raise."""
         node = _cloud_node()
-        task = _todo_task(42, allocated_ip="10.0.0.5")
+        task = _todo_task(42, allocated_ip="10.0.0.5", allocated_node_id=node.node_id)
         uow = _build_uow(todo_tasks=[task])
 
         clouds = AsyncMock()
@@ -236,8 +241,8 @@ class TestAbandonNode:
     ) -> None:
         """Two TO_DO tasks with same allocated_ip → warning logged, no discard, no raise."""
         node = _cloud_node()
-        t1 = _todo_task(101, allocated_ip="10.0.0.5")
-        t2 = _todo_task(102, allocated_ip="10.0.0.5")
+        t1 = _todo_task(101, allocated_ip="10.0.0.5", allocated_node_id=node.node_id)
+        t2 = _todo_task(102, allocated_ip="10.0.0.5", allocated_node_id=node.node_id)
         uow = _build_uow(todo_tasks=[t1, t2])
 
         clouds = AsyncMock()

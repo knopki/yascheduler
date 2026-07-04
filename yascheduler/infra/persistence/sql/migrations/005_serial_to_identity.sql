@@ -27,21 +27,25 @@
 -- Not idempotent by design; the yascheduler_migrations tracker guards
 -- re-application.
 ALTER TABLE yascheduler_nodes
-    ALTER COLUMN node_id DROP DEFAULT;
+ALTER COLUMN node_id DROP DEFAULT;
 ALTER SEQUENCE yascheduler_nodes_node_id_seq OWNED BY NONE;
 DROP SEQUENCE yascheduler_nodes_node_id_seq;
 ALTER TABLE yascheduler_nodes
-    ALTER COLUMN node_id ADD GENERATED ALWAYS AS IDENTITY;
-SELECT setval(pg_get_serial_sequence('yascheduler_nodes', 'node_id'),
-              (SELECT COALESCE(MAX(node_id), 0) FROM yascheduler_nodes) + 1,
-              false);
+ALTER COLUMN node_id ADD GENERATED ALWAYS AS IDENTITY;
+SELECT setval(
+    pg_get_serial_sequence('yascheduler_nodes', 'node_id'),
+    (SELECT coalesce(max(node_id), 0) FROM yascheduler_nodes) + 1,
+    false
+);
 
 ALTER TABLE yascheduler_tasks
-    ALTER COLUMN task_id DROP DEFAULT;
+ALTER COLUMN task_id DROP DEFAULT;
 ALTER SEQUENCE yascheduler_tasks_task_id_seq OWNED BY NONE;
 DROP SEQUENCE yascheduler_tasks_task_id_seq;
 ALTER TABLE yascheduler_tasks
-    ALTER COLUMN task_id ADD GENERATED ALWAYS AS IDENTITY;
-SELECT setval(pg_get_serial_sequence('yascheduler_tasks', 'task_id'),
-              (SELECT COALESCE(MAX(task_id), 0) FROM yascheduler_tasks) + 1,
-              false);
+ALTER COLUMN task_id ADD GENERATED ALWAYS AS IDENTITY;
+SELECT setval(
+    pg_get_serial_sequence('yascheduler_tasks', 'task_id'),
+    (SELECT coalesce(max(task_id), 0) FROM yascheduler_tasks) + 1,
+    false
+);

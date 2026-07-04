@@ -264,7 +264,7 @@ async def test_repo_node_crud(
     assert persisted.node_id.value >= 1
 
     # Get
-    retrieved = await repo.get("10.0.0.10")
+    retrieved = await repo.get_by_id(persisted.node_id)
     assert retrieved is not None
     assert retrieved.ncpus == 4
     assert retrieved.cloud == "aws"
@@ -274,17 +274,17 @@ async def test_repo_node_crud(
 
     # Disable
     await repo.disable(persisted.node_id)
-    n = await repo.get("10.0.0.10")
+    n = await repo.get_by_id(persisted.node_id)
     assert n is not None and n.enabled is False
 
     # Enable
     await repo.enable(persisted.node_id)
-    n = await repo.get("10.0.0.10")
+    n = await repo.get_by_id(persisted.node_id)
     assert n is not None and n.enabled is True
 
     # Remove
     await repo.remove(persisted.node_id)
-    assert await repo.get("10.0.0.10") is None
+    assert await repo.get_by_id(persisted.node_id) is None
 
 
 # START_CONTRACT: test_repo_node_list_filters
@@ -321,27 +321,30 @@ async def test_repo_node_list_filters(
 async def test_repo_node_update(
     pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
 ) -> None:
-    """update persists all mutable fields."""
+    """update persists all mutable fields (including ip — V1 cloud lifecycle relies on this)."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    persisted = await repo.insert(
-        NewNode(ip="10.0.0.1", ncpus=2, enabled=True, cloud="aws")
-    )
+    # Insert with ip="" mirroring the tmp-reservation row (NewNode cloud defaults).
+    persisted = await repo.insert(NewNode(ip="", ncpus=0, enabled=False, cloud="aws"))
 
+    # Flip to enabled=True + real ip/ncpus via update (the V1 single-row lifecycle).
     await repo.update(
         Node(
             node_id=NodeId(persisted.node_id.value),
             ip="10.0.0.1",
             ncpus=8,
-            enabled=False,
+            enabled=True,
             cloud="azure",
             username="admin",
             port=2222,
         )
     )
-    n = await repo.get("10.0.0.1")
+    n = await repo.get_by_id(persisted.node_id)
     assert n is not None
+    assert n.ip == "10.0.0.1", (
+        "update must persist ip (V1 cloud lifecycle sets real ip via update)"
+    )
     assert n.ncpus == 8
-    assert n.enabled is False
+    assert n.enabled is True
     assert n.cloud == "azure"
     assert n.username == "admin"
     assert n.port == 2222
@@ -395,27 +398,27 @@ async def test_repo_node_count(
     assert statuses[False] == 1
 
 
-# START_CONTRACT: test_repo_node_get_by_ips
-#   PURPOSE: Verify batch get_by_ips returns all matching nodes.
+# START_CONTRACT: test_repo_node_get_by_ids
+#   PURPOSE: Verify batch get_by_ids returns all matching nodes keyed by NodeId.
 #   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.get_by_ips
-# END_CONTRACT: test_repo_node_get_by_ips
-async def test_repo_node_get_by_ips(
+#   LINKS: PostgresNodeRepository.get_by_ids
+# END_CONTRACT: test_repo_node_get_by_ids
+async def test_repo_node_get_by_ids(
     pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
 ) -> None:
-    """Batch get_by_ips returns only matching nodes."""
+    """Batch get_by_ids returns only matching nodes keyed by NodeId."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    await repo.insert(NewNode(ip="10.0.0.1", ncpus=2, cloud="aws"))
+    n1 = await repo.insert(NewNode(ip="10.0.0.1", ncpus=2, cloud="aws"))
     await repo.insert(NewNode(ip="10.0.0.2", ncpus=2, cloud="gcp"))
-    await repo.insert(NewNode(ip="10.0.0.3", ncpus=2, cloud="azure"))
+    n3 = await repo.insert(NewNode(ip="10.0.0.3", ncpus=2, cloud="azure"))
 
-    nodes = await repo.get_by_ips(["10.0.0.1", "10.0.0.3", "10.0.0.99"])
+    nodes = await repo.get_by_ids([n1.node_id, n3.node_id, NodeId(99999)])
     assert len(nodes) == 2
-    assert nodes["10.0.0.1"].cloud == "aws"
-    assert nodes["10.0.0.3"].cloud == "azure"
-    assert "10.0.0.99" not in nodes
+    assert nodes[n1.node_id].cloud == "aws"
+    assert nodes[n3.node_id].cloud == "azure"
+    assert NodeId(99999) not in nodes
 
 
 # START_CONTRACT: test_repo_node_get_by_id
@@ -443,6 +446,14 @@ async def test_repo_node_get_by_id(
 
     missing = await repo.get_by_id(NodeId(99999))
     assert missing is None
+
+
+async def test_repo_node_get_by_ids_empty(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
+    """get_by_ids([]) returns empty dict."""
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
+    assert await repo.get_by_ids([]) == {}
 
 
 # START_CONTRACT: test_repo_node_list_all_ordered_by_node_id
@@ -498,7 +509,7 @@ async def test_uow_integration(
         assert persisted.node_id.value >= 1
 
         # Verify persisted
-        retrieved = await uow.nodes.get("10.0.0.50")
+        retrieved = await uow.nodes.get_by_id(persisted.node_id)
         assert retrieved is not None
         assert retrieved.ip == "10.0.0.50"
 
@@ -519,12 +530,14 @@ async def test_uow_rollback_integration(
 
     with pytest.raises(ValueError):
         async with PostgresUnitOfWork(config, MessageBus()) as uow:
-            await uow.nodes.insert(NewNode(ip="10.0.0.99", ncpus=2, enabled=True))
+            persisted = await uow.nodes.insert(
+                NewNode(ip="10.0.0.99", ncpus=2, enabled=True)
+            )
             raise ValueError("simulated error")
 
     # After rollback, node should NOT exist
     async with PostgresUnitOfWork(config, MessageBus()) as uow:
-        n = await uow.nodes.get("10.0.0.99")
+        n = await uow.nodes.get_by_id(persisted.node_id)
         assert n is None
 
 

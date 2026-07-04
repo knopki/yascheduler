@@ -30,6 +30,7 @@ import pytest
 from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
 from yascheduler.domain import ConnectedMachine, MachineState
+from yascheduler.domain.model import NodeId
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 from yascheduler.infra.ssh.session import SSHMachineSession
 
@@ -52,6 +53,7 @@ def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
 
 def _make_session(
     ip: str = "10.0.0.1",
+    node_id: int = 1,
     platform: str = "linux",
     ncpus: int = 4,
     state: MachineState = MachineState.FREE,
@@ -61,6 +63,7 @@ def _make_session(
     conn, conn_opts = _make_mock_connection(ip=ip)
 
     machine = ConnectedMachine(
+        node_id=NodeId(node_id),
         ip=ip,
         platform=platform,
         ncpus=ncpus,
@@ -93,26 +96,26 @@ class TestMachineQueries:
         self, repository: SSHMachineRepository
     ) -> None:
         """get_session returns the live MachineSession registered for ip, or None."""
-        session = _make_session(ip="10.0.0.1")
-        repository._sessions["10.0.0.1"] = session
-        assert repository.get_session("10.0.0.1") is session
-        assert repository.get_session("10.0.0.2") is None
+        session = _make_session(ip="10.0.0.1", node_id=1)
+        repository._sessions[NodeId(1)] = session
+        assert repository.get_session(NodeId(1)) is session
+        assert repository.get_session(NodeId(2)) is None
 
     def test_get_session_returns_none_after_disconnect(
         self, repository: SSHMachineRepository
     ) -> None:
-        """get_session returns None once the ip is popped from _sessions."""
-        session = _make_session(ip="10.0.0.1")
-        repository._sessions["10.0.0.1"] = session
-        repository._sessions.pop("10.0.0.1", None)
-        assert repository.get_session("10.0.0.1") is None
+        """get_session returns None once the node_id is popped from _sessions."""
+        session = _make_session(ip="10.0.0.1", node_id=1)
+        repository._sessions[NodeId(1)] = session
+        repository._sessions.pop(NodeId(1), None)
+        assert repository.get_session(NodeId(1)) is None
 
     def test_list_connected(self, repository: SSHMachineRepository) -> None:
         """list_connected returns every registered session."""
-        session_a = _make_session(ip="10.0.0.1")
-        session_b = _make_session(ip="10.0.0.2")
-        repository._sessions["10.0.0.1"] = session_a
-        repository._sessions["10.0.0.2"] = session_b
+        session_a = _make_session(ip="10.0.0.1", node_id=1)
+        session_b = _make_session(ip="10.0.0.2", node_id=2)
+        repository._sessions[NodeId(1)] = session_a
+        repository._sessions[NodeId(2)] = session_b
         result = repository.list_connected()
         assert set(result) == {session_a, session_b}
         assert all(hasattr(s, "machine") for s in result)

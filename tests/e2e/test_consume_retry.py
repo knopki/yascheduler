@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from asyncssh.sftp import SFTPFailure
 
-from yascheduler.domain.model import NewNode, Task, TaskId
+from yascheduler.domain.model import NewNode, Node, NodeId, Task, TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
 from yascheduler.infra.ssh.operations import SSHMachineOperations
@@ -51,22 +51,8 @@ async def _setup_node_and_submit(
     ssh_container: dict[str, Any],
 ) -> TaskId:
     """Connect, deploy engine, add node row, submit a task. Returns task_id."""
-    repository = SSHMachineRepository(log=log)
-    operations = SSHMachineOperations(repository=repository)
-    session = await repository.connect(
-        ip=ssh_container["host"],
-        username=ssh_container["username"],
-        client_keys=[ssh_container["key_path"]],
-        port=ssh_container["port"],
-        data_dir=e2e_config.remote.data_dir,
-        engines_dir=e2e_config.remote.engines_dir,
-        tasks_dir=e2e_config.remote.tasks_dir,
-    )
-    await operations.setup_node(session, e2e_config.engines)
-    await repository.disconnect(ssh_container["host"])
-
     async with uow_factory() as uow:
-        await uow.nodes.insert(
+        db_node = await uow.nodes.insert(
             NewNode(
                 ip=ssh_container["host"],
                 username=ssh_container["username"],
@@ -76,6 +62,20 @@ async def _setup_node_and_submit(
             )
         )
         await uow.commit()
+
+    repository = SSHMachineRepository(log=log)
+    operations = SSHMachineOperations(repository=repository)
+    session = await repository.connect(
+        node=db_node,
+        username=ssh_container["username"],
+        client_keys=[ssh_container["key_path"]],
+        port=ssh_container["port"],
+        data_dir=e2e_config.remote.data_dir,
+        engines_dir=e2e_config.remote.engines_dir,
+        tasks_dir=e2e_config.remote.tasks_dir,
+    )
+    await operations.setup_node(session, e2e_config.engines)
+    await repository.disconnect(db_node.node_id)
 
     deps = make_cli_deps(e2e_config)
     task_id = await deps.submit(
@@ -288,18 +288,27 @@ async def test_consume_transient_preserves_remote_dir_regression(
         remote_dir = captured_remote_dir[-1]
         # Connect and check the remote dir exists
         check_repo = SSHMachineRepository(log=log)
-        check_session = await check_repo.connect(
+        check_node = Node(
+            node_id=NodeId(9999),
             ip=ssh_container["host"],
+            ncpus=0,
+            enabled=True,
+            cloud=None,
+            username=ssh_container["username"],
+            port=ssh_container["port"],
+        )
+        check_session = await check_repo.connect(
+            node=check_node,
             username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
             port=ssh_container["port"],
         )
         try:
             async with check_session.open_sftp() as sftp:
-                # The remote_dir should still exist (rmtree was gated)
+                # The remote dir should still exist (rmtree was gated)
                 await sftp.stat(check_session.path(remote_dir))
         finally:
-            await check_repo.disconnect(check_session.ip)
+            await check_repo.disconnect(check_session.machine.node_id)
     finally:
         # Restore real download so the orchestrator can finalise the task on
         # shutdown cycle, then stop.
@@ -323,7 +332,8 @@ async def _cleanup_node(
     ssh_container: dict[str, Any],
 ) -> None:
     async with uow_factory() as uow:
-        node = await uow.nodes.get(ssh_container["host"])
-        if node is not None:
-            await uow.nodes.remove(node.node_id)
+        all_nodes = await uow.nodes.list_all()
+        matching = [n for n in all_nodes if n.ip == ssh_container["host"]]
+        if matching:
+            await uow.nodes.remove(matching[0].node_id)
         await uow.commit()

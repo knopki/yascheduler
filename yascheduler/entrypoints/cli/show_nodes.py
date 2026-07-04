@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/show_nodes.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output.
 #   SCOPE: show_nodes command + argparse + in-memory node-to-task join + table/JSON renderers.
@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - _NodeView.task_id narrows int | None -> TaskId | None; _fetch_nodes_view carries task.task_id (a TaskId) through the join; JSON renderer extracts r.task_id.value (json.dumps would raise TypeError on a TaskId); table renderer str(row.task_id) unchanged via __str__ (add-task-id-identity).
-#   PREVIOUS_CHANGE: v1.2.0 - _NodeView gains node_id: NodeId as first field (identity-first); table renderer adds NODE_ID as the first column rendering str(row.node_id); JSON renderer adds "node_id": r.node_id.value as the first field (add-node-id-identity).
+#   LAST_CHANGE: v1.4.0 - ssh-rekey-node-id: in-memory join rekeyed from tasks_by_ip (dict[str, Task] keyed by allocated_ip, looked up by node.ip) to tasks_by_node_id (dict[NodeId, Task] keyed by allocated_node_id, looked up by node.node_id). Dup-IP nodes now disambiguated.
+#   PREVIOUS_CHANGE: v1.3.0 - _NodeView.task_id narrows int | None -> TaskId | None; _fetch_nodes_view carries task.task_id (a TaskId) through the join; JSON renderer extracts r.task_id.value (json.dumps would raise TypeError on a TaskId); table renderer str(row.task_id) unchanged via __str__ (add-task-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -135,14 +135,15 @@ async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
     # END_BLOCK_READ_NODES
     # START_BLOCK_JOIN
     # Single pass O(m) build; the one-RUNNING-task-per-node invariant means a later task
-    # on the same ip would overwrite, but the invariant forbids that. If it ever relaxes,
-    # this becomes a dict[str, list[Task]] and the row/object shape changes together.
-    tasks_by_ip: dict[str, Task] = {
-        t.allocated_ip: t for t in tasks if t.allocated_ip is not None
+    # on the same node would overwrite, but the invariant forbids that. If it ever relaxes,
+    # this becomes a dict[NodeId, list[Task]] and the row/object shape changes together.
+    # Keyed by NodeId (was ip) — dup-IP nodes now disambiguated via node_id.
+    tasks_by_node_id: dict[NodeId, Task] = {
+        t.allocated_node_id: t for t in tasks if t.allocated_node_id is not None
     }
     rows: list[_NodeView] = []
     for node in nodes:
-        task = tasks_by_ip.get(node.ip)
+        task = tasks_by_node_id.get(node.node_id)
         rows.append(
             _NodeView(
                 node_id=node.node_id,

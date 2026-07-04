@@ -90,9 +90,6 @@ class StubTaskRepository:
 
 
 class StubNodeRepository:
-    async def get(self, ip: str) -> Node | None:
-        raise NotImplementedError
-
     async def list_enabled(self) -> list[Node]:
         return []
 
@@ -101,6 +98,9 @@ class StubNodeRepository:
 
     async def get_by_id(self, node_id: NodeId) -> Node | None:
         raise NotImplementedError
+
+    async def get_by_ids(self, node_ids: list[NodeId]) -> dict[NodeId, Node]:
+        return {}
 
     async def insert(self, new_node: NewNode) -> Node:
         raise NotImplementedError
@@ -120,15 +120,12 @@ class StubNodeRepository:
     async def list_all(self) -> list[Node]:
         return []
 
-    async def get_by_ips(self, ips: list[str]) -> dict[str, Node]:
-        return {}
-
     async def count_by_status(self) -> dict[bool, int]:
         return {}
 
 
 def _make_session_stub() -> ConnectedMachine:
-    return ConnectedMachine(ip="10.0.0.1", platform="linux", ncpus=1)
+    return ConnectedMachine(node_id=NodeId(1), ip="10.0.0.1", platform="linux", ncpus=1)
 
 
 class StubMachineSession(MachineSession):
@@ -243,7 +240,7 @@ async def _empty_async_gen() -> Any:
 class StubMachineRepository(MachineRepository):
     async def connect(
         self,
-        ip: str,
+        node: Node,
         username: str,
         client_keys: Sequence[PurePath] | None,
         *,
@@ -257,7 +254,7 @@ class StubMachineRepository(MachineRepository):
     ) -> MachineSession:
         return StubMachineSession()
 
-    async def disconnect(self, ip: str) -> None:
+    async def disconnect(self, node_id: NodeId) -> None:
         pass
 
     async def disconnect_all(self) -> None:
@@ -269,16 +266,16 @@ class StubMachineRepository(MachineRepository):
     def list_connected(self) -> list[MachineSession]:
         return []
 
-    def get_session(self, ip: str) -> MachineSession | None:
+    def get_session(self, node_id: NodeId) -> MachineSession | None:
         return None
 
-    def contains(self, ip: str) -> bool:
+    def contains(self, node_id: NodeId) -> bool:
         return False
 
     def __len__(self) -> int:
         return 0
 
-    def __contains__(self, ip: str) -> bool:
+    def __contains__(self, node_id: NodeId) -> bool:
         return False
 
 
@@ -338,7 +335,7 @@ class StubMachineOperations:
 
 
 class StubCloudProvisioner:
-    async def allocate(self, provider: str) -> NewNode:
+    async def allocate(self, provider: str, tmp_node_id: NodeId) -> Node:
         raise NotImplementedError
 
     async def deallocate(self, cloud: str, ip: str) -> None:

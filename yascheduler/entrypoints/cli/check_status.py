@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/check_status.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
 #   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
@@ -24,8 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Carry TaskId through the query/render path (add-task-id-identity): _query_tasks wraps [TaskId(j) for j in args.jobs] before list_by_jobs (CLI-internal int→TaskId wrap, same pattern as the facade); _render_json extracts task.task_id.value (json.dumps would raise TypeError on a TaskId); _render_default/_render_info render via __str__ unchanged.
-#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle: _download_convergence_snippet takes MachineSession instead of (repository, operations, ip); _display_remote_output uses session directly (session.path, session.quote, session.run_full) and returns (session, remote_folder, repository) triple; _render_view unpacking updated.
+#   LAST_CHANGE: v1.4.0 - ssh-rekey-node-id: query phase builds nodes_by_id: dict[NodeId, Node] via uow.nodes.get_by_ids([t.allocated_node_id for t in tasks if t.allocated_node_id]) (was get_by_ips keyed by allocated_ip). _render_json/_render_view look up nodes via nodes_by_id.get(task.allocated_node_id). _display_remote_output takes node: Node | None and connects via repository.connect(node=node, ...) (session registers under node.node_id); the two disconnect sites call repository.disconnect(session.machine.node_id) (was session.ip). _render_json keeps allocated_ip (transport display, unchanged wire field) and reads node.port/node.cloud from the resolved Node.
+#   PREVIOUS_CHANGE: v1.3.0 - Carry TaskId through the query/render path (add-task-id-identity): _query_tasks wraps [TaskId(j) for j in args.jobs] before list_by_jobs (CLI-internal int→TaskId wrap, same pattern as the facade); _render_json extracts task.task_id.value (json.dumps would raise TypeError on a TaskId); _render_default/_render_info render via __str__ unchanged.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import TaskId, TaskStatus
+from yascheduler.domain import NodeId, TaskId, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.infra import SSHMachineRepository
@@ -168,16 +168,18 @@ def _render_info(tasks: list[Task]) -> None:
 
 # START_CONTRACT: _render_json
 #   PURPOSE: Render tasks as a JSON list of 9-field objects with raw domain values (no display transformations).
-#   INPUTS: { tasks: list[Task], nodes_by_ip: dict[str, Node] - node lookup by allocated ip }
+#   INPUTS: { tasks: list[Task], nodes_by_id: dict[NodeId, Node] - node lookup by allocated_node_id }
 #   OUTPUTS: { str - json.dumps(list_of_objects) }
 #   SIDE_EFFECTS: None
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
 # END_CONTRACT: _render_json
-def _render_json(tasks: list[Task], nodes_by_ip: dict[str, Node]) -> str:
+def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
     # START_BLOCK_RENDER_JSON
     objects = []
     for task in tasks:
-        node = nodes_by_ip.get(task.allocated_ip) if task.allocated_ip else None
+        node = (
+            nodes_by_id.get(task.allocated_node_id) if task.allocated_node_id else None
+        )
         objects.append(
             {
                 "task_id": task.task_id.value,
@@ -304,23 +306,22 @@ def _parse_convergence(filepath: Path) -> str:
 
 # START_CONTRACT: _display_remote_output
 #   PURPOSE: Connect to the remote machine via repository, tail the OUTPUT file, return (session, remote_folder) or None.
-#   INPUTS: { task: Task, conn_params: _ConnParams - resolved SSH params, config: Config }
+#   INPUTS: { task: Task - for remote_folder, node: Node | None - resolved node (carries node_id + ip; None skips connect), conn_params: _ConnParams, config: Config }
 #   OUTPUTS: { tuple[MachineSession, str, SSHMachineRepository] | None - (session, remote_folder, repository) or None if skipped }
-#   SIDE_EFFECTS: Connects via SSH, reads remote file, prints to stdout.
+#   SIDE_EFFECTS: Connects via SSH (session registers under node.node_id), reads remote file, prints to stdout.
 #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
 # END_CONTRACT: _display_remote_output
 async def _display_remote_output(
-    task: Task, conn_params: _ConnParams, config: Config
+    task: Task, node: Node | None, conn_params: _ConnParams, config: Config
 ) -> tuple[MachineSession, str, SSHMachineRepository] | None:
-    """Connect to machine via repository, display tail of remote OUTPUT."""
-    if not task.allocated_ip:
+    """Connect to machine via repository (under node.node_id), display tail of remote OUTPUT."""
+    if node is None:
         print("NO ALLOCATED IP")
         return None
-    ip = task.allocated_ip
     repository = SSHMachineRepository()
     try:
         session = await repository.connect(
-            ip=ip,
+            node=node,
             username=conn_params.username,
             client_keys=list_private_keys(config.local.keys_dir),
             port=conn_params.port,
@@ -333,7 +334,7 @@ async def _display_remote_output(
     remote_folder = task.context.remote_folder
     if not remote_folder:
         print("OUTDATED TASK, SKIPPING")
-        await repository.disconnect(ip)
+        await repository.disconnect(session.machine.node_id)
         return None
     if session.is_closed:
         print("CAN'T CONNECT")
@@ -359,7 +360,7 @@ async def _display_remote_output(
 # END_CONTRACT: _render_view
 async def _render_view(
     tasks: list[Task],
-    nodes_by_ip: dict[str, Node],
+    nodes_by_id: dict[NodeId, Node],
     config: Config,
     fetch_convergence: bool,
     deps: CLIDeps,  # noqa: ARG001 (passed per design D8; nodes are pre-fetched, no re-query needed)
@@ -375,7 +376,11 @@ async def _render_view(
     try:
         # START_BLOCK_ITERATE_RUNNING
         for task in running:
-            node = nodes_by_ip.get(task.allocated_ip) if task.allocated_ip else None
+            node = (
+                nodes_by_id.get(task.allocated_node_id)
+                if task.allocated_node_id
+                else None
+            )
             if node is not None:
                 conn_params = _resolve_conn_params(node, config)
             else:
@@ -397,7 +402,7 @@ async def _render_view(
                     task.context.remote_folder or "",
                 )
             )
-            conn = await _display_remote_output(task, conn_params, config)
+            conn = await _display_remote_output(task, node, conn_params, config)
             if conn is None:
                 continue
             session, remote_folder, repository = conn
@@ -411,7 +416,7 @@ async def _render_view(
                         if output:
                             print(output)
             finally:
-                await repository.disconnect(session.ip)
+                await repository.disconnect(session.machine.node_id)
         # END_BLOCK_ITERATE_RUNNING
     except Exception:
         # Self-clean the snippet on exception so the temp file never leaks; re-raise to the caller's
@@ -448,20 +453,20 @@ async def _check_status_async(argv: list[str] | None) -> None:
         # QUERY PHASE — one short UoW, closed before any SSH work.
         async with deps.uow_factory() as uow:
             tasks = await _query_tasks(uow, args)
-            nodes_by_ip: dict[str, Node] = {}
+            nodes_by_id: dict[NodeId, Node] = {}
             if args.view or args.json:
-                ips = [t.allocated_ip for t in tasks if t.allocated_ip]
-                if ips:
-                    nodes_by_ip = await uow.nodes.get_by_ips(ips)
+                node_ids = [t.allocated_node_id for t in tasks if t.allocated_node_id]
+                if node_ids:
+                    nodes_by_id = await uow.nodes.get_by_ids(node_ids)
         # RENDER PHASE — no DB connection held during SSH.
         if args.view:
             snippet = await _render_view(
-                tasks, nodes_by_ip, config, bool(args.convergence), deps
+                tasks, nodes_by_id, config, bool(args.convergence), deps
             )
         elif args.info:
             _render_info(tasks)
         elif args.json:
-            print(_render_json(tasks, nodes_by_ip))
+            print(_render_json(tasks, nodes_by_id))
         else:
             _render_default(tasks)
     except Exception as e:

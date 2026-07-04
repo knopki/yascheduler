@@ -33,6 +33,7 @@ from tests.unit.test_ssh_gateway import _make_state
 from yascheduler.domain import Engine
 from yascheduler.domain.model import (
     MachineState,
+    NodeId,
     Task,
     TaskContext,
     TaskId,
@@ -102,7 +103,7 @@ class TestNonIdempotentRetry:
         session = _make_state()
         adapter = cast("MagicMock", session.adapter)
         adapter.run_bg = AsyncMock(side_effect=ChannelOpenError(11, "open failed"))
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         with pytest.raises(ChannelOpenError):
             await operations.run_bg(session, "spawn-cmd", cwd="/tmp")
@@ -123,7 +124,7 @@ class TestNonIdempotentRetry:
             yield sftp
 
         session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         with pytest.raises(SFTPConnectionLost):
             await session.upload(Path("/tmp/local"), "/remote/file")
@@ -144,7 +145,7 @@ class TestNonIdempotentRetry:
             yield sftp
 
         session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         with pytest.raises(SFTPConnectionLost):
             async with session.open_sftp() as sftp_client:
@@ -171,7 +172,7 @@ class TestStartTaskRollback:
         """Upload failure -> machine released, info log, original error re-raised."""
         session = _make_state()
         _wire_realpath(session)
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         with patch.object(
             operations.deploy,
@@ -188,7 +189,7 @@ class TestStartTaskRollback:
                         PurePosixPath("/engines"),
                     )
 
-        assert repository._sessions["10.0.0.1"].machine.state == MachineState.FREE
+        assert repository._sessions[NodeId(1)].machine.state == MachineState.FREE
         assert "rolling back BUSY" in caplog.text
 
     @pytest.mark.asyncio
@@ -201,7 +202,7 @@ class TestStartTaskRollback:
         """Spawn failure (ChannelOpenError) -> machine released, info log, re-raised."""
         session = _make_state()
         _wire_realpath(session)
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         with (
             patch.object(
@@ -223,7 +224,7 @@ class TestStartTaskRollback:
                         PurePosixPath("/engines"),
                     )
 
-        assert repository._sessions["10.0.0.1"].machine.state == MachineState.FREE
+        assert repository._sessions[NodeId(1)].machine.state == MachineState.FREE
         assert "rolling back BUSY" in caplog.text
 
     @pytest.mark.asyncio
@@ -236,7 +237,7 @@ class TestStartTaskRollback:
         """CancelledError (BaseException) is caught, machine released, then re-raised."""
         session = _make_state()
         _wire_realpath(session)
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         with patch.object(
             operations.deploy,
@@ -253,7 +254,7 @@ class TestStartTaskRollback:
                         PurePosixPath("/engines"),
                     )
 
-        assert repository._sessions["10.0.0.1"].machine.state == MachineState.FREE
+        assert repository._sessions[NodeId(1)].machine.state == MachineState.FREE
         assert "rolling back BUSY" in caplog.text
 
     @pytest.mark.asyncio
@@ -266,7 +267,7 @@ class TestStartTaskRollback:
         """Non-BUSY state at rollback -> warn, still release, re-raise."""
         session = _make_state()
         _wire_realpath(session)
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         async def _fail_with_unexpected_state(
             s: object, task: Task, task_dir: object, input_files: object
@@ -290,7 +291,7 @@ class TestStartTaskRollback:
                         PurePosixPath("/engines"),
                     )
 
-        assert repository._sessions["10.0.0.1"].machine.state == MachineState.FREE
+        assert repository._sessions[NodeId(1)].machine.state == MachineState.FREE
         assert "unexpected state" in caplog.text
         assert "expected BUSY" in caplog.text
 
@@ -304,7 +305,7 @@ class TestStartTaskRollback:
         """Session closed (concurrent disconnect) -> warn, skip release, re-raise."""
         session = _make_state()
         _wire_realpath(session)
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         async def _fail_after_disconnect(
             s: object, task: Task, task_dir: object, input_files: object
@@ -334,7 +335,7 @@ class TestStartTaskRollback:
 
         # Rollback saw is_closed and skipped release; session stays BUSY in repo.
         assert session.is_closed
-        assert repository._sessions["10.0.0.1"].machine.state == MachineState.BUSY
+        assert repository._sessions[NodeId(1)].machine.state == MachineState.BUSY
         # occupy was called exactly once (the initial occupy); no release call.
         assert spy.call_count == 1
         assert "already disconnected" in caplog.text

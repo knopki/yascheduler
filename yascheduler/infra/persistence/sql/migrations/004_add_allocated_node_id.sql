@@ -6,11 +6,13 @@
 -- for a legacy dup-IP row the subquery returns one row arbitrarily
 -- (best-effort; read path stays ip).
 ALTER TABLE yascheduler_tasks
-    ADD COLUMN allocated_node_id INTEGER
-        REFERENCES yascheduler_nodes(node_id) ON DELETE SET NULL;
+ADD COLUMN allocated_node_id INTEGER
+REFERENCES yascheduler_nodes (node_id) ON DELETE SET NULL;
 
 UPDATE yascheduler_tasks t
-SET allocated_node_id = (
-    SELECT n.node_id FROM yascheduler_nodes n WHERE n.ip = t.ip
-)
+SET
+    allocated_node_id = (
+        SELECT n.node_id FROM yascheduler_nodes n
+        WHERE n.ip = t.ip
+    )
 WHERE t.ip IS NOT NULL;

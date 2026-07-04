@@ -42,7 +42,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from yascheduler.domain import Engine
-from yascheduler.domain.model import MachineState
+from yascheduler.domain.model import MachineState, Node, NodeId
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 
@@ -148,7 +148,7 @@ async def repository(
     """Create SSHMachineRepository connected to test container."""
     repo = SSHMachineRepository()
     await repo.connect(
-        ip=ssh_container["host"],
+        node=_container_node(1, ssh_container),
         username=ssh_container["username"],
         client_keys=[ssh_container["key_path"]],
         port=ssh_container["port"],
@@ -271,16 +271,16 @@ class TestSSHGatewayIntegration:
     ) -> None:
         """disconnect() removes machine from repository registry."""
         repo = SSHMachineRepository()
-        machine = await repo.connect(
-            ip=ssh_container["host"],
+        await repo.connect(
+            node=_container_node(2, ssh_container),
             username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
             port=ssh_container["port"],
         )
-        assert machine.ip in repo
+        assert NodeId(2) in repo
 
-        await repo.disconnect(machine.ip)
-        assert machine.ip not in repo
+        await repo.disconnect(NodeId(2))
+        assert NodeId(2) not in repo
 
     async def test_run_multiple_commands(
         self, repository: SSHMachineRepository, operations: SSHMachineOperations
@@ -334,7 +334,7 @@ class TestSSHGatewayIntegration:
         """disconnect_all() removes all machines."""
         repo = SSHMachineRepository()
         await repo.connect(
-            ip=ssh_container["host"],
+            node=_container_node(3, ssh_container),
             username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
             port=ssh_container["port"],
@@ -383,6 +383,19 @@ class TestOccupancyRunBgLeak:
 
         # Cleanup
         await operations.run(session, "killall sleep 2>/dev/null || true")
+
+
+def _container_node(node_id: int, ssh_container: dict[str, Any]) -> Node:  # type: ignore[type-arg]
+    """Build a Node from a testcontainers SSH fixture (node_id-first identity)."""
+    return Node(
+        node_id=NodeId(node_id),
+        ip=ssh_container["host"],
+        ncpus=4,
+        enabled=True,
+        cloud=None,
+        username=ssh_container["username"],
+        port=ssh_container["port"],
+    )
 
 
 def _make_pengine(
@@ -658,7 +671,6 @@ class TestOccupancyRaceCondition:
         """
         engine = _make_pengine(check_pname="sleep", sleep_interval=1)
         session = await self._get_session(repository)
-        ip = session.ip
 
         # Machine starts FREE
         assert session.machine.state == MachineState.FREE
@@ -678,7 +690,7 @@ class TestOccupancyRaceCondition:
             # Simulate _meta_sync: it polls repository state and would mirror to meta.busy
             # With the fix, it sees BUSY (not FREE), so meta.busy stays True
             # type: ignore[unreachable]: pyright narrows from the FREE assert above; it can't see that start_occupancy_check mutated the snapshot.
-            repo_session = repository.get_session(ip)  # type: ignore[unreachable]
+            repo_session = repository.get_session(NodeId(1))  # type: ignore[unreachable]
             assert repo_session is not None
             assert repo_session.machine.state == MachineState.BUSY, (
                 "_meta_sync would see FREE without the fix, causing premature task consumption"
@@ -692,7 +704,6 @@ class TestOccupancyRaceCondition:
         """Simulating _meta_sync polling: must see BUSY while process runs."""
         engine = _make_pengine(check_pname="sleep", sleep_interval=1)
         session = await self._get_session(repository)
-        ip = session.ip
 
         # Start process, then start occupancy check
         await operations.run(session, "nohup sleep 3 >/dev/null 2>&1 &")
@@ -705,7 +716,7 @@ class TestOccupancyRaceCondition:
             # Without the fix, at least one poll would see FREE
             for _ in range(4):
                 await asyncio.sleep(0.5)
-                repo_session = repository.get_session(ip)
+                repo_session = repository.get_session(NodeId(1))
                 assert repo_session is not None
                 assert repo_session.machine.state == MachineState.BUSY, (
                     "_meta_sync must consistently see BUSY while process is running"
@@ -920,7 +931,7 @@ class TestMultiMachineBgTaskLeak:
         session_a = cast(
             "SSHMachineSession",
             await repository.connect(
-                ip=ssh_container["host"],
+                node=_container_node(4, ssh_container),
                 username=ssh_container["username"],
                 client_keys=[ssh_container["key_path"]],
                 port=ssh_container["port"],
@@ -929,7 +940,7 @@ class TestMultiMachineBgTaskLeak:
         session_b = cast(
             "SSHMachineSession",
             await repository.connect(
-                ip=ssh_container_2["host"],
+                node=_container_node(5, ssh_container_2),
                 username=ssh_container_2["username"],
                 client_keys=[ssh_container_2["key_path"]],
                 port=ssh_container_2["port"],
@@ -960,15 +971,15 @@ class TestMultiMachineBgTaskLeak:
             task_b = session_b._monitor_task  # noqa: SLF001
 
             # Disconnect A — must cancel only A's monitor
-            await repository.disconnect(ip_a)
+            await repository.disconnect(NodeId(4))
 
-            assert ip_a not in repository._sessions
+            assert NodeId(4) not in repository._sessions
             # B's monitor and session are untouched
             assert not task_b.done(), "B monitor must survive disconnect(A)"
             assert session_b._monitor_task is task_b  # noqa: SLF001
-            assert ip_b in repository._sessions
+            assert NodeId(5) in repository._sessions
 
-            await repository.disconnect(ip_b)
+            await repository.disconnect(NodeId(5))
         finally:
             # Best-effort cleanup of any surviving monitor / remote process
             await repository.disconnect_all()

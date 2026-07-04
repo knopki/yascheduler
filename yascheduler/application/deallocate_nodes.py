@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 4.6.0
+# VERSION: 4.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion.
 #   SCOPE: deallocate_node, deallocate_nodes async functions.
@@ -8,13 +8,13 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   deallocate_node - Disconnect and cloud-deallocate a single node; logs+flags stale row if DB remove fails after successful cloud delete
-#   deallocate_nodes - Disable idle cloud nodes and return Node objects for VM deletion
+#   deallocate_node - Disconnect (by node_id) and cloud-deallocate a single node; logs+flags stale row if DB remove fails after successful cloud delete
+#   deallocate_nodes - Disable idle cloud nodes and return Node objects for VM deletion (idle_machines dict[NodeId, float]; busy_node_ids matching)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.6.0 - deallocate-node-id-identity: deallocate_nodes returns list[Node] (was list[str] of IPs) — phase 2 returns the Node objects it reads from list_disabled() directly, eliminating the orchestrator consumer's uow.nodes.get(ip) round-trip. Removed the dead "." in node.ip post-filter (tmp-node rows now carry ip="" and are excluded at SQL level by list_disabled.sql WHERE ip <> ''). The orchestrator's _deallocate_q is rekeyed to UniqueQueue[NodeId, Node] in the same change.
-#   PREVIOUS_CHANGE: v4.5.0 - Mutators rekeyed from ip to node_id (node-id-keyed-mutators): deallocate_node calls uow.nodes.disable(node.node_id) and uow.nodes.remove(node.node_id); deallocate_nodes disable loop iterates all_enabled_nodes.values() and calls uow.nodes.disable(node.node_id) (was ip-keyed). Internal log lines add node_id=%s alongside ip=%s. clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host, out of scope).
+#   LAST_CHANGE: v4.7.0 - ssh-rekey-node-id: deallocate_nodes takes idle_machines: dict[NodeId, float] (was dict[str, float] keyed by ip); busy matching rekeyed to busy_node_ids = {t.allocated_node_id}; phase-1 disable matches by node.node_id in idle_machines and node.node_id not in busy_node_ids; phase-2 filter node.node_id not in busy_node_ids and node.cloud. deallocate_node calls repository.contains(node.node_id)/repository.disconnect(node.node_id) (was node.ip). clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host).
+#   PREVIOUS_CHANGE: v4.6.0 - deallocate-node-id-identity: deallocate_nodes returns list[Node] (was list[str] of IPs) — phase 2 returns the Node objects it reads from list_disabled() directly, eliminating the orchestrator consumer's uow.nodes.get(ip) round-trip. Removed the dead "." in node.ip post-filter (tmp-node rows now carry ip="" and are excluded at SQL level by list_disabled.sql WHERE ip <> ''). The orchestrator's _deallocate_q is rekeyed to UniqueQueue[NodeId, Node] in the same change.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import Node, TaskStatus
+from yascheduler.domain import Node, NodeId, TaskStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -53,8 +53,8 @@ async def deallocate_node(
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> None:
-    if repository.contains(node.ip):
-        await repository.disconnect(node.ip)
+    if repository.contains(node.node_id):
+        await repository.disconnect(node.node_id)
         logger.debug(
             "[deallocate_node][DISCONNECT] node_id=%s ip=%s gateway disconnected",
             node.node_id,
@@ -117,7 +117,7 @@ async def deallocate_node(
 #   INPUTS: {
 #     uow_factory: Callable[[], AbstractUnitOfWork] - Unit of Work factory,
 #     config_clouds: Sequence[CloudConfig] - Cloud configuration with idle_tolerance,
-#     idle_machines: dict[str, float] - IP -> free_since monotonic timestamp (seconds since arbitrary epoch)
+#     idle_machines: dict[NodeId, float] - NodeId -> free_since monotonic timestamp (seconds since arbitrary epoch)
 #   }
 #   OUTPUTS: { list[Node] - Disabled node objects (each carrying node_id) for orchestrator to deallocate }
 #   SIDE_EFFECTS: Disables nodes in DB.
@@ -126,14 +126,18 @@ async def deallocate_node(
 async def deallocate_nodes(
     uow_factory: Callable[[], AbstractUnitOfWork],
     config_clouds: Sequence[CloudConfig],
-    idle_machines: dict[str, float],
+    idle_machines: dict[NodeId, float],
 ) -> list[Node]:
     # START_BLOCK_DISABLE_IDLE
     async with uow_factory() as uow:
         running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
-        busy_ips = {t.allocated_ip for t in running_tasks if t.allocated_ip}
+        busy_node_ids = {
+            t.allocated_node_id for t in running_tasks if t.allocated_node_id
+        }
         all_enabled_nodes = {
-            n.ip: n for n in await uow.nodes.list_enabled() if n.ip not in busy_ips
+            n.node_id: n
+            for n in await uow.nodes.list_enabled()
+            if n.node_id not in busy_node_ids
         }
 
     now = time.monotonic()
@@ -142,8 +146,8 @@ async def deallocate_nodes(
             node
             for node in all_enabled_nodes.values()
             if node.cloud == ccfg.prefix
-            and node.ip in idle_machines
-            and (now - idle_machines[node.ip]) >= ccfg.idle_tolerance
+            and node.node_id in idle_machines
+            and (now - idle_machines[node.node_id]) >= ccfg.idle_tolerance
         ]
         for node in nodes_to_disable:
             async with uow_factory() as uow:
@@ -162,7 +166,7 @@ async def deallocate_nodes(
         free_disabled_nodes = [
             node
             for node in await uow.nodes.list_disabled()
-            if node.ip not in busy_ips and node.cloud
+            if node.node_id not in busy_node_ids and node.cloud
         ]
     return free_disabled_nodes
     # END_BLOCK_COLLECT_DISABLED

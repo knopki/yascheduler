@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.19.0
+# VERSION: 1.20.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
@@ -19,15 +19,15 @@
 #   NodeId - Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
 #   NewNode - Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) for the tmp-reservation call site
 #   Node - Post-persistence node record; always carries node_id: NodeId (first field, identity-first)
-#   ConnectedMachine - Runtime connected machine with state transitions
+#   ConnectedMachine - Runtime connected machine with state transitions (node_id is the first field — identity-first; ip is the transport address)
 #   Engine - Calculation engine value object (re-exported from M-DOMAIN-ENGINE; see domain/engine.py)
 #   EngineRepository - Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)
 #   LocalFilesDeploy / LocalArchiveDeploy / RemoteArchiveDeploy / Deploy - Deploy strategies (re-exported from M-DOMAIN-ENGINE)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.19.0 - task-allocated-node-id: NewTask and Task gain allocated_node_id: NodeId | None = None (nullable FK to yascheduler_nodes.node_id; None for unallocated tasks and tasks whose node was deleted — the DB FK is ON DELETE SET NULL). Task.allocate_to signature changes from allocate_to(ip: str) to allocate_to(node: Node); the single replace() call binds both allocated_ip=node.ip and allocated_node_id=node.node_id atomically (the guard stays on allocated_ip). Read paths keep using allocated_ip until Surface A (ssh-rekey-node-id).
-#   PREVIOUS_CHANGE: v1.18.0 - NewNode gains ip: str = "" and ncpus: int = 0 defaults (remove-tmp-node-fake-ip); field order unchanged (ip and ncpus still first, now with defaults) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False) without naming them. Node.ip stays str (no Optional ripple); tmp rows carry the empty-string sentinel.
+#   LAST_CHANGE: v1.20.0 - ssh-rekey-node-id: ConnectedMachine gains node_id: NodeId as its FIRST field (identity-first). The construction site SSHMachineRepository._connect_impl passes node_id=node.node_id; occupy()/release()/replace() carry node_id through automatically (frozen dataclass). ip stays as the transport address (asyncssh host) — two machines sharing an ip with different node_id are distinct (dup-IP behind different jump hosts). Node docstring updated (ip-keyed lookup methods get/get_by_ips removed; node_id is the sole identity). NewNode docstring updated (cloud adapter reuses tmp_node_id as the real node identity; returns Node not NewNode).
+#   PREVIOUS_CHANGE: v1.19.0 - task-allocated-node-id: NewTask and Task gain allocated_node_id: NodeId | None = None (nullable FK to yascheduler_nodes.node_id; None for unallocated tasks and tasks whose node was deleted — the DB FK is ON DELETE SET NULL). Task.allocate_to signature changes from allocate_to(ip: str) to allocate_to(node: Node); the single replace() call binds both allocated_ip=node.ip and allocated_node_id=node.node_id atomically (the guard stays on allocated_ip). Read paths keep using allocated_ip until Surface A (ssh-rekey-node-id).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -423,7 +423,7 @@ class Task:
     ) -> Task: ...
     @overload
     def with_event(
-        self, event_type: type[TaskAllocated], *, node_ip: str, engine_name: str
+        self, event_type: type[TaskAllocated], *, node_id: NodeId, engine_name: str
     ) -> Task: ...
     @overload
     def with_event(
@@ -432,7 +432,9 @@ class Task:
     @overload
     def with_event(self, event_type: type[TaskFailed], *, reason: str) -> Task: ...
     @overload
-    def with_event(self, event_type: type[TaskAbandoned], *, node_ip: str) -> Task: ...
+    def with_event(
+        self, event_type: type[TaskAbandoned], *, node_id: NodeId
+    ) -> Task: ...
     def with_event(self, event_type: type[_E], **fields: object) -> Task:
         # START_BLOCK_DROP_BASE_FIELDS
         fields.pop("task_id", None)
@@ -506,15 +508,19 @@ class NewNode:
     carry defaults (``""`` and ``0``) so the tmp-reservation call site can
     construct ``NewNode(cloud=selected_name, enabled=False)`` without naming
     them (the empty-string sentinel marks a tmp/pending row); field types are
-    unchanged (``ip: str``, ``ncpus: int`` — no Optional ripple). A caller
-    building a real ``NewNode`` (from ``CloudProvisioner.allocate``) passes a
-    real ``ip`` and ``ncpus`` explicitly; the conversion to :class:`Node`
-    happens in exactly one place: ``NodeRepository.insert``.
+    unchanged (``ip: str``, ``ncpus: int`` — no Optional ripple). ``NewNode``
+    carries no identity attribute; it is converted to a :class:`Node` only by
+    :meth:`NodeRepository.insert`. The tmp-node row inserted by
+    ``_select_and_insert_tmp`` is reused as the real node's identity:
+    ``clouds.allocate(provider, tmp_node_id)`` returns a :class:`Node` carrying
+    ``node_id == tmp_node_id`` (the cloud adapter does NOT return a ``NewNode``;
+    the row already exists), so the caller flips ``enabled=TRUE`` and sets
+    ``ip``/``ncpus`` via ``uow.nodes.update(node)``.
     """
 
     ip: str = ""
     ncpus: int = 0
-    enabled: bool = True
+    enabled: bool = True  # FIXME: should be False
     cloud: str | None = None
     username: str = "root"
     port: int = 22
@@ -533,13 +539,14 @@ class Node:
 
     ``node_id`` is the FIRST field (identity first); a ``Node`` only ever comes from
     the database (via ``_row_to_node``) or from ``NodeRepository.insert``'s return.
-    ``NodeRepository`` mutators (``enable``/``disable``/``remove``/``update``) key
-    on ``node_id``; ``ip`` is no longer ``UNIQUE`` (dropped by migration 003 —
-    duplicate IPs are valid behind different jump hosts; ``node_id`` is the
-    identity) and is still the key for the ip-keyed lookup methods
-    (``get``/``get_by_ips``) and the SSH/Task surfaces — those migrations are
-    deferred non-goals. Tmp/pending rows carry ``ip == ""`` (the empty-string
-    sentinel; ``ip == ""`` IFF ``enabled = FALSE`` AND the node is tmp/pending).
+    ``node_id`` is the sole identity; ``ip`` is the transport attribute (the
+    asyncssh host). ``NodeRepository`` mutators (``enable``/``disable``/
+    ``remove``/``update``) key on ``node_id``, and all lookups are ``node_id``-keyed
+    (``get_by_id``, ``get_by_ids``) — the ip-keyed lookup methods (``get``/
+    ``get_by_ips``) are removed. ``ip`` is no longer ``UNIQUE`` (dropped by
+    migration 003 — duplicate IPs are valid behind different jump hosts).
+    Tmp/pending rows carry ``ip == ""`` (the empty-string sentinel; ``ip == ""``
+    IFF ``enabled = FALSE`` AND the node is tmp/pending).
     """
 
     node_id: NodeId
@@ -553,8 +560,23 @@ class Node:
 
 @dataclass(frozen=True)
 class ConnectedMachine:
-    """Runtime connected machine with state and platform info."""
+    """Runtime connected machine with state and platform info.
 
+    ``node_id`` is the FIRST field (identity first); it identifies which
+    :class:`Node` this connected machine represents. ``occupy``/``release``/
+    ``replace()`` carry ``node_id`` through automatically (frozen dataclass —
+    ``replace(self, state=…)`` preserves all non-overridden fields, including
+    ``node_id``). The construction site is ``SSHMachineRepository._connect_impl``,
+    which passes ``node_id=node.node_id`` from the ``Node`` parameter of
+    ``connect``.
+
+    ``ip`` is the transport address (the asyncssh host), NOT the identity — two
+    instances sharing an ``ip`` but with different ``node_id`` are distinct (the
+    dup-IP configuration behind different jump hosts).
+    """
+
+    node_id: NodeId
+    # FIXME: why ip is here but not port, username, etc? maybe ip is not needed?
     ip: str
     platform: str
     ncpus: int

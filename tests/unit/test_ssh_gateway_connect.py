@@ -27,6 +27,7 @@ import pytest
 
 from tests.unit.test_ssh_gateway import _make_state
 from yascheduler.domain.exceptions import MachineConnectionError
+from yascheduler.domain.model import Node, NodeId
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 
@@ -42,8 +43,9 @@ async def test_connect_translates_asyncssh_error() -> None:
     gw = SSHMachineRepository()
     err = asyncssh.misc.PermissionDenied("denied")
     gw._connect_impl = AsyncMock(side_effect=err)  # type: ignore[method-assign]
+    node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
     with pytest.raises(MachineConnectionError) as exc_info:
-        await gw.connect("10.0.0.1", "root", None)
+        await gw.connect(node, "root", None)
     assert exc_info.value.ip == "10.0.0.1"
     assert "denied" in exc_info.value.reason
     assert isinstance(exc_info.value.__cause__, asyncssh.misc.Error)
@@ -60,8 +62,9 @@ async def test_connect_translates_asyncssh_error() -> None:
 async def test_connect_translates_oserror() -> None:
     gw = SSHMachineRepository()
     gw._connect_impl = AsyncMock(side_effect=OSError("refused"))  # type: ignore[method-assign]
+    node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
     with pytest.raises(MachineConnectionError) as exc_info:
-        await gw.connect("10.0.0.1", "root", None)
+        await gw.connect(node, "root", None)
     assert exc_info.value.ip == "10.0.0.1"
     assert "refused" in exc_info.value.reason
 
@@ -78,7 +81,8 @@ async def test_connect_returns_session_on_success() -> None:
     gw = SSHMachineRepository()
     session = _make_state(ip="10.0.0.1")
     gw._connect_impl = AsyncMock(return_value=session)  # type: ignore[method-assign]
-    result = await gw.connect("10.0.0.1", "root", None)
+    node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
+    result = await gw.connect(node, "root", None)
     assert result is session
     assert result.ip == "10.0.0.1"
     assert isinstance(result, type(session))

@@ -44,7 +44,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, TaskId, TaskStatus
 from yascheduler.infra.notifier.webhook import WebhookPayload, webhook_handler
 
 URL = "https://example.com/hook"
@@ -93,7 +93,7 @@ async def _call(event: DomainEvent) -> AsyncMock:
         (TaskCreated, {"engine_name": "fleur"}, TaskStatus.TO_DO),
         (
             TaskAllocated,
-            {"node_ip": "1.2.3.4", "engine_name": "fleur"},
+            {"node_id": NodeId(7), "engine_name": "fleur"},
             TaskStatus.RUNNING,
         ),
         (
@@ -102,7 +102,7 @@ async def _call(event: DomainEvent) -> AsyncMock:
             TaskStatus.DONE,
         ),
         (TaskFailed, {"reason": "oops"}, TaskStatus.DONE),
-        (TaskAbandoned, {"node_ip": "1.2.3.4"}, TaskStatus.DONE),
+        (TaskAbandoned, {"node_id": NodeId(7)}, TaskStatus.DONE),
     ],
     ids=["created", "allocated", "completed", "failed", "abandoned"],
 )

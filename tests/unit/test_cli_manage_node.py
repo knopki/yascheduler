@@ -69,6 +69,17 @@ def make_mock_uow() -> AsyncMock:
     uow.__aexit__ = AsyncMock(return_value=False)
     uow.tasks = AsyncMock()
     uow.nodes = AsyncMock()
+    uow.nodes.insert = AsyncMock(
+        return_value=Node(
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=0,
+            enabled=False,
+            cloud=None,
+            username="root",
+            port=22,
+        )
+    )
     uow.commit = AsyncMock()
     return uow
 
@@ -352,9 +363,9 @@ class TestManageNodeAddPath:
         assert len(setup_call_args) == 2
         assert setup_call_args[0] is repo.connect.return_value
         assert setup_call_args[1] is _config.engines
-        repo.disconnect.assert_called_once_with("10.0.0.1")
+        repo.disconnect.assert_called_once_with(NodeId(1))
         uow.nodes.insert.assert_called_once()
-        uow.commit.assert_called_once()
+        assert uow.commit.call_count == 2
         out, _ = capsys.readouterr()
         assert "Setup host..." in out
         assert "Added host to yascheduler: 10.0.0.1:22" in out
@@ -371,9 +382,9 @@ class TestManageNodeAddPath:
 
         repo.connect.assert_called_once()
         ops.setup_node.assert_not_called()
-        repo.disconnect.assert_called_once_with("10.0.0.1")
-        uow.nodes.insert.assert_called_once()
-        uow.commit.assert_called_once()
+        repo.disconnect.assert_called_once_with(NodeId(1))
+        assert uow.nodes.insert.call_count == 1
+        assert uow.commit.call_count == 2
         out, _ = capsys.readouterr()
         assert "Setup host..." not in out
         assert "Added host to yascheduler: 10.0.0.1:22" in out
@@ -392,8 +403,9 @@ class TestManageNodeAddPath:
         assert exc.value.code == 1
         # Resource-leak fix: disconnect ran even though setup raised.
         repo.connect.assert_called_once()
-        repo.disconnect.assert_called_once_with("10.0.0.1")
-        uow.nodes.insert.assert_not_called()
+        repo.disconnect.assert_called_once_with(NodeId(1))
+        # tmp insert runs before connect (to obtain node_id); it persists even if setup fails.
+        uow.nodes.insert.assert_called_once()
         _, err = capsys.readouterr()
         assert "Error:" in err
 
@@ -403,8 +415,8 @@ class TestManageNodeAddPath:
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
         _config, uow, _deps, repo, ops = stub_env
-        uow.nodes.get = AsyncMock(
-            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        uow.nodes.list_all = AsyncMock(
+            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
 
         with pytest.raises(SystemExit) as exc:
@@ -458,7 +470,9 @@ class TestManageNodeAddPath:
         assert added_node.ncpus == 0
         assert added_node.ip == "10.0.0.1"
         assert added_node.port == 22
-        assert added_node.enabled is True
+        assert (
+            added_node.enabled is False
+        )  # tmp insert; enabled=True comes via later update
 
     def test_node_ncpus_when_explicit(
         self,
@@ -503,8 +517,8 @@ class TestManageNodeRemovePath:
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
         _config, uow, _deps, repo, ops = stub_env
-        uow.nodes.get = AsyncMock(
-            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        uow.nodes.list_all = AsyncMock(
+            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1, 2])
 
@@ -528,8 +542,8 @@ class TestManageNodeRemovePath:
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
         _config, uow, _deps, _repo, _ops = stub_env
-        uow.nodes.get = AsyncMock(
-            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        uow.nodes.list_all = AsyncMock(
+            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1])
 
@@ -548,8 +562,8 @@ class TestManageNodeRemovePath:
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
         _config, uow, _deps, _repo, _ops = stub_env
-        uow.nodes.get = AsyncMock(
-            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        uow.nodes.list_all = AsyncMock(
+            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
 
@@ -584,8 +598,8 @@ class TestManageNodeRemovePath:
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
         _config, uow, _deps, _repo, _ops = stub_env
-        uow.nodes.get = AsyncMock(
-            return_value=Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        uow.nodes.list_all = AsyncMock(
+            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1])
         # Failing commit proves the success prints live AFTER commit, not before.
@@ -606,16 +620,16 @@ class TestManageNodeRemovePath:
         capsys: pytest.CaptureFixture[str],
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock, AsyncMock],
     ) -> None:
-        """[9.4] remove-by-host: get(spec.host) resolves Node; helper receives Node, not str."""
+        """[9.4] remove-by-host: list_all() resolves Node by ip; helper receives Node, not str."""
         _config, uow, _deps, _repo, _ops = stub_env
         resolved = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
-        uow.nodes.get = AsyncMock(return_value=resolved)
+        uow.nodes.list_all = AsyncMock(return_value=[resolved])
         uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
 
         _run(["10.0.0.1", "--remove-soft"])
 
-        # The validation UoW resolved the Node via get(host) (ip-keyed lookup, unchanged).
-        uow.nodes.get.assert_awaited_once_with("10.0.0.1")
+        # The validation UoW resolved the Node via list_all + ip filter.
+        uow.nodes.list_all.assert_awaited_once()
         # The mutator received node.node_id (NodeId), not the ip string.
         uow.nodes.remove.assert_called_once_with(NodeId(1))
 

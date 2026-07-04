@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/events.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain events for task lifecycle transitions.
 #   SCOPE: DomainEvent base, TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned, Event union type.
@@ -10,16 +10,16 @@
 # START_MODULE_MAP
 #   DomainEvent - Base frozen dataclass with task_id (TaskId), webhook_url, webhook_custom_params (all required)
 #   TaskCreated - Task submitted event with engine_name
-#   TaskAllocated - Task assigned to node with node_ip and engine_name
+#   TaskAllocated - Task assigned to node with node_id (NodeId) and engine_name
 #   TaskCompleted - Task finished with local_folder and has_errors
 #   TaskFailed - Task failed with reason
-#   TaskAbandoned - Task abandoned on lost node with node_ip
+#   TaskAbandoned - Task abandoned on lost node with node_id (NodeId)
 #   Event - Union type alias of all event types
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - DomainEvent.task_id: int -> TaskId (add-task-id-identity); the 5 subclasses inherit the new type. TaskId imported under TYPE_CHECKING (annotations are strings via from __future__ import annotations). Python 3.9 compat preserved: typing.Union for the Event alias, no PEP 604.
-#   PREVIOUS_CHANGE: v1.1.0 - Restore Python 3.9 compatibility: drop dataclass kw_only (3.10+), make webhook_custom_params required (avoids non-default-after-default inheritance error), use typing.Union instead of PEP 604 X|Y at runtime.
+#   LAST_CHANGE: v1.3.0 - ssh-rekey-node-id: TaskAllocated and TaskAbandoned replace node_ip: str with node_id: NodeId (the node identity, not the transport address). Emission sites pass task.allocated_node_id (was task.allocated_ip / session.ip). webhook_handler builds WebhookPayload(task_id, status, custom_params) and does not read the field — wire format unchanged. NodeId imported under TYPE_CHECKING alongside TaskId.
+#   PREVIOUS_CHANGE: v1.2.0 - DomainEvent.task_id: int -> TaskId (add-task-id-identity); the 5 subclasses inherit the new type. TaskId imported under TYPE_CHECKING (annotations are strings via from __future__ import annotations). Python 3.9 compat preserved: typing.Union for the Event alias, no PEP 604.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
-    from .model import TaskId
+    from .model import NodeId, TaskId
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class TaskCreated(DomainEvent):
 
 @dataclass(frozen=True)
 class TaskAllocated(DomainEvent):
-    node_ip: str
+    node_id: NodeId
     engine_name: str
 
 
@@ -62,7 +62,7 @@ class TaskFailed(DomainEvent):
 
 @dataclass(frozen=True)
 class TaskAbandoned(DomainEvent):
-    node_ip: str
+    node_id: NodeId
 
 
 Event = Union[TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned]

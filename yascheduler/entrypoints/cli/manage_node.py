@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.6.0
+# VERSION: 1.7.1
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
 #   SCOPE: manage_node command + argparse + node-target parser + host-spec parser + node add/remove helpers (each helper owns its UoW).
@@ -21,8 +21,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Mutators rekeyed from ip to node_id (node-id-keyed-mutators): validation UoW resolves the Node early on both paths (get_by_id on the node_id path, get(spec.host) on the host_spec path) and passes it to the remove helpers; _remove_node_hard/_remove_node_soft take (deps, node: Node) and call uow.nodes.disable(node.node_id)/uow.nodes.remove(node.node_id); node.ip stays for tasks.list_ids_by_ip_and_status (Surface C) and user-facing print. Dropped the now-dead _get_by_ip and _remove_ip helpers (their callers are replaced by direct Node resolution).
-#   PREVIOUS_CHANGE: v1.5.0 - Positional accepts a node_id (purely-digit) via _parse_node_target/NodeTarget (discriminator: s.isdigit()); add-by-id is rejected via parser.error (exit 2); remove-by-id resolves node.ip via uow.nodes.get_by_id and uses ip-keyed mutators unchanged; add path builds NewNode and persists via uow.nodes.insert (renamed from add). Success messages unchanged; {host} on the node_id path is the resolved node.ip (add-node-id-identity).
+#   LAST_CHANGE: v1.7.1 - ssh-rekey-node-id follow-up: _add_node flips the tmp row to enabled=True via dataclasses.replace(tmp, enabled=True) instead of reconstructing a Node from scratch (tmp already carries node_id, ip, port, username, ncpus, cloud — only enabled needs flipping). Drops the FIXME.
+#   PREVIOUS_CHANGE: v1.7.0 - ssh-rekey-node-id: _add_node adopts the V1 single-row lifecycle (insert enabled=False tmp row → Node(T) for node_id; connect(node=T,…); optional setup; update enabled=True via single UPDATE; finally disconnect(T.node_id); on connect-failure best-effort remove(T.node_id) + re-raise). Validation UoW host_spec path resolves the Node via list_all + filter by ip (the ip-keyed get(spec.host) is removed — node_id is the sole identity). Remove helpers unchanged (already take Node; key mutators on node_id).
+#   PREVIOUS_CHANGE: v1.6.0 - Mutators rekeyed from ip to node_id (node-id-keyed-mutators): validation UoW resolves the Node early on both paths (get_by_id on the node_id path, get(spec.host) on the host_spec path) and passes it to the remove helpers; _remove_node_hard/_remove_node_soft take (deps, node: Node) and call uow.nodes.disable(node.node_id)/uow.nodes.remove(node.node_id); node.ip stays for tasks.list_ids_by_ip_and_status (Surface C) and user-facing print. Dropped the now-dead _get_by_ip and _remove_ip helpers (their callers are replaced by direct Node resolution).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from yascheduler.domain import NewNode, Node, NodeId, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
@@ -275,7 +276,7 @@ async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
 
 
 # START_CONTRACT: _add_node
-#   PURPOSE: Add a node — in its own UoW, connect gateway, optional setup, insert NewNode, commit, announce; disconnect in finally.
+#   PURPOSE: Add a node — V1 single-row lifecycle: insert enabled=False tmp row (UoW#1) to obtain node_id, connect+setup under that node_id, flip to enabled=True via update (UoW#2); always disconnect(T.node_id) in finally; on connect-failure best-effort remove(T.node_id) then re-raise.
 #   INPUTS: {
 #     deps: CLIDeps - DI holder providing uow_factory,
 #     repository: SSHMachineRepository, operations: SSHMachineOperations - gateway constructed by manage_node (mockable),
@@ -284,8 +285,7 @@ async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
 #     skip_setup: bool - skip gateway.setup_node when True
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens its own UoW; opens SSH, optionally sets up the remote node, inserts a NewNode (receiving the persisted Node), commits, prints to stdout;
-#                ALWAYS calls repository.disconnect(spec.host) via try/finally (resource-leak fix).
+#   SIDE_EFFECTS: Opens UoW#1 (insert enabled=False → Node(T), commit), opens SSH under T.node_id, optionally sets up the remote node, opens UoW#2 (update enabled=True, commit), prints to stdout; ALWAYS calls repository.disconnect(T.node_id) via try/finally (resource-leak fix). On connect-failure opens a UoW to remove+commit T.node_id (best-effort) then re-raises so the operator sees the real error.
 #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-UOW, M-DOMAIN-MODEL, M-ENTRYPOINTS-CONFIG, M-DI
 # END_CONTRACT: _add_node
 async def _add_node(
@@ -298,32 +298,57 @@ async def _add_node(
 ) -> None:
     # HostSpec is frozen and the parser cannot resolve config defaults, so resolve here.
     username = spec.username or config.remote.username
+    # START_BLOCK_INSERT_TMP
+    # Insert an enabled=False tmp row first to obtain a node_id — the SSH
+    # session must register under a node_id (connect takes a Node). This
+    # mirrors the cloud-allocation V1 lifecycle: insert tmp → connect/setup →
+    # flip enabled via update (single row per add lifecycle, not two).
+    async with deps.uow_factory() as uow:
+        tmp = await uow.nodes.insert(
+            NewNode(
+                ip=spec.host,
+                port=spec.port,
+                username=username,
+                ncpus=(spec.ncpus if spec.ncpus is not None else 0),
+                enabled=False,
+            )
+        )
+        await uow.commit()
+    # END_BLOCK_INSERT_TMP
     # START_BLOCK_CONNECT_SETUP_ADD
     try:
-        session = await repository.connect(
-            ip=spec.host,
-            username=username,
-            client_keys=list_private_keys(config.local.keys_dir),
-            engines_dir=config.remote.engines_dir,
-            port=spec.port,
-        )
+        try:
+            session = await repository.connect(
+                node=tmp,
+                username=username,
+                client_keys=list_private_keys(config.local.keys_dir),
+                engines_dir=config.remote.engines_dir,
+                port=spec.port,
+            )
+        except Exception:
+            # Connect failed — the tmp row is orphaned; best-effort remove it
+            # so an unreachable host does not leave a disabled row behind.
+            # Failure here is logged but does not mask the connect error.
+            try:
+                async with deps.uow_factory() as uow:
+                    await uow.nodes.remove(tmp.node_id)
+                    await uow.commit()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "[manage_node][_add_node][CLEANUP_FAILED] node_id=%s",
+                    tmp.node_id,
+                )
+            raise
         if not skip_setup:
             print("Setup host...")
             await operations.setup_node(session, config.engines)
+        # Flip the tmp row to enabled=True (single UPDATE on the same node_id).
         async with deps.uow_factory() as uow:
-            await uow.nodes.insert(
-                NewNode(
-                    ip=spec.host,
-                    port=spec.port,
-                    username=username,
-                    ncpus=(spec.ncpus if spec.ncpus is not None else 0),
-                    enabled=True,
-                )
-            )
+            await uow.nodes.update(replace(tmp, enabled=True))
             await uow.commit()
         print(f"Added host to yascheduler: {spec.host}:{spec.port}")
     finally:
-        await repository.disconnect(spec.host)
+        await repository.disconnect(tmp.node_id)
     # END_BLOCK_CONNECT_SETUP_ADD
 
 
@@ -357,9 +382,12 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         # A TOCTOU window exists between this close and the helper's own UoW open;
         # accepted for a single-operator CLI (design D18).
         # Resolve the Node early on both paths: get_by_id on the node_id path,
-        # get(spec.host) on the host_spec path. The resolved Node (carrying both
-        # node_id and ip) is passed to the remove helpers — node.node_id keys the
-        # node_id-keyed mutators; node.ip keys the ip-keyed task lookup + print.
+        # list_all + filter by ip on the host_spec path (the ip-keyed get(ip)
+        # lookup is removed — node_id is the sole identity; resolving a host_spec
+        # to a Node requires listing because ip is no longer a unique key). The
+        # resolved Node (carrying node_id) is passed to the remove helpers —
+        # node.node_id keys the node_id-keyed mutators; node.ip keys the
+        # ip-keyed task lookup + print.
         resolved_node: Node | None = None
         if target.node_id is not None:
             async with deps.uow_factory() as uow:
@@ -368,7 +396,10 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         else:
             assert target.host_spec is not None  # exactly one of the two is set
             async with deps.uow_factory() as uow:
-                resolved_node = await uow.nodes.get(target.host_spec.host)
+                all_nodes = await uow.nodes.list_all()
+            resolved_node = next(
+                (n for n in all_nodes if n.ip == target.host_spec.host), None
+            )
             already_there = resolved_node is not None
         # On the node_id path the "already in DB" check is meaningless (add-by-id
         # is already rejected in _parse_node_args), so only the remove-path

@@ -598,7 +598,7 @@ class TestPostgresNodeRepository:
             }
         ]
 
-        node = await repo.get("10.0.0.1")
+        node = await repo.get_by_id(NodeId(1))
 
         assert node is not None
         assert node.node_id == NodeId(1)
@@ -614,7 +614,7 @@ class TestPostgresNodeRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
 
-        node = await repo.get("10.0.0.99")
+        node = await repo.get_by_id(NodeId(999))
 
         assert node is None
 
@@ -633,7 +633,7 @@ class TestPostgresNodeRepository:
             }
         ]
 
-        node = await repo.get("10.0.0.2")
+        node = await repo.get_by_id(NodeId(2))
 
         assert node is not None
         assert node.node_id == NodeId(2)
@@ -678,16 +678,16 @@ class TestPostgresNodeRepository:
 
         assert result is None
 
-    # -- get_by_ips ------------------------------------------------------------
+    # -- get_by_ids -----------------------------------------------------------
 
-    async def test_get_by_ips_empty_returns_empty_dict(
+    async def test_get_by_ids_empty_returns_empty_dict(
         self, mocker: MockerFixture
     ) -> None:
-        """get_by_ips([]) returns an empty dict."""
+        """get_by_ids([]) returns an empty dict."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
 
-        result = await repo.get_by_ips([])
+        result = await repo.get_by_ids([])
 
         assert result == {}
         assert repo._run.call_count == 1  # type: ignore[attr-defined]
@@ -923,6 +923,36 @@ class TestPostgresNodeRepository:
         _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
         assert kwargs["cloud"] == "upcloud"
         assert kwargs["enabled"] is False
+
+    async def test_update_binds_all_fields_including_ip(
+        self, mocker: MockerFixture
+    ) -> None:
+        """update runs UPDATE SQL binding ip, ncpus, enabled, cloud, username, port, node_id (V1 cloud lifecycle relies on ip being SET)."""
+        repo = self._make_repo(mocker)
+
+        await repo.update(
+            Node(
+                node_id=NodeId(7),
+                ip="10.0.0.99",
+                ncpus=8,
+                enabled=True,
+                cloud="hetzner",
+                username="root",
+                port=22,
+            )
+        )
+
+        repo._run.assert_awaited_once()  # type: ignore[attr-defined]
+        _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
+        assert kwargs["node_id"] == 7
+        assert kwargs["ip"] == "10.0.0.99", (
+            "update must bind ip (V1 cloud lifecycle sets real ip via update)"
+        )
+        assert kwargs["ncpus"] == 8
+        assert kwargs["enabled"] is True
+        assert kwargs["cloud"] == "hetzner"
+        assert kwargs["username"] == "root"
+        assert kwargs["port"] == 22
 
     # -- enable / disable / remove ---------------------------------------------
 

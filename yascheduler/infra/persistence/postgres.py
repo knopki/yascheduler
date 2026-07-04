@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.9.0
+# VERSION: 1.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
@@ -10,12 +10,12 @@
 # START_MODULE_MAP
 #   _PgRepository - base class for pg8000-backed repositories (conn, executor, _run)
 #   PostgresTaskRepository - async task CRUD: get, save, update_status, insert (NewTask→Task), list_by_status, list_by_jobs, count_by_status; get/update_status/save/list_by_jobs take/return TaskId (.value passed as pg8000 param); list_ids_by_ip_and_status returns list[TaskId]; _row_to_task wraps TaskId and NodeId; save/insert bind allocated_node_id via :node_id param; save/update_status raise TaskRowNotFoundError on 0-row UPDATE
-#   PostgresNodeRepository - async node CRUD: get, get_by_id, get_by_ips, list_*, insert (NewNode→Node, sole insertion path — add_tmp removed), update (keys on node_id), enable/disable/remove (take NodeId, pass node_id.value), count_*; list_enabled/list_disabled have no python post-filter (list_disabled filters ip <> '' in SQL)
+#   PostgresNodeRepository - async node CRUD: get_by_id, get_by_ids (batch, WHERE node_id = ANY(:node_ids)), list_*, insert (NewNode→Node, sole insertion path — add_tmp removed), update (keys on node_id), enable/disable/remove (take NodeId, pass node_id.value), count_*; ip-keyed get/get_by_ips removed; list_enabled/list_disabled have no python post-filter (list_disabled filters ip <> '' in SQL)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - task-allocated-node-id: PostgresTaskRepository.save and insert bind allocated_node_id via the :node_id pg8000 param (alongside label/status/ip/metadata); _row_to_task reads allocated_node_id and constructs NodeId(int(...)) when not None (else None). The 5 task SQL files feeding _row_to_task (get_by_id, list_by_status, list_by_jobs, insert RETURNING, update_by_id SET) include allocated_node_id; update_status/get_ids_by_ip_and_status/count_by_status are untouched (status-only / task_id-only / aggregate).
-#   PREVIOUS_CHANGE: v1.8.0 - remove-tmp-node-fake-ip: PostgresNodeRepository.add_tmp removed (insert(NewNode) is the sole insertion path; the tmp-reservation flow calls insert(NewNode(cloud=..., enabled=False))); list_enabled/list_disabled drop the python '.' post-filters (list_enabled by the invariant enabled=TRUE ⇒ ip<>''; list_disabled filters ip <> '' in SQL via node/list_disabled.sql). node/insert_tmp.sql removed from the SQL layout.
+#   LAST_CHANGE: v1.10.0 - ssh-rekey-node-id: PostgresNodeRepository removes get(ip) and get_by_ips(ips) (no caller resolves a node by ip) and adds get_by_ids(node_ids: list[NodeId]) -> dict[NodeId, Node] (batch lookup, runs node/get_by_ids.sql with WHERE node_id = ANY(:node_ids), binds [n.value for n in node_ids]). node/get_by_ip.sql and node/get_by_ips.sql removed from the SQL layout; node/get_by_ids.sql added. get_by_id/list_*/insert/update/enable/disable/remove unchanged.
+#   PREVIOUS_CHANGE: v1.9.0 - task-allocated-node-id: PostgresTaskRepository.save and insert bind allocated_node_id via the :node_id pg8000 param (alongside label/status/ip/metadata); _row_to_task reads allocated_node_id and constructs NodeId(int(...)) when not None (else None). The 5 task SQL files feeding _row_to_task (get_by_id, list_by_status, list_by_jobs, insert RETURNING, update_by_id SET) include allocated_node_id; update_status/get_ids_by_ip_and_status/count_by_status are untouched (status-only / task_id-only / aggregate).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -288,20 +288,6 @@ class PostgresNodeRepository(_PgRepository):
     (``node/list_disabled.sql``) so tmp rows are excluded at the DB layer.
     """
 
-    # START_CONTRACT: get
-    #   PURPOSE: Fetch a single node by IP address.
-    #   INPUTS: { ip: str }
-    #   OUTPUTS: { Node | None }
-    #   SIDE_EFFECTS: None
-    #   LINKS: node/get_by_ip.sql, _row_to_node
-    # END_CONTRACT: get
-    async def get(self, ip: str) -> Node | None:
-        """Retrieve a node by IP, or None if not found."""
-        rows = await self._run(load_query("node/get_by_ip"), ip=ip)
-        if not rows:
-            return None
-        return self._row_to_node(rows[0])
-
     # START_CONTRACT: list_all
     #   PURPOSE: Return all nodes without filtering.
     #   INPUTS: { None }
@@ -389,20 +375,26 @@ class PostgresNodeRepository(_PgRepository):
             return None
         return self._row_to_node(rows[0])
 
-    # START_CONTRACT: get_by_ips
-    #   PURPOSE: Return nodes keyed by IP for the given IP list (batch lookup).
-    #   INPUTS: { ips: list[str] - list of IPs to fetch }
-    #   OUTPUTS: { dict[str, Node] - nodes keyed by IP }
+    # START_CONTRACT: get_by_ids
+    #   PURPOSE: Batch-lookup nodes by primary-key list, returning a dict keyed by NodeId.
+    #   INPUTS: { node_ids: list[NodeId] - primary keys to look up }
+    #   OUTPUTS: { dict[NodeId, Node] - nodes keyed by NodeId; missing node_ids are absent from the dict }
     #   SIDE_EFFECTS: None
-    #   LINKS: node/get_by_ips.sql, _row_to_node
-    # END_CONTRACT: get_by_ips
-    async def get_by_ips(self, ips: list[str]) -> dict[str, Node]:
-        """Return nodes keyed by IP for the given IP list."""
+    #   LINKS: node/get_by_ids.sql, _row_to_node
+    # END_CONTRACT: get_by_ids
+    async def get_by_ids(self, node_ids: list[NodeId]) -> dict[NodeId, Node]:
+        """Return nodes keyed by NodeId for the given primary-key list.
+
+        Passes ``[n.value for n in node_ids]`` (the bare ints) as the SQL
+        param — pg8000 adapts a Python list to a PostgreSQL array for
+        ``= ANY(:node_ids)``. An empty list runs the SQL with an empty array
+        and returns an empty dict.
+        """
         rows = await self._run(
-            load_query("node/get_by_ips"),
-            ips=ips,
+            load_query("node/get_by_ids"),
+            node_ids=[n.value for n in node_ids],
         )
-        return {row["ip"]: self._row_to_node(row) for row in rows}
+        return {NodeId(int(row["node_id"])): self._row_to_node(row) for row in rows}
 
     # START_CONTRACT: update
     #   PURPOSE: Persist all mutable node fields by node_id via UPDATE.
@@ -416,6 +408,7 @@ class PostgresNodeRepository(_PgRepository):
         await self._run(
             load_query("node/update"),
             node_id=node.node_id.value,
+            ip=node.ip,
             ncpus=node.ncpus,
             enabled=node.enabled,
             cloud=node.cloud,

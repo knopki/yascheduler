@@ -79,7 +79,7 @@ async def test_add_and_get_node(uow_factory: Callable[[], PostgresUnitOfWork]) -
         assert persisted.node_id.value >= 1
 
     async with uow_factory() as uow:
-        retrieved = await uow.nodes.get("10.0.0.1")
+        retrieved = await uow.nodes.get_by_id(persisted.node_id)
         assert retrieved is not None
         assert retrieved.ip == "10.0.0.1"
         assert retrieved.username == "admin"
@@ -128,12 +128,12 @@ async def test_get_all_nodes_filtering(
 async def test_has_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Check has_node for existing and non-existing IPs."""
     async with uow_factory() as uow:
-        await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0))
+        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0))
         await uow.commit()
 
     async with uow_factory() as uow:
-        assert bool(await uow.nodes.get("10.0.0.1")) is True
-        assert await uow.nodes.get("10.0.0.99") is None
+        assert bool(await uow.nodes.get_by_id(node.node_id)) is True
+        assert await uow.nodes.get_by_id(NodeId(99999)) is None
 
 
 # START_CONTRACT: test_enable_disable_node
@@ -156,7 +156,7 @@ async def test_enable_disable_node(
         await uow.commit()
 
     async with uow_factory() as uow:
-        fetched = await uow.nodes.get("10.0.0.1")
+        fetched = await uow.nodes.get_by_id(node.node_id)
         assert fetched is not None
         assert fetched.enabled is True
 
@@ -165,7 +165,7 @@ async def test_enable_disable_node(
         await uow.commit()
 
     async with uow_factory() as uow:
-        fetched = await uow.nodes.get("10.0.0.1")
+        fetched = await uow.nodes.get_by_id(node.node_id)
         assert fetched is not None
         assert fetched.enabled is False
 
@@ -184,12 +184,12 @@ async def test_remove_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> Non
         await uow.commit()
 
     async with uow_factory() as uow:
-        assert await uow.nodes.get("10.0.0.1") is not None
+        assert await uow.nodes.get_by_id(node.node_id) is not None
         await uow.nodes.remove(node.node_id)
         await uow.commit()
 
     async with uow_factory() as uow:
-        assert await uow.nodes.get("10.0.0.1") is None
+        assert await uow.nodes.get_by_id(node.node_id) is None
 
 
 # START_CONTRACT: test_count_aggregations
@@ -561,10 +561,13 @@ async def test_get_tasks_with_cloud_by_id_status(
         matching = [task for task in tasks if task.status == DomainTaskStatus.RUNNING]
         assert len(matching) == 1
         assert matching[0].task_id == t.task_id
-        ips = [task.allocated_ip for task in matching if task.allocated_ip]
-        nodes = await uow.nodes.get_by_ips(ips)
+        all_nodes = await uow.nodes.list_all()
+        node_ids = [n.node_id for n in all_nodes if n.ip == "10.0.0.1"]
+        nodes = await uow.nodes.get_by_ids(node_ids)
         assert matching[0].allocated_ip is not None
-        node = nodes.get(matching[0].allocated_ip)
+        node = next(
+            (n for n in nodes.values() if n.ip == matching[0].allocated_ip), None
+        )
         assert node is not None
         assert node.cloud == "azure"
 

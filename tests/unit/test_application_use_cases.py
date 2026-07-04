@@ -229,6 +229,7 @@ class TestAllocateTask:
         engines.get.return_value = engine
 
         free_machine = MagicMock(spec=ConnectedMachine)
+        free_machine.node_id = NodeId(1)
         free_machine.ip = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
@@ -317,6 +318,7 @@ class TestAllocateTask:
         uow.nodes.list_all = AsyncMock(return_value=[])
         tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
         uow.nodes.insert = AsyncMock(return_value=tmp_node)
+        uow.nodes.update = AsyncMock()
         uow.nodes.remove = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
         uow.publish_events = AsyncMock()
@@ -334,7 +336,15 @@ class TestAllocateTask:
 
         clouds = MagicMock(spec=CloudProvisioner)
         clouds.select_provider.return_value = "aws"
-        cloud_node = Node(node_id=NodeId(1), ip="10.0.0.100", ncpus=4, cloud="aws")
+        cloud_node = Node(
+            node_id=NodeId(1),
+            ip="10.0.0.100",
+            ncpus=4,
+            cloud="aws",
+            enabled=True,
+            username="root",
+            port=22,
+        )
         clouds.allocate = AsyncMock(return_value=cloud_node)
 
         start_on_machine = AsyncMock()
@@ -362,15 +372,15 @@ class TestAllocateTask:
         # tmp node inserted via insert(NewNode(cloud=..., enabled=False)) before cloud allocate
         uow.nodes.insert.assert_any_call(NewNode(cloud="aws", enabled=False))
 
-        # cloud allocate called with provider name
-        clouds.allocate.assert_called_once_with("aws")
+        # cloud allocate called with provider name + tmp_node_id
+        clouds.allocate.assert_called_once_with("aws", NodeId(2))
 
-        # final persist: insert cloud node + remove tmp by node_id (no get lookup)
-        uow.nodes.insert.assert_any_call(cloud_node)
-        uow.nodes.remove.assert_called_once_with(NodeId(2))
+        # final persist: update(node) — no insert, no remove on success
+        uow.nodes.update.assert_called_once_with(cloud_node)
+        uow.nodes.remove.assert_not_called()
         uow.nodes.get.assert_not_called()
 
-        # commit called at least twice (tmp insert + final persist)
+        # commit called at least once (tmp insert + final persist are separate UoWs)
         assert uow.commit.call_count >= 2
 
         # tracker.discard NOT called on happy cloud path (deferred to consume)
@@ -609,11 +619,18 @@ class TestTmpCleanupByNodeId:
         uow.nodes.get.assert_not_called()
 
     async def test_persist_with_cleanup_success_removes_tmp_by_node_id(self) -> None:
-        """[9.3] _persist_node_with_cleanup success: insert + remove(tmp_node_id) + commit (no get lookup)."""
-        cloud_node = NewNode(ip="10.0.0.100", ncpus=4, cloud="aws")
+        """[9.3] _persist_node_with_cleanup success: update(node) + commit (no get lookup, no remove)."""
+        cloud_node = Node(
+            node_id=NodeId(7),
+            ip="10.0.0.100",
+            ncpus=4,
+            cloud="aws",
+            enabled=True,
+            username="root",
+            port=22,
+        )
         uow = AsyncMock()
-        uow.nodes.insert = AsyncMock()
-        uow.nodes.remove = AsyncMock()
+        uow.nodes.update = AsyncMock()
         uow.commit = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
         uow.__aexit__ = AsyncMock(return_value=False)
@@ -632,10 +649,10 @@ class TestTmpCleanupByNodeId:
             task_id=TaskId(1),
         )
 
-        uow.nodes.insert.assert_awaited_once_with(cloud_node)
-        uow.nodes.remove.assert_awaited_once_with(NodeId(7))
+        uow.nodes.update.assert_awaited_once_with(cloud_node)
         uow.commit.assert_awaited_once()
         uow.nodes.get.assert_not_called()
+        uow.nodes.remove.assert_not_called()
         clouds.deallocate.assert_not_called()  # success path, no cleanup
 
 
@@ -671,7 +688,7 @@ class TestDeallocateNodes:
         ]
 
         # free_since (monotonic) is well beyond tolerance so the node qualifies
-        idle_machines = {"10.0.0.1": time.monotonic() - 3600}
+        idle_machines = {NodeId(1): time.monotonic() - 3600}
 
         result = await deallocate_nodes(
             uow_factory=uow_factory,
@@ -713,7 +730,7 @@ class TestDeallocateNodes:
             MagicMock(spec=ConfigCloudAzure, prefix="az", idle_tolerance=300)
         ]
 
-        idle_machines = {"10.0.0.1": time.monotonic() - 3600}
+        idle_machines = {NodeId(1): time.monotonic() - 3600}
 
         result = await deallocate_nodes(
             uow_factory=uow_factory,
@@ -749,7 +766,7 @@ class TestDeallocateNodes:
         config_clouds = [
             MagicMock(spec=ConfigCloudAzure, prefix="aws", idle_tolerance=300)
         ]
-        idle_machines = {"10.0.0.2": time.monotonic() - 3600}
+        idle_machines = {NodeId(2): time.monotonic() - 3600}
 
         result = await deallocate_nodes(
             uow_factory=uow_factory,
@@ -791,7 +808,7 @@ class TestDeallocateNodes:
         config_clouds = [
             MagicMock(spec=ConfigCloudAzure, prefix="aws", idle_tolerance=300)
         ]
-        idle_machines: dict[str, float] = {}
+        idle_machines: dict[NodeId, float] = {}
 
         result = await deallocate_nodes(
             uow_factory=uow_factory,

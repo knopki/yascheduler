@@ -20,7 +20,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.9.0 - add-node-id-identity: import NewNode, update allocate return type assertion (Node → NewNode) for test_allocate_happy_path.
+#   LAST_CHANGE: v2.10.0 - ssh-rekey-node-id: import Node/NodeId, add tmp_node_id to allocate calls, assert isinstance(node, Node) and node.node_id.
 #   PREVIOUS_CHANGE: v2.7.0 - add-hetzner-live-e2e: update test_cloud_config_with_engine_packages to inject a MagicMock local_config with cloud_package_upgrade=True (now sourced from local_config instead of hardcoded True); add test_cloud_config_package_upgrade_sourced_from_local_config asserting False propagates to CloudInitConfig.package_upgrade.
 # END_CHANGE_SUMMARY
 
@@ -37,7 +37,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from yascheduler.domain.model import NewNode
+from yascheduler.domain.model import Node, NodeId
 from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
 from yascheduler.infra.cloud.cloud_init import CloudInitConfig
 from yascheduler.infra.cloud.manager import (
@@ -264,9 +264,10 @@ class TestAllocate:
             "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
             new=AsyncMock(return_value=MagicMock()),
         ):
-            node = await prov.allocate("test")
+            node = await prov.allocate("test", NodeId(999))
 
-        assert isinstance(node, NewNode)
+        assert isinstance(node, Node)
+        assert node.node_id == NodeId(999)
         assert node.ip == "10.0.0.1"
         assert node.ncpus == 4
         assert node.cloud == "test"
@@ -279,7 +280,7 @@ class TestAllocate:
         prov = make_provisioner()
 
         with pytest.raises(CloudAllocateError, match="Unknown provider"):
-            await prov.allocate("nonexistent")
+            await prov.allocate("nonexistent", NodeId(1))
 
     @pytest.mark.asyncio
     async def test_allocate_create_node_failure(
@@ -301,7 +302,7 @@ class TestAllocate:
         )
 
         with pytest.raises(CloudAllocateError, match="Create node error"):
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(1))
 
     @pytest.mark.asyncio
     async def test_allocate_setup_failure_cleans_up_vm(
@@ -335,7 +336,7 @@ class TestAllocate:
             ),
             pytest.raises(CloudSetupError, match="SSH connect to"),
         ):
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(1))
 
         adapter.delete_node.assert_awaited_once()
 
@@ -384,7 +385,7 @@ class TestAllocate:
             ),
             pytest.raises(CloudSetupError, match="timed out"),
         ):
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(1))
 
         adapter.delete_node.assert_awaited_once()
 

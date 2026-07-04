@@ -32,7 +32,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId, TaskStatus
 
 
 class TestDomainEvents:
@@ -63,10 +63,10 @@ class TestDomainEvents:
             webhook_url=None,
             webhook_custom_params={},
             engine_name="fleur",
-            node_ip="10.0.0.1",
+            node_id=NodeId(3),
         )
         assert evt.task_id == TaskId(3)
-        assert evt.node_ip == "10.0.0.1"
+        assert evt.node_id == NodeId(3)
         assert evt.engine_name == "fleur"
 
     def test_task_completed_all_fields(self) -> None:
@@ -91,9 +91,9 @@ class TestDomainEvents:
             task_id=TaskId(6),
             webhook_url=None,
             webhook_custom_params={},
-            node_ip="10.0.0.5",
+            node_id=NodeId(6),
         )
-        assert evt.node_ip == "10.0.0.5"
+        assert evt.node_id == NodeId(6)
 
     def test_frozen_enforcement(self) -> None:
         evt = TaskCreated(
@@ -117,7 +117,7 @@ class TestDomainEvents:
             webhook_url=None,
             webhook_custom_params={},
             engine_name="cp2k",
-            node_ip="10.0.0.1",
+            node_id=NodeId(1),
         )
         completed: Event = TaskCompleted(
             task_id=TaskId(1),
@@ -133,7 +133,7 @@ class TestDomainEvents:
             task_id=TaskId(1),
             webhook_url=None,
             webhook_custom_params={},
-            node_ip="10.0.0.1",
+            node_id=NodeId(1),
         )
 
         assert isinstance(created, TaskCreated)
@@ -156,7 +156,7 @@ class TestDomainEvents:
                 webhook_url=None,
                 webhook_custom_params={},
                 engine_name="cp2k",
-                node_ip="10.0.0.1",
+                node_id=NodeId(1),
             ),
             TaskCompleted(
                 task_id=TaskId(1),
@@ -175,7 +175,7 @@ class TestDomainEvents:
                 task_id=TaskId(1),
                 webhook_url=None,
                 webhook_custom_params={},
-                node_ip="10.0.0.1",
+                node_id=NodeId(1),
             ),
         ):
             assert isinstance(evt, DomainEvent)
@@ -234,7 +234,7 @@ class TestTaskEvents:
             webhook_url=None,
             webhook_custom_params={},
             engine_name="fleur",
-            node_ip="10.0.0.1",
+            node_id=NodeId(1),
         )
         e3 = TaskCompleted(
             task_id=TaskId(1),
@@ -270,7 +270,7 @@ class TestTaskWithEvent:
     def test_populates_base_fields_from_context(self) -> None:
         task = _make_task_with_webhook()
         updated = task.with_event(
-            TaskAllocated, node_ip="10.0.0.1", engine_name="fleur"
+            TaskAllocated, node_id=NodeId(42), engine_name="fleur"
         )
         assert len(updated._events) == 1
         evt = updated._events[0]
@@ -278,7 +278,7 @@ class TestTaskWithEvent:
         assert evt.task_id == TaskId(42)
         assert evt.webhook_url == "https://hook.example.com"
         assert evt.webhook_custom_params == {"k": "v"}
-        assert evt.node_ip == "10.0.0.1"
+        assert evt.node_id == NodeId(42)
         assert evt.engine_name == "fleur"
 
     def test_subclass_fields_are_keyword_only(self) -> None:
@@ -315,10 +315,10 @@ class TestTaskWithEvent:
             status=TaskStatus.RUNNING, allocated_ip="10.0.0.9"
         )
         failed = running.fail("node is gone")
-        updated = failed.with_event(TaskAbandoned, node_ip="10.0.0.9")
+        updated = failed.with_event(TaskAbandoned, node_id=NodeId(42))
         evt = updated._events[0]
         assert isinstance(evt, TaskAbandoned)
-        assert evt.node_ip == "10.0.0.9"
+        assert evt.node_id == NodeId(42)
         assert evt.webhook_url == "https://hook.example.com"
         assert evt.webhook_custom_params == {"k": "v"}
 

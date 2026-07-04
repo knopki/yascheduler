@@ -126,6 +126,7 @@ def make_task(
     label: str = "test",
     ip: str | None = "10.0.0.1",
     engine: str = "g09",
+    allocated_node_id: NodeId | None = None,
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
     return Task(
@@ -138,6 +139,7 @@ def make_task(
         ),
         status=status,
         allocated_ip=ip,
+        allocated_node_id=allocated_node_id,
     )
 
 
@@ -157,6 +159,7 @@ def make_mock_repository(
         return_value=MagicMock(returncode=returncode, stdout=stdout)
     )
     session.ip = "10.0.0.1"
+    session.machine = MagicMock(node_id=NodeId(1))
     session.open_sftp = AsyncMock()
 
     repo = MagicMock()
@@ -404,10 +407,15 @@ class TestCheckStatusJson:
         )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
+                make_task(
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    ip="10.0.0.1",
+                    allocated_node_id=NodeId(1),
+                )
             ]
         )
-        uow.nodes.get_by_ips = AsyncMock(return_value={"10.0.0.1": node})
+        uow.nodes.get_by_ids = AsyncMock(return_value={NodeId(1): node})
 
         _run(["--json"])
 
@@ -435,9 +443,9 @@ class TestCheckStatusJson:
         assert obj["local_folder"] == "/tmp/local"
         assert obj["remote_folder"] == "/tmp/remote"
         # --json triggers the conditional nodes lookup (lazy-lookup invariant).
-        uow.nodes.get_by_ips.assert_called_once()
+        uow.nodes.get_by_ids.assert_called_once()
 
-    def test_json_fetches_nodes_by_ip(
+    def test_json_fetches_nodes_by_id(
         self,
         capsys: pytest.CaptureFixture[str],
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
@@ -445,18 +453,23 @@ class TestCheckStatusJson:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
+                make_task(
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    ip="10.0.0.1",
+                    allocated_node_id=NodeId(1),
+                )
             ]
         )
-        uow.nodes.get_by_ips = AsyncMock(
+        uow.nodes.get_by_ids = AsyncMock(
             return_value={
-                "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=22)
+                NodeId(1): Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=22)
             }
         )
 
         _run(["--json"])
 
-        uow.nodes.get_by_ips.assert_called_once()
+        uow.nodes.get_by_ids.assert_called_once()
 
     def test_json_todo_task_has_null_placement(
         self,
@@ -502,12 +515,17 @@ class TestCheckStatusJson:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_jobs = AsyncMock(
             return_value=[
-                make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
+                make_task(
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    ip="10.0.0.1",
+                    allocated_node_id=NodeId(1),
+                )
             ]
         )
-        uow.nodes.get_by_ips = AsyncMock(
+        uow.nodes.get_by_ids = AsyncMock(
             return_value={
-                "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=22)
+                NodeId(1): Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=22)
             }
         )
 
@@ -711,10 +729,15 @@ class TestCheckStatusViewHappyPath:
         )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
+                make_task(
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    ip="10.0.0.1",
+                    allocated_node_id=NodeId(1),
+                )
             ]
         )
-        uow.nodes.get_by_ips = AsyncMock(return_value={"10.0.0.1": node})
+        uow.nodes.get_by_ids = AsyncMock(return_value={NodeId(1): node})
 
         repo = make_mock_repository(stdout="OUTPUT TAIL")
         session = repo.connect.return_value
@@ -738,11 +761,12 @@ class TestCheckStatusViewHappyPath:
         assert kwargs["jump_username"] == "jumper"
         # tails OUTPUT (session.run_full invoked) and disconnects.
         assert session.run_full.await_count == 1
-        repo.disconnect.assert_awaited()
+        # disconnect called with node_id (session machine handle)
+        repo.disconnect.assert_awaited_with(session.machine.node_id)
         out, _ = capsys.readouterr()
         assert "OUTPUT TAIL" in out
 
-    def test_view_fetches_nodes_by_ip(
+    def test_view_fetches_nodes_by_id(
         self,
         capsys: pytest.CaptureFixture[str],
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
@@ -751,11 +775,16 @@ class TestCheckStatusViewHappyPath:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
+                make_task(
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    ip="10.0.0.1",
+                    allocated_node_id=NodeId(1),
+                )
             ]
         )
-        uow.nodes.get_by_ips = AsyncMock(
-            return_value={"10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)}
+        uow.nodes.get_by_ids = AsyncMock(
+            return_value={NodeId(1): Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)}
         )
         monkeypatch.setattr(
             check_status_mod,
@@ -765,7 +794,7 @@ class TestCheckStatusViewHappyPath:
 
         _run(["-v"])
 
-        uow.nodes.get_by_ips.assert_called_once()
+        uow.nodes.get_by_ids.assert_called_once()
 
     def test_default_does_not_fetch_nodes(
         self,
@@ -817,11 +846,16 @@ class TestCheckStatusQueryRenderSeparation:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
+                make_task(
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    ip="10.0.0.1",
+                    allocated_node_id=NodeId(1),
+                )
             ]
         )
-        uow.nodes.get_by_ips = AsyncMock(
-            return_value={"10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)}
+        uow.nodes.get_by_ids = AsyncMock(
+            return_value={NodeId(1): Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)}
         )
 
         repo = make_mock_repository()

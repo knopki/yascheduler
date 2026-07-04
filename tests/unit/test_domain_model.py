@@ -498,7 +498,9 @@ class TestNewNode:
 # END_CONTRACT: test_connected_machine
 class TestConnectedMachine:
     def make_machine(self, **overrides: object) -> ConnectedMachine:
-        defaults: dict[str, object] = dict(ip="10.0.0.1", platform="linux", ncpus=4)
+        defaults: dict[str, object] = dict(
+            node_id=NodeId(1), ip="10.0.0.1", platform="linux", ncpus=4
+        )
         defaults.update(overrides)
         return ConnectedMachine(**defaults)  # type: ignore[arg-type]
 

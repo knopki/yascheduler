@@ -57,7 +57,7 @@ from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UniqueQueue
 from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.domain.events import TaskAbandoned
-from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId, TaskStatus
 from yascheduler.entrypoints import Config
 from yascheduler.infra.persistence import PostgresDbConfig
 
@@ -443,6 +443,7 @@ class TestOrchestratorTaskAbandoned:
             ),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
+            allocated_node_id=NodeId(42),
         )
         msg = UMessage(TaskId(42), task)
         machine_not_found: Counter[str] = Counter()
@@ -466,7 +467,7 @@ class TestOrchestratorTaskAbandoned:
         event = saved_task._events[0]
         assert isinstance(event, TaskAbandoned)
         assert event.task_id == TaskId(42)
-        assert event.node_ip == "10.0.0.1"
+        assert event.node_id == NodeId(42)
         assert event.webhook_url == "https://hook.example.com"
         assert event.webhook_custom_params == {"k": "v"}
         uow.commit.assert_called_once()
@@ -768,6 +769,7 @@ class TestConsumeConditionalDiscard:
 
         orch = make_orchestrator()
         machine = ConnectedMachine(
+            node_id=NodeId(1),
             ip="10.0.0.1",
             platform="linux",
             ncpus=2,
@@ -776,7 +778,7 @@ class TestConsumeConditionalDiscard:
         )
         session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
-        orch._occupancy_started.add("10.0.0.1")
+        orch._occupancy_started.add(NodeId(1))
 
         task = Task(
             task_id=TaskId(5),
@@ -784,6 +786,7 @@ class TestConsumeConditionalDiscard:
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
+            allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
 
@@ -793,7 +796,7 @@ class TestConsumeConditionalDiscard:
         ):
             await orch._task_consumer_consumer(msg, Counter())
 
-        assert "10.0.0.1" not in orch._occupancy_started
+        assert NodeId(1) not in orch._occupancy_started
 
     @pytest.mark.asyncio
     async def test_deferred_keeps_ip(self) -> None:
@@ -803,6 +806,7 @@ class TestConsumeConditionalDiscard:
 
         orch = make_orchestrator()
         machine = ConnectedMachine(
+            node_id=NodeId(1),
             ip="10.0.0.1",
             platform="linux",
             ncpus=2,
@@ -811,7 +815,7 @@ class TestConsumeConditionalDiscard:
         )
         session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
-        orch._occupancy_started.add("10.0.0.1")
+        orch._occupancy_started.add(NodeId(1))
 
         task = Task(
             task_id=TaskId(5),
@@ -819,6 +823,7 @@ class TestConsumeConditionalDiscard:
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
+            allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
 
@@ -829,7 +834,7 @@ class TestConsumeConditionalDiscard:
             await orch._task_consumer_consumer(msg, Counter())
 
         # Deferred: ip stays registered so the next producer cycle re-enters consume
-        assert "10.0.0.1" in orch._occupancy_started
+        assert NodeId(1) in orch._occupancy_started
 
 
 class TestConsumeInFlightGuard:
@@ -882,6 +887,7 @@ class TestConsumeInFlightGuard:
 
         orch = make_orchestrator()
         machine = ConnectedMachine(
+            node_id=NodeId(1),
             ip="10.0.0.1",
             platform="linux",
             ncpus=2,
@@ -890,7 +896,7 @@ class TestConsumeInFlightGuard:
         )
         session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
-        orch._occupancy_started.add("10.0.0.1")
+        orch._occupancy_started.add(NodeId(1))
 
         task = Task(
             task_id=TaskId(5),
@@ -898,6 +904,7 @@ class TestConsumeInFlightGuard:
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
+            allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
 
@@ -917,6 +924,7 @@ class TestConsumeInFlightGuard:
 
         orch = make_orchestrator()
         machine = ConnectedMachine(
+            node_id=NodeId(1),
             ip="10.0.0.1",
             platform="linux",
             ncpus=2,
@@ -925,7 +933,7 @@ class TestConsumeInFlightGuard:
         )
         session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
-        orch._occupancy_started.add("10.0.0.1")
+        orch._occupancy_started.add(NodeId(1))
 
         task = Task(
             task_id=TaskId(5),
@@ -933,6 +941,7 @@ class TestConsumeInFlightGuard:
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
+            allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
 
@@ -944,7 +953,7 @@ class TestConsumeInFlightGuard:
 
         # Deferred keeps the ip in _occupancy_started but releases the in-flight guard
         assert TaskId(5) not in orch._consuming
-        assert "10.0.0.1" in orch._occupancy_started
+        assert NodeId(1) in orch._occupancy_started
 
     @pytest.mark.asyncio
     async def test_guard_released_on_consume_exception(self) -> None:
@@ -954,6 +963,7 @@ class TestConsumeInFlightGuard:
 
         orch = make_orchestrator()
         machine = ConnectedMachine(
+            node_id=NodeId(1),
             ip="10.0.0.1",
             platform="linux",
             ncpus=2,
@@ -962,7 +972,7 @@ class TestConsumeInFlightGuard:
         )
         session_stub = SimpleNamespace(machine=machine, ip="10.0.0.1")
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
-        orch._occupancy_started.add("10.0.0.1")
+        orch._occupancy_started.add(NodeId(1))
 
         task = Task(
             task_id=TaskId(5),
@@ -970,6 +980,7 @@ class TestConsumeInFlightGuard:
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_ip="10.0.0.1",
+            allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
 

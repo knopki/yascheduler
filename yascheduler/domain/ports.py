@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.15.0
+# VERSION: 2.16.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -9,17 +9,17 @@
 #
 # START_MODULE_MAP
 #   TaskRepository - Async port for task persistence (get, save, insert NewTask→Task, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status); get/update_status take TaskId, list_ids_by_ip_and_status returns list[TaskId], list_by_jobs takes list[TaskId]
-#   NodeRepository - Async port for node persistence (insert NewNode→Node is the sole insertion path — add_tmp removed; get_by_id, full CRUD lifecycle, list_all, get_by_ips, count_by_status); mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups get/get_by_ips/list_* remain ip-keyed / unkeyed; tmp-reservation uses insert(NewNode(cloud=..., enabled=False))
+#   NodeRepository - Async port for node persistence (insert NewNode→Node is the sole insertion path; get_by_id, get_by_ids batch lookup, full CRUD lifecycle, list_all, count_by_status); mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups get_by_id/get_by_ids and list_* are node_id-keyed / unkeyed (ip-keyed get/get_by_ips removed); tmp-reservation uses insert(NewNode(cloud=..., enabled=False))
 #   CloudConfig - Structural Protocol for cloud provider config (7-field surface application consumers read: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host)
-#   MachineRepository - Async port for the connected-machine collection (lifecycle, queries); returns MachineSession; no state transitions/accessors/monitor (moved to MachineSession)
+#   MachineRepository - Async port for the connected-machine collection (lifecycle, queries); keyed by NodeId (connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id)); returns MachineSession; no state transitions/accessors/monitor (moved to MachineSession)
 #   MachineSession - Connected-machine entity handle (identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism); Engine-agnostic
 #   MachineOperations - Async port for operations on a single machine; methods take session: MachineSession (use-case methods + facade pass-throughs)
-#   CloudProvisioner - Async port for cloud node provisioning (allocate returns NewNode, deallocate, select_provider)
+#   CloudProvisioner - Async port for cloud node provisioning (allocate(provider, tmp_node_id)->Node reusing tmp_node_id as node identity, deallocate, select_provider)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.15.0 - NodeRepository.add_tmp removed (remove-tmp-node-fake-ip): insert(NewNode) -> Node is now the sole node-insertion path; the tmp-reservation flow constructs NewNode(cloud=..., enabled=False) (relying on NewNode.ip="" and NewNode.ncpus=0 defaults) and persists it via insert, using the returned Node.node_id as the cleanup handle. No second insertion path, no insert_tmp.sql.
-#   PREVIOUS_CHANGE: v2.14.0 - NodeRepository mutators rekeyed from ip to node_id (node-id-keyed-mutators): enable(node_id: NodeId), disable(node_id: NodeId), remove(node_id: NodeId); update(node: Node) signature unchanged (already carries node_id; its SQL keys on node_id). Lookup methods get(ip)/get_by_ips/list_* remain ip-keyed / unkeyed (deferred non-goal).
+#   LAST_CHANGE: v2.16.0 - ssh-rekey-node-id: MachineRepository rekeyed from ip to NodeId (connect(node: Node,...), disconnect(node_id), get_session(node_id), contains(node_id), __contains__(node_id)); ip survives only as node.ip read inside connect for the asyncssh host. NodeRepository removes get(ip)/get_by_ips(ips) and adds get_by_ids(node_ids)->dict[NodeId, Node] (batch, WHERE node_id = ANY(:node_ids)). CloudProvisioner.allocate signature changes from allocate(provider)->NewNode to allocate(provider, tmp_node_id: NodeId)->Node (cloud adapter reuses tmp_node_id as the real node identity; single-row UPDATE lifecycle). deallocate(cloud, ip) stays ip-keyed (cloud SDK host).
+#   PREVIOUS_CHANGE: v2.15.0 - NodeRepository.add_tmp removed (remove-tmp-node-fake-ip): insert(NewNode) -> Node is now the sole node-insertion path; the tmp-reservation flow constructs NewNode(cloud=..., enabled=False) (relying on NewNode.ip="" and NewNode.ncpus=0 defaults) and persists it via insert, using the returned Node.node_id as the cleanup handle. No second insertion path, no insert_tmp.sql.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -93,23 +93,22 @@ class NodeRepository(Protocol):
     tmp nodes too — constructing ``NewNode(cloud=selected_name,
     enabled=False)`` (relying on ``NewNode``'s ``ip=""`` and ``ncpus=0``
     defaults) and persisting it to reserve capacity; the returned
-    ``Node.node_id`` is the tmp-node handle for cleanup. There is exactly one
-    node-insertion method on the port — ``add_tmp`` is abolished.
+    ``Node.node_id`` is the tmp-node cleanup handle AND the real-node identity
+    reused by ``clouds.allocate``.
 
-    ``get_by_id(node_id: NodeId) -> Node | None`` is an additive lookup by
-    primary key. The four mutators ``enable``, ``disable``, ``remove``, and
-    ``update`` key on ``node_id``: ``enable``/``disable``/``remove`` take
-    ``NodeId`` directly; ``update`` takes a ``Node`` (which carries
-    ``node_id``) and the implementation binds ``node.node_id.value`` as the SQL
-    key. The lookup methods ``get(ip)``, ``get_by_ips(ips)``, and the
-    ``list_*`` methods remain ip-keyed / unkeyed — switching them to
-    ``node_id`` is a deferred non-goal (the ip-keyed orchestrator queues that
-    feed them must migrate first).
+    All lookups are ``node_id``-keyed: ``get_by_id(node_id) -> Node | None``
+    (single-row) and ``get_by_ids(node_ids: list[NodeId]) -> dict[NodeId, Node]``
+    (batch). The ip-keyed lookup methods (``get(ip)``, ``get_by_ips(ips)``)
+    are REMOVED — no caller resolves a node by ip. The four mutators
+    ``enable``, ``disable``, ``remove``, and ``update`` key on ``node_id``:
+    ``enable``/``disable``/``remove`` take ``NodeId`` directly; ``update``
+    takes a ``Node`` (which carries ``node_id``) and the implementation binds
+    ``node.node_id.value`` as the SQL key.
     """
 
-    async def get(self, ip: str) -> Node | None: ...
-
     async def get_by_id(self, node_id: NodeId) -> Node | None: ...
+
+    async def get_by_ids(self, node_ids: list[NodeId]) -> dict[NodeId, Node]: ...
 
     async def list_enabled(self) -> list[Node]: ...
 
@@ -126,8 +125,6 @@ class NodeRepository(Protocol):
     async def remove(self, node_id: NodeId) -> None: ...
 
     async def list_all(self) -> list[Node]: ...
-
-    async def get_by_ips(self, ips: list[str]) -> dict[str, Node]: ...
 
     async def count_by_status(self) -> Mapping[bool, int]: ...
 
@@ -163,7 +160,7 @@ class CloudConfig(Protocol):
 #   PURPOSE: Connected-machine entity handle — the public counterpart to the dissolved private _MachineState.
 #     Carries domain identity (ip, mutable machine snapshot), connect-time config (read-only),
 #     adapter-derived accessors, base SSH primitives, and the per-session monitor mechanism.
-#     What MachineOperations methods operate on; what MachineRepository hands out and tracks by IP.
+#     What MachineOperations methods operate on; what MachineRepository hands out and tracks by NodeId.
 #   INPUTS: { None - Protocol has no inputs }
 #   OUTPUTS: { None - Protocol defines surface only }
 #   SIDE_EFFECTS: None at Protocol level; implementations own connection teardown via _close (private to concrete class)
@@ -262,21 +259,26 @@ class MachineSession(Protocol):
 class MachineRepository(Protocol):
     """Connected-machine collection — lifecycle and queries.
 
-    Returns MachineSession from connect/list_free/list_connected/get_session.
-    Does NOT declare state transitions (occupy/release/update), accessor
-    getters (get_path/get_quote/get_hostname), the monitor mechanism
+    Keyed by ``NodeId``, not by ip. ``ip`` survives only as the transport
+    address read from ``node.ip`` inside ``connect``; it is no longer a
+    positional parameter or a dict key. Returns MachineSession from
+    connect/list_free/list_connected/get_session. Does NOT declare state
+    transitions (occupy/release/update), accessor getters
+    (get_path/get_quote/get_hostname), the monitor mechanism
     (install_monitor/cancel_monitor), or get_machine_state — those are on
-    MachineSession. Callers resolve a session via get_session(ip) and read
-    session.machine for the snapshot.
+    MachineSession. Callers resolve a session via
+    ``get_session(node_id)`` and read ``session.machine`` for the snapshot.
     """
 
     # ---- Collection lifecycle ----
     async def connect(
         self,
-        ip: str,
+        node: Node,
+        # FIXME: why username? it's already in node.username
         username: str,
         client_keys: Sequence[PurePath] | None,
         *,
+        # FIXME: why port? it's already in node.port
         port: int = 22,
         connect_timeout: int | None = None,
         data_dir: PurePath | None = None,
@@ -286,7 +288,7 @@ class MachineRepository(Protocol):
         jump_username: str | None = None,
     ) -> MachineSession: ...
 
-    async def disconnect(self, ip: str) -> None: ...
+    async def disconnect(self, node_id: NodeId) -> None: ...
 
     async def disconnect_all(self) -> None: ...
 
@@ -295,13 +297,13 @@ class MachineRepository(Protocol):
 
     def list_connected(self) -> list[MachineSession]: ...
 
-    def get_session(self, ip: str) -> MachineSession | None: ...
+    def get_session(self, node_id: NodeId) -> MachineSession | None: ...
 
-    def contains(self, ip: str) -> bool: ...
+    def contains(self, node_id: NodeId) -> bool: ...
 
     def __len__(self) -> int: ...
 
-    def __contains__(self, ip: str) -> bool: ...
+    def __contains__(self, node_id: NodeId) -> bool: ...
 
 
 @runtime_checkable
@@ -309,7 +311,7 @@ class MachineOperations(Protocol):
     """Operations on a single connected machine — use-case methods plus
     facade pass-throughs. All machine-reference parameters are typed
     `session: MachineSession` (resolved per-tick by the orchestrator via
-    `repository.get_session(ip)`).
+    `repository.get_session(node_id)`).
 
     Does NOT declare base primitives (run/run_full/run_bg/upload/
     open_sftp/pgrep/list_processes/get_cpu_cores/setup_node) as abstract —
@@ -369,15 +371,24 @@ class MachineOperations(Protocol):
 class CloudProvisioner(Protocol):
     """Port for cloud node provisioning.
 
-    ``allocate`` returns a ``NewNode`` (pre-persistence) — a freshly-built VM that
-    has NOT been written to ``yascheduler_nodes``. The caller (``allocate_task``)
-    persists it via ``NodeRepository.insert(new_node) -> Node``. Provider selection
-    is sync (no I/O); ``allocate``/``deallocate`` are async. ``select_provider``
-    returns None when no provider has capacity OR when the selected provider is
-    throttled (op semaphore locked).
+    ``allocate(provider, tmp_node_id) -> Node`` returns a ``Node`` carrying
+    ``node_id == tmp_node_id`` (post-persistence identity — the row already
+    exists with ``node_id == tmp_node_id``). The caller (``allocate_task``)
+    inserted the tmp-node row via ``uow.nodes.insert(NewNode(cloud=...,
+    enabled=False)) -> Node`` and passes the returned ``tmp_node_id`` to
+    ``allocate``. The cloud adapter reuses this ``tmp_node_id`` as the real
+    node's identity: the setup SSH session registers under ``tmp_node_id``,
+    and the returned ``Node`` carries ``node_id == tmp_node_id``. The caller
+    then flips the row to ``enabled=TRUE`` and sets ``ip``/``ncpus`` via a
+    single ``uow.nodes.update(node)`` — one row per cloud allocation
+    lifecycle, not two. Provider selection is sync (no I/O);
+    ``allocate``/``deallocate`` are async. ``select_provider`` returns None
+    when no provider has capacity OR when the selected provider is throttled
+    (op semaphore locked). ``deallocate(cloud, ip)`` stays ip-keyed — ``ip``
+    is the cloud SDK host identifier.
     """
 
-    async def allocate(self, provider: str) -> NewNode: ...
+    async def allocate(self, provider: str, tmp_node_id: NodeId) -> Node: ...
 
     async def deallocate(self, cloud: str, ip: str) -> None: ...
 

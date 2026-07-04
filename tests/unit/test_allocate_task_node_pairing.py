@@ -52,10 +52,12 @@ class TestFindFreeMachinesNodePairing:
         node_b = Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=4, enabled=True)
 
         m_a = MagicMock(spec=ConnectedMachine)
+        m_a.node_id = NodeId(1)
         m_a.ip = "10.0.0.1"
         m_a.state = MachineState.FREE
         m_a.free_since = time.monotonic()
         m_b = MagicMock(spec=ConnectedMachine)
+        m_b.node_id = NodeId(2)
         m_b.ip = "10.0.0.2"
         m_b.state = MachineState.FREE
         m_b.free_since = time.monotonic()
@@ -100,6 +102,7 @@ class TestFindFreeMachinesNodePairing:
         node_last = Node(node_id=NodeId(2), ip="10.0.0.1", ncpus=4, enabled=True)
 
         m = MagicMock(spec=ConnectedMachine)
+        m.node_id = NodeId(2)
         m.ip = "10.0.0.1"
         m.state = MachineState.FREE
         m.free_since = time.monotonic()

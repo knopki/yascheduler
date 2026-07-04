@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 6.9.0
+# VERSION: 7.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.9.0 - deallocate-node-id-identity: _deallocate_q rekeyed from UniqueQueue[str, str] to UniqueQueue[NodeId, Node] (dedup on NodeId, the strictly-unique SERIAL PK, instead of ip which is non-unique post migration 003 — duplicate IPs behind different jump hosts no longer collapse to one queue entry). _deallocator_producer yields UMessage(node.node_id, node) for each Node returned by deallocate_nodes (which now returns list[Node]). _deallocator_consumer takes node = msg.payload directly and drops the uow.nodes.get(ip) round-trip lookup — deallocate_node(node, ...) is called with the already-held Node. The consumer's elif self._repository.contains(ip): disconnect(ip) fallback is removed (SSH teardown is owned by deallocate_node's internal repository.contains/disconnect, which runs before the if node.cloud: guard). Consumer error log adds node_id=%s alongside ip=%s. NodeId added to the domain import block.
-#   PREVIOUS_CHANGE: v6.8.0 - Carry TaskId end-to-end through the producer/consumer loops (add-task-id-identity): _consuming is set[TaskId]; _allocate_q/_consume_q are UniqueQueue[TaskId, Task]; the allocator/task-consumer producers yield UMessage[TaskId, Task]; allocate_task/consume_task are called with task.task_id (a TaskId) and the tracker/add/discard keys are TaskId. No .value extraction (TaskId flows internally; logging task_id=%s renders the bare integer).
+#   LAST_CHANGE: v7.0.0 - ssh-rekey-node-id: _occupancy_started rekeyed from set[str] (ip) to set[NodeId] (keyed by session.machine.node_id). _connect_failures rekeyed from dict[str, float] to dict[NodeId, float] (keyed by node.node_id). _conn_machine_q rekeyed from UniqueQueue[str, Node] to UniqueQueue[NodeId, Node]. _connect_machine_producer filters by not contains(n.node_id) and yields UMessage(n.node_id, n). _connect_machine_consumer connects via connect(node=node, ...) and keys failure-timer/grace/abandon by node.node_id (static-node retry guard unchanged). _task_consumer_consumer resolves session via get_session(node_id) where node_id = task.allocated_node_id, keys occupancy via session.machine.node_id, emits TaskAbandoned with node_id. _start_task_on_machine resolves ncpus via uow.nodes.get_by_id(task.allocated_node_id) (was get(allocated_ip)). _deallocator_producer builds idle_machines: dict[NodeId, float] keyed by s.machine.node_id. deallocate_nodes called with dict[NodeId, float].
+#   PREVIOUS_CHANGE: v6.9.0 - deallocate-node-id-identity: _deallocate_q rekeyed from UniqueQueue[str, str] to UniqueQueue[NodeId, Node] (dedup on NodeId, the strictly-unique SERIAL PK, instead of ip which is non-unique post migration 003 — duplicate IPs behind different jump hosts no longer collapse to one queue entry). _deallocator_producer yields UMessage(node.node_id, node) for each Node returned by deallocate_nodes (which now returns list[Node]). _deallocator_consumer takes node = msg.payload directly and drops the uow.nodes.get(ip) round-trip lookup — deallocate_node(node, ...) is called with the already-held Node. The consumer's elif self._repository.contains(ip): disconnect(ip) fallback is removed (SSH teardown is owned by deallocate_node's internal repository.contains/disconnect, which runs before the if node.cloud: guard). Consumer error log adds node_id=%s alongside ip=%s. NodeId added to the domain import block.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -135,15 +135,16 @@ class Orchestrator:
         self._cancellation_event = Event()
         self._machine_connected_event = Event()
         self._sleep_interval: int = min(e.sleep_interval for e in engines.values())
-        self._occupancy_started: set[str] = set()
+        self._occupancy_started: set[NodeId] = set()
         # In-flight consume task ids — prevents two workers from concurrently
         # consuming the same RUNNING task across overlapping producer cycles.
         # Same-event-loop check/add/remove are atomic (no await between check
         # and add). In-memory only; daemon restart resets the guard.
         self._consuming: set[TaskId] = set()
-        # Per-IP first-seen monotonic timestamp of a consecutive connect
-        # failure; in-memory only (daemon restart resets grace windows).
-        self._connect_failures: dict[str, float] = {}
+        # Per-node first-seen monotonic timestamp of a consecutive connect
+        # failure (keyed by NodeId); in-memory only (daemon restart resets
+        # grace windows).
+        self._connect_failures: dict[NodeId, float] = {}
         # Single-execution guard for stop(): set synchronously at the top of
         # stop() with no `await` between check and set — atomic in
         # single-threaded asyncio. In-memory only; a fresh Orchestrator
@@ -151,7 +152,7 @@ class Orchestrator:
         self._stopped: bool = False
 
         lcfg = local_settings
-        self._conn_machine_q: UniqueQueue[str, Node] = UniqueQueue(
+        self._conn_machine_q: UniqueQueue[NodeId, Node] = UniqueQueue(
             "conn_machine", maxsize=lcfg.conn_machine_pending
         )
         self._allocate_q: UniqueQueue[TaskId, Task] = UniqueQueue(
@@ -181,7 +182,11 @@ class Orchestrator:
     ) -> bool:
         # START_BLOCK_RESOLVE_NCPUS
         async with self._uow_factory() as uow:
-            node = await uow.nodes.get(task.allocated_ip or "")
+            node = (
+                await uow.nodes.get_by_id(task.allocated_node_id)
+                if task.allocated_node_id is not None
+                else None
+            )
         ncpus = (node and node.ncpus) or await self._operations.get_cpu_cores(session)
         # END_BLOCK_RESOLVE_NCPUS
         return await self._operations.start_task_on_machine(
@@ -248,7 +253,7 @@ class Orchestrator:
 
     async def _connect_machine_producer(
         self,
-    ) -> AsyncGenerator[UMessage[str, Node], None]:
+    ) -> AsyncGenerator[UMessage[NodeId, Node], None]:
         async with self._uow_factory() as uow:
             enabled_nodes = await uow.nodes.list_enabled()
         # START_BLOCK_FILTER_NOT_CONNECTED
@@ -257,12 +262,14 @@ class Orchestrator:
         # nodes are both connected here; the never-abandon guarantee for
         # static nodes is enforced in _connect_machine_consumer before the
         # grace-check (see START_BLOCK_STATIC_NODE_RETRY).
-        new_nodes = [n for n in enabled_nodes if not self._repository.contains(n.ip)]
+        new_nodes = [
+            n for n in enabled_nodes if not self._repository.contains(n.node_id)
+        ]
         # END_BLOCK_FILTER_NOT_CONNECTED
         for node in new_nodes:
-            yield UMessage(node.ip, node)
+            yield UMessage(node.node_id, node)
 
-    async def _connect_machine_consumer(self, msg: UMessage[str, Node]) -> None:
+    async def _connect_machine_consumer(self, msg: UMessage[NodeId, Node]) -> None:
         node = msg.payload
         keys = await asyncio.get_running_loop().run_in_executor(
             None, self._list_private_keys_fn, self._local_settings.keys_dir
@@ -276,7 +283,7 @@ class Orchestrator:
 
         try:
             await self._repository.connect(
-                ip=node.ip,
+                node=node,
                 username=node.username,
                 client_keys=keys,
                 connect_timeout=10,
@@ -288,7 +295,7 @@ class Orchestrator:
                 port=node.port,
             )
             # START_BLOCK_CONNECT_RESET_FAILURE_TIMER
-            self._connect_failures.pop(node.ip, None)
+            self._connect_failures.pop(node.node_id, None)
             # END_BLOCK_CONNECT_RESET_FAILURE_TIMER
             self._machine_connected_event.set()
         except MachineConnectionError as err:
@@ -301,20 +308,24 @@ class Orchestrator:
             if node.cloud is None:
                 self._log.warning(
                     "[Orchestrator][_connect_machine_consumer][CONNECT_RETRY_STATIC] "
-                    "ip=%s err=%s",
+                    "node_id=%s ip=%s err=%s",
+                    node.node_id,
                     node.ip,
                     err,
                 )
                 return
             # END_BLOCK_STATIC_NODE_RETRY
             # START_BLOCK_CONNECT_GRACE_CHECK
-            first_seen = self._connect_failures.setdefault(node.ip, time.monotonic())
+            first_seen = self._connect_failures.setdefault(
+                node.node_id, time.monotonic()
+            )
             age = time.monotonic() - first_seen
             grace = self._connect_grace_for(node.cloud)
             if age < grace:
                 self._log.warning(
                     "[Orchestrator][_connect_machine_consumer][CONNECT_RETRY] "
-                    "ip=%s age=%.1fs grace=%ds err=%s",
+                    "node_id=%s ip=%s age=%.1fs grace=%ds err=%s",
+                    node.node_id,
                     node.ip,
                     age,
                     grace,
@@ -326,7 +337,8 @@ class Orchestrator:
             # START_BLOCK_CONNECT_ABANDON
             self._log.error(
                 "[Orchestrator][_connect_machine_consumer][CONNECT_ABANDON] "
-                "ip=%s age=%.1fs grace=%ds — abandoning node",
+                "node_id=%s ip=%s age=%.1fs grace=%ds — abandoning node",
+                node.node_id,
                 node.ip,
                 age,
                 grace,
@@ -341,11 +353,12 @@ class Orchestrator:
             except Exception as abandon_err:
                 self._log.error(
                     "[Orchestrator][_connect_machine_consumer][ABANDON_FAILED] "
-                    "ip=%s err=%s",
+                    "node_id=%s ip=%s err=%s",
+                    node.node_id,
                     node.ip,
                     abandon_err,
                 )
-            self._connect_failures.pop(node.ip, None)
+            self._connect_failures.pop(node.node_id, None)
             # END_BLOCK_CONNECT_ABANDON
         except Exception as err:
             self._log.error("An error occuried on remote machine creation: %s", err)
@@ -429,8 +442,8 @@ class Orchestrator:
     #   INPUTS: { msg: UMessage[TaskId, Task], machine_not_found: Counter[TaskId] }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Records TaskAbandoned event for lost nodes; calls consume_task use case for free machines;
-    #     guards the task id in self._consuming around the await; discards ip from _occupancy_started only when
-    #     consume_task returns True (finalised) — deferred (False) keeps the ip registered for retry.
+    #     guards the task id in self._consuming around the await; discards node_id from _occupancy_started only when
+    #     consume_task returns True (finalised) — deferred (False) keeps the node_id registered for retry.
     #   LINKS: M-APPLICATION-CONSUME, M-DOMAIN-EVENTS
     # END_CONTRACT: Orchestrator._task_consumer_consumer
     async def _task_consumer_consumer(
@@ -438,19 +451,28 @@ class Orchestrator:
     ) -> None:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
+        node_id = task.allocated_node_id
+        session = self._repository.get_session(node_id) if node_id is not None else None
         ip = task.allocated_ip or ""
-        session = self._repository.get_session(ip)
         if session is None:
             # START_BLOCK_MACHINE_GONE
             self._log.warning(
-                "[Orchestrator][_task_consumer_consumer][MACHINE_GONE] task_id=%s ip=%s",
+                "[Orchestrator][_task_consumer_consumer][MACHINE_GONE] task_id=%s node_id=%s ip=%s",
                 task_id,
+                node_id,
                 ip,
             )
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:
                 task = task.fail("node is gone")
-                task = task.with_event(TaskAbandoned, node_ip=ip)
+                # node_id is task.allocated_node_id; None only in the
+                # double-abandon edge (the node row was already deleted via
+                # abandon_node/deallocate_node, FK ON DELETE SET NULL nulled
+                # allocated_node_id). In that edge there is no node to abandon,
+                # so the TaskAbandoned event is skipped — the task is still
+                # failed + persisted + tracker-discarded below.
+                if node_id is not None:
+                    task = task.with_event(TaskAbandoned, node_id=node_id)
                 # START_BLOCK_ABANDON_PERSIST
                 # Persist the TaskAbandoned transition. The row may have been
                 # concurrently deleted between the producer's list_by_status
@@ -474,21 +496,24 @@ class Orchestrator:
 
         machine = session.machine
 
-        if ip not in self._occupancy_started:
+        # session.machine.node_id is the authoritative non-optional NodeId key
+        # (matches task.allocated_node_id for a correctly-bound RUNNING task).
+        key = machine.node_id
+        if key not in self._occupancy_started:
             engine = self._engines.get(task.context.engine)
             if engine:
                 self._operations.start_occupancy_check(session, engine)
-                self._occupancy_started.add(ip)
-                session = self._repository.get_session(ip)
+                self._occupancy_started.add(key)
+                session = self._repository.get_session(key)
                 if session is None:
                     return
                 machine = session.machine
 
         # START_BLOCK_CONSUME
-        if machine.state == MachineState.FREE and ip in self._occupancy_started:
+        if machine.state == MachineState.FREE and key in self._occupancy_started:
             self._log.debug(
-                "[Orchestrator][_task_consumer][CONSUME] machine=%s task_id=%s",
-                ip,
+                "[Orchestrator][_task_consumer][CONSUME] node_id=%s task_id=%s",
+                key,
                 task_id,
             )
             # Guard the task id so the next producer cycle does not re-yield it
@@ -506,10 +531,11 @@ class Orchestrator:
                 )
             finally:
                 self._consuming.discard(task_id)
-            # Discard the ip from _occupancy_started only when finalised so a
-            # deferred (transient-only) task is re-consumed on the next cycle.
+            # Discard the node_id from _occupancy_started only when finalised
+            # so a deferred (transient-only) task is re-consumed on the next
+            # cycle.
             if finalised:
-                self._occupancy_started.discard(ip)
+                self._occupancy_started.discard(key)
         # END_BLOCK_CONSUME
 
     # ---- Deallocator producer-consumer ----
@@ -527,13 +553,14 @@ class Orchestrator:
         # START_BLOCK_COLLECT_IDLE
         # free_since is monotonic; pass it through unchanged so deallocate_nodes
         # compares against time.monotonic() and stays immune to wall-clock jumps.
-        idle_machines: dict[str, float] = {}
+        # Keyed by NodeId (was ip) — dup-IP nodes have distinct node_id keys.
+        idle_machines: dict[NodeId, float] = {}
         for s in self._repository.list_connected():
             if (
                 s.machine.state == MachineState.FREE
                 and s.machine.free_since is not None
             ):
-                idle_machines[s.machine.ip] = s.machine.free_since
+                idle_machines[s.machine.node_id] = s.machine.free_since
         # END_BLOCK_COLLECT_IDLE
 
         # START_BLOCK_DEALLOCATE_USE_CASE

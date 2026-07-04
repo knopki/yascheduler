@@ -99,6 +99,7 @@ def make_task(
     status: TaskStatus = TaskStatus.RUNNING,
     label: str = "test",
     ip: str | None = "10.0.0.1",
+    allocated_node_id: NodeId | None = None,
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
     return Task(
@@ -111,6 +112,7 @@ def make_task(
         ),
         status=status,
         allocated_ip=ip,
+        allocated_node_id=allocated_node_id,
     )
 
 
@@ -193,7 +195,14 @@ class TestShowNodesRendering:
             cloud="hetzner",
         )
         uow.tasks.list_by_status = AsyncMock(
-            return_value=[make_task(task_id=1, label="my_job", ip="10.0.0.1")]
+            return_value=[
+                make_task(
+                    task_id=1,
+                    label="my_job",
+                    ip="10.0.0.1",
+                    allocated_node_id=NodeId(1),
+                )
+            ]
         )
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
 
@@ -247,7 +256,11 @@ class TestShowNodesRendering:
             cloud="hetzner",
         )
         uow.tasks.list_by_status = AsyncMock(
-            return_value=[make_task(task_id=7, label="job7", ip="10.0.0.1")]
+            return_value=[
+                make_task(
+                    task_id=7, label="job7", ip="10.0.0.1", allocated_node_id=NodeId(1)
+                )
+            ]
         )
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
 
@@ -389,7 +402,15 @@ class TestShowNodesFiltering:
         _config, uow, _deps = stub_config_deps
         nodes = _three_mixed_nodes()
         # One busy node (10.0.0.1), rest free.
-        _wire(uow, nodes, [make_task(task_id=1, label="j1", ip="10.0.0.1")])
+        _wire(
+            uow,
+            nodes,
+            [
+                make_task(
+                    task_id=1, label="j1", ip="10.0.0.1", allocated_node_id=NodeId(1)
+                )
+            ],
+        )
         _run(["--busy", "--free"])
         out, _ = capsys.readouterr()
         assert len(out.splitlines()) == len(nodes) + 1
@@ -402,7 +423,15 @@ class TestShowNodesFiltering:
         _config, uow, _deps = stub_config_deps
         nodes = _three_mixed_nodes()
         # 10.0.0.1 is enabled, busy, cloud=hetzner — the only match.
-        _wire(uow, nodes, [make_task(task_id=1, label="j1", ip="10.0.0.1")])
+        _wire(
+            uow,
+            nodes,
+            [
+                make_task(
+                    task_id=1, label="j1", ip="10.0.0.1", allocated_node_id=NodeId(1)
+                )
+            ],
+        )
         _run(["--enabled", "--busy", "--cloud", "hetzner"])
         out, _ = capsys.readouterr()
         assert _ips_from_table(out) == ["10.0.0.1"]
@@ -436,7 +465,15 @@ class TestShowNodesFiltering:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         nodes = _three_mixed_nodes()
-        _wire(uow, nodes, [make_task(task_id=1, label="j1", ip="10.0.0.2")])
+        _wire(
+            uow,
+            nodes,
+            [
+                make_task(
+                    task_id=1, label="j1", ip="10.0.0.2", allocated_node_id=NodeId(2)
+                )
+            ],
+        )
         _run(["--busy"])
         out, _ = capsys.readouterr()
         assert _ips_from_table(out) == ["10.0.0.2"]
@@ -448,7 +485,15 @@ class TestShowNodesFiltering:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         nodes = _three_mixed_nodes()
-        _wire(uow, nodes, [make_task(task_id=1, label="j1", ip="10.0.0.2")])
+        _wire(
+            uow,
+            nodes,
+            [
+                make_task(
+                    task_id=1, label="j1", ip="10.0.0.2", allocated_node_id=NodeId(2)
+                )
+            ],
+        )
         _run(["--free"])
         out, _ = capsys.readouterr()
         assert _ips_from_table(out) == ["10.0.0.1", "10.0.0.3", "10.0.0.4"]
@@ -566,15 +611,19 @@ class TestShowNodesStructure:
         _wire(
             uow,
             [Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22)],
-            [make_task(task_id=1, label="j1", ip="10.0.0.1")],
+            [
+                make_task(
+                    task_id=1, label="j1", ip="10.0.0.1", allocated_node_id=NodeId(1)
+                )
+            ],
         )
         _run([])
         # Each read called exactly once.
         uow.tasks.list_by_status.assert_called_once()
         uow.nodes.list_all.assert_called_once()
-        # The source builds a tasks_by_ip dict (O(n+m)), not a nested scan.
+        # The source builds a tasks_by_node_id dict (O(n+m)), not a nested scan.
         source = inspect.getsource(show_nodes_mod._fetch_nodes_view)
-        assert "tasks_by_ip" in source
+        assert "tasks_by_node_id" in source
 
 
 # ---------------------------------------------------------------------------

@@ -166,6 +166,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
                 context=TaskContext(engine="test_engine"),
                 status=TaskStatus.TO_DO,
                 allocated_ip=dead_ip,
+                allocated_node_id=persisted_node.node_id,
             )
         )
         await uow.commit()
@@ -192,18 +193,20 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     # "first" value, shifting first_seen so the consumer sees age=0 → retry.
     # Pre-seeding decouples first_seen from any call: age = 200 - 100 = 100s
     # >= grace = 60s → abandon fires.
-    orch._connect_failures[dead_ip] = 100.0
+    orch._connect_failures[persisted_node.node_id] = 100.0
 
     with patch(
         "yascheduler.application.orchestrator.time.monotonic",
         return_value=200.0,
     ):
-        await orch._connect_machine_consumer(UMessage(dead_ip, persisted_node))
+        await orch._connect_machine_consumer(
+            UMessage(persisted_node.node_id, persisted_node)
+        )
     # END_BLOCK_DRIVE_PAST_GRACE
 
     # START_BLOCK_VERIFY_DB_ROW_REMOVED
     async with uow_factory() as uow:
-        removed_node = await uow.nodes.get(dead_ip)
+        removed_node = await uow.nodes.get_by_id(persisted_node.node_id)
     assert removed_node is None, "yascheduler_nodes row must be removed after abandon"
     # END_BLOCK_VERIFY_DB_ROW_REMOVED
 

@@ -159,6 +159,7 @@ class TestAllocateTaskEvents:
         engines.get.return_value = engine
 
         free_machine = MagicMock(spec=ConnectedMachine)
+        free_machine.node_id = NodeId(1)
         free_machine.ip = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
@@ -218,7 +219,7 @@ class TestAllocateTaskEvents:
             e for e in last_save_task._events if isinstance(e, TaskAllocated)
         ]
         assert len(allocated_events) == 1
-        assert allocated_events[0].node_ip == "10.0.0.1"
+        assert allocated_events[0].node_id == NodeId(1)
         assert allocated_events[0].engine_name == "test_engine"
         # tracker.discard called (machine path discards immediately)
         tracker.discard.assert_called_once_with(TaskId(1))

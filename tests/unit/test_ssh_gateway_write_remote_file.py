@@ -37,7 +37,7 @@ import asyncssh
 import pytest
 
 from yascheduler.domain import Engine
-from yascheduler.domain.model import Task, TaskContext, TaskId
+from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.operations.deployment import _write_remote_file
 from yascheduler.infra.ssh.repository import SSHMachineRepository
@@ -271,7 +271,7 @@ class TestStartTaskAbortOnUploadFailure:
         repository = SSHMachineRepository()
         operations = SSHMachineOperations(repository=repository)
         session, _sftp = _make_sftp_state(write_side_effect=ValueError("bad input"))
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         spawn_calls: list[Any] = []
         operations.deploy._exec_spawn_command = AsyncMock(  # type: ignore[method-assign]
@@ -307,7 +307,7 @@ class TestStartTaskAbortOnUploadFailure:
         operations = SSHMachineOperations(repository=repository)
         err = asyncssh.misc.Error(2, "No such file")
         session, _sftp = _make_sftp_state(write_side_effect=err)
-        repository._sessions["10.0.0.1"] = session
+        repository._sessions[NodeId(1)] = session
 
         operations.deploy._exec_spawn_command = AsyncMock()  # type: ignore[method-assign]
 
@@ -365,7 +365,7 @@ class TestSuccessfulWrite:
         repository = SSHMachineRepository()
         operations = SSHMachineOperations(repository=repository)
         state, sftp = _make_sftp_state(write_side_effect=None)
-        repository._sessions["10.0.0.1"] = state
+        repository._sessions[NodeId(1)] = state
 
         # Two input files; the _FakeSFTPFile is shared across calls so we can
         # count write invocations across the loop.

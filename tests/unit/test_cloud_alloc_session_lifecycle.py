@@ -72,12 +72,16 @@ class FakeMachineSession:
 
     def __init__(self, ip: str, platform: str = "linux") -> None:
         self._ip = ip
+        # Derive node_id from ip to ensure uniqueness; the allocator pairs
+        # sessions with nodes by node_id so this must match the DB-side ID.
+        last_octet = int(ip.rsplit(".", 1)[-1]) if "." in ip else 1
         self._machine = ConnectedMachine(
             ip=ip,
             platform=platform,
             ncpus=4,
             state=MachineState.FREE,
             free_since=0.0,
+            node_id=NodeId(last_octet),
         )
 
     @property
@@ -105,31 +109,35 @@ class FakeMachineRepository:
         disconnect_raises: BaseException | None = None,
     ) -> None:
         self._sessions: dict[str, FakeMachineSession] = {}
-        self.connect_calls: list[str] = []
-        self.disconnect_calls: list[str] = []
+        self._node_id_to_ip: dict[NodeId, str] = {}
+        self.connect_calls: list[Node] = []
+        self.disconnect_calls: list[NodeId] = []
         self._connect_raises = connect_raises
         self._disconnect_raises = disconnect_raises
 
     async def connect(
         self,
-        ip: str,
+        node: Node,
         username: str | None = None,
         client_keys: Sequence[Any] | None = None,
         **kwargs: Any,
     ) -> FakeMachineSession:
         if self._connect_raises is not None:
             raise self._connect_raises
-        self.connect_calls.append(ip)
+        self.connect_calls.append(node)
         platform = kwargs.get("platform", "linux")
-        session = FakeMachineSession(ip=ip, platform=platform)
-        self._sessions[ip] = session
+        session = FakeMachineSession(ip=node.ip, platform=platform)
+        self._sessions[node.ip] = session
+        self._node_id_to_ip[node.node_id] = node.ip
         return session
 
-    async def disconnect(self, ip: str) -> None:
-        self.disconnect_calls.append(ip)
+    async def disconnect(self, node_id: NodeId) -> None:
+        self.disconnect_calls.append(node_id)
         if self._disconnect_raises is not None:
             raise self._disconnect_raises
-        self._sessions.pop(ip, None)
+        ip = self._node_id_to_ip.pop(node_id, None)
+        if ip is not None:
+            self._sessions.pop(ip, None)
 
     async def disconnect_all(self) -> None:
         for ip in list(self._sessions):
@@ -148,14 +156,15 @@ class FakeMachineRepository:
     def list_connected(self) -> list[FakeMachineSession]:
         return list(self._sessions.values())
 
-    def get_session(self, ip: str) -> FakeMachineSession | None:
-        return self._sessions.get(ip)
+    def get_session(self, node_id: NodeId) -> FakeMachineSession | None:
+        ip = self._node_id_to_ip.get(node_id)
+        return self._sessions.get(ip) if ip is not None else None
 
-    def contains(self, ip: str) -> bool:
-        return ip in self._sessions
+    def contains(self, node_id: NodeId) -> bool:
+        return node_id in self._node_id_to_ip
 
-    def __contains__(self, ip: str) -> bool:
-        return ip in self._sessions
+    def __contains__(self, node_id: NodeId) -> bool:
+        return node_id in self._node_id_to_ip
 
     def __len__(self) -> int:
         return len(self._sessions)
@@ -374,22 +383,41 @@ class FakeCloudProvisioner:
         self._select_result = select_provider_result
         self.allocate_calls: list[str] = []
 
-    async def allocate(self, provider: str) -> NewNode:
+    async def allocate(self, provider: str, tmp_node_id: NodeId) -> Node:
         self.allocate_calls.append(provider)
-        session = await self._repo.connect(self._new_ip, platform=self._new_platform)
+        session = await self._repo.connect(
+            Node(
+                node_id=tmp_node_id,
+                ip=self._new_ip,
+                ncpus=4,
+                enabled=True,
+                cloud=provider,
+                username="root",
+                port=22,
+            ),
+            platform=self._new_platform,
+        )
         if self._fail:
             raise CloudSetupError(f"setup failed on {session.ip}")
         async with self._uow_factory() as uow:
             await uow.nodes.insert(
                 NewNode(
-                    ip=self._new_ip,
+                    ip=session.ip,
                     ncpus=4,
                     enabled=True,
                     cloud=provider,
                 )
             )
             await uow.commit()
-        return NewNode(ip=self._new_ip, ncpus=4, enabled=True, cloud=provider)
+        return Node(
+            node_id=tmp_node_id,
+            ip=self._new_ip,
+            ncpus=4,
+            enabled=True,
+            cloud=provider,
+            username="root",
+            port=22,
+        )
 
     async def deallocate(self, cloud: str, ip: str) -> None:
         pass
@@ -546,6 +574,17 @@ def _make_todo_task(task_id: int = 1) -> Task:
     )
 
 
+def _node(n: int, *, enabled: bool = True) -> Node:
+    return Node(
+        node_id=NodeId(n),
+        ip=f"10.0.0.{n}",
+        ncpus=4,
+        enabled=enabled,
+        username="root",
+        port=22,
+    )
+
+
 def _make_engine_repo(engine: Engine) -> Any:
     repo = MagicMock()
     repo.get.return_value = engine
@@ -598,7 +637,7 @@ class TestFixA:
     async def test_setup_in_flight_session_invisible_to_allocator(self) -> None:
         """A connected session whose DB row is still enabled=FALSE (setup in flight) is excluded from free_sessions."""
         repo = FakeMachineRepository()
-        await repo.connect("10.0.0.1")  # setup-in-flight, DB not yet enabled
+        await repo.connect(_node(1))  # setup-in-flight, DB not yet enabled
         nodes_store: dict[str, Node] = {}  # no enabled node for 10.0.0.1
         tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
@@ -616,7 +655,7 @@ class TestFixA:
     async def test_multiple_workers_do_not_pile_on(self) -> None:
         """Two concurrent allocate_task calls both exclude a setup-in-flight session."""
         repo = FakeMachineRepository()
-        await repo.connect("10.0.0.1")  # setup-in-flight
+        await repo.connect(_node(1))
         nodes_store: dict[str, Node] = {}
         tasks_store: dict[TaskId, Task] = {
             TaskId(1): _make_todo_task(),
@@ -646,10 +685,8 @@ class TestFixA:
     async def test_enabled_node_is_allocatable_after_setup(self) -> None:
         """A connected session whose DB row is enabled=TRUE IS allocated."""
         repo = FakeMachineRepository()
-        await repo.connect("10.0.0.1")
-        nodes_store: dict[str, Node] = {
-            "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
-        }
+        await repo.connect(_node(1))
+        nodes_store: dict[str, Node] = {"10.0.0.1": _node(1)}
         tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
@@ -667,10 +704,8 @@ class TestFixA:
     async def test_disabled_but_not_disconnected_excluded(self) -> None:
         """A connected session whose DB row was flipped to enabled=FALSE is excluded."""
         repo = FakeMachineRepository()
-        await repo.connect("10.0.0.1")
-        nodes_store: dict[str, Node] = {
-            "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=False)
-        }
+        await repo.connect(_node(1))
+        nodes_store: dict[str, Node] = {"10.0.0.1": _node(1, enabled=False)}
         tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
@@ -708,10 +743,10 @@ class TestFixB:
             _patch_ssh_key(),
             pytest.raises(CloudSetupError, match="cloud-init failed"),
         ):
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(50))
 
         # Session was registered by _connect_to_vm, then disconnected on failure.
-        assert repo.disconnect_calls == ["10.0.0.50"]
+        assert repo.disconnect_calls == [NodeId(50)]
         assert len(repo._sessions) == 0
         assert repo.list_free() == []
         adapter.delete_node.assert_awaited_once()
@@ -744,9 +779,9 @@ class TestFixB:
             ),
             pytest.raises(CloudSetupError, match="Setup node error"),
         ):
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(50))
 
-        assert repo.disconnect_calls == ["10.0.0.50"]
+        assert repo.disconnect_calls == [NodeId(50)]
         assert len(repo._sessions) == 0
         assert repo.list_free() == []
         adapter.delete_node.assert_awaited_once()
@@ -764,10 +799,10 @@ class TestFixB:
             _patch_ssh_key(),
             pytest.raises(CloudSetupError, match="SSH connect to"),
         ):
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(50))
 
         # disconnect was called on the never-registered IP without raising.
-        assert repo.disconnect_calls == ["10.0.0.50"]
+        assert repo.disconnect_calls == [NodeId(50)]
         assert len(repo._sessions) == 0
         adapter.delete_node.assert_awaited_once()
 
@@ -781,7 +816,7 @@ class TestFixB:
         prov, adapter = _make_real_provisioner(repo, ops)
 
         with _patch_ssh_key():
-            node = await prov.allocate("test")
+            node = await prov.allocate("test", NodeId(1))
 
         assert node.ip == "10.0.0.50"
         assert node.ncpus == 8
@@ -807,7 +842,7 @@ class TestFixB:
             _patch_ssh_key(),
             pytest.raises(CloudSetupError, match="cloud-init failed"),
         ):
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(1))
 
         # delete_node STILL ran despite disconnect raising — no VM orphan.
         adapter.delete_node.assert_awaited_once()
@@ -824,12 +859,9 @@ class TestFixC:
     async def test_stale_session_failure_does_not_abort_loop(self) -> None:
         """One session that raises is skipped (logged), the next healthy enabled session gets the task."""
         repo = FakeMachineRepository()
-        await repo.connect("10.0.0.1")  # stale
-        await repo.connect("10.0.0.2")  # healthy
-        nodes_store: dict[str, Node] = {
-            "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True),
-            "10.0.0.2": Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=4, enabled=True),
-        }
+        await repo.connect(_node(1))  # stale
+        await repo.connect(_node(2))  # healthy
+        nodes_store: dict[str, Node] = {"10.0.0.1": _node(1), "10.0.0.2": _node(2)}
         tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
@@ -853,10 +885,8 @@ class TestFixC:
     async def test_cloud_branch_reached_when_all_free_sessions_fail(self) -> None:
         """When every free session fails, the cloud branch is reached (fake CloudProvisioner.allocate is invoked)."""
         repo = FakeMachineRepository()
-        await repo.connect("10.0.0.1")  # stale
-        nodes_store: dict[str, Node] = {
-            "10.0.0.1": Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
-        }
+        await repo.connect(_node(1))  # stale
+        nodes_store: dict[str, Node] = {"10.0.0.1": _node(1)}
         tasks_store: dict[TaskId, Task] = {TaskId(1): _make_todo_task()}
         uow = FakeUnitOfWork(tasks_store, nodes_store)
 
@@ -893,7 +923,7 @@ class TestFixD:
         prov, _adapter = _make_real_provisioner(repo, ops)
 
         with _patch_ssh_key(), pytest.raises(CloudSetupError) as exc_info:
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(1))
 
         msg = str(exc_info.value)
         assert "stdout=status: error" in msg
@@ -908,7 +938,7 @@ class TestFixD:
         adapter.create_node_timeout = 0.05
 
         with _patch_ssh_key(), pytest.raises(CloudSetupError) as exc_info:
-            await prov.allocate("test")
+            await prov.allocate("test", NodeId(1))
 
         msg = str(exc_info.value)
         assert "timed out" in msg

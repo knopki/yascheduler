@@ -238,13 +238,12 @@ class TestAllocateTaskFailureModes:
 
         # Original persist exception propagates.
         tracker.discard.assert_called_once_with(todo_task.task_id)
-        clouds.allocate.assert_called_once_with("aws")
+        clouds.allocate.assert_called_once_with("aws", NodeId(2))
         # VM is best-effort deallocated so no billable orphan leaks.
         clouds.deallocate.assert_called_once_with("aws", "10.0.0.100")
-        # tmp-node best-effort cleanup also runs (remove(tmp_node_id) is called
-        # directly — once in the persist attempt before commit raises, once in
-        # the best-effort cleanup path after persist fails).
-        assert uow.nodes.remove.call_count >= 2
+        # tmp-node best-effort cleanup runs (remove(tmp_node_id) is called
+        # directly in the best-effort cleanup path after persist fails).
+        assert uow.nodes.remove.call_count >= 1
         uow.nodes.get.assert_not_called()
 
     async def test_empty_platforms_short_circuits_cloud_fallback(

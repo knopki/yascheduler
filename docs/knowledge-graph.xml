@@ -232,8 +232,8 @@
         <fn-_parse_host_spec PURPOSE="argparse type: parse [user@]host[:port][~ncpus] grammar into HostSpec (UNCHANGED)" />
         <fn-_parse_node_target PURPOSE="argparse type: digit→NodeTarget(node_id=NodeId(n)); else delegate to _parse_host_spec" />
         <fn-_parse_node_args PURPOSE="argparse → Namespace: host positional via _parse_node_target (NodeTarget), store_true flags, --remove-soft/--remove-hard mutex; add-by-id rejected via parser.error (exit 2)" />
-        <fn-_remove_node_hard PURPOSE="Hard-remove by ip: mark RUNNING tasks DONE, remove node, commit, announce" />
-        <fn-_remove_node_soft PURPOSE="Soft-remove by ip: disable (if tasks) or remove node, commit, announce" />
+        <fn-_remove_node_hard PURPOSE="Hard-remove by node_id: mark RUNNING tasks DONE, remove node (node_id-keyed), commit, announce" />
+        <fn-_remove_node_soft PURPOSE="Soft-remove by node_id: disable (if tasks) or remove node (node_id-keyed), commit, announce" />
         <fn-_add_node PURPOSE="Add node: connect, optional setup, insert NewNode, commit, announce; try/finally disconnect" />
         <type-HostSpec PURPOSE="Frozen parsed host spec (host, username, port, ncpus)" />
         <type-NodeTarget PURPOSE="Frozen parsed node target (node_id: NodeId|None, host_spec: HostSpec|None; exactly one set)" />
@@ -356,9 +356,9 @@
         <type-TaskId PURPOSE="Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
         <type-NewTask PURPOSE="Pre-persistence task record (no task_id); carries allocated_node_id: NodeId | None = None (written by Task.allocate_to, not NewTask construction); converted to Task only by TaskRepository.insert" />
         <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
-        <type-NewNode PURPOSE="Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False); converted to Node only by NodeRepository.insert" />
-        <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); NodeRepository mutators key on node_id; ip no longer UNIQUE (dropped by migration 003); tmp rows carry ip='' sentinel" />
-        <class-ConnectedMachine PURPOSE="Runtime connected machine with is_compatible, occupy, release" />
+        <type-NewNode PURPOSE="Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False); converted to Node only by NodeRepository.insert. The tmp-node row inserted by _select_and_insert_tmp is reused as the real node identity: clouds.allocate(provider, tmp_node_id) returns a Node carrying node_id == tmp_node_id (single-row UPDATE lifecycle, not insert+remove)." />
+        <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); node_id is the sole identity (ip-keyed lookups get/get_by_ips removed — get_by_id/get_by_ids are node_id-keyed); NodeRepository mutators key on node_id; ip no longer UNIQUE (dropped by migration 003 — dup-IP valid behind different jump hosts); tmp rows carry ip='' sentinel" />
+        <class-ConnectedMachine PURPOSE="Runtime connected machine; node_id: NodeId is the FIRST field (identity-first — identifies which Node this represents); ip is the transport address (asyncssh host, NOT the identity — two machines sharing ip with different node_id are distinct); occupy/release/replace carry node_id through automatically (frozen dataclass); construction site SSHMachineRepository._connect_impl passes node_id=node.node_id" />
       </annotations>
     </M-DOMAIN-MODEL>
 
@@ -386,16 +386,17 @@
       <depends>M-DOMAIN-ENGINE, M-DOMAIN-MODEL</depends>
       <annotations>
         <class-TaskRepository PURPOSE="Async port for task persistence: insert(NewTask)->Task (sole NewTask→Task conversion), get/update_status take TaskId, list_ids_by_ip_and_status returns list[TaskId], list_by_jobs takes list[TaskId]; the public Yascheduler facade is the sole int/TaskId boundary" />
-        <class-NodeRepository PURPOSE="Async port for node persistence: insert(NewNode)->Node is the sole node-insertion path (add_tmp removed); get_by_id(NodeId), full CRUD lifecycle; mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups get/get_by_ips/list_* remain ip-keyed / unkeyed; tmp-reservation uses insert(NewNode(cloud=..., enabled=False))" />
+        <class-NodeRepository PURPOSE="Async port for node persistence: insert(NewNode)->Node is the sole node-insertion path; get_by_id(NodeId), get_by_ids(list[NodeId])->dict[NodeId, Node] (batch — ip-keyed get/get_by_ips removed), full CRUD lifecycle; mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups are node_id-keyed; tmp-reservation uses insert(NewNode(cloud=..., enabled=False)) and the returned node_id is reused by clouds.allocate as the real node identity" />
         <fn-enable PURPOSE="Enable a node by NodeId (node-id-keyed mutator; was ip-keyed)" />
         <fn-disable PURPOSE="Disable a node by NodeId (node-id-keyed mutator; was ip-keyed)" />
         <fn-remove PURPOSE="Delete a node row by NodeId (node-id-keyed mutator; was ip-keyed)" />
         <fn-insert PURPOSE="Sole node-insertion path: insert(NewNode) -> Node; serves both the real-node and tmp-reservation paths (tmp via NewNode(cloud=..., enabled=False))" />
-        <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries)" />
+        <fn-get_by_ids PURPOSE="Batch node lookup by primary key: get_by_ids(list[NodeId]) -> dict[NodeId, Node] (added in ssh-rekey-node-id; replaces get_by_ips)" />
+        <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries); keyed by NodeId (connect(node: Node)/disconnect(node_id)/get_session(node_id)/contains(node_id)); ip survives only as node.ip read inside connect for the asyncssh host" />
         <class-MachineSession PURPOSE="Connected-machine entity handle Protocol (domain identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)" />
         <class-MachineOperations PURPOSE="Async port for operations on a single machine (facade pass-throughs + use-case methods forwarding to stateless collaborators)" />
         <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host) — 7-field surface application consumers read" />
-        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider) returns NewNode (pre-persistence; caller persists via NodeRepository.insert), deallocate(cloud, ip), select_provider(platforms, counts) -> str | None (sync)" />
+        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider, tmp_node_id: NodeId) -> Node (reuses tmp_node_id as node identity; caller flips enabled=TRUE via NodeRepository.update — single-row lifecycle), deallocate(cloud, ip) (ip = cloud SDK host, stays ip-keyed), select_provider(platforms, counts) -> str | None (sync)" />
         <type-connect_grace PURPOSE="Per-cloud SSH connect-failure deadline in seconds (declared on CloudConfig Protocol + each ConfigCloud* DTO with provider-specific default)" />
       </annotations>
     </M-DOMAIN-PORTS>
@@ -403,14 +404,14 @@
     <M-DOMAIN-EVENTS NAME="Domain events" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Domain events for task lifecycle transitions.</purpose>
       <path>yascheduler/domain/events.py</path>
-      <depends>none</depends>
+      <depends>M-DOMAIN-MODEL</depends>
       <annotations>
         <class-DomainEvent PURPOSE="Base frozen dataclass with task_id: TaskId, webhook_url, webhook_custom_params" />
         <class-TaskCreated PURPOSE="Task submitted event with engine_name" />
-        <class-TaskAllocated PURPOSE="Task assigned to node with node_ip and engine_name" />
+        <class-TaskAllocated PURPOSE="Task assigned to node with node_id (NodeId) and engine_name (was node_ip: str — node_id is the node identity, not the transport address; emission sites pass task.allocated_node_id)" />
         <class-TaskCompleted PURPOSE="Task finished with local_folder and has_errors" />
         <class-TaskFailed PURPOSE="Task failed with reason" />
-        <class-TaskAbandoned PURPOSE="Task abandoned on lost node with node_ip" />
+        <class-TaskAbandoned PURPOSE="Task abandoned on lost node with node_id (NodeId) (was node_ip: str)" />
         <type-Event PURPOSE="Union type alias of all event types" />
       </annotations>
     </M-DOMAIN-EVENTS>
@@ -487,14 +488,13 @@
         <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or own full cloud-fallback flow via CloudProvisioner port" />
         <fn-_validate_engine PURPOSE="Validate task engine is configured and supported" />
         <fn-_allocate_free_machine PURPOSE="Find free machine and start task on it" />
-        <fn-_find_free_machines PURPOSE="Find free compatible machines for task allocation; returns list[tuple[MachineSession, Node]] paired by ip (nodes_by_ip = {n.ip: n}; dup-IP collapses to one Node — same ambiguity as today; Surface A fixes disambiguation)" />
-        <fn-_try_start_on_machine PURPOSE="Attempt to start a task on a specific (session, node) pair; calls allocate_to(node) (binds both allocated_ip and allocated_node_id); log lines include node_id=%s alongside ip=%s" />
+        <fn-_find_free_machines PURPOSE="Find free compatible machines for task allocation; returns list[tuple[MachineSession, Node]] paired by s.machine.node_id (nodes_by_id = {n.node_id: n}; busy_node_ids = {t.allocated_node_id}; dup-IP nodes disambiguated via distinct node_id keys — ssh-rekey-node-id)" />
+        <fn-_try_start_on_machine PURPOSE="Attempt to start a task on a specific (session, node) pair; calls allocate_to(node) (binds both allocated_ip and allocated_node_id); emits TaskAllocated with node_id=node.node_id (was node_ip=session.ip)" />
         <type-_TmpSelection PURPOSE="NamedTuple(name: str, node_id: NodeId) — tmp-node handle is the NodeId from insert(NewNode(cloud=..., enabled=False)), NOT a placeholder ip (remove-tmp-node-fake-ip)" />
         <fn-_select_and_insert_tmp PURPOSE="Under allocation_lock, compute capacity, select provider, and insert tmp-node via insert(NewNode(cloud=..., enabled=False)) committed before lock release; returns _TmpSelection(name, node_id=tmp_node.node_id)" />
         <fn-_cleanup_tmp_node_best_effort PURPOSE="Best-effort tmp-node removal by NodeId (remove(tmp_node_id) directly — no get(ip) lookup); logs failures, never raises" />
         <fn-_allocate_cloud_node PURPOSE="Call clouds.allocate (returns NewNode); cleanup tmp-node by NodeId on failure then re-raise (takes tmp_node_id: NodeId)" />
         <fn-_persist_node_with_cleanup PURPOSE="Persist final node (insert NewNode→Node + remove(tmp_node_id) + commit); on failure best-effort deallocate VM + tmp cleanup then re-raise (takes tmp_node_id: NodeId)" />
-        <fn-_provision_and_persist PURPOSE="Orchestrate _allocate_cloud_node then _persist_node_with_cleanup (takes tmp_node_id: NodeId)" />
       </annotations>
     </M-APPLICATION-ALLOCATE>
 
@@ -805,7 +805,7 @@
       <path>yascheduler/infra/cloud/manager.py</path>
       <depends>M-DOMAIN, M-DOMAIN-SETTINGS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
       <annotations>
-        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access)" />
+        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access); allocate(provider, tmp_node_id) returns Node reusing tmp_node_id as node identity (single-row UPDATE lifecycle — setup session registers under tmp_node_id, returned Node carries node_id == tmp_node_id)" />
         <class-CloudAllocateError PURPOSE="Cloud allocation failure (domain exception realized via yascheduler.domain)" />
         <class-CloudSetupError PURPOSE="Cloud setup/bootstrap failure (domain exception realized via yascheduler.domain)" />
       </annotations>
@@ -1003,20 +1003,20 @@
       <path>yascheduler/infra/ssh/repository.py</path>
       <depends>M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION</depends>
       <annotations>
-        <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _sessions: dict[str, SSHMachineSession]; delegates teardown to session._close()" />
+        <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _sessions: dict[NodeId, SSHMachineSession] keyed by NodeId (was dict[str] keyed by ip); connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id); delegates teardown to session._close()" />
         <class-MySSHClient PURPOSE="Insecure SSH client trusting all host keys (connection-building bit; stays)" />
         <const-DEFAULT_CONN_OPTS PURPOSE="Default SSH connection options (connection-building bit; stays)" />
         <fn-_resolve_tunnel PURPOSE="Build SSH tunnel string from jump host/username (connection-building bit; stays)" />
-        <fn-connect PURPOSE="Open SSH connection, detect platform, construct and register SSHMachineSession (two-method pattern with @my_backoff_exc on _connect_impl); returns MachineSession" />
-        <fn-_connect_impl PURPOSE="Inner connect with fibonacci backoff retry on SSHRetryExc; constructs SSHMachineSession, stores in _sessions[ip]" />
+        <fn-connect PURPOSE="Open SSH connection (using node.ip as the asyncssh host), detect platform, construct ConnectedMachine(node_id=node.node_id, ip=node.ip, …), register SSHMachineSession under _sessions[node.node_id]; returns MachineSession" />
+        <fn-_connect_impl PURPOSE="Inner connect with fibonacci backoff retry on SSHRetryExc; takes node: Node, constructs SSHMachineSession, stores in _sessions[node.node_id]" />
         <fn-_open_connection PURPOSE="Build SSH options and open connection" />
-        <fn-disconnect PURPOSE="Pop _sessions[ip] then await session._close() (pop-before-await ordering preserved)" />
-        <fn-disconnect_all PURPOSE="Disconnect every connected session" />
+        <fn-disconnect PURPOSE="Pop _sessions[node_id] then await session._close() (pop-before-await ordering preserved)" />
+        <fn-disconnect_all PURPOSE="Disconnect every connected session (iterates list of NodeId keys)" />
         <fn-list_free PURPOSE="Return FREE sessions filtered by platform, oldest first by session.machine.free_since" />
         <fn-list_connected PURPOSE="Return all registered sessions (list[MachineSession])" />
-        <fn-get_session PURPOSE="Return the live session for ip, or None (after disconnect)" />
-        <fn-contains PURPOSE="Return whether ip is registered (explicit form of __contains__)" />
-        <fn-__contains__ PURPOSE="Support `ip in repository`" />
+        <fn-get_session PURPOSE="Return the live session for node_id, or None (after disconnect)" />
+        <fn-contains PURPOSE="Return whether node_id is registered (explicit form of __contains__)" />
+        <fn-__contains__ PURPOSE="Support `node_id in repository`" />
         <fn-__len__ PURPOSE="Support len(repository)" />
       </annotations>
     </M-SSH-REPOSITORY>

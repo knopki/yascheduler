@@ -39,5 +39,7 @@ CREATE TABLE IF NOT EXISTS yascheduler_tasks (
     metadata JSONB,
     ip VARCHAR(15),
     status SMALLINT,
-    allocated_node_id INTEGER REFERENCES yascheduler_nodes(node_id) ON DELETE SET NULL
+    allocated_node_id INTEGER REFERENCES yascheduler_nodes (
+        node_id
+    ) ON DELETE SET NULL
 );
