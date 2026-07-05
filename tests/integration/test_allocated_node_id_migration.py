@@ -19,12 +19,11 @@
 #   test_migration_004_leaves_unallocated_tasks_null - ip IS NULL tasks stay NULL
 #   test_fk_on_delete_set_null - deleting a node nulls the task's allocated_node_id (row + allocated_ip preserved)
 #   test_fresh_db_seeds_to_005 - fresh DB seeds yascheduler_migrations to '005'; apply_migrations skips 005
-#   test_schema_sql_create_table_includes_allocated_node_id - schema.sql CREATE TABLE includes the column
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - serial-to-generated-identity: fresh-DB seed bumped to '005' (new last_migration CONSTANT after migration 005); test_fresh_db_seeds_to_004 renamed to test_fresh_db_seeds_to_005; the schema.sql CONSTANT assertion bumped to '005'.
-#   PREVIOUS_CHANGE: v1.0.0 - task-allocated-node-id: initial integration tests for migration 004 (column add, backfill, NULL-preserve, FK ON DELETE SET NULL, fresh-DB seed-to-004, schema.sql column presence).
+#   LAST_CHANGE: v1.2.0 - removed text-assertion tests (test_schema_sql_create_table_includes_allocated_node_id, test_schema_sql_create_table_includes_allocated_node_id_via_load_query): brittle substring checks against schema.sql source that broke on reformatting; the column/FK/seed semantics they claimed to cover are already verified via testcontainers in test_migration_004_adds_allocated_node_id_column, test_fk_on_delete_set_null, and test_fresh_db_seeds_to_005.
+#   PREVIOUS_CHANGE: v1.1.0 - serial-to-generated-identity: fresh-DB seed bumped to '005' (new last_migration CONSTANT after migration 005); test_fresh_db_seeds_to_004 renamed to test_fresh_db_seeds_to_005; the schema.sql CONSTANT assertion bumped to '005'.
 # END_CHANGE_SUMMARY
 
 """Integration tests for migration 004 (add-allocated-node-id) via testcontainers.
@@ -39,12 +38,10 @@ specs/postgres-schema-apply/spec.md:
 * FK ON DELETE SET NULL nulls allocated_node_id when the node is removed
   (the task row + allocated_ip are preserved)
 * a fresh DB seeds yascheduler_migrations to '005' and apply_migrations skips 005
-* schema.sql CREATE TABLE includes the allocated_node_id column
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from urllib.parse import urlparse
 
 import pg8000.native
@@ -53,18 +50,8 @@ from testcontainers.postgres import PostgresContainer
 
 from yascheduler.infra.persistence import PostgresDbConfig, apply_migrations
 from yascheduler.infra.persistence.postgres_schema import apply_schema
-from yascheduler.infra.persistence.sql_loader import load_query
 
 pytestmark = pytest.mark.integration
-
-_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "yascheduler"
-    / "infra"
-    / "persistence"
-    / "sql"
-    / "schema.sql"
-)
 
 
 def _make_config(pg: PostgresContainer) -> PostgresDbConfig:
@@ -380,34 +367,3 @@ def test_fresh_db_seeds_to_005() -> None:
             assert _tracker_rows(conn) == ["005"]
         finally:
             conn.close()
-
-
-# START_CONTRACT: test_schema_sql_create_table_includes_allocated_node_id
-#   PURPOSE: schema.sql CREATE TABLE IF NOT EXISTS yascheduler_tasks includes the allocated_node_id column with FK ON DELETE SET NULL.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Reads schema.sql from disk (no container)
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-SQLLOADER
-# END_CONTRACT: test_schema_sql_create_table_includes_allocated_node_id
-def test_schema_sql_create_table_includes_allocated_node_id() -> None:
-    schema = _SCHEMA_PATH.read_text()
-    assert "CREATE TABLE IF NOT EXISTS yascheduler_tasks" in schema
-    assert (
-        "allocated_node_id INTEGER REFERENCES yascheduler_nodes(node_id) "
-        "ON DELETE SET NULL" in schema
-    )
-    # The last_migration CONSTANT is '005'.
-    assert "last_migration CONSTANT TEXT := '005'" in schema
-
-
-# START_CONTRACT: test_schema_sql_create_table_includes_allocated_node_id_via_load_query
-#   PURPOSE: load_query('schema') returns the same content as the on-disk file (cache parity sanity).
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-SQLLOADER
-# END_CONTRACT: test_schema_sql_create_table_includes_allocated_node_id_via_load_query
-def test_schema_sql_create_table_includes_allocated_node_id_via_load_query() -> None:
-    schema = load_query("schema")
-    assert "allocated_node_id INTEGER REFERENCES yascheduler_nodes(node_id)" in schema
-    assert "ON DELETE SET NULL" in schema
