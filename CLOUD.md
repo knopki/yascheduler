@@ -124,24 +124,43 @@ The default plan is `vbm-24c-256gb-amd` (AMD EPYC 7443P, 24C/48T, 256 GB RAM,
 > Debian 12 (bookworm) is `os_id=2136`. The cloud-init setup works on both,
 > but Ubuntu 24.04 is recommended (newer packages).
 
+### RAID0 and disk setup (`vultr_need_raid`)
+
+The `vultr_need_raid` flag controls whether cloud-init performs RAID0 NVMe
+setup. It defaults to `True` (for `vbm-24c-256gb-amd`).
+
+- **`vultr_need_raid = True`** (default, for `vbm-24c-256gb-amd`):
+  RAID0 NVMe (`mdadm --create /dev/md0`), mount `/data`, resize `/dev/shm` to
+  200G, install `mdadm`. Required because NVMe drives are unformatted on this
+  plan.
+- **`vultr_need_raid = False`** (for `vbm-8c-132gb` and similar):
+  Skip RAID0. NVMe is already the main disk (mounted at `/`). Only `mkdir -p
+  /data` is created on the root disk. `/dev/shm` is left at default (50% of
+  RAM). No `mdadm` package installed.
+
+In both cases `/data` is available for engines (`/data/engines`), tasks
+(`/data/tasks`), and AiiDA work directory (`/data/aiida`).
+
 ### Bare-metal setup (automatic via cloud-init)
 
 The following steps from the [Vultr setup README][vultr_setup] are applied
 automatically via cloud-init `user_data` on instance creation:
 
-- **RAID0 NVMe** — `mdadm --create /dev/md0` from `nvme0n1` + `nvme1n1`,
-  `mkfs.ext4`, mount at `/data`, persist via `/etc/fstab`, save to
-  `mdadm.conf` and `update-initramfs -u`.
-- **`/dev/shm` 200G** — required by CRYSTAL pproperties for inter-process
-  communication during parallel Seebeck/TDF runs.
+- **`mkdir /data`** — always created (on RAID0 mount or root disk).
+- **RAID0 NVMe** (only when `vultr_need_raid = True`) — `mdadm --create
+  /dev/md0` from `nvme0n1` + `nvme1n1`, `mkfs.ext4`, mount at `/data`,
+  persist via `/etc/fstab`, save to `mdadm.conf` and `update-initramfs -u`.
+- **`/dev/shm` 200G** (only when `vultr_need_raid = True`) — required by
+  CRYSTAL pproperties for inter-process communication during parallel
+  Seebeck/TDF runs.
 - **ulimit 65536** — required by FLEUR/CRYSTAL parallel runs that open many
   files simultaneously.
 - **ScaLAPACK symlink** — `libscalapack-openmpi.so.2.2 -> .so.2.1` expected
   by FLEUR and CRYSTAL.
 - **apt packages** — `openmpi-bin`, `libopenmpi-dev`, `libscalapack-openmpi-dev`,
   `libxml2-dev`, `libblas-dev`, `liblapack-dev`, `build-essential`, `gfortran`,
-  `cmake`, `git`, `mdadm`, plus engine-specific packages from `[engine.*]`
-  `platform_packages`.
+  `cmake`, `git` (`mdadm` only when `vultr_need_raid = True`), plus
+  engine-specific packages from `[engine.*]` `platform_packages`.
 
 Engines are deployed to `/data/engines` (per `[remote] engines_dir`) by the
 scheduler after the instance becomes active.
@@ -162,6 +181,7 @@ vultr_api_key = YOUR_VULTR_API_KEY
 vultr_region = ams
 vultr_plan = vbm-24c-256gb-amd
 vultr_os_id = 2284
+vultr_need_raid = True
 vultr_max_nodes = 2
 vultr_idle_tolerance = 3600
 ```

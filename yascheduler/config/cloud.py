@@ -183,6 +183,7 @@ class ConfigCloudVultr:
     region: str = make_default_field("ams")
     plan: str = make_default_field("vbm-24c-256gb-amd")
     os_id: int = make_default_field(2284, extra_validators=[validators.ge(1)])
+    need_raid: bool = make_default_field(True)
     max_nodes: int = make_default_field(10, extra_validators=[validators.ge(0)])
     username: str = make_default_field("root")
     priority: int = make_default_field(0)
@@ -221,6 +222,7 @@ class ConfigCloudVultr:
             region=sec.get(fmt("region")),  # type: ignore
             plan=sec.get(fmt("plan")),  # type: ignore
             os_id=sec.getint(fmt("os_id")),  # type: ignore
+            need_raid=sec.getboolean(fmt("need_raid"), fallback=True),
             max_nodes=sec.getint(fmt("max_nodes")),  # type: ignore
             username=sec.get(fmt("user")),  # type: ignore
             priority=sec.getint(fmt("priority")),  # type: ignore

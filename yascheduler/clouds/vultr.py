@@ -92,15 +92,22 @@ def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
     return cast(str, ssh_key["id"])
 
 
-def build_baremetal_user_data(cloud_config: Optional[PCloudConfig]) -> str:
+def build_baremetal_user_data(
+    cloud_config: Optional[PCloudConfig],
+    need_raid: bool = True,
+) -> str:
     """Build cloud-config user-data for bare metal setup.
 
-    Applies the bare-metal provisioning steps from the Vultr README:
-    RAID0 NVMe, /data mount, /dev/shm 200G, ulimit, apt packages,
-    ScaLAPACK symlink. Merges with engine packages from cloud_config.
+    When need_raid is True (default, for vbm-24c-256gb-amd):
+      RAID0 NVMe, /data mount, /dev/shm 200G, ulimit, apt packages,
+      ScaLAPACK symlink. Merges with engine packages from cloud_config.
+
+    When need_raid is False (for vbm-8c-132gb and similar where NVMe
+      is already the main disk):
+      mkdir /data on root disk, ulimit, apt packages, ScaLAPACK symlink.
+      No RAID0, no /dev/shm resize.
     """
     base_packages = [
-        "mdadm",
         "openmpi-bin",
         "openmpi-common",
         "libopenmpi-dev",
@@ -113,6 +120,9 @@ def build_baremetal_user_data(cloud_config: Optional[PCloudConfig]) -> str:
         "cmake",
         "git",
     ]
+    if need_raid:
+        base_packages.append("mdadm")
+
     engine_packages: list[str] = []
     package_upgrade = False
     if cloud_config:
@@ -121,15 +131,21 @@ def build_baremetal_user_data(cloud_config: Optional[PCloudConfig]) -> str:
 
     packages = list(dict.fromkeys(base_packages + engine_packages))
 
-    runcmd = [
-        "mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme0n1 /dev/nvme1n1 --force",
-        "mkfs.ext4 -b 4096 -E stride=128,stripe-width=256 /dev/md0",
-        "UUID=$(blkid -s UUID -o value /dev/md0) && mkdir -p /data && "
-        'echo "UUID=$UUID /data ext4 defaults 0 2" >> /etc/fstab && mount /data',
-        "mdadm --detail --scan >> /etc/mdadm/mdadm.conf",
-        "update-initramfs -u",
-        "echo 'tmpfs /dev/shm tmpfs defaults,size=200G 0 0' >> /etc/fstab",
-        "mount -o remount /dev/shm",
+    runcmd = ["mkdir -p /data"]
+
+    if need_raid:
+        runcmd += [
+            "mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme0n1 /dev/nvme1n1 --force",
+            "mkfs.ext4 -b 4096 -E stride=128,stripe-width=256 /dev/md0",
+            "UUID=$(blkid -s UUID -o value /dev/md0) && "
+            'echo "UUID=$UUID /data ext4 defaults 0 2" >> /etc/fstab && mount /data',
+            "mdadm --detail --scan >> /etc/mdadm/mdadm.conf",
+            "update-initramfs -u",
+            "echo 'tmpfs /dev/shm tmpfs defaults,size=200G 0 0' >> /etc/fstab",
+            "mount -o remount /dev/shm",
+        ]
+
+    runcmd += [
         "printf '* soft nofile 65536\\n* hard nofile 65536\\n"
         "root soft nofile 65536\\nroot hard nofile 65536\\n' "
         ">> /etc/security/limits.conf",
@@ -156,7 +172,7 @@ def vultr_create_node_sync(
     ssh_key_id = get_ssh_key_id(client, key)
 
     label = get_rnd_name("node")
-    user_data = build_baremetal_user_data(cloud_config)
+    user_data = build_baremetal_user_data(cloud_config, cfg.need_raid)
     user_data_b64 = base64.b64encode(user_data.encode()).decode()
 
     body = {
