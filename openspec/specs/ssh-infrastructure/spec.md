@@ -17,10 +17,12 @@ logic, monitor mechanism) — those are `MachineSession` and
 
 The collection is keyed by `NodeId`, not by ip. `ip` survives only as
 the transport address read from `node.ip` inside `connect`; it is no
-longer a positional parameter or a dict key.
+longer a positional parameter or a dict key. The transport login user
+and port likewise survive only as `node.username` and `node.port` read
+inside `connect`; they are NOT separate parameters.
 
 **Collection lifecycle:**
-- `connect(node: Node, username: str, client_keys: Sequence[PurePath] | None, *, port: int = 22, connect_timeout: int | None = None, data_dir: PurePath | None = None, engines_dir: PurePath | None = None, tasks_dir: PurePath | None = None, jump_host: str | None = None, jump_username: str | None = None) -> MachineSession` (async) — constructs and registers an `SSHMachineSession` keyed by `node.node_id`, returns it. The asyncssh transport uses `node.ip` as the host address.
+- `connect(node: Node, client_keys: Sequence[PurePath] | None, *, connect_timeout: int | None = None, data_dir: PurePath | None = None, engines_dir: PurePath | None = None, tasks_dir: PurePath | None = None, jump_host: str | None = None, jump_username: str | None = None) -> MachineSession` (async) — constructs and registers an `SSHMachineSession` keyed by `node.node_id`, returns it. The asyncssh transport uses `node.ip` as the host address, `node.username` as the login user, and `node.port` as the port. `connect` SHALL NOT take `username` or `port` parameters — they are read from `node`.
 - `disconnect(node_id: NodeId) -> None` (async) — pops the session keyed by `node_id` and delegates teardown to `session._close()`
 - `disconnect_all() -> None` (async) — unchanged
 

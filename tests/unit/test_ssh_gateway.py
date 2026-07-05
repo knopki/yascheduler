@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineRepository + SSHMachineSession — connection lifecycle, command execution via session, SFTP via session, machine state via session, repository collection semantics.
@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: _make_state now builds an SSHMachineSession (was _MachineState). repository._machines → repository._sessions. operations.run/run_full/run_bg(machine,…) → operations.X(session,…). operations.upload/get_sftp removed from facade — rewritten as TestSessionFileTransfer testing session.upload/session.open_sftp directly. update_machine → session.update. Removed unknown-IP AssertionError tests (facade no longer IP-keys). list_free/list_connected now return sessions; assertions read session.machine.
-#   PREVIOUS_CHANGE: v1.0.5 - Removed TestPropertyHelpers class and test_keys/test_items/test_register_machine per cleanup-unused-repository-symbols (methods deleted from SSHMachineRepository).
+#   LAST_CHANGE: v1.2.0 - simplify-cloud-connect-node-args: test_connect_returns_session drops the `username="root"` kwarg from connect; added test_connect_reads_username_and_port_from_node.
+#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: _make_state builds an SSHMachineSession; repository._machines → _sessions.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -290,7 +290,6 @@ class TestConnectionLifecycle:
             )
             session = await repository.connect(
                 node=node,
-                username="root",
                 client_keys=[],
             )
 
@@ -301,6 +300,54 @@ class TestConnectionLifecycle:
         assert session.ip == "10.0.0.1"
         assert session.machine.state == MachineState.FREE
         assert session.is_closed is False
+
+    @pytest.mark.asyncio
+    async def test_connect_reads_username_and_port_from_node(
+        self,
+        repository: SSHMachineRepository,
+        mock_conn: MagicMock,
+        mock_adapter: MagicMock,
+    ) -> None:
+        """connect() forwards node.username and node.port into _open_connection.
+
+        connect takes no username/port parameters; the login user and port are
+        read from the Node. A node with a non-default username/port reaches
+        _open_connection with those exact values.
+        """
+        with (
+            patch(
+                "yascheduler.infra.ssh.repository._detect_platform",
+                AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
+            ),
+            patch(
+                "yascheduler.infra.ssh.repository._init_paths",
+                return_value=(
+                    PurePosixPath("./data"),
+                    PurePosixPath("./data/engines"),
+                    PurePosixPath("./data/tasks"),
+                ),
+            ),
+            patch.object(
+                repository,
+                "_open_connection",
+                new=AsyncMock(return_value=(mock_conn, MagicMock())),
+            ) as open_conn,
+        ):
+            node = Node(
+                node_id=NodeId(7),
+                ip="10.0.0.7",
+                ncpus=4,
+                username="yascheduler",
+                port=2222,
+            )
+            await repository.connect(node, client_keys=[])
+
+        open_conn.assert_awaited_once()
+        call_args, call_kwargs = open_conn.call_args
+        # _open_connection signature: (ip, username, client_keys, *, port, ...)
+        assert call_args[0] == "10.0.0.7"
+        assert call_args[1] == "yascheduler"
+        assert call_kwargs["port"] == 2222
 
     @pytest.mark.asyncio
     async def test_disconnect_removes_session(

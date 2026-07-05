@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.16.0
+# VERSION: 2.17.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.16.0 - ssh-rekey-node-id: MachineRepository rekeyed from ip to NodeId (connect(node: Node,...), disconnect(node_id), get_session(node_id), contains(node_id), __contains__(node_id)); ip survives only as node.ip read inside connect for the asyncssh host. NodeRepository removes get(ip)/get_by_ips(ips) and adds get_by_ids(node_ids)->dict[NodeId, Node] (batch, WHERE node_id = ANY(:node_ids)). CloudProvisioner.allocate signature changes from allocate(provider)->NewNode to allocate(provider, tmp_node_id: NodeId)->Node (cloud adapter reuses tmp_node_id as the real node identity; single-row UPDATE lifecycle). deallocate(cloud, ip) stays ip-keyed (cloud SDK host).
-#   PREVIOUS_CHANGE: v2.15.0 - NodeRepository.add_tmp removed (remove-tmp-node-fake-ip): insert(NewNode) -> Node is now the sole node-insertion path; the tmp-reservation flow constructs NewNode(cloud=..., enabled=False) (relying on NewNode.ip="" and NewNode.ncpus=0 defaults) and persists it via insert, using the returned Node.node_id as the cleanup handle. No second insertion path, no insert_tmp.sql.
+#   LAST_CHANGE: v2.17.0 - simplify-cloud-connect-node-args: MachineRepository.connect drops the redundant `username: str` positional and `port: int = 22` keyword; connect reads the login user from `node.username` and the port from `node.port` internally. Removed two `# FIXME: why username/port?` comments.
+#   PREVIOUS_CHANGE: v2.16.0 - ssh-rekey-node-id: MachineRepository rekeyed from ip to NodeId (connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id)); CloudProvisioner.allocate signature changed to (provider, tmp_node_id)->Node.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -257,29 +257,14 @@ class MachineSession(Protocol):
 
 @runtime_checkable
 class MachineRepository(Protocol):
-    """Connected-machine collection — lifecycle and queries.
-
-    Keyed by ``NodeId``, not by ip. ``ip`` survives only as the transport
-    address read from ``node.ip`` inside ``connect``; it is no longer a
-    positional parameter or a dict key. Returns MachineSession from
-    connect/list_free/list_connected/get_session. Does NOT declare state
-    transitions (occupy/release/update), accessor getters
-    (get_path/get_quote/get_hostname), the monitor mechanism
-    (install_monitor/cancel_monitor), or get_machine_state — those are on
-    MachineSession. Callers resolve a session via
-    ``get_session(node_id)`` and read ``session.machine`` for the snapshot.
-    """
+    """Connected-machine collection — lifecycle and queries."""
 
     # ---- Collection lifecycle ----
     async def connect(
         self,
         node: Node,
-        # FIXME: why username? it's already in node.username
-        username: str,
         client_keys: Sequence[PurePath] | None,
         *,
-        # FIXME: why port? it's already in node.port
-        port: int = 22,
         connect_timeout: int | None = None,
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,

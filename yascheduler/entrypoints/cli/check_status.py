@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/check_status.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
 #   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
@@ -24,8 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - ssh-rekey-node-id: query phase builds nodes_by_id: dict[NodeId, Node] via uow.nodes.get_by_ids([t.allocated_node_id for t in tasks if t.allocated_node_id]) (was get_by_ips keyed by allocated_ip). _render_json/_render_view look up nodes via nodes_by_id.get(task.allocated_node_id). _display_remote_output takes node: Node | None and connects via repository.connect(node=node, ...) (session registers under node.node_id); the two disconnect sites call repository.disconnect(session.machine.node_id) (was session.ip). _render_json keeps allocated_ip (transport display, unchanged wire field) and reads node.port/node.cloud from the resolved Node.
-#   PREVIOUS_CHANGE: v1.3.0 - Carry TaskId through the query/render path (add-task-id-identity): _query_tasks wraps [TaskId(j) for j in args.jobs] before list_by_jobs (CLI-internal int→TaskId wrap, same pattern as the facade); _render_json extracts task.task_id.value (json.dumps would raise TypeError on a TaskId); _render_default/_render_info render via __str__ unchanged.
+#   LAST_CHANGE: v1.5.0 - simplify-cloud-connect-node-args: _display_remote_output stops passing `username=conn_params.username` and `port=conn_params.port` to repository.connect (connect reads them from node internally). `_ConnParams` retains its username/.port fields (DTO unchanged).
+#   PREVIOUS_CHANGE: v1.4.0 - ssh-rekey-node-id: _display_remote_output takes node: Node and connects via repository.connect(node=node, ...); query phase builds nodes_by_id via get_by_ids.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -322,9 +322,7 @@ async def _display_remote_output(
     try:
         session = await repository.connect(
             node=node,
-            username=conn_params.username,
             client_keys=list_private_keys(config.local.keys_dir),
-            port=conn_params.port,
             jump_host=conn_params.jump_host,
             jump_username=conn_params.jump_username,
         )

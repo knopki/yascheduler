@@ -805,7 +805,7 @@
       <path>yascheduler/infra/cloud/manager.py</path>
       <depends>M-DOMAIN, M-DOMAIN-SETTINGS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
       <annotations>
-        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access); allocate(provider, tmp_node_id) returns Node reusing tmp_node_id as node identity (single-row UPDATE lifecycle — setup session registers under tmp_node_id, returned Node carries node_id == tmp_node_id)" />
+        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access); allocate(provider, tmp_node_id)->Node (reuses tmp_node_id as node identity, single-row UPDATE lifecycle), deallocate(cloud, ip), select_provider" />
         <class-CloudAllocateError PURPOSE="Cloud allocation failure (domain exception realized via yascheduler.domain)" />
         <class-CloudSetupError PURPOSE="Cloud setup/bootstrap failure (domain exception realized via yascheduler.domain)" />
       </annotations>
@@ -1007,7 +1007,7 @@
         <class-MySSHClient PURPOSE="Insecure SSH client trusting all host keys (connection-building bit; stays)" />
         <const-DEFAULT_CONN_OPTS PURPOSE="Default SSH connection options (connection-building bit; stays)" />
         <fn-_resolve_tunnel PURPOSE="Build SSH tunnel string from jump host/username (connection-building bit; stays)" />
-        <fn-connect PURPOSE="Open SSH connection (using node.ip as the asyncssh host), detect platform, construct ConnectedMachine(node_id=node.node_id, ip=node.ip, …), register SSHMachineSession under _sessions[node.node_id]; returns MachineSession" />
+        <fn-connect PURPOSE="Open SSH connection (using node.ip as the asyncssh host; reads login user from node.username and port from node.port — takes no username/port parameters), detect platform, construct ConnectedMachine(node_id=node.node_id, ip=node.ip, …), register SSHMachineSession under _sessions[node.node_id]; returns MachineSession" />
         <fn-_connect_impl PURPOSE="Inner connect with fibonacci backoff retry on SSHRetryExc; takes node: Node, constructs SSHMachineSession, stores in _sessions[node.node_id]" />
         <fn-_open_connection PURPOSE="Build SSH options and open connection" />
         <fn-disconnect PURPOSE="Pop _sessions[node_id] then await session._close() (pop-before-await ordering preserved)" />

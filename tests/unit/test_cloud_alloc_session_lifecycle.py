@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_alloc_session_lifecycle.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Regression-guard the four fixes in fix-cloud-alloc-session-lifecycle (DB-enabled free-machine gate, setup-failure disconnect, per-session loop isolation, stdout in cloud-init error).
@@ -25,8 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - remove-tmp-node-fake-ip: _FakeNodeRepo.add_tmp removed (insert is the sole insertion path); enable/disable/remove take node_id: NodeId (not ip) to match the NodeRepository port.
-#   PREVIOUS_CHANGE: v1.1.0 - add-node-id-identity: import NewNode/NodeId, rename _FakeNodeRepo.add → insert(NewNode) -> Node, fix add_tmp/enable/disable to include node_id, update FakeCloudProvisioner.allocate to return NewNode and call insert, add node_id to all Node(...) constructions in tests.
+#   LAST_CHANGE: v1.3.0 - simplify-cloud-connect-node-args: FakeMachineRepository.connect drops the `username` param (keeps `**kwargs`).
+#   PREVIOUS_CHANGE: v1.2.0 - remove-tmp-node-fake-ip: _FakeNodeRepo.add_tmp removed; enable/disable/remove take node_id: NodeId.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -118,7 +118,6 @@ class FakeMachineRepository:
     async def connect(
         self,
         node: Node,
-        username: str | None = None,
         client_keys: Sequence[Any] | None = None,
         **kwargs: Any,
     ) -> FakeMachineSession:

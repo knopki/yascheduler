@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway_connect.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineRepository.connect two-method pattern and error translation.
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: connect returns MachineSession (was ConnectedMachine). Test_connect_returns_session_on_success now mocks _connect_impl to return a session stub and asserts the session is returned unchanged.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for connect error translation (gateway-port-cleanup).
+#   LAST_CHANGE: v1.2.0 - simplify-cloud-connect-node-args: the three `gw.connect(node, "root", None)` calls drop the `"root"` username arg; client_keys (`None`) shifts to the 2nd positional slot.
+#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: connect returns MachineSession (was ConnectedMachine).
 # END_CHANGE_SUMMARY
 
 from unittest.mock import AsyncMock
@@ -45,7 +45,7 @@ async def test_connect_translates_asyncssh_error() -> None:
     gw._connect_impl = AsyncMock(side_effect=err)  # type: ignore[method-assign]
     node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
     with pytest.raises(MachineConnectionError) as exc_info:
-        await gw.connect(node, "root", None)
+        await gw.connect(node, None)
     assert exc_info.value.ip == "10.0.0.1"
     assert "denied" in exc_info.value.reason
     assert isinstance(exc_info.value.__cause__, asyncssh.misc.Error)
@@ -64,7 +64,7 @@ async def test_connect_translates_oserror() -> None:
     gw._connect_impl = AsyncMock(side_effect=OSError("refused"))  # type: ignore[method-assign]
     node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
     with pytest.raises(MachineConnectionError) as exc_info:
-        await gw.connect(node, "root", None)
+        await gw.connect(node, None)
     assert exc_info.value.ip == "10.0.0.1"
     assert "refused" in exc_info.value.reason
 
@@ -82,7 +82,7 @@ async def test_connect_returns_session_on_success() -> None:
     session = _make_state(ip="10.0.0.1")
     gw._connect_impl = AsyncMock(return_value=session)  # type: ignore[method-assign]
     node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
-    result = await gw.connect(node, "root", None)
+    result = await gw.connect(node, None)
     assert result is session
     assert result.ip == "10.0.0.1"
     assert isinstance(result, type(session))

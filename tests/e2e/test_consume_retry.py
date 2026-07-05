@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_consume_retry.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
 #   SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
@@ -14,9 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - fix-static-node-connect-exclusion: drop the `cloud="e2e"` workaround (added in v1.1.0 to mask the v6.2.1 over-broad producer filter that excluded static nodes from the connect path). The orchestrator now connects static (cloud=None) nodes again; the e2e flow exercises the real static-node production path.
-#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle section 7.x: Migrate monkey-patched download_outputs signatures from ip to session. Capture session from connect for setup_node/open_sftp/path access.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial e2e tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
+#   LAST_CHANGE: v1.4.0 - simplify-cloud-connect-node-args: both repository.connect calls drop the `username=`/`port=` kwargs.
+#   PREVIOUS_CHANGE: v1.3.0 - fix-static-node-connect-exclusion: drop the `cloud="e2e"` workaround; orchestrator connects static nodes again.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -67,9 +66,7 @@ async def _setup_node_and_submit(
     operations = SSHMachineOperations(repository=repository)
     session = await repository.connect(
         node=db_node,
-        username=ssh_container["username"],
         client_keys=[ssh_container["key_path"]],
-        port=ssh_container["port"],
         data_dir=e2e_config.remote.data_dir,
         engines_dir=e2e_config.remote.engines_dir,
         tasks_dir=e2e_config.remote.tasks_dir,
@@ -299,9 +296,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
         )
         check_session = await check_repo.connect(
             node=check_node,
-            username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
-            port=ssh_container["port"],
         )
         try:
             async with check_session.open_sftp() as sftp:

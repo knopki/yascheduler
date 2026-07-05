@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.7.1
+# VERSION: 1.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
 #   SCOPE: manage_node command + argparse + node-target parser + host-spec parser + node add/remove helpers (each helper owns its UoW).
@@ -21,9 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.1 - ssh-rekey-node-id follow-up: _add_node flips the tmp row to enabled=True via dataclasses.replace(tmp, enabled=True) instead of reconstructing a Node from scratch (tmp already carries node_id, ip, port, username, ncpus, cloud — only enabled needs flipping). Drops the FIXME.
-#   PREVIOUS_CHANGE: v1.7.0 - ssh-rekey-node-id: _add_node adopts the V1 single-row lifecycle (insert enabled=False tmp row → Node(T) for node_id; connect(node=T,…); optional setup; update enabled=True via single UPDATE; finally disconnect(T.node_id); on connect-failure best-effort remove(T.node_id) + re-raise). Validation UoW host_spec path resolves the Node via list_all + filter by ip (the ip-keyed get(spec.host) is removed — node_id is the sole identity). Remove helpers unchanged (already take Node; key mutators on node_id).
-#   PREVIOUS_CHANGE: v1.6.0 - Mutators rekeyed from ip to node_id (node-id-keyed-mutators): validation UoW resolves the Node early on both paths (get_by_id on the node_id path, get(spec.host) on the host_spec path) and passes it to the remove helpers; _remove_node_hard/_remove_node_soft take (deps, node: Node) and call uow.nodes.disable(node.node_id)/uow.nodes.remove(node.node_id); node.ip stays for tasks.list_ids_by_ip_and_status (Surface C) and user-facing print. Dropped the now-dead _get_by_ip and _remove_ip helpers (their callers are replaced by direct Node resolution).
+#   LAST_CHANGE: v1.8.0 - simplify-cloud-connect-node-args: _add_node stops passing `username=username` and `port=spec.port` to repository.connect (connect reads them from node internally; the tmp node already carries them).
+#   PREVIOUS_CHANGE: v1.7.1 - ssh-rekey-node-id follow-up: _add_node flips the tmp row to enabled=True via dataclasses.replace(tmp, enabled=True) instead of reconstructing a Node.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -320,10 +319,8 @@ async def _add_node(
         try:
             session = await repository.connect(
                 node=tmp,
-                username=username,
                 client_keys=list_private_keys(config.local.keys_dir),
                 engines_dir=config.remote.engines_dir,
-                port=spec.port,
             )
         except Exception:
             # Connect failed — the tmp row is orphaned; best-effort remove it

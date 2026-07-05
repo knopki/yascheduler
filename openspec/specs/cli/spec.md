@@ -1313,7 +1313,7 @@ error + no row remains.
 #### Scenario: yasetnode add-path connects via Node and disconnects by node_id
 
 - **WHEN** `_add_node` reaches the connect step
-- **THEN** it calls `repository.connect(node=T, username=..., ...)` (registering the session under `T.node_id`); the `finally` block calls `repository.disconnect(T.node_id)`
+- **THEN** it calls `repository.connect(node=T, client_keys=..., ...)` with no `username`/`port` arguments (the login user and port are `T.username` / `T.port`), registering the session under `T.node_id`; the `finally` block calls `repository.disconnect(T.node_id)`
 
 #### Scenario: yasetnode add-path flips enabled to TRUE after setup
 
@@ -1718,14 +1718,17 @@ an allocated IP, connect to the remote machine via `SSHMachineRepository`
 (resolving a `MachineSession` via `repository.get_session` / a fresh
 `repository.connect`), display a tail of the remote `OUTPUT` file, optionally
 download and parse a CRYSTAL convergence snippet (when `-o` is also given),
-and disconnect. The SSH connection parameters SHALL be resolved by a private
-`_resolve_conn_params(node, config)` helper that mirrors
-`orchestrator._connect_machine_consumer:209-214`:
+and disconnect. The connection SHALL pass the resolved `node` to
+`repository.connect(node=node, ...)`; the login user and port come from
+`node.username` / `node.port` (NOT from separate `username`/`port` arguments —
+`connect` reads them from the node). A private
+`_resolve_conn_params(node, config)` helper resolves the jump-host parameters
+(mirroring `orchestrator._connect_machine_consumer:209-214`):
 
-- `username` SHALL be `node.username` (NOT a cloud username — the previous
+- The login user is `node.username` (NOT a cloud username — the previous
   implementation's `for c in config.clouds: ssh_user = c.username` took the
   last cloud's username, which was a bug).
-- `port` SHALL be `node.port` (the previous implementation always used the
+- The port is `node.port` (the previous implementation always used the
   gateway default of 22).
 - `jump_host` and `jump_username` SHALL come from the cloud whose `prefix
   == node.cloud` (if any such cloud has both set), falling back to
@@ -1734,18 +1737,19 @@ and disconnect. The SSH connection parameters SHALL be resolved by a private
   jump-host parameters, so `yastatus -v` on a cloud node behind a jump host
   was functionally broken.
 
-All four parameters SHALL be passed to `repository.connect(...)`. The
+The `jump_host` and `jump_username` parameters SHALL be passed to
+`repository.connect(...)`. The
 convergence snippet SHALL be stored in a `tempfile`-based file (NOT the
 previous fixed-name `local_calc_snippet.tmp`) and cleaned up in a
 `try/finally` block so it is removed even when `_render_view` raises.
 
 #### Scenario: yastatus -v uses node.username not cloud username
 - **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a node with `username="yascheduler"` and `cloud="hetzner"`, and the `hetzner` cloud config has `username="hcloud-user"`
-- **THEN** `repository.connect(...)` is called with `username="yascheduler"` (the node's username, NOT the cloud's)
+- **THEN** `repository.connect(node=node, ...)` is called with a `node` whose `username == "yascheduler"` (the node's username, NOT the cloud's), and no separate `username` argument is passed
 
-#### Scenario: yastatus -v passes node.port
+#### Scenario: yastatus -v uses node.port
 - **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a node with `port=2222`
-- **THEN** `repository.connect(...)` is called with `port=2222` (NOT the repository default of 22)
+- **THEN** `repository.connect(node=node, ...)` is called with a `node` whose `port == 2222` (NOT the repository default of 22), and no separate `port` argument is passed
 
 #### Scenario: yastatus -v resolves jump host from matching cloud
 - **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a node with `cloud="hetzner"`, and the `hetzner` cloud config has `jump_host="jump.example.com"` and `jump_username="jumper"`

@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_ssh_gateway.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for SSHMachineRepository + SSHMachineOperations against a Docker SSH server via testcontainers.
@@ -22,10 +22,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - session-based-machine-handle section 7.x: Migrate all tests from ConnectedMachine to SSHMachineSession. _get_machine→_get_session returning SSHMachineSession. operations.* take session, not ip. session.occupy/replace repository.update_machine. _sessions[]/_monitor_task replace _machines[]/_monitors[]. upload/get_sftp removed from operations — use session.upload/session.open_sftp. pgrep moved to session.pgrep.
-#   PREVIOUS_CHANGE: v1.3.2 - Restore TestMultiMachineBgTaskLeak as a working real-asyncssh regression: ssh_container_2 now yields the container bridge IP (from docker SDK NetworkSettings.IPAddress, with a fallback to the first network's IPAddress) plus the internal port 2222, so machine B is reached at a genuinely distinct IP from machine A (localhost). The original variant keyed both testcontainers by 'localhost' and was guaranteed to fail because SSHMachineGateway keys _machines/_bg_tasks by IP only; the YASCHED_MULTI_CONTAINER=1 skip guard was added by mistake and only hid the unavoidable failure. Drops the env-guard entirely.
-#   PREVIOUS_CHANGE: v1.3.1 - Remove TestMultiMachineBgTaskLeak and ssh_container_2 fixture: the integration test was architecturally broken on a single Docker host (both testcontainers report host 'localhost', but SSHMachineGateway keys _machines/_bg_tasks by IP only, so the second connect overwrote the first and disconnect cancelled the only surviving monitor). The skip guard YASCHED_MULTI_CONTAINER=1 was added by mistake; enabling it surfaced the unavoidable failure. The unit test test_disconnect_does_not_cancel_other_machines_monitors (three distinct IPs) remains the primary guard for fix-disconnect-bg-task-leak.
-#   PREVIOUS_CHANGE: v1.3.0 - Migrate _bg_tasks accesses from list(set) to dict[ip]; add TestMultiMachineBgTaskLeak regression (skipped unless YASCHED_MULTI_CONTAINER=1, since the unit test is the primary guard) for fix-disconnect-bg-task-leak.
+#   LAST_CHANGE: v1.5.0 - simplify-cloud-connect-node-args: all repository.connect calls drop the `username=`/`port=` kwargs.
+#   PREVIOUS_CHANGE: v1.4.0 - session-based-machine-handle: migrate all tests from ConnectedMachine to SSHMachineSession.
+# END_CHANGE_SUMMARYgression (skipped unless YASCHED_MULTI_CONTAINER=1, since the unit test is the primary guard) for fix-disconnect-bg-task-leak.
 #   PREVIOUS_CHANGE: v1.2.1 - Update TestOccupancyRaceCondition for new get_machine_state contract returning ConnectedMachine (gateway-port-cleanup).
 # END_CHANGE_SUMMARY
 
@@ -149,9 +148,7 @@ async def repository(
     repo = SSHMachineRepository()
     await repo.connect(
         node=_container_node(1, ssh_container),
-        username=ssh_container["username"],
         client_keys=[ssh_container["key_path"]],
-        port=ssh_container["port"],
     )
     yield repo
     await repo.disconnect_all()
@@ -273,9 +270,7 @@ class TestSSHGatewayIntegration:
         repo = SSHMachineRepository()
         await repo.connect(
             node=_container_node(2, ssh_container),
-            username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
-            port=ssh_container["port"],
         )
         assert NodeId(2) in repo
 
@@ -335,9 +330,7 @@ class TestSSHGatewayIntegration:
         repo = SSHMachineRepository()
         await repo.connect(
             node=_container_node(3, ssh_container),
-            username=ssh_container["username"],
             client_keys=[ssh_container["key_path"]],
-            port=ssh_container["port"],
         )
         assert len(repo) > 0
 
@@ -932,18 +925,14 @@ class TestMultiMachineBgTaskLeak:
             "SSHMachineSession",
             await repository.connect(
                 node=_container_node(4, ssh_container),
-                username=ssh_container["username"],
                 client_keys=[ssh_container["key_path"]],
-                port=ssh_container["port"],
             ),
         )
         session_b = cast(
             "SSHMachineSession",
             await repository.connect(
                 node=_container_node(5, ssh_container_2),
-                username=ssh_container_2["username"],
                 client_keys=[ssh_container_2["key_path"]],
-                port=ssh_container_2["port"],
             ),
         )
 

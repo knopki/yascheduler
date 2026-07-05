@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_check_status.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yastatus check_status() flag parsing, renderers, exit codes, and connection-params resolver.
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - session-based-machine-handle section 7.5: make_mock_repository returns session-like mock via repo.connect; remove _get_machine_state/get_path/get_quote; view tests check session.run_full instead of ops.run_full; SSHMachineOperations patches no longer needed in view tests.
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
+#   LAST_CHANGE: v2.1.0 - simplify-cloud-connect-node-args: test_view_connects_with_resolved_params_and_disconnects asserts connect is called with node=... and no username/port kwargs.
+#   PREVIOUS_CHANGE: v2.0.0 - session-based-machine-handle: make_mock_repository returns session-like mock via repo.connect.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -752,11 +752,14 @@ class TestCheckStatusViewHappyPath:
         # _resolve_conn_params called with the task's node.
         resolve_spy.assert_called_once()
         assert resolve_spy.call_args.args[0].ip == "10.0.0.1"
-        # repo.connect called with node username/port + cloud jump host.
+        # repo.connect called with node (carrying username/port) + cloud jump host;
+        # connect takes no username/port kwargs (reads node.username/node.port).
         repo.connect.assert_called_once()
         kwargs = repo.connect.call_args.kwargs
-        assert kwargs["username"] == "yascheduler"
-        assert kwargs["port"] == 2222
+        assert "username" not in kwargs
+        assert "port" not in kwargs
+        assert kwargs["node"].username == "yascheduler"
+        assert kwargs["node"].port == 2222
         assert kwargs["jump_host"] == "jump.example.com"
         assert kwargs["jump_username"] == "jumper"
         # tails OUTPUT (session.run_full invoked) and disconnects.

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - remove-tmp-node-fake-ip: StubNodeRepository.add_tmp removed (insert is the sole insertion path).
-#   PREVIOUS_CHANGE: v1.6.0 - StubNodeRepository.enable/disable/remove take node_id: NodeId (node-id-keyed-mutators port change).
+#   LAST_CHANGE: v1.8.0 - simplify-cloud-connect-node-args: StubMachineRepository.connect drops `username`/`port` params to match the new port signature.
+#   PREVIOUS_CHANGE: v1.7.0 - remove-tmp-node-fake-ip: StubNodeRepository.add_tmp removed (insert is the sole insertion path).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -241,10 +241,8 @@ class StubMachineRepository(MachineRepository):
     async def connect(
         self,
         node: Node,
-        username: str,
         client_keys: Sequence[PurePath] | None,
         *,
-        port: int = 22,
         connect_timeout: int | None = None,
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,

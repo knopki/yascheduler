@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 7.0.0
+# VERSION: 7.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.0.0 - ssh-rekey-node-id: _occupancy_started rekeyed from set[str] (ip) to set[NodeId] (keyed by session.machine.node_id). _connect_failures rekeyed from dict[str, float] to dict[NodeId, float] (keyed by node.node_id). _conn_machine_q rekeyed from UniqueQueue[str, Node] to UniqueQueue[NodeId, Node]. _connect_machine_producer filters by not contains(n.node_id) and yields UMessage(n.node_id, n). _connect_machine_consumer connects via connect(node=node, ...) and keys failure-timer/grace/abandon by node.node_id (static-node retry guard unchanged). _task_consumer_consumer resolves session via get_session(node_id) where node_id = task.allocated_node_id, keys occupancy via session.machine.node_id, emits TaskAbandoned with node_id. _start_task_on_machine resolves ncpus via uow.nodes.get_by_id(task.allocated_node_id) (was get(allocated_ip)). _deallocator_producer builds idle_machines: dict[NodeId, float] keyed by s.machine.node_id. deallocate_nodes called with dict[NodeId, float].
-#   PREVIOUS_CHANGE: v6.9.0 - deallocate-node-id-identity: _deallocate_q rekeyed from UniqueQueue[str, str] to UniqueQueue[NodeId, Node] (dedup on NodeId, the strictly-unique SERIAL PK, instead of ip which is non-unique post migration 003 — duplicate IPs behind different jump hosts no longer collapse to one queue entry). _deallocator_producer yields UMessage(node.node_id, node) for each Node returned by deallocate_nodes (which now returns list[Node]). _deallocator_consumer takes node = msg.payload directly and drops the uow.nodes.get(ip) round-trip lookup — deallocate_node(node, ...) is called with the already-held Node. The consumer's elif self._repository.contains(ip): disconnect(ip) fallback is removed (SSH teardown is owned by deallocate_node's internal repository.contains/disconnect, which runs before the if node.cloud: guard). Consumer error log adds node_id=%s alongside ip=%s. NodeId added to the domain import block.
+#   LAST_CHANGE: v7.1.0 - simplify-cloud-connect-node-args: _connect_machine_consumer stops passing `username=node.username` and `port=node.port` to repository.connect (connect reads them from node internally).
+#   PREVIOUS_CHANGE: v7.0.0 - ssh-rekey-node-id: _connect_machine_consumer connects via connect(node=node, ...) and keys failure-timer/grace/abandon by node.node_id; _occupancy_started/_connect_failures/_conn_machine_q rekeyed to NodeId.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -284,7 +284,6 @@ class Orchestrator:
         try:
             await self._repository.connect(
                 node=node,
-                username=node.username,
                 client_keys=keys,
                 connect_timeout=10,
                 data_dir=self._remote_defaults.data_dir,
@@ -292,7 +291,6 @@ class Orchestrator:
                 tasks_dir=self._remote_defaults.tasks_dir,
                 jump_username=jump_username,
                 jump_host=jump_host,
-                port=node.port,
             )
             # START_BLOCK_CONNECT_RESET_FAILURE_TIMER
             self._connect_failures.pop(node.node_id, None)

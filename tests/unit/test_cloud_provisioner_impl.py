@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.9.0
+# VERSION: 2.11.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.10.0 - ssh-rekey-node-id: import Node/NodeId, add tmp_node_id to allocate calls, assert isinstance(node, Node) and node.node_id.
-#   PREVIOUS_CHANGE: v2.7.0 - add-hetzner-live-e2e: update test_cloud_config_with_engine_packages to inject a MagicMock local_config with cloud_package_upgrade=True (now sourced from local_config instead of hardcoded True); add test_cloud_config_package_upgrade_sourced_from_local_config asserting False propagates to CloudInitConfig.package_upgrade.
+#   LAST_CHANGE: v2.11.0 - simplify-cloud-connect-node-args: _make_mock_repository records connect calls; happy-path test asserts connect(node=..., no username/port kwargs, same-identity return); setup-failure test asserts disconnect before delete_node.
+#   PREVIOUS_CHANGE: v2.10.0 - ssh-rekey-node-id: import Node/NodeId, add tmp_node_id to allocate calls.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -122,12 +122,20 @@ def _make_mock_adapter(
 
 
 def _make_mock_repository(**kwargs: Any) -> MagicMock:
-    """Create a mock SSHMachineRepository."""
+    """Create a mock SSHMachineRepository.
+
+    Records every connect call's kwargs in ``repo.connect_calls`` so tests can
+    assert the node is passed straight through and no ``username``/``port``
+    kwargs are supplied (they now come from ``node.username``/``node.port``).
+    """
     repo = MagicMock()
+    repo.connect_calls = []
 
     async def _connect(**kw: Any) -> MagicMock:
+        repo.connect_calls.append(kw)
         machine = MagicMock()
-        machine.ip = kw.get("ip", "10.0.0.1")
+        node = kw.get("node")
+        machine.ip = node.ip if node is not None else "10.0.0.1"
         return machine
 
     repo.connect = _connect
@@ -273,6 +281,19 @@ class TestAllocate:
         assert node.cloud == "test"
         assert node.enabled is True
         assert node.port == 22
+        # allocate constructs one Node (after create_node) and threads it to
+        # connect; connect is called with node=... and NO username/port kwargs
+        # (they come from node.username/node.port). The returned node is the
+        # same identity (replace(node, enabled=True, ncpus)) — node_id == tmp_node_id.
+        assert len(repo.connect_calls) == 1
+        connect_kw = repo.connect_calls[0]
+        assert "node" in connect_kw
+        assert "username" not in connect_kw
+        assert "port" not in connect_kw
+        assert connect_kw["node"].node_id == NodeId(999)
+        assert node.username == connect_kw["node"].username
+        assert node.port == connect_kw["node"].port
+        assert node.cloud == connect_kw["node"].cloud
 
     @pytest.mark.asyncio
     async def test_allocate_no_provider(self) -> None:
@@ -328,6 +349,21 @@ class TestAllocate:
         )
 
         adapter.delete_node = AsyncMock()
+        disconnect_mock = AsyncMock()
+        delete_mock = adapter.delete_node
+        call_order: list[str] = []
+
+        async def _record_disconnect(*args: Any, **kwargs: Any) -> None:
+            call_order.append("disconnect")
+            await disconnect_mock(*args, **kwargs)
+
+        repo.disconnect = _record_disconnect
+
+        async def _record_delete(*args: Any, **kwargs: Any) -> None:
+            call_order.append("delete_node")
+            await delete_mock(*args, **kwargs)
+
+        adapter.delete_node = _record_delete
 
         with (
             patch(
@@ -338,7 +374,12 @@ class TestAllocate:
         ):
             await prov.allocate("test", NodeId(1))
 
-        adapter.delete_node.assert_awaited_once()
+        # Setup-failure path: disconnect(node.node_id) is awaited BEFORE
+        # delete_node, and node.node_id == tmp_node_id (the single identity
+        # object allocate constructed after create_node).
+        assert call_order == ["disconnect", "delete_node"]
+        disconnect_mock.assert_awaited_once_with(NodeId(1))
+        delete_mock.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_allocate_cloud_init_timeout_cleans_up_vm(

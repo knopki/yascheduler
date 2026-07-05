@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/repository.py
-# VERSION: 2.1.0
+# VERSION: 2.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. True collection only — no state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession).
 #   SCOPE: SSHMachineRepository class (owns _sessions: dict[NodeId, SSHMachineSession] keyed by NodeId) + MySSHClient + DEFAULT_CONN_OPTS + _resolve_tunnel connection-building helpers (used by _open_connection).
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - ssh-rekey-node-id: _sessions rekeyed from dict[str, SSHMachineSession] (ip-keyed) to dict[NodeId, SSHMachineSession]. connect(ip,…)->connect(node: Node,…) — passes node.ip into _open_connection (asyncssh host unchanged), constructs ConnectedMachine(node_id=node.node_id, ip=node.ip, …), stores under _sessions[node.node_id]. disconnect(ip)->disconnect(node_id). _connect_impl takes node: Node. get_session/contains/__contains__ key by NodeId. MachineConnectionError(ip, reason) stays ip-keyed — reads node.ip at the raise site (transport-level error, operator reads the address). disconnect_all iterates list(self._sessions) (NodeId keys) — unchanged logic. SSHMachineSession unchanged (no node_id attribute; reads via session.machine.node_id).
-#   PREVIOUS_CHANGE: v2.0.0 - Session-based-machine-handle section 3. Replaced _machines: dict[str, _MachineState] + _monitors: dict[str, asyncio.Task[None]] with _sessions: dict[str, SSHMachineSession]. Deleted _MachineState dataclass, _get_machine_state, get_machine_state, occupy/release/update_machine, get_path/get_quote/get_hostname, install_monitor/cancel_monitor. connect now constructs SSHMachineSession and returns MachineSession. disconnect pops _sessions[ip] then delegates teardown to session._close() (pop-before-await ordering preserved; session._close sets is_closed synchronously before its first await). list_free/list_connected now return list[MachineSession]. get_session(ip) returns MachineSession | None. Monitor mechanism moved onto SSHMachineSession (reverses decompose-ssh-gateway D2). MySSHClient/DEFAULT_CONN_OPTS/_resolve_tunnel stay (connection-building bits used by _open_connection).
+#   LAST_CHANGE: v2.2.0 - simplify-cloud-connect-node-args: connect/_connect_impl drop the redundant `username`/`port` params; both are read from `node.username`/`node.port` internally and forwarded into `_open_connection`. Removed four `# FIXME` comments.
+#   PREVIOUS_CHANGE: v2.1.0 - ssh-rekey-node-id: _sessions rekeyed from dict[str, SSHMachineSession] (ip-keyed) to dict[NodeId, SSHMachineSession]; connect(ip,…)->connect(node: Node,…); disconnect(ip)->disconnect(node_id).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -140,21 +140,17 @@ class SSHMachineRepository:
         return conn, conn_opts
 
     # START_CONTRACT: SSHMachineRepository.connect
-    #   PURPOSE: Public API — translates transport errors into domain MachineConnectionError. Returns the newly constructed MachineSession.
-    #   INPUTS: { node: Node, username, client_keys, *, port, connect_timeout, data_dir, engines_dir, tasks_dir, jump_host, jump_username }
+    #   PURPOSE: Open an SSH connection and register a MachineSession under node.node_id; translates transport errors into MachineConnectionError.
+    #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir, jump_host, jump_username }
     #   OUTPUTS: { MachineSession - the newly constructed and registered session }
-    #   SIDE_EFFECTS: Opens SSH connection (using node.ip as the asyncssh host), detects platform, constructs ConnectedMachine carrying node_id=node.node_id, constructs SSHMachineSession, stores in _sessions[node.node_id].
+    #   SIDE_EFFECTS: Opens an SSH connection to node.ip; registers a MachineSession in _sessions[node.node_id].
     #   LINKS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS, M-SSH-SESSION
     # END_CONTRACT: SSHMachineRepository.connect
     async def connect(
         self,
         node: Node,
-        #  FIXME: why username is here? it's already inside node
-        username: str,
         client_keys: Sequence[PurePath] | None,
         *,
-        # FIXME: why port is here? it's already inside node
-        port: int = 22,
         connect_timeout: int | None = None,
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,
@@ -168,14 +164,14 @@ class SSHMachineRepository:
         after _connect_impl's backoff exhausts retries. ``ip`` is read from
         ``node.ip`` (the asyncssh host) and threaded into ``MachineConnectionError``
         at the raise site (transport-level error — the address is what the
-        operator recognizes).
+        operator recognizes). The login user and port are read from
+        ``node.username`` / ``node.port`` (this method takes no
+        ``username``/``port`` arguments).
         """
         try:
             return await self._connect_impl(
                 node,
-                username,
                 client_keys,
-                port=port,
                 connect_timeout=connect_timeout,
                 data_dir=data_dir,
                 engines_dir=engines_dir,
@@ -189,22 +185,18 @@ class SSHMachineRepository:
             raise MachineConnectionError(node.ip, str(err)) from err
 
     # START_CONTRACT: SSHMachineRepository._connect_impl
-    #   PURPOSE: Inner connection implementation with backoff retry on SSHRetryExc. Constructs SSHMachineSession and registers it in _sessions.
-    #   INPUTS: { same as connect (node: Node threaded through) }
+    #   PURPOSE: Inner connection implementation with backoff retry on SSHRetryExc; constructs and registers the MachineSession.
+    #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir, jump_host, jump_username }
     #   OUTPUTS: { SSHMachineSession - the newly constructed and registered session }
-    #   SIDE_EFFECTS: Opens SSH (node.ip as host), detects platform, constructs ConnectedMachine(node_id=node.node_id, ip=node.ip, …), constructs SSHMachineSession, stores in _sessions[node.node_id].
+    #   SIDE_EFFECTS: Opens an SSH connection to node.ip (login user node.username, port node.port); registers a MachineSession in _sessions[node.node_id].
     #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
     # END_CONTRACT: SSHMachineRepository._connect_impl
     @my_backoff_exc()
     async def _connect_impl(
         self,
         node: Node,
-        #  FIXME: why username is here? it's already inside node
-        username: str,
         client_keys: Sequence[PurePath] | None,
         *,
-        # FIXME: why port is here? it's already inside node
-        port: int = 22,
         connect_timeout: int | None = None,
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,
@@ -215,9 +207,9 @@ class SSHMachineRepository:
         """Open SSH connection, detect platform, construct SSHMachineSession (inner impl with backoff)."""
         conn, conn_opts = await self._open_connection(
             node.ip,
-            username,
+            node.username,
             client_keys,
-            port=port,
+            port=node.port,
             connect_timeout=connect_timeout,
             jump_host=jump_host,
             jump_username=jump_username,
