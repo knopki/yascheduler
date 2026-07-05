@@ -93,6 +93,11 @@ def get_upcloud_adapter(name: str):
 
 
 def get_vultr_adapter(name: str):
+    """Build a CloudAdapter for Vultr bare metal.
+
+    op_limit is 2 (bare metal provisions slowly), create_node_timeout is
+    1200 s (~20 min) to accommodate long boot times.
+    """
     from .vultr import vultr_create_node, vultr_delete_node
 
     return CloudAdapter(

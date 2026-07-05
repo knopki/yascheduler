@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Submit MgO single-point CRYSTAL calculation via AiiDA to yascheduler (Vultr).
+"""Submit a CRYSTAL calculation via AiiDA to yascheduler (Vultr).
+
+Runs a simple geometry optimization (no phonons, no elastic, no properties).
+For a full Seebeck pipeline, use scripts/seebeck_calc/by_crystal/run_seebeck_easy_example_HCL_225.py instead.
 
 Usage:
     export MPDS_KEY=...
-    python examples/vultr_test_aiida.py
+    python examples/vultr_test_aiida.py [formula] [sgs]
+    # defaults: MgO 225
 """
 
-import os
 import sys
 
 from aiida import load_profile

@@ -33,6 +33,7 @@ class VultrClient:
         self.api_key = api_key
 
     def request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
+        """Send an HTTP request to the Vultr API v2 and return parsed JSON."""
         url = API_BASE + path
         data = None
         headers = {
@@ -96,16 +97,13 @@ def build_baremetal_user_data(
     cloud_config: Optional[PCloudConfig],
     need_raid: bool = True,
 ) -> str:
-    """Build cloud-config user-data for bare metal setup.
+    """Build a cloud-init user-data string for bare metal provisioning.
 
-    When need_raid is True (default, for vbm-24c-256gb-amd):
-      RAID0 NVMe, /data mount, /dev/shm 200G, ulimit, apt packages,
-      ScaLAPACK symlink. Merges with engine packages from cloud_config.
-
-    When need_raid is False (for vbm-8c-132gb and similar where NVMe
-      is already the main disk):
-      mkdir /data on root disk, ulimit, apt packages, ScaLAPACK symlink.
-      No RAID0, no /dev/shm resize.
+    Always creates /data, sets ulimit, installs apt packages, and adds the
+    ScaLAPACK symlink. When need_raid is True, also sets up RAID0 over NVMe
+    drives and resizes /dev/shm — needed for vbm-24c-256gb-amd where NVMe
+    disks ship unformatted. For plans where NVMe is already the main disk
+    (e.g. vbm-8c-132gb), pass need_raid=False to skip RAID and /dev/shm.
     """
     base_packages = [
         "openmpi-bin",
@@ -167,7 +165,13 @@ def vultr_create_node_sync(
     key: ASSHKey,
     cloud_config: Optional[PCloudConfig] = None,
 ) -> str:
-    """Create bare-metal node, wait for active, return IP"""
+    """Provision a bare-metal instance and wait until SSH is ready.
+
+    Creates the instance via Vultr API, polls until it becomes active,
+    then waits for the SSH port to open and for key-based auth to succeed
+    (cloud-init may not have installed authorized_keys yet when the port
+    first opens). Returns the instance IP address.
+    """
     client = get_client(cfg)
     ssh_key_id = get_ssh_key_id(client, key)
 
@@ -225,11 +229,9 @@ def vultr_create_node_sync(
     if not ssh_ready:
         raise APIError(f"Bare-metal {instance_id} SSH not ready on {ip_addr} in time")
 
-    # Bare metal boots slowly: SSH port may open before cloud-init has
-    # installed authorized_keys, causing Permission denied on first try.
-    # Actively poll SSH authentication with the configured key until it
-    # succeeds, so create_node does not fail and the scheduler does not
-    # spin up redundant instances.
+    # SSH port may open before cloud-init finishes installing authorized_keys,
+    # causing Permission denied on first connect. Poll auth with the configured
+    # key so create_node doesn't fail and trigger redundant instance creation.
     log.info(
         "Bare-metal %s SSH port open, waiting for cloud-init to install keys",
         instance_id,
@@ -295,7 +297,7 @@ async def vultr_create_node(
     key: ASSHKey,
     cloud_config: Optional[PCloudConfig] = None,
 ) -> str:
-    """Create node (async wrapper)"""
+    """Async wrapper around vultr_create_node_sync."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         executor, vultr_create_node_sync, log, cfg, key, cloud_config
@@ -303,7 +305,7 @@ async def vultr_create_node(
 
 
 def find_baremetal(client: VultrClient, host: str) -> Optional[str]:
-    """Find bare-metal id by IP addr"""
+    """Find a bare-metal instance id by its IP address."""
     data = client.request("GET", "/bare-metals?per_page=500")
     for bm in data.get("bare_metals", []):
         if bm.get("main_ip") == host and bm.get("id"):
@@ -316,7 +318,7 @@ def vultr_delete_node_sync(
     cfg: ConfigCloudVultr,
     host: str,
 ) -> None:
-    """Delete bare-metal node by IP"""
+    """Delete a bare-metal instance by its IP address."""
     client = get_client(cfg)
     instance_id = find_baremetal(client, host)
     if instance_id:
@@ -331,6 +333,6 @@ async def vultr_delete_node(
     cfg: ConfigCloudVultr,
     host: str,
 ) -> None:
-    """Delete node (async wrapper)"""
+    """Async wrapper around vultr_delete_node_sync."""
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(executor, vultr_delete_node_sync, log, cfg, host)

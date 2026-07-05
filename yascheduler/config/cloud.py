@@ -176,7 +176,18 @@ class ConfigCloudHetzner:
 
 @define(frozen=True)
 class ConfigCloudVultr:
-    """Vultr cloud configuration"""
+    """Vultr bare-metal cloud configuration.
+
+    Key fields:
+      api_key       — Vultr API key (required)
+      region        — datacenter region, e.g. 'ams'
+      plan          — bare-metal plan id, e.g. 'vbm-24c-256gb-amd'
+      os_id         — Vultr OS id (2284 = Ubuntu 24.04)
+      need_raid     — whether to set up RAID0 NVMe + /dev/shm during
+                      cloud-init (True for vbm-24c-256gb-amd, False for
+                      plans where NVMe is already the main disk)
+      idle_tolerance — seconds of idleness before auto-deletion
+    """
 
     prefix = "vultr"
     api_key: str = field(validator=validators.instance_of(str))
