@@ -115,10 +115,8 @@ async def test_full_cycle(
             assert task.status == DomainTaskStatus.DONE, (
                 f"task {tid} status={task.status}, expected DONE"
             )
-            assert task.context.error is None, (
-                f"task {tid} error={task.context.error!r}"
-            )
-            local_folder = task.context.local_folder
+            assert task.error is None, f"task {tid} error={task.error!r}"
+            local_folder = task.local_folder
             assert local_folder, f"task {tid} missing local_folder"
             n = task_ids.index(tid) + 1
             expected = f"hello e2e {n}"

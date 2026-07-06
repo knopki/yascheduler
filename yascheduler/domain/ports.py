@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.19.0
+# VERSION: 2.20.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.19.0 - task-schema-and-entity-cleanup: TaskRepository.list_ids_by_ip_and_status(ip: str, status) → list_ids_by_node_id_and_status(node_id: NodeId, status).
-#   PREVIOUS_CHANGE: v2.18.0 - cloud-port-node-arg: CloudProvisioner.allocate/deallocate take node: Node (was tmp_node_id / cloud,ip); port frozen for Variant C.
+#   LAST_CHANGE: v2.20.0 - drop-task-context-entity: MachineOperations.download_outputs return type is the new 4-tuple (local_folder: str, remote_folder: str, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
+#   PREVIOUS_CHANGE: v2.19.0 - task-schema-and-entity-cleanup: TaskRepository.list_ids_by_ip_and_status(ip: str, status) → list_ids_by_node_id_and_status(node_id: NodeId, status).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -294,7 +294,8 @@ class MachineOperations(Protocol):
         files: list[str],
         task_id: TaskId | None = None,
     ) -> tuple[
-        list[tuple[str, Any]],
+        str,
+        str,
         list[tuple[str | None, Exception]],
         list[tuple[str | None, Exception]],
     ]: ...

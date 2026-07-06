@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway_retry_rollback.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for non-idempotent retry removal (run_bg/upload/download single-attempt) and start_task_on_machine BUSY rollback.
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: repository._machines → repository._sessions; operations.run_bg/start_task_on_machine take session; operations.upload/get_sftp removed — use session.upload/session.open_sftp; rollback uses session.is_closed; occupy spy on session not repository. Log substring "rolling back BUSY" (no "repository").
+#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: repository._machines → repository._sessions; operations.run_bg/start_task_on_machine take session; operations.upload/get_sftp removed — use session.upload/session.open_sftp; rollback uses session.is_closed; occupy spy on session not repository. Log substring "rolling back BUSY" (no "repository").
 #   PREVIOUS_CHANGE: v1.0.0 - Initial tests for fix-nonidempotent-ssh-retries: run_bg/upload/download single-attempt propagation; start_task_on_machine BUSY rollback (upload failure, spawn failure, CancelledError, unexpected non-BUSY state, concurrent disconnect).
 # END_CHANGE_SUMMARY
 
@@ -35,7 +36,6 @@ from yascheduler.domain.model import (
     MachineState,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
 )
 from yascheduler.infra.ssh.operations import SSHMachineOperations
@@ -68,10 +68,20 @@ def _make_engine() -> Engine:
 
 def _make_task(remote_folder: str = "/remote/tasks/1") -> Task:
     """Minimal Task with a remote_folder set (required by start_task_on_machine)."""
+    from datetime import datetime
+
     return Task(
         task_id=TaskId(1),
         label="test-task",
-        context=TaskContext(engine="test_engine", remote_folder=remote_folder),
+        engine="test_engine",
+        remote_folder=remote_folder,
+        local_folder=None,
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
     )
 
 

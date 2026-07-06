@@ -549,47 +549,56 @@ new capability requiring explicit spec coverage.
 - **WHEN** a downstream consumer attempts `from yascheduler.shared.async_utils import asleep_until` or `from yascheduler.shared import asleep_until`
 - **THEN** `ImportError` is raised (the module `yascheduler.shared.async_utils` no longer exists)
 
-### Requirement: Yascheduler client query method public contract
+### Requirement: Yascheduler facade public contract
 
-The `Yascheduler` class SHALL preserve its public query API across the
-introduction of the `TaskId` domain value object. The class is defined in
-`yascheduler/entrypoints/client.py` and re-exported via
-`from yascheduler import Yascheduler` (package facade) and
-`from yascheduler.client import Yascheduler` (compat shim); the public
-contract is keyed on the resolvable symbol, not the file path.
+The `Yascheduler` facade SHALL expose the query methods (`queue_get_tasks`,
+`queue_get_tasks_async`, `queue_get_task`, `queue_get_task_async`) and the
+submission method (`queue_submit_task`) with the public contract below. This
+delta modifies only the `metadata` field reconstruction source; all other
+clauses (signatures, `task_id` int marshalling, `node` object shape, `status`
+enum, `label` string, `queue_submit_task` return) are unchanged. Each query
+method SHALL return Mappings with EXACTLY the keys
+`{task_id, label, status, metadata, node}`. The `_task_to_dict` helper SHALL be
+the sole extraction site and SHALL construct the `metadata` Mapping inline from
+the typed `Task` fields plus `extra` (was `t.context.to_metadata()`).
 
-- `Yascheduler()` zero-arg construction SHALL remain valid.
-- `Yascheduler(config_path, logger)` positional callsites SHALL remain valid.
-- `Yascheduler(config_path, logger, *, deps_factory=None)` SHALL add
-  `deps_factory` as a keyword-only optional parameter (lazy default
-  `make_cli_deps`), used as a test-injection seam.
 - `queue_get_tasks(jobs, status)`, `queue_get_tasks_async(jobs, status)`,
   `queue_get_task(task_id)`, and `queue_get_task_async(task_id)` signatures
   SHALL NOT change; their public `task_id`/`jobs` parameters stay `int` /
   `list[int]`.
- - Each query method SHALL return Mappings (a `Sequence[Mapping]` for the
-   list variants `queue_get_tasks` / `queue_get_tasks_async`, an
-   `Optional[Mapping]` for the single-task variants `queue_get_task` /
-   `queue_get_task_async`) with EXACTLY the keys
-   `{task_id, label, status, metadata, node}`. The flat `ip` and `cloud` keys
-   are REMOVED and replaced by a nested `node` key. This is a **BREAKING**
-   change to the facade dict shape (was `{task_id, label, ip, status, metadata,
-   cloud}`).
- - The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
-   `TaskId`). The private `_task_to_dict(t: Task, nodes_by_id: dict[NodeId,
-   Node])` helper is the sole extraction site: it builds the dict with
-   `"task_id": t.task_id.value` so the public dict preserves the `int` shape.
-  The `Yascheduler` facade is the **sole** `int`/`TaskId` marshalling boundary,
-  in both directions: on input (`queue_get_task(task_id: int)` /
-  `queue_get_tasks(jobs: list[int])`) it wraps `TaskId(task_id)` /
-  `[TaskId(i) for i in jobs]` before calling the use cases / repository; on
-  output it extracts `.value` via `_task_to_dict`.
+  - Each query method SHALL return Mappings (a `Sequence[Mapping]` for the
+    list variants `queue_get_tasks` / `queue_get_tasks_async`, an
+    `Optional[Mapping]` for the single-task variants `queue_get_task` /
+    `queue_get_task_async`) with EXACTLY the keys
+    `{task_id, label, status, metadata, node}`. The flat `ip` and `cloud` keys
+    are REMOVED and replaced by a nested `node` key. This is a **BREAKING**
+    change to the facade dict shape (was `{task_id, label, ip, status, metadata,
+    cloud}`).
+  - The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
+    `TaskId`). The private `_task_to_dict(t: Task, nodes_by_id: dict[NodeId,
+    Node])` helper is the sole extraction site: it builds the dict with
+    `"task_id": t.task_id.value` so the public dict preserves the `int` shape.
+   The `Yascheduler` facade is the **sole** `int`/`TaskId` marshalling boundary,
+   in both directions: on input (`queue_get_task(task_id: int)` /
+   `queue_get_tasks(jobs: list[int])`) it wraps `TaskId(task_id)` /
+   `[TaskId(i) for i in jobs]` before calling the use cases / repository; on
+   output it extracts `.value` via `_task_to_dict`.
 - `queue_submit_task(...) -> int` SHALL stay `int`; it wraps `submit_task`
   (which now returns `TaskId`) and returns `(await submit_task(...)).value`.
 - `status` SHALL be a `domain.TaskStatus` enum member (preserves `.name`
   access and cross-class IntEnum equality; NOT a plain `int`). Unchanged.
 - `label` SHALL be the raw `task.label` string. Unchanged.
-- `metadata` SHALL be the raw `task.context` metadata dict. Unchanged.
+- `metadata` SHALL be a flat dict reconstructed from the typed `Task` fields
+  plus `extra` — the SAME shape that `TaskContext.to_metadata()` produced
+  before the drop-task-context-entity change. `_task_to_dict` SHALL construct
+  the dict inline: the six typed fields (`engine`, `remote_folder`,
+  `local_folder`, `webhook_url`, `webhook_custom_params`, `error`) with `None`
+  values omitted, then `**task.extra` merged. The public dict shape
+  `{task_id, label, status, metadata, node}` is UNCHANGED — only the
+  construction source changes (was `t.context.to_metadata()`, now inline
+  reconstruction from `t.engine` / `t.remote_folder` / `t.local_folder` /
+  `t.webhook_url` / `t.webhook_custom_params` / `t.error` / `t.extra`). This
+  preserves wire compatibility for any caller parsing the `metadata` dict.
 - `node` SHALL be an object built from `nodes_by_id.get(task.allocated_node_id)`,
   or `null` when the task has no allocated node (`allocated_node_id` is
   `None`). When non-null, the object has exactly `{ip, port, username, cloud}`:
@@ -599,7 +608,7 @@ contract is keyed on the resolvable symbol, not the file path.
   - `username`: the raw `node.username` string.
   - `cloud`: the raw `node.cloud` string, or `null` for static nodes.
   The `nodes_by_id` dict is obtained from the `query_tasks` use case, which
-  now returns `(list[Task], dict[NodeId, Node])` (see the `use-cases`
+  returns `(list[Task], dict[NodeId, Node])` (see the `use-cases`
   capability). The facade unpacks the tuple and passes `nodes_by_id` to
   `_task_to_dict`.
 
@@ -609,39 +618,51 @@ identically whether `Yascheduler` is imported via the package facade
 (`from yascheduler.entrypoints import Yascheduler`), or the compat shim
 (`from yascheduler.client import Yascheduler`).
 
+#### Scenario: metadata dict is reconstructed from typed fields plus extra
+- **WHEN** `_task_to_dict(t, nodes_by_id)` is called on a Task with `engine="cp2k"`, `remote_folder="/r"`, `local_folder=None`, `webhook_url=None`, `webhook_custom_params={"parent": 42}`, `error=None`, `extra={"input.in": "ATOMS"}`
+- **THEN** the returned Mapping's `metadata` value is `{"engine": "cp2k", "remote_folder": "/r", "webhook_custom_params": {"parent": 42}, "input.in": "ATOMS"}` (None-valued `local_folder`/`webhook_url`/`error` omitted; `extra` merged in) — the SAME shape that `TaskContext.to_metadata()` produced before the change
+
+#### Scenario: metadata dict omits all None typed fields
+- **WHEN** `_task_to_dict(t, nodes_by_id)` is called on a Task with `remote_folder=None`, `local_folder=None`, `webhook_url=None`, `error=None`, `extra={}`
+- **THEN** the returned Mapping's `metadata` value contains only the non-None typed fields (e.g. `{"engine": "cp2k", "webhook_custom_params": {}}`); the None-valued fields are absent (preserving the `to_metadata()` omission behavior)
+
+#### Scenario: metadata dict shape unchanged from caller perspective
+- **WHEN** a caller inspects `queue_get_tasks_async(jobs=[1])` output before and after the drop-task-context-entity change
+- **THEN** the `metadata` Mapping has the same keys and values for the same task (the reconstruction produces the same flat dict that `to_metadata()` did) — wire compatibility preserved
+
 #### Scenario: Zero-arg construction remains valid
 - **WHEN** `Yascheduler()` is called with no arguments
 - **THEN** the client is constructed successfully and `queue_get_tasks_async` is invokable
 
 #### Scenario: deps_factory is keyword-only
-- **WHEN** `Yascheduler(config_path, logger, my_factory)` is called with `deps_factory` positionally
-- **THEN** a `TypeError` is raised
+- **WHEN** `Yascheduler(config_path, logger, make_cli_deps)` is called with `deps_factory` as a positional argument
+- **THEN** `TypeError` is raised (the parameter is keyword-only via `*,`)
 
-#### Scenario: Query returns five-key dict shape with nested node
+#### Scenario: task_id in returned Mapping is bare int
 - **WHEN** `queue_get_tasks_async(jobs=[1])` returns a non-empty result
-- **THEN** each Mapping has exactly the keys `{task_id, label, status, metadata, node}`; the flat `ip` and `cloud` keys are ABSENT (replaced by the nested `node` key)a, cloud}` and no others
+- **THEN** each Mapping has exactly the keys `{task_id, label, status, metadata, node}`; the flat `ip` and `cloud` keys are ABSENT (replaced by the nested `node` key)
 
-#### Scenario: task_id in returned dict is a bare int
-- **WHEN** a returned Mapping's `task_id` value is inspected
+#### Scenario: task_id value is bare int not TaskId
+- **WHEN** the `task_id` value in a returned Mapping is inspected
 - **THEN** it is a bare `int` (NOT a `TaskId` instance); the facade extracted `.value` via `_task_to_dict` so the public `int`-typed contract is preserved
 
-#### Scenario: Facade wraps int to TaskId on input
-- **WHEN** `queue_get_task(42)` or `queue_get_tasks_async(jobs=[1, 2, 3])` is called
-- **THEN** the facade internally wraps `TaskId(42)` / `[TaskId(1), TaskId(2), TaskId(3)]` before calling the use case / repository (the public `int` signature is unchanged)
+#### Scenario: queue_get_task single-task returns Optional Mapping
+- **WHEN** `queue_get_task(42)` is called and the task exists
+- **THEN** it returns a Mapping with exactly `{task_id, label, status, metadata, node}` (NOT a list); `queue_get_task(99999)` for a missing task returns `None`
 
-#### Scenario: queue_submit_task returns int
-- **WHEN** `queue_submit_task(...)` completes successfully
-- **THEN** it returns a bare `int` (the `.value` of the `TaskId` returned by `submit_task`); the public `-> int` contract is preserved
+#### Scenario: node object shape when allocated
+- **WHEN** `_task_to_dict` is called on a Task with `allocated_node_id=NodeId(7)` and `nodes_by_id={NodeId(7): Node(ip="[IP]", port=22, username="u", cloud="hetzner", ...)}`
+- **THEN** the `node` value is `{"ip": "[IP]", "port": 22, "username": "u", "cloud": "hetzner"}`
 
-#### Scenario: Status field is a domain.TaskStatus member
-- **WHEN** a returned Mapping's `status` value is inspected
-- **THEN** it is an instance of `yascheduler.domain.TaskStatus` (not a plain `int`), with `.name` and `.value` matching the underlying IntEnum values 0/1/2
+#### Scenario: node is null when not allocated
+- **WHEN** `_task_to_dict` is called on a Task with `allocated_node_id=None`
+- **THEN** the `node` value is `None` (null)
 
-#### Scenario: node is null when task unallocated
-- **WHEN** a Task with `allocated_node_id=None` is returned by a query method
-- **THEN** the Mapping's `node` value is `null` (the flat `ip` and `cloud` keys are ABSENT; all node data is under the nested `node` key or `null`)
+#### Scenario: queue_submit_task returns bare int
+- **WHEN** `queue_submit_task(...)` is called
+- **THEN** it returns a bare `int` (NOT a `TaskId`); the facade unwraps `.value` from the `submit_task` use case's `TaskId` return
 
-#### Scenario: Contract holds via each import path
-- **WHEN** `Yascheduler` is imported via `from yascheduler import Yascheduler`, `from yascheduler.entrypoints import Yascheduler`, or `from yascheduler.client import Yascheduler`
-- **THEN** all query-method scenarios above hold identically (the import path does not affect the public contract)
+#### Scenario: No TaskContext reference in _task_to_dict
+- **WHEN** `_task_to_dict` is inspected for `TaskContext` or `to_metadata` references
+- **THEN** none are present (the dict is constructed inline from `t.engine`, `t.remote_folder`, `t.local_folder`, `t.webhook_url`, `t.webhook_custom_params`, `t.error`, `t.extra`)
 

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway_write_remote_file.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for _write_remote_file exception contract (fix-write-remote-file-swallow).
@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: repository._machines → repository._sessions; start_task_on_machine takes session (was machine); _upload_task_data takes session (was ip); _make_sftp_state returns SSHMachineSession; wiring on session._conn (was state.conn).
+#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: repository._machines → repository._sessions; start_task_on_machine takes session (was machine); _upload_task_data takes session (was ip); _make_sftp_state returns SSHMachineSession; wiring on session._conn (was state.conn).
 #   PREVIOUS_CHANGE: v1.0.1 - Add test_open_failure_propagates covering a non-SFTP exception raised by sftp.open() (same try block as f.write; gap surfaced by the bug-hunt review of v1.0.0). Helper _make_sftp_state gains an open_side_effect parameter.
 #   PREVIOUS_CHANGE: v1.0.0 - Initial tests for fix-write-remote-file-swallow: non-SFTP exception
 #     propagation through _write_remote_file / _upload_task_data; asyncssh.misc.Error structured
@@ -37,7 +38,7 @@ import asyncssh
 import pytest
 
 from yascheduler.domain import Engine
-from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId
+from yascheduler.domain.model import NodeId, Task, TaskId
 from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.operations.deployment import _write_remote_file
 from yascheduler.infra.ssh.repository import SSHMachineRepository
@@ -121,14 +122,20 @@ def _make_engine(input_files: tuple[str, ...] = ("input.txt",)) -> Engine:
 
 
 def _make_task(extra: dict[str, object] | None = None) -> Task:
+    from datetime import datetime
+
     return Task(
         task_id=TaskId(7),
         label="t7",
-        context=TaskContext(
-            engine="test_engine",
-            remote_folder="/remote/tasks/7",
-            extra=extra or {"input.txt": "hello"},
-        ),
+        engine="test_engine",
+        remote_folder="/remote/tasks/7",
+        local_folder=None,
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra=extra or {"input.txt": "hello"},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
     )
 
 

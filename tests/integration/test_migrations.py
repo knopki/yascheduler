@@ -1,9 +1,9 @@
 # FILE: tests/integration/test_migrations.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the migration runner against real PostgreSQL via testcontainers.
-#   SCOPE: Fresh/legacy/modern DB cohorts; .py best-effort reopen; .sql failure rollback; migration 002 backfills node_id SERIAL.
+#   SCOPE: Fresh/legacy/modern DB cohorts; .py best-effort reopen; .sql failure rollback; migration 002 backfills node_id SERIAL; migration 010 extracts typed columns from metadata JSONB.
 #   DEPENDS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATION-BASE
 #   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA
 # END_MODULE_CONTRACT
@@ -19,14 +19,14 @@
 #   test_sql_migration_failure_rolls_back_and_not_recorded - .sql failure rolls back, not recorded
 #   test_migration_002_adds_node_id_on_legacy_db - migration 002 backfills node_id SERIAL PRIMARY KEY on a legacy-style DB
 #   test_migration_005_converts_serial_to_identity - migration 005 converts SERIAL PKs to GENERATED ALWAYS AS IDENTITY and seeds above MAX
-#   test_legacy_db_at_005_applies_006_009 - legacy DB at 005: label→title, created_at/updated_at, trigger advances updated_at, status→task_status enum, ip dropped
-#   test_fresh_db_full_shape - fresh DB: task_status enum, trigger, title/status enum/created_at/updated_at columns, no ip, seeds '009'
+#   test_legacy_db_at_005_applies_006_010 - legacy DB at 005: label→title, created_at/updated_at, trigger advances updated_at, status→task_status enum, ip dropped; migration 010 extracts typed columns from metadata
+#   test_fresh_db_full_shape - fresh DB: task_status enum, trigger, title/status enum/created_at/updated_at columns, typed columns (engine/extra/remote_folder/local_folder/webhook_url/error/webhook_custom_params), no ip, seeds '010'
 #   test_migration_008_fails_on_out_of_range_status - migration 008 rolls back when a row has status=3 (out of enum range)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - task-schema-and-entity-cleanup: tracker assertions updated to '009' (new last_migration CONSTANT after migrations 006-009); synthetic migrations renumbered 006_*→010_* to avoid colliding with the real migrations 006-009; fresh DB now seeds to '009' and apply_migrations is no-op; legacy/modern DBs now apply 001-009.
-#   PREVIOUS_CHANGE: v1.4.0 - serial-to-generated-identity: tracker assertions updated to '005' (the new last_migration CONSTANT); synthetic migrations renumbered 005_*→006_* to avoid colliding with the real 005_serial_to_identity.sql; fresh DB now seeds to '005' and apply_migrations applies 005 on legacy/modern DBs (005 converts SERIAL PKs to GENERATED ALWAYS AS IDENTITY).
+#   LAST_CHANGE: v1.6.0 - drop-task-context-entity: migration 010 extracts typed columns from metadata; tracker assertions updated to include "010"; synthetic migrations renumbered 010_*→011_* (collision with real 010); fresh DB seeds to "010"; test_fresh_db_full_shape asserts typed columns present + metadata dropped.
+#   PREVIOUS_CHANGE: v1.5.0 - task-schema-and-entity-cleanup: tracker assertions updated to '009' (new last_migration CONSTANT after migrations 006-009); synthetic migrations renumbered 006_*→010_* to avoid colliding with the real migrations 006-009; fresh DB now seeds to '009' and apply_migrations is no-op; legacy/modern DBs now apply 001-009.
 # END_CHANGE_SUMMARY
 
 """Integration tests for the migration runner against real PostgreSQL.
@@ -126,7 +126,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
         conn = _connect(config)
         try:
             seeded = _tracker_rows(conn)
-            assert seeded == ["009"]
+            assert seeded == ["010"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -137,7 +137,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["009"]
+            assert _tracker_rows(conn) == ["010"]
         finally:
             conn.close()
 
@@ -191,6 +191,7 @@ def test_legacy_db_runs_all_migrations() -> None:
                 "007",
                 "008",
                 "009",
+                "010",
             ]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
@@ -251,6 +252,7 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
                 "007",
                 "008",
                 "009",
+                "010",
             ]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
@@ -272,7 +274,7 @@ def test_py_migration_best_effort_reopen(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "010_reopen.py").write_text(
+    (migrations_dir / "011_reopen.py").write_text(
         "from yascheduler.infra.persistence.migration_base import Migration\n"
         "class Reopen(Migration):\n"
         "    def migrate(self) -> None:\n"
@@ -291,7 +293,7 @@ def test_py_migration_best_effort_reopen(
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["009", "010"]
+            assert _tracker_rows(conn) == ["010", "011"]
             assert _table_exists(conn, "test_reopen")
         finally:
             conn.close()
@@ -310,7 +312,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "010_fail.sql").write_text(
+    (migrations_dir / "011_fail.sql").write_text(
         "CREATE TABLE fail_tbl (id int); CREATE TABLE fail_tbl (id int);"
     )
     monkeypatch.setattr(
@@ -327,7 +329,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 
         conn = _connect(config)
         try:
-            assert "010" not in _tracker_rows(conn)
+            assert "011" not in _tracker_rows(conn)
             assert not _table_exists(conn, "fail_tbl")
         finally:
             conn.close()
@@ -377,7 +379,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
 
         conn = _connect(config)
         try:
-            # Tracker records 001-009.
+            # Tracker records 001-010.
             assert _tracker_rows(conn) == [
                 "001",
                 "002",
@@ -388,6 +390,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
                 "007",
                 "008",
                 "009",
+                "010",
             ]
             # node_id column now exists.
             cols = _columns(conn, "yascheduler_nodes")
@@ -485,7 +488,15 @@ def test_migration_005_converts_serial_to_identity() -> None:
                 assert gen == "ALWAYS", (_tbl, _col, gen)
 
             # The tracker now records 004 (seeded) and 005 (applied).
-            assert _tracker_rows(conn) == ["004", "005", "006", "007", "008", "009"]
+            assert _tracker_rows(conn) == [
+                "004",
+                "005",
+                "006",
+                "007",
+                "008",
+                "009",
+                "010",
+            ]
 
             # (b) The identity sequence next value > the previously inserted id,
             # so the next insert will not collide. The identity sequence was
@@ -521,15 +532,15 @@ def test_migration_005_converts_serial_to_identity() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_legacy_db_at_005_applies_006_009
-#   PURPOSE: On a legacy DB at migration 005, apply_migrations runs 006-009; assert label→title rename, created_at/updated_at, trigger, status enum, ip dropped.
+# START_CONTRACT: test_legacy_db_at_005_applies_006_010
+#   PURPOSE: On a legacy DB at migration 005, apply_migrations runs 006-010; assert label→title rename, created_at/updated_at, trigger, status enum, ip dropped; migration 010 extracts typed columns from metadata.
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based }
 #   SIDE_EFFECTS: Starts a Postgres container; legacy seed at 005; applies migrations
 #   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_legacy_db_at_005_applies_006_009
-def test_legacy_db_at_005_applies_006_009() -> None:
-    """Legacy DB at migration 005: migrations 006-009 produce the final schema shape."""
+# END_CONTRACT: test_legacy_db_at_005_applies_006_010
+def test_legacy_db_at_005_applies_006_010() -> None:
+    """Legacy DB at migration 005: migrations 006-010 produce the final schema shape."""
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
 
@@ -576,6 +587,15 @@ def test_legacy_db_at_005_applies_006_009() -> None:
             # created_at and updated_at present
             assert "created_at" in cols
             assert "updated_at" in cols
+            # Migration 010: metadata dropped, typed columns extracted
+            assert "metadata" not in cols
+            assert "engine" in cols
+            assert "extra" in cols
+            assert "remote_folder" in cols
+            assert "local_folder" in cols
+            assert "webhook_url" in cols
+            assert "error" in cols
+            assert "webhook_custom_params" in cols
 
             # status column type is task_status enum with correct labels
             conn.run("BEGIN")
@@ -616,8 +636,8 @@ def test_legacy_db_at_005_applies_006_009() -> None:
             conn.run("BEGIN")
             try:
                 conn.run(
-                    "INSERT INTO yascheduler_tasks (title, status, metadata) "
-                    "VALUES ('trigger_test', 'TO_DO', '{}'::jsonb)"
+                    "INSERT INTO yascheduler_tasks (title, status, engine) "
+                    "VALUES ('trigger_test', 'TO_DO', 'fleur')"
                 )
             finally:
                 conn.run("COMMIT")
@@ -654,8 +674,8 @@ def test_legacy_db_at_005_applies_006_009() -> None:
             finally:
                 conn.run("ROLLBACK")
 
-            # Tracker records 005 (seeded) + 006, 007, 008, 009
-            assert _tracker_rows(conn) == ["005", "006", "007", "008", "009"]
+            # Tracker records 005 (seeded) + 006, 007, 008, 009, 010
+            assert _tracker_rows(conn) == ["005", "006", "007", "008", "009", "010"]
 
             # The legacy row's status was converted via the USING clause.
             conn.run("BEGIN")
@@ -686,14 +706,21 @@ def test_fresh_db_full_shape() -> None:
 
         conn = _connect(config)
         try:
-            # Tracker seeds to '009'
-            assert _tracker_rows(conn) == ["009"]
+            # Tracker seeds to '010'
+            assert _tracker_rows(conn) == ["010"]
 
             cols = _columns(conn, "yascheduler_tasks")
             assert "task_id" in cols
             assert "title" in cols  # not label
             assert "status" in cols
-            assert "metadata" in cols
+            assert "metadata" not in cols  # dropped by migration 010
+            assert "engine" in cols
+            assert "remote_folder" in cols
+            assert "local_folder" in cols
+            assert "webhook_url" in cols
+            assert "error" in cols
+            assert "webhook_custom_params" in cols
+            assert "extra" in cols
             assert "allocated_node_id" in cols
             assert "created_at" in cols
             assert "updated_at" in cols
@@ -724,12 +751,12 @@ def test_fresh_db_full_shape() -> None:
         finally:
             conn.close()
 
-        # apply_migrations finds MAX='009' and applies nothing.
+        # apply_migrations finds MAX='010' and applies nothing.
         apply_migrations(config)
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["009"]
+            assert _tracker_rows(conn) == ["010"]
         finally:
             conn.close()
 

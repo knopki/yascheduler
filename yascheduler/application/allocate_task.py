@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.18.0
+# VERSION: 5.19.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: allocate_task async function and cloud-fallback helpers.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.18.0 - cloud-port-node-arg: _TmpSelection carries the tmp Node (was node_id); _allocate_cloud_node takes tmp_node: Node; _persist_node_with_cleanup calls clouds.deallocate(node) (dropped selected_name param + cloud_name fallback).
-#   PREVIOUS_CHANGE: v5.17.0 - ssh-rekey-node-id: _find_free_machines builds nodes_by_id = {n.node_id: n} and busy_node_ids = {t.allocated_node_id} and pairs sessions via s.machine.node_id (was nodes_by_ip/busy_node_ips — dup-IP collapse resolved: two enabled nodes sharing an ip now have distinct node_id keys). _try_start_on_machine emits TaskAllocated with node_id=node.node_id (was node_ip=session.ip). _allocate_cloud_node calls clouds.allocate(selected_name, tmp_node_id) -> Node (was NewNode). _persist_node_with_cleanup does a single uow.nodes.update(node) (V1: flips enabled=TRUE, sets ip/ncpus; was insert(NewNode)+remove(tmp_node_id) — one row per lifecycle, not two). _provision_and_persist returns Node.
+#   LAST_CHANGE: v5.19.0 - drop-task-context-entity: _validate_engine and _try_start_on_machine read task.engine; with_event(TaskAllocated, ..., engine_name=task.engine).
+#   PREVIOUS_CHANGE: v5.18.0 - cloud-port-node-arg: _TmpSelection carries the tmp Node (was node_id); _allocate_cloud_node takes tmp_node: Node; _persist_node_with_cleanup calls clouds.deallocate(node) (dropped selected_name param + cloud_name fallback).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ async def _validate_engine(
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> Engine | None:
     # START_BLOCK_VALIDATE_ENGINE
-    engine_name: str | None = task.context.engine
+    engine_name: str | None = task.engine
     engine = engines.get(engine_name) if engine_name else None
     if engine is None:
         logger.warning(
@@ -143,9 +143,7 @@ async def _try_start_on_machine(
         node.node_id,
     )
     operations.start_occupancy_check(session, engine)
-    task = task.with_event(
-        TaskAllocated, node_id=node.node_id, engine_name=task.context.engine
-    )
+    task = task.with_event(TaskAllocated, node_id=node.node_id, engine_name=task.engine)
     async with uow_factory() as uow:
         await uow.tasks.save(task)
         await uow.commit()

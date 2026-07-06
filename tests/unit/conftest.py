@@ -18,12 +18,13 @@
 # END_CHANGE_SUMMARY
 
 from collections.abc import Generator
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, Task, TaskId, TaskStatus
 from yascheduler.infra.persistence.sql_loader import load_query
 
 
@@ -86,10 +87,15 @@ def running_task() -> Task:
     return Task(
         task_id=TaskId(1),
         label="test",
-        context=TaskContext(
-            engine="test_engine",
-            remote_folder="/remote/tasks/20250101_120000_42",
-        ),
+        engine="test_engine",
+        remote_folder="/remote/tasks/20250101_120000_42",
+        local_folder=None,
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
         status=TaskStatus.RUNNING,
         allocated_node_id=NodeId(1),
     )

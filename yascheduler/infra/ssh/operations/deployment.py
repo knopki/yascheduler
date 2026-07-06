@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/deployment.py
-# VERSION: 1.3.0
+# VERSION: 1.4.1
 # START_MODULE_CONTRACT
 #   PURPOSE: TaskDeployer — upload task inputs and spawn the calculation process on a remote machine via MachineSession. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: TaskDeployer class + _write_remote_file + _safe_b64decode module-private helpers.
@@ -14,9 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - fix-submit-log-after-occupy: moved the "Submitting task_id=..." INFO log in start_task_on_machine from before session.occupy() to after it, so a CAS loser (MachineBusyError) never emits a misleading deploy-intent line. Ordering is now: assert remote_folder -> occupy() (CAS) -> "Submitting..." log -> deploy+spawn -> rollback on failure. assert kept before occupy for fail-fast with no side effects; rollback handler unchanged.
-#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle section 5.2: Method bodies rewritten to operate via MachineSession parameter directly. _upload_task_data, _exec_spawn_command, start_task_on_machine all take `session: MachineSession` instead of `ip`/`machine`. All self._operations/self._repository references replaced with session methods (open_sftp, run_bg, quote, path, hostname, is_closed, machine.state, update, release, occupy).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial module created (decompose-ssh-gateway). Extracted from the dissolved SSHMachineGateway god-class; start_task_on_machine + _upload_task_data + _exec_spawn_command + _write_remote_file + _safe_b64decode moved verbatim.
+#   LAST_CHANGE: v1.4.1 - start-task-contract-side-effect: TaskDeployer.start_task_on_machine SIDE_EFFECTS now declares the AssertionError raise on the task.remote_folder precondition (was the line-206 FIXME); checked before session.occupy() so it stays outside the rollback path, uncaught locally, propagates to the orchestrator allocator worker's `except Exception`.
+#   PREVIOUS_CHANGE: v1.4.0 - drop-task-context-entity: read task.extra[input_file] and task.remote_folder — typed fields folded onto Task.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -132,7 +131,7 @@ class TaskDeployer:
 
             for input_file in input_files:
                 r_input_file = remote_dir / input_file
-                file_data = task.context.extra[input_file]
+                file_data = task.extra[input_file]
                 if input_file == "fort.9":
                     await _write_remote_file(
                         sftp,
@@ -190,7 +189,7 @@ class TaskDeployer:
     #     engines_dir: PurePath - Remote engines directory for engine path resolution
     #   }
     #   OUTPUTS: { bool - True on successful spawn }
-    #   SIDE_EFFECTS: Uploads files via SFTP, marks machine busy, runs spawn command via run_bg.
+    #   SIDE_EFFECTS: Uploads files via SFTP, marks machine busy, runs spawn command via run_bg. Raises AssertionError when task.remote_folder is None (precondition, checked before session.occupy() so outside the rollback path); uncaught locally, propagates to the orchestrator allocator worker's `except Exception`.
     #   LINKS: M-SSH-OPS-DEPLOY, M-SSH-SESSION
     # END_CONTRACT: TaskDeployer.start_task_on_machine
     async def start_task_on_machine(
@@ -204,7 +203,7 @@ class TaskDeployer:
         from yascheduler.domain import MachineState
 
         # START_BLOCK_START_TASK
-        assert task.context.remote_folder is not None
+        assert task.remote_folder is not None
         session.occupy()
 
         self._log.info(
@@ -218,7 +217,7 @@ class TaskDeployer:
         # START_BLOCK_DEPLOY_SPAWN
         try:
             path_type = session.path
-            remote_folder = path_type(task.context.remote_folder)
+            remote_folder = path_type(task.remote_folder)
             # START_BLOCK_DEPLOY
             async with session.open_sftp() as sftp:
                 try:

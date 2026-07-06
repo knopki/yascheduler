@@ -307,11 +307,12 @@ class StubMachineOperations:
         files: list[str],
         task_id: TaskId | None = None,
     ) -> tuple[
-        list[tuple[str, Any]],
+        str,
+        str,
         list[tuple[str | None, Exception]],
         list[tuple[str | None, Exception]],
     ]:
-        return ([], [], [])
+        return ("", "", [], [])
 
     def start_occupancy_check(
         self, session: StubMachineSession, config: Engine

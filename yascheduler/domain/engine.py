@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/engine.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Engine value object, EngineRepository collection, Deploy strategies as frozen stdlib dataclasses.
 #   SCOPE: LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy, Deploy Union alias, Engine value object with validate_inputs, EngineRepository frozen collection with filter/filter_platforms/get_platform_packages.
@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Relocate Engine, Deploy*, EngineRepository from yascheduler.config to yascheduler.domain as frozen stdlib dataclasses; merge 7-field domain.model.Engine with 4 fields from config.Engine (deployable, platform_packages, check_cmd_code, sleep_interval); drop UserDict inheritance, __hash__, engines_dir; INI parsing moves to entrypoints.config_parser (engine-to-domain-frozen).
+#   LAST_CHANGE: v1.1.0 - drop-task-context-entity: Engine.validate_inputs takes extra: Mapping[str, object] (was ctx: TaskContext); reads the task's extra dict directly.
+#   PREVIOUS_CHANGE: v1.0.0 - Relocate Engine, Deploy*, EngineRepository from yascheduler.config to yascheduler.domain as frozen stdlib dataclasses; merge 7-field domain.model.Engine with 4 fields from config.Engine (deployable, platform_packages, check_cmd_code, sleep_interval); drop UserDict inheritance, __hash__, engines_dir; INI parsing moves to entrypoints.config_parser (engine-to-domain-frozen).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,8 +30,6 @@ from typing import TYPE_CHECKING, Union
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence, ValuesView
     from pathlib import PurePath
-
-    from .model import TaskContext
 
 from .exceptions import MissingInputFileError
 
@@ -80,17 +79,17 @@ class Engine:
     sleep_interval: int = 10
 
     # START_CONTRACT: Engine.validate_inputs
-    #   PURPOSE: Validate that all required input files exist in the task context.
-    #   INPUTS: { ctx: TaskContext - Task metadata containing input file data in ctx.extra }
+    #   PURPOSE: Validate that all required input files exist in the task extra payload.
+    #   INPUTS: { extra: Mapping[str, object] - the task's extra dict (input-file payloads, file names as keys) }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: None
-    #   RAISES: MissingInputFileError - if any input_file is missing from ctx.extra
+    #   RAISES: MissingInputFileError - if any input_file is missing from extra
     #   LINKS: M-DOMAIN-EXCEPTIONS: MissingInputFileError
     # END_CONTRACT: Engine.validate_inputs
-    def validate_inputs(self, ctx: TaskContext) -> None:
-        """Verify all required engine input files exist in the task context."""
+    def validate_inputs(self, extra: Mapping[str, object]) -> None:
+        """Verify all required engine input files exist in the task extra payload."""
         for filename in self.input_files:
-            if filename not in ctx.extra:
+            if filename not in extra:
                 raise MissingInputFileError(self.name, filename)
 
 

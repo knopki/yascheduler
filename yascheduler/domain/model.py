@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.21.1
+# VERSION: 1.22.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
-#   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
+#   SCOPE: TaskStatus, MachineState enums; ProcessResult value object; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
 #   DEPENDS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 #   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -11,10 +11,8 @@
 #   TaskStatus - IntEnum: TO_DO=0, RUNNING=1, DONE=2
 #   MachineState - Enum: FREE, BUSY
 #   ProcessResult - Exit code and captured output from remote execution
-#   TaskContext - Typed task metadata with arbitrary extras; .replace() typed copy-with
-#   TaskContextOverrides - TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra
 #   TaskId - Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
-#   NewTask - Pre-persistence task record (no task_id)
+#   NewTask - Pre-persistence task record
 #   Task - Post-persistence task entity
 #   NodeId - Node primary-key value object
 #   NewNode - Pre-persistence node record
@@ -25,17 +23,17 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.21.0 - task-schema-and-entity-cleanup: Task/NewTask drop allocated_ip; Task gains created_at/updated_at: datetime
-#   PREVIOUS_CHANGE: v1.20.1 - cloud-port-node-arg: NewNode docstring updated for the allocate(node) signature (doc-only).
+#   LAST_CHANGE: v1.22.0 - drop-task-context-entity: TaskContext / TaskContextOverrides; typed fields folded onto Task / NewTask; Task.fail/reject simplified to direct replace(status=DONE, error=reason); new Task.with_remote_folder and Task.with_download_results methods; with_event reads self.webhook_url / self.webhook_custom_params directly.
+#   PREVIOUS_CHANGE: v1.21.0 - task-schema-and-entity-cleanup: Task/NewTask drop allocated_ip; Task gains created_at/updated_at: datetime
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum, IntEnum, unique
-from typing import TYPE_CHECKING, TypedDict, TypeVar, overload
+from typing import TypeVar, overload
 
 from .engine import (
     Deploy,
@@ -72,11 +70,6 @@ __all__ = [
     "RemoteArchiveDeploy",
 ]
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from yascheduler.shared import Self, Unpack
-
 _E = TypeVar("_E", bound=DomainEvent)
 
 
@@ -104,94 +97,6 @@ class ProcessResult:
     exit_code: int
     stdout: str = ""
     stderr: str = ""
-
-
-class TaskContextOverrides(TypedDict, total=False):
-    """Overridable TaskContext fields.
-
-    Only fields actually replaced somewhere in the codebase are listed.
-    """
-
-    remote_folder: str | None
-    local_folder: str | None
-    error: str | None
-    extra: dict[str, object]
-
-
-# START_CONTRACT: _get_opt_str
-#   PURPOSE: Narrow a JSONB metadata value to str | None at the deserialization boundary; raise TypeError on any other type.
-#   INPUTS: { metadata: Mapping[str, object] - JSONB flat dict, key: str - the str|None field name }
-#   OUTPUTS: { str | None - the str value, or None if the key is missing/None }
-#   SIDE_EFFECTS: None
-#   RAISES: TypeError - if the value is neither str nor None (upstream JSONB corruption)
-#   LINKS: M-DOMAIN-MODEL
-# END_CONTRACT: _get_opt_str
-def _get_opt_str(metadata: Mapping[str, object], key: str) -> str | None:
-    value = metadata.get(key)
-    if value is None or isinstance(value, str):
-        return value
-    raise TypeError(
-        f"TaskContext JSONB field {key!r} expected str or None, "
-        f"got {type(value).__name__}"
-    )
-
-
-@dataclass(frozen=True)
-class TaskContext:
-    """Typed task metadata with engine name, paths, webhook, and arbitrary extras."""
-
-    engine: str
-    remote_folder: str | None = None
-    local_folder: str | None = None
-    webhook_url: str | None = None
-    webhook_custom_params: dict[str, object] = field(default_factory=dict)
-    error: str | None = None
-    extra: dict[str, object] = field(default_factory=dict)
-
-    def to_metadata(self) -> dict[str, object]:
-        """Serialize to flat dict for JSONB storage."""
-
-        def factory(items: list[tuple[str, object]]) -> dict[str, object]:
-            return {k: v for k, v in items if v is not None and k != "extra"}
-
-        result = asdict(self, dict_factory=factory)
-        # Domain fields take precedence — merge extra only for non-colliding keys
-        for k, v in self.extra.items():
-            if k not in result:
-                result[k] = v
-        return result
-
-    @classmethod
-    def from_metadata(cls, metadata: Mapping[str, object]) -> TaskContext:
-        """Deserialize from a flat dict produced by to_metadata()."""
-        extra: dict[str, object] = {}
-        keys = [field.name for field in fields(cls) if field.name != "extra"]
-        for key, value in metadata.items():
-            if key not in keys:
-                extra[key] = value
-
-        wcp = metadata.get("webhook_custom_params")
-        webhook_custom_params = wcp if isinstance(wcp, dict) else {}
-        return cls(
-            engine=str(metadata.get("engine", "")),
-            remote_folder=_get_opt_str(metadata, "remote_folder"),
-            local_folder=_get_opt_str(metadata, "local_folder"),
-            webhook_url=_get_opt_str(metadata, "webhook_url"),
-            webhook_custom_params=webhook_custom_params,
-            error=_get_opt_str(metadata, "error"),
-            extra=extra,
-        )
-
-    # START_CONTRACT: TaskContext.replace
-    #   PURPOSE: Typed copy-with returning a new TaskContext
-    #   INPUTS: { **overrides: Unpack[TaskContextOverrides] - subset of fields to override }
-    #   OUTPUTS: { Self - new TaskContext instance with overrides applied }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-MODEL
-    # END_CONTRACT: TaskContext.replace
-    def replace(self, **overrides: Unpack[TaskContextOverrides]) -> Self:
-        """Return a new TaskContext with the given overrides applied."""
-        return replace(self, **overrides)
 
 
 # START_CONTRACT: TaskId
@@ -227,7 +132,7 @@ class TaskId:
 
 # START_CONTRACT: NewTask
 #   PURPOSE: Pre-persistence task record — no identity yet; converted to Task only by TaskRepository.insert.
-#   INPUTS: { label: str, context: TaskContext, status: TaskStatus, allocated_node_id: NodeId | None }
+#   INPUTS: { label: str, engine: str, local_folder: str | None, webhook_url: str | None, webhook_custom_params: dict, extra: dict, status: TaskStatus, allocated_node_id: NodeId | None }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert
@@ -238,21 +143,19 @@ class NewTask:
 
     A caller builds a ``NewTask`` to prepare a task for insertion.
     It is a pure data carrier with no lifecycle methods.
-
-    ``allocated_node_id`` is ``None`` on a ``NewTask`` (no node is bound until
-    allocation). It is written by :meth:`Task.allocate_to`, not by ``NewTask``
-    construction.
     """
 
-    label: str
-    context: TaskContext
-    status: TaskStatus = TaskStatus.TO_DO
-    allocated_node_id: NodeId | None = None
+    engine: str
+    label: str = ""
+    local_folder: str | None = None
+    webhook_url: str | None = None
+    webhook_custom_params: dict[str, object] = field(default_factory=dict)
+    extra: dict[str, object] = field(default_factory=dict)
 
 
 # START_CONTRACT: Task
 #   PURPOSE: Post-persistence task entity — always carries its database-generated task_id (identity-first) and a status lifecycle.
-#   INPUTS: { task_id: TaskId, label: str, context: TaskContext, status: TaskStatus, allocated_node_id: NodeId | None, created_at: datetime, updated_at: datetime }
+#   INPUTS: { task_id: TaskId, label: str, engine: str, remote_folder: str | None, local_folder: str | None, webhook_url: str | None, webhook_custom_params: dict, error: str | None, extra: dict, created_at: datetime, updated_at: datetime, status: TaskStatus, allocated_node_id: NodeId | None, _events: tuple }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert (the only NewTask→Task conversion site)
@@ -273,12 +176,18 @@ class Task:
     """
 
     task_id: TaskId
-    label: str
-    context: TaskContext
-    status: TaskStatus = TaskStatus.TO_DO
-    allocated_node_id: NodeId | None = None
+    engine: str
     created_at: datetime = field(default_factory=lambda: datetime.now())
     updated_at: datetime = field(default_factory=lambda: datetime.now())
+    label: str = ""
+    local_folder: str | None = None
+    remote_folder: str | None = None
+    webhook_url: str | None = None
+    webhook_custom_params: dict[str, object] = field(default_factory=dict)
+    error: str | None = None
+    status: TaskStatus = TaskStatus.TO_DO
+    extra: dict[str, object] = field(default_factory=dict)
+    allocated_node_id: NodeId | None = None
     _events: tuple[DomainEvent, ...] = field(default=(), repr=False)
 
     # START_CONTRACT: Task.allocate_to
@@ -335,7 +244,7 @@ class Task:
     # START_CONTRACT: Task.fail
     #   PURPOSE: Mark task as DONE with error reason if currently RUNNING.
     #   INPUTS: { reason: str - Failure description }
-    #   OUTPUTS: { Task - New Task instance with status=DONE and context.error set }
+    #   OUTPUTS: { Task - New Task instance with status=DONE and error set }
     #   SIDE_EFFECTS: None
     #   RAISES: TaskNotRunningError - if not RUNNING
     #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotRunningError
@@ -347,17 +256,13 @@ class Task:
             raise TaskNotRunningError(self.task_id)
         # END_BLOCK_FAIL_VALIDATE_RUNNING
         # START_BLOCK_MARK_FAILED
-        return replace(
-            self,
-            status=TaskStatus.DONE,
-            context=self.context.replace(error=reason),
-        )
+        return replace(self, status=TaskStatus.DONE, error=reason)
         # END_BLOCK_MARK_FAILED
 
     # START_CONTRACT: Task.reject
     #   PURPOSE: Mark a TO_DO task as DONE with error reason (e.g. unsupported engine).
     #   INPUTS: { reason: str - Rejection description }
-    #   OUTPUTS: { Task - New Task instance with status=DONE and context.error set }
+    #   OUTPUTS: { Task - New Task instance with status=DONE and error set }
     #   SIDE_EFFECTS: None
     #   RAISES: TaskNotTodoError - if not TO_DO
     #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotTodoError
@@ -369,11 +274,7 @@ class Task:
             raise TaskNotTodoError(self.task_id)
         # END_BLOCK_VALIDATE_TODO
         # START_BLOCK_MARK_REJECTED
-        return replace(
-            self,
-            status=TaskStatus.DONE,
-            context=self.context.replace(error=reason),
-        )
+        return replace(self, status=TaskStatus.DONE, error=reason)
         # END_BLOCK_MARK_REJECTED
 
     # START_CONTRACT: Task.record_event
@@ -386,18 +287,30 @@ class Task:
     def record_event(self, event: DomainEvent) -> Task:
         return replace(self, _events=self._events + (event,))
 
-    # START_CONTRACT: Task.with_context
-    #   PURPOSE: Wholesale-replace the task's context, returning a new Task.
-    #   INPUTS: { context: TaskContext - new context to wholesale-replace }
-    #   OUTPUTS: { Task - new instance with context replaced, all other fields preserved }
+    # START_CONTRACT: Task.with_remote_folder
+    #   PURPOSE: Set remote_folder post-insert
+    #   INPUTS: { remote_folder: str - the remote path assigned to the task }
+    #   OUTPUTS: { Task - new Task with remote_folder set }
     #   SIDE_EFFECTS: None
     #   LINKS: M-DOMAIN-MODEL
-    # END_CONTRACT: Task.with_context
-    def with_context(self, context: TaskContext) -> Task:
-        return replace(self, context=context)
+    # END_CONTRACT: Task.with_remote_folder
+    def with_remote_folder(self, remote_folder: str) -> Task:
+        """Return a new Task with remote_folder set (submit-time copy-with)."""
+        return replace(self, remote_folder=remote_folder)
+
+    # START_CONTRACT: Task.with_download_results
+    #   PURPOSE: Set local_folder and remote_folder post-download.
+    #   INPUTS: { local_folder: str - local output path (keyword-only), remote_folder: str - remote output path (keyword-only) }
+    #   OUTPUTS: { Task - new Task with local_folder and remote_folder set }
+    #   SIDE_EFFECTS: None
+    #   LINKS: M-DOMAIN-MODEL
+    # END_CONTRACT: Task.with_download_results
+    def with_download_results(self, *, local_folder: str, remote_folder: str) -> Task:
+        """Return a new Task with local_folder and remote_folder set"""
+        return replace(self, local_folder=local_folder, remote_folder=remote_folder)
 
     # START_CONTRACT: Task.with_event
-    #   PURPOSE: Construct an event of the given type with base fields (task_id, webhook_url, webhook_custom_params) populated from self.context and subclass-specific fields from the caller, then append via record_event.
+    #   PURPOSE: Construct an event of the given type with base fields (task_id, webhook_url, webhook_custom_params) populated from the typed task fields and subclass-specific fields from the caller, then append via record_event.
     #   INPUTS: {
     #     event_type: type[E] - Concrete event subclass to construct,
     #     **fields: object - Subclass-specific fields (keyword-only via overloads); any base fields passed are silently dropped
@@ -433,8 +346,8 @@ class Task:
         # START_BLOCK_CONSTRUCT_AND_RECORD
         event = event_type(
             task_id=self.task_id,
-            webhook_url=self.context.webhook_url,
-            webhook_custom_params=self.context.webhook_custom_params,
+            webhook_url=self.webhook_url,
+            webhook_custom_params=self.webhook_custom_params,
             **fields,
         )
         return self.record_event(event)

@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: removed allocated_ip=dead_ip from NewTask constructor (field removed); assert matching[0].allocated_node_id == persisted_node.node_id instead of allocated_ip.
-#   PREVIOUS_CHANGE: v1.1.0 - cloud-port-node-arg: assert orch._clouds.deallocate awaited with persisted_node (was ("hetzner", dead_ip)).
+#   LAST_CHANGE: v1.3.0 - drop-task-context-entity: NewTask constructed with flat typed fields (engine=...); pre-bound task now insert + allocate_to(node) + save (NewTask no longer carries allocated_node_id/status); TaskContext import removed.
+#   PREVIOUS_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: removed allocated_ip=dead_ip from NewTask constructor (field removed); assert matching[0].allocated_node_id == persisted_node.node_id instead of allocated_ip.
 # END_CHANGE_SUMMARY
 """Integration tests for the never-connected-node abandon path.
 
@@ -60,7 +60,6 @@ from yascheduler.domain.exceptions import MachineConnectionError
 from yascheduler.domain.model import (
     NewNode,
     NewTask,
-    TaskContext,
     TaskStatus,
 )
 from yascheduler.infra.cloud.cloud_configs import (
@@ -161,13 +160,10 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     async with uow_factory() as uow:
         persisted_node = await uow.nodes.insert(node)
         inserted_task = await uow.tasks.insert(
-            NewTask(
-                label="stuck",
-                context=TaskContext(engine="test_engine"),
-                status=TaskStatus.TO_DO,
-                allocated_node_id=persisted_node.node_id,
-            )
+            NewTask(label="stuck", engine="test_engine")
         )
+        inserted_task = inserted_task.allocate_to(persisted_node)
+        await uow.tasks.save(inserted_task)
         await uow.commit()
     task_id = inserted_task.task_id
 

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_consume_task.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for consume_task finalise/defer branches and task-not-found path.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - session-based-machine-handle section 7.4: _run_consume wrapper and all test methods pass session: MachineSession instead of ip: str; update download_outputs assertion from ip= kwarg to session= kwarg.
-#   PREVIOUS_CHANGE: v1.0.0 - Extracted from test_application_use_cases.py (GRACE 1000-line hard limit). Covers consume_task bool return + 3-tuple download_outputs branches (fix-download-rmtree-data-loss).
+#   LAST_CHANGE: v2.2.0 - drop-task-context-entity: AsyncMock return_values updated to the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors).
+#   PREVIOUS_CHANGE: v2.1.0 - drop-task-context-entity: task.context.error → task.error.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for consume_task finalise/defer branches.
@@ -53,7 +53,7 @@ class TestConsumeTask:
     @pytest.fixture
     def mock_operations(self) -> MagicMock:
         operations = MagicMock()
-        operations.download_outputs = AsyncMock(return_value=([], [], []))
+        operations.download_outputs = AsyncMock(return_value=("", "", [], []))
         return operations
 
     async def _run_consume(
@@ -123,7 +123,7 @@ class TestConsumeTask:
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.context.error is None
+        assert saved_task.error is None
         uow.commit.assert_called_once()
         # tracker.discard called instead of clouds.mark_task_done
         tracker.discard.assert_called_once_with(TaskId(1))
@@ -137,9 +137,9 @@ class TestConsumeTask:
         mock_engine_repo: MagicMock,
     ) -> None:
         """Permanent-only errors -> save DONE with error, tracker discarded, returns True."""
-        session_mock = SimpleNamespace(ip="10.0.0.1")
+        session_mock = SimpleNamespace(ip="[IP]")
         mock_operations.download_outputs = AsyncMock(
-            return_value=([], [], [("/remote/file", OSError("Connection refused"))])
+            return_value=("", "", [], [("/remote/file", OSError("Connection refused"))])
         )
 
         uow = AsyncMock()
@@ -172,7 +172,7 @@ class TestConsumeTask:
         uow.tasks.save.assert_called_once()
         saved_task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.context.error is not None
+        assert saved_task.error is not None
         # tracker.discard called on permanent failure path too
         tracker.discard.assert_called_once_with(TaskId(1))
         # finalised -> True
@@ -185,10 +185,11 @@ class TestConsumeTask:
         mock_engine_repo: MagicMock,
     ) -> None:
         """Transient-only errors -> no save, no event, no tracker.discard, returns False."""
-        session_mock = SimpleNamespace(ip="10.0.0.1")
+        session_mock = SimpleNamespace(ip="[IP]")
         mock_operations.download_outputs = AsyncMock(
             return_value=(
-                [],
+                "",
+                "",
                 [("/remote/file", SFTPFailure("transient blip"))],
                 [],
             )
@@ -238,7 +239,7 @@ class TestConsumeTask:
         transient = [("/remote/a", SFTPFailure("transient"))]
         permanent = [("/remote/b", OSError("permanent missing"))]
         mock_operations.download_outputs = AsyncMock(
-            return_value=([], transient, permanent)
+            return_value=("", "", transient, permanent)
         )
 
         uow = AsyncMock()
@@ -271,9 +272,9 @@ class TestConsumeTask:
         uow.tasks.save.assert_called_once()
         saved_task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.context.error is not None
+        assert saved_task.error is not None
         # error message includes both permanent and transient details
-        error_str = str(saved_task.context.error)
+        error_str = str(saved_task.error)
         assert "permanent missing" in error_str
         assert "transient" in error_str
         uow.commit.assert_called_once()

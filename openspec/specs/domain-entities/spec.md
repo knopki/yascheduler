@@ -58,27 +58,36 @@ design). It is the Task-side analog of `NodeId`.
 The system SHALL provide a `NewTask` domain entity as an immutable
 `@dataclass(frozen=True)` object representing a **pre-persistence** task record
 (one that has not yet been assigned a database `task_id`). Fields:
-`label: str`, `context: TaskContext`, `status: TaskStatus = TaskStatus.TO_DO`,
-`allocated_node_id: NodeId | None = None`.
+`engine: str`, `label: str = ""`, `local_folder: str | None = None`,
+`webhook_url: str | None = None`,
+`webhook_custom_params: dict[str, object] = field(default_factory=dict)`,
+`extra: dict[str, object] = field(default_factory=dict)`.
 
-`NewTask` mirrors the non-`task_id`/non-`_events`/non-`created_at`/
-non-`updated_at` fields of `Task` with identical defaults. It carries no
-identity attribute, no `_events` tuple, and no `created_at`/`updated_at`
-timestamp fields (those are DB-generated and only appear on the
-post-persistence `Task`). It is a pure data carrier with **no lifecycle
-methods** (`allocate_to`/`mark_running`/
-`complete`/`fail`/`reject`/`with_context`/`with_event`/`pull_events`/
-`record_event` stay on `Task` — they are nonsensical on an unpersisted task). It
-is converted to a `Task` only by `TaskRepository.insert` (see the `domain-ports`
-capability).
+`NewTask` carries no identity attribute, no `_events` tuple, no
+`created_at`/`updated_at` timestamps, no `status`, no `allocated_node_id`, no
+`remote_folder`, and no `error`. The DB supplies `status` (DEFAULT 'TO_DO'),
+`allocated_node_id` (DEFAULT NULL), `created_at`/`updated_at` (DEFAULT NOW()) on
+insert; `remote_folder` is assigned post-insert by `Task.with_remote_folder`;
+`error` is only ever set by `Task.fail` / `Task.reject` on a post-persistence
+`Task`. It is a pure data carrier with **no lifecycle methods**
+(`allocate_to`/`mark_running`/`complete`/`fail`/`reject`/
+`with_remote_folder`/`with_download_results`/`with_event`/`pull_events`/
+`record_event` stay on `Task` — `NewTask` is converted to a `Task` only by
+`TaskRepository.insert` (see the `domain-ports` capability)).
 
-`allocated_node_id` is `None` on a `NewTask` (no node is bound until
-allocation). It is written by `Task.allocate_to` (see the "Task entity with
-status lifecycle" requirement), not by `NewTask` construction.
+`allocated_node_id` is bound by `Task.allocate_to(node)` after insert, not by
+`NewTask` construction. A task that must be pre-bound to a node (e.g. the
+never-connected-node-abandon integration test) is inserted as an unbound
+`NewTask`, then `task.allocate_to(node)` + `repo.save(task)` bind it.
+
+`NewTask` carries NO `remote_folder` and NO `error` fields: `remote_folder` is
+assigned post-insert by `Task.with_remote_folder` (the remote path is constructed
+from the generated `task_id`); `error` is only ever set by `Task.fail` /
+`Task.reject` on a post-persistence `Task`. The two fields appear on `Task` only.
 
 #### Scenario: NewTask has no task_id attribute
-- **WHEN** a NewTask is instantiated with `label="job"` and `context=ctx`
-- **THEN** it has no `task_id` field; `status` defaults to `TaskStatus.TO_DO`, `allocated_node_id` defaults to None
+- **WHEN** a NewTask is instantiated with `label="job"` and `engine="cp2k"`
+- **THEN** it has no `task_id` field; no `status` field; no `allocated_node_id` field; `local_folder`/`webhook_url` default to None, `webhook_custom_params`/`extra` default to `{}`
 
 #### Scenario: NewTask carries no events
 - **WHEN** a NewTask is instantiated
@@ -88,20 +97,27 @@ status lifecycle" requirement), not by `NewTask` construction.
 - **WHEN** a NewTask is instantiated
 - **THEN** it has no `created_at` or `updated_at` attribute; those fields are DB-generated and appear only on the post-persistence `Task`
 
+#### Scenario: NewTask has no remote_folder or error
+- **WHEN** a NewTask is instantiated with `label="job"`, `engine="cp2k"`
+- **THEN** it has no `remote_folder` attribute and no `error` attribute; those fields appear only on the post-persistence `Task`
+
 #### Scenario: NewTask is the pre-persistence input shape
 - **WHEN** a caller prepares a task record for insertion
-- **THEN** it constructs a `NewTask` (no `task_id`, `allocated_node_id=None`), passes it to `TaskRepository.insert`, and receives a `Task` carrying the generated `TaskId`
+- **THEN** it constructs a `NewTask` (no `task_id`, no `status`, no `allocated_node_id`), passes it to `TaskRepository.insert`, and receives a `Task` carrying the generated `TaskId` with DB-defaulted `status=TO_DO` and `allocated_node_id=None`
 
-#### Scenario: NewTask carries allocated_node_id for pre-bound tasks
-- **WHEN** a `NewTask` is constructed with `allocated_node_id=NodeId(5)` (e.g. a pre-bound task in a future flow)
-- **THEN** the field is carried through `TaskRepository.insert` to the resulting `Task.allocated_node_id`
+#### Scenario: Pre-bound task is inserted then allocate_to + save
+- **WHEN** a task must be bound to a node before allocation (e.g. a never-connected-node scenario)
+- **THEN** the caller inserts an unbound `NewTask`, calls `task = task.allocate_to(node)`, then `repo.save(task)` to persist `allocated_node_id` (NewTask carries no `allocated_node_id`)
 
 ### Requirement: Task entity with status lifecycle
 
 The system SHALL provide a `Task` domain entity as an immutable
 `@dataclass(frozen=True)` object representing a **post-persistence** task record
 (one that has been assigned a database `task_id`). Fields: `task_id: TaskId`
-(first field, identity first), `label: str`, `context: TaskContext`,
+(first field, identity first), `label: str`, `engine: str`,
+`remote_folder: str | None`, `local_folder: str | None`,
+`webhook_url: str | None`, `webhook_custom_params: dict[str, object]`,
+`error: str | None`, `extra: dict[str, object]`,
 `created_at: datetime`, `updated_at: datetime`,
 `status: TaskStatus = TaskStatus.TO_DO`,
 `allocated_node_id: NodeId | None = None`,
@@ -114,28 +130,32 @@ from `NewTask` to `Task` happens in exactly one place: `TaskRepository.insert`
 (see the `domain-ports` capability).
 
 `task_id` SHALL be the first field (identity first). Field order is valid for a
-frozen dataclass: `task_id`, `label`, `context`, `created_at`, `updated_at`
-carry no defaults; the remaining fields follow with their defaults. Construction at all in-repo call sites uses
-keyword arguments, so the reorder is source-compatible. The `task_id=0` sentinel
-becomes unrepresentable: `Task`'s `task_id: TaskId` field is required, and
-`TaskId(0)` raises `ValueError` in `__post_init__`.
+frozen dataclass: `task_id`, `label`, `engine`, `remote_folder`, `local_folder`,
+`webhook_url`, `webhook_custom_params`, `error`, `extra`, `created_at`,
+`updated_at` carry no defaults; the remaining fields (`status`,
+`allocated_node_id`, `_events`) follow with their defaults. Construction at all
+in-repo call sites uses keyword arguments, so the reorder is source-compatible.
+The `task_id=0` sentinel is unrepresentable: `Task`'s `task_id: TaskId` field is
+required, and `TaskId(0)` raises `ValueError` in `__post_init__`.
 
 `allocated_node_id` is `None` for unallocated tasks (TO_DO with no node bound)
 and for tasks whose node was deleted (the DB FK is `ON DELETE SET NULL`). It is
 set by `allocate_to(node)`. `allocated_ip` is removed from `Task`; the node
-transport address is obtained from the resolved `Node.ip` via
-`nodes_by_id` (see the `cli` capability).
+transport address is obtained from the resolved `Node.ip` via `nodes_by_id`
+(see the `cli` capability).
 
 The lifecycle methods (`allocate_to`, `mark_running`, `complete`, `fail`,
-`reject`, `with_context`, `with_event`, `pull_events`, `record_event`) are
-unchanged in behavior except `allocate_to` (signature change below). `with_event`
-constructs events with `task_id=self.task_id` (now a `TaskId` — no `.value`
-extraction needed); event subclasses carry `task_id: TaskId` (see the
+`reject`, `with_remote_folder`, `with_download_results`, `with_event`,
+`pull_events`, `record_event`) operate on the typed fields directly (no
+`TaskContext` indirection). `with_event` constructs events with
+`task_id=self.task_id` (a `TaskId` — no `.value` extraction needed) and reads
+`webhook_url=self.webhook_url`, `webhook_custom_params=self.webhook_custom_params`
+(was `self.context.X`); event subclasses carry `task_id: TaskId` (see the
 `domain-events` capability).
 
 #### Scenario: Task creation
-- **WHEN** a Task is instantiated with `task_id=TaskId(1)`, `label="job"`, `context=ctx`, and status TO_DO
-- **THEN** fields are immutable and hashable; `allocated_node_id` defaults to None
+- **WHEN** a Task is instantiated with `task_id=TaskId(1)`, `label="job"`, `engine="cp2k"`, and status TO_DO
+- **THEN** fields are immutable and hashable; `allocated_node_id` defaults to None, `remote_folder`/`local_folder`/`webhook_url`/`error` are the provided values (None unless set), `webhook_custom_params`/`extra` are the provided dicts
 
 #### Scenario: Task always carries TaskId
 - **WHEN** a Task is obtained from any `TaskRepository` read or insert (`get`, `insert`, `list_by_status`, `list_by_jobs`)
@@ -163,7 +183,7 @@ extraction needed); event subclasses carry `task_id: TaskId` (see the
 
 #### Scenario: Transition to DONE
 - **WHEN** `task.complete()` is called on a RUNNING task
-- **THEN** a new Task is returned with `status=DONE`
+- **THEN** a new Task is returned with `status=DONE`; `error` is NOT touched (remains whatever it was — `None` on the success path)
 
 #### Scenario: Complete non-running task
 - **WHEN** `task.complete()` is called on a non-RUNNING task
@@ -171,31 +191,23 @@ extraction needed); event subclasses carry `task_id: TaskId` (see the
 
 #### Scenario: Fail task with reason
 - **WHEN** `task.fail("disk full")` is called on a RUNNING task
-- **THEN** a new Task is returned with `status=DONE` and `context.error="disk full"`
+- **THEN** a new Task is returned with `status=DONE` and `error="disk full"` (the nested `context.replace(error=reason)` is replaced by a direct `replace(self, status=DONE, error=reason)`)
 
 #### Scenario: Fail non-running task
 - **WHEN** `task.fail("disk full")` is called on a non-RUNNING task
 - **THEN** `TaskNotRunningError` is raised (carrying `task.task_id: TaskId`)
 
-#### Scenario: with_context replaces context wholesale
-- **WHEN** `task.with_context(new_context)` is called with a `TaskContext` differing from `task.context`
-- **THEN** a new Task is returned with `context is new_context` and all other fields (`task_id`, `status`, `allocated_ip`, `allocated_node_id`, `_events`) preserved unchanged
+#### Scenario: Reject task with reason
+- **WHEN** `task.reject("unsupported engine")` is called on a TO_DO task
+- **THEN** a new Task is returned with `status=DONE` and `error="unsupported engine"` (the nested `context.replace(error=reason)` is replaced by a direct `replace(self, status=DONE, error=reason)`)
 
-#### Scenario: with_context preserves events
-- **WHEN** `task.with_context(new_context)` is called on a task with prior recorded events
-- **THEN** the returned Task retains the same `_events` tuple as the original
-
-#### Scenario: with_context chains with with_event
-- **WHEN** `task.with_context(new_context).with_event(TaskCreated, engine_name=new_context.engine)` is called
-- **THEN** a Task is returned with the new context and the `TaskCreated` event (carrying `task_id: TaskId`) appended to `_events`
-
-#### Scenario: with_context performs no status validation
-- **WHEN** `task.with_context(new_context)` is called on a Task in any status (TO_DO, RUNNING, or DONE)
-- **THEN** no error is raised and a new Task with the new context is returned regardless of status
+#### Scenario: Reject non-todo task
+- **WHEN** `task.reject("unsupported engine")` is called on a non-TO_DO task
+- **THEN** `TaskNotTodoError` is raised (carrying `task.task_id: TaskId`)
 
 #### Scenario: with_event passes TaskId to the event
-- **WHEN** `task.with_event(TaskCreated, engine_name=ctx.engine)` is called on a Task whose `task_id` is `TaskId(7)`
-- **THEN** the constructed `TaskCreated` event has `event.task_id == TaskId(7)` (the `TaskId` is passed through, not unwrapped to `int`)
+- **WHEN** `task.with_event(TaskCreated, engine_name=task.engine)` is called on a Task whose `task_id` is `TaskId(7)`
+- **THEN** the constructed `TaskCreated` event has `event.task_id == TaskId(7)` (the `TaskId` is passed through, not unwrapped to `int`) and `event.webhook_url == task.webhook_url`, `event.webhook_custom_params == task.webhook_custom_params` (read from the typed fields, not from a nested context)
 
 ### Requirement: Node persistent record
 
@@ -338,149 +350,6 @@ and `parse_engines`.
 - **WHEN** `Engine` is inspected for class attributes
 - **THEN** it has no `from_config_parser_section` classmethod and no `get_valid_config_parser_fields` classmethod
 
-### Requirement: TaskContext typed metadata
-
-The system SHALL provide a `TaskContext` value object as an immutable object
-with fields: `engine: str`, `remote_folder: str | None`, `local_folder: str | None`,
-`webhook_url: str | None`, `webhook_custom_params: dict[str, object]`,
-`error: str | None`, `extra: dict[str, object]`.
-
-The system SHALL provide a
-`TaskContext.replace(self, **overrides: Unpack[TaskContextOverrides]) -> Self`
-method that returns a new `TaskContext` with the given overrides applied.
-`TaskContextOverrides` SHALL be a `TypedDict` with `total=False` and SHALL
-contain exactly the fields actually overridden at call sites in the codebase:
-`remote_folder: str | None`, `local_folder: str | None`,
-`error: str | None`, `extra: dict[str, object]`. The method SHALL perform no
-merge into a stored context, no validation guard, and no side effect — it is
-a pure typed copy-with delegating to `dataclasses.replace(self, **overrides)`.
-The method SHALL be additive-only: raw `dataclasses.replace(ctx, ...)`
-continues to work.
-
-#### Scenario: TaskContext creation with known fields
-- **WHEN** a TaskContext is instantiated with `engine="fleur"` and `webhook_url="https://example.com/hook"`
-- **THEN** those fields are accessible as attributes; `extra` defaults to empty dict
-
-#### Scenario: TaskContext preserves unknown fields in extra
-- **WHEN** a TaskContext is created with `extra={"fort.9": "base64data", "custom_param": 42}`
-- **THEN** those values are accessible via `ctx.extra["fort.9"]` and `ctx.extra["custom_param"]`
-
-#### Scenario: replace returns a new immutable TaskContext with a single field overridden
-- **WHEN** `ctx.replace(remote_folder="/r/new")` is called on a `TaskContext` with `remote_folder=None`
-- **THEN** a new `TaskContext` is returned with `remote_folder="/r/new"` and all other fields (`engine`, `local_folder`, `webhook_url`, `webhook_custom_params`, `error`, `extra`) preserved unchanged from the original
-
-#### Scenario: replace returns a new immutable TaskContext with multiple fields overridden
-- **WHEN** `ctx.replace(local_folder="/l", remote_folder="/r", extra={"k": "v"})` is called on a `TaskContext`
-- **THEN** the returned `TaskContext` has `local_folder="/l"`, `remote_folder="/r"`, `extra={"k": "v"}`, and all non-overridden fields preserved unchanged
-
-#### Scenario: replace leaves the original unchanged
-- **WHEN** `ctx.replace(error="boom")` is called and the original `ctx.error` is inspected afterward
-- **THEN** the returned TaskContext has `error="boom"` and the original `ctx.error` is unchanged (frozen dataclass)
-
-#### Scenario: replace accepts no overrides and returns an equal copy
-- **WHEN** `ctx.replace()` is called with no arguments
-- **THEN** a new `TaskContext` is returned equal to the original (`==` holds) but not identical (`is` does not hold)
-
-#### Scenario: replace type-checks override field names
-- **WHEN** a caller writes `ctx.replace(remot_folder="/r")` (typo)
-- **THEN** the type checker rejects the call with an unknown-argument error (the `TaskContextOverrides` TypedDict does not contain `remot_folder`); the call does not silently create a spurious field
-
-#### Scenario: replace overrides only the 4 declared fields
-- **WHEN** the set of keys in `TaskContextOverrides.__annotations__` is inspected
-- **THEN** it equals exactly `{"remote_folder", "local_folder", "error", "extra"}` — the fields actually overridden at call sites in the codebase; `engine`, `webhook_url`, `webhook_custom_params` are excluded
-
-#### Scenario: replace is additive-only
-- **WHEN** `dataclasses.replace(ctx, remote_folder="/r")` is called directly (raw stdlib call, not the method)
-- **THEN** it continues to work and returns a new `TaskContext` with `remote_folder="/r"` — the method's existence does not prohibit the raw primitive
-
-### Requirement: TaskContext JSONB serialization
-
-The system SHALL provide `TaskContext.to_metadata() -> dict` and
-`TaskContext.from_metadata(mapping) -> TaskContext` for JSONB round-trip
-persistence.
-
-Known fields (`engine`, `remote_folder`, `local_folder`, `webhook_url`,
-`webhook_custom_params`, `error`) are serialized as top-level keys with
-`None` values omitted. Unknown keys are preserved in `extra` and merged
-into the flat dict on serialization. On deserialization, keys not matching
-known fields populate `extra`.
-
-`from_metadata` SHALL validate the types of the 4 `str | None` known fields
-(`remote_folder`, `local_folder`, `webhook_url`, `error`) at the JSONB
-boundary: a value that is neither `str` nor `None` SHALL raise `TypeError`
-with a message identifying the field name and the offending type. The
-`engine` field SHALL be coerced via `str(metadata.get("engine", ""))` (a
-missing `engine` defaults to the empty string; a non-str value is coerced
-through `str()`). The `webhook_custom_params` field SHALL be assigned only
-when the metadata value is a `dict` (per the existing
-`isinstance(wcp, dict)` guard); a non-dict value SHALL fall back to an
-empty dict (preserving existing behavior — no `TypeError` for this field).
-
-The 4 `str | None` field validations SHALL be routed through a single
-module-private `_get_opt_str(metadata, key) -> str | None` helper (or
-equivalent narrowing) that returns `None` for a missing key, returns the
-`str` for a `str` value, and raises `TypeError` for any other type. This
-removes the `# type: ignore[arg-type]` annotations on those 4 assignments;
-the 5th previously-ignored assignment (`webhook_custom_params`) drops its
-`# type: ignore` because the existing `isinstance(wcp, dict)` guard narrows
-`object` to `dict`, which is assignable to `dict[str, object]`.
-
-The `TypeError` is the defensive boundary behavior — a non-str value under a
-str-typed key indicates upstream JSONB corruption (a botched migration, a
-hand-edited row, a serialization bug). Failing fast at the deserialization
-boundary, with the field name and offending type in the message, enables
-quick diagnosis; silently coercing or passing through would shift the crash
-to a downstream consumer's `.upper()` call where the corruption origin is
-untraceable.
-
-#### Scenario: Round-trip preserves all data
-- **WHEN** `TaskContext(engine="fleur", webhook_url="https://...", extra={"fort.9": "data"})` is serialized then deserialized
-- **THEN** all known fields and extra keys are preserved
-
-#### Scenario: None values omitted from serialized dict
-- **WHEN** `TaskContext(engine="fleur")` is serialized via `to_metadata()`
-- **THEN** only `engine` appears as a key; `remote_folder`, `local_folder`, etc. are absent
-
-#### Scenario: Extra keys merged into flat dict
-- **WHEN** `to_metadata()` is called on a TaskContext with `extra={"fort.9": "base64data"}`
-- **THEN** the returned dict contains `"fort.9": "base64data"` as a top-level key
-
-#### Scenario: from_metadata raises TypeError on non-str remote_folder
-- **WHEN** `TaskContext.from_metadata({"engine": "fleur", "remote_folder": 123})` is called (an int value under a str-typed key)
-- **THEN** `TypeError` is raised with a message mentioning the field name `remote_folder` and the offending type `int` (or `int`-derived name)
-
-#### Scenario: from_metadata raises TypeError on non-str local_folder
-- **WHEN** `TaskContext.from_metadata({"engine": "fleur", "local_folder": ["a", "b"]})` is called (a list value under a str-typed key)
-- **THEN** `TypeError` is raised with a message mentioning the field name `local_folder`
-
-#### Scenario: from_metadata raises TypeError on non-str webhook_url
-- **WHEN** `TaskContext.from_metadata({"engine": "fleur", "webhook_url": {"k": "v"}})` is called (a dict value under a str-typed key)
-- **THEN** `TypeError` is raised with a message mentioning the field name `webhook_url`
-
-#### Scenario: from_metadata raises TypeError on non-str error
-- **WHEN** `TaskContext.from_metadata({"engine": "fleur", "error": 4.5})` is called (a float value under a str-typed key)
-- **THEN** `TypeError` is raised with a message mentioning the field name `error`
-
-#### Scenario: from_metadata accepts None for str-or-None fields
-- **WHEN** `TaskContext.from_metadata({"engine": "fleur", "remote_folder": None, "error": None})` is called
-- **THEN** a `TaskContext` is returned with `remote_folder=None`, `error=None`, and `engine="fleur"` (no `TypeError` — `None` is permitted for the `str | None` fields)
-
-#### Scenario: from_metadata coerces engine to str
-- **WHEN** `TaskContext.from_metadata({"engine": 42})` is called (an int `engine` value)
-- **THEN** a `TaskContext` is returned with `engine="42"` (the `str()` coercion applies; no `TypeError` for the `engine` field)
-
-#### Scenario: from_metadata accepts dict for webhook_custom_params
-- **WHEN** `TaskContext.from_metadata({"engine": "fleur", "webhook_custom_params": {"k": "v"}})` is called
-- **THEN** a `TaskContext` is returned with `webhook_custom_params={"k": "v"}` (the existing `isinstance(wcp, dict)` guard accepts a dict)
-
-#### Scenario: from_metadata falls back to empty dict for non-dict webhook_custom_params
-- **WHEN** `TaskContext.from_metadata({"engine": "fleur", "webhook_custom_params": "not-a-dict"})` is called (a str value under the dict-typed key)
-- **THEN** a `TaskContext` is returned with `webhook_custom_params={}` (the existing `isinstance` guard falls back to the empty-dict default; no `TypeError` for this field)
-
-#### Scenario: No type: ignore on the 5 from_metadata field assignments
-- **WHEN** `yascheduler/domain/model.py::TaskContext.from_metadata` is inspected for `# type: ignore` annotations on the `remote_folder`, `local_folder`, `webhook_url`, `error`, and `webhook_custom_params` assignments
-- **THEN** zero `# type: ignore` annotations are present on those 5 assignments (the 4 `str | None` fields route through `_get_opt_str`; `webhook_custom_params` drops its over-cautious ignore because the existing `isinstance` guard already narrows to `dict`, which is assignable to `dict[str, object]`)
-
 ### Requirement: ProcessResult value object
 
 The system SHALL provide a `ProcessResult` value object as an immutable object
@@ -503,8 +372,118 @@ The system SHALL provide a `MachineState` enum with values `FREE` and `BUSY`.
 The system SHALL expose all domain entities from `yascheduler.domain.model`.
 
 #### Scenario: Import entities
-- **WHEN** `from yascheduler.domain.model import Task, NewTask, TaskId, Node, NewNode, NodeId, ConnectedMachine, TaskContext, Engine, TaskStatus, MachineState, ProcessResult`
-- **THEN** all symbols are available (including the new `NewTask` and `TaskId`)
+- **WHEN** `from yascheduler.domain.model import Task, NewTask, TaskId, Node, NewNode, NodeId, ConnectedMachine, Engine, TaskStatus, MachineState, ProcessResult`
+- **THEN** all symbols are available (including `NewTask` and `TaskId`); `TaskContext` and `TaskContextOverrides` are NO LONGER importable (removed)
+
+### Requirement: Task.with_remote_folder
+
+The system SHALL provide a `Task.with_remote_folder(self, remote_folder: str) -> Task`
+method that returns a new `Task` with `remote_folder` set and all other fields
+preserved. The method SHALL perform no status validation and no side effect — it is
+a pure copy-with used at submit time, after `TaskRepository.insert` generates the
+`task_id` and the remote path is constructed from it.
+
+#### Scenario: with_remote_folder sets the field
+- **WHEN** `task.with_remote_folder("/remote/20240101_000000_7")` is called on a Task with `remote_folder=None`
+- **THEN** a new Task is returned with `remote_folder="/remote/20240101_000000_7"` and all other fields (`task_id`, `label`, `engine`, `local_folder`, `webhook_url`, `webhook_custom_params`, `error`, `extra`, `status`, `allocated_node_id`, `_events`) preserved unchanged
+
+#### Scenario: with_remote_folder performs no status validation
+- **WHEN** `task.with_remote_folder("/r")` is called on a Task in any status (TO_DO, RUNNING, or DONE)
+- **THEN** no error is raised and a new Task with the new `remote_folder` is returned regardless of status
+
+### Requirement: Task.with_download_results
+
+The system SHALL provide a
+`Task.with_download_results(self, *, local_folder: str, remote_folder: str) -> Task`
+method (keyword-only) that returns a new `Task` with `local_folder` and
+`remote_folder` set and all other fields preserved. The method SHALL NOT update
+`extra`: after the typed extraction, `extra` carries only input-file payloads and
+the download path never touches them (the legacy `extra_updates` merge block in
+`consume_task._decide_finalisation` was always a no-op — `meta_add` from
+`download_outputs` only ever contains `remote_folder`/`local_folder`, and `error`
+is appended by `_decide_finalisation` itself; none of those keys ever reached the
+`extra_updates` comprehension). The method SHALL perform no status validation and
+no side effect — it is a pure copy-with used at consume time, after
+`download_outputs` returns.
+
+The call site MAY pass values equal to the existing field values (it falls back to
+the existing field when `meta_dict.get(...)` returns falsy). The method expresses
+intent (this is the post-download update), not a delta — calling with the same
+values is a no-op-equivalent and is not an error.
+
+#### Scenario: with_download_results sets both fields
+- **WHEN** `task.with_download_results(local_folder="/local/out", remote_folder="/remote/out")` is called on a Task with `local_folder=None`, `remote_folder=None`
+- **THEN** a new Task is returned with `local_folder="/local/out"`, `remote_folder="/remote/out"`, and all other fields (`task_id`, `label`, `engine`, `webhook_url`, `webhook_custom_params`, `error`, `extra`, `status`, `allocated_node_id`, `_events`) preserved unchanged
+
+#### Scenario: with_download_results does not touch extra
+- **WHEN** `task.with_download_results(local_folder="/l", remote_folder="/r")` is called on a Task with `extra={"input.in": "ATOMS ..."}`
+- **THEN** the returned Task has `extra={"input.in": "ATOMS ..."}` unchanged — `extra` is NOT merged, NOT cleared, NOT modified
+
+#### Scenario: with_download_results accepts equal values
+- **WHEN** `task.with_download_results(local_folder=task.local_folder, remote_folder=task.remote_folder)` is called (same values as the existing fields)
+- **THEN** a new Task is returned with the same `local_folder` and `remote_folder`; no error is raised
+
+#### Scenario: with_download_results is keyword-only
+- **WHEN** `task.with_download_results("/l", "/r")` is called with positional arguments
+- **THEN** `TypeError` is raised (the parameters are keyword-only via `*,`)
+
+#### Scenario: with_download_results performs no status validation
+- **WHEN** `task.with_download_results(local_folder="/l", remote_folder="/r")` is called on a Task in any status (TO_DO, RUNNING, or DONE)
+- **THEN** no error is raised and a new Task with the new fields is returned regardless of status
+
+### Requirement: Task.error column format contract
+
+The `Task.error` field (TEXT, nullable) SHALL carry one of three shapes depending on
+which write site produced it:
+
+- `allocate_task` reject → bare human string (e.g. `"unsupported engine"`)
+- `orchestrator` fail → bare human string (e.g. `"node is gone"`)
+- `consume_task` download fail → `"Download error: <path>: <msg>, <path>: <msg>"`
+  (a class prefix `Download error: ` followed by one or more `<path>: <msg>` pairs
+  joined by `, `; entries with `path=None` render as bare `"<msg>"`, though in
+  practice `path` is always a string)
+- `NULL` (no error) on the success path — `complete()` does NOT touch `error`
+
+The download-failure format combines `permanent_errors + transient_errors` exactly
+as the legacy code did (the mixed case includes both lists in the error string);
+this behavior is preserved deliberately.
+
+Historical `error` values in existing rows (legacy `str(dict)` format from the old
+download path, e.g. `"{'/remote/1.out': 'No such file'}"`) are passed through
+verbatim by migration 010 (`metadata->>'error'`); the migration does NOT reformat
+existing rows. Only new writes follow this contract.
+
+No reader of `Task.error` parses the string structure: e2e tests use substring match
+(`"No such file" in str(error)`), unit tests use bare strings, and the webhook
+receives the same `reason: str` on `TaskFailed` (see the `domain-events` capability).
+
+#### Scenario: error is NULL on success
+- **WHEN** a RUNNING task is completed via `task.complete()` after a successful download
+- **THEN** the resulting Task has `error=None` (complete does not touch error; it was `None` before and stays `None`)
+
+#### Scenario: error is the bare reason on reject
+- **WHEN** `task.reject("unsupported engine")` is called
+- **THEN** the resulting Task has `error="unsupported engine"`
+
+#### Scenario: error is the bare reason on orchestrator fail
+- **WHEN** `task.fail("node is gone")` is called
+- **THEN** the resulting Task has `error="node is gone"`
+
+#### Scenario: error is download-formatted on consume fail
+- **WHEN** `consume_task._decide_finalisation` finalises a task whose `download_outputs` returned `permanent_errors=[("/remote/1.out", OSError("No such file"))]` and `transient_errors=[]`
+- **THEN** `task.error == "Download error: /remote/1.out: No such file"`
+
+#### Scenario: error combines permanent and transient in the mixed case
+- **WHEN** `consume_task._decide_finalisation` finalises a task whose `download_outputs` returned `permanent_errors=[("/remote/2.out", OSError("No such file"))]` and `transient_errors=[("/remote/1.out", SFTPRetryExc("timeout"))]`
+- **THEN** `task.error == "Download error: /remote/2.out: No such file, /remote/1.out: timeout"` (both lists combined, permanent first)
+
+#### Scenario: error stays None on retry-then-success
+- **WHEN** a task's first consume attempt defers (transient-only, no save) and a later attempt downloads successfully and calls `complete()`
+- **THEN** the persisted task has `error=None` (the deferral wrote nothing; the successful `complete()` does not touch `error`)
+
+#### Scenario: migration preserves legacy error format
+- **WHEN** migration 010 runs against a row with `metadata = {"error": "{'/remote/1.out': 'No such file'}"}`
+- **THEN** the new row has `error = "{'/remote/1.out': 'No such file'}"` (verbatim passthrough via `metadata->>'error'`; not reformatted)
 
 ### Requirement: NodeId value object
 

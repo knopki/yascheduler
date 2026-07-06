@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_events.py
-# VERSION: 1.1.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain event recording from application use cases.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Update TestConsumeTaskEvents for 3-tuple download_outputs (meta_add, transient_errors, permanent_errors); permanent failure now in permanent_errors list (fix-download-rmtree-data-loss).
-#   PREVIOUS_CHANGE: v1.0.0 - Extracted from test_application_use_cases.py (size limit). Event recording tests moved to own file.
+#   LAST_CHANGE: v1.3.0 - drop-task-context-entity follow-up: download_outputs AsyncMock return_values updated to the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors).
+#   PREVIOUS_CHANGE: v1.2.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for domain event recording from application use cases.
@@ -29,6 +29,7 @@ Tests cover:
 
 import asyncio
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path, PurePath
 from types import SimpleNamespace
 from typing import Any
@@ -53,7 +54,6 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
     TaskStatus,
 )
@@ -76,8 +76,16 @@ class TestSubmitTaskEvents:
             return Task(
                 task_id=TaskId(55),
                 label=new_task.label,
-                context=new_task.context,
-                status=new_task.status,
+                engine=new_task.engine,
+                remote_folder=None,
+                local_folder=new_task.local_folder,
+                webhook_url=new_task.webhook_url,
+                webhook_custom_params=new_task.webhook_custom_params,
+                error=None,
+                extra=new_task.extra,
+                created_at=datetime(2025, 1, 1),
+                updated_at=datetime(2025, 1, 1),
+                status=TaskStatus.TO_DO,
             )
 
         uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
@@ -110,7 +118,15 @@ class TestAllocateTaskEvents:
         todo_task = Task(
             task_id=TaskId(1),
             label="t",
-            context=TaskContext(engine="bad"),
+            engine="bad",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=TaskStatus.TO_DO,
         )
         uow = AsyncMock()
@@ -170,10 +186,20 @@ class TestAllocateTaskEvents:
         operations = MagicMock()
         operations.start_occupancy_check = MagicMock()
 
+        from datetime import datetime
+
         todo_task = Task(
             task_id=TaskId(1),
             label="t",
-            context=TaskContext(engine="test_engine"),
+            engine="test_engine",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=TaskStatus.TO_DO,
         )
         uow = AsyncMock()
@@ -231,7 +257,7 @@ class TestConsumeTaskEvents:
     @pytest.fixture
     def mock_operations(self) -> MagicMock:
         operations = MagicMock()
-        operations.download_outputs = AsyncMock(return_value=([], [], []))
+        operations.download_outputs = AsyncMock(return_value=("", "", [], []))
         return operations
 
     async def _run_consume(
@@ -300,7 +326,7 @@ class TestConsumeTaskEvents:
         mock_engine_repo: MagicMock,
     ) -> None:
         mock_operations.download_outputs = AsyncMock(
-            return_value=([], [], [("/remote/file", OSError("Connection refused"))])
+            return_value=("", "", [], [("/remote/file", OSError("Connection refused"))])
         )
 
         uow = AsyncMock()

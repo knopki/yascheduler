@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_check_status.py
-# VERSION: 2.2.0
+# VERSION: 2.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yastatus check_status() flag parsing, renderers, exit codes, and connection-params resolver.
@@ -23,7 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - task-schema-and-entity-cleanup: make_task drops allocated_ip (uses allocated_node_id); test_json_emits_list_with_nine_fields asserts new 9-key shape (nested node + created_at/updated_at, flat allocated_ip/port/cloud absent); test_json_todo_task_has_null_placement asserts node is null; test_info_tab_separated asserts node_id= (was ip=); default/info node-fetch assertions use get_by_ids (was get_by_ips).
+#   LAST_CHANGE: v2.3.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v2.2.0 - task-schema-and-entity-cleanup: make_task drops allocated_ip (uses allocated_node_id); test_json_emits_list_with_nine_fields asserts new 9-key shape (nested node + created_at/updated_at, flat allocated_ip/port/cloud absent); test_json_todo_task_has_null_placement asserts node is null; test_info_tab_separated asserts node_id= (was ip=); default/info node-fetch assertions use get_by_ids (was get_by_ips).
 #   PREVIOUS_CHANGE: v2.1.0 - simplify-cloud-connect-node-args: test_view_connects_with_resolved_params_and_disconnects asserts connect is called with node=... and no username/port kwargs.
 # END_CHANGE_SUMMARY
 
@@ -38,7 +39,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 check_status_mod = importlib.import_module("yascheduler.entrypoints.cli.check_status")
@@ -128,14 +129,20 @@ def make_task(
     allocated_node_id: NodeId | None = None,
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
+    from datetime import datetime
+
     return Task(
         task_id=TaskId(task_id),
         label=label,
-        context=TaskContext(
-            engine=engine,
-            remote_folder="/tmp/remote",
-            local_folder="/tmp/local",
-        ),
+        engine=engine,
+        remote_folder="/tmp/remote",
+        local_folder="/tmp/local",
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
         status=status,
         allocated_node_id=allocated_node_id,
     )

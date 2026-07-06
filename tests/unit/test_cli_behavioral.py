@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_behavioral.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Behavioral CLI test helpers — shared mock factories for Config/CLIDeps/UoW/Task.
 #   SCOPE: Mock helpers retained for behavioral CLI tests. check_status moved to
@@ -19,7 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Drop TestCheckStatus (check_status moved to entrypoints/cli/check_status.py in relocate-check-status-command; covered by tests/unit/test_cli_check_status.py). Shared mock helpers retained.
+#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.6.0 - Drop TestCheckStatus (check_status moved to entrypoints/cli/check_status.py in relocate-check-status-command; covered by tests/unit/test_cli_check_status.py). Shared mock helpers retained.
 #   PREVIOUS_CHANGE: v1.5.0 - Drop TestManageNode (manage_node moved to entrypoints/cli/manage_node.py in relocate-manage-node-change; covered by tests/unit/test_cli_manage_node.py).
 # END_CHANGE_SUMMARY
 
@@ -35,7 +36,7 @@ from pathlib import PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, Task, TaskId, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 # ---------------------------------------------------------------------------
@@ -98,14 +99,20 @@ def make_task(
     allocated_node_id: NodeId | None = None,
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
+    from datetime import datetime
+
     return Task(
         task_id=TaskId(task_id),
         label=label,
-        context=TaskContext(
-            engine="g09",
-            remote_folder="/tmp/remote",
-            local_folder="/tmp/local",
-        ),
+        engine="g09",
+        remote_folder="/tmp/remote",
+        local_folder="/tmp/local",
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
         status=status,
         allocated_node_id=allocated_node_id,
     )

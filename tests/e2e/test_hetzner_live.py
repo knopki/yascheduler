@@ -394,8 +394,8 @@ async def _assert_outputs(
         assert task.status == DomainTaskStatus.DONE, (
             f"task {tid} status={task.status}, expected DONE"
         )
-        assert task.context.error is None, f"task {tid} error={task.context.error!r}"
-        local_folder = task.context.local_folder
+        assert task.error is None, f"task {tid} error={task.error!r}"
+        local_folder = task.local_folder
         assert local_folder, f"task {tid} missing local_folder"
         out_file = Path(str(local_folder)) / "1.input.out"
         assert out_file.exists(), f"task {tid} output missing: {out_file}"

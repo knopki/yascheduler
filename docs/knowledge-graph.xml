@@ -280,7 +280,6 @@
         <export-TaskStatus PURPOSE="IntEnum: TO_DO=0, RUNNING=1, DONE=2" />
         <export-MachineState PURPOSE="Enum: FREE, BUSY" />
         <export-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
-        <export-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
         <export-Engine PURPOSE="Calculation engine specification with platform support" />
         <export-Task PURPOSE="Task entity with lifecycle methods" />
         <export-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)" />
@@ -345,16 +344,15 @@
         <class-TaskStatus PURPOSE="IntEnum: TO_DO=0, RUNNING=1, DONE=2" />
         <class-MachineState PURPOSE="Enum: FREE, BUSY" />
         <class-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
-        <class-TaskContext PURPOSE="Typed task metadata with arbitrary extras" />
-        <fn-replace PURPOSE="Typed copy-with returning new TaskContext" />
-        <type-TaskContextOverrides PURPOSE="TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs() (re-exported from M-DOMAIN-ENGINE)" />
         <class-EngineRepository PURPOSE="Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)" />
-        <class-Task PURPOSE="Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocated_node_id: NodeId | None is the sole allocation signal (allocated_ip removed); created_at/updated_at: datetime (non-nullable, default_factory=datetime.now mirroring DB DEFAULT NOW(); DB always overrides via RETURNING/read; absent from NewTask); lifecycle methods (allocate_to, mark_running, complete, fail, reject) and event recording (record_event, with_event factory, pull_events, _events tuple)" />
-        <fn-allocate_to PURPOSE="Bind task to a Node: allocate_to(node) sets allocated_node_id=node.node_id in one replace() call (guard stays on allocated_node_id — the sole allocation signal; allocated_ip removed)" />
-        <fn-with_context PURPOSE="Wholesale-replace task context, returning new Task" />
+        <class-Task PURPOSE="Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); typed fields folded directly onto Task (engine, remote_folder, local_folder, webhook_url, webhook_custom_params, error, extra) — TaskContext value object removed; allocated_node_id: NodeId | None is the sole allocation signal; created_at/updated_at: datetime; lifecycle methods (allocate_to, mark_running, complete, fail, reject) and event recording (record_event, with_event factory, pull_events, _events tuple); fail/reject set error directly via replace(status=DONE, error=reason)" />
+        <fn-allocate_to PURPOSE="Bind task to a Node: allocate_to(node) sets allocated_node_id=node.node_id in one replace() call (guard stays on allocated_node_id — the sole allocation signal)" />
+        <fn-with_remote_folder PURPOSE="Submit-time copy-with: returns new Task with remote_folder set (assigned post-insert from the generated task_id); no validation guard; chains with with_event/fail/complete" />
+        <fn-with_download_results PURPOSE="Consume-time copy-with: returns new Task with local_folder and remote_folder set (keyword-only); does NOT update extra (extra carries only input-file payloads, download path never touches them); no validation guard" />
+        <const-error_column_format PURPOSE="Task.error write contract: bare human strings for allocate_task reject and orchestrator fail; 'Download error: {path}: {msg}, {path}: {msg}' for consume_task download failures (combined permanent+transient); NULL/None on success" />
         <type-TaskId PURPOSE="Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
-        <type-NewTask PURPOSE="Pre-persistence task record (no task_id); carries allocated_node_id: NodeId | None = None (written by Task.allocate_to, not NewTask construction); no created_at/updated_at (DB-generated, only on Task); converted to Task only by TaskRepository.insert" />
+        <type-NewTask PURPOSE="Pre-persistence task record (no task_id, no status, no allocated_node_id, no remote_folder, no error, no created_at/updated_at — all DB-generated or Task-only); carries engine, label, local_folder, webhook_url, webhook_custom_params, extra; converted to Task only by TaskRepository.insert" />
         <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
         <type-NewNode PURPOSE="Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False); converted to Node only by NodeRepository.insert. The tmp-node row inserted by _select_and_insert_tmp is reused as the real node identity: clouds.allocate(provider, node) receives the tmp-node Node and returns a Node carrying the same node_id (single-row UPDATE lifecycle, not insert+remove)." />
         <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); node_id is the sole identity (ip-keyed lookups get/get_by_ips removed — get_by_id/get_by_ids are node_id-keyed); NodeRepository mutators key on node_id; ip no longer UNIQUE (dropped by migration 003 — dup-IP valid behind different jump hosts); tmp rows carry ip='' sentinel" />
@@ -1053,7 +1051,7 @@
       <path>yascheduler/infra/ssh/operations/download.py</path>
       <depends>M-SSH-SESSION, M-SSH-EXCEPTIONS, M-PLATFORM</depends>
       <annotations>
-        <class-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification; stateless (takes log); 3-tuple return" />
+        <class-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification; stateless (takes log); 4-tuple return (local_folder, remote_folder, transient_errors, permanent_errors)" />
         <fn-download_outputs PURPOSE="Per-file SFTP-isolated download via session.open_sftp/session.path with retry, error classification, conservative post-loop rmtree" />
         <fn-my_backoff_sftp PURPOSE="Partial backoff decorator for SFTPRetryExc (canonical; first user is download_outputs)" />
       </annotations>

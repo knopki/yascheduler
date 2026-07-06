@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/check_status.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
 #   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
@@ -24,8 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - task-schema-and-entity-cleanup: _render_info emits node_id= (was ip=); _render_json drops flat allocated_ip/port/cloud fields, adds nested node object {ip, port, username, cloud} (or null) + created_at/updated_at (ISO-8601); _render_view reads node.ip from the resolved Node (was task.allocated_ip). BREAKING yastatus --json wire format change.
-#   PREVIOUS_CHANGE: v1.5.0 - simplify-cloud-connect-node-args: _display_remote_output stops passing `username=conn_params.username` and `port=conn_params.port` to repository.connect (connect reads them from node internally). `_ConnParams` retains its username/.port fields (DTO unchanged).
+#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: _render_json and _render_view read task.engine/task.local_folder/task.remote_folder (was task.context.X).
+#   PREVIOUS_CHANGE: v1.6.0 - task-schema-and-entity-cleanup: _render_info emits node_id= (was ip=); _render_json drops flat allocated_ip/port/cloud fields, adds nested node object {ip, port, username, cloud} (or null) + created_at/updated_at (ISO-8601); _render_view reads node.ip from the resolved Node (was task.allocated_ip). BREAKING yastatus --json wire format change.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -185,9 +185,9 @@ def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
                 "task_id": task.task_id.value,
                 "status": task.status.name,
                 "label": task.label,
-                "engine": task.context.engine,
-                "local_folder": task.context.local_folder,
-                "remote_folder": task.context.remote_folder,
+                "engine": task.engine,
+                "local_folder": task.local_folder,
+                "remote_folder": task.remote_folder,
                 "created_at": task.created_at.isoformat(),
                 "updated_at": task.updated_at.isoformat(),
                 "node": (
@@ -338,7 +338,7 @@ async def _display_remote_output(
     except Exception:
         print("CAN'T CONNECT")
         return None
-    remote_folder = task.context.remote_folder
+    remote_folder = task.remote_folder
     if not remote_folder:
         print("OUTDATED TASK, SKIPPING")
         await repository.disconnect(session.machine.node_id)
@@ -406,7 +406,7 @@ async def _render_view(
                     conn_params.username,
                     node.ip if node else "",
                     cloud_str,
-                    task.context.remote_folder or "",
+                    task.remote_folder or "",
                 )
             )
             conn = await _display_remote_output(task, node, conn_params, config)

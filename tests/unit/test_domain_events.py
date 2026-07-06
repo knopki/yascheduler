@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_events.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain events and Task aggregate event support.
@@ -15,7 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
+#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
 #   PREVIOUS_CHANGE: v1.2.0 - Add TestTaskWithEvent suite for task.with_event factory (task-with-event).
 # END_CHANGE_SUMMARY
 
@@ -32,7 +33,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, Task, TaskId, TaskStatus
 
 
 class TestDomainEvents:
@@ -182,8 +183,21 @@ class TestDomainEvents:
 
 
 def _make_task(**overrides: object) -> Task:
-    ctx = TaskContext(engine="fleur")
-    base: dict[str, object] = dict(task_id=TaskId(1), label="test", context=ctx)
+    from datetime import datetime
+
+    base: dict[str, object] = dict(
+        task_id=TaskId(1),
+        label="test",
+        engine="fleur",
+        remote_folder=None,
+        local_folder=None,
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
+    )
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 
@@ -256,12 +270,21 @@ class TestTaskEvents:
 
 
 def _make_task_with_webhook(**overrides: object) -> Task:
-    ctx = TaskContext(
+    from datetime import datetime
+
+    base: dict[str, object] = dict(
+        task_id=TaskId(42),
+        label="test",
         engine="fleur",
+        remote_folder=None,
+        local_folder=None,
         webhook_url="https://hook.example.com",
         webhook_custom_params={"k": "v"},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
     )
-    base: dict[str, object] = dict(task_id=TaskId(42), label="test", context=ctx)
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 

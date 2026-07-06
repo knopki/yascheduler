@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 7.2.0
+# VERSION: 7.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.2.0 - task-schema-and-entity-cleanup: _task_consumer_consumer MACHINE_GONE log drops the ip field (task.allocated_ip removed; node is gone so node.ip is unresolvable — log task_id + node_id only).
-#   PREVIOUS_CHANGE: v7.1.0 - simplify-cloud-connect-node-args: _connect_machine_consumer stops passing `username=node.username` and `port=node.port` to repository.connect (connect reads them from node internally).
+#   LAST_CHANGE: v7.3.0 - drop-task-context-entity: _consumer_consume reads task.engine (was task.context.engine) for occupancy-check engine lookup.
+#   PREVIOUS_CHANGE: v7.2.0 - task-schema-and-entity-cleanup: _task_consumer_consumer MACHINE_GONE log drops the ip field (task.allocated_ip removed; node is gone so node.ip is unresolvable — log task_id + node_id only).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -496,7 +496,7 @@ class Orchestrator:
         # (matches task.allocated_node_id for a correctly-bound RUNNING task).
         key = machine.node_id
         if key not in self._occupancy_started:
-            engine = self._engines.get(task.context.engine)
+            engine = self._engines.get(task.engine)
             if engine:
                 self._operations.start_occupancy_check(session, engine)
                 self._occupancy_started.add(key)

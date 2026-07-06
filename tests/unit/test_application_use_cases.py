@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.8.0
+# VERSION: 4.9.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.8.0 - cloud-port-node-arg: allocate/deallocate asserts + _persist_node_with_cleanup call use Node args (was NodeId/scalars).
+#   LAST_CHANGE: v4.9.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); task.context.X → task.X reads; remove TaskContext import.
+#   PREVIOUS_CHANGE: v4.8.0 - cloud-port-node-arg: allocate/deallocate asserts + _persist_node_with_cleanup call use Node args (was NodeId/scalars).
 #   PREVIOUS_CHANGE: v4.7.1 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests into tests/unit/test_allocate_task_node_pairing.py (this file exceeded the 1000-line GRACE-lite hard limit after the v4.7.0 additions). The free-machine test still asserts saved_task.allocated_node_id == NodeId(1) here.
 # END_CHANGE_SUMMARY
 #
@@ -62,7 +63,6 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
     TaskStatus,
 )
@@ -119,11 +119,21 @@ class TestSubmitTask:
         uow = mock_uow_factory.return_value
 
         def _insert_side_effect(new_task: NewTask) -> Task:
+            from datetime import datetime
+
             return Task(
                 task_id=TaskId(42),
                 label=new_task.label,
-                context=new_task.context,
-                status=new_task.status,
+                engine=new_task.engine,
+                remote_folder=None,
+                local_folder=new_task.local_folder,
+                webhook_url=new_task.webhook_url,
+                webhook_custom_params=new_task.webhook_custom_params,
+                error=None,
+                extra=new_task.extra,
+                created_at=datetime(2025, 1, 1),
+                updated_at=datetime(2025, 1, 1),
+                status=TaskStatus.TO_DO,
             )
 
         uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
@@ -143,17 +153,16 @@ class TestSubmitTask:
         uow.tasks.insert.assert_called_once()
         inserted_arg: NewTask = uow.tasks.insert.call_args[0][0]
         assert inserted_arg.label == "my_job"
-        assert inserted_arg.status == TaskStatus.TO_DO
-        assert inserted_arg.context.extra == {"inp": "content"}
-        assert inserted_arg.context.engine == "test_engine"
+        assert inserted_arg.extra == {"inp": "content"}
+        assert inserted_arg.engine == "test_engine"
 
         # save was called with the task that now has remote_folder set
         uow.tasks.save.assert_called_once()
         saved_arg: Task = uow.tasks.save.call_args[0][0]
         assert saved_arg.task_id == TaskId(42)
-        assert saved_arg.context.remote_folder is not None
-        assert str(saved_arg.context.remote_folder).startswith("/remote/tasks/")
-        assert saved_arg.context.remote_folder.endswith("_42")  # dt_str_taskid
+        assert saved_arg.remote_folder is not None
+        assert str(saved_arg.remote_folder).startswith("/remote/tasks/")
+        assert saved_arg.remote_folder.endswith("_42")  # dt_str_taskid
 
         uow.commit.assert_called_once()
 
@@ -168,10 +177,20 @@ class TestAllocateTask:
 
     @pytest.fixture
     def todo_task(self) -> Task:
+        from datetime import datetime
+
         return Task(
             task_id=TaskId(1),
             label="test",
-            context=TaskContext(engine="test_engine"),
+            engine="test_engine",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=TaskStatus.TO_DO,
         )
 
@@ -213,7 +232,7 @@ class TestAllocateTask:
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.context.error == "unsupported engine"
+        assert saved_task.error == "unsupported engine"
 
     async def test_allocate_task_finds_free_machine(
         self,

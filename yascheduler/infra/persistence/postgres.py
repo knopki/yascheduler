@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.11.1
+# VERSION: 1.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
@@ -9,14 +9,13 @@
 #
 # START_MODULE_MAP
 #   _PgRepository - base class for pg8000-backed repositories (conn, executor, _run)
-#   PostgresTaskRepository - async task CRUD: get, save, update_status, insert (NewTask→Task), list_by_status, list_by_jobs, count_by_status; get/update_status/save/list_by_jobs take/return TaskId (.value passed as pg8000 param); list_ids_by_node_id_and_status returns list[TaskId]; _row_to_task wraps TaskId and NodeId, reads created_at/updated_at, reads status via TaskStatus[name] (name lookup, was int cast); save/insert bind allocated_node_id via :node_id param, write status via status.name (enum-label string); save/update_status raise TaskRowNotFoundError on 0-row UPDATE
-#   PostgresNodeRepository - async node CRUD: get_by_id, get_by_ids (batch, WHERE node_id = ANY(:node_ids)), list_*, insert (NewNode→Node, sole insertion path — add_tmp removed), update (keys on node_id), enable/disable/remove (take NodeId, pass node_id.value), count_*; ip-keyed get/get_by_ips removed; list_enabled/list_disabled have no python post-filter (list_disabled filters ip <> '' in SQL)
+#   PostgresTaskRepository - async task CRUD
+#   PostgresNodeRepository - async node CRUD
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.11.1 - task-schema-and-entity-cleanup: _row_to_task reads created_at/updated_at via row["created_at"]/row["updated_at"] (direct access — DB NOT NULL, was row.get() returning Any|None).
-#   PREVIOUS_CHANGE: v1.11.0 - task-schema-and-entity-cleanup: _row_to_task reads title (renamed from label) → Task.label, reads status via TaskStatus[row["status"]] (name lookup, was int cast — pg8000 returns the enum label as a str), reads created_at/updated_at, drops the allocated_ip read (column dropped). save/insert bind :title (was :label, value is task.label/new_task.label), :status as status.name (enum-label string, was status.value int), drop :ip. list_by_status passes [s.name for s in statuses] (was [s.value for s in statuses]) with cast(:statuses AS task_status[]) (was int[]). count_by_status uses TaskStatus[row["status"]] (name lookup). list_ids_by_ip_and_status → list_ids_by_node_id_and_status (binds :node_id=node_id.value, :status=status.name; runs task/get_ids_by_node_id_and_status.sql). update_status passes status=status.name (was status.value).
-#   PREVIOUS_CHANGE: v1.10.0 - ssh-rekey-node-id: PostgresNodeRepository removes get(ip) and get_by_ips(ips) (no caller resolves a node by ip) and adds get_by_ids(node_ids: list[NodeId]) -> dict[NodeId, Node] (batch lookup, runs node/get_by_ids.sql with WHERE node_id = ANY(:node_ids), binds [n.value for n in node_ids]). node/get_by_ip.sql and node/get_by_ips.sql removed from the SQL layout; node/get_by_ids.sql added. get_by_id/list_*/insert/update/enable/disable/remove unchanged.
+#   LAST_CHANGE: v1.12.0 - drop-task-context-entity: _row_to_task reads the seven typed columns directly from the row; webhook_custom_params/extra use json.loads str-fallback; save/insert bind the typed columns directly; insert binds remote_folder=None and error=None.
+#   PREVIOUS_CHANGE: v1.11.1 - task-schema-and-entity-cleanup: _row_to_task reads created_at/updated_at via row["created_at"]/row["updated_at"] (direct access — DB NOT NULL, was row.get() returning Any|None).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,7 +30,6 @@ from yascheduler.domain import (
     Node,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
     TaskStatus,
 )
@@ -110,21 +108,26 @@ class PostgresTaskRepository(_PgRepository):
 
     # START_CONTRACT: save
     #   PURPOSE: Update mutable fields of an existing task row by task_id; raise TaskRowNotFoundError if the row does not exist.
-    #   INPUTS: { task: Task - domain task with serialized context (task.task_id: TaskId) }
+    #   INPUTS: { task: Task - domain task with typed fields }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Writes to yascheduler_tasks row (SQL param task_id=task.task_id.value); binds allocated_node_id via :node_id (task.allocated_node_id.value or None); title carries task.label (DB column is title); status binds task.status.name (enum-label string); metadata serialized as JSON; raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist. The BEFORE UPDATE trigger sets updated_at on the row.
-    #   LINKS: task/update_by_id.sql, TaskContext.to_metadata, TaskRowNotFoundError
+    #   SIDE_EFFECTS: Writes to yascheduler_tasks row; raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist. The BEFORE UPDATE trigger sets updated_at on the row.
+    #   LINKS: task/update_by_id.sql, TaskRowNotFoundError
     # END_CONTRACT: save
     async def save(self, task: Task) -> None:
         """Persist task state to the database (update by task_id; raises on missing row)."""
-        metadata = json.dumps(task.context.to_metadata())
         # START_BLOCK_DETECT_ZERO_ROWS
         rows = await self._run(
             load_query("task/update_by_id"),
             task_id=task.task_id.value,
             title=task.label,
+            engine=task.engine,
+            remote_folder=task.remote_folder,
+            local_folder=task.local_folder,
+            webhook_url=task.webhook_url,
+            error=task.error,
+            webhook_custom_params=task.webhook_custom_params,
+            extra=task.extra,
             status=task.status.name,
-            metadata=metadata,
             node_id=task.allocated_node_id.value if task.allocated_node_id else None,
         )
         if not rows:
@@ -171,23 +174,23 @@ class PostgresTaskRepository(_PgRepository):
         return [TaskId(int(row["task_id"])) for row in rows]
 
     # START_CONTRACT: insert
-    #   PURPOSE: Insert a new task row and return a Task with the DB-generated task_id (sole NewTask→Task conversion).
+    #   PURPOSE: Insert a new task row and return a Task with the DB-generated task_id.
     #   INPUTS: { new_task: NewTask - pre-persistence task record (no task_id; the DB generates it) }
-    #   OUTPUTS: { Task - the newly created task carrying the generated TaskId, created_at, updated_at }
-    #   SIDE_EFFECTS: Inserts row into yascheduler_tasks; assigns task_id via RETURNING; binds allocated_node_id via :node_id (new_task.allocated_node_id.value or None); title carries new_task.label; status binds new_task.status.name (enum-label string); created_at/updated_at populated by DEFAULT NOW() (not bound) and read back via RETURNING.
+    #   OUTPUTS: { Task - the newly created task }
+    #   SIDE_EFFECTS: Inserts row into yascheduler_tasks.
     #   LINKS: task/insert.sql, _row_to_task
     # END_CONTRACT: insert
     async def insert(self, new_task: NewTask) -> Task:
         """Insert a NewTask, return the persisted Task with the generated ID."""
-        metadata = json.dumps(new_task.context.to_metadata())
         rows = await self._run(
             load_query("task/insert"),
             title=new_task.label,
-            metadata=metadata,
-            status=new_task.status.name,
-            node_id=(
-                new_task.allocated_node_id.value if new_task.allocated_node_id else None
-            ),
+            engine=new_task.engine,
+            remote_folder=None,
+            local_folder=new_task.local_folder,
+            webhook_url=new_task.webhook_url,
+            webhook_custom_params=new_task.webhook_custom_params,
+            extra=new_task.extra,
         )
         return self._row_to_task(rows[0])
 
@@ -236,27 +239,33 @@ class PostgresTaskRepository(_PgRepository):
         return {TaskStatus[row["status"]]: row["count"] for row in rows}
 
     # START_CONTRACT: _row_to_task
-    #   PURPOSE: Map a DB row dict to a domain Task, parsing JSONB metadata and wrapping TaskId from the task_id column and NodeId from the allocated_node_id column.
-    #   INPUTS: { row: dict[str, Any] - row with keys task_id, title, status, metadata, allocated_node_id, created_at, updated_at }
-    #   OUTPUTS: { Task - carries task_id: TaskId, allocated_node_id: NodeId | None, created_at/updated_at: datetime (DB NOT NULL DEFAULT NOW()), label=row["title"] }
+    #   PURPOSE: Map a DB row dict to a domain Task, reading the typed columns directly and wrapping TaskId from the task_id column and NodeId from the allocated_node_id column.
+    #   INPUTS: { row: dict[str, Any] - row }
+    #   OUTPUTS: { Task - task from DB }
     #   SIDE_EFFECTS: None
-    #   LINKS: TaskContext.from_metadata, TaskId, NodeId
+    #   LINKS: TaskId, NodeId
     # END_CONTRACT: _row_to_task
     @staticmethod
     def _row_to_task(row: dict[str, Any]) -> Task:
         """Convert a DB row dict to a domain Task."""
-        metadata = row.get("metadata")
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata)
-        elif not isinstance(metadata, dict):
-            metadata = {}
-        ctx = TaskContext.from_metadata(metadata)
+        webhook_custom_params = row["webhook_custom_params"]
+        if isinstance(webhook_custom_params, str):
+            webhook_custom_params = json.loads(webhook_custom_params)
+        extra = row["extra"]
+        if isinstance(extra, str):
+            extra = json.loads(extra)
         # Events are transient — always empty when loaded from DB.
         allocated_node_id_raw = row.get("allocated_node_id")
         return Task(
             task_id=TaskId(int(row["task_id"])),
             label=row.get("title", ""),
-            context=ctx,
+            engine=row["engine"],
+            remote_folder=row.get("remote_folder"),
+            local_folder=row.get("local_folder"),
+            webhook_url=row.get("webhook_url"),
+            error=row.get("error"),
+            webhook_custom_params=webhook_custom_params,
+            extra=extra,
             status=TaskStatus[row["status"]],
             allocated_node_id=(
                 NodeId(int(allocated_node_id_raw))

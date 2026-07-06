@@ -1,22 +1,23 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 5.8.0
+# VERSION: 6.0.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
-#   SCOPE: consume_task async function returning bool (True=finalised, False=deferred for retry).
+#   SCOPE: consume_task async function returning bool (True=finalised, False=deferred for retry); helpers.
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-OPERATIONS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   consume_task - Load task via UoW, download outputs, finalise (DONE/DONE+error) or defer (stay RUNNING); returns bool
-#   _prepare_store_folder - Create local output directory from domain Task context
+#   _prepare_store_folder - Create local output directory from typed Task fields
+#   _format_download_error - Format combined download errors into "Download error: <path>: <msg>, <path>: <msg>" per the Task.error column format contract
 #   _finalize_task - On finalise: apply domain lifecycle, save via UoW, record events, discard tracker slot; returns True. On defer: no side effects, returns False
-#   _decide_finalisation - Decide finalise vs defer from (transient_errors, permanent_errors) and apply domain status + event when finalising
+#   _decide_finalisation - Decide finalise vs defer from (transient_errors, permanent_errors); on finalise apply task.with_download_results(local_folder=, remote_folder=).complete()/.fail(...) (no extra update, no with_context)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.8.0 - consume_task entry takes task_id: TaskId (was int); download_outputs receives task_id=task.task_id (a TaskId) for logging/folder naming (TaskId.__str__ renders the bare int, no .value needed); tracker.discard keys become TaskId (add-task-id-identity).
-#   PREVIOUS_CHANGE: v5.7.0 - session-based-machine-handle: consume_task takes session: MachineSession instead of ip: str; delegates session to operations.download_outputs(session=session).
+#   LAST_CHANGE: v6.0.1 - consume-task-contract-side-effect: _prepare_store_folder SIDE_EFFECTS now declares the AssertionError raise on the task.remote_folder RUNNING-task precondition (was the line-67 FIXME); exception is uncaught locally and propagates to the orchestrator consumer worker's `except Exception`.
+#   PREVIOUS_CHANGE: v6.0.0 - drop-task-context-entity follow-up: drop the legacy meta_add list-of-pairs indirection (a metadata-blob relic); _decide_finalisation and _finalize_task take local_folder/remote_folder as named args from download_outputs' new 4-tuple return. _prepare_store_folder asserts task.remote_folder is not None for type narrowing (the task is RUNNING — remote_folder was assigned post-insert).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from yascheduler.domain import TaskCompleted, TaskFailed
 
@@ -48,12 +49,12 @@ logger = logging.getLogger(__name__)
 # START_CONTRACT: _prepare_store_folder
 #   PURPOSE: Create local output directory for task file downloads.
 #   INPUTS: {
-#     task: Task - Domain task with context containing paths and engine name,
+#     task: Task - Domain task with typed fields (remote_folder, engine, local_folder),
 #     local_tasks_dir: Path - Local base directory for output storage,
 #     engines: EngineRepository - Config engine repository
 #   }
 #   OUTPUTS: { tuple[Path, list[str], str] - (store_folder, output_files, remote_folder) }
-#   SIDE_EFFECTS: Creates directory on local filesystem.
+#   SIDE_EFFECTS: Creates directory on local filesystem. Raises AssertionError when task.remote_folder is None (RUNNING-task precondition); uncaught locally, propagates to the orchestrator consumer worker's `except Exception`.
 #   LINKS: none
 # END_CONTRACT: _prepare_store_folder
 async def _prepare_store_folder(
@@ -62,10 +63,12 @@ async def _prepare_store_folder(
     engines: EngineRepository,
 ) -> tuple[Path, list[str], str]:
     # START_BLOCK_CREATE_DIR
-    remote_folder: str = task.context.remote_folder  # type: ignore[assignment]
-    engine = engines[task.context.engine]
+    # task is RUNNING here — submit_task assigned remote_folder post-insert via with_remote_folder.
+    assert task.remote_folder is not None
+    remote_folder: str = task.remote_folder
+    engine = engines[task.engine]
     output_files = [str(PurePosixPath(remote_folder) / x) for x in engine.output_files]
-    local_folder: str | None = task.context.local_folder
+    local_folder = task.local_folder
     if local_folder:
         store_folder = Path(local_folder)
     else:
@@ -77,13 +80,31 @@ async def _prepare_store_folder(
     return store_folder, output_files, remote_folder
 
 
+# START_CONTRACT: _format_download_error
+#   PURPOSE: Format the combined download errors into the Task.error column contract string "Download error: <path>: <msg>, <path>: <msg>".
+#   INPUTS: { combined_errors: list[tuple[str | None, Exception]] - permanent + transient download errors (permanent first) }
+#   OUTPUTS: { str - Error message }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-MODEL
+# END_CONTRACT: _format_download_error
+def _format_download_error(
+    combined_errors: list[tuple[str | None, Exception]],
+) -> str:
+    parts: list[str] = []
+    for path, err in combined_errors:
+        msg = str(err)
+        parts.append(f"{path}: {msg}" if path is not None else msg)
+    return "Download error: " + ", ".join(parts)
+
+
 # START_CONTRACT: _decide_finalisation
 #   PURPOSE: Decide finalise vs defer from (transient_errors, permanent_errors) and apply domain
 #     status + event when finalising. Finalise when permanent_errors non-empty OR transient_errors
 #     empty (full success, permanent-only, or mixed). Defer (return None) when transient-only.
 #   INPUTS: {
 #     task: Task - Domain task to finalise or defer,
-#     meta_add: list[tuple[str, Any]] - Additional metadata to merge,
+#     local_folder: str - Downloaded local folder (download_outputs return),
+#     remote_folder: str - Remote folder downloaded from (download_outputs return),
 #     transient_errors: list[tuple[str | None, Exception]] - Retryable download errors,
 #     permanent_errors: list[tuple[str | None, Exception]] - Non-retryable download errors,
 #     store_folder: Path - Local directory where outputs were saved
@@ -93,7 +114,8 @@ async def _prepare_store_folder(
 # END_CONTRACT: _decide_finalisation
 def _decide_finalisation(
     task: Task,
-    meta_add: list[tuple[str, Any]],
+    local_folder: str,
+    remote_folder: str,
     transient_errors: list[tuple[str | None, Exception]],
     permanent_errors: list[tuple[str | None, Exception]],
     store_folder: Path,
@@ -109,34 +131,17 @@ def _decide_finalisation(
     # non-empty, permanent takes priority and the task fails with a combined
     # message including both.
     combined_errors = permanent_errors + transient_errors
-    if combined_errors:
-        error_map = {p: str(e) for p, e in combined_errors}
-        meta_add.append(("error", error_map))
-
-    meta_dict = dict(meta_add)
-    extra_updates = {
-        k: v
-        for k, v in meta_dict.items()
-        if k not in ("remote_folder", "local_folder", "error")
-    }
-    updated_context = task.context.replace(
-        local_folder=meta_dict.get("local_folder") or task.context.local_folder,
-        remote_folder=meta_dict.get("remote_folder") or task.context.remote_folder,
-        extra={**task.context.extra, **extra_updates},
+    task = task.with_download_results(
+        local_folder=local_folder or task.local_folder or "",
+        remote_folder=remote_folder or task.remote_folder or "",
     )
 
     if combined_errors:
-        error_msg = str(error_map)
-        task = (
-            task.with_context(updated_context)
-            .fail(error_msg)
-            .with_event(TaskFailed, reason=error_msg)
-        )
+        error_msg = _format_download_error(combined_errors)
+        task = task.fail(error_msg).with_event(TaskFailed, reason=error_msg)
     else:
-        task = (
-            task.with_context(updated_context)
-            .complete()
-            .with_event(TaskCompleted, local_folder=str(store_folder), has_errors=False)
+        task = task.complete().with_event(
+            TaskCompleted, local_folder=str(store_folder), has_errors=False
         )
     # END_BLOCK_FINALISE
     return task
@@ -147,7 +152,8 @@ def _decide_finalisation(
 #     discard in-flight allocation slot. On defer: no side effects.
 #   INPUTS: {
 #     task: Task - Domain task to finalise,
-#     meta_add: list[tuple[str, Any]] - Additional metadata to merge,
+#     local_folder: str - Downloaded local folder (download_outputs return),
+#     remote_folder: str - Remote folder downloaded from (download_outputs return),
 #     transient_errors: list[tuple[str | None, Exception]] - Retryable download errors,
 #     permanent_errors: list[tuple[str | None, Exception]] - Non-retryable download errors,
 #     store_folder: Path - Local directory where outputs were saved,
@@ -161,7 +167,8 @@ def _decide_finalisation(
 # END_CONTRACT: _finalize_task
 async def _finalize_task(
     task: Task,
-    meta_add: list[tuple[str, Any]],
+    local_folder: str,
+    remote_folder: str,
     transient_errors: list[tuple[str | None, Exception]],
     permanent_errors: list[tuple[str | None, Exception]],
     store_folder: Path,
@@ -170,7 +177,12 @@ async def _finalize_task(
 ) -> bool:
     # START_BLOCK_DECIDE_OR_DEFER
     finalised_task = _decide_finalisation(
-        task, meta_add, transient_errors, permanent_errors, store_folder
+        task,
+        local_folder,
+        remote_folder,
+        transient_errors,
+        permanent_errors,
+        store_folder,
     )
     if finalised_task is None:
         # Defer: transient-only — stay RUNNING, no save, no event, no discard.
@@ -231,19 +243,25 @@ async def consume_task(
         tracker.discard(task_id)
         return True
 
-    store_folder, output_files, remote_folder = await _prepare_store_folder(
+    store_folder, output_files, task_remote_folder = await _prepare_store_folder(
         task, local_tasks_dir, engines
     )
-    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
+    (
+        local_folder,
+        remote_folder,
+        transient_errors,
+        permanent_errors,
+    ) = await operations.download_outputs(
         session=session,
-        remote_dir=remote_folder,
+        remote_dir=task_remote_folder,
         local_dir=store_folder,
         files=output_files,
         task_id=task.task_id,
     )
     return await _finalize_task(
         task,
-        meta_add,
+        local_folder,
+        remote_folder,
         transient_errors,
         permanent_errors,
         store_folder,

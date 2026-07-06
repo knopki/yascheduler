@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_client_query.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Yascheduler queue-query methods via the deps_factory constructor seam.
@@ -18,7 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: update EXPECTED_KEYS to 5-key set (task_id, label, status, metadata, node); add FakeNodeRepository; update FakeUnitOfWork with .nodes; _make_task uses allocated_node_id instead of allocated_ip; rename ip/cloud assertions to node assertions; add test_node_object_for_allocated_task, test_node_is_null_for_unallocated_task, test_flat_ip_and_cloud_keys_absent.
+#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: update EXPECTED_KEYS to 5-key set (task_id, label, status, metadata, node); add FakeNodeRepository; update FakeUnitOfWork with .nodes; _make_task uses allocated_node_id instead of allocated_ip; rename ip/cloud assertions to node assertions; add test_node_object_for_allocated_task, test_node_is_null_for_unallocated_task, test_flat_ip_and_cloud_keys_absent.
 #   PREVIOUS_CHANGE: v1.0.2 - Migrate import/patch paths from yascheduler.client to yascheduler.entrypoints.client.
 # END_CHANGE_SUMMARY
 
@@ -38,7 +39,7 @@ from unittest.mock import patch
 
 import pytest
 
-from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
 from yascheduler.entrypoints.client import Yascheduler
 
 EXPECTED_KEYS = {"task_id", "label", "status", "metadata", "node"}
@@ -108,10 +109,20 @@ def _make_task(
     status: TaskStatus = TaskStatus.TO_DO,
     allocated_node_id: NodeId | None = None,
 ) -> Task:
+    from datetime import datetime
+
     return Task(
         task_id=TaskId(task_id),
         label=f"task-{task_id}",
-        context=TaskContext(engine="test_engine"),
+        engine="test_engine",
+        remote_folder=None,
+        local_folder=None,
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
         status=status,
         allocated_node_id=allocated_node_id,
     )

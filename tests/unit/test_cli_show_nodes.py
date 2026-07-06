@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_show_nodes.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yanodes show_nodes() flag parsing, filtering, table/JSON rendering, and exit codes.
@@ -18,7 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: remove allocated_ip from make_task helper, drop ip= kwarg from all call sites
+#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: remove allocated_ip from make_task helper, drop ip= kwarg from all call sites
 #   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
 # END_CHANGE_SUMMARY
 
@@ -33,7 +34,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 show_nodes_mod = importlib.import_module("yascheduler.entrypoints.cli.show_nodes")
@@ -101,14 +102,20 @@ def make_task(
     allocated_node_id: NodeId | None = None,
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
+    from datetime import datetime
+
     return Task(
         task_id=TaskId(task_id),
         label=label,
-        context=TaskContext(
-            engine="g09",
-            remote_folder="/tmp/remote",
-            local_folder="/tmp/local",
-        ),
+        engine="g09",
+        remote_folder="/tmp/remote",
+        local_folder="/tmp/local",
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
         status=status,
         allocated_node_id=allocated_node_id,
     )

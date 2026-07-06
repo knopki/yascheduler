@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.10.0
+# VERSION: 2.11.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain layer entry point — re-exports events, model entities, engine types, exception hierarchy, port interfaces, and cross-layer settings.
 #   SCOPE: Re-exports domain events from .events, domain entities from .model, engine types from .engine (via .model), exception tree from .exceptions, port Protocols from .ports (including CloudConfig, MachineRepository, MachineSession, MachineOperations), and LocalSettings/RemoteDefaults from .settings.
@@ -18,13 +18,12 @@
 #   TaskStatus - IntEnum: TO_DO=0, RUNNING=1, DONE=2
 #   MachineState - Enum: FREE, BUSY
 #   ProcessResult - Exit code and captured output from remote execution
-#   TaskContext - Typed task metadata with arbitrary extras
 #   Engine - Calculation engine value object (from M-DOMAIN-ENGINE)
 #   EngineRepository - Frozen collection of engines (from M-DOMAIN-ENGINE)
 #   LocalFilesDeploy / LocalArchiveDeploy / RemoteArchiveDeploy / Deploy - Deploy strategies (from M-DOMAIN-ENGINE)
-#   Task - Task entity with lifecycle methods
+#   Task - Task entity with typed fields (engine, remote_folder, local_folder, webhook_url, webhook_custom_params, error, extra) and lifecycle methods
 #   TaskId - Task primary-key value object (frozen dataclass wrapping int)
-#   NewTask - Pre-persistence task record (no task_id)
+#   NewTask - Pre-persistence task record (no task_id, no remote_folder, no error)
 #   NodeId - Node primary-key value object (frozen dataclass wrapping int)
 #   NewNode - Pre-persistence node record (no node_id)
 #   Node - Post-persistence node record; carries node_id: NodeId
@@ -58,8 +57,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.10.0 - Re-export NewTask and TaskId from .model (add-task-id-identity). Task now carries task_id: TaskId as its first field (post-persistence shape); NewTask is the pre-persistence input shape; the NewTask→Task conversion happens only in TaskRepository.insert. DomainEvent.task_id and the task-keyed exceptions now carry TaskId.
-#   PREVIOUS_CHANGE: v2.9.0 - Re-export NewNode and NodeId from .model (add-node-id-identity). Node now carries node_id: NodeId as its first field (post-persistence shape); NewNode is the pre-persistence input shape; CloudProvisioner.allocate returns NewNode (caller persists via NodeRepository.insert).
+#   LAST_CHANGE: v2.11.0 - drop-task-context-entity: remove TaskContext / TaskContextOverrides re-exports (folded into Task / NewTask typed fields).
+#   PREVIOUS_CHANGE: v2.10.0 - Re-export NewTask and TaskId from .model (add-task-id-identity). Task now carries task_id: TaskId as its first field (post-persistence shape); NewTask is the pre-persistence input shape; the NewTask→Task conversion happens only in TaskRepository.insert. DomainEvent.task_id and the task-keyed exceptions now carry TaskId.
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -75,7 +74,6 @@ __all__ = [
     "TaskStatus",
     "MachineState",
     "ProcessResult",
-    "TaskContext",
     "Engine",
     "EngineRepository",
     "LocalFilesDeploy",
@@ -165,7 +163,6 @@ from .model import (
     NodeId,
     ProcessResult,
     Task,
-    TaskContext,
     TaskId,
     TaskStatus,
 )

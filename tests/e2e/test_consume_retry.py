@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_consume_retry.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
 #   SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - simplify-cloud-connect-node-args: both repository.connect calls drop the `username=`/`port=` kwargs.
-#   PREVIOUS_CHANGE: v1.3.0 - fix-static-node-connect-exclusion: drop the `cloud="e2e"` workaround; orchestrator connects static nodes again.
+#   LAST_CHANGE: v1.5.0 - drop-task-context-entity follow-up: wrappers return the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors); empty strings for the unused local/remote paths in the synthetic failure paths.
+#   PREVIOUS_CHANGE: v1.4.0 - simplify-cloud-connect-node-args: both repository.connect calls drop the `username=`/`port=` kwargs.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -126,7 +126,8 @@ async def test_consume_retry_then_success(
         files: list[str],
         task_id: TaskId | None = None,
     ) -> tuple[
-        list[tuple[str, Any]],
+        str,
+        str,
         list[tuple[str | None, Exception]],
         list[tuple[str | None, Exception]],
     ]:
@@ -134,7 +135,8 @@ async def test_consume_retry_then_success(
             call_count["n"] += 1
             # Transient-only: remote dir must be preserved (rmtree gated)
             return (
-                [],
+                "",
+                "",
                 [("/remote/transient", SFTPFailure("transient blip"))],
                 [],
             )
@@ -158,10 +160,10 @@ async def test_consume_retry_then_success(
 
         assert task is not None, "Task did not reach DONE"
         assert task.status == DomainTaskStatus.DONE
-        assert task.context.error is None, (
-            f"Expected no error on retry-then-success, got: {task.context.error}"
+        assert task.error is None, (
+            f"Expected no error on retry-then-success, got: {task.error}"
         )
-        local_folder = task.context.local_folder
+        local_folder = task.local_folder
         assert local_folder, "Task metadata missing local_folder"
         output_file = Path(str(local_folder)) / "1.input.out"
         assert output_file.exists(), f"Output file not found: {output_file}"
@@ -192,13 +194,15 @@ async def test_consume_permanent_marks_done_with_error(
         files: list[str],
         task_id: TaskId | None = None,
     ) -> tuple[
-        list[tuple[str, Any]],
+        str,
+        str,
         list[tuple[str | None, Exception]],
         list[tuple[str | None, Exception]],
     ]:
         # Permanent-only: missing output file (bare OSError is permanent)
         return (
-            [],
+            "",
+            "",
             [],
             [("/remote/1.input.out", OSError("No such file"))],
         )
@@ -212,10 +216,8 @@ async def test_consume_permanent_marks_done_with_error(
 
         assert task is not None, "Task did not reach DONE"
         assert task.status == DomainTaskStatus.DONE
-        assert task.context.error is not None, (
-            "Expected error on permanent download failure"
-        )
-        assert "No such file" in str(task.context.error)
+        assert task.error is not None, "Expected error on permanent download failure"
+        assert "No such file" in str(task.error)
     finally:
         await _stop_orchestrator(orchestrator, orch_task)
         await _cleanup_node(uow_factory, ssh_container)
@@ -249,14 +251,16 @@ async def test_consume_transient_preserves_remote_dir_regression(
         files: list[str],
         task_id: TaskId | None = None,
     ) -> tuple[
-        list[tuple[str, Any]],
+        str,
+        str,
         list[tuple[str | None, Exception]],
         list[tuple[str | None, Exception]],
     ]:
         captured_remote_dir.append(remote_dir)
         # Transient-only -> gateway must NOT rmtree; remote dir preserved
         return (
-            [],
+            "",
+            "",
             [(remote_dir + "/1.input.out", SFTPFailure("transient"))],
             [],
         )

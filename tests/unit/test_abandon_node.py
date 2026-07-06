@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_abandon_node.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup).
@@ -13,7 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
+#   LAST_CHANGE: v1.5.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.4.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
 #   PREVIOUS_CHANGE: v1.2.0 - node-id-keyed-mutators: uow.nodes.remove asserts expect NodeId(1) (was ip string "10.0.0.5").
 # END_CHANGE_SUMMARY
 """Unit tests for the abandon_node use case.
@@ -38,7 +39,7 @@ import pytest
 
 from yascheduler.application.abandon_node import abandon_node
 from yascheduler.application.allocation_tracker import AllocationTracker
-from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -62,10 +63,20 @@ def _todo_task(
     task_id: int,
     allocated_node_id: NodeId | None = None,
 ) -> Task:
+    from datetime import datetime
+
     return Task(
         task_id=TaskId(task_id),
         label="t",
-        context=TaskContext(engine="e"),
+        engine="e",
+        remote_folder=None,
+        local_folder=None,
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
         status=TaskStatus.TO_DO,
         allocated_node_id=allocated_node_id,
     )

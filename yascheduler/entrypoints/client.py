@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/client.py
-# VERSION: 2.9.0
+# VERSION: 2.10.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
@@ -10,13 +10,13 @@
 #
 # START_MODULE_MAP
 #   Yascheduler - Sync/async client wrapper for task operations
-#   _task_to_dict - Project domain Task to the public 5-key Mapping shape (task_id, label, status, metadata, node) with nested node object
+#   _task_to_dict - Project domain Task to the public shape
 #   to_sync - Private async-to-sync decorator (inlined from former yascheduler.shared.async_utils; not re-exported)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.9.0 - task-schema-and-entity-cleanup: queue_get_tasks_async unpacks (tasks, nodes_by_id) from query_tasks (return type widened to tuple); _task_to_dict(t, nodes_by_id) drops flat "ip"/"cloud" keys and adds a nested "node" object {ip, port, username, cloud} (or null) built from nodes_by_id.get(t.allocated_node_id). Public keys are now {task_id, label, status, metadata, node}. BREAKING facade dict shape change.
-#   PREVIOUS_CHANGE: v2.8.0 - Facade is the sole int/TaskId marshalling boundary (add-task-id-identity): _task_to_dict extracts "task_id": t.task_id.value (public dict stays int); queue_submit_task_async returns (await deps.submit(...)).value (public -> int preserved); queue_get_tasks_async wraps [TaskId(i) for i in jobs] before calling query_tasks (public jobs: list[int] preserved). The domain is type-safe end-to-end; the public API signatures are unchanged.
+#   LAST_CHANGE: v2.10.0 - drop-task-context-entity: _task_to_dict reconstructs the flat metadata dict inline from the six typed Task fields (engine, remote_folder, local_folder, webhook_url, webhook_custom_params, error — None omitted) plus **t.extra (was t.context.to_metadata()). Public dict shape {task_id, label, status, metadata, node} unchanged.
+#   PREVIOUS_CHANGE: v2.9.0 - task-schema-and-entity-cleanup: queue_get_tasks_async unpacks (tasks, nodes_by_id) from query_tasks (return type widened to tuple); _task_to_dict(t, nodes_by_id) drops flat "ip"/"cloud" keys and adds a nested "node" object {ip, port, username, cloud} (or null) built from nodes_by_id.get(t.allocated_node_id). Public keys are now {task_id, label, status, metadata, node}. BREAKING facade dict shape change.
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -82,17 +82,31 @@ def to_sync(
 # START_CONTRACT: _task_to_dict
 #   PURPOSE: Project a domain Task to the public 5-key Mapping shape returned by query methods.
 #   INPUTS: { t: Task - domain Task aggregate (t.task_id: TaskId), nodes_by_id: dict[NodeId, Node] - node lookup by allocated_node_id }
-#   OUTPUTS: { Mapping[str, Any] - {task_id (bare int via .value), label, status, metadata, node} ; node is a nested {ip, port, username, cloud} object or null }
+#   OUTPUTS: { Mapping[str, Any] - public shape }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL
 # END_CONTRACT: _task_to_dict
 def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]:
     node = nodes_by_id.get(t.allocated_node_id) if t.allocated_node_id else None
+    metadata: dict[str, Any] = {"engine": t.engine}
+    if t.remote_folder is not None:
+        metadata["remote_folder"] = t.remote_folder
+    if t.local_folder is not None:
+        metadata["local_folder"] = t.local_folder
+    if t.webhook_url is not None:
+        metadata["webhook_url"] = t.webhook_url
+    if t.webhook_custom_params:
+        metadata["webhook_custom_params"] = t.webhook_custom_params
+    if t.error is not None:
+        metadata["error"] = t.error
+    for k, v in t.extra.items():
+        if k not in metadata:
+            metadata[k] = v
     return {
         "task_id": t.task_id.value,
         "label": t.label,
         "status": t.status,
-        "metadata": t.context.to_metadata(),
+        "metadata": metadata,
         "node": (
             {
                 "ip": node.ip,

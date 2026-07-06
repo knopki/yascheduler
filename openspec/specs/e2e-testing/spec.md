@@ -44,22 +44,67 @@ The project SHALL provide a shell script `run.sh` as the test engine executable.
 - **THEN** after completion, `1.input.out` exists with content "hello e2e"
 
 ### Requirement: Full cycle E2E test
-The project SHALL provide a test in `tests/e2e/test_full_cycle.py` that exercises the complete scheduler lifecycle through the application's real entrypoint code paths (not direct repository/UoW bypass):
 
-1. **Start daemon**: Create the orchestrator via `make_daemon(config)` and start it as a background `asyncio.Task` via `orchestrator.start()`. The test SHALL NOT call `run_daemon` (which registers signal handlers unsuitable for a test loop).
-2. **Submit jobs**: Submit four tasks by calling the internal async entrypoint `_submit_async(argv)` from `entrypoints/cli/submit.py` (the async core of the `yasubmit` CLI). Each call SHALL pass `["<script_path>", "--config", "<ini_path>"]` where `<script_path>` is a temp file containing `ENGINE=test_shell` and `LABEL=job_N`, and the current working directory is a temp dir containing a `1.input` file with content `"hello e2e N"` (per-job CWD isolation via `monkeypatch.chdir`). The test SHALL capture `task_id` from the entrypoint's stdout (`print(str(task_id))`).
-3. **Assert queued**: After all four submissions, read all four tasks via `uow_factory()` and assert each has status `TO_DO`.
-4. **Add nodes**: Add two nodes by calling the internal async entrypoint `_manage_node_async(argv)` from `entrypoints/cli/manage_node.py` (the async core of the `yasetnode` CLI) twice — once per `ssh_pool` container — passing `["<host>:<port>", "--config", "<ini_path>"]`. The `:<port>` is required because the SSH containers listen on port 2222, not the `yasetnode` default of 22. Each call exercises the real `_add_node` path: `SSHMachineRepository.connect` + `operations.setup_node` + `uow.nodes.add` + `commit` + `disconnect`.
-5. **Assert nodes added**: After both `_add_node` calls return, assert `uow.nodes.list_all()` returns both nodes.
-6. **Wait for completion**: Poll `uow_factory()` reading each task until all four reach status `DONE`, with a timeout of at least 30 seconds.
-7. **Assert completion and outputs**: For each task, assert `status == DONE`, `context.error is None`, `context.local_folder` is set, and the output file `<local_folder>/1.input.out` exists with content matching the per-job `1.input` payload.
-8. **Assert distribution**: Collect `allocated_ip` from all four tasks. Assert the set of allocated IPs equals `{"<ipA>", "<ipB>"}` (both nodes were used) AND that no single node received all four tasks (reject the 0:4 / 4:0 monopoly case — those indicate one node never accepted work).
-9. **Assert scheduling activity in logs**: Grep the captured `log_records` for `[AllocateTask][_try_allocate_to_machine][ALLOCATED]` entries and assert one appears for each of the four `task_id`s, and that both node IPs appear among the logged `ip=` values.
-10. **Remove nodes (soft)**: Remove both nodes by calling `_manage_node_async(["<host>:<port>", "--remove-soft", "--config", "<ini_path>"])` once per container. This exercises the real `_remove_node_soft` path which, with no RUNNING tasks, takes the `uow.nodes.remove(ip)` branch.
-11. **Assert nodes removed**: After both soft-remove calls return, assert `uow.nodes.list_all()` returns an empty list.
-12. **Stop daemon**: In a `finally` block, call `orchestrator.stop()` and `asyncio.wait_for(orch_task, timeout=10)`.
+The project SHALL provide a test in `tests/e2e/test_full_cycle.py` that
+exercises the complete scheduler lifecycle through the application's real
+entrypoint code paths (not direct repository/UoW bypass):
 
-Status assertions SHALL use `yascheduler.domain.TaskStatus`. The task's allocated IP is read via `task.allocated_ip`; the local folder is read via `task.context.local_folder`.
+1. **Start daemon**: Create the orchestrator via `make_daemon(config)` and
+   start it as a background `asyncio.Task` via `orchestrator.start()`. The test
+   SHALL NOT call `run_daemon` (which registers signal handlers unsuitable
+   for a test loop).
+2. **Submit jobs**: Submit four tasks by calling the internal async entrypoint
+   `_submit_async(argv)` from `entrypoints/cli/submit.py` (the async core of
+   the `yasubmit` CLI). Each call SHALL pass `["<script_path>", "--config",
+   "<ini_path>"]` where `<script_path>` is a temp file containing
+   `ENGINE=test_shell` and `LABEL=job_N`, and the current working directory is
+   a temp dir containing a `1.input` file with content `"hello e2e N"` (per-job
+   CWD isolation via `monkeypatch.chdir`). The test SHALL capture `task_id`
+   from the entrypoint's stdout (`print(str(task_id))`).
+3. **Assert queued**: After all four submissions, read all four tasks via
+   `uowFactory()` and assert each has status `TO_DO`.
+4. **Add nodes**: Add two nodes by calling the internal async entrypoint
+   `_manage_node_async(argv)` from `entrypoints/cli/manage_node.py` (the async
+   core of the `yasetnode` CLI).
+5. **Wait for completion**: Poll until all four tasks reach `DONE` (timeout ≥
+   60s), capturing each task's `RUNNING` snapshot node IP via
+   `uow.nodes.get_by_id(t.allocated_node_id).ip` (was `task.allocated_ip`,
+   which is removed — see the `domain-entities` delta).
+6. **Assert per-task state**: For each task, read it via `uow.tasks.get(id)`,
+   resolve its node via `uow.nodes.get_by_id(task.allocated_node_id)`, and
+   assert.
+7. **Assert completion and outputs**: For each task, assert `status == DONE`,
+   `task.error is None` (was `context.error is None` — see the
+   `domain-entities` delta), `task.local_folder` is set (was
+   `context.local_folder`), and the output file
+   `<local_folder>/1.input.out` exists with content matching the per-job
+   `1.input` payload.
+8. **Assert distribution**: Collect node IPs from all four tasks (via
+   `uow.nodes.get_by_id(t.allocated_node_id).ip`). Assert the set of allocated
+   node IPs equals `{"<ipA>", "<ipB>"}` (both nodes were used) AND that no
+   single node received all four tasks (reject the 0:4 / 4:0 monopoly case —
+   those indicate one node never accepted work).
+9. **Assert scheduling activity in logs**: Grep the captured `log_records`
+   for `[AllocateTask][_try_allocate_to_machine][ALLOCATED]` entries and
+   assert one appears for each of the four `task_id`s, and that both node IPs
+   appear among the logged `ip=` values.
+10. **Remove nodes (soft)**: Remove both nodes by calling
+    `_manage_node_async(["<host>:<port>", "--remove-soft", "--config",
+    "<ini_path>"])` once per container. This exercises the real
+    `_remove_node_soft` path which, with no RUNNING tasks, takes the
+    `uow.nodes.remove(ip)` branch.
+11. **Assert nodes removed**: After both soft-remove calls return, assert
+    `uow.nodes.list_all()` returns an empty list.
+12. **Stop daemon**: In a `finally` block, call `orchestrator.stop()` and
+    `asyncio.wait_for(orch_task, timeout=10)`.
+
+Status assertions SHALL use `yascheduler.domain.TaskStatus`. The task's
+allocated node IP is read via `uow.nodes.get_by_id(task.allocated_node_id).ip`
+(the `Task` entity carries `allocated_node_id`, not `allocated_ip` — the
+latter is removed). The local folder is read via `task.local_folder` (was
+`task.context.local_folder`). The error field is read via `task.error` (was
+`task.context.error`). No `task.context` references exist in the test (the
+`TaskContext` value object is removed — see the `domain-entities` delta).
 
 #### Scenario: Submitted jobs are initially TO_DO before nodes exist
 - **WHEN** four jobs are submitted via `_submit_async` before any node is added
@@ -67,36 +112,15 @@ Status assertions SHALL use `yascheduler.domain.TaskStatus`. The task's allocate
 
 #### Scenario: Jobs are scheduled across both nodes
 - **WHEN** the daemon is running and both nodes are added
-- **THEN** all four tasks transition to `DONE` within 30 seconds
-- **AND** the set of `allocated_ip` values across the four tasks is exactly `{"<ipA>", "<ipB>"}`
-- **AND** no single node received all four tasks (the 0:4 / 4:0 split is rejected)
+- **THEN** all four tasks transition to DONE; the set of node IPs (resolved via `uow.nodes.get_by_id(t.allocated_node_id).ip`) across the four tasks is exactly `{"<ipA>", "<ipB>"}` (both nodes used, no monopoly)
 
-#### Scenario: Output files are downloaded and match input
-- **WHEN** a task reaches `DONE`
-- **THEN** the file `<local_folder>/1.input.out` exists
-- **AND** its content matches the `1.input` payload submitted for that job
+#### Scenario: Each DONE task has error None and local_folder set
+- **WHEN** a task reaches DONE
+- **THEN** `task.error is None` (success path; was `context.error is None`) and `task.local_folder` is set (was `context.local_folder`); the output file exists at `<task.local_folder>/1.input.out` matching the per-job payload
 
-#### Scenario: Soft-remove deletes nodes when no RUNNING tasks remain
-- **WHEN** both nodes are removed via `_manage_node_async(["<host>:<port>", "--remove-soft", ...])` after all tasks are `DONE`
-- **THEN** `_remove_node_soft` queries `list_ids_by_ip_and_status(ip, RUNNING)`, finds it empty, and removes the node row
-- **AND** `uow.nodes.list_all()` returns an empty list
-
-#### Scenario: Engine script is deployed to each remote machine
-- **WHEN** `_add_node` runs for each of the two nodes
-- **THEN** `setup_node` deploys `run.sh` to the remote engines directory at `{remote_engines_dir}/test_shell/run.sh` on each container
-
-#### Scenario: Allocator logs each task placement
-- **WHEN** the allocator places a task on a machine
-- **THEN** a debug log record with `[AllocateTask][_try_allocate_to_machine][ALLOCATED]` and the `task_id` and `ip` is emitted
-- **AND** the captured `log_records` fixture contains one such record per task_id with both node IPs represented
-
-#### Scenario: Task lifecycle transitions are correct
-- **WHEN** a task is first created via `_submit_async`
-- **THEN** its status is `TO_DO`
-- **WHEN** the orchestrator allocates and starts it
-- **THEN** its status transitions to `RUNNING`
-- **WHEN** the orchestrator detects completion and downloads results
-- **THEN** its status transitions to `DONE`
+#### Scenario: No TaskContext or task.context references in e2e tests
+- **WHEN** `tests/e2e/test_full_cycle.py` is inspected for `TaskContext`, `task.context`, or `context.error`/`context.local_folder` references
+- **THEN** none are present; the test reads `task.error`, `task.local_folder`, and resolves node IP via `uow.nodes.get_by_id(task.allocated_node_id).ip`
 
 ### Requirement: Live Hetzner cloud-provider E2E test
 
@@ -147,15 +171,18 @@ The test scenario SHALL be:
 4. **Assert autoscale**: poll `uow.nodes.list_all()` until a `cloud == "hetzner"` node row
    appears; record its IP into `observed_ips`; timeout ≥ 600s.
 5. **Wait for completion**: poll until both tasks reach `DONE`, capturing each task's
-   `RUNNING` snapshot `allocated_ip`; timeout ≥ 600s.
-6. **Assert outputs**: for each task, assert `status == DONE`, `context.error is None`,
-   `context.local_folder` is set, and `<local_folder>/1.input.out` exists matching the
-   per-job payload.
-7. **Assert tasks ran on cloud nodes**: each task's `allocated_ip` is the IP of some
-   `cloud == "hetzner"` node observed during the test. The test SHALL NOT assert both
-   `allocated_ip` values are identical (with `max_nodes = 1` the idle-deallocate loop MAY
-   provision a second VM for the second task; that outcome is non-fatal, tuned via
-   `hetzner_idle_tolerance`).
+   `RUNNING` snapshot node IP via `uow.nodes.get_by_id(task.allocated_node_id).ip` (was
+   `task.allocated_ip`); timeout ≥ 600s.
+6. **Assert outputs**: for each task, assert `status == DONE`, `task.error is
+   None` (was `context.error is None`), `task.local_folder` is set (was
+   `context.local_folder`), and `<local_folder>/1.input.out` exists matching
+   the per-job payload.
+7. **Assert tasks ran on cloud nodes**: each task's allocated node IP (read
+   via `uow.nodes.get_by_id(task.allocated_node_id).ip`, was
+   `task.allocated_ip`) is the IP of some `cloud == "hetzner"` node observed
+   during the test. The test SHALL NOT assert both allocated node IPs are
+   identical (with `max_nodes = 1` the idle-deallocate loop MAY provision a
+   2nd VM; that race is non-fatal).
 8. **Assert cloud-path logs**: grep `log_records` for an
    `[AllocateTask][allocate_task][CLOUD_DONE]` record whose `ip=` matches the provisioned
    node and `provider=hetzner`, and a `[deallocate_node][CLOUD_DELETE]` record whose `ip=`
@@ -175,6 +202,13 @@ The test scenario SHALL be:
     implement any name-prefix "sweep" of unrelated servers. Cleanup deletion calls SHALL be
     best-effort across multiple IPs BUT a failure to actually delete a VM MUST surface as a
     test failure, not be swallowed.
+
+Status assertions SHALL use `yascheduler.domain.TaskStatus`. The task's
+allocated node IP is read via `uow.nodes.get_by_id(task.allocated_node_id).ip`
+(the `Task` entity carries `allocated_node_id`, not `allocated_ip`). The
+local folder is read via `task.local_folder` (was `task.context.local_folder`).
+The error field is read via `task.error` (was `task.context.error`). No
+`task.context` references exist in the test.
 
 #### Scenario: Test is skipped when the opt-in gate is absent
 - **WHEN** `YASCHEDULER_TEST_HETZNER` is unset (or not equal to `1`) and the test is collected
@@ -210,8 +244,8 @@ The test scenario SHALL be:
 #### Scenario: Both jobs run to DONE on provisioned cloud node(s) and outputs are downloaded
 - **WHEN** the Hetzner node has been provisioned and enabled
 - **THEN** both tasks transition through `RUNNING` to `DONE` within 600 seconds
-- **AND** each task's `allocated_ip` is the IP of a `cloud == "hetzner"` node observed during the test
-- **AND** the test does NOT require both `allocated_ip` values to be identical (a second VM provisioned by the idle-deallocate race is non-fatal)
+- **AND** each task's allocated node IP (read via `uow.nodes.get_by_id(task.allocated_node_id).ip`) is the IP of a `cloud == "hetzner"` node observed during the test
+- **AND** the test does NOT require both allocated node IPs to be identical (a second VM provisioned by the idle-deallocate race is non-fatal)
 - **AND** `<local_folder>/1.input.out` exists for each task with content matching its `1.input` payload
 
 #### Scenario: Idle node is deallocated, the VM is deleted, and deletion is verified via the API
@@ -235,3 +269,11 @@ The test scenario SHALL be:
 #### Scenario: Cleanup runs even when an assertion fails mid-test
 - **WHEN** any assertion in steps 2–9 fails (or an exception is raised) after a Hetzner VM was created and its IP was recorded in `observed_ips`
 - **THEN** the `finally` block still calls `hetzner_delete_node` for each recorded IP before the test reports its failure
+
+#### Scenario: Each DONE task has error None and local_folder set (hetzner)
+- **WHEN** a task reaches DONE on a hetzner-provisioned node
+- **THEN** `task.error is None` (was `context.error is None`) and `task.local_folder` is set (was `context.local_folder`); the output file exists at `<task.local_folder>/1.input.out` matching the per-job payload
+
+#### Scenario: No TaskContext or task.context references in hetzner e2e test
+- **WHEN** `tests/e2e/test_hetzner_live.py` is inspected for `TaskContext`, `task.context`, or `context.error`/`context.local_folder` references
+- **THEN** none are present; the test reads `task.error`, `task.local_folder`, and resolves node IP via `uow.nodes.get_by_id(task.allocated_node_id).ip`

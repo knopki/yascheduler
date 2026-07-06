@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_alloc_session_lifecycle.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Regression-guard the four fixes in fix-cloud-alloc-session-lifecycle (DB-enabled free-machine gate, setup-failure disconnect, per-session loop isolation, stdout in cloud-init error).
@@ -25,7 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - cloud-port-node-arg: FakeCloudProvisioner + real CloudProvisionerImpl allocate call sites take node: Node; added _tmp_node helper.
+#   LAST_CHANGE: v1.5.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.4.0 - cloud-port-node-arg: FakeCloudProvisioner + real CloudProvisionerImpl allocate call sites take node: Node; added _tmp_node helper.
 #   PREVIOUS_CHANGE: v1.3.0 - simplify-cloud-connect-node-args: FakeMachineRepository.connect drops the `username` param (keeps `**kwargs`).
 # END_CHANGE_SUMMARY
 
@@ -50,7 +51,6 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
     TaskStatus,
 )
@@ -278,12 +278,21 @@ class _FakeTaskRepo:
     async def insert(self, new_task: NewTask) -> Task:
         # Assign a fresh TaskId (one past the current max, min 1).
         next_id = TaskId(max((tid.value for tid in self._store), default=0) + 1)
+        from datetime import datetime
+
         task = Task(
             task_id=next_id,
             label=new_task.label,
-            context=new_task.context,
-            status=new_task.status,
-            allocated_node_id=new_task.allocated_node_id,
+            engine=new_task.engine,
+            remote_folder=None,
+            local_folder=new_task.local_folder,
+            webhook_url=new_task.webhook_url,
+            webhook_custom_params=new_task.webhook_custom_params,
+            error=None,
+            extra=new_task.extra,
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
+            status=TaskStatus.TO_DO,
         )
         self._store[next_id] = task
         return task
@@ -565,10 +574,20 @@ def _make_engine() -> Engine:
 
 
 def _make_todo_task(task_id: int = 1) -> Task:
+    from datetime import datetime
+
     return Task(
         task_id=TaskId(task_id),
         label="test",
-        context=TaskContext(engine="test_engine"),
+        engine="test_engine",
+        remote_folder=None,
+        local_folder=None,
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
         status=TaskStatus.TO_DO,
     )
 

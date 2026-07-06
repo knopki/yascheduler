@@ -1474,9 +1474,17 @@ removed in favor of the nested `node`). The `_render_info` renderer SHALL emit
 `node_id={task.allocated_node_id}` (was `ip={task.allocated_ip}`) as the
 placement field, because the `Task` entity no longer carries `allocated_ip`.
 
-The `_display_remote_output` helper SHALL resolve the node via
-`nodes_by_id.get(task.allocated_node_id)`, build `_ConnParams` from the
-node (via `_resolve_conn_params(node, config)`), and connect via
+The `_render_json` output object SHALL read `engine`, `local_folder`, and
+`remote_folder` from the typed `Task` fields directly (`task.engine`,
+`task.local_folder`, `task.remote_folder` — was `task.context.engine`,
+`task.context.local_folder`, `task.context.remote_folder`). No `TaskContext`
+indirection; the `task.context` accessor is removed (see the `domain-entities`
+delta).
+
+The `_display_remote_output` helper SHALL read `task.remote_folder` (was
+`task.context.remote_folder`) for the remote output directory path, resolve
+the node via `nodes_by_id.get(task.allocated_node_id)`, build `_ConnParams`
+from the node (via `_resolve_conn_params(node, config)`), and connect via
 `SSHMachineRepository().connect(node, ...)` (passing the `Node` so the
 session registers under `node.node_id`). The finally block SHALL call
 `repository.disconnect(session.machine.node_id)`. The verbose renderer
@@ -1497,6 +1505,14 @@ address) in its display line, NOT `task.allocated_ip` (which is removed).
 
 - **WHEN** the `check_status.py` implementation is inspected
 - **THEN** no code reads `task.allocated_ip` (the field is removed from `Task`); node transport address is obtained from the resolved `Node.ip` via `nodes_by_id`
+
+#### Scenario: yastatus _render_json reads typed fields not task.context
+- **WHEN** `_render_json` is inspected for `task.context` references
+- **THEN** none are present; the renderer reads `task.engine`, `task.local_folder`, `task.remote_folder` (was `task.context.engine`, `task.context.local_folder`, `task.context.remote_folder`)
+
+#### Scenario: yastatus _display_remote_output reads task.remote_folder
+- **WHEN** `_display_remote_output` is inspected for the remote folder read
+- **THEN** it reads `task.remote_folder` (was `task.context.remote_folder`); no `task.context` reference
 
 #### Scenario: yastatus _display_remote_output connects via Node
 

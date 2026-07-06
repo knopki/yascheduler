@@ -1,8 +1,14 @@
 SELECT
     task_id,
     title,
+    engine,
+    remote_folder,
+    local_folder,
+    webhook_url,
+    error,
+    webhook_custom_params,
+    extra,
     status,
-    metadata,
     allocated_node_id,
     created_at,
     updated_at

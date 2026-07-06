@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.6.0 - cloud-port-node-arg: step3 asserts clouds.allocate/deallocate called with Node args (was NodeId/scalars).]
+#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: [v1.6.0 - cloud-port-node-arg: step3 asserts clouds.allocate/deallocate called with Node args (was NodeId/scalars).]
 #   PREVIOUS_CHANGE: [v1.5.0 - remove-tmp-node-fake-ip: _make_uow sets uow.nodes.insert to return a tmp Node (NewNode(cloud=..., enabled=False) → Node with node_id); step2/step3 cleanup asserts remove(tmp_node_id) directly (no get lookup).]
 # END_CHANGE_SUMMARY
 #
@@ -40,7 +41,6 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
     TaskStatus,
 )
@@ -84,10 +84,20 @@ class TestAllocateTaskFailureModes:
 
     @pytest.fixture
     def todo_task(self) -> Task:
+        from datetime import datetime
+
         return Task(
             task_id=TaskId(1),
             label="test",
-            context=TaskContext(engine="test_engine"),
+            engine="test_engine",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=TaskStatus.TO_DO,
         )
 

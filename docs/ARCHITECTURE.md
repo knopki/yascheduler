@@ -65,13 +65,14 @@ wires the graph per entry point are the load-bearing ideas of the design.
 Pure stdlib. Frozen dataclasses for entities, `typing.Protocol` for ports, a
 `DomainError` hierarchy, and domain events.
 
-- **`model.py`** — `Task`, `Node`, `ConnectedMachine`, `TaskContext`,
-  `TaskStatus` (`IntEnum`: `TO_DO=0`, `RUNNING=1`, `DONE=2`), `MachineState`,
-  `ProcessResult`. `Task` stores events in a private `_events` tuple and
-  exposes immutable lifecycle transitions (`allocate_to`, `mark_running`,
-  `complete`, `fail`, `reject`, `with_context`, `with_event`, `record_event`,
-  `pull_events`), each returning a new frozen instance.
-- **`engine.py`** — `Engine` value object with `validate_inputs()`, the frozen
+- **`model.py`** — `Task`, `NewTask`, `Node`, `ConnectedMachine`, `TaskStatus`
+  (`IntEnum`: `TO_DO=0`, `RUNNING=1`, `DONE=2`), `MachineState`,
+  `ProcessResult`. `Task` stores events in a private `_events` tuple and exposes
+  immutable lifecycle transitions (`allocate_to`, `mark_running`, `complete`,
+  `fail`, `reject`, `with_remote_folder`, `with_download_results`, `with_event`,
+  `record_event`, `pull_events`), each returning a new frozen instance.
+- **`engine.py`** — `Engine` value object with `validate_inputs(extra)` (reads
+  input-file payloads from the task's `extra: Mapping[str, object]`), the frozen
   `EngineRepository` collection, and `Deploy` strategies
   (`LocalFilesDeploy`, `LocalArchiveDeploy`, `RemoteArchiveDeploy`).
 - **`ports.py`** — async ports `TaskRepository`, `NodeRepository`,

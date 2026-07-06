@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/base.py
-# VERSION: 2.1.1
+# VERSION: 2.1.2
 # START_MODULE_CONTRACT
 #   PURPOSE: SSHMachineOperations — facade over MachineSession. Use-case methods forward to stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker); facade pass-throughs delegate to session.*. No base primitives declared on the facade (moved to SSHMachineSession).
 #   SCOPE: SSHMachineOperations class only. Narrow local Protocols (CommandExecutor/SftpProvider/StateAccessors) deleted — collaborators take sessions directly. my_backoff_exc canonical copy lives in ../session.py (consumers import from there directly).
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.1 - download_outputs pass-through takes task_id: TaskId | None (was int | None) to match the collaborator + domain port (add-task-id-identity).
-#   PREVIOUS_CHANGE: v2.1.0 - Drop the back-compat re-import of my_backoff_exc (no consumer imports it from operations.base; canonical copy lives in ../session.py and is imported directly by its users).
+#   LAST_CHANGE: v2.1.2 - drop-task-context-entity: download_outputs pass-through signature matches the new 4-tuple return (local_folder, remote_folder, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
+#   PREVIOUS_CHANGE: v2.1.1 - download_outputs pass-through takes task_id: TaskId | None (was int | None) to match the collaborator + domain port (add-task-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -111,7 +111,8 @@ class SSHMachineOperations:
         files: list[str],
         task_id: TaskId | None = None,
     ) -> tuple[
-        list[tuple[str, Any]],
+        str,
+        str,
         list[tuple[str | None, Exception]],
         list[tuple[str | None, Exception]],
     ]:

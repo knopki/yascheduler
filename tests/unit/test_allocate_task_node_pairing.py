@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_node_pairing.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the task-allocated-node-id application-layer changes: _find_free_machines session↔Node pairing and _try_start_on_machine node_id logging.
@@ -14,7 +14,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests from test_application_use_cases.py into a focused module (the parent file exceeded the 1000-line GRACE-lite hard limit after the additions).
+#   LAST_CHANGE: v1.1.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
 # END_CHANGE_SUMMARY
 
 import logging
@@ -35,7 +35,6 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
     TaskStatus,
 )
@@ -147,10 +146,20 @@ class TestTryStartOnMachineNodeIdLogging:
         m.free_since = time.monotonic()
         session = SimpleNamespace(machine=m, ip="10.0.0.1")
 
+        from datetime import datetime
+
         task = Task(
             task_id=TaskId(1),
             label="t",
-            context=TaskContext(engine="test_engine"),
+            engine="test_engine",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=TaskStatus.TO_DO,
         )
 

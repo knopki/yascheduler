@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_persistence_adapter.py
-# VERSION: 1.8.1
+# VERSION: 1.10.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yascheduler.infra.persistence.
@@ -9,6 +9,7 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
+#   _make_task_row - build a fake _run row dict for a Task with sensible defaults
 #   test_load_query_first_call_reads_file - verify disk read on first access
 #   test_load_query_second_call_uses_cache - verify cached result (no re-read)
 #   test_uow_enter_creates_repositories - verify __aenter__ sets tasks and nodes
@@ -20,12 +21,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.1 - task-allocated-node-id: extract allocated_node_id bind/read tests + SQL-content tests into tests/unit/test_persistence_allocated_node_id.py (this file exceeded the 1000-line GRACE-lite hard limit after the v1.8.0 additions).
+#   LAST_CHANGE: v1.10.0 - extract _make_task_row helper to collapse repeated 12-column row dicts (GRACE-lite 1000-line limit compliance).
+#   PREVIOUS_CHANGE: v1.9.0 - drop-task-context-entity: update mock row data (flat columns, no metadata JSON); task.context.X → task.X reads; Task/NewTask construction with flat fields; remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.8.1 - task-allocated-node-id: extract allocated_node_id bind/read tests + SQL-content tests into tests/unit/test_persistence_allocated_node_id.py (this file exceeded the 1000-line GRACE-lite hard limit after the v1.8.0 additions).
 #   PREVIOUS_CHANGE: v1.8.0 - task-allocated-node-id: add test_row_to_task_reads_allocated_node_id, test_row_to_task_handles_null_allocated_node_id, test_insert_binds_allocated_node_id, test_save_binds_allocated_node_id, test_save_binds_null_allocated_node_id, and TestTaskSqlIncludesAllocatedNodeId (verifies insert/update_by_id/get_by_id/list_by_status/list_by_jobs SQL files include allocated_node_id; update_status/get_ids_by_ip_and_status/count_by_status do NOT).
 # END_CHANGE_SUMMARY
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pytest_mock import MockerFixture
@@ -37,7 +41,6 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
 )
 from yascheduler.domain.model import (
@@ -50,6 +53,27 @@ from yascheduler.infra.persistence.postgres import (
 )
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.infra.persistence.sql_loader import load_query
+
+
+def _make_task_row(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Build a fake _run row dict for a Task with sensible defaults; overrides win."""
+    base = {
+        "task_id": 1,
+        "title": "test_label",
+        "status": "TO_DO",
+        "engine": "fleur",
+        "remote_folder": None,
+        "local_folder": None,
+        "webhook_url": None,
+        "webhook_custom_params": "{}",
+        "extra": "{}",
+        "error": None,
+        "allocated_node_id": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+    base.update(overrides)
+    return base
 
 
 # START_CONTRACT: test_load_query_first_call_reads_file
@@ -317,17 +341,7 @@ class TestPostgresTaskRepository:
     async def test_get_returns_task(self, mocker: MockerFixture) -> None:
         """get returns a Task hydrated from the row returned by _run."""
         repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 42,
-                "title": "test_label",
-                "status": "RUNNING",
-                "metadata": '{"engine":"fleur"}',
-                "allocated_node_id": None,
-                "created_at": None,
-                "updated_at": None,
-            }
-        ]
+        repo._run.return_value = [_make_task_row(task_id=42, status="RUNNING")]  # type: ignore[attr-defined]
 
         task = await repo.get(TaskId(42))
 
@@ -335,7 +349,7 @@ class TestPostgresTaskRepository:
         assert task.task_id == TaskId(42)
         assert task.label == "test_label"
         assert not hasattr(task, "allocated_ip")
-        assert task.context.engine == "fleur"
+        assert task.engine == "fleur"
         assert task.status == DomainTaskStatus.RUNNING
 
     async def test_get_returns_none_when_not_found(self, mocker: MockerFixture) -> None:
@@ -353,25 +367,17 @@ class TestPostgresTaskRepository:
         """get handles null allocated_node_id and extra metadata fields."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 1,
-                "title": "no-ip-task",
-                "status": "TO_DO",
-                "metadata": json.dumps(
-                    {
-                        "engine": "cp2k",
-                        "remote_folder": "/remote/path",
-                        "local_folder": "/local/path",
-                        "webhook_url": "https://hook.example.com",
-                        "webhook_custom_params": {"key": "val"},
-                        "extra_field": "extra_val",
-                    }
-                ),
-                "allocated_node_id": None,
-                "created_at": None,
-                "updated_at": None,
-            }
-        ]
+            _make_task_row(
+                task_id=1,
+                title="no-ip-task",
+                engine="cp2k",
+                remote_folder="/remote/path",
+                local_folder="/local/path",
+                webhook_url="https://hook.example.com",
+                webhook_custom_params=json.dumps({"key": "val"}),
+                extra=json.dumps({"extra_field": "extra_val"}),
+            )
+        ]  # type: ignore[attr-defined]
 
         task = await repo.get(TaskId(1))
 
@@ -380,34 +386,23 @@ class TestPostgresTaskRepository:
         assert task.label == "no-ip-task"
         assert not hasattr(task, "allocated_ip")
         assert task.status == DomainTaskStatus.TO_DO
-        assert task.context.engine == "cp2k"
-        assert task.context.remote_folder == "/remote/path"
-        assert task.context.local_folder == "/local/path"
-        assert task.context.webhook_url == "https://hook.example.com"
-        assert task.context.webhook_custom_params == {"key": "val"}
-        assert task.context.extra == {"extra_field": "extra_val"}
+        assert task.engine == "cp2k"
+        assert task.remote_folder == "/remote/path"
+        assert task.local_folder == "/local/path"
+        assert task.webhook_url == "https://hook.example.com"
+        assert task.webhook_custom_params == {"key": "val"}
+        assert task.extra == {"extra_field": "extra_val"}
 
     # -- insert ----------------------------------------------------------------
 
     async def test_insert_returns_task_with_id(self, mocker: MockerFixture) -> None:
         """insert runs INSERT SQL and returns Task with generated ID."""
         repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 99,
-                "title": "label",
-                "status": "TO_DO",
-                "metadata": '{"engine":"fleur"}',
-                "allocated_node_id": None,
-                "created_at": None,
-                "updated_at": None,
-            }
-        ]
+        repo._run.return_value = [_make_task_row(task_id=99, title="label")]  # type: ignore[attr-defined]
 
         new_task = NewTask(
             label="label",
-            context=TaskContext(engine="fleur"),
-            status=DomainTaskStatus.TO_DO,
+            engine="fleur",
         )
         result = await repo.insert(new_task)
 
@@ -420,11 +415,20 @@ class TestPostgresTaskRepository:
     async def test_save_calls_update_by_id(self, mocker: MockerFixture) -> None:
         """save calls _run with the update_by_id query and all task fields."""
         repo = self._make_repo(mocker)
-        ctx = TaskContext(engine="fleur", remote_folder="/remote")
+        from datetime import datetime
+
         task = Task(
             task_id=TaskId(7),
             label="my-job",
-            context=ctx,
+            engine="fleur",
+            remote_folder="/remote",
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=DomainTaskStatus.TO_DO,
         )
 
@@ -439,18 +443,26 @@ class TestPostgresTaskRepository:
         assert kwargs["title"] == "my-job"
         assert kwargs["status"] == "TO_DO"
         assert "ip" not in kwargs
-        metadata = json.loads(kwargs["metadata"])
-        assert metadata["engine"] == "fleur"
-        assert metadata["remote_folder"] == "/remote"
+        assert kwargs["engine"] == "fleur"
+        assert kwargs["remote_folder"] == "/remote"
 
     async def test_save_running_task(self, mocker: MockerFixture) -> None:
         """save persists a RUNNING task with its allocated_node_id."""
         repo = self._make_repo(mocker)
-        ctx = TaskContext(engine="vasp")
+        from datetime import datetime
+
         task = Task(
             task_id=TaskId(3),
             label="running-job",
-            context=ctx,
+            engine="vasp",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=DomainTaskStatus.RUNNING,
             allocated_node_id=NodeId(5),
         )
@@ -468,24 +480,8 @@ class TestPostgresTaskRepository:
         """list_by_status returns a Task for each row."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 1,
-                "title": "a",
-                "status": "TO_DO",
-                "metadata": '{"engine":"fleur"}',
-                "allocated_node_id": None,
-                "created_at": None,
-                "updated_at": None,
-            },
-            {
-                "task_id": 2,
-                "title": "b",
-                "status": "RUNNING",
-                "metadata": '{"engine":"cp2k"}',
-                "allocated_node_id": None,
-                "created_at": None,
-                "updated_at": None,
-            },
+            _make_task_row(task_id=1, title="a"),
+            _make_task_row(task_id=2, title="b", status="RUNNING", engine="cp2k"),
         ]
 
         tasks = await repo.list_by_status(
@@ -513,24 +509,8 @@ class TestPostgresTaskRepository:
         """list_by_jobs returns tasks matching the given job ids."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 10,
-                "title": "job-x",
-                "status": "DONE",
-                "metadata": '{"engine":"fleur"}',
-                "allocated_node_id": None,
-                "created_at": None,
-                "updated_at": None,
-            },
-            {
-                "task_id": 20,
-                "title": "job-y",
-                "status": "DONE",
-                "metadata": '{"engine":"cp2k"}',
-                "allocated_node_id": None,
-                "created_at": None,
-                "updated_at": None,
-            },
+            _make_task_row(task_id=10, title="job-x", status="DONE"),
+            _make_task_row(task_id=20, title="job-y", status="DONE", engine="cp2k"),
         ]
 
         tasks = await repo.list_by_jobs([TaskId(10), TaskId(20)])

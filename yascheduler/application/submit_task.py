@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/submit_task.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Submit task use case — validates inputs, creates a domain NewTask, persists via UoW and returns the generated TaskId.
 #   SCOPE: submit_task async function.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - submit_task return type int -> TaskId; constructs NewTask(label, context) (pre-persistence shape, no task_id=0 sentinel) and persists via uow.tasks.insert (sole NewTask→Task conversion). The task_id=0 fiction is gone (add-task-id-identity).
-#   PREVIOUS_CHANGE: v1.4.0 - TYPE_CHECKING import EngineRepository from yascheduler.domain instead of yascheduler.config (engine-to-domain-frozen).
+#   LAST_CHANGE: v1.6.0 - drop-task-context-entity: extract typed fields from the caller metadata dict and construct NewTask(label, engine, local_folder, webhook_url, webhook_custom_params, extra) directly (no TaskContext.from_metadata); apply task.with_remote_folder(...).with_event(TaskCreated, engine_name=task.engine) (no with_context, no context.replace).
+#   PREVIOUS_CHANGE: v1.5.0 - submit_task return type int -> TaskId; constructs NewTask(label, context) (pre-persistence shape, no task_id=0 sentinel) and persists via uow.tasks.insert (sole NewTask→Task conversion). The task_id=0 fiction is gone (add-task-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any
 from yascheduler.domain import (
     MissingInputFileError,
     NewTask,
-    TaskContext,
     TaskCreated,
     TaskId,
     UnsupportedEngineError,
@@ -40,6 +39,17 @@ if TYPE_CHECKING:
     from .uow import AbstractUnitOfWork
 
 logger = logging.getLogger(__name__)
+
+_KNOWN_TYPED_KEYS = frozenset(
+    {
+        "engine",
+        "remote_folder",
+        "local_folder",
+        "webhook_url",
+        "webhook_custom_params",
+        "error",
+    }
+)
 
 
 # START_CONTRACT: submit_task
@@ -75,10 +85,15 @@ async def submit_task(
     # END_BLOCK_VALIDATE
 
     # START_BLOCK_CREATE_TASK
-    full_meta = dict(metadata)
-    full_meta["engine"] = engine_name
-    context = TaskContext.from_metadata(full_meta)
-    new_task = NewTask(label=label, context=context)
+    extra = {k: v for k, v in metadata.items() if k not in _KNOWN_TYPED_KEYS}
+    new_task = NewTask(
+        label=label,
+        engine=engine_name,
+        local_folder=metadata.get("local_folder"),
+        webhook_url=metadata.get("webhook_url"),
+        webhook_custom_params=metadata.get("webhook_custom_params", {}),
+        extra=extra,
+    )
     # END_BLOCK_CREATE_TASK
 
     # START_BLOCK_PERSIST
@@ -86,9 +101,8 @@ async def submit_task(
         task: Task = await uow.tasks.insert(new_task)
         dt_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")
-        context = task.context.replace(remote_folder=remote_folder)
-        task = task.with_context(context).with_event(
-            TaskCreated, engine_name=task.context.engine
+        task = task.with_remote_folder(remote_folder).with_event(
+            TaskCreated, engine_name=task.engine
         )
         await uow.tasks.save(task)
         await uow.commit()

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway_download_outputs.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineOperations.download_outputs classification + conditional rmtree.
@@ -10,7 +10,7 @@
 #
 # START_MODULE_MAP
 #   _make_session_with_sftp - Build an SSHMachineSession whose _conn.start_sftp_client yields a configured sftp mock
-#   test_download_outputs_success - All files download OK; returns (meta_add, [], []); rmtree called
+#   test_download_outputs_success - All files download OK; returns (local_folder, remote_folder, [], []); rmtree called
 #   test_download_outputs_per_file_permanent_error - Per-file OSError caught; classified permanent; rmtree NOT called (conservative gate)
 #   test_download_outputs_per_file_transient_error - Per-file SFTPFailure (SFTPRetryExc) caught; classified transient; rmtree NOT called
 #   test_download_outputs_session_error - Session-level failure caught; returned in transient_errors; rmtree NOT called
@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - session-based-machine-handle: download_outputs now takes a session param (was ip). Tests build a real SSHMachineSession via _make_state and wire sftp mocks on session._conn.start_sftp_client (was operations.get_sftp / repository.get_path monkey-patches). session.path replaces repository.get_path.
-#   PREVIOUS_CHANGE: v1.2.0 - Update for fix-nonidempotent-ssh-retries: download_outputs now opens a FRESH get_sftp client per file and rmtree is gated on `not transient_errors AND not permanent_errors` (conservative — permanent errors now preserve the remote dir). Add an autouse fixture that neutralizes my_backoff_sftp (per-file retry) to a passthrough so transient SFTP exceptions (SFTPFailure/SFTPConnectionLost) reach the classifier immediately instead of triggering the real 60s fibonacci backoff — this was the unit-test timeout root cause. Add per-file SFTP isolation test (fresh client per file; file-2 failure does not fail-fast file 3) and session-level-failure test (get_sftp-open raises -> session-level transient). Flip the permanent-error rmtree assertion to assert_not_awaited (gate now includes permanent_errors).
+#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: tests unpack the new 4-tuple return (local_folder, remote_folder, transient_errors, permanent_errors); drop meta_add list-of-pairs assertions.
+#   PREVIOUS_CHANGE: v1.3.0 - session-based-machine-handle: download_outputs now takes a session param (was ip). Tests build a real SSHMachineSession via _make_state and wire sftp mocks on session._conn.start_sftp_client (was operations.get_sftp / repository.get_path monkey-patches). session.path replaces repository.get_path.
 # END_CHANGE_SUMMARY
 
 from collections.abc import AsyncGenerator
@@ -81,14 +81,19 @@ def _make_operations() -> SSHMachineOperations:
 
 @pytest.mark.asyncio
 async def test_download_outputs_success() -> None:
-    """All files download OK, rmtree called, returns (meta_add, [], [])."""
+    """All files download OK, rmtree called, returns (local, remote, [], [])."""
     sftp_mock = AsyncMock()
     sftp_mock.get = AsyncMock(return_value=None)
     sftp_mock.rmtree = AsyncMock(return_value=None)
     session = _make_session_with_sftp(sftp_mock)
     operations = _make_operations()
 
-    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
+    (
+        local_folder,
+        remote_folder,
+        transient_errors,
+        permanent_errors,
+    ) = await operations.download_outputs(
         session,
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -96,10 +101,8 @@ async def test_download_outputs_success() -> None:
         task_id=TaskId(42),
     )
 
-    assert meta_add == [
-        ("remote_folder", "/remote/path"),
-        ("local_folder", "/local/path"),
-    ]
+    assert local_folder == "/local/path"
+    assert remote_folder == "/remote/path"
     assert transient_errors == []
     assert permanent_errors == []
     assert sftp_mock.get.await_count == 2
@@ -115,7 +118,12 @@ async def test_download_outputs_per_file_permanent_error() -> None:
     session = _make_session_with_sftp(sftp_mock)
     operations = _make_operations()
 
-    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
+    (
+        local_folder,
+        remote_folder,
+        transient_errors,
+        permanent_errors,
+    ) = await operations.download_outputs(
         session,
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -123,10 +131,8 @@ async def test_download_outputs_per_file_permanent_error() -> None:
         task_id=TaskId(42),
     )
 
-    assert meta_add == [
-        ("remote_folder", "/remote/path"),
-        ("local_folder", "/local/path"),
-    ]
+    assert local_folder == "/local/path"
+    assert remote_folder == "/remote/path"
     assert transient_errors == []
     assert len(permanent_errors) == 2
     for file_name, exc in permanent_errors:
@@ -144,7 +150,12 @@ async def test_download_outputs_per_file_transient_error() -> None:
     session = _make_session_with_sftp(sftp_mock)
     operations = _make_operations()
 
-    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
+    (
+        local_folder,
+        remote_folder,
+        transient_errors,
+        permanent_errors,
+    ) = await operations.download_outputs(
         session,
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -152,10 +163,8 @@ async def test_download_outputs_per_file_transient_error() -> None:
         task_id=TaskId(42),
     )
 
-    assert meta_add == [
-        ("remote_folder", "/remote/path"),
-        ("local_folder", "/local/path"),
-    ]
+    assert local_folder == "/local/path"
+    assert remote_folder == "/remote/path"
     assert permanent_errors == []
     assert len(transient_errors) == 2
     for file_name, exc in transient_errors:
@@ -178,7 +187,12 @@ async def test_download_outputs_session_error() -> None:
     session._conn.start_sftp_client = bad_sftp  # type: ignore[method-assign,misc]  # noqa: SLF001
     operations = _make_operations()
 
-    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
+    (
+        local_folder,
+        remote_folder,
+        transient_errors,
+        permanent_errors,
+    ) = await operations.download_outputs(
         session,
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -186,10 +200,8 @@ async def test_download_outputs_session_error() -> None:
         task_id=TaskId(42),
     )
 
-    assert meta_add == [
-        ("remote_folder", "/remote/path"),
-        ("local_folder", "/local/path"),
-    ]
+    assert local_folder == "/local/path"
+    assert remote_folder == "/remote/path"
     assert permanent_errors == []
     assert len(transient_errors) == 1
     remote_dir, exc = transient_errors[0]
@@ -206,7 +218,12 @@ async def test_download_outputs_task_id_in_signature() -> None:
     session = _make_session_with_sftp(sftp_mock)
     operations = _make_operations()
 
-    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
+    (
+        local_folder,
+        remote_folder,
+        transient_errors,
+        permanent_errors,
+    ) = await operations.download_outputs(
         session,
         remote_dir="/r",
         local_dir=Path("/l"),
@@ -215,10 +232,16 @@ async def test_download_outputs_task_id_in_signature() -> None:
     )
     assert len(transient_errors) == 0
     assert len(permanent_errors) == 0
-    assert len(meta_add) == 2
+    assert local_folder == "/l"
+    assert remote_folder == "/r"
 
     # Without task_id (None default)
-    meta_add2, transient_errors2, permanent_errors2 = await operations.download_outputs(
+    (
+        local_folder2,
+        remote_folder2,
+        transient_errors2,
+        permanent_errors2,
+    ) = await operations.download_outputs(
         session,
         remote_dir="/r",
         local_dir=Path("/l"),
@@ -226,6 +249,8 @@ async def test_download_outputs_task_id_in_signature() -> None:
     )
     assert len(transient_errors2) == 0
     assert len(permanent_errors2) == 0
+    assert local_folder2 == "/l"
+    assert remote_folder2 == "/r"
 
 
 @pytest.mark.asyncio
@@ -248,7 +273,7 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
     sftp_perm.rmtree = AsyncMock(return_value=None)
     session_perm = _make_session_with_sftp(sftp_perm)
     ops_perm = _make_operations()
-    _, transient, permanent = await ops_perm.download_outputs(
+    _, _, transient, permanent = await ops_perm.download_outputs(
         session_perm, remote_dir="/r", local_dir=Path("/l"), files=["f1", "f2"]
     )
     assert len(permanent) == 2
@@ -261,7 +286,7 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
     sftp_trans.rmtree = AsyncMock(return_value=None)
     session_trans = _make_session_with_sftp(sftp_trans)
     ops_trans = _make_operations()
-    _, transient2, permanent2 = await ops_trans.download_outputs(
+    _, _, transient2, permanent2 = await ops_trans.download_outputs(
         session_trans, remote_dir="/r", local_dir=Path("/l"), files=["f1", "f2"]
     )
     assert len(transient2) == 2
@@ -293,7 +318,7 @@ async def test_download_outputs_per_file_sftp_isolation() -> None:
 
     session._conn.start_sftp_client = fresh_sftp  # type: ignore[method-assign,misc,assignment]  # noqa: SLF001
 
-    _, transient_errors, permanent_errors = await operations.download_outputs(
+    _, _, transient_errors, permanent_errors = await operations.download_outputs(
         session,
         remote_dir="/r",
         local_dir=Path("/l"),
@@ -326,7 +351,12 @@ async def test_download_outputs_session_level_failure_transient() -> None:
 
     session._conn.start_sftp_client = broken_sftp  # type: ignore[method-assign,misc]  # noqa: SLF001
 
-    meta_add, transient_errors, permanent_errors = await operations.download_outputs(
+    (
+        local_folder,
+        remote_folder,
+        transient_errors,
+        permanent_errors,
+    ) = await operations.download_outputs(
         session,
         remote_dir="/remote/path",
         local_dir=Path("/local/path"),
@@ -334,10 +364,8 @@ async def test_download_outputs_session_level_failure_transient() -> None:
         task_id=TaskId(42),
     )
 
-    assert meta_add == [
-        ("remote_folder", "/remote/path"),
-        ("local_folder", "/local/path"),
-    ]
+    assert local_folder == "/local/path"
+    assert remote_folder == "/remote/path"
     assert permanent_errors == []
     assert len(transient_errors) == 1
     remote_dir, exc = transient_errors[0]

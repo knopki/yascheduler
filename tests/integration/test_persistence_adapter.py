@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_persistence_adapter.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
 #   SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
@@ -8,7 +8,7 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   test_repo_task_insert_and_get - round-trip insert + get with JSONB metadata
+#   test_repo_task_insert_and_get - round-trip insert + get with typed fields and JSONB extra
 #   test_repo_task_get_none - get() returns None for non-existent task
 #   test_repo_task_save_updates - save() updates existing task fields via update_by_id
 #   test_repo_task_list_by_status - list_by_status filtering
@@ -32,8 +32,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - task-schema-and-entity-cleanup: test_repo_task_save_updates and test_repo_task_list_by_status no longer use allocated_ip (field removed); added 11.3 tests: insert returns created_at/updated_at, save advances updated_at, list_by_status with enum cast, count_by_status name lookup keys, list_ids_by_node_id_and_status.
-#   PREVIOUS_CHANGE: v1.4.0 - task-schema-and-entity-cleanup: test_repo_task_save_updates and test_repo_task_list_by_status no longer use allocated_ip (field removed from Task/NewTask); Task construction uses allocated_node_id instead.
+#   LAST_CHANGE: v1.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields (no TaskContext); context.X reads → task.X; TaskContext import removed.
+#   PREVIOUS_CHANGE: v1.5.0 - task-schema-and-entity-cleanup: test_repo_task_save_updates and test_repo_task_list_by_status no longer use allocated_ip (field removed); added 11.3 tests: insert returns created_at/updated_at, save advances updated_at, list_by_status with enum cast, count_by_status name lookup keys, list_ids_by_node_id_and_status.
 # END_CHANGE_SUMMARY
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
@@ -50,7 +50,6 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
 )
 from yascheduler.domain.model import (
@@ -69,11 +68,11 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 
 # START_CONTRACT: test_repo_task_insert_and_get
-#   PURPOSE: Verify round-trip insert -> get with all TaskContext fields including JSONB roundtrip.
+#   PURPOSE: Verify round-trip insert -> get with all typed fields including JSONB extra roundtrip.
 #   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.get, TaskContext.to_metadata
+#   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.get
 # END_CONTRACT: test_repo_task_insert_and_get
 async def test_repo_task_insert_and_get(
     pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
@@ -81,31 +80,36 @@ async def test_repo_task_insert_and_get(
     """Insert a task via repo, get it back, verify all fields including JSONB roundtrip."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
 
-    ctx = TaskContext(
+    new_task = NewTask(
+        label="test-task",
         engine="fleur",
-        remote_folder="/r",
         local_folder="/l",
         webhook_url="https://hook.example.com",
         extra={"param": 42},
     )
-    new_task = NewTask(label="test-task", context=ctx, status=DomainTaskStatus.TO_DO)
     inserted = await repo.insert(new_task)
     assert inserted.task_id.value >= 1
     assert inserted.label == "test-task"
     assert inserted.status == DomainTaskStatus.TO_DO
-    assert inserted.context.engine == "fleur"
-    assert inserted.context.remote_folder == "/r"
-    assert inserted.context.webhook_url == "https://hook.example.com"
-    assert inserted.context.extra["param"] == 42
-    assert inserted.context.webhook_custom_params == {}
+    assert inserted.engine == "fleur"
+    assert inserted.local_folder == "/l"
+    assert inserted.webhook_url == "https://hook.example.com"
+    assert inserted.extra["param"] == 42
+    assert inserted.webhook_custom_params == {}
+    assert inserted.remote_folder is None
+
+    # Set remote_folder post-insert to verify round-trip
+    inserted = inserted.with_remote_folder("/r")
+    await repo.save(inserted)
 
     # Retrieve by ID
     retrieved = await repo.get(inserted.task_id)
     assert retrieved is not None
     assert retrieved.task_id == inserted.task_id
     assert retrieved.label == inserted.label
-    assert retrieved.context.engine == "fleur"
-    assert retrieved.context.extra["param"] == 42
+    assert retrieved.engine == "fleur"
+    assert retrieved.remote_folder == "/r"
+    assert retrieved.extra["param"] == 42
 
 
 # START_CONTRACT: test_repo_task_get_none
@@ -135,15 +139,12 @@ async def test_repo_task_save_updates(
 ) -> None:
     """Save updates an existing task's fields via update_by_id."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
-    task = await repo.insert(
-        NewTask(label="initial", context=ctx, status=DomainTaskStatus.TO_DO)
-    )
+    task = await repo.insert(NewTask(label="initial", engine="fleur"))
 
     updated = Task(
         task_id=task.task_id,
         label="renamed",
-        context=ctx,
+        engine="fleur",
         status=DomainTaskStatus.RUNNING,
     )
     await repo.save(updated)
@@ -166,20 +167,13 @@ async def test_repo_task_list_by_status(
 ) -> None:
     """list_by_status filters correctly."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
-    t1 = await repo.insert(
-        NewTask(label="todo", context=ctx, status=DomainTaskStatus.TO_DO)
-    )
-    t2_id = (
-        await repo.insert(
-            NewTask(label="running", context=ctx, status=DomainTaskStatus.TO_DO)
-        )
-    ).task_id
+    t1 = await repo.insert(NewTask(label="todo", engine="fleur"))
+    t2_id = (await repo.insert(NewTask(label="running", engine="fleur"))).task_id
     await repo.save(
         Task(
             task_id=t2_id,
             label="running",
-            context=ctx,
+            engine="fleur",
             status=DomainTaskStatus.RUNNING,
         )
     )
@@ -205,10 +199,10 @@ async def test_repo_task_count_by_status(
 ) -> None:
     """count_by_status returns correct aggregates."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
-    await repo.insert(NewTask(label="t1", context=ctx, status=DomainTaskStatus.TO_DO))
-    await repo.insert(NewTask(label="t2", context=ctx, status=DomainTaskStatus.TO_DO))
-    await repo.insert(NewTask(label="t3", context=ctx, status=DomainTaskStatus.DONE))
+    await repo.insert(NewTask(label="t1", engine="fleur"))
+    await repo.insert(NewTask(label="t2", engine="fleur"))
+    t3 = await repo.insert(NewTask(label="t3", engine="fleur"))
+    await repo.update_status(t3.task_id, DomainTaskStatus.DONE)
 
     counts = await repo.count_by_status()
     assert counts.get(DomainTaskStatus.TO_DO) == 2
@@ -227,10 +221,7 @@ async def test_repo_task_update_status_atomic(
 ) -> None:
     """update_status only changes the status field."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
-    task = await repo.insert(
-        NewTask(label="keep-label", context=ctx, status=DomainTaskStatus.TO_DO)
-    )
+    task = await repo.insert(NewTask(label="keep-label", engine="fleur"))
 
     await repo.update_status(task.task_id, DomainTaskStatus.RUNNING)
     retrieved = await repo.get(task.task_id)
@@ -251,10 +242,7 @@ async def test_repo_task_insert_returns_created_updated_at(
 ) -> None:
     """Insert returns Task with created_at and updated_at populated."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
-    task = await repo.insert(
-        NewTask(label="ts-test", context=ctx, status=DomainTaskStatus.TO_DO)
-    )
+    task = await repo.insert(NewTask(label="ts-test", engine="fleur"))
     assert task.created_at is not None
     assert task.updated_at is not None
     assert task.created_at <= task.updated_at
@@ -272,10 +260,7 @@ async def test_repo_task_save_triggers_updated_at(
 ) -> None:
     """Save (UPDATE) triggers updated_at to advance; created_at unchanged."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
-    task = await repo.insert(
-        NewTask(label="touch-test", context=ctx, status=DomainTaskStatus.TO_DO)
-    )
+    task = await repo.insert(NewTask(label="touch-test", engine="fleur"))
     assert task.created_at is not None
     assert task.updated_at is not None
     created_before = task.created_at
@@ -285,7 +270,7 @@ async def test_repo_task_save_triggers_updated_at(
     updated = Task(
         task_id=task.task_id,
         label="touch-test",
-        context=ctx,
+        engine="fleur",
         status=DomainTaskStatus.RUNNING,
     )
     await repo.save(updated)
@@ -309,13 +294,9 @@ async def test_repo_task_list_by_status_enum_cast(
 ) -> None:
     """list_by_status with enum-label cast works."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
-    t1 = await repo.insert(
-        NewTask(label="enum-todo", context=ctx, status=DomainTaskStatus.TO_DO)
-    )
-    await repo.insert(
-        NewTask(label="enum-done", context=ctx, status=DomainTaskStatus.DONE)
-    )
+    t1 = await repo.insert(NewTask(label="enum-todo", engine="fleur"))
+    t2 = await repo.insert(NewTask(label="enum-done", engine="fleur"))
+    await repo.update_status(t2.task_id, DomainTaskStatus.DONE)
 
     todos = await repo.list_by_status({DomainTaskStatus.TO_DO})
     assert len(todos) == 1
@@ -334,10 +315,10 @@ async def test_repo_task_count_by_status_name_lookup(
 ) -> None:
     """count_by_status keys are TaskStatus members accessible via name lookup."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
-    await repo.insert(NewTask(label="n1", context=ctx, status=DomainTaskStatus.TO_DO))
-    await repo.insert(NewTask(label="n2", context=ctx, status=DomainTaskStatus.TO_DO))
-    await repo.insert(NewTask(label="n3", context=ctx, status=DomainTaskStatus.DONE))
+    await repo.insert(NewTask(label="n1", engine="fleur"))
+    await repo.insert(NewTask(label="n2", engine="fleur"))
+    t3 = await repo.insert(NewTask(label="n3", engine="fleur"))
+    await repo.update_status(t3.task_id, DomainTaskStatus.DONE)
 
     counts = await repo.count_by_status()
     # Keys are TaskStatus enum members, accessible by name
@@ -358,35 +339,29 @@ async def test_repo_task_list_ids_by_node_id_and_status(
     """list_ids_by_node_id_and_status filters by allocated_node_id and status."""
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
     node_repo = PostgresNodeRepository(pg_conn, pg_executor)
-    ctx = TaskContext(engine="fleur")
 
     node = await node_repo.insert(NewNode(ip="10.0.0.99", ncpus=2, enabled=True))
     other = await node_repo.insert(NewNode(ip="10.0.0.98", ncpus=2, enabled=True))
 
-    t1 = await task_repo.insert(
-        NewTask(
-            label="for-node",
-            context=ctx,
-            status=DomainTaskStatus.TO_DO,
-            allocated_node_id=node.node_id,
-        )
+    t1 = await task_repo.insert(NewTask(label="for-node", engine="fleur"))
+    t1 = t1.allocate_to(node)
+    await task_repo.save(t1)
+
+    t2 = await task_repo.insert(NewTask(label="other-node", engine="fleur"))
+    t2 = t2.allocate_to(other)
+    await task_repo.save(t2)
+
+    t3 = await task_repo.insert(NewTask(label="done-on-node", engine="fleur"))
+    t3 = t3.allocate_to(node)
+    await task_repo.save(t3)
+    t3_done = Task(
+        task_id=t3.task_id,
+        label=t3.label,
+        engine=t3.engine,
+        status=DomainTaskStatus.DONE,
+        allocated_node_id=t3.allocated_node_id,
     )
-    await task_repo.insert(
-        NewTask(
-            label="other-node",
-            context=ctx,
-            status=DomainTaskStatus.TO_DO,
-            allocated_node_id=other.node_id,
-        )
-    )
-    await task_repo.insert(
-        NewTask(
-            label="done-on-node",
-            context=ctx,
-            status=DomainTaskStatus.DONE,
-            allocated_node_id=node.node_id,
-        )
-    )
+    await task_repo.save(t3_done)
 
     ids = await task_repo.list_ids_by_node_id_and_status(
         node.node_id, DomainTaskStatus.TO_DO

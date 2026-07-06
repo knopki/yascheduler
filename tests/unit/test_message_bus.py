@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_message_bus.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the MessageBus event dispatcher.
@@ -13,13 +13,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Import Self from yascheduler.shared facade (shared-kernel-extraction).
+#   LAST_CHANGE: v1.1.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.0.1 - Import Self from yascheduler.shared facade (shared-kernel-extraction).
 #   PREVIOUS_CHANGE: v1.0.0 - MessageBus unit tests.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import functools
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from yascheduler.application.message_bus import MessageBus
@@ -28,7 +30,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import Task, TaskContext, TaskId
+from yascheduler.domain.model import Task, TaskId
 
 if TYPE_CHECKING:
     from yascheduler.shared import Self
@@ -143,7 +145,19 @@ class TestUoWEventDispatch:
             webhook_custom_params={},
             engine_name="fleur",
         )
-        task = Task(task_id=TaskId(1), label="t", context=TaskContext(engine="fleur"))
+        task = Task(
+            task_id=TaskId(1),
+            label="t",
+            engine="fleur",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
+        )
         task = task.record_event(event)
 
         bus_dispatch = bus.dispatch
@@ -223,9 +237,33 @@ class TestUoWEventDispatch:
             engine_name="vasp",
         )
 
-        t1 = Task(task_id=TaskId(1), label="t1", context=TaskContext(engine="fleur"))
+        t1 = Task(
+            task_id=TaskId(1),
+            label="t1",
+            engine="fleur",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
+        )
         t1 = t1.record_event(e1)
-        t2 = Task(task_id=TaskId(2), label="t2", context=TaskContext(engine="vasp"))
+        t2 = Task(
+            task_id=TaskId(2),
+            label="t2",
+            engine="vasp",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
+        )
         t2 = t2.record_event(e2)
 
         bus_dispatch = bus.dispatch

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.8.0
+# VERSION: 1.11.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -12,6 +12,7 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
+#   _make_task - build a Task with sensible default typed fields; overrides win
 #   TestOrchestratorLifecycle - Lifecycle: constructor queues, start tasks, stop cleanup, cancellation, limits
 #   TestOrchestratorTaskAbandoned - TaskAbandoned event recorded when machine is gone
 #   TestCloudsGetCapacity - _clouds_get_capacity inline UoW arithmetic over active_clouds
@@ -23,7 +24,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
+#   LAST_CHANGE: v1.11.0 - extract _make_task helper to collapse repeated Task(...) constructions (GRACE-lite 1000-line limit compliance).
+#   PREVIOUS_CHANGE: v1.10.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); task.context.error → task.error; remove TaskContext import.
+#   PREVIOUS_CHANGE: v1.8.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
 #   PREVIOUS_CHANGE: v1.6.1 - add-node-id-identity test update: prepend node_id=NodeId(<n>) to all Node(...) constructions and add NodeId to 3 local imports.
 # END_CHANGE_SUMMARY
 #
@@ -45,9 +48,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -57,7 +61,7 @@ from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UniqueQueue
 from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.domain.events import TaskAbandoned
-from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, Task, TaskId, TaskStatus
 from yascheduler.entrypoints import Config
 from yascheduler.infra.persistence import PostgresDbConfig
 
@@ -69,6 +73,27 @@ if TYPE_CHECKING:
 # =============================================================================
 # Helpers
 # =============================================================================
+
+
+def _make_task(**overrides: Any) -> Task:  # noqa: ANN401
+    """Build a Task with default typed fields; overrides win."""
+    base: dict[str, Any] = dict(
+        task_id=TaskId(1),
+        engine="test_engine",
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 1),
+        label="test",
+        local_folder=None,
+        remote_folder=None,
+        webhook_url=None,
+        webhook_custom_params={},
+        error=None,
+        extra={},
+        status=TaskStatus.TO_DO,
+        allocated_node_id=None,
+    )
+    base.update(overrides)
+    return Task(**base)  # type: ignore[arg-type]
 
 
 def create_mock_config(
@@ -433,14 +458,10 @@ class TestOrchestratorTaskAbandoned:
         # Gateway returns None for machine state (machine gone)
         orch._repository.get_session = MagicMock(return_value=None)  # type: ignore[method-assign]
 
-        task = Task(
+        task = _make_task(
             task_id=TaskId(42),
-            label="test",
-            context=TaskContext(
-                engine="test_engine",
-                webhook_url="https://hook.example.com",
-                webhook_custom_params={"k": "v"},
-            ),
+            webhook_url="https://hook.example.com",
+            webhook_custom_params={"k": "v"},
             status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(42),
         )
@@ -461,7 +482,7 @@ class TestOrchestratorTaskAbandoned:
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.context.error == "node is gone"
+        assert saved_task.error == "node is gone"
         assert len(saved_task._events) == 1
         event = saved_task._events[0]
         assert isinstance(event, TaskAbandoned)
@@ -680,12 +701,7 @@ class TestAllocatorConsumer:
 
         orch = make_orchestrator()
 
-        task_payload = Task(
-            task_id=TaskId(1),
-            label="t",
-            context=TaskContext(engine="e"),
-            status=TaskStatus.TO_DO,
-        )
+        task_payload = _make_task(engine="e", label="t")
         msg = UMessage(TaskId(1), task_payload)
 
         with patch(
@@ -706,12 +722,7 @@ class TestAllocatorConsumer:
 
         orch = make_orchestrator()
 
-        task_payload = Task(
-            task_id=TaskId(42),
-            label="t",
-            context=TaskContext(engine="e"),
-            status=TaskStatus.TO_DO,
-        )
+        task_payload = _make_task(task_id=TaskId(42), engine="e", label="t")
         msg = UMessage(TaskId(42), task_payload)
 
         with patch(
@@ -730,12 +741,7 @@ class TestAllocatorConsumer:
 
         orch = make_orchestrator()
 
-        task_payload = Task(
-            task_id=TaskId(7),
-            label="t",
-            context=TaskContext(engine="e"),
-            status=TaskStatus.TO_DO,
-        )
+        task_payload = _make_task(task_id=TaskId(7), engine="e", label="t")
         msg = UMessage(TaskId(7), task_payload)
 
         with patch(
@@ -779,10 +785,10 @@ class TestConsumeConditionalDiscard:
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add(NodeId(1))
 
-        task = Task(
+        task = _make_task(
             task_id=TaskId(5),
+            engine="e",
             label="t",
-            context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(1),
         )
@@ -815,10 +821,10 @@ class TestConsumeConditionalDiscard:
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add(NodeId(1))
 
-        task = Task(
+        task = _make_task(
             task_id=TaskId(5),
+            engine="e",
             label="t",
-            context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(1),
         )
@@ -844,17 +850,9 @@ class TestConsumeInFlightGuard:
 
         orch = make_orchestrator()
 
-        task_a = Task(
-            task_id=TaskId(1),
-            label="a",
-            context=TaskContext(engine="e"),
-            status=TaskStatus.RUNNING,
-        )
-        task_b = Task(
-            task_id=TaskId(2),
-            label="b",
-            context=TaskContext(engine="e"),
-            status=TaskStatus.RUNNING,
+        task_a = _make_task(engine="e", label="a", status=TaskStatus.RUNNING)
+        task_b = _make_task(
+            task_id=TaskId(2), engine="e", label="b", status=TaskStatus.RUNNING
         )
 
         mock_uow = AsyncMock()
@@ -893,10 +891,10 @@ class TestConsumeInFlightGuard:
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add(NodeId(1))
 
-        task = Task(
+        task = _make_task(
             task_id=TaskId(5),
+            engine="e",
             label="t",
-            context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(1),
         )
@@ -929,10 +927,10 @@ class TestConsumeInFlightGuard:
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add(NodeId(1))
 
-        task = Task(
+        task = _make_task(
             task_id=TaskId(5),
+            engine="e",
             label="t",
-            context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(1),
         )
@@ -967,10 +965,10 @@ class TestConsumeInFlightGuard:
         orch._repository.get_session = MagicMock(return_value=session_stub)  # type: ignore[method-assign]
         orch._occupancy_started.add(NodeId(1))
 
-        task = Task(
+        task = _make_task(
             task_id=TaskId(5),
+            engine="e",
             label="t",
-            context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(1),
         )

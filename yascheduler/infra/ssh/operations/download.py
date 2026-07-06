@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/download.py
-# VERSION: 1.2.1
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OutputDownloader class + my_backoff_sftp partial (canonical location — its first user is download_outputs).
@@ -9,18 +9,18 @@
 #
 # START_MODULE_MAP
 #   my_backoff_sftp - Partial backoff decorator for SFTPRetryExc (canonical; first user is download_outputs)
-#   OutputDownloader - Per-file SFTP-isolated download with retry and error classification; stateless (log)-only constructor; 3-tuple return
+#   OutputDownloader - Per-file SFTP-isolated download with retry and error classification; stateless (log)-only constructor; returns (local_folder, remote_folder, transient_errors, permanent_errors)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.1 - download_outputs takes task_id: TaskId | None (was int | None); used only for logging (task_id=%s renders the bare integer via TaskId.__str__) (add-task-id-identity).
-#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle section 5.4: download_outputs rewritten to operate via MachineSession parameter. Uses session.open_sftp() instead of self._operations.get_sftp(ip), session.path instead of self._repository.get_path(ip).
+#   LAST_CHANGE: v1.3.0 - drop-task-context-entity: download_outputs drops the legacy meta_add list-of-pairs (a metadata-blob relic); returns typed fields directly as (local_folder: str, remote_folder: str, transient_errors, permanent_errors). consume_task receives them as named values, not via a meta_dict.
+#   PREVIOUS_CHANGE: v1.2.1 - download_outputs takes task_id: TaskId | None (was int | None); used only for logging (task_id=%s renders the bare integer via TaskId.__str__) (add-task-id-identity).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import backoff
 from asyncssh.sftp import SFTPError
@@ -52,8 +52,8 @@ class OutputDownloader:
     to one file). Classifies per-file exceptions into transient (SFTPRetryExc)
     or permanent (everything else). Removes the remote dir tree ONCE only on
     full success (both error lists empty). Stateless: takes (log) at
-    construction, (session, ...) per call. Returns a 3-tuple
-    (meta_add, transient_errors, permanent_errors).
+    construction, (session, ...) per call. Returns a 4-tuple
+    (local_folder, remote_folder, transient_errors, permanent_errors).
     """
 
     def __init__(
@@ -65,7 +65,7 @@ class OutputDownloader:
     # START_CONTRACT: OutputDownloader.download_outputs
     #   PURPOSE: Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.
     #   INPUTS: { session: MachineSession, remote_dir: str, local_dir: Path, files: list[str], task_id: TaskId | None }
-    #   OUTPUTS: { tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]] - (meta_add, transient_errors, permanent_errors) }
+    #   OUTPUTS: { tuple[str, str, list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]] - (local_folder, remote_folder, transient_errors, permanent_errors) }
     #   SIDE_EFFECTS: Downloads files via SFTP using a FRESH client per file; removes the remote directory tree ONCE after the loop ONLY when both transient_errors and permanent_errors are empty.
     #   LINKS: M-SSH-OPS-DOWNLOAD, M-SSH-SESSION
     # END_CONTRACT: OutputDownloader.download_outputs
@@ -77,15 +77,14 @@ class OutputDownloader:
         files: list[str],
         task_id: TaskId | None = None,
     ) -> tuple[
-        list[tuple[str, Any]],
+        str,
+        str,
         list[tuple[str | None, Exception]],
         list[tuple[str | None, Exception]],
     ]:
         # START_BLOCK_DOWNLOAD_OUTPUTS
-        meta_add: list[tuple[str, Any]] = [
-            ("remote_folder", remote_dir),
-            ("local_folder", str(local_dir)),
-        ]
+        local_folder = str(local_dir)
+        remote_folder = remote_dir
         transient_errors: list[tuple[str | None, Exception]] = []
         permanent_errors: list[tuple[str | None, Exception]] = []
         path_type = session.path
@@ -130,4 +129,4 @@ class OutputDownloader:
             self._log.warning("Cannot scp from %s: %s", remote_dir, err)
             transient_errors.append((remote_dir, err))
         # END_BLOCK_DOWNLOAD_OUTPUTS
-        return meta_add, transient_errors, permanent_errors
+        return local_folder, remote_folder, transient_errors, permanent_errors

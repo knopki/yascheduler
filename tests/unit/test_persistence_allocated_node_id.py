@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_persistence_allocated_node_id.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the task-schema-and-entity-cleanup persistence-layer changes: _row_to_task reads NodeId + audit timestamps + title + enum-label status, insert/save bind :node_id + :title + :status (name), and the 5 task SQL files include allocated_node_id/created_at/updated_at/title.
@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: _row_to_task reads title (renamed from label) → Task.label, reads status via TaskStatus[row["status"]] (name lookup, was int cast), reads created_at/updated_at, drops allocated_ip read. insert/save bind :title (was :label, value is task.label), :status as status.name (was status.value), drop :ip. list_ids_by_ip_and_status → list_ids_by_node_id_and_status. SQL file tests updated for the new column lists. Protocol-conformance test added.
+#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: _row dict includes flat typed columns (no metadata JSON); remove TaskContext import; Task/NewTask construction with flat fields.
+#   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: _row_to_task reads title (renamed from label) → Task.label, reads status via TaskStatus[row["status"]] (name lookup, was int cast), reads created_at/updated_at, drops allocated_ip read. insert/save bind :title (was :label, value is task.label), :status as status.name (was status.value), drop :ip. list_ids_by_ip_and_status → list_ids_by_node_id_and_status. SQL file tests updated for the new column lists. Protocol-conformance test added.
 #   PREVIOUS_CHANGE: v1.0.0 - task-allocated-node-id: extract allocated_node_id persistence tests from test_persistence_adapter.py into a focused module (the parent file exceeded the 1000-line GRACE-lite hard limit after the additions).
 # END_CHANGE_SUMMARY
 
@@ -30,7 +31,6 @@ from yascheduler.domain.model import (
     NewTask,
     NodeId,
     Task,
-    TaskContext,
     TaskId,
 )
 from yascheduler.domain.model import (
@@ -61,12 +61,18 @@ def _row(
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
 ) -> dict[str, object]:
-    """Build a DB-row dict in the post-cleanup shape (title, enum-label status, no ip)."""
+    """Build a DB-row dict in the post-cleanup shape (flat typed columns, no metadata JSON)."""
     return {
         "task_id": task_id,
         "title": title,
         "status": status,
-        "metadata": '{"engine":"fleur"}',
+        "engine": "fleur",
+        "remote_folder": None,
+        "local_folder": None,
+        "webhook_url": None,
+        "webhook_custom_params": "{}",
+        "extra": "{}",
+        "error": None,
         "allocated_node_id": allocated_node_id,
         "created_at": created_at or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         "updated_at": updated_at or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
@@ -162,18 +168,13 @@ class TestInsertSaveBindAllocatedNodeId:
 
         new_task = NewTask(
             label="job",
-            context=TaskContext(engine="fleur"),
-            status=DomainTaskStatus.TO_DO,
-            allocated_node_id=NodeId(5),
+            engine="fleur",
         )
-        result = await repo.insert(new_task)
+        await repo.insert(new_task)
 
         _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
-        assert kwargs["node_id"] == 5
         assert kwargs["title"] == "job"
-        assert kwargs["status"] == "TO_DO"
         assert "ip" not in kwargs
-        assert result.allocated_node_id == NodeId(5)
 
     async def test_insert_binds_null_allocated_node_id_by_default(
         self, mocker: MockerFixture
@@ -183,20 +184,26 @@ class TestInsertSaveBindAllocatedNodeId:
 
         new_task = NewTask(
             label="job",
-            context=TaskContext(engine="fleur"),
-            status=DomainTaskStatus.TO_DO,
+            engine="fleur",
         )
         await repo.insert(new_task)
 
-        _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
-        assert kwargs["node_id"] is None
-
     async def test_save_binds_allocated_node_id(self, mocker: MockerFixture) -> None:
         repo = _make_repo(mocker)
+        from datetime import datetime
+
         task = Task(
             task_id=TaskId(7),
             label="job",
-            context=TaskContext(engine="fleur"),
+            engine="fleur",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=DomainTaskStatus.RUNNING,
             allocated_node_id=NodeId(7),
         )
@@ -213,10 +220,20 @@ class TestInsertSaveBindAllocatedNodeId:
         self, mocker: MockerFixture
     ) -> None:
         repo = _make_repo(mocker)
+        from datetime import datetime
+
         task = Task(
             task_id=TaskId(7),
             label="job",
-            context=TaskContext(engine="fleur"),
+            engine="fleur",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
             status=DomainTaskStatus.TO_DO,
         )
 
@@ -232,9 +249,10 @@ class TestTaskSqlIncludesAllocatedNodeId:
     def test_insert_sql_includes_allocated_node_id(self) -> None:
         sql = load_query("task/insert")
         assert "allocated_node_id" in sql
-        assert ":node_id" in sql
         assert "title" in sql
-        # RETURNING includes allocated_node_id, created_at, updated_at
+        # insert does not bind allocated_node_id (DB defaults to NULL); it only
+        # appears in the RETURNING clause so _row_to_task can read it back.
+        assert ":node_id" not in sql
         assert "RETURNING" in sql
         returning = sql[sql.index("RETURNING") :]
         assert "allocated_node_id" in returning
@@ -266,7 +284,7 @@ class TestTaskSqlIncludesAllocatedNodeId:
         assert "title" in sql
         assert "created_at" in sql
         assert "updated_at" in sql
-        assert "task_status[]" in sql
+        assert "task_status" in sql
         assert "ip" not in sql
 
     def test_list_by_jobs_sql_includes_allocated_node_id(self) -> None:

@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: removed allocated_ip kwarg from Task constructor (field removed from Task entity).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial integration tests for TaskRowNotFoundError on 0-row UPDATE (fix-save-silent-zero-rows).
+#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: Task construction uses flat typed fields (engine=...) instead of context=TaskContext(...); TaskContext import removed.
+#   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: removed allocated_ip kwarg from Task constructor (field removed from Task entity).
 # END_CHANGE_SUMMARY
 
 """Integration tests for TaskRowNotFoundError on 0-row UPDATE outcomes."""
@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pg8000.native
 import pytest
 
-from yascheduler.domain.model import Task, TaskContext, TaskId
+from yascheduler.domain.model import Task, TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.infra.persistence import TaskRowNotFoundError
 from yascheduler.infra.persistence.postgres import PostgresTaskRepository
@@ -54,7 +54,7 @@ async def test_save_nonexistent_task_raises(
         ghost = Task(
             task_id=nonexistent_id,
             label="ghost",
-            context=TaskContext(engine="test_shell"),
+            engine="test_shell",
             status=DomainTaskStatus.RUNNING,
         )
         with pytest.raises(TaskRowNotFoundError) as excinfo:

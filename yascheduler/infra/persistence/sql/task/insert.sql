@@ -1,5 +1,12 @@
-INSERT INTO yascheduler_tasks (title, metadata, status, allocated_node_id)
-VALUES (:title, :metadata, :status, :node_id)
+INSERT INTO yascheduler_tasks (
+    title, engine, local_folder, webhook_url,
+    webhook_custom_params, extra
+)
+VALUES (
+    :title, :engine, :local_folder, :webhook_url,
+    :webhook_custom_params, :extra
+)
 RETURNING
-    task_id, title, status, metadata,
-    allocated_node_id, created_at, updated_at;
+    task_id, title, engine, remote_folder, local_folder, webhook_url, error,
+    webhook_custom_params, extra, status, allocated_node_id,
+    created_at, updated_at;

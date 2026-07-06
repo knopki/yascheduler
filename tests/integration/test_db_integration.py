@@ -1,9 +1,9 @@
 # FILE: tests/integration/test_db_integration.py
-# VERSION: 2.4.0
+# VERSION: 2.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
-#   SCOPE: Node CRUD, Task CRUD, status transitions, UoW-based composition queries (list_by_jobs, get_by_ids), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
+#   SCOPE: Node CRUD, Task CRUD with flat typed fields + JSONB extra, status transitions, UoW-based composition queries (list_by_jobs, get_by_ids), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
 #   DEPENDS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL, M-CONFIG-DB
 #   LINKS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
@@ -15,9 +15,9 @@
 #   test_enable_disable_node - toggling enabled status via repo
 #   test_remove_node - node removed after removal
 #   test_count_aggregations - count_by_cloud, count_by_status
-#   test_add_and_get_task - round-trip insert + get with JSONB metadata
-#   test_task_lifecycle - insert -> allocate_to(node)/mark_running -> DONE with metadata merge (preserves allocated_node_id)
-#   test_set_task_error - with and without error message
+#   test_add_and_get_task - round-trip insert + get with typed fields and JSONB extra
+#   test_task_lifecycle - insert -> allocate_to(node)/mark_running -> DONE with with_download_results (preserves allocated_node_id)
+#   test_set_task_error - with and without error message (typed error field)
 #   test_get_tasks_by_status - filtering across statuses
 #   test_get_tasks_by_jobs - array parameter with unnest
 #   test_get_task_ids_by_node_id_and_status - filtered by node_id and status
@@ -28,8 +28,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.4.0 - task-schema-and-entity-cleanup: removed all allocated_ip references; test_add_and_get_task uses allocated_node_id; test_task_lifecycle no longer asserts allocated_ip; test_set_task_error removes allocated_ip from Task construction; test_get_task_ids_by_ip_and_status → test_get_task_ids_by_node_id_and_status (uses list_ids_by_node_id_and_status); test_get_tasks_with_cloud_by_id_status uses allocated_node_id for node resolution.
-#   PREVIOUS_CHANGE: v2.3.0 - task-allocated-node-id: test_task_lifecycle inserts a Node and calls allocate_to(node) (was allocate_to(ip) — signature changed); the DONE transition preserves allocated_node_id from the loaded task (manual Task construction passes allocated_node_id=task.allocated_node_id). test_migration_003_backfills_prov_ips_and_drops_unique pre-creates yascheduler_tasks at the 002-era schema (no allocated_node_id) so migration 004's ALTER ADD COLUMN does not collide with the fresh-snapshot CREATE TABLE. The schema now seeds to migration 003 and drops ip UNIQUE.
+#   LAST_CHANGE: v2.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields; TaskContext.from_metadata/to_metadata removed; context.X reads → task.X; lifecycle test uses with_download_results; extra preserved through download path.
+#   PREVIOUS_CHANGE: v2.4.0 - task-schema-and-entity-cleanup: removed all allocated_ip references; test_add_and_get_task uses allocated_node_id; test_task_lifecycle no longer asserts allocated_ip; test_set_task_error removes allocated_ip from Task construction; test_get_task_ids_by_ip_and_status → test_get_task_ids_by_node_id_and_status (uses list_ids_by_node_id_and_status); test_get_tasks_with_cloud_by_id_status uses allocated_node_id for node resolution.
 # END_CHANGE_SUMMARY
 
 """Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL."""
@@ -42,7 +42,6 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     Task,
-    TaskContext,
 )
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
@@ -230,33 +229,34 @@ async def test_count_aggregations(
 
 
 # START_CONTRACT: test_add_and_get_task
-#   PURPOSE: Verify Task insert + get round-trip including metadata via UoW.
+#   PURPOSE: Verify Task insert + get round-trip including typed fields and JSONB extra via UoW.
 #   INPUTS: { uow_factory: UoW factory fixture }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
 # END_CONTRACT: test_add_and_get_task
 async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
-    """Add a task and retrieve it; verify all fields including metadata."""
-    meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
-    ctx = TaskContext.from_metadata({**meta, "param": 42})
-
+    """Add a task and retrieve it; verify all fields including typed fields and JSONB extra."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=4, enabled=True))
         task = await uow.tasks.insert(
             NewTask(
                 label="calc",
-                context=ctx,
-                status=DomainTaskStatus.TO_DO,
-                allocated_node_id=node.node_id,
+                engine="fleur",
+                webhook_custom_params={},
+                extra={"param": 42},
             )
         )
+        task = task.allocate_to(node)
+        await uow.tasks.save(task)
         await uow.commit()
         assert task.task_id.value >= 1
         assert task.label == "calc"
         assert task.allocated_node_id == node.node_id
         assert task.status == DomainTaskStatus.TO_DO
-        assert task.context.to_metadata() == {**meta, "param": 42}
+        assert task.engine == "fleur"
+        assert task.webhook_custom_params == {}
+        assert task.extra == {"param": 42}
 
     async with uow_factory() as uow:
         retrieved = await uow.tasks.get(task.task_id)
@@ -265,11 +265,13 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
         assert retrieved.label == "calc"
         assert retrieved.allocated_node_id == node.node_id
         assert retrieved.status == DomainTaskStatus.TO_DO
-        assert retrieved.context.to_metadata() == {**meta, "param": 42}
+        assert retrieved.engine == "fleur"
+        assert retrieved.webhook_custom_params == {}
+        assert retrieved.extra == {"param": 42}
 
 
 # START_CONTRACT: test_task_lifecycle
-#   PURPOSE: Verify full task lifecycle: insert -> allocate_to/mark_running -> DONE with metadata merge.
+#   PURPOSE: Verify full task lifecycle: insert -> allocate_to/mark_running -> DONE with with_download_results.
 #   INPUTS: { uow_factory: UoW factory fixture }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
@@ -277,15 +279,17 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
 # END_CONTRACT: test_task_lifecycle
 async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Walk a task through TO_DO -> RUNNING -> DONE and verify each step."""
-    meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
-    ctx = TaskContext.from_metadata(meta)
-
     async with uow_factory() as uow:
         # Insert a node first so allocate_to(node) can bind a real node_id
         # (the DB FK allocated_node_id REFERENCES yascheduler_nodes(node_id)).
         node = await uow.nodes.insert(NewNode(ip="10.0.0.5", ncpus=4, enabled=True))
         task = await uow.tasks.insert(
-            NewTask(label="sim", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(
+                label="sim",
+                engine="fleur",
+                webhook_custom_params={},
+                extra={"param": 42},
+            )
         )
         await uow.commit()
         assert task.status == DomainTaskStatus.TO_DO
@@ -310,15 +314,9 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
         assert task is not None
-        merged = task.context.to_metadata()
-        merged["result"] = "ok"
-        updated = Task(
-            task_id=task.task_id,
-            label=task.label,
-            context=TaskContext.from_metadata(merged),
-            status=DomainTaskStatus.DONE,
-            allocated_node_id=task.allocated_node_id,
-        )
+        updated = task.with_download_results(
+            local_folder="/l", remote_folder="/r"
+        ).complete()
         await uow.tasks.save(updated)
         await uow.commit()
 
@@ -326,25 +324,26 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         done = await uow.tasks.get(task_id)
         assert done is not None
         assert done.status == DomainTaskStatus.DONE
-        assert done.context.to_metadata() == {**meta, "result": "ok"}
+        assert done.extra == {"param": 42}
+        assert done.local_folder == "/l"
+        assert done.remote_folder == "/r"
+        assert done.allocated_node_id == node_id
 
 
 # START_CONTRACT: test_set_task_error
-#   PURPOSE: Verify setting task error embeds error in metadata; without error passes metadata unchanged.
+#   PURPOSE: Verify setting task error embeds error in typed error field; without error extra is preserved.
 #   INPUTS: { uow_factory: UoW factory fixture }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
 # END_CONTRACT: test_set_task_error
 async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
-    """set_task_error embeds error in metadata; without error passes metadata unchanged."""
-    meta: dict[str, object] = {"engine": "fleur", "webhook_custom_params": {}}
-    ctx = TaskContext.from_metadata(meta)
+    """set_task_error embeds error in typed error field; without error extra is preserved."""
 
     # With error message
     async with uow_factory() as uow:
         task = await uow.tasks.insert(
-            NewTask(label="fail-job", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(label="fail-job", engine="fleur", webhook_custom_params={})
         )
         await uow.commit()
         task_id = task.task_id
@@ -352,14 +351,13 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
         assert task is not None
-        merged = task.context.to_metadata()
-        merged["key"] = "val"
-        merged["error"] = "crash"
         updated = Task(
             task_id=task.task_id,
             label=task.label,
-            context=TaskContext.from_metadata(merged),
+            engine=task.engine,
             status=DomainTaskStatus.DONE,
+            error="crash",
+            extra={"key": "val"},
             allocated_node_id=task.allocated_node_id,
         )
         await uow.tasks.save(updated)
@@ -369,12 +367,13 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         t = await uow.tasks.get(task_id)
         assert t is not None
         assert t.status == DomainTaskStatus.DONE
-        assert t.context.to_metadata() == {**meta, "key": "val", "error": "crash"}
+        assert t.error == "crash"
+        assert t.extra == {"key": "val"}
 
     # Without error message (use a new task for clarity)
     async with uow_factory() as uow:
         task2 = await uow.tasks.insert(
-            NewTask(label="fail-job2", context=ctx, status=DomainTaskStatus.TO_DO)
+            NewTask(label="fail-job2", engine="fleur", webhook_custom_params={})
         )
         await uow.commit()
         task2_id = task2.task_id
@@ -382,13 +381,12 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     async with uow_factory() as uow:
         task2 = await uow.tasks.get(task2_id)
         assert task2 is not None
-        merged = task2.context.to_metadata()
-        merged["only"] = "meta"
         updated = Task(
             task_id=task2.task_id,
             label=task2.label,
-            context=TaskContext.from_metadata(merged),
+            engine=task2.engine,
             status=DomainTaskStatus.DONE,
+            extra={"only": "meta"},
             allocated_node_id=task2.allocated_node_id,
         )
         await uow.tasks.save(updated)
@@ -398,7 +396,8 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         t2 = await uow.tasks.get(task2_id)
         assert t2 is not None
         assert t2.status == DomainTaskStatus.DONE
-        assert t2.context.to_metadata() == {**meta, "only": "meta"}
+        assert t2.error is None
+        assert t2.extra == {"only": "meta"}
 
 
 # START_CONTRACT: test_get_tasks_by_status
@@ -412,16 +411,25 @@ async def test_get_tasks_by_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Filter tasks by status; multiple statuses supported."""
-    ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
-        await uow.tasks.insert(
-            NewTask(label="todo", context=ctx, status=DomainTaskStatus.TO_DO)
+        await uow.tasks.insert(NewTask(label="todo", engine="fleur"))
+        t2 = await uow.tasks.insert(NewTask(label="running", engine="fleur"))
+        t3 = await uow.tasks.insert(NewTask(label="done", engine="fleur"))
+        await uow.tasks.save(
+            Task(
+                task_id=t2.task_id,
+                engine="fleur",
+                label="running",
+                status=DomainTaskStatus.RUNNING,
+            )
         )
-        await uow.tasks.insert(
-            NewTask(label="running", context=ctx, status=DomainTaskStatus.RUNNING)
-        )
-        await uow.tasks.insert(
-            NewTask(label="done", context=ctx, status=DomainTaskStatus.DONE)
+        await uow.tasks.save(
+            Task(
+                task_id=t3.task_id,
+                engine="fleur",
+                label="done",
+                status=DomainTaskStatus.DONE,
+            )
         )
         await uow.commit()
 
@@ -454,17 +462,10 @@ async def test_get_tasks_by_status(
 # END_CONTRACT: test_get_tasks_by_jobs
 async def test_get_tasks_by_jobs(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Retrieve tasks by array of IDs; only requested IDs returned."""
-    ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
-        t1 = await uow.tasks.insert(
-            NewTask(label="a", context=ctx, status=DomainTaskStatus.TO_DO)
-        )
-        await uow.tasks.insert(
-            NewTask(label="b", context=ctx, status=DomainTaskStatus.TO_DO)
-        )
-        t3 = await uow.tasks.insert(
-            NewTask(label="c", context=ctx, status=DomainTaskStatus.TO_DO)
-        )
+        t1 = await uow.tasks.insert(NewTask(label="a", engine="fleur"))
+        await uow.tasks.insert(NewTask(label="b", engine="fleur"))
+        t3 = await uow.tasks.insert(NewTask(label="c", engine="fleur"))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -485,37 +486,34 @@ async def test_get_task_ids_by_node_id_and_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Filter task IDs by node_id and status."""
-    ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
         node = await uow.nodes.insert(NewNode(ip="192.168.1.1", ncpus=4, enabled=True))
         node_id = node.node_id
-        t1 = await uow.tasks.insert(
-            NewTask(
-                label="x",
-                context=ctx,
-                status=DomainTaskStatus.RUNNING,
-                allocated_node_id=node_id,
-            )
-        )
         other_node = await uow.nodes.insert(
             NewNode(ip="10.0.0.1", ncpus=4, enabled=True)
         )
-        await uow.tasks.insert(
-            NewTask(
-                label="y",
-                context=ctx,
-                status=DomainTaskStatus.RUNNING,
-                allocated_node_id=other_node.node_id,
-            )
+
+        t1 = await uow.tasks.insert(NewTask(label="x", engine="fleur"))
+        t1 = t1.allocate_to(node)
+        t1 = t1.mark_running()
+        await uow.tasks.save(t1)
+
+        ty = await uow.tasks.insert(NewTask(label="y", engine="fleur"))
+        ty = ty.allocate_to(other_node)
+        ty = ty.mark_running()
+        await uow.tasks.save(ty)
+
+        tz = await uow.tasks.insert(NewTask(label="z", engine="fleur"))
+        tz = tz.allocate_to(node)
+        await uow.tasks.save(tz)
+        tz_done = Task(
+            task_id=tz.task_id,
+            label=tz.label,
+            engine=tz.engine,
+            status=DomainTaskStatus.DONE,
+            allocated_node_id=tz.allocated_node_id,
         )
-        await uow.tasks.insert(
-            NewTask(
-                label="z",
-                context=ctx,
-                status=DomainTaskStatus.DONE,
-                allocated_node_id=node_id,
-            )
-        )
+        await uow.tasks.save(tz_done)
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -536,30 +534,30 @@ async def test_get_tasks_with_cloud_by_id_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Compose list_by_jobs + get_by_ids to get cloud attribute."""
-    ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
             NewNode(ip="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
         )
+        node_id = node.node_id
         await uow.commit()
 
     async with uow_factory() as uow:
-        t = await uow.tasks.insert(
-            NewTask(
-                label="",
-                context=ctx,
-                status=DomainTaskStatus.RUNNING,
-                allocated_node_id=node.node_id,
-            )
+        t = await uow.tasks.insert(NewTask(label="", engine="fleur"))
+        t = t.allocate_to(node)
+        t = t.mark_running()
+        await uow.tasks.save(t)
+
+        t2 = await uow.tasks.insert(NewTask(label="", engine="fleur"))
+        t2 = t2.allocate_to(node)
+        await uow.tasks.save(t2)
+        t2_done = Task(
+            task_id=t2.task_id,
+            label=t2.label,
+            engine=t2.engine,
+            status=DomainTaskStatus.DONE,
+            allocated_node_id=t2.allocated_node_id,
         )
-        t2 = await uow.tasks.insert(
-            NewTask(
-                label="",
-                context=ctx,
-                status=DomainTaskStatus.DONE,
-                allocated_node_id=node.node_id,
-            )
-        )
+        await uow.tasks.save(t2_done)
         await uow.commit()
 
     async with uow_factory() as uow:
