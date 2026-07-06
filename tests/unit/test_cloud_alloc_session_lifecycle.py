@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_alloc_session_lifecycle.py
-# VERSION: 1.2.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Regression-guard the four fixes in fix-cloud-alloc-session-lifecycle (DB-enabled free-machine gate, setup-failure disconnect, per-session loop isolation, stdout in cloud-init error).
@@ -25,8 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - simplify-cloud-connect-node-args: FakeMachineRepository.connect drops the `username` param (keeps `**kwargs`).
-#   PREVIOUS_CHANGE: v1.2.0 - remove-tmp-node-fake-ip: _FakeNodeRepo.add_tmp removed; enable/disable/remove take node_id: NodeId.
+#   LAST_CHANGE: v1.4.0 - cloud-port-node-arg: FakeCloudProvisioner + real CloudProvisionerImpl allocate call sites take node: Node; added _tmp_node helper.
+#   PREVIOUS_CHANGE: v1.3.0 - simplify-cloud-connect-node-args: FakeMachineRepository.connect drops the `username` param (keeps `**kwargs`).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -382,11 +382,11 @@ class FakeCloudProvisioner:
         self._select_result = select_provider_result
         self.allocate_calls: list[str] = []
 
-    async def allocate(self, provider: str, tmp_node_id: NodeId) -> Node:
+    async def allocate(self, provider: str, node: Node) -> Node:
         self.allocate_calls.append(provider)
         session = await self._repo.connect(
             Node(
-                node_id=tmp_node_id,
+                node_id=node.node_id,
                 ip=self._new_ip,
                 ncpus=4,
                 enabled=True,
@@ -409,7 +409,7 @@ class FakeCloudProvisioner:
             )
             await uow.commit()
         return Node(
-            node_id=tmp_node_id,
+            node_id=node.node_id,
             ip=self._new_ip,
             ncpus=4,
             enabled=True,
@@ -418,7 +418,7 @@ class FakeCloudProvisioner:
             port=22,
         )
 
-    async def deallocate(self, cloud: str, ip: str) -> None:
+    async def deallocate(self, node: Node) -> None:
         pass
 
     def select_provider(
@@ -584,6 +584,23 @@ def _node(n: int, *, enabled: bool = True) -> Node:
     )
 
 
+def _tmp_node(n: int, *, cloud: str = "test") -> Node:
+    """Build a tmp-node Node as allocate_task inserts it (pre-allocate).
+
+    ``allocate`` receives this and overlays ip/cloud/username via ``replace``
+    after ``create_node`` returns the VM ip.
+    """
+    return Node(
+        node_id=NodeId(n),
+        ip="",
+        ncpus=0,
+        enabled=False,
+        cloud=cloud,
+        username="root",
+        port=22,
+    )
+
+
 def _make_engine_repo(engine: Engine) -> Any:
     repo = MagicMock()
     repo.get.return_value = engine
@@ -742,7 +759,7 @@ class TestFixB:
             _patch_ssh_key(),
             pytest.raises(CloudSetupError, match="cloud-init failed"),
         ):
-            await prov.allocate("test", NodeId(50))
+            await prov.allocate("test", _tmp_node(50))
 
         # Session was registered by _connect_to_vm, then disconnected on failure.
         assert repo.disconnect_calls == [NodeId(50)]
@@ -778,7 +795,7 @@ class TestFixB:
             ),
             pytest.raises(CloudSetupError, match="Setup node error"),
         ):
-            await prov.allocate("test", NodeId(50))
+            await prov.allocate("test", _tmp_node(50))
 
         assert repo.disconnect_calls == [NodeId(50)]
         assert len(repo._sessions) == 0
@@ -798,7 +815,7 @@ class TestFixB:
             _patch_ssh_key(),
             pytest.raises(CloudSetupError, match="SSH connect to"),
         ):
-            await prov.allocate("test", NodeId(50))
+            await prov.allocate("test", _tmp_node(50))
 
         # disconnect was called on the never-registered IP without raising.
         assert repo.disconnect_calls == [NodeId(50)]
@@ -815,7 +832,7 @@ class TestFixB:
         prov, adapter = _make_real_provisioner(repo, ops)
 
         with _patch_ssh_key():
-            node = await prov.allocate("test", NodeId(1))
+            node = await prov.allocate("test", _tmp_node(1))
 
         assert node.ip == "10.0.0.50"
         assert node.ncpus == 8
@@ -841,7 +858,7 @@ class TestFixB:
             _patch_ssh_key(),
             pytest.raises(CloudSetupError, match="cloud-init failed"),
         ):
-            await prov.allocate("test", NodeId(1))
+            await prov.allocate("test", _tmp_node(1))
 
         # delete_node STILL ran despite disconnect raising — no VM orphan.
         adapter.delete_node.assert_awaited_once()
@@ -922,7 +939,7 @@ class TestFixD:
         prov, _adapter = _make_real_provisioner(repo, ops)
 
         with _patch_ssh_key(), pytest.raises(CloudSetupError) as exc_info:
-            await prov.allocate("test", NodeId(1))
+            await prov.allocate("test", _tmp_node(1))
 
         msg = str(exc_info.value)
         assert "stdout=status: error" in msg
@@ -937,7 +954,7 @@ class TestFixD:
         adapter.create_node_timeout = 0.05
 
         with _patch_ssh_key(), pytest.raises(CloudSetupError) as exc_info:
-            await prov.allocate("test", NodeId(1))
+            await prov.allocate("test", _tmp_node(1))
 
         msg = str(exc_info.value)
         assert "timed out" in msg

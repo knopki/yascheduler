@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 4.7.0
+# VERSION: 4.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion.
 #   SCOPE: deallocate_node, deallocate_nodes async functions.
@@ -8,13 +8,13 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   deallocate_node - Disconnect (by node_id) and cloud-deallocate a single node; logs+flags stale row if DB remove fails after successful cloud delete
+#   deallocate_node - Disconnect (by node_id) and cloud-deallocate a single node (clouds.deallocate(node) reads node.cloud/node.ip internally); logs+flags stale row if DB remove fails after successful cloud delete
 #   deallocate_nodes - Disable idle cloud nodes and return Node objects for VM deletion (idle_machines dict[NodeId, float]; busy_node_ids matching)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.7.0 - ssh-rekey-node-id: deallocate_nodes takes idle_machines: dict[NodeId, float] (was dict[str, float] keyed by ip); busy matching rekeyed to busy_node_ids = {t.allocated_node_id}; phase-1 disable matches by node.node_id in idle_machines and node.node_id not in busy_node_ids; phase-2 filter node.node_id not in busy_node_ids and node.cloud. deallocate_node calls repository.contains(node.node_id)/repository.disconnect(node.node_id) (was node.ip). clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host).
-#   PREVIOUS_CHANGE: v4.6.0 - deallocate-node-id-identity: deallocate_nodes returns list[Node] (was list[str] of IPs) — phase 2 returns the Node objects it reads from list_disabled() directly, eliminating the orchestrator consumer's uow.nodes.get(ip) round-trip. Removed the dead "." in node.ip post-filter (tmp-node rows now carry ip="" and are excluded at SQL level by list_disabled.sql WHERE ip <> ''). The orchestrator's _deallocate_q is rekeyed to UniqueQueue[NodeId, Node] in the same change.
+#   LAST_CHANGE: v4.8.0 - cloud-port-node-arg: deallocate_node calls clouds.deallocate(node) (was clouds.deallocate(node.cloud, node.ip)).
+#   PREVIOUS_CHANGE: v4.7.0 - ssh-rekey-node-id: deallocate_nodes takes idle_machines: dict[NodeId, float] (was dict[str, float] keyed by ip); busy matching rekeyed to busy_node_ids = {t.allocated_node_id}; phase-1 disable matches by node.node_id in idle_machines and node.node_id not in busy_node_ids; phase-2 filter node.node_id not in busy_node_ids and node.cloud. deallocate_node calls repository.contains(node.node_id)/repository.disconnect(node.node_id) (was node.ip). clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ async def deallocate_node(
             node.ip,
             node.cloud,
         )
-        await clouds.deallocate(node.cloud, node.ip)
+        await clouds.deallocate(node)
         # END_BLOCK_CLOUD_DELETE
 
         # START_BLOCK_REMOVE

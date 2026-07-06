@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.7.0
+# VERSION: 4.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.7.1 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests into tests/unit/test_allocate_task_node_pairing.py (this file exceeded the 1000-line GRACE-lite hard limit after the v4.7.0 additions). The free-machine test still asserts saved_task.allocated_node_id == NodeId(1) here.
-#   PREVIOUS_CHANGE: v4.7.0 - task-allocated-node-id: TestAllocateTask updated for _find_free_machines returning list[tuple[MachineSession, Node]] and _try_start_on_machine taking (session, node); test_allocate_task_finds_free_machine asserts saved_task.allocated_node_id == NodeId(1) (allocate_to(node) binds both fields); added test_find_free_machines_pairs_session_with_node_by_ip, test_find_free_machines_dup_ip_collapses_to_one_node (last-wins ambiguity), test_try_start_on_machine_logs_node_id.
+#   LAST_CHANGE: v4.8.0 - cloud-port-node-arg: allocate/deallocate asserts + _persist_node_with_cleanup call use Node args (was NodeId/scalars).
+#   PREVIOUS_CHANGE: v4.7.1 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests into tests/unit/test_allocate_task_node_pairing.py (this file exceeded the 1000-line GRACE-lite hard limit after the v4.7.0 additions). The free-machine test still asserts saved_task.allocated_node_id == NodeId(1) here.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for application use cases.
@@ -372,8 +372,8 @@ class TestAllocateTask:
         # tmp node inserted via insert(NewNode(cloud=..., enabled=False)) before cloud allocate
         uow.nodes.insert.assert_any_call(NewNode(cloud="aws", enabled=False))
 
-        # cloud allocate called with provider name + tmp_node_id
-        clouds.allocate.assert_called_once_with("aws", NodeId(2))
+        # cloud allocate called with provider name + tmp Node
+        clouds.allocate.assert_called_once_with("aws", tmp_node)
 
         # final persist: update(node) — no insert, no remove on success
         uow.nodes.update.assert_called_once_with(cloud_node)
@@ -644,7 +644,6 @@ class TestTmpCleanupByNodeId:
             node=cloud_node,
             clouds=clouds,
             uow_factory=uow_factory,
-            selected_name="aws",
             tmp_node_id=NodeId(7),
             task_id=TaskId(1),
         )
@@ -855,7 +854,7 @@ class TestDeallocateNodeBracketing:
 
         clouds = MagicMock(spec=CloudProvisioner)
         clouds.deallocate = AsyncMock(
-            side_effect=lambda c, ip: calls.append("deallocate")
+            side_effect=lambda _node: calls.append("deallocate")
         )
 
         await deallocate_node(
@@ -940,7 +939,7 @@ class TestDeallocateNodeBracketing:
             )
 
         # Cloud delete happened; disable happened; remove attempted.
-        clouds.deallocate.assert_awaited_once_with("aws", "10.0.0.1")
+        clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.disable.assert_awaited_once_with(NodeId(1))
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         # Reconciliation marker logged.

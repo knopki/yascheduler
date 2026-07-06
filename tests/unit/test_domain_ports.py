@@ -333,10 +333,10 @@ class StubMachineOperations:
 
 
 class StubCloudProvisioner:
-    async def allocate(self, provider: str, tmp_node_id: NodeId) -> Node:
+    async def allocate(self, provider: str, node: Node) -> Node:
         raise NotImplementedError
 
-    async def deallocate(self, cloud: str, ip: str) -> None:
+    async def deallocate(self, node: Node) -> None:
         pass
 
     def select_provider(

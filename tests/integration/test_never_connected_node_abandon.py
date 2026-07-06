@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_never_connected_node_abandon.py
-# VERSION: 1.0.2
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the never-connected-node abandon path against real PostgreSQL.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.2 - Adapt to add-node-id-identity: NewNode for insert, repo.add→insert, persist result used for message flow.
-#   PREVIOUS_CHANGE: v1.0.1 - Make DRIVE_PAST_GRACE robust on Python 3.12: the order-sensitive _fake_monotonic callable broke because asyncio calls time.monotonic during the await chain, consuming the callable's "first" value so the consumer recorded first_seen=100 and saw age=0 → retry (abandon never fired, DB row not removed). Replaced with a pre-seeded _connect_failures[dead_ip]=100 + constant return_value=200: age = 100 >= 60 → abandon, independent of how many times asyncio polls the mock.
+#   LAST_CHANGE: v1.1.0 - cloud-port-node-arg: assert orch._clouds.deallocate awaited with persisted_node (was ("hetzner", dead_ip)).
+#   PREVIOUS_CHANGE: v1.0.2 - Adapt to add-node-id-identity: NewNode for insert, repo.add→insert, persist result used for message flow.
 # END_CHANGE_SUMMARY
 """Integration tests for the never-connected-node abandon path.
 
@@ -211,7 +211,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     # END_BLOCK_VERIFY_DB_ROW_REMOVED
 
     # START_BLOCK_VERIFY_CLOUD_DELETE_CALLED
-    orch._clouds.deallocate.assert_awaited_once_with("hetzner", dead_ip)  # type: ignore[attr-defined]
+    orch._clouds.deallocate.assert_awaited_once_with(persisted_node)  # type: ignore[attr-defined]
     # END_BLOCK_VERIFY_CLOUD_DELETE_CALLED
 
     # START_BLOCK_VERIFY_TRACKER_RELEASED

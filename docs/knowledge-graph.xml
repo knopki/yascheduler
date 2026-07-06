@@ -356,7 +356,7 @@
         <type-TaskId PURPOSE="Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
         <type-NewTask PURPOSE="Pre-persistence task record (no task_id); carries allocated_node_id: NodeId | None = None (written by Task.allocate_to, not NewTask construction); converted to Task only by TaskRepository.insert" />
         <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
-        <type-NewNode PURPOSE="Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False); converted to Node only by NodeRepository.insert. The tmp-node row inserted by _select_and_insert_tmp is reused as the real node identity: clouds.allocate(provider, tmp_node_id) returns a Node carrying node_id == tmp_node_id (single-row UPDATE lifecycle, not insert+remove)." />
+        <type-NewNode PURPOSE="Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False); converted to Node only by NodeRepository.insert. The tmp-node row inserted by _select_and_insert_tmp is reused as the real node identity: clouds.allocate(provider, node) receives the tmp-node Node and returns a Node carrying the same node_id (single-row UPDATE lifecycle, not insert+remove)." />
         <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); node_id is the sole identity (ip-keyed lookups get/get_by_ips removed — get_by_id/get_by_ids are node_id-keyed); NodeRepository mutators key on node_id; ip no longer UNIQUE (dropped by migration 003 — dup-IP valid behind different jump hosts); tmp rows carry ip='' sentinel" />
         <class-ConnectedMachine PURPOSE="Runtime connected machine; node_id: NodeId is the FIRST field (identity-first — identifies which Node this represents); ip is the transport address (asyncssh host, NOT the identity — two machines sharing ip with different node_id are distinct); occupy/release/replace carry node_id through automatically (frozen dataclass); construction site SSHMachineRepository._connect_impl passes node_id=node.node_id" />
       </annotations>
@@ -396,7 +396,7 @@
         <class-MachineSession PURPOSE="Connected-machine entity handle Protocol (domain identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)" />
         <class-MachineOperations PURPOSE="Async port for operations on a single machine (facade pass-throughs + use-case methods forwarding to stateless collaborators)" />
         <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host) — 7-field surface application consumers read" />
-        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider, tmp_node_id: NodeId) -> Node (reuses tmp_node_id as node identity; caller flips enabled=TRUE via NodeRepository.update — single-row lifecycle), deallocate(cloud, ip) (ip = cloud SDK host, stays ip-keyed), select_provider(platforms, counts) -> str | None (sync)" />
+        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider, node: Node) -> Node (receives the tmp-node Node and reuses its node_id as the real node identity; caller flips enabled=TRUE via NodeRepository.update — single-row lifecycle), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None; ip stays the cloud SDK host identifier), select_provider(platforms, counts) -> str | None (sync)" />
         <type-connect_grace PURPOSE="Per-cloud SSH connect-failure deadline in seconds (declared on CloudConfig Protocol + each ConfigCloud* DTO with provider-specific default)" />
       </annotations>
     </M-DOMAIN-PORTS>
@@ -493,8 +493,8 @@
         <type-_TmpSelection PURPOSE="NamedTuple(name: str, node_id: NodeId) — tmp-node handle is the NodeId from insert(NewNode(cloud=..., enabled=False)), NOT a placeholder ip (remove-tmp-node-fake-ip)" />
         <fn-_select_and_insert_tmp PURPOSE="Under allocation_lock, compute capacity, select provider, and insert tmp-node via insert(NewNode(cloud=..., enabled=False)) committed before lock release; returns _TmpSelection(name, node_id=tmp_node.node_id)" />
         <fn-_cleanup_tmp_node_best_effort PURPOSE="Best-effort tmp-node removal by NodeId (remove(tmp_node_id) directly — no get(ip) lookup); logs failures, never raises" />
-        <fn-_allocate_cloud_node PURPOSE="Call clouds.allocate (returns NewNode); cleanup tmp-node by NodeId on failure then re-raise (takes tmp_node_id: NodeId)" />
-        <fn-_persist_node_with_cleanup PURPOSE="Persist final node (insert NewNode→Node + remove(tmp_node_id) + commit); on failure best-effort deallocate VM + tmp cleanup then re-raise (takes tmp_node_id: NodeId)" />
+        <fn-_allocate_cloud_node PURPOSE="Call clouds.allocate(provider, tmp_node: Node) (returns Node reusing tmp_node.node_id); cleanup tmp-node by NodeId on failure then re-raise (takes tmp_node: Node)" />
+        <fn-_persist_node_with_cleanup PURPOSE="Persist final node via single uow.nodes.update(node) (flips enabled=TRUE, sets ip/ncpus — single-row lifecycle); on failure best-effort clouds.deallocate(node) + tmp cleanup then re-raise (takes tmp_node_id: NodeId; no selected_name — deallocate reads node.cloud)" />
       </annotations>
     </M-APPLICATION-ALLOCATE>
 
@@ -515,7 +515,7 @@
       <path>yascheduler/application/deallocate_nodes.py</path>
       <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-CLOUD-PROVISIONER</depends>
       <annotations>
-        <fn-deallocate_node PURPOSE="Per-node wrapper: gateway disconnect -> UoW disable+commit -> clouds.deallocate(cloud, ip) -> UoW remove+commit" />
+        <fn-deallocate_node PURPOSE="Per-node wrapper: gateway disconnect -> UoW disable+commit -> clouds.deallocate(node) -> UoW remove+commit" />
         <fn-deallocate_nodes PURPOSE="Disable idle cloud nodes and return list[Node] (each carrying node_id) for orchestrator-level SSH disconnect + cloud deallocation (idle-disable sweep)" />
       </annotations>
     </M-APPLICATION-DEALLOCATE>
@@ -805,7 +805,7 @@
       <path>yascheduler/infra/cloud/manager.py</path>
       <depends>M-DOMAIN, M-DOMAIN-SETTINGS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
       <annotations>
-        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access); allocate(provider, tmp_node_id)->Node (reuses tmp_node_id as node identity, single-row UPDATE lifecycle), deallocate(cloud, ip), select_provider" />
+        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access); allocate(provider, node: Node)->Node (derives the identity via replace on the passed node after create_node — no fresh Node construction; reuses node.node_id, single-row UPDATE lifecycle), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None), select_provider" />
         <class-CloudAllocateError PURPOSE="Cloud allocation failure (domain exception realized via yascheduler.domain)" />
         <class-CloudSetupError PURPOSE="Cloud setup/bootstrap failure (domain exception realized via yascheduler.domain)" />
       </annotations>

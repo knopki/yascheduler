@@ -1,9 +1,9 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.16.0
+# VERSION: 2.17.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
-#   SCOPE: CloudProvisionerImpl class implementing allocate(provider, tmp_node_id)->Node (constructs the identity Node once after create_node, threads it through _setup_vm/_connect_to_vm, returns replace(node, enabled=True, ncpus); reuses tmp_node_id as node identity), deallocate, select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineRepository + SSHMachineOperations.
+#   SCOPE: CloudProvisionerImpl class implementing allocate(provider, node: Node)->Node (derives the identity via replace on the passed node after create_node, threads it through _setup_vm/_connect_to_vm, returns replace(node, enabled=True, ncpus); reuses node.node_id as node identity), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None), select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineRepository + SSHMachineOperations.
 #   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-DOMAIN-SETTINGS
 #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE, M-CLOUD-INIT
 # END_MODULE_CONTRACT
@@ -11,12 +11,12 @@
 # START_MODULE_MAP
 #   CloudAllocateError         # Cloud node allocation error (re-exported from domain.exceptions)
 #   CloudSetupError            # Cloud node setup error (re-exported from domain.exceptions)
-#   CloudProvisionerImpl       # Pure cloud-API adapter implementing CloudProvisioner port (no DB); allocate(provider, tmp_node_id)->Node, deallocate(cloud, ip), select_provider
+#   CloudProvisionerImpl       # Pure cloud-API adapter implementing CloudProvisioner port (no DB); allocate(provider, node: Node)->Node, deallocate(node: Node), select_provider
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.16.0 - simplify-cloud-connect-node-args: allocate constructs the identity Node once (after create_node) and threads it through _setup_vm/_connect_to_vm; the three Node constructions collapse to one (no ersatz Node). _setup_vm returns replace(node, enabled=True, ncpus); _connect_to_vm passes the Node straight to connect with no username/port args. Setup-failure except blocks call disconnect(node.node_id) before delete_node. Removed the `# FIXME: just use Node` comment; added `replace` to the dataclasses import.
-#   PREVIOUS_CHANGE: v2.15.0 - ssh-rekey-node-id: allocate/_setup_vm/_connect_to_vm take tmp_node_id: NodeId; allocate returns Node (was NewNode) carrying node_id == tmp_node_id (single-row UPDATE lifecycle). Setup-failure except blocks call disconnect(tmp_node_id) before delete_node.
+#   LAST_CHANGE: v2.17.0 - cloud-port-node-arg: allocate/deallocate take node: Node; allocate derives identity via replace(node, ...) (no fresh Node); deallocate reads node.cloud/node.ip, no-ops on cloud is None.
+#   PREVIOUS_CHANGE: v2.16.0 - simplify-cloud-connect-node-args: allocate constructs the identity Node once (after create_node) and threads it through _setup_vm/_connect_to_vm; the three Node constructions collapse to one (no ersatz Node). _setup_vm returns replace(node, enabled=True, ncpus); _connect_to_vm passes the Node straight to connect with no username/port args. Setup-failure except blocks call disconnect(node.node_id) before delete_node. Removed the `# FIXME: just use Node` comment; added `replace` to the dataclasses import.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -32,7 +32,6 @@ from yascheduler.domain import (
     CloudSetupError,
     MachineSession,
     Node,
-    NodeId,
 )
 from yascheduler.infra.ssh.keys import list_private_keys
 
@@ -139,26 +138,15 @@ class CloudProvisionerImpl:
         return adapter.name
 
     # START_CONTRACT: CloudProvisionerImpl.allocate
-    #   PURPOSE: Create VM on named provider, run cloud-init and engine setup, return the enabled Node (no DB write; the row already exists; caller flips enabled=TRUE via NodeRepository.update).
-    #   INPUTS: {
-    #     provider: str - selected provider name (matches adapters dict key),
-    #     tmp_node_id: NodeId - reused as the real node's identity (session registers under it; returned Node carries it)
-    #   }
-    #   OUTPUTS: { Node - enabled=True, ncpus populated, node_id == tmp_node_id; the caller flips enabled=TRUE + sets ip/ncpus via uow.nodes.update }
-    #   SIDE_EFFECTS: Creates cloud VM, writes SSH key, installs engines. On setup failure: best-effort disconnect of the machine_repository session for node.node_id (failures logged and swallowed so delete_node is never skipped), then deletes the VM.
-    #   RAISES: CloudAllocateError - if provider unknown or VM creation fails;
-    #           CloudSetupError - if SSH/cloud-init/setup fails
+    #   PURPOSE: Create VM on named provider, run cloud-init and engine setup, return the enabled Node (no DB write; caller flips enabled=TRUE via NodeRepository.update).
+    #   INPUTS: { provider: str - selected provider name, node: Node - tmp-node whose node_id is reused as the real identity }
+    #   OUTPUTS: { Node - enabled=True, ncpus populated, same node_id as the input }
+    #   SIDE_EFFECTS: Creates cloud VM, writes SSH key, installs engines. On setup failure: best-effort disconnect (node.node_id) then delete VM.
+    #   RAISES: CloudAllocateError - provider unknown or VM creation fails;
+    #           CloudSetupError - SSH/cloud-init/setup fails
     #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS
     # END_CONTRACT: CloudProvisionerImpl.allocate
-    async def allocate(self, provider: str, tmp_node_id: NodeId) -> Node:
-        """Allocate a new cloud node on the named provider — satisfies CloudProvisioner port.
-
-        Reuses ``tmp_node_id`` as the real node's identity: the cloud setup
-        SSH session registers under ``tmp_node_id``, and the returned
-        :class:`Node` carries ``node_id == tmp_node_id``. The caller persists
-        via a single ``uow.nodes.update(node)`` (flipping enabled=TRUE, setting
-        ip/ncpus) — one row per cloud allocation lifecycle, not two.
-        """
+    async def allocate(self, provider: str, node: Node) -> Node:
         # START_BLOCK_RESOLVE_ALLOCATE_PROVIDER
         adapter = self.adapters.get(provider)
         if adapter is None:
@@ -197,15 +185,7 @@ class CloudProvisionerImpl:
         # transport), and such a failure MUST NOT skip delete_node or a
         # billable VM would be orphaned — so disconnect failures are logged
         # and swallowed, then delete_node always runs.
-        node = Node(
-            node_id=tmp_node_id,
-            ip=ip_addr,
-            ncpus=0,
-            enabled=False,
-            cloud=adapter.name,
-            username=config.username,
-            port=22,
-        )
+        node = replace(node, ip=ip_addr, cloud=adapter.name, username=config.username)
         try:
             node = await self._setup_vm(node, adapter, config)
         except CloudSetupError:
@@ -253,39 +233,44 @@ class CloudProvisionerImpl:
 
     # START_CONTRACT: CloudProvisionerImpl.deallocate
     #   PURPOSE: Delete VM via named provider's SDK (no DB access).
-    #   INPUTS: {
-    #     cloud: str - provider name (matches adapters dict key),
-    #     ip: str - VM IP to delete
-    #   }
+    #   INPUTS: { node: Node - provider and host read from node.cloud/node.ip }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Deletes cloud VM via provider SDK.
+    #   SIDE_EFFECTS: Deletes cloud VM. No-ops (warn+return) when node.cloud is None, provider has no adapter, or provider has no config.
     #   LINKS: M-CLOUD-PROVISIONER
     # END_CONTRACT: CloudProvisionerImpl.deallocate
-    async def deallocate(self, cloud: str, ip: str) -> None:
-        """Deallocate a cloud node — satisfies CloudProvisioner port."""
+    async def deallocate(self, node: Node) -> None:
         # START_BLOCK_RESOLVE_DEALLOCATE_PROVIDER
-        adapter = self.adapters.get(cloud)
+        if node.cloud is None:
+            self.log.warning(
+                "[CloudProvisionerImpl][deallocate][NO_CLOUD] node_id=%s",
+                node.node_id,
+            )
+            return
+        adapter = self.adapters.get(node.cloud)
         if adapter is None:
             self.log.warning(
                 "[CloudProvisionerImpl][deallocate][UNSUPPORTED] ip=%s cloud=%s",
-                ip,
-                cloud,
+                node.ip,
+                node.cloud,
             )
             return
-        config = self.configs.get(cloud)
+        config = self.configs.get(node.cloud)
         if config is None:
             self.log.warning(
                 "[CloudProvisionerImpl][deallocate][NO_CONFIG] ip=%s cloud=%s",
-                ip,
-                cloud,
+                node.ip,
+                node.cloud,
             )
             return
         # END_BLOCK_RESOLVE_DEALLOCATE_PROVIDER
 
         # START_BLOCK_DELETE_VM
-        await adapter.delete_node(log=self.log, cfg=config, host=ip)
+        await adapter.delete_node(log=self.log, cfg=config, host=node.ip)
         self.log.debug(
-            "[CloudProvisionerImpl][deallocate][DONE] ip=%s cloud=%s", ip, cloud
+            "[CloudProvisionerImpl][deallocate][DONE] ip=%s cloud=%s node_id=%s",
+            node.ip,
+            node.cloud,
+            node.node_id,
         )
         # END_BLOCK_DELETE_VM
 

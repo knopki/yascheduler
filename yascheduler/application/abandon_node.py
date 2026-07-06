@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/abandon_node.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Abandon never-connected cloud node use case — VM delete + DB-row remove + release stuck TO_DO task.
 #   SCOPE: abandon_node async function.
@@ -8,13 +8,12 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   abandon_node - Best-effort cloud VM delete, remove yascheduler_nodes row, discard stuck task's tracker entry
+#   abandon_node - Best-effort cloud VM delete (clouds.deallocate(node)), remove yascheduler_nodes row, discard stuck task's tracker entry
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - ssh-rekey-node-id: stuck-task matching rekeyed from t.allocated_ip == node.ip to t.allocated_node_id == node.node_id (dup-IP nodes now disambiguated). REORDERED: read the stuck TO_DO task BEFORE uow.nodes.remove(node.node_id) — the allocated_node_id FK is ON DELETE SET NULL, so reading after remove would null allocated_node_id and the in-memory filter would no longer match. clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host). uow.nodes.remove(node.node_id) unchanged.
-#   PREVIOUS_CHANGE: v1.2.0 - Mutator rekeyed from ip to node_id (node-id-keyed-mutators): uow.nodes.remove(node.node_id) (was node.ip). Internal log lines add node_id=%s alongside ip=%s. clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host, out of scope).
-#   PREVIOUS_CHANGE: v1.1.0 - Drop the unused gateway parameter (decompose-ssh-gateway). The node was never registered with the repository, so no SSH-side call is needed; the previous gateway param was present only for symmetry with deallocate_node and was never used in the body.
+#   LAST_CHANGE: v1.4.0 - cloud-port-node-arg: calls clouds.deallocate(node) (was clouds.deallocate(node.cloud, node.ip)).
+#   PREVIOUS_CHANGE: v1.3.0 - ssh-rekey-node-id: stuck-task matching rekeyed from t.allocated_ip == node.ip to t.allocated_node_id == node.node_id (dup-IP nodes now disambiguated). REORDERED: read the stuck TO_DO task BEFORE uow.nodes.remove(node.node_id) — the allocated_node_id FK is ON DELETE SET NULL, so reading after remove would null allocated_node_id and the in-memory filter would no longer match. clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host). uow.nodes.remove(node.node_id) unchanged.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ async def abandon_node(
     # START_BLOCK_CLOUD_DELETE
     if node.cloud is not None:
         try:
-            await clouds.deallocate(node.cloud, node.ip)
+            await clouds.deallocate(node)
         except Exception as err:
             logger.error(
                 "[abandon_node][CLOUD_DELETE_FAILED] node_id=%s ip=%s cloud=%s err=%s",

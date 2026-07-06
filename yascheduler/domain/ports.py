@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.17.0
+# VERSION: 2.18.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -14,12 +14,12 @@
 #   MachineRepository - Async port for the connected-machine collection (lifecycle, queries); keyed by NodeId (connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id)); returns MachineSession; no state transitions/accessors/monitor (moved to MachineSession)
 #   MachineSession - Connected-machine entity handle (identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism); Engine-agnostic
 #   MachineOperations - Async port for operations on a single machine; methods take session: MachineSession (use-case methods + facade pass-throughs)
-#   CloudProvisioner - Async port for cloud node provisioning (allocate(provider, tmp_node_id)->Node reusing tmp_node_id as node identity, deallocate, select_provider)
+#   CloudProvisioner - Async port for cloud node provisioning (allocate(provider, node: Node)->Node reusing the passed node's node_id as identity, deallocate(node: Node) reads node.cloud/node.ip internally and no-ops on cloud is None, select_provider)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.17.0 - simplify-cloud-connect-node-args: MachineRepository.connect drops the redundant `username: str` positional and `port: int = 22` keyword; connect reads the login user from `node.username` and the port from `node.port` internally. Removed two `# FIXME: why username/port?` comments.
-#   PREVIOUS_CHANGE: v2.16.0 - ssh-rekey-node-id: MachineRepository rekeyed from ip to NodeId (connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id)); CloudProvisioner.allocate signature changed to (provider, tmp_node_id)->Node.
+#   LAST_CHANGE: v2.18.0 - cloud-port-node-arg: CloudProvisioner.allocate/deallocate take node: Node (was tmp_node_id / cloud,ip); port frozen for Variant C.
+#   PREVIOUS_CHANGE: v2.17.0 - simplify-cloud-connect-node-args: MachineRepository.connect drops the redundant `username: str` positional and `port: int = 22` keyword; connect reads the login user from `node.username` and the port from `node.port` internally. Removed two `# FIXME: why username/port?` comments.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -354,28 +354,14 @@ class MachineOperations(Protocol):
 
 @runtime_checkable
 class CloudProvisioner(Protocol):
-    """Port for cloud node provisioning.
-
-    ``allocate(provider, tmp_node_id) -> Node`` returns a ``Node`` carrying
-    ``node_id == tmp_node_id`` (post-persistence identity — the row already
-    exists with ``node_id == tmp_node_id``). The caller (``allocate_task``)
-    inserted the tmp-node row via ``uow.nodes.insert(NewNode(cloud=...,
-    enabled=False)) -> Node`` and passes the returned ``tmp_node_id`` to
-    ``allocate``. The cloud adapter reuses this ``tmp_node_id`` as the real
-    node's identity: the setup SSH session registers under ``tmp_node_id``,
-    and the returned ``Node`` carries ``node_id == tmp_node_id``. The caller
-    then flips the row to ``enabled=TRUE`` and sets ``ip``/``ncpus`` via a
-    single ``uow.nodes.update(node)`` — one row per cloud allocation
-    lifecycle, not two. Provider selection is sync (no I/O);
-    ``allocate``/``deallocate`` are async. ``select_provider`` returns None
-    when no provider has capacity OR when the selected provider is throttled
-    (op semaphore locked). ``deallocate(cloud, ip)`` stays ip-keyed — ``ip``
-    is the cloud SDK host identifier.
+    """Cloud VM provisioning port. ``allocate``/``deallocate`` are async;
+    ``select_provider`` is sync (returns ``None`` when no capacity or throttled).
+    ``deallocate`` reads ``node.cloud``/``node.ip`` and no-ops on ``cloud is None``.
     """
 
-    async def allocate(self, provider: str, tmp_node_id: NodeId) -> Node: ...
+    async def allocate(self, provider: str, node: Node) -> Node: ...
 
-    async def deallocate(self, cloud: str, ip: str) -> None: ...
+    async def deallocate(self, node: Node) -> None: ...
 
     def select_provider(
         self, platforms: list[str], current_counts: dict[str, int]

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.5.0 - remove-tmp-node-fake-ip: _make_uow sets uow.nodes.insert to return a tmp Node (NewNode(cloud=..., enabled=False) → Node with node_id); step2/step3 cleanup asserts remove(tmp_node_id) directly (no get lookup).]
-#   PREVIOUS_CHANGE: [v1.4.1 - add-node-id-identity test update: prepend node_id=NodeId(1) to Node(...) construction and add NodeId import.]
+#   LAST_CHANGE: [v1.6.0 - cloud-port-node-arg: step3 asserts clouds.allocate/deallocate called with Node args (was NodeId/scalars).]
+#   PREVIOUS_CHANGE: [v1.5.0 - remove-tmp-node-fake-ip: _make_uow sets uow.nodes.insert to return a tmp Node (NewNode(cloud=..., enabled=False) → Node with node_id); step2/step3 cleanup asserts remove(tmp_node_id) directly (no get lookup).]
 # END_CHANGE_SUMMARY
 #
 """Failure-mode tests for allocate_task cloud-fallback hardening.
@@ -238,9 +238,13 @@ class TestAllocateTaskFailureModes:
 
         # Original persist exception propagates.
         tracker.discard.assert_called_once_with(todo_task.task_id)
-        clouds.allocate.assert_called_once_with("aws", NodeId(2))
-        # VM is best-effort deallocated so no billable orphan leaks.
-        clouds.deallocate.assert_called_once_with("aws", "10.0.0.100")
+        # cloud allocate called with provider name + tmp Node (node_id == NodeId(2))
+        allocated_node = clouds.allocate.call_args.args[1]
+        assert isinstance(allocated_node, Node)
+        assert allocated_node.node_id == NodeId(2)
+        # VM is best-effort deallocated with the provisioned cloud_node
+        # (node.cloud == "aws" from clouds.allocate) so no billable orphan leaks.
+        clouds.deallocate.assert_called_once_with(cloud_node)
         # tmp-node best-effort cleanup runs (remove(tmp_node_id) is called
         # directly in the best-effort cleanup path after persist fails).
         assert uow.nodes.remove.call_count >= 1

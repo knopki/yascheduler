@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_abandon_node.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - node-id-keyed-mutators: uow.nodes.remove asserts expect NodeId(1) (was ip string "10.0.0.5").
-#   PREVIOUS_CHANGE: v1.1.0 - add-node-id-identity: import NodeId, add node_id=NodeId(1) to _cloud_node Node(...) helper.
+#   LAST_CHANGE: v1.3.0 - cloud-port-node-arg: deallocate asserts expect clouds.deallocate(node) (was ("aws", "10.0.0.5")).
+#   PREVIOUS_CHANGE: v1.2.0 - node-id-keyed-mutators: uow.nodes.remove asserts expect NodeId(1) (was ip string "10.0.0.5").
 # END_CHANGE_SUMMARY
 """Unit tests for the abandon_node use case.
 
@@ -121,7 +121,7 @@ class TestAbandonNode:
             tracker=tracker,
         )
 
-        clouds.deallocate.assert_awaited_once_with("aws", "10.0.0.5")
+        clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         uow.commit.assert_awaited_once()
         tracker.discard.assert_called_once_with(TaskId(42))
@@ -170,7 +170,7 @@ class TestAbandonNode:
                 tracker=tracker,
             )
 
-        clouds.deallocate.assert_awaited_once_with("aws", "10.0.0.5")
+        clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         uow.commit.assert_awaited_once()
         assert any(
@@ -205,7 +205,7 @@ class TestAbandonNode:
                     tracker=tracker,
                 )
 
-        clouds.deallocate.assert_awaited_once_with("aws", "10.0.0.5")
+        clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         assert any(
             "REMOVE_FAILED" in r.message and "10.0.0.5" in r.message

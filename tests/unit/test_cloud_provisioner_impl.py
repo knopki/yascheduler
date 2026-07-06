@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.11.0
+# VERSION: 2.12.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -11,7 +11,7 @@
 # START_MODULE_MAP
 #   TestBool - __bool__ reflects adapter presence
 #   TestAllocate - allocate happy path, no provider, create_node failure, setup failure
-#   TestDeallocate - happy path, unsupported cloud, no config
+#   TestDeallocate - happy path, unsupported cloud, no config, no-cloud no-op
 #   TestStop - stop drains machine_gateway via disconnect_all (happy path + idempotency)
 #   TestIsPlatformSupported - _is_platform_supported edge cases
 #   TestSshKeyGeneration - get_or_create_ssh_key file ops
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.11.0 - simplify-cloud-connect-node-args: _make_mock_repository records connect calls; happy-path test asserts connect(node=..., no username/port kwargs, same-identity return); setup-failure test asserts disconnect before delete_node.
-#   PREVIOUS_CHANGE: v2.10.0 - ssh-rekey-node-id: import Node/NodeId, add tmp_node_id to allocate calls.
+#   LAST_CHANGE: v2.12.0 - cloud-port-node-arg: allocate/deallocate call sites pass a tmp Node (was NodeId/cloud+ip); added _tmp_node helper + test_deallocate_no_cloud_logs_and_returns.
+#   PREVIOUS_CHANGE: v2.11.0 - simplify-cloud-connect-node-args: _make_mock_repository records connect calls; happy-path test asserts connect(node=..., no username/port kwargs, same-identity return); setup-failure test asserts disconnect before delete_node.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -169,6 +169,24 @@ def _make_mock_operations(**kwargs: Any) -> MagicMock:
     return ops
 
 
+def _tmp_node(node_id: int = 999, cloud: str | None = "test") -> Node:
+    """Build a tmp-node Node as the caller (allocate_task) would insert it.
+
+    ``allocate`` receives this Node and overlays ip/cloud/username via
+    ``replace`` after ``create_node`` returns the VM ip. The tmp node carries
+    the default port=22 and the caller's cloud (== provider name).
+    """
+    return Node(
+        node_id=NodeId(node_id),
+        ip="",
+        ncpus=0,
+        enabled=False,
+        cloud=cloud,
+        username="root",
+        port=22,
+    )
+
+
 @pytest.fixture
 def mock_engines() -> MagicMock:
     """Create mock EngineRepository with filter chain."""
@@ -272,7 +290,7 @@ class TestAllocate:
             "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
             new=AsyncMock(return_value=MagicMock()),
         ):
-            node = await prov.allocate("test", NodeId(999))
+            node = await prov.allocate("test", _tmp_node(999))
 
         assert isinstance(node, Node)
         assert node.node_id == NodeId(999)
@@ -301,7 +319,7 @@ class TestAllocate:
         prov = make_provisioner()
 
         with pytest.raises(CloudAllocateError, match="Unknown provider"):
-            await prov.allocate("nonexistent", NodeId(1))
+            await prov.allocate("nonexistent", _tmp_node(1))
 
     @pytest.mark.asyncio
     async def test_allocate_create_node_failure(
@@ -323,7 +341,7 @@ class TestAllocate:
         )
 
         with pytest.raises(CloudAllocateError, match="Create node error"):
-            await prov.allocate("test", NodeId(1))
+            await prov.allocate("test", _tmp_node(1))
 
     @pytest.mark.asyncio
     async def test_allocate_setup_failure_cleans_up_vm(
@@ -372,7 +390,7 @@ class TestAllocate:
             ),
             pytest.raises(CloudSetupError, match="SSH connect to"),
         ):
-            await prov.allocate("test", NodeId(1))
+            await prov.allocate("test", _tmp_node(1))
 
         # Setup-failure path: disconnect(node.node_id) is awaited BEFORE
         # delete_node, and node.node_id == tmp_node_id (the single identity
@@ -426,7 +444,7 @@ class TestAllocate:
             ),
             pytest.raises(CloudSetupError, match="timed out"),
         ):
-            await prov.allocate("test", NodeId(1))
+            await prov.allocate("test", _tmp_node(1))
 
         adapter.delete_node.assert_awaited_once()
 
@@ -445,7 +463,16 @@ class TestDeallocate:
             configs={"test-cloud": config},
         )
 
-        await prov.deallocate("test-cloud", "10.0.0.1")
+        node = Node(
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=2,
+            cloud="test-cloud",
+            username="root",
+            port=22,
+            enabled=True,
+        )
+        await prov.deallocate(node)
 
         adapter.delete_node.assert_awaited_once()
 
@@ -462,7 +489,16 @@ class TestDeallocate:
             logger=log,
         )
 
-        await prov.deallocate("unknown-cloud", "10.0.0.1")
+        node = Node(
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=2,
+            cloud="unknown-cloud",
+            username="root",
+            port=22,
+            enabled=True,
+        )
+        await prov.deallocate(node)
 
         adapter.delete_node.assert_not_awaited()
         log.warning.assert_called()
@@ -480,7 +516,43 @@ class TestDeallocate:
             logger=log,
         )
 
-        await prov.deallocate("test-cloud", "10.0.0.1")
+        node = Node(
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=2,
+            cloud="test-cloud",
+            username="root",
+            port=22,
+            enabled=True,
+        )
+        await prov.deallocate(node)
+
+        adapter.delete_node.assert_not_awaited()
+        log.warning.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_deallocate_no_cloud_logs_and_returns(self) -> None:
+        """node.cloud is None -> no provider SDK invoked; adapter logs and returns."""
+        adapter, config = _make_mock_adapter(name="test-cloud")
+        adapter.delete_node = AsyncMock()
+        log = MagicMock()
+
+        prov = make_provisioner(
+            adapters={"test-cloud": adapter},
+            configs={"test-cloud": config},
+            logger=log,
+        )
+
+        node = Node(
+            node_id=NodeId(1),
+            ip="10.0.0.1",
+            ncpus=2,
+            cloud=None,
+            username="root",
+            port=22,
+            enabled=True,
+        )
+        await prov.deallocate(node)
 
         adapter.delete_node.assert_not_awaited()
         log.warning.assert_called()
