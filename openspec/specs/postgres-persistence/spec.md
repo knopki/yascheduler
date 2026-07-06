@@ -20,32 +20,51 @@ at most once per process).
 
 - `sql/schema.sql` — the full latest snapshot (every `CREATE TABLE` includes
   all current columns; no inline `ALTER`s). The DO block's `last_migration`
-  CONSTANT is the single manual edit point when a migration is added.
+  CONSTANT is the single manual edit point when a migration is added. After the
+  task-schema-and-entity-cleanup change, `last_migration` is `'009'` and
+  `yascheduler_tasks` reflects the final shape (`title` column, `task_status`
+  enum, `created_at`/`updated_at` columns, no `ip` column).
 - `sql/migrations/` — forward-only migration files (`{prefix_id}_{rest}.sql`
   or `.py`), applied by `apply_migrations` in string-sorted `prefix_id` order.
-- `sql/task/insert.sql` — `INSERT INTO yascheduler_tasks (label, metadata, ip,
-  status, allocated_node_id) VALUES (:label, :metadata, :ip, :status, :node_id)
-  RETURNING task_id, label, ip, status, metadata, allocated_node_id`.
-- `sql/task/update_by_id.sql` — `UPDATE yascheduler_tasks SET label=:label,
-  ip=:ip, status=:status, metadata=:metadata, allocated_node_id=:node_id WHERE
+- `sql/task/insert.sql` — `INSERT INTO yascheduler_tasks (title, metadata,
+  status, allocated_node_id) VALUES (:title, :metadata, :status, :node_id)
+  RETURNING task_id, title, status, metadata, allocated_node_id, created_at,
+  updated_at`. The `:title` named parameter binds the domain `Task.label`
+  value (the DB column is `title`, the domain field is `label`). The `:status`
+  named parameter binds the enum-label string (`task.status.name`, was the int
+  `task.status.value`). `created_at`/`updated_at` are NOT bound (the DB
+  `DEFAULT NOW()` populates them) and are read back via `RETURNING`. The `ip`
+  column is absent (dropped by migration 009); the `:ip` named parameter is
+  removed.
+- `sql/task/update_by_id.sql` — `UPDATE yascheduler_tasks SET title=:title,
+  status=:status, metadata=:metadata, allocated_node_id=:node_id WHERE
   task_id = :task_id RETURNING task_id` (partial update keyed by `task_id`; NOT
-  an upsert).
-- `sql/task/get_by_id.sql` — `SELECT task_id, label, ip, status, metadata,
-  allocated_node_id FROM yascheduler_tasks WHERE task_id = :task_id`.
-- `sql/task/list_by_status.sql` — `SELECT task_id, label, ip, status, metadata,
-  allocated_node_id FROM yascheduler_tasks WHERE status IN (...) ORDER BY
-  task_id LIMIT :lim`.
-- `sql/task/list_by_jobs.sql` — `SELECT task_id, label, ip, status, metadata,
-  allocated_node_id FROM yascheduler_tasks WHERE task_id IN (...) ORDER BY
-  task_id`.
+  an upsert). The `BEFORE UPDATE` trigger `yascheduler_tasks_touch_updated_at`
+  sets `updated_at = NOW()` on the row (the application does not set it). The
+  `ip=:ip` SET term is removed (the `ip` column is dropped).
+- `sql/task/get_by_id.sql` — `SELECT task_id, title, status, metadata,
+  allocated_node_id, created_at, updated_at FROM yascheduler_tasks WHERE
+  task_id = :task_id`. The `label` column is renamed to `title`; the `ip`
+  column is absent; `created_at`/`updated_at` are added.
+- `sql/task/list_by_status.sql` — `SELECT task_id, title, status, metadata,
+  allocated_node_id, created_at, updated_at FROM yascheduler_tasks WHERE
+  status IN (...) ORDER BY task_id LIMIT :lim`. The `status IN (...)` filter
+  uses `cast(:statuses AS task_status[])` (the enum-array cast; was
+  `cast(:statuses AS int[])`).
+- `sql/task/list_by_jobs.sql` — `SELECT task_id, title, status, metadata,
+  allocated_node_id, created_at, updated_at FROM yascheduler_tasks WHERE
+  task_id IN (...) ORDER BY task_id`.
 - `sql/task/update_status.sql` — `UPDATE yascheduler_tasks SET status=...
   WHERE task_id = :task_id RETURNING task_id` (status-only update; does NOT
-  touch `allocated_node_id`).
-- `sql/task/get_ids_by_ip_and_status.sql` — `SELECT task_id FROM
-  yascheduler_tasks WHERE ip = :ip AND status = :status ORDER BY task_id`
-  (returns task_ids only; this is a read-path lookup that stays ip-keyed —
-  `ip` is the cloud host identifier, not node identity).
-- `sql/task/count_by_status.sql` — aggregate; no `allocated_node_id` column.
+  touch `allocated_node_id`). The `:status` named parameter binds the
+  enum-label string (`task.status.name`, was the int).
+- `sql/task/get_ids_by_node_id_and_status.sql` — `SELECT task_id FROM
+  yascheduler_tasks WHERE allocated_node_id = :node_id AND status = :status
+  ORDER BY task_id` (renamed from `get_ids_by_ip_and_status.sql`; the filter
+  key changes from `ip = :ip` to `allocated_node_id = :node_id`; the
+  `:status` named parameter binds the enum-label string).
+- `sql/task/count_by_status.sql` — aggregate (`GROUP BY status`, works with
+  the enum); no `allocated_node_id` column.
 - `sql/node/insert.sql` — `INSERT ... VALUES (...) RETURNING node_id`.
 - `sql/node/get_by_id.sql` — `WHERE node_id = :node_id`.
 - `sql/node/get_by_ids.sql` — `SELECT node_id, ip, ncpus, enabled, cloud,
@@ -59,6 +78,9 @@ at most once per process).
 - The ip-keyed SQL files `sql/node/get_by_ip.sql` and
   `sql/node/get_by_ips.sql` are REMOVED — no caller resolves a node by ip
   after the `ssh-rekey-node-id` change.
+- The ip-keyed SQL file `sql/task/get_ids_by_ip_and_status.sql` is REMOVED
+  and replaced by `sql/task/get_ids_by_node_id_and_status.sql` (filter by
+  `allocated_node_id`, not `ip`).
 - Every node SELECT (`list_all`, `get_by_ids`, `list_enabled`,
   `list_disabled`, `get_by_id`) SHALL include `node_id` in its column list.
 
@@ -98,10 +120,10 @@ parameter in `node/get_by_ids.sql` binds a list of `node_id.value` ints
 - **WHEN** any of `sql/node/enable.sql`, `sql/node/disable.sql`, `sql/node/remove.sql`, `sql/node/update.sql` is inspected
 - **THEN** the `WHERE` clause is `WHERE node_id = :node_id` (not `WHERE ip = :ip`)
 
-#### Scenario: Task SELECTs include allocated_node_id
+#### Scenario: Task SELECTs include created_at and updated_at
 
 - **WHEN** any task SELECT clause (`get_by_id`, `list_by_status`, `list_by_jobs`) or `insert`'s RETURNING clause is inspected
-- **THEN** the column list includes `allocated_node_id`
+- **THEN** the column list includes `allocated_node_id`, `created_at`, and `updated_at` (and uses `title`, not `label`, for the label column)
 
 #### Scenario: Task insert binds allocated_node_id
 
@@ -155,7 +177,10 @@ entering the `async with` context SHALL raise
 
 `PostgresTaskRepository` SHALL satisfy the `TaskRepository` Protocol with async
 methods `get`, `save`, `insert`, `update_status`, `list_by_status`,
-`list_by_jobs`, `list_ids_by_ip_and_status`, `count_by_status`.
+`list_by_jobs`, `list_ids_by_node_id_and_status`, `count_by_status`. The
+method `list_ids_by_ip_and_status` is REMOVED and replaced by
+`list_ids_by_node_id_and_status(node_id: NodeId, status: TaskStatus)`
+(filtering by `allocated_node_id = :node_id` instead of `ip = :ip`).
 
 `save(task)` and `update_status(task_id, status)` SHALL execute
 `UPDATE ... WHERE task_id = :task_id ... RETURNING task_id`, passing
@@ -168,27 +193,46 @@ leaves an orphan task that `publish_events` would later dispatch for.
 
 `save(task)` SHALL bind `node_id=task.allocated_node_id.value` (or `None` when
 `task.allocated_node_id is None`) as the pg8000 named parameter for the
-`allocated_node_id` column, alongside `label`, `status`, `ip`, `metadata` in
-the `task/update_by_id.sql` UPDATE. The SQL SHALL SET
-`allocated_node_id = :node_id`.
+`allocated_node_id` column, alongside `title` (the DB column name for the
+domain `label` field), `status` (the `task.status.name` string — the DB column
+is a PostgreSQL enum `task_status`), `metadata` in the `task/update_by_id.sql`
+UPDATE. The SQL SHALL SET `allocated_node_id = :node_id`, `title = :title`,
+`status = :status`. The SQL SHALL NOT set `ip` (the column is dropped) and
+SHALL NOT set `updated_at` (the `BEFORE UPDATE` trigger sets it). The `label`
+pg8000 named parameter carries the value of `task.label` (the param name is
+`title`, matching the DB column; the domain field name is `label`).
 
 `insert(new_task: NewTask) -> Task` SHALL run
-`task/insert.sql ... RETURNING task_id, label, ip, status, metadata,
-allocated_node_id` and return `_row_to_task(rows[0])` (the `NewTask.task_id` is
-ignored — none exists; the DB generates it), avoiding a second `get` round-trip.
-`insert` SHALL bind `node_id=new_task.allocated_node_id.value` (or `None`) as
-the pg8000 named parameter for the `allocated_node_id` column, alongside
-`label`, `metadata`, `ip`, `status`.
+`task/insert.sql ... RETURNING task_id, title, status, metadata,
+allocated_node_id, created_at, updated_at` and return `_row_to_task(rows[0])`
+(the `NewTask.task_id` is ignored — none exists; the DB generates it),
+avoiding a second `get` round-trip. `insert` SHALL bind
+`node_id=new_task.allocated_node_id.value` (or `None`) as the pg8000 named
+parameter for the `allocated_node_id` column, alongside `title` (carrying
+`new_task.label`), `metadata`, `status` (the `new_task.status.name` string).
+`created_at`/`updated_at` are NOT bound — the DB `DEFAULT NOW()` populates them
+on insert, and they are read back via `RETURNING`.
 
-`get`, `_row_to_task`, `list_by_jobs`, `list_ids_by_ip_and_status` SHALL wrap
-`TaskId(int(row["task_id"]))` / `task_id.value` at the boundary. `_row_to_task`
-SHALL read `allocated_node_id` from the row and construct
+`get`, `_row_to_task`, `list_by_jobs`, `list_ids_by_node_id_and_status` SHALL
+wrap `TaskId(int(row["task_id"]))` / `task_id.value` at the boundary.
+`_row_to_task` SHALL read `allocated_node_id` from the row and construct
 `allocated_node_id=NodeId(int(row["allocated_node_id"]))` when
-`row["allocated_node_id"]` is not None, else `allocated_node_id=None`. The 5
-task SQL files that return task rows (`get_by_id`, `list_by_status`,
-`list_by_jobs`, `insert`'s RETURNING, `update_by_id`'s RETURNING) SHALL include
-`allocated_node_id` in their SELECT/RETURNING column lists so `_row_to_task`
-can read it.
+`row["allocated_node_id"]` is not None, else `allocated_node_id=None`.
+`_row_to_task` SHALL read `created_at` and `updated_at` from the row (pg8000
+returns `datetime` for `TIMESTAMPTZ` columns). `_row_to_task` SHALL read
+`status` as a Python `str` (the enum label, e.g. `"TO_DO"`) and construct the
+domain enum via `TaskStatus[row["status"]]` (name lookup — NOT
+`TaskStatus(row["status"])`, which is an int cast and would raise on a
+string). `_row_to_task` SHALL NOT read an `ip`/`allocated_ip` column (the
+column is dropped). `_row_to_task` SHALL read `title` (the renamed column)
+and map it to the `label` field of `Task`. The 4 task SQL files that return
+task rows (`get_by_id`, `list_by_status`, `list_by_jobs`, `insert`'s
+RETURNING) SHALL include `title, status, metadata, allocated_node_id,
+created_at, updated_at` in their SELECT/RETURNING column lists (renamed from
+`label` to `title`, dropped `ip`, added `created_at`/`updated_at`).
+`update_by_id.sql`'s RETURNING SHALL include only `task_id` (the current `save`
+does not refresh the in-memory `Task`; `updated_at` is observable via a
+subsequent read).
 
 #### Scenario: Get non-existent task
 - **WHEN** `get(TaskId(999))` is called and no such row exists
@@ -218,17 +262,21 @@ can read it.
 - **WHEN** `update_status(TaskId(999), TaskStatus.RUNNING)` is called and no row with task_id=999 exists
 - **THEN** `TaskRowNotFoundError` is raised (carrying `TaskId(999)`)
 
-#### Scenario: List IDs by IP and status returns TaskIds
-- **WHEN** `list_ids_by_ip_and_status("10.0.0.1", TaskStatus.RUNNING)` is called
+#### Scenario: List IDs by node ID and status returns TaskIds
+- **WHEN** `list_ids_by_node_id_and_status(NodeId("n1"), TaskStatus.RUNNING)` is called
 - **THEN** returns a `list[TaskId]` (each `TaskId(int(row["task_id"]))`), NOT a `list[int]`
 
 #### Scenario: _row_to_task wraps TaskId and NodeId
-- **WHEN** `_row_to_task(row)` is called with a row whose `task_id` is the int `7` and `allocated_node_id` is the int `5`
-- **THEN** the returned `Task` has `task_id=TaskId(7)` and `allocated_node_id=NodeId(5)`
+- **WHEN** `_row_to_task(row)` is called with a row whose `task_id` is the int `7`, `allocated_node_id` is the int `5`, `status` is the string `"TO_DO"`, `created_at` is a `datetime`, and `updated_at` is a `datetime`
+- **THEN** the returned `Task` has `task_id=TaskId(7)`, `allocated_node_id=NodeId(5)`, `status=TaskStatus.TO_DO`, `created_at=datetime`, and `updated_at=datetime`
 
 #### Scenario: _row_to_task handles NULL allocated_node_id
 - **WHEN** `_row_to_task(row)` is called with a row whose `allocated_node_id` is NULL (or absent)
 - **THEN** the returned `Task` has `allocated_node_id=None`
+
+#### Scenario: _row_to_task reads title as label
+- **WHEN** `_row_to_task(row)` is called with a row whose `title` column is `"my job"`
+- **THEN** the returned `Task` has `label="my job"` (the domain field is `label`, mapped from the DB column `title`)
 
 ### Requirement: PostgresNodeRepository implements NodeRepository
 

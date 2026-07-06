@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/client.py
-# VERSION: 2.8.0
+# VERSION: 2.9.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
@@ -10,13 +10,13 @@
 #
 # START_MODULE_MAP
 #   Yascheduler - Sync/async client wrapper for task operations
-#   _task_to_dict - Project domain Task to the public 6-key Mapping shape
+#   _task_to_dict - Project domain Task to the public 5-key Mapping shape (task_id, label, status, metadata, node) with nested node object
 #   to_sync - Private async-to-sync decorator (inlined from former yascheduler.shared.async_utils; not re-exported)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.8.0 - Facade is the sole int/TaskId marshalling boundary (add-task-id-identity): _task_to_dict extracts "task_id": t.task_id.value (public dict stays int); queue_submit_task_async returns (await deps.submit(...)).value (public -> int preserved); queue_get_tasks_async wraps [TaskId(i) for i in jobs] before calling query_tasks (public jobs: list[int] preserved). The domain is type-safe end-to-end; the public API signatures are unchanged.
-#   PREVIOUS_CHANGE: v2.7.0 - Import Config from yascheduler.entrypoints.config (not yascheduler.config, deleted); replace Config.from_config_parser with parse_config from entrypoints.config_parser (config-aggregate-to-entrypoints / P4).
+#   LAST_CHANGE: v2.9.0 - task-schema-and-entity-cleanup: queue_get_tasks_async unpacks (tasks, nodes_by_id) from query_tasks (return type widened to tuple); _task_to_dict(t, nodes_by_id) drops flat "ip"/"cloud" keys and adds a nested "node" object {ip, port, username, cloud} (or null) built from nodes_by_id.get(t.allocated_node_id). Public keys are now {task_id, label, status, metadata, node}. BREAKING facade dict shape change.
+#   PREVIOUS_CHANGE: v2.8.0 - Facade is the sole int/TaskId marshalling boundary (add-task-id-identity): _task_to_dict extracts "task_id": t.task_id.value (public dict stays int); queue_submit_task_async returns (await deps.submit(...)).value (public -> int preserved); queue_get_tasks_async wraps [TaskId(i) for i in jobs] before calling query_tasks (public jobs: list[int] preserved). The domain is type-safe end-to-end; the public API signatures are unchanged.
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -31,7 +31,7 @@ from pathlib import PurePath
 from typing import Any, Optional, TypeVar, Union
 
 from yascheduler.application import query_tasks
-from yascheduler.domain import Task, TaskId, TaskStatus
+from yascheduler.domain import Node, NodeId, Task, TaskId, TaskStatus
 from yascheduler.entrypoints.config import Config
 from yascheduler.entrypoints.config_parser import parse_config
 
@@ -80,20 +80,29 @@ def to_sync(
 
 
 # START_CONTRACT: _task_to_dict
-#   PURPOSE: Project a domain Task to the public 6-key Mapping shape returned by query methods.
-#   INPUTS: { t: Task - domain Task aggregate (t.task_id: TaskId) }
-#   OUTPUTS: { Mapping[str, Any] - {task_id (bare int via .value), label, ip, status, metadata, cloud} }
+#   PURPOSE: Project a domain Task to the public 5-key Mapping shape returned by query methods.
+#   INPUTS: { t: Task - domain Task aggregate (t.task_id: TaskId), nodes_by_id: dict[NodeId, Node] - node lookup by allocated_node_id }
+#   OUTPUTS: { Mapping[str, Any] - {task_id (bare int via .value), label, status, metadata, node} ; node is a nested {ip, port, username, cloud} object or null }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL
 # END_CONTRACT: _task_to_dict
-def _task_to_dict(t: Task) -> Mapping[str, Any]:
+def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]:
+    node = nodes_by_id.get(t.allocated_node_id) if t.allocated_node_id else None
     return {
         "task_id": t.task_id.value,
         "label": t.label,
-        "ip": t.allocated_ip or "",
         "status": t.status,
         "metadata": t.context.to_metadata(),
-        "cloud": None,
+        "node": (
+            {
+                "ip": node.ip,
+                "port": node.port,
+                "username": node.username,
+                "cloud": node.cloud,
+            }
+            if node is not None
+            else None
+        ),
     }
 
 
@@ -169,8 +178,8 @@ class Yascheduler:
     # START_CONTRACT: queue_get_tasks_async
     #   PURPOSE: Query tasks asynchronously by job IDs or statuses via the query_tasks use case.
     #   INPUTS: { jobs: Optional[Sequence[int]], status: Optional[Sequence[int]] }
-    #   OUTPUTS: { Sequence[Mapping[str, Any]] - list of task dicts with 6 keys each }
-    #   SIDE_EFFECTS: Opens a UoW (DB connection) per call via deps_factory; reads task records
+    #   OUTPUTS: { Sequence[Mapping[str, Any]] - list of task dicts with 5 keys each (task_id, label, status, metadata, node) }
+    #   SIDE_EFFECTS: Opens a UoW (DB connection) per call via deps_factory; reads task records and batch-loads allocated nodes
     #   RAISES: ValueError - if both jobs and statuses are non-empty (mutual exclusivity)
     #   LINKS: M-ENTRYPOINTS-CLIENT, M-APPLICATION-QUERY-TASKS, M-DI
     # END_CONTRACT: queue_get_tasks_async
@@ -188,8 +197,8 @@ class Yascheduler:
         # before crossing into the use case (public jobs: list[int] preserved).
         job_ids: Optional[list[TaskId]] = [TaskId(i) for i in jobs] if jobs else None
         deps = self._deps_factory(self.config)
-        tasks = await query_tasks(job_ids, statuses, deps.uow_factory)
-        return [_task_to_dict(t) for t in tasks]
+        tasks, nodes_by_id = await query_tasks(job_ids, statuses, deps.uow_factory)
+        return [_task_to_dict(t, nodes_by_id) for t in tasks]
 
     # START_CONTRACT: queue_get_tasks
     #   PURPOSE: Query tasks synchronously by job IDs or statuses

@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, TaskContext, Engine, Task, Node, ConnectedMachine.
-#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_context, TaskContext.replace, Task.allocate_to(node) binding both allocated_ip and allocated_node_id, allocated_node_id field defaults/preservation.
+#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_context, TaskContext.replace, Task.allocate_to(node) binding allocated_node_id (sole allocation signal), allocated_node_id field defaults/preservation, Task has no allocated_ip attribute, created_at/updated_at field defaults.
 #   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -16,8 +16,10 @@
 #   test_engine_validate_inputs - ok when files present, raises MissingInputFileError when missing
 #   test_task_construction - default TO_DO status
 #   test_task_immutability - FrozenInstanceError on mutation
-#   test_allocate_to_takes_node_and_binds_both_fields - allocate_to(node) sets allocated_ip and allocated_node_id
-#   test_allocate_to_rejects_already_allocated - raises TaskAlreadyAllocatedError, neither field changed
+#   test_allocate_to_takes_node_and_binds_allocated_node_id - allocate_to(node) sets allocated_node_id (sole allocation signal)
+#   test_allocate_to_rejects_already_allocated - raises TaskAlreadyAllocatedError, allocated_node_id unchanged
+#   test_allocate_to_returns_task_without_allocated_ip - allocate_to result has no allocated_ip attribute
+#   test_mark_running_raises_when_allocated_node_id_none - mark_running guard on allocated_node_id
 #   test_task_mark_running - transitions to RUNNING
 #   test_task_complete - transitions RUNNING->DONE
 #   test_task_complete_not_running - raises TaskNotAllocatedError
@@ -40,12 +42,13 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - task-allocated-node-id: update test_task_allocate_to* tests to call allocate_to(node) with a constructed Node (was allocate_to("ip") — signature changed); add test_allocate_to_takes_node_and_binds_both_fields, test_allocate_to_rejects_already_allocated (asserts neither field changed), test_new_task_has_allocated_node_id_default_none, test_task_with_context_preserves_allocated_node_id.
-#   PREVIOUS_CHANGE: v1.4.0 - remove-tmp-node-fake-ip: add TestNewNode.tmp_reservation_defaults and test_explicit_ip_ncpus_override_defaults for NewNode ip="" / ncpus=0 defaults.
+#   LAST_CHANGE: v1.6.0 - task-schema-and-entity-cleanup: drop allocated_ip from Task/NewTask (allocated_node_id is the sole allocation signal); allocate_to/mark_running guards switch to allocated_node_id; add test_allocate_to_returns_task_without_allocated_ip, test_mark_running_raises_when_allocated_node_id_none; Task gains created_at/updated_at (DB-generated, default None on construction).
+#   PREVIOUS_CHANGE: v1.5.0 - task-allocated-node-id: update test_task_allocate_to* tests to call allocate_to(node) with a constructed Node (was allocate_to("ip") — signature changed); add test_allocate_to_takes_node_and_binds_both_fields, test_allocate_to_rejects_already_allocated (asserts neither field changed), test_new_task_has_allocated_node_id_default_none, test_task_with_context_preserves_allocated_node_id.
 # END_CHANGE_SUMMARY
 
 import time
 from dataclasses import FrozenInstanceError
+from datetime import datetime
 
 import pytest
 
@@ -54,6 +57,7 @@ from yascheduler.domain.exceptions import (
     MachineBusyError,
     MissingInputFileError,
     TaskAlreadyAllocatedError,
+    TaskNotAllocatedError,
     TaskNotRunningError,
 )
 from yascheduler.domain.model import (
@@ -301,35 +305,51 @@ class TestTask:
         assert task.label == "test"
         assert task.context.engine == "cp2k"
         assert task.status == TaskStatus.TO_DO
-        assert task.allocated_ip is None
         assert task.allocated_node_id is None
+        assert not hasattr(task, "allocated_ip")
+        assert isinstance(task.created_at, datetime)
+        assert isinstance(task.updated_at, datetime)
 
     def test_immutability(self) -> None:
         task = self.make_task()
         with pytest.raises(FrozenInstanceError):
             task.status = TaskStatus.RUNNING  # type: ignore[misc]
 
-    def test_allocate_to_takes_node_and_binds_both_fields(self) -> None:
+    def test_allocate_to_takes_node_and_binds_allocated_node_id(self) -> None:
         task = self.make_task()
         node = self._node(node_id=7, ip="10.0.0.1")
         allocated = task.allocate_to(node)
-        assert allocated.allocated_ip == "10.0.0.1"
         assert allocated.allocated_node_id == NodeId(7)
         assert allocated.task_id == task.task_id
         assert allocated.status == task.status
         # original unchanged
-        assert task.allocated_ip is None
         assert task.allocated_node_id is None
+        # allocate_to returns a Task with no allocated_ip attribute
+        assert not hasattr(allocated, "allocated_ip")
 
     def test_allocate_to_rejects_already_allocated(self) -> None:
-        task = self.make_task(allocated_ip="10.0.0.1", allocated_node_id=NodeId(7))
+        task = self.make_task(allocated_node_id=NodeId(7))
         node = self._node(node_id=8, ip="10.0.0.2")
         with pytest.raises(TaskAlreadyAllocatedError) as exc_info:
             task.allocate_to(node)
         assert "1" in str(exc_info.value)
-        # neither field changed
-        assert task.allocated_ip == "10.0.0.1"
+        # allocated_node_id unchanged
         assert task.allocated_node_id == NodeId(7)
+
+    def test_allocate_to_returns_task_without_allocated_ip(self) -> None:
+        """allocate_to returns a Task with no allocated_ip attribute (field removed)."""
+        task = self.make_task()
+        node = self._node(node_id=7, ip="10.0.0.1")
+        allocated = task.allocate_to(node)
+        assert not hasattr(allocated, "allocated_ip")
+        assert not hasattr(task, "allocated_ip")
+
+    def test_mark_running_raises_when_allocated_node_id_none(self) -> None:
+        """mark_running guard keys on allocated_node_id (was allocated_ip)."""
+        task = self.make_task()  # allocated_node_id defaults to None
+        with pytest.raises(TaskNotAllocatedError) as exc_info:
+            task.mark_running()
+        assert "1" in str(exc_info.value)
 
     def test_mark_running(self) -> None:
         task = self.make_task()
@@ -561,24 +581,23 @@ class TestTaskWithContext:
         return Task(**base)  # type: ignore[arg-type]
 
     def test_with_context_replaces_context_wholesale(self) -> None:
-        task = self.make_task(allocated_ip="10.0.0.1", status=TaskStatus.RUNNING)
+        task = self.make_task(status=TaskStatus.RUNNING)
         new_context = TaskContext(engine="cp2k", remote_folder="/r")
         result = task.with_context(new_context)
         assert result.context is new_context
         assert result.task_id == task.task_id
         assert result.label == task.label
         assert result.status == task.status
-        assert result.allocated_ip == task.allocated_ip
+        assert result.allocated_node_id == task.allocated_node_id
         assert result._events == task._events
 
     def test_with_context_preserves_allocated_node_id(self) -> None:
         # task-allocated-node-id: with_context preserves allocated_node_id
         # alongside the other non-context fields.
-        task = self.make_task(allocated_ip="10.0.0.1", allocated_node_id=NodeId(5))
+        task = self.make_task(allocated_node_id=NodeId(5))
         new_context = TaskContext(engine="cp2k")
         result = task.with_context(new_context)
         assert result.allocated_node_id == NodeId(5)
-        assert result.allocated_ip == "10.0.0.1"
 
     def test_with_context_preserves_events(self) -> None:
         task = self.make_task()
@@ -772,8 +791,10 @@ class TestNewTask:
         assert nt.label == "x"
         assert nt.context is ctx
         assert nt.status == TaskStatus.TO_DO
-        assert nt.allocated_ip is None
         assert nt.allocated_node_id is None
+        assert not hasattr(nt, "allocated_ip")
+        assert not hasattr(nt, "created_at")
+        assert not hasattr(nt, "updated_at")
 
     def test_has_no_task_id(self) -> None:
         nt = NewTask(label="x", context=TaskContext(engine="cp2k"))

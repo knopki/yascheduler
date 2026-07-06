@@ -320,10 +320,12 @@ class TestPostgresTaskRepository:
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
                 "task_id": 42,
-                "label": "test_label",
-                "ip": "10.0.0.1",
-                "status": 1,
+                "title": "test_label",
+                "status": "RUNNING",
                 "metadata": '{"engine":"fleur"}',
+                "allocated_node_id": None,
+                "created_at": None,
+                "updated_at": None,
             }
         ]
 
@@ -332,7 +334,7 @@ class TestPostgresTaskRepository:
         assert task is not None
         assert task.task_id == TaskId(42)
         assert task.label == "test_label"
-        assert task.allocated_ip == "10.0.0.1"
+        assert not hasattr(task, "allocated_ip")
         assert task.context.engine == "fleur"
         assert task.status == DomainTaskStatus.RUNNING
 
@@ -348,14 +350,13 @@ class TestPostgresTaskRepository:
     async def test_get_with_none_ip_and_extra_fields(
         self, mocker: MockerFixture
     ) -> None:
-        """get handles null ip and extra metadata fields."""
+        """get handles null allocated_node_id and extra metadata fields."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
                 "task_id": 1,
-                "label": "no-ip-task",
-                "ip": None,
-                "status": 0,
+                "title": "no-ip-task",
+                "status": "TO_DO",
                 "metadata": json.dumps(
                     {
                         "engine": "cp2k",
@@ -366,6 +367,9 @@ class TestPostgresTaskRepository:
                         "extra_field": "extra_val",
                     }
                 ),
+                "allocated_node_id": None,
+                "created_at": None,
+                "updated_at": None,
             }
         ]
 
@@ -374,7 +378,7 @@ class TestPostgresTaskRepository:
         assert task is not None
         assert task.task_id == TaskId(1)
         assert task.label == "no-ip-task"
-        assert task.allocated_ip is None
+        assert not hasattr(task, "allocated_ip")
         assert task.status == DomainTaskStatus.TO_DO
         assert task.context.engine == "cp2k"
         assert task.context.remote_folder == "/remote/path"
@@ -391,10 +395,12 @@ class TestPostgresTaskRepository:
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
                 "task_id": 99,
-                "label": "label",
-                "ip": None,
-                "status": 0,
+                "title": "label",
+                "status": "TO_DO",
                 "metadata": '{"engine":"fleur"}',
+                "allocated_node_id": None,
+                "created_at": None,
+                "updated_at": None,
             }
         ]
 
@@ -430,15 +436,15 @@ class TestPostgresTaskRepository:
         (sql,), kwargs = call_args
         assert sql == load_query("task/update_by_id")
         assert kwargs["task_id"] == 7
-        assert kwargs["label"] == "my-job"
-        assert kwargs["status"] == 0
-        assert kwargs["ip"] is None
+        assert kwargs["title"] == "my-job"
+        assert kwargs["status"] == "TO_DO"
+        assert "ip" not in kwargs
         metadata = json.loads(kwargs["metadata"])
         assert metadata["engine"] == "fleur"
         assert metadata["remote_folder"] == "/remote"
 
     async def test_save_running_task(self, mocker: MockerFixture) -> None:
-        """save persists a RUNNING task with its allocated_ip."""
+        """save persists a RUNNING task with its allocated_node_id."""
         repo = self._make_repo(mocker)
         ctx = TaskContext(engine="vasp")
         task = Task(
@@ -446,14 +452,15 @@ class TestPostgresTaskRepository:
             label="running-job",
             context=ctx,
             status=DomainTaskStatus.RUNNING,
-            allocated_ip="10.0.0.5",
+            allocated_node_id=NodeId(5),
         )
 
         await repo.save(task)
 
         _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
-        assert kwargs["status"] == 1
-        assert kwargs["ip"] == "10.0.0.5"
+        assert kwargs["status"] == "RUNNING"
+        assert kwargs["node_id"] == 5
+        assert "ip" not in kwargs
 
     # -- list_by_status --------------------------------------------------------
 
@@ -463,17 +470,21 @@ class TestPostgresTaskRepository:
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
                 "task_id": 1,
-                "label": "a",
-                "ip": "10.0.0.1",
-                "status": 0,
+                "title": "a",
+                "status": "TO_DO",
                 "metadata": '{"engine":"fleur"}',
+                "allocated_node_id": None,
+                "created_at": None,
+                "updated_at": None,
             },
             {
                 "task_id": 2,
-                "label": "b",
-                "ip": "10.0.0.2",
-                "status": 1,
+                "title": "b",
+                "status": "RUNNING",
                 "metadata": '{"engine":"cp2k"}',
+                "allocated_node_id": None,
+                "created_at": None,
+                "updated_at": None,
             },
         ]
 
@@ -504,17 +515,21 @@ class TestPostgresTaskRepository:
         repo._run.return_value = [  # type: ignore[attr-defined]
             {
                 "task_id": 10,
-                "label": "job-x",
-                "ip": "10.0.0.1",
-                "status": 2,
+                "title": "job-x",
+                "status": "DONE",
                 "metadata": '{"engine":"fleur"}',
+                "allocated_node_id": None,
+                "created_at": None,
+                "updated_at": None,
             },
             {
                 "task_id": 20,
-                "label": "job-y",
-                "ip": None,
-                "status": 2,
+                "title": "job-y",
+                "status": "DONE",
                 "metadata": '{"engine":"cp2k"}',
+                "allocated_node_id": None,
+                "created_at": None,
+                "updated_at": None,
             },
         ]
 
@@ -537,12 +552,12 @@ class TestPostgresTaskRepository:
     # -- count_by_status -------------------------------------------------------
 
     async def test_count_by_status_returns_mapping(self, mocker: MockerFixture) -> None:
-        """count_by_status returns a mapping of TaskStatus -> count."""
+        """count_by_status returns a mapping of TaskStatus -> count (name lookup)."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
-            {"status": 0, "count": 5},
-            {"status": 1, "count": 3},
-            {"status": 2, "count": 10},
+            {"status": "TO_DO", "count": 5},
+            {"status": "RUNNING", "count": 3},
+            {"status": "DONE", "count": 10},
         ]
 
         counts = await repo.count_by_status()

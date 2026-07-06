@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_manage_node.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yasetnode manage_node() host-spec grammar, argparse, exit codes, helpers, and add/remove paths.
@@ -20,7 +20,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - add-node-id-identity: added node_id=NodeId(...) to all Node() constructions; renamed all add→insert calls (NodeRepository.add→insert, NewNode arg); added TestParseNodeTarget and TestManageNodeIdPath test classes.
+#   LAST_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: rename list_ids_by_ip_and_status→list_ids_by_node_id_and_status in mock setup
 #   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: deleted test_manage_node_is_to_sync_decorated (manage_node is no longer @to_sync; it's a sync def that calls asyncio.run); added --config/--log-level scenarios.
 # END_CHANGE_SUMMARY
 
@@ -520,7 +520,7 @@ class TestManageNodeRemovePath:
         uow.nodes.list_all = AsyncMock(
             return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
-        uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1, 2])
+        uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1, 2])
 
         _run(["10.0.0.1", "--remove-hard"])
 
@@ -545,7 +545,7 @@ class TestManageNodeRemovePath:
         uow.nodes.list_all = AsyncMock(
             return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
-        uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1])
+        uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1])
 
         _run(["10.0.0.1", "--remove-soft"])
 
@@ -565,7 +565,7 @@ class TestManageNodeRemovePath:
         uow.nodes.list_all = AsyncMock(
             return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
-        uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
+        uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[])
 
         _run(["10.0.0.1", "--remove-soft"])
 
@@ -601,7 +601,7 @@ class TestManageNodeRemovePath:
         uow.nodes.list_all = AsyncMock(
             return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
         )
-        uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[1])
+        uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1])
         # Failing commit proves the success prints live AFTER commit, not before.
         uow.commit = AsyncMock(side_effect=RuntimeError("commit failed"))
 
@@ -624,7 +624,7 @@ class TestManageNodeRemovePath:
         _config, uow, _deps, _repo, _ops = stub_env
         resolved = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
         uow.nodes.list_all = AsyncMock(return_value=[resolved])
-        uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
+        uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[])
 
         _run(["10.0.0.1", "--remove-soft"])
 
@@ -899,7 +899,7 @@ class TestManageNodeIdPath:
         uow.nodes.get_by_id = AsyncMock(
             return_value=Node(node_id=NodeId(5), ip="10.0.0.5", ncpus=4, enabled=True)
         )
-        uow.tasks.list_ids_by_ip_and_status = AsyncMock(return_value=[])
+        uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[])
 
         _run(["5", "--remove-soft"])
 

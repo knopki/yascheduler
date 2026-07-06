@@ -545,17 +545,32 @@ case SHALL import adapter-specific types (`AllSSHRetryExc`, `SFTPRetryExc`,
 ### Requirement: QueryTasks use case
 
 The system SHALL provide a `query_tasks` async function that returns
-domain `Task` aggregates matching a jobs- or statuses-based read query.
-The function SHALL accept `jobs: Sequence[TaskId] | None` (was
-`Sequence[int] | None`), `statuses: Sequence[TaskStatus] | None`, and
-`uow_factory: Callable[[], AbstractUnitOfWork]`. It SHALL raise `ValueError` if
-both `jobs` and `statuses` are supplied. It SHALL open a single Unit of Work,
-dispatch to `uow.tasks.list_by_status(set(statuses))` when `statuses` is
-non-empty or `uow.tasks.list_by_jobs(list(jobs))` (a `list[TaskId]`) when
-`jobs` is non-empty, and return `[]` when neither is non-empty (truthiness
-semantics, matching `yascheduler.client.queue_get_tasks_async`'s existing
-dispatch). It SHALL NOT call `uow.commit` (read-only). It SHALL NOT import
-from `yascheduler.infra` at runtime.
+domain `Task` aggregates matching a jobs- or statuses-based read query,
+alongside a `dict[NodeId, Node]` of the nodes allocated to those tasks (for
+the caller to project a nested `node` field). The function SHALL accept
+`jobs: Sequence[TaskId] | None` (was `Sequence[int] | None`), `statuses:
+Sequence[TaskStatus] | None`, and `uow_factory: Callable[[], AbstractUnitOfWork]`.
+It SHALL raise `ValueError` if both `jobs` and `statuses` are supplied. It
+SHALL open a single Unit of Work, dispatch to `uow.tasks.list_by_status(set(statuses))`
+when `statuses` is non-empty or `uow.tasks.list_by_jobs(list(jobs))` (a
+`list[TaskId]`) when `jobs` is non-empty, and return `([], {})` when neither
+is non-empty (truthiness semantics, matching `yascheduler.client.queue_get_tasks_async`'s
+existing dispatch). It SHALL NOT call `uow.commit` (read-only). It SHALL NOT
+import from `yascheduler.infra` at runtime.
+
+Within the same single UoW, after fetching tasks, the use case SHALL
+batch-load the nodes allocated to those tasks via
+`uow.nodes.get_by_ids(list({t.allocated_node_id for t in tasks if
+t.allocated_node_id is not None}))` (a single batch round-trip), building
+`nodes_by_id: dict[NodeId, Node]`. When no task has an `allocated_node_id`
+(all tasks are unallocated), the use case SHALL skip the `get_by_ids` call
+and return `(tasks, {})`. The use case SHALL return the tuple
+`(tasks, nodes_by_id)`.
+
+The return type widens from `list[Task]` to `tuple[list[Task], dict[NodeId,
+Node]]`. This is the only signature change. The use case does NOT project
+the nested `node` field into task dicts; that is the facade's responsibility
+(see the `package-facades` capability). It returns raw domain objects.
 
 The public `Yascheduler.queue_get_tasks_async(jobs: list[int])` facade is the
 sole `int`/`TaskId` boundary on this path: it wraps `[TaskId(i) for i in jobs]`
@@ -563,19 +578,27 @@ before calling `query_tasks(jobs=[TaskId(...)], ...)`.
 
 #### Scenario: Query by statuses dispatches to list_by_status
 - **WHEN** `query_tasks(jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=f)` is called
-- **THEN** a UoW is opened via `f()`, `uow.tasks.list_by_status({TaskStatus.TO_DO})` is awaited, the UoW closes without `commit`, and the returned `list[Task]` is forwarded to the caller
+- **THEN** a UoW is opened via `f()`, `uow.tasks.list_by_status({TaskStatus.TO_DO})` is awaited, `uow.nodes.get_by_ids(...)` is called with the `allocated_node_id`s of the returned tasks, the UoW closes without `commit`, and the returned `(list[Task], dict[NodeId, Node])` tuple is forwarded to the caller
 
 #### Scenario: Query by jobs dispatches to list_by_jobs
 - **WHEN** `query_tasks(jobs=[TaskId(1), TaskId(2), TaskId(3)], statuses=None, uow_factory=f)` is called
-- **THEN** a UoW is opened via `f()`, `uow.tasks.list_by_jobs([TaskId(1), TaskId(2), TaskId(3)])` is awaited, the UoW closes without `commit`, and the returned `list[Task]` is forwarded to the caller
+- **THEN** a UoW is opened via `f()`, `uow.tasks.list_by_jobs([TaskId(1), TaskId(2), TaskId(3)])` is awaited, `uow.nodes.get_by_ids(...)` is called with the `allocated_node_id`s of the returned tasks, the UoW closes without `commit`, and the returned `list[Task]` is forwarded to the caller
 
 #### Scenario: Both jobs and statuses supplied raises ValueError
 - **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=[TaskStatus.TO_DO], uow_factory=f)` is called
 - **THEN** `ValueError` is raised and no UoW is opened
 
-#### Scenario: Neither jobs nor statuses returns empty list
+#### Scenario: Neither jobs nor statuses returns empty tuple
 - **WHEN** `query_tasks(jobs=None, statuses=None, uow_factory=f)` is called
-- **THEN** `[]` is returned without dispatching to either repository method and without opening a UoW
+- **THEN** `([], {})` is returned without dispatching to either repository method and without opening a UoW
+
+#### Scenario: Query returns nodes_by_id with resolved nodes
+- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=NodeId("n1")`
+- **THEN** `uow.nodes.get_by_ids([NodeId("n1")])` is called, the returned dict `{NodeId("n1"): node}` is included in the `(tasks, nodes_by_id)` tuple
+
+#### Scenario: Query skips get_by_ids when all tasks unallocated
+- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=None`
+- **THEN** `uow.nodes.get_by_ids` is NOT called (no node IDs to resolve), and the return is `([task], {})`
 
 #### Scenario: Use case is read-only
 - **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` runs to completion successfully

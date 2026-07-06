@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId, TaskStatus
 from yascheduler.infra.persistence.sql_loader import load_query
 
 
@@ -91,7 +91,7 @@ def running_task() -> Task:
             remote_folder="/remote/tasks/20250101_120000_42",
         ),
         status=TaskStatus.RUNNING,
-        allocated_ip="10.0.0.1",
+        allocated_node_id=NodeId(1),
     )
 
 

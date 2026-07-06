@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_events.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain events and Task aggregate event support.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Add TestTaskWithEvent suite for task.with_event factory (task-with-event).
-#   PREVIOUS_CHANGE: v1.1.0 - Pass webhook_custom_params explicitly (field is now required for Python 3.9 compat); replace test_task_created_defaults with test_webhook_custom_params_stored.
+#   LAST_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
+#   PREVIOUS_CHANGE: v1.2.0 - Add TestTaskWithEvent suite for task.with_event factory (task-with-event).
 # END_CHANGE_SUMMARY
 
 from dataclasses import FrozenInstanceError
@@ -311,9 +311,7 @@ class TestTaskWithEvent:
         assert evt.task_id == TaskId(42)
 
     def test_with_event_after_fail_reads_preserved_webhook_fields(self) -> None:
-        running = _make_task_with_webhook(
-            status=TaskStatus.RUNNING, allocated_ip="10.0.0.9"
-        )
+        running = _make_task_with_webhook(status=TaskStatus.RUNNING)
         failed = running.fail("node is gone")
         updated = failed.with_event(TaskAbandoned, node_id=NodeId(42))
         evt = updated._events[0]

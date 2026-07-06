@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.18.0
+# VERSION: 2.19.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
 #   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
@@ -8,18 +8,18 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TaskRepository - Async port for task persistence (get, save, insert NewTask→Task, list_by_status, list_by_jobs, update_status, list_ids_by_ip_and_status, count_by_status); get/update_status take TaskId, list_ids_by_ip_and_status returns list[TaskId], list_by_jobs takes list[TaskId]
-#   NodeRepository - Async port for node persistence (insert NewNode→Node is the sole insertion path; get_by_id, get_by_ids batch lookup, full CRUD lifecycle, list_all, count_by_status); mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups get_by_id/get_by_ids and list_* are node_id-keyed / unkeyed (ip-keyed get/get_by_ips removed); tmp-reservation uses insert(NewNode(cloud=..., enabled=False))
-#   CloudConfig - Structural Protocol for cloud provider config (7-field surface application consumers read: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host)
-#   MachineRepository - Async port for the connected-machine collection (lifecycle, queries); keyed by NodeId (connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id)); returns MachineSession; no state transitions/accessors/monitor (moved to MachineSession)
-#   MachineSession - Connected-machine entity handle (identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism); Engine-agnostic
-#   MachineOperations - Async port for operations on a single machine; methods take session: MachineSession (use-case methods + facade pass-throughs)
-#   CloudProvisioner - Async port for cloud node provisioning (allocate(provider, node: Node)->Node reusing the passed node's node_id as identity, deallocate(node: Node) reads node.cloud/node.ip internally and no-ops on cloud is None, select_provider)
+#   TaskRepository - Async port for task persistence
+#   NodeRepository - Async port for node persistence
+#   CloudConfig - Structural Protocol for cloud provider config
+#   MachineRepository - Async port for the connected-machine collection
+#   MachineSession - Connected-machine entity handle
+#   MachineOperations - Async port for operations on a single machine
+#   CloudProvisioner - Async port for cloud node provisioning
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.18.0 - cloud-port-node-arg: CloudProvisioner.allocate/deallocate take node: Node (was tmp_node_id / cloud,ip); port frozen for Variant C.
-#   PREVIOUS_CHANGE: v2.17.0 - simplify-cloud-connect-node-args: MachineRepository.connect drops the redundant `username: str` positional and `port: int = 22` keyword; connect reads the login user from `node.username` and the port from `node.port` internally. Removed two `# FIXME: why username/port?` comments.
+#   LAST_CHANGE: v2.19.0 - task-schema-and-entity-cleanup: TaskRepository.list_ids_by_ip_and_status(ip: str, status) → list_ids_by_node_id_and_status(node_id: NodeId, status).
+#   PREVIOUS_CHANGE: v2.18.0 - cloud-port-node-arg: CloudProvisioner.allocate/deallocate take node: Node (was tmp_node_id / cloud,ip); port frozen for Variant C.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -50,14 +50,7 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class TaskRepository(Protocol):
-    """Async port for task persistence.
-
-    ``insert(new_task: NewTask) -> Task`` is the sole ``NewTask → Task`` conversion
-    site (the DB-generated ``TaskId`` lives on the returned ``Task``). ``get``,
-    ``update_status``, ``list_ids_by_ip_and_status`` (return), and ``list_by_jobs``
-    (input) use ``TaskId`` — the domain is type-safe end-to-end. The public
-    ``Yascheduler`` facade is the sole ``int``/``TaskId`` boundary.
-    """
+    """Async port for task persistence."""
 
     async def get(self, task_id: TaskId) -> Task | None: ...
 
@@ -73,8 +66,8 @@ class TaskRepository(Protocol):
 
     async def update_status(self, task_id: TaskId, status: TaskStatus) -> None: ...
 
-    async def list_ids_by_ip_and_status(
-        self, ip: str, status: TaskStatus
+    async def list_ids_by_node_id_and_status(
+        self, node_id: NodeId, status: TaskStatus
     ) -> list[TaskId]: ...
 
     async def count_by_status(self) -> Mapping[TaskStatus, int]: ...
@@ -82,29 +75,7 @@ class TaskRepository(Protocol):
 
 @runtime_checkable
 class NodeRepository(Protocol):
-    """Async port for node persistence: full CRUD lifecycle.
-
-    ``insert(new_node: NewNode) -> Node`` is the sole node-insertion path. It
-    takes a pre-persistence ``NewNode`` and returns the persisted ``Node``
-    carrying the database-generated ``node_id``. This mirrors
-    ``TaskRepository.insert``. The implementation runs
-    ``node/insert.sql ... RETURNING node_id``. The tmp-reservation flow (cloud
-    provisioning critical section in ``allocate_task``) uses ``insert`` for
-    tmp nodes too — constructing ``NewNode(cloud=selected_name,
-    enabled=False)`` (relying on ``NewNode``'s ``ip=""`` and ``ncpus=0``
-    defaults) and persisting it to reserve capacity; the returned
-    ``Node.node_id`` is the tmp-node cleanup handle AND the real-node identity
-    reused by ``clouds.allocate``.
-
-    All lookups are ``node_id``-keyed: ``get_by_id(node_id) -> Node | None``
-    (single-row) and ``get_by_ids(node_ids: list[NodeId]) -> dict[NodeId, Node]``
-    (batch). The ip-keyed lookup methods (``get(ip)``, ``get_by_ips(ips)``)
-    are REMOVED — no caller resolves a node by ip. The four mutators
-    ``enable``, ``disable``, ``remove``, and ``update`` key on ``node_id``:
-    ``enable``/``disable``/``remove`` take ``NodeId`` directly; ``update``
-    takes a ``Node`` (which carries ``node_id``) and the implementation binds
-    ``node.node_id.value`` as the SQL key.
-    """
+    """Async port for node persistence."""
 
     async def get_by_id(self, node_id: NodeId) -> Node | None: ...
 

@@ -80,8 +80,8 @@ class StubTaskRepository:
     async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
         pass
 
-    async def list_ids_by_ip_and_status(
-        self, ip: str, status: TaskStatus
+    async def list_ids_by_node_id_and_status(
+        self, node_id: NodeId, status: TaskStatus
     ) -> list[TaskId]:
         return []
 

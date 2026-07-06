@@ -29,11 +29,13 @@ Shared mock factories for Config/CLIDeps/UoW/Task. Each behavioral test subject
 (check_status, show_nodes, submit, manage_node) has graduated to a dedicated test file.
 """
 
+from __future__ import annotations
+
 from pathlib import PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import NodeId, Task, TaskContext, TaskId, TaskStatus
 from yascheduler.entrypoints.di import CLIDeps
 
 # ---------------------------------------------------------------------------
@@ -93,7 +95,7 @@ def make_task(
     task_id: int = 1,
     status: TaskStatus = TaskStatus.RUNNING,
     label: str = "test",
-    ip: str = "10.0.0.1",
+    allocated_node_id: NodeId | None = None,
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
     return Task(
@@ -105,5 +107,5 @@ def make_task(
             local_folder="/tmp/local",
         ),
         status=status,
-        allocated_ip=ip,
+        allocated_node_id=allocated_node_id,
     )

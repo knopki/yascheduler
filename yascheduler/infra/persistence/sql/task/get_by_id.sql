@@ -1,9 +1,10 @@
 SELECT
     task_id,
-    label,
-    ip,
+    title,
     status,
     metadata,
-    allocated_node_id
+    allocated_node_id,
+    created_at,
+    updated_at
 FROM yascheduler_tasks
 WHERE task_id = :task_id;

@@ -12,12 +12,23 @@ The system SHALL define a `TaskRepository` Protocol with async methods:
 `list_by_status(statuses: set[TaskStatus], *, limit: int | None = None) -> list[Task]`,
 `list_by_jobs(job_ids: list[TaskId]) -> list[Task]`,
 `update_status(task_id: TaskId, status: TaskStatus) -> None`,
-`list_ids_by_ip_and_status(ip: str, status: TaskStatus) -> list[TaskId]`,
-`count_by_status() -> Mapping[TaskStatus, int]`.
+ `list_ids_by_node_id_and_status(node_id: NodeId, status: TaskStatus) -> list[TaskId]`,
+ `count_by_status() -> Mapping[TaskStatus, int]`.
+
+The method `list_ids_by_ip_and_status(ip: str, status: TaskStatus) -> list[TaskId]`
+is REMOVED and replaced by
+`list_ids_by_node_id_and_status(node_id: NodeId, status: TaskStatus) -> list[TaskId]`.
+The filter key changes from `ip` (the transport address, which is no longer
+stored on `yascheduler_tasks` after migration 009 drops the `ip` column) to
+`node_id` (the canonical allocation identity, already carried by `Task` as
+`allocated_node_id`). Both callers (`entrypoints/cli/manage_node._remove_node_hard`
+and `_remove_node_soft`) already hold a fully-resolved `Node` with
+`node.node_id`, so the signature change is source-compatible at the call sites
+(they pass `node.node_id` instead of `node.ip`).
 
 `insert` takes `NewTask` (pre-persistence) and returns `Task` (post-persistence,
 carrying the generated `TaskId`); it is the sole `NewTask → Task` conversion
-site. `get`, `update_status`, `list_ids_by_ip_and_status` (return), and
+site. `get`, `update_status`, `list_ids_by_node_id_and_status` (return), and
 `list_by_jobs` (input) use `TaskId` — the domain is type-safe end-to-end. The
 public `Yascheduler` facade (see `package-facades`) is the sole `int`/`TaskId`
 boundary: it wraps `TaskId(int)` on input and extracts `.value` on output.
@@ -51,8 +62,8 @@ take/return `Task` / mappings, which carry `TaskId` internally).
 - **WHEN** `update_status(TaskId(42), TaskStatus.RUNNING)` is called
 - **THEN** the status of the task with `task_id=42` is updated (the `TaskId` is the key)
 
-#### Scenario: list_ids_by_ip_and_status returns TaskIds
-- **WHEN** `list_ids_by_ip_and_status("10.0.0.1", TaskStatus.RUNNING)` is called
+#### Scenario: list_ids_by_node_id_and_status returns TaskIds
+- **WHEN** `list_ids_by_node_id_and_status(NodeId("n1"), TaskStatus.RUNNING)` is called
 - **THEN** returns a `list[TaskId]` (not `list[int]`); the caller feeds them directly to `update_status(TaskId, ...)`
 
 #### Scenario: list_by_jobs takes TaskIds

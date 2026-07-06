@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.20.1
+# VERSION: 1.21.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: TaskStatus, MachineState enums; ProcessResult, TaskContext value objects; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
@@ -14,26 +14,26 @@
 #   TaskContext - Typed task metadata with arbitrary extras; .replace() typed copy-with
 #   TaskContextOverrides - TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra
 #   TaskId - Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
-#   NewTask - Pre-persistence task record (no task_id); carries allocated_node_id: NodeId | None = None (written by Task.allocate_to, not NewTask construction)
-#   Task - Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocated_node_id: NodeId | None; allocate_to(node: Node) binds both allocated_ip and allocated_node_id, mark_running, complete, fail, reject lifecycle, record_event, with_event, with_context, pull_events
-#   NodeId - Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
-#   NewNode - Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) for the tmp-reservation call site
-#   Node - Post-persistence node record; always carries node_id: NodeId (first field, identity-first)
-#   ConnectedMachine - Runtime connected machine with state transitions (node_id is the first field — identity-first; ip is the transport address)
-#   Engine - Calculation engine value object (re-exported from M-DOMAIN-ENGINE; see domain/engine.py)
+#   NewTask - Pre-persistence task record (no task_id)
+#   Task - Post-persistence task entity
+#   NodeId - Node primary-key value object
+#   NewNode - Pre-persistence node record
+#   Node - Post-persistence node record
+#   ConnectedMachine - Runtime connected machine with state transitions
 #   EngineRepository - Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)
 #   LocalFilesDeploy / LocalArchiveDeploy / RemoteArchiveDeploy / Deploy - Deploy strategies (re-exported from M-DOMAIN-ENGINE)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.20.1 - cloud-port-node-arg: NewNode docstring updated for the allocate(node) signature (doc-only).
-#   PREVIOUS_CHANGE: v1.20.0 - ssh-rekey-node-id: ConnectedMachine gains node_id: NodeId as its FIRST field (identity-first). The construction site SSHMachineRepository._connect_impl passes node_id=node.node_id; occupy()/release()/replace() carry node_id through automatically (frozen dataclass). ip stays as the transport address (asyncssh host) — two machines sharing an ip with different node_id are distinct (dup-IP behind different jump hosts). Node docstring updated (ip-keyed lookup methods get/get_by_ips removed; node_id is the sole identity). NewNode docstring updated (cloud adapter reuses tmp_node_id as the real node identity; returns Node not NewNode).
+#   LAST_CHANGE: v1.21.0 - task-schema-and-entity-cleanup: Task/NewTask drop allocated_ip; Task gains created_at/updated_at: datetime
+#   PREVIOUS_CHANGE: v1.20.1 - cloud-port-node-arg: NewNode docstring updated for the allocate(node) signature (doc-only).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, field, fields, replace
+from datetime import datetime
 from enum import Enum, IntEnum, unique
 from typing import TYPE_CHECKING, TypedDict, TypeVar, overload
 
@@ -227,7 +227,7 @@ class TaskId:
 
 # START_CONTRACT: NewTask
 #   PURPOSE: Pre-persistence task record — no identity yet; converted to Task only by TaskRepository.insert.
-#   INPUTS: { label: str, context: TaskContext, status: TaskStatus, allocated_ip: str | None, allocated_node_id: NodeId | None }
+#   INPUTS: { label: str, context: TaskContext, status: TaskStatus, allocated_node_id: NodeId | None }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert
@@ -236,11 +236,8 @@ class TaskId:
 class NewTask:
     """Pre-persistence task record — no identity yet.
 
-    Mirrors the non-``task_id``/non-``_events`` fields of :class:`Task` with identical
-    defaults. A caller builds a ``NewTask`` to prepare a task for insertion; the
-    conversion to :class:`Task` happens in exactly one place: ``TaskRepository.insert``.
-    It is a pure data carrier with no lifecycle methods (those are nonsensical on an
-    unpersisted task and stay on ``Task``).
+    A caller builds a ``NewTask`` to prepare a task for insertion.
+    It is a pure data carrier with no lifecycle methods.
 
     ``allocated_node_id`` is ``None`` on a ``NewTask`` (no node is bound until
     allocation). It is written by :meth:`Task.allocate_to`, not by ``NewTask``
@@ -250,13 +247,12 @@ class NewTask:
     label: str
     context: TaskContext
     status: TaskStatus = TaskStatus.TO_DO
-    allocated_ip: str | None = None
     allocated_node_id: NodeId | None = None
 
 
 # START_CONTRACT: Task
 #   PURPOSE: Post-persistence task entity — always carries its database-generated task_id (identity-first) and a status lifecycle.
-#   INPUTS: { task_id: TaskId, label: str, context: TaskContext, status: TaskStatus, allocated_ip: str | None, allocated_node_id: NodeId | None }
+#   INPUTS: { task_id: TaskId, label: str, context: TaskContext, status: TaskStatus, allocated_node_id: NodeId | None, created_at: datetime, updated_at: datetime }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert (the only NewTask→Task conversion site)
@@ -265,49 +261,42 @@ class NewTask:
 class Task:
     """Post-persistence task entity with lifecycle methods and allocation state.
 
-    ``task_id`` is the FIRST field (identity first); a ``Task`` only ever comes from
-    the database (via ``_row_to_task``) or from ``TaskRepository.insert``'s return.
-    The ``task_id=0`` sentinel is unrepresentable: ``Task``'s ``task_id: TaskId`` field
-    is required, and ``TaskId(0)`` raises ``ValueError``.
+    ``allocated_node_id`` is the sole allocation signal: it is ``None`` for
+    unallocated tasks (TO_DO with no node bound) and for tasks whose node was
+    deleted (the DB FK is ``ON DELETE SET NULL``). It is set by
+    :meth:`allocate_to`.
 
-    ``allocated_node_id`` is ``None`` for unallocated tasks (TO_DO with no node bound)
-    and for tasks whose node was deleted (the DB FK is ``ON DELETE SET NULL``). It is
-    set by :meth:`allocate_to` alongside ``allocated_ip``; the two fields are bound
-    together in a single :meth:`allocate_to` call. The read path continues to use
-    ``allocated_ip`` until Surface A (``ssh-rekey-node-id``) switches the read sites
-    to ``allocated_node_id``.
+    ``created_at``/``updated_at`` default to ``datetime.now()`` mirroring the
+    DB schema (``DEFAULT NOW()``; ``updated_at`` is advanced by the
+    ``yascheduler_tasks_touch_updated_at`` BEFORE UPDATE trigger).
+    The DB always overrides them via RETURNING on insert and on every read.
     """
 
     task_id: TaskId
     label: str
     context: TaskContext
     status: TaskStatus = TaskStatus.TO_DO
-    allocated_ip: str | None = None
     allocated_node_id: NodeId | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now())
+    updated_at: datetime = field(default_factory=lambda: datetime.now())
     _events: tuple[DomainEvent, ...] = field(default=(), repr=False)
 
     # START_CONTRACT: Task.allocate_to
-    #   PURPOSE: Bind task to a Node if not already allocated — sets both allocated_ip and allocated_node_id atomically in one replace() call.
-    #   INPUTS: { node: Node - the node to bind (carries ip and node_id) }
-    #   OUTPUTS: { Task - new Task with allocated_ip and allocated_node_id set }
+    #   PURPOSE: Bind task to a Node if not already allocated — sets allocated_node_id in one replace() call.
+    #   INPUTS: { node: Node - the node to bind (carries node_id) }
+    #   OUTPUTS: { Task - new Task with allocated_node_id set }
     #   SIDE_EFFECTS: None
-    #   RAISES: TaskAlreadyAllocatedError - if already allocated (guard checks self.allocated_ip is not None)
+    #   RAISES: TaskAlreadyAllocatedError - if already allocated (guard checks self.allocated_node_id is not None)
     #   LINKS: M-DOMAIN-EXCEPTIONS: TaskAlreadyAllocatedError
     # END_CONTRACT: Task.allocate_to
     def allocate_to(self, node: Node) -> Task:
-        """Bind task to a node, raising TaskAlreadyAllocatedError if already allocated.
-
-        Binds both ``allocated_ip = node.ip`` and ``allocated_node_id = node.node_id``
-        in a single :func:`replace` call so the two fields are never out of sync. The
-        guard stays on ``self.allocated_ip`` for continuity with
-        :meth:`mark_running`'s existing ``allocated_ip is None`` check.
-        """
+        """Bind task to a node, raising TaskAlreadyAllocatedError if already allocated."""
         # START_BLOCK_VALIDATE_NOT_ALLOCATED
-        if self.allocated_ip is not None:
+        if self.allocated_node_id is not None:
             raise TaskAlreadyAllocatedError(self.task_id)
         # END_BLOCK_VALIDATE_NOT_ALLOCATED
         # START_BLOCK_APPLY_ALLOCATION
-        return replace(self, allocated_ip=node.ip, allocated_node_id=node.node_id)
+        return replace(self, allocated_node_id=node.node_id)
         # END_BLOCK_APPLY_ALLOCATION
 
     # START_CONTRACT: Task.mark_running
@@ -321,7 +310,7 @@ class Task:
     def mark_running(self) -> Task:
         """Transition task status to RUNNING."""
         # START_BLOCK_VALIDATE_STATE
-        if self.allocated_ip is None:
+        if self.allocated_node_id is None:
             raise TaskNotAllocatedError(self.task_id)
         if self.status != TaskStatus.TO_DO:
             raise TaskNotTodoError(self.task_id)
@@ -528,15 +517,7 @@ class Node:
     """Post-persistence node record — always carries its identity.
 
     ``node_id`` is the FIRST field (identity first); a ``Node`` only ever comes from
-    the database (via ``_row_to_node``) or from ``NodeRepository.insert``'s return.
-    ``node_id`` is the sole identity; ``ip`` is the transport attribute (the
-    asyncssh host). ``NodeRepository`` mutators (``enable``/``disable``/
-    ``remove``/``update``) key on ``node_id``, and all lookups are ``node_id``-keyed
-    (``get_by_id``, ``get_by_ids``) — the ip-keyed lookup methods (``get``/
-    ``get_by_ips``) are removed. ``ip`` is no longer ``UNIQUE`` (dropped by
-    migration 003 — duplicate IPs are valid behind different jump hosts).
-    Tmp/pending rows carry ``ip == ""`` (the empty-string sentinel; ``ip == ""``
-    IFF ``enabled = FALSE`` AND the node is tmp/pending).
+    the database.
     """
 
     node_id: NodeId

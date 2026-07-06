@@ -1,24 +1,25 @@
 # FILE: tests/unit/test_client_query.py
-# VERSION: 1.0.2
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Yascheduler queue-query methods via the deps_factory constructor seam.
-#   SCOPE: status/jobs dispatch, mutual-exclusivity ValueError, empty-in empty-out, 6-key shape, factory-per-call.
+#   SCOPE: status/jobs dispatch, mutual-exclusivity ValueError, empty-in empty-out, 5-key dict shape with nested node, node object for allocated/unallocated, factory-per-call.
 #   DEPENDS: M-ENTRYPOINTS-CLIENT, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL
 #   LINKS: M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   FakeTaskRepository - In-memory task repo capturing list_by_status/list_by_jobs calls
-#   FakeUnitOfWork - In-memory UoW exposing FakeTaskRepository
+#   FakeNodeRepository - In-memory node repo returning Nodes for allocated tasks
+#   FakeUnitOfWork - In-memory UoW exposing FakeTaskRepository + FakeNodeRepository
 #   FakeCLIDeps - Lightweight CLIDeps stub exposing uow_factory only
-#   TestClientQueryDispatch - 5 testing-unit scenarios via deps_factory
+#   TestClientQueryDispatch - 7 testing-unit scenarios via deps_factory
 #   TestDepsFactoryInvocation - Factory invoked once per queue_get_tasks_async call (no caching)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.2 - Migrate import/patch paths from yascheduler.client to yascheduler.entrypoints.client.
-#   PREVIOUS_CHANGE: v1.0.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in helper signatures).
+#   LAST_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: update EXPECTED_KEYS to 5-key set (task_id, label, status, metadata, node); add FakeNodeRepository; update FakeUnitOfWork with .nodes; _make_task uses allocated_node_id instead of allocated_ip; rename ip/cloud assertions to node assertions; add test_node_object_for_allocated_task, test_node_is_null_for_unallocated_task, test_flat_ip_and_cloud_keys_absent.
+#   PREVIOUS_CHANGE: v1.0.2 - Migrate import/patch paths from yascheduler.client to yascheduler.entrypoints.client.
 # END_CHANGE_SUMMARY
 
 """Unit tests for Yascheduler queue-query methods.
@@ -37,10 +38,10 @@ from unittest.mock import patch
 
 import pytest
 
-from yascheduler.domain.model import Task, TaskContext, TaskId, TaskStatus
+from yascheduler.domain.model import Node, NodeId, Task, TaskContext, TaskId, TaskStatus
 from yascheduler.entrypoints.client import Yascheduler
 
-EXPECTED_KEYS = {"task_id", "label", "ip", "status", "metadata", "cloud"}
+EXPECTED_KEYS = {"task_id", "label", "status", "metadata", "node"}
 
 
 class FakeTaskRepository:
@@ -62,11 +63,24 @@ class FakeTaskRepository:
         return self._tasks
 
 
-class FakeUnitOfWork:
-    """In-memory UoW exposing a FakeTaskRepository as `tasks`."""
+class FakeNodeRepository:
+    """In-memory node repository returning stored nodes for get_by_ids queries."""
 
-    def __init__(self, repo: FakeTaskRepository) -> None:
+    def __init__(self, nodes: list[Node] | None = None) -> None:
+        self._nodes = {n.node_id: n for n in (nodes or [])}
+
+    async def get_by_ids(self, node_ids: list[NodeId]) -> dict[NodeId, Node]:
+        return {nid: self._nodes[nid] for nid in node_ids if nid in self._nodes}
+
+
+class FakeUnitOfWork:
+    """In-memory UoW exposing FakeTaskRepository + FakeNodeRepository."""
+
+    def __init__(
+        self, repo: FakeTaskRepository, nodes: FakeNodeRepository | None = None
+    ) -> None:
         self.tasks = repo
+        self.nodes = nodes or FakeNodeRepository()
         self.commit_calls = 0
 
     async def __aenter__(self) -> FakeUnitOfWork:
@@ -92,14 +106,14 @@ class FakeCLIDeps:
 def _make_task(
     task_id: int = 1,
     status: TaskStatus = TaskStatus.TO_DO,
-    allocated_ip: str | None = None,
+    allocated_node_id: NodeId | None = None,
 ) -> Task:
     return Task(
         task_id=TaskId(task_id),
         label=f"task-{task_id}",
         context=TaskContext(engine="test_engine"),
         status=status,
-        allocated_ip=allocated_ip,
+        allocated_node_id=allocated_node_id,
     )
 
 
@@ -156,8 +170,61 @@ class TestClientQueryDispatch:
         assert repo.list_by_status_calls == []
         assert repo.list_by_jobs_calls == []
 
+    async def test_node_object_for_allocated_task(self) -> None:
+        """Task with allocated_node_id returns nested node object with ip, port, username, cloud."""
+        node = Node(
+            node_id=NodeId(7),
+            ip="10.0.0.1",
+            ncpus=2,
+            port=22,
+            username="root",
+            cloud="hetzner",
+        )
+        repo = FakeTaskRepository(
+            tasks=[_make_task(task_id=1, allocated_node_id=NodeId(7))]
+        )
+        nodes_repo = FakeNodeRepository(nodes=[node])
+        uow = FakeUnitOfWork(repo, nodes=nodes_repo)
+        client = _build_client(uow)
+
+        result = await client.queue_get_tasks_async(jobs=[1])
+
+        assert len(result) == 1
+        mapping = result[0]
+        assert mapping["node"] == {
+            "ip": "10.0.0.1",
+            "port": 22,
+            "username": "root",
+            "cloud": "hetzner",
+        }
+
+    async def test_node_is_null_for_unallocated_task(self) -> None:
+        """Task with allocated_node_id=None has node is None."""
+        repo = FakeTaskRepository(tasks=[_make_task(allocated_node_id=None)])
+        uow = FakeUnitOfWork(repo)
+        client = _build_client(uow)
+
+        result = await client.queue_get_tasks_async(jobs=[1])
+
+        assert len(result) == 1
+        mapping = result[0]
+        assert mapping["node"] is None
+
+    async def test_flat_ip_and_cloud_keys_absent(self) -> None:
+        """Flat ip and cloud keys are absent from the returned mapping."""
+        repo = FakeTaskRepository(tasks=[_make_task()])
+        uow = FakeUnitOfWork(repo)
+        client = _build_client(uow)
+
+        result = await client.queue_get_tasks_async(jobs=[1])
+
+        assert len(result) == 1
+        mapping = result[0]
+        assert "ip" not in mapping
+        assert "cloud" not in mapping
+
     async def test_returned_dict_shape_and_types(self) -> None:
-        repo = FakeTaskRepository(tasks=[_make_task(allocated_ip=None)])
+        repo = FakeTaskRepository(tasks=[_make_task(allocated_node_id=None)])
         uow = FakeUnitOfWork(repo)
         client = _build_client(uow)
 
@@ -168,8 +235,7 @@ class TestClientQueryDispatch:
         assert set(mapping.keys()) == EXPECTED_KEYS
         assert isinstance(mapping["status"], TaskStatus)
         assert mapping["status"] is TaskStatus.TO_DO
-        assert mapping["ip"] == ""
-        assert mapping["cloud"] is None
+        assert mapping["node"] is None
         assert isinstance(mapping["metadata"], dict)
 
 

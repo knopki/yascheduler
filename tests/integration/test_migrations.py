@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_migrations.py
-# VERSION: 1.3.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the migration runner against real PostgreSQL via testcontainers.
@@ -19,11 +19,14 @@
 #   test_sql_migration_failure_rolls_back_and_not_recorded - .sql failure rolls back, not recorded
 #   test_migration_002_adds_node_id_on_legacy_db - migration 002 backfills node_id SERIAL PRIMARY KEY on a legacy-style DB
 #   test_migration_005_converts_serial_to_identity - migration 005 converts SERIAL PKs to GENERATED ALWAYS AS IDENTITY and seeds above MAX
+#   test_legacy_db_at_005_applies_006_009 - legacy DB at 005: label→title, created_at/updated_at, trigger advances updated_at, status→task_status enum, ip dropped
+#   test_fresh_db_full_shape - fresh DB: task_status enum, trigger, title/status enum/created_at/updated_at columns, no ip, seeds '009'
+#   test_migration_008_fails_on_out_of_range_status - migration 008 rolls back when a row has status=3 (out of enum range)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - serial-to-generated-identity: tracker assertions updated to '005' (the new last_migration CONSTANT); synthetic migrations renumbered 005_*→006_* to avoid colliding with the real 005_serial_to_identity.sql; fresh DB now seeds to '005' and apply_migrations applies 005 on legacy/modern DBs (005 converts SERIAL PKs to GENERATED ALWAYS AS IDENTITY).
-#   PREVIOUS_CHANGE: v1.3.0 - task-allocated-node-id: tracker assertions updated to '004' (the new last_migration CONSTANT); synthetic migrations renumbered 004_*→005_* to avoid colliding with the real 004_add_allocated_node_id.sql; fresh DB now seeds to '004' and apply_migrations applies 004 on legacy/modern DBs.
+#   LAST_CHANGE: v1.5.0 - task-schema-and-entity-cleanup: tracker assertions updated to '009' (new last_migration CONSTANT after migrations 006-009); synthetic migrations renumbered 006_*→010_* to avoid colliding with the real migrations 006-009; fresh DB now seeds to '009' and apply_migrations is no-op; legacy/modern DBs now apply 001-009.
+#   PREVIOUS_CHANGE: v1.4.0 - serial-to-generated-identity: tracker assertions updated to '005' (the new last_migration CONSTANT); synthetic migrations renumbered 005_*→006_* to avoid colliding with the real 005_serial_to_identity.sql; fresh DB now seeds to '005' and apply_migrations applies 005 on legacy/modern DBs (005 converts SERIAL PKs to GENERATED ALWAYS AS IDENTITY).
 # END_CHANGE_SUMMARY
 
 """Integration tests for the migration runner against real PostgreSQL.
@@ -123,7 +126,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
         conn = _connect(config)
         try:
             seeded = _tracker_rows(conn)
-            assert seeded == ["005"]
+            assert seeded == ["009"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -134,7 +137,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["005"]
+            assert _tracker_rows(conn) == ["009"]
         finally:
             conn.close()
 
@@ -178,7 +181,17 @@ def test_legacy_db_runs_all_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["001", "002", "003", "004", "005"]
+            assert _tracker_rows(conn) == [
+                "001",
+                "002",
+                "003",
+                "004",
+                "005",
+                "006",
+                "007",
+                "008",
+                "009",
+            ]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -227,7 +240,18 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["000", "001", "002", "003", "004", "005"]
+            assert _tracker_rows(conn) == [
+                "000",
+                "001",
+                "002",
+                "003",
+                "004",
+                "005",
+                "006",
+                "007",
+                "008",
+                "009",
+            ]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -248,7 +272,7 @@ def test_py_migration_best_effort_reopen(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "006_reopen.py").write_text(
+    (migrations_dir / "010_reopen.py").write_text(
         "from yascheduler.infra.persistence.migration_base import Migration\n"
         "class Reopen(Migration):\n"
         "    def migrate(self) -> None:\n"
@@ -267,7 +291,7 @@ def test_py_migration_best_effort_reopen(
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["005", "006"]
+            assert _tracker_rows(conn) == ["009", "010"]
             assert _table_exists(conn, "test_reopen")
         finally:
             conn.close()
@@ -286,7 +310,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "006_fail.sql").write_text(
+    (migrations_dir / "010_fail.sql").write_text(
         "CREATE TABLE fail_tbl (id int); CREATE TABLE fail_tbl (id int);"
     )
     monkeypatch.setattr(
@@ -303,7 +327,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 
         conn = _connect(config)
         try:
-            assert "006" not in _tracker_rows(conn)
+            assert "010" not in _tracker_rows(conn)
             assert not _table_exists(conn, "fail_tbl")
         finally:
             conn.close()
@@ -353,8 +377,18 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
 
         conn = _connect(config)
         try:
-            # Tracker records 001, 002, 003, 004, 005.
-            assert _tracker_rows(conn) == ["001", "002", "003", "004", "005"]
+            # Tracker records 001-009.
+            assert _tracker_rows(conn) == [
+                "001",
+                "002",
+                "003",
+                "004",
+                "005",
+                "006",
+                "007",
+                "008",
+                "009",
+            ]
             # node_id column now exists.
             cols = _columns(conn, "yascheduler_nodes")
             assert "node_id" in cols
@@ -451,7 +485,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
                 assert gen == "ALWAYS", (_tbl, _col, gen)
 
             # The tracker now records 004 (seeded) and 005 (applied).
-            assert _tracker_rows(conn) == ["004", "005"]
+            assert _tracker_rows(conn) == ["004", "005", "006", "007", "008", "009"]
 
             # (b) The identity sequence next value > the previously inserted id,
             # so the next insert will not collide. The identity sequence was
@@ -483,5 +517,285 @@ def test_migration_005_converts_serial_to_identity() -> None:
             new_id = inserted[0][0]
             assert new_id > pre_node_id, (new_id, pre_node_id)
             assert {r[0] for r in node_rows} == {pre_node_id, new_id}, node_rows
+        finally:
+            conn.close()
+
+
+# START_CONTRACT: test_legacy_db_at_005_applies_006_009
+#   PURPOSE: On a legacy DB at migration 005, apply_migrations runs 006-009; assert label→title rename, created_at/updated_at, trigger, status enum, ip dropped.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: Starts a Postgres container; legacy seed at 005; applies migrations
+#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
+# END_CONTRACT: test_legacy_db_at_005_applies_006_009
+def test_legacy_db_at_005_applies_006_009() -> None:
+    """Legacy DB at migration 005: migrations 006-009 produce the final schema shape."""
+    with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
+        config = _make_config(pg)
+
+        # Build a legacy DB at migration 005: pre-006 schema (label, status SMALLINT, ip, no created_at/updated_at).
+        conn = _connect(config)
+        try:
+            conn.run(
+                "CREATE TABLE yascheduler_migrations "
+                "(migration_id TEXT PRIMARY KEY, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+            )
+            conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('005')")
+            conn.run(
+                "CREATE TABLE yascheduler_nodes ("
+                "node_id SERIAL PRIMARY KEY, ip VARCHAR(15), "
+                "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
+                "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
+                "cloud VARCHAR(32) DEFAULT NULL)"
+            )
+            # Pre-006 schema: label (not title), status SMALLINT, ip present, no allocated_node_id.
+            conn.run(
+                "CREATE TABLE yascheduler_tasks ("
+                "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+            )
+            conn.run(
+                "INSERT INTO yascheduler_tasks (label, ip, status, metadata) "
+                "VALUES ('legacy_task', '10.0.0.1', 0, '{}'::jsonb)"
+            )
+        finally:
+            conn.close()
+
+        apply_schema(config)
+        apply_migrations(config)
+
+        conn = _connect(config)
+        try:
+            cols = _columns(conn, "yascheduler_tasks")
+            # label was renamed to title
+            assert "label" not in cols
+            assert "title" in cols
+            # ip column was dropped
+            assert "ip" not in cols
+            # created_at and updated_at present
+            assert "created_at" in cols
+            assert "updated_at" in cols
+
+            # status column type is task_status enum with correct labels
+            conn.run("BEGIN")
+            try:
+                type_rows = conn.run(
+                    "SELECT data_type FROM information_schema.columns "
+                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert type_rows[0][0] == "USER-DEFINED"
+
+            conn.run("BEGIN")
+            try:
+                enum_rows = conn.run(
+                    "SELECT e.enumlabel FROM pg_enum e "
+                    "JOIN pg_type t ON t.oid = e.enumtypid "
+                    "WHERE t.typname = 'task_status' ORDER BY e.enumsortorder"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert [r[0] for r in enum_rows] == ["TO_DO", "RUNNING", "DONE"]
+
+            # Trigger exists
+            conn.run("BEGIN")
+            try:
+                trig_rows = conn.run(
+                    "SELECT tgname FROM pg_trigger "
+                    "WHERE tgrelid = 'yascheduler_tasks'::regclass "
+                    "AND tgname = 'yascheduler_tasks_touch_updated_at'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert len(trig_rows) == 1
+
+            # Insert a row, commit, then UPDATE in a new transaction so the
+            # trigger's NOW() (transaction-start time) differs from the INSERT's NOW().
+            conn.run("BEGIN")
+            try:
+                conn.run(
+                    "INSERT INTO yascheduler_tasks (title, status, metadata) "
+                    "VALUES ('trigger_test', 'TO_DO', '{}'::jsonb)"
+                )
+            finally:
+                conn.run("COMMIT")
+
+            conn.run("BEGIN")
+            try:
+                row = conn.run(
+                    "SELECT task_id, created_at, updated_at "
+                    "FROM yascheduler_tasks WHERE title = 'trigger_test'"
+                )
+                assert len(row) == 1
+                task_id = row[0][0]
+                created_before = row[0][1]
+                updated_before = row[0][2]
+
+                # Sleep a tiny bit so the timestamps differ.
+                import time as _time
+
+                _time.sleep(0.05)
+
+                conn.run(
+                    "UPDATE yascheduler_tasks SET status = 'RUNNING' WHERE task_id = :tid",
+                    tid=task_id,
+                )
+                row2 = conn.run(
+                    "SELECT created_at, updated_at "
+                    "FROM yascheduler_tasks WHERE task_id = :tid",
+                    tid=task_id,
+                )
+                assert row2[0][0] == created_before, (
+                    "created_at must NOT change on UPDATE"
+                )
+                assert row2[0][1] > updated_before, "updated_at must advance on UPDATE"
+            finally:
+                conn.run("ROLLBACK")
+
+            # Tracker records 005 (seeded) + 006, 007, 008, 009
+            assert _tracker_rows(conn) == ["005", "006", "007", "008", "009"]
+
+            # The legacy row's status was converted via the USING clause.
+            conn.run("BEGIN")
+            try:
+                legacy = conn.run(
+                    "SELECT title, status::text FROM yascheduler_tasks "
+                    "WHERE title = 'legacy_task'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert legacy[0][1] == "TO_DO"
+        finally:
+            conn.close()
+
+
+# START_CONTRACT: test_fresh_db_full_shape
+#   PURPOSE: On a fresh DB, apply_schema creates the final schema shape; apply_migrations is a no-op.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
+#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
+# END_CONTRACT: test_fresh_db_full_shape
+def test_fresh_db_full_shape() -> None:
+    """Fresh DB: apply_schema produces final shape; apply_migrations is no-op."""
+    with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
+        config = _make_config(pg)
+        apply_schema(config)
+
+        conn = _connect(config)
+        try:
+            # Tracker seeds to '009'
+            assert _tracker_rows(conn) == ["009"]
+
+            cols = _columns(conn, "yascheduler_tasks")
+            assert "task_id" in cols
+            assert "title" in cols  # not label
+            assert "status" in cols
+            assert "metadata" in cols
+            assert "allocated_node_id" in cols
+            assert "created_at" in cols
+            assert "updated_at" in cols
+            assert "ip" not in cols  # dropped
+
+            # status column type is task_status enum
+            conn.run("BEGIN")
+            try:
+                type_rows = conn.run(
+                    "SELECT data_type FROM information_schema.columns "
+                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert type_rows[0][0] == "USER-DEFINED"
+
+            # Trigger exists
+            conn.run("BEGIN")
+            try:
+                trig_rows = conn.run(
+                    "SELECT tgname FROM pg_trigger "
+                    "WHERE tgrelid = 'yascheduler_tasks'::regclass "
+                    "AND tgname = 'yascheduler_tasks_touch_updated_at'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert len(trig_rows) == 1
+        finally:
+            conn.close()
+
+        # apply_migrations finds MAX='009' and applies nothing.
+        apply_migrations(config)
+
+        conn = _connect(config)
+        try:
+            assert _tracker_rows(conn) == ["009"]
+        finally:
+            conn.close()
+
+
+# START_CONTRACT: test_migration_008_fails_on_out_of_range_status
+#   PURPOSE: On a legacy DB at 007 with a row status=3, migration 008 fails (USING CASE maps 3→NULL, NOT NULL violates), rolls back.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: Starts a Postgres container; seeds legacy DB with bad row; applies migrations; asserts rollback.
+#   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA
+# END_CONTRACT: test_migration_008_fails_on_out_of_range_status
+def test_migration_008_fails_on_out_of_range_status() -> None:
+    """Migration 008 fails (rolls back) when a row has out-of-range status (e.g. 3)."""
+    with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
+        config = _make_config(pg)
+
+        conn = _connect(config)
+        try:
+            conn.run(
+                "CREATE TABLE yascheduler_migrations "
+                "(migration_id TEXT PRIMARY KEY, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+            )
+            conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('007')")
+            conn.run(
+                "CREATE TABLE yascheduler_nodes ("
+                "node_id SERIAL PRIMARY KEY, ip VARCHAR(15), "
+                "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
+                "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
+                "cloud VARCHAR(32) DEFAULT NULL)"
+            )
+            # Pre-008 schema: status SMALLINT NOT NULL DEFAULT 0, no allocated_node_id, no type.
+            conn.run(
+                "CREATE TABLE yascheduler_tasks ("
+                "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
+                "metadata JSONB, ip VARCHAR(15), "
+                "status SMALLINT NOT NULL DEFAULT 0)"
+            )
+            # Row with out-of-range status = 3 (maps to NULL via USING CASE).
+            conn.run(
+                "INSERT INTO yascheduler_tasks (label, status, metadata) "
+                "VALUES ('bad', 3, '{}'::jsonb)"
+            )
+        finally:
+            conn.close()
+
+        # apply_schema is a no-op on existing tables.
+        apply_schema(config)
+
+        # apply_migrations runs 008; it should fail because status=3 → NULL violates NOT NULL.
+        with pytest.raises(DatabaseError):
+            apply_migrations(config)
+
+        conn = _connect(config)
+        try:
+            # Migration 008 NOT recorded in tracker.
+            assert _tracker_rows(conn) == ["007"]
+            # status column remains SMALLINT (rollback restored the schema).
+            conn.run("BEGIN")
+            try:
+                type_rows = conn.run(
+                    "SELECT data_type FROM information_schema.columns "
+                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert type_rows[0][0] == "smallint"
         finally:
             conn.close()

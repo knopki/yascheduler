@@ -1,26 +1,26 @@
 # FILE: tests/integration/test_client_query_integration.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Implementation-agnostic integration test pinning the Yascheduler query-method output shape against real PostgreSQL.
-#   SCOPE: Submit a real task, query via jobs=[id] and status=[0], assert 6-key dict shape.
+#   SCOPE: Submit a real task, query via jobs=[id] and status=[0], assert 5-key dict shape with nested node object.
 #   DEPENDS: M-ENTRYPOINTS-CLIENT, M-ENTRYPOINTS-CONFIG, M-INFRA-DB-CONFIG, M-PERSISTENCE-SCHEMA
 #   LINKS: M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   _query_config - session-scoped INI path pointing at testcontainer DB with minimal engine
-#   test_query_by_jobs - queue_get_tasks(jobs=[id]) returns one 6-key Mapping
-#   test_query_by_status - queue_get_tasks(status=[0]) returns matching 6-key Mapping
+#   test_query_by_jobs - queue_get_tasks(jobs=[id]) returns one 5-key Mapping with nested node
+#   test_query_by_status - queue_get_tasks(status=[0]) returns matching 5-key Mapping
 #   test_query_single_task - queue_get_task(id) returns Mapping; unknown id returns None
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Migrate import path from yascheduler.client to yascheduler.entrypoints.client.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial implementation-agnostic integration test for client query path (client-query-uow).
+#   LAST_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: EXPECTED_KEYS changed from {task_id, label, ip, status, metadata, cloud} to {task_id, label, status, metadata, node}; test_query_by_jobs_returns_six_key_mapping → test_query_by_jobs_returns_five_key_mapping_with_node; assertions updated for nested node dict.
+#   PREVIOUS_CHANGE: v1.0.1 - Migrate import path from yascheduler.client to yascheduler.entrypoints.client.
 # END_CHANGE_SUMMARY
 
-"""Implementation-agnostic integration test — Yascheduler query path against real PostgreSQL.
+"""Implementation-agnostic integration test — Yascheduler query path against real PostgreSQL (5-key shape).
 
 Implementation-agnostic: asserts observable behavior only (never isinstance
 on db.TaskStatus). Valid both before the UoW swap (DB-backed) and after.
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
     from yascheduler.infra.persistence import PostgresDbConfig
 
-EXPECTED_KEYS = {"task_id", "label", "ip", "status", "metadata", "cloud"}
+EXPECTED_KEYS = {"task_id", "label", "status", "metadata", "node"}
 
 
 # START_CONTRACT: _query_config
@@ -104,9 +104,9 @@ def _submit_task(
 
 
 class TestClientQueryIntegration:
-    """Implementation-agnostic: query methods return 6-key Mapping shape against real Postgres."""
+    """Implementation-agnostic: query methods return 5-key Mapping shape with nested node object."""
 
-    def test_query_by_jobs_returns_six_key_mapping(
+    def test_query_by_jobs_returns_five_key_mapping_with_node(
         self, _query_config: str, _submit_task: int
     ) -> None:
         task_id = _submit_task
@@ -120,11 +120,12 @@ class TestClientQueryIntegration:
         assert mapping["label"] == "gamma-query-test"
         assert int(mapping["status"]) == 0
         assert mapping["status"].name == "TO_DO"
-        assert mapping["ip"] == ""
-        assert mapping["cloud"] is None
+        assert "ip" not in mapping
+        assert "cloud" not in mapping
+        assert "node" in mapping
         assert isinstance(mapping["metadata"], dict)
 
-    def test_query_by_status_returns_six_key_mapping(
+    def test_query_by_status_returns_five_key_mapping_with_node(
         self, _query_config: str, _submit_task: int
     ) -> None:
         task_id = _submit_task
@@ -136,7 +137,8 @@ class TestClientQueryIntegration:
         mapping = matching[0]
         assert set(mapping.keys()) == EXPECTED_KEYS
         assert mapping["status"] == 0
-        assert mapping["cloud"] is None
+        assert "cloud" not in mapping
+        assert "node" in mapping
 
     def test_query_single_task_returns_mapping_or_none(
         self, _query_config: str, _submit_task: int

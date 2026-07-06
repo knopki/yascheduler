@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_task_row_not_found.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for TaskRowNotFoundError raised by PostgresTaskRepository.save/update_status on 0-row UPDATE.
@@ -14,7 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial integration tests for TaskRowNotFoundError on 0-row UPDATE (fix-save-silent-zero-rows).
+#   LAST_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: removed allocated_ip kwarg from Task constructor (field removed from Task entity).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial integration tests for TaskRowNotFoundError on 0-row UPDATE (fix-save-silent-zero-rows).
 # END_CHANGE_SUMMARY
 
 """Integration tests for TaskRowNotFoundError on 0-row UPDATE outcomes."""
@@ -55,7 +56,6 @@ async def test_save_nonexistent_task_raises(
             label="ghost",
             context=TaskContext(engine="test_shell"),
             status=DomainTaskStatus.RUNNING,
-            allocated_ip="10.0.0.99",
         )
         with pytest.raises(TaskRowNotFoundError) as excinfo:
             await uow.tasks.save(ghost)

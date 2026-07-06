@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_never_connected_node_abandon.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the never-connected-node abandon path against real PostgreSQL.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - cloud-port-node-arg: assert orch._clouds.deallocate awaited with persisted_node (was ("hetzner", dead_ip)).
-#   PREVIOUS_CHANGE: v1.0.2 - Adapt to add-node-id-identity: NewNode for insert, repo.add→insert, persist result used for message flow.
+#   LAST_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: removed allocated_ip=dead_ip from NewTask constructor (field removed); assert matching[0].allocated_node_id == persisted_node.node_id instead of allocated_ip.
+#   PREVIOUS_CHANGE: v1.1.0 - cloud-port-node-arg: assert orch._clouds.deallocate awaited with persisted_node (was ("hetzner", dead_ip)).
 # END_CHANGE_SUMMARY
 """Integration tests for the never-connected-node abandon path.
 
@@ -165,7 +165,6 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
                 label="stuck",
                 context=TaskContext(engine="test_engine"),
                 status=TaskStatus.TO_DO,
-                allocated_ip=dead_ip,
                 allocated_node_id=persisted_node.node_id,
             )
         )
@@ -227,7 +226,9 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     assert len(matching) == 1, (
         "task must remain TO_DO so the allocate producer re-yields it"
     )
-    assert matching[0].allocated_ip == dead_ip
+    # The node was removed (abandoned), so the FK ON DELETE SET NULL
+    # nulled allocated_node_id — the task is re-allocatable.
+    assert matching[0].allocated_node_id is None
     # END_BLOCK_VERIFY_TASK_REALLOCATABLE
 
 

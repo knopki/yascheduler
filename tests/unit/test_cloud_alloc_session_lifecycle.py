@@ -283,7 +283,7 @@ class _FakeTaskRepo:
             label=new_task.label,
             context=new_task.context,
             status=new_task.status,
-            allocated_ip=new_task.allocated_ip,
+            allocated_node_id=new_task.allocated_node_id,
         )
         self._store[next_id] = task
         return task
@@ -298,13 +298,13 @@ class _FakeTaskRepo:
 
             self._store[task_id] = replace(t, status=status)
 
-    async def list_ids_by_ip_and_status(
-        self, ip: str, status: TaskStatus
+    async def list_ids_by_node_id_and_status(
+        self, node_id: NodeId, status: TaskStatus
     ) -> list[TaskId]:
         return [
             t.task_id
             for t in self._store.values()
-            if t.allocated_ip == ip and t.status == status
+            if t.allocated_node_id == node_id and t.status == status
         ]
 
     async def count_by_status(self) -> dict[TaskStatus, int]:

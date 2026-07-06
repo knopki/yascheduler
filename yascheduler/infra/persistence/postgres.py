@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.10.0
+# VERSION: 1.11.1
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
@@ -9,13 +9,14 @@
 #
 # START_MODULE_MAP
 #   _PgRepository - base class for pg8000-backed repositories (conn, executor, _run)
-#   PostgresTaskRepository - async task CRUD: get, save, update_status, insert (NewTask→Task), list_by_status, list_by_jobs, count_by_status; get/update_status/save/list_by_jobs take/return TaskId (.value passed as pg8000 param); list_ids_by_ip_and_status returns list[TaskId]; _row_to_task wraps TaskId and NodeId; save/insert bind allocated_node_id via :node_id param; save/update_status raise TaskRowNotFoundError on 0-row UPDATE
+#   PostgresTaskRepository - async task CRUD: get, save, update_status, insert (NewTask→Task), list_by_status, list_by_jobs, count_by_status; get/update_status/save/list_by_jobs take/return TaskId (.value passed as pg8000 param); list_ids_by_node_id_and_status returns list[TaskId]; _row_to_task wraps TaskId and NodeId, reads created_at/updated_at, reads status via TaskStatus[name] (name lookup, was int cast); save/insert bind allocated_node_id via :node_id param, write status via status.name (enum-label string); save/update_status raise TaskRowNotFoundError on 0-row UPDATE
 #   PostgresNodeRepository - async node CRUD: get_by_id, get_by_ids (batch, WHERE node_id = ANY(:node_ids)), list_*, insert (NewNode→Node, sole insertion path — add_tmp removed), update (keys on node_id), enable/disable/remove (take NodeId, pass node_id.value), count_*; ip-keyed get/get_by_ips removed; list_enabled/list_disabled have no python post-filter (list_disabled filters ip <> '' in SQL)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - ssh-rekey-node-id: PostgresNodeRepository removes get(ip) and get_by_ips(ips) (no caller resolves a node by ip) and adds get_by_ids(node_ids: list[NodeId]) -> dict[NodeId, Node] (batch lookup, runs node/get_by_ids.sql with WHERE node_id = ANY(:node_ids), binds [n.value for n in node_ids]). node/get_by_ip.sql and node/get_by_ips.sql removed from the SQL layout; node/get_by_ids.sql added. get_by_id/list_*/insert/update/enable/disable/remove unchanged.
-#   PREVIOUS_CHANGE: v1.9.0 - task-allocated-node-id: PostgresTaskRepository.save and insert bind allocated_node_id via the :node_id pg8000 param (alongside label/status/ip/metadata); _row_to_task reads allocated_node_id and constructs NodeId(int(...)) when not None (else None). The 5 task SQL files feeding _row_to_task (get_by_id, list_by_status, list_by_jobs, insert RETURNING, update_by_id SET) include allocated_node_id; update_status/get_ids_by_ip_and_status/count_by_status are untouched (status-only / task_id-only / aggregate).
+#   LAST_CHANGE: v1.11.1 - task-schema-and-entity-cleanup: _row_to_task reads created_at/updated_at via row["created_at"]/row["updated_at"] (direct access — DB NOT NULL, was row.get() returning Any|None).
+#   PREVIOUS_CHANGE: v1.11.0 - task-schema-and-entity-cleanup: _row_to_task reads title (renamed from label) → Task.label, reads status via TaskStatus[row["status"]] (name lookup, was int cast — pg8000 returns the enum label as a str), reads created_at/updated_at, drops the allocated_ip read (column dropped). save/insert bind :title (was :label, value is task.label/new_task.label), :status as status.name (enum-label string, was status.value int), drop :ip. list_by_status passes [s.name for s in statuses] (was [s.value for s in statuses]) with cast(:statuses AS task_status[]) (was int[]). count_by_status uses TaskStatus[row["status"]] (name lookup). list_ids_by_ip_and_status → list_ids_by_node_id_and_status (binds :node_id=node_id.value, :status=status.name; runs task/get_ids_by_node_id_and_status.sql). update_status passes status=status.name (was status.value).
+#   PREVIOUS_CHANGE: v1.10.0 - ssh-rekey-node-id: PostgresNodeRepository removes get(ip) and get_by_ips(ips) (no caller resolves a node by ip) and adds get_by_ids(node_ids: list[NodeId]) -> dict[NodeId, Node] (batch lookup, runs node/get_by_ids.sql with WHERE node_id = ANY(:node_ids), binds [n.value for n in node_ids]). node/get_by_ip.sql and node/get_by_ips.sql removed from the SQL layout; node/get_by_ids.sql added. get_by_id/list_*/insert/update/enable/disable/remove unchanged.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -111,7 +112,7 @@ class PostgresTaskRepository(_PgRepository):
     #   PURPOSE: Update mutable fields of an existing task row by task_id; raise TaskRowNotFoundError if the row does not exist.
     #   INPUTS: { task: Task - domain task with serialized context (task.task_id: TaskId) }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Writes to yascheduler_tasks row (SQL param task_id=task.task_id.value); binds allocated_node_id via :node_id (task.allocated_node_id.value or None); metadata serialized as JSON; raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist.
+    #   SIDE_EFFECTS: Writes to yascheduler_tasks row (SQL param task_id=task.task_id.value); binds allocated_node_id via :node_id (task.allocated_node_id.value or None); title carries task.label (DB column is title); status binds task.status.name (enum-label string); metadata serialized as JSON; raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist. The BEFORE UPDATE trigger sets updated_at on the row.
     #   LINKS: task/update_by_id.sql, TaskContext.to_metadata, TaskRowNotFoundError
     # END_CONTRACT: save
     async def save(self, task: Task) -> None:
@@ -121,9 +122,8 @@ class PostgresTaskRepository(_PgRepository):
         rows = await self._run(
             load_query("task/update_by_id"),
             task_id=task.task_id.value,
-            label=task.label,
-            status=task.status.value,
-            ip=task.allocated_ip,
+            title=task.label,
+            status=task.status.name,
             metadata=metadata,
             node_id=task.allocated_node_id.value if task.allocated_node_id else None,
         )
@@ -137,7 +137,7 @@ class PostgresTaskRepository(_PgRepository):
     #   PURPOSE: Atomically update only the status field of a task; raise TaskRowNotFoundError if the row does not exist.
     #   INPUTS: { task_id: TaskId - task to update, status: TaskStatus - new status }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Executes atomic UPDATE on yascheduler_tasks.status (SQL param task_id=task_id.value); raises TaskRowNotFoundError when the targeted task_id does not exist.
+    #   SIDE_EFFECTS: Executes atomic UPDATE on yascheduler_tasks.status (SQL param task_id=task_id.value, status=status.name — the enum-label string); raises TaskRowNotFoundError when the targeted task_id does not exist.
     #   LINKS: task/update_status.sql, TaskRowNotFoundError
     # END_CONTRACT: update_status
     async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
@@ -146,35 +146,35 @@ class PostgresTaskRepository(_PgRepository):
         rows = await self._run(
             load_query("task/update_status"),
             task_id=task_id.value,
-            status=status.value,
+            status=status.name,
         )
         if not rows:
             raise TaskRowNotFoundError(task_id)
         # END_BLOCK_DETECT_ZERO_ROWS
 
-    # START_CONTRACT: list_ids_by_ip_and_status
-    #   PURPOSE: Return task IDs matching the given IP and status.
-    #   INPUTS: { ip: str, status: TaskStatus }
+    # START_CONTRACT: list_ids_by_node_id_and_status
+    #   PURPOSE: Return task IDs allocated to the given node and matching the given status.
+    #   INPUTS: { node_id: NodeId - the node identity (allocated_node_id filter), status: TaskStatus }
     #   OUTPUTS: { list[TaskId] - task IDs (the caller feeds them to update_status(TaskId, ...)) }
     #   SIDE_EFFECTS: None
-    #   LINKS: task/get_ids_by_ip_and_status.sql
-    # END_CONTRACT: list_ids_by_ip_and_status
-    async def list_ids_by_ip_and_status(
-        self, ip: str, status: TaskStatus
+    #   LINKS: task/get_ids_by_node_id_and_status.sql
+    # END_CONTRACT: list_ids_by_node_id_and_status
+    async def list_ids_by_node_id_and_status(
+        self, node_id: NodeId, status: TaskStatus
     ) -> list[TaskId]:
-        """Return task IDs matching the given IP and status."""
+        """Return task IDs allocated to the given node and matching the status."""
         rows = await self._run(
-            load_query("task/get_ids_by_ip_and_status"),
-            ip=ip,
-            status=status.value,
+            load_query("task/get_ids_by_node_id_and_status"),
+            node_id=node_id.value,
+            status=status.name,
         )
         return [TaskId(int(row["task_id"])) for row in rows]
 
     # START_CONTRACT: insert
     #   PURPOSE: Insert a new task row and return a Task with the DB-generated task_id (sole NewTask→Task conversion).
     #   INPUTS: { new_task: NewTask - pre-persistence task record (no task_id; the DB generates it) }
-    #   OUTPUTS: { Task - the newly created task carrying the generated TaskId }
-    #   SIDE_EFFECTS: Inserts row into yascheduler_tasks; assigns task_id via RETURNING; binds allocated_node_id via :node_id (new_task.allocated_node_id.value or None).
+    #   OUTPUTS: { Task - the newly created task carrying the generated TaskId, created_at, updated_at }
+    #   SIDE_EFFECTS: Inserts row into yascheduler_tasks; assigns task_id via RETURNING; binds allocated_node_id via :node_id (new_task.allocated_node_id.value or None); title carries new_task.label; status binds new_task.status.name (enum-label string); created_at/updated_at populated by DEFAULT NOW() (not bound) and read back via RETURNING.
     #   LINKS: task/insert.sql, _row_to_task
     # END_CONTRACT: insert
     async def insert(self, new_task: NewTask) -> Task:
@@ -182,10 +182,9 @@ class PostgresTaskRepository(_PgRepository):
         metadata = json.dumps(new_task.context.to_metadata())
         rows = await self._run(
             load_query("task/insert"),
-            label=new_task.label,
+            title=new_task.label,
             metadata=metadata,
-            ip=new_task.allocated_ip,
-            status=new_task.status.value,
+            status=new_task.status.name,
             node_id=(
                 new_task.allocated_node_id.value if new_task.allocated_node_id else None
             ),
@@ -205,7 +204,7 @@ class PostgresTaskRepository(_PgRepository):
         """Return tasks matching any of the given statuses."""
         rows = await self._run(
             load_query("task/list_by_status"),
-            statuses=[s.value for s in statuses],
+            statuses=[s.name for s in statuses],
             lim=limit,
         )
         return [self._row_to_task(r) for r in rows]
@@ -227,19 +226,19 @@ class PostgresTaskRepository(_PgRepository):
     # START_CONTRACT: count_by_status
     #   PURPOSE: Aggregate task counts grouped by status.
     #   INPUTS: { None }
-    #   OUTPUTS: { Mapping[TaskStatus, int] }
+    #   OUTPUTS: { Mapping[TaskStatus, int] - keys via name lookup TaskStatus[row["status"]] (pg8000 returns the enum label as a str) }
     #   SIDE_EFFECTS: None
     #   LINKS: task/count_by_status.sql
     # END_CONTRACT: count_by_status
     async def count_by_status(self) -> Mapping[TaskStatus, int]:
         """Return a mapping of TaskStatus to task count."""
         rows = await self._run(load_query("task/count_by_status"))
-        return {TaskStatus(row["status"]): row["count"] for row in rows}
+        return {TaskStatus[row["status"]]: row["count"] for row in rows}
 
     # START_CONTRACT: _row_to_task
     #   PURPOSE: Map a DB row dict to a domain Task, parsing JSONB metadata and wrapping TaskId from the task_id column and NodeId from the allocated_node_id column.
-    #   INPUTS: { row: dict[str, Any] - row with keys task_id, label, ip, status, metadata, allocated_node_id }
-    #   OUTPUTS: { Task - carries task_id: TaskId and allocated_node_id: NodeId | None }
+    #   INPUTS: { row: dict[str, Any] - row with keys task_id, title, status, metadata, allocated_node_id, created_at, updated_at }
+    #   OUTPUTS: { Task - carries task_id: TaskId, allocated_node_id: NodeId | None, created_at/updated_at: datetime (DB NOT NULL DEFAULT NOW()), label=row["title"] }
     #   SIDE_EFFECTS: None
     #   LINKS: TaskContext.from_metadata, TaskId, NodeId
     # END_CONTRACT: _row_to_task
@@ -256,15 +255,16 @@ class PostgresTaskRepository(_PgRepository):
         allocated_node_id_raw = row.get("allocated_node_id")
         return Task(
             task_id=TaskId(int(row["task_id"])),
-            label=row.get("label", ""),
+            label=row.get("title", ""),
             context=ctx,
-            status=TaskStatus(row["status"]),
-            allocated_ip=row.get("ip") or None,
+            status=TaskStatus[row["status"]],
             allocated_node_id=(
                 NodeId(int(allocated_node_id_raw))
                 if allocated_node_id_raw is not None
                 else None
             ),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
 

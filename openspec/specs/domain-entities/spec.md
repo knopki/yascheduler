@@ -59,11 +59,14 @@ The system SHALL provide a `NewTask` domain entity as an immutable
 `@dataclass(frozen=True)` object representing a **pre-persistence** task record
 (one that has not yet been assigned a database `task_id`). Fields:
 `label: str`, `context: TaskContext`, `status: TaskStatus = TaskStatus.TO_DO`,
-`allocated_ip: str | None = None`, `allocated_node_id: NodeId | None = None`.
+`allocated_node_id: NodeId | None = None`.
 
-`NewTask` mirrors the non-`task_id`/non-`_events` fields of `Task` with identical
-defaults. It carries no identity attribute and no `_events` tuple; it is a pure
-data carrier with **no lifecycle methods** (`allocate_to`/`mark_running`/
+`NewTask` mirrors the non-`task_id`/non-`_events`/non-`created_at`/
+non-`updated_at` fields of `Task` with identical defaults. It carries no
+identity attribute, no `_events` tuple, and no `created_at`/`updated_at`
+timestamp fields (those are DB-generated and only appear on the
+post-persistence `Task`). It is a pure data carrier with **no lifecycle
+methods** (`allocate_to`/`mark_running`/
 `complete`/`fail`/`reject`/`with_context`/`with_event`/`pull_events`/
 `record_event` stay on `Task` — they are nonsensical on an unpersisted task). It
 is converted to a `Task` only by `TaskRepository.insert` (see the `domain-ports`
@@ -75,11 +78,15 @@ status lifecycle" requirement), not by `NewTask` construction.
 
 #### Scenario: NewTask has no task_id attribute
 - **WHEN** a NewTask is instantiated with `label="job"` and `context=ctx`
-- **THEN** it has no `task_id` field; `status` defaults to `TaskStatus.TO_DO`, `allocated_ip` defaults to None, `allocated_node_id` defaults to None
+- **THEN** it has no `task_id` field; `status` defaults to `TaskStatus.TO_DO`, `allocated_node_id` defaults to None
 
 #### Scenario: NewTask carries no events
 - **WHEN** a NewTask is instantiated
 - **THEN** it has no `_events` attribute; events are collected on the persisted `Task` after `insert`
+
+#### Scenario: NewTask has no audit timestamps
+- **WHEN** a NewTask is instantiated
+- **THEN** it has no `created_at` or `updated_at` attribute; those fields are DB-generated and appear only on the post-persistence `Task`
 
 #### Scenario: NewTask is the pre-persistence input shape
 - **WHEN** a caller prepares a task record for insertion
@@ -95,7 +102,8 @@ The system SHALL provide a `Task` domain entity as an immutable
 `@dataclass(frozen=True)` object representing a **post-persistence** task record
 (one that has been assigned a database `task_id`). Fields: `task_id: TaskId`
 (first field, identity first), `label: str`, `context: TaskContext`,
-`status: TaskStatus = TaskStatus.TO_DO`, `allocated_ip: str | None = None`,
+`created_at: datetime`, `updated_at: datetime`,
+`status: TaskStatus = TaskStatus.TO_DO`,
 `allocated_node_id: NodeId | None = None`,
 `_events: tuple[DomainEvent, ...] = field(default=(), repr=False)`.
 
@@ -106,18 +114,17 @@ from `NewTask` to `Task` happens in exactly one place: `TaskRepository.insert`
 (see the `domain-ports` capability).
 
 `task_id` SHALL be the first field (identity first). Field order is valid for a
-frozen dataclass: `task_id`, `label`, `context` carry no defaults; the remaining
-fields follow with their defaults. Construction at all in-repo call sites uses
+frozen dataclass: `task_id`, `label`, `context`, `created_at`, `updated_at`
+carry no defaults; the remaining fields follow with their defaults. Construction at all in-repo call sites uses
 keyword arguments, so the reorder is source-compatible. The `task_id=0` sentinel
 becomes unrepresentable: `Task`'s `task_id: TaskId` field is required, and
 `TaskId(0)` raises `ValueError` in `__post_init__`.
 
 `allocated_node_id` is `None` for unallocated tasks (TO_DO with no node bound)
 and for tasks whose node was deleted (the DB FK is `ON DELETE SET NULL`). It is
-set by `allocate_to(node)` alongside `allocated_ip`; the two fields SHALL be
-bound together in a single `allocate_to` call. The read path continues to use
-`allocated_ip` until Surface A (`ssh-rekey-node-id`) switches the read sites to
-`allocated_node_id`.
+set by `allocate_to(node)`. `allocated_ip` is removed from `Task`; the node
+transport address is obtained from the resolved `Node.ip` via
+`nodes_by_id` (see the `cli` capability).
 
 The lifecycle methods (`allocate_to`, `mark_running`, `complete`, `fail`,
 `reject`, `with_context`, `with_event`, `pull_events`, `record_event`) are
@@ -135,19 +142,19 @@ extraction needed); event subclasses carry `task_id: TaskId` (see the
 - **THEN** `task.task_id` is a `TaskId` instance (never `None`, never a bare `int`)
 
 #### Scenario: Allocate task to a node
-- **WHEN** `task.allocate_to(node)` is called on a TO_DO task with a `Node` carrying `node_id=NodeId(7)` and `ip="10.0.0.1"`
-- **THEN** a new Task is returned with `allocated_ip="10.0.0.1"`, `allocated_node_id=NodeId(7)`, and original status preserved
+- **WHEN** `task.allocate_to(node)` is called on a TO_DO task with a `Node` carrying `node_id=NodeId(7)`
+- **THEN** a new Task is returned with `allocated_node_id=NodeId(7)` and original status preserved
 
 #### Scenario: Allocate already-allocated task
-- **WHEN** `task.allocate_to(node)` is called on a task with `allocated_ip` already set
-- **THEN** `TaskAlreadyAllocatedError` is raised (carrying `task.task_id: TaskId`); neither `allocated_ip` nor `allocated_node_id` is changed
+- **WHEN** `task.allocate_to(node)` is called on a task with `allocated_node_id` already set
+- **THEN** `TaskAlreadyAllocatedError` is raised (carrying `task.task_id: TaskId`); `allocated_node_id` is not changed
 
 #### Scenario: Transition to RUNNING — success
-- **WHEN** `task.mark_running()` is called on a TO_DO task with `allocated_ip` set
+- **WHEN** `task.mark_running()` is called on a TO_DO task with `allocated_node_id` set
 - **THEN** a new Task is returned with `status=RUNNING`
 
 #### Scenario: mark_running on unallocated task
-- **WHEN** `task.mark_running()` is called on a task with `allocated_ip=None`
+- **WHEN** `task.mark_running()` is called on a task with `allocated_node_id=None`
 - **THEN** `TaskNotAllocatedError` is raised (carrying `task.task_id: TaskId`)
 
 #### Scenario: mark_running on non-TO_DO task

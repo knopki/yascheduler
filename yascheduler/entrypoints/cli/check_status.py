@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/check_status.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
 #   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
@@ -13,9 +13,9 @@
 #   _parse_status_args - Parse yastatus argparse flags (mutex renderers, -o requires -v)
 #   _query_tasks - Conditional task query within the single query-phase UoW
 #   _render_default - AiiDA-compatible default renderer (<id>   <STATUS>)
-#   _render_info - Tab-separated one-line-per-task renderer
-#   _render_json - Raw-domain-values JSON (9 fields)
-#   _render_view - Verbose renderer: SSH tail of OUTPUT, optional convergence snippet
+#   _render_info - Tab-separated one-line-per-task renderer (task_id, status, label, node_id)
+#   _render_json - Raw-domain-values JSON (nested node object + created_at/updated_at)
+#   _render_view - Verbose renderer: SSH tail of OUTPUT, optional convergence snippet (uses node.ip from resolved Node)
 #   _resolve_conn_params - Resolve SSH conn params mirroring orchestrator._connect_machine_consumer
 #   _display_remote_output - Connect via SSHMachineRepository / SSHMachineOperations, tail OUTPUT file
 #   _download_convergence_snippet - Download OUTPUT file via SFTP
@@ -24,8 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - simplify-cloud-connect-node-args: _display_remote_output stops passing `username=conn_params.username` and `port=conn_params.port` to repository.connect (connect reads them from node internally). `_ConnParams` retains its username/.port fields (DTO unchanged).
-#   PREVIOUS_CHANGE: v1.4.0 - ssh-rekey-node-id: _display_remote_output takes node: Node and connects via repository.connect(node=node, ...); query phase builds nodes_by_id via get_by_ids.
+#   LAST_CHANGE: v1.6.0 - task-schema-and-entity-cleanup: _render_info emits node_id= (was ip=); _render_json drops flat allocated_ip/port/cloud fields, adds nested node object {ip, port, username, cloud} (or null) + created_at/updated_at (ISO-8601); _render_view reads node.ip from the resolved Node (was task.allocated_ip). BREAKING yastatus --json wire format change.
+#   PREVIOUS_CHANGE: v1.5.0 - simplify-cloud-connect-node-args: _display_remote_output stops passing `username=conn_params.username` and `port=conn_params.port` to repository.connect (connect reads them from node internally). `_ConnParams` retains its username/.port fields (DTO unchanged).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def _render_default(tasks: list[Task]) -> None:
 
 
 # START_CONTRACT: _render_info
-#   PURPOSE: Tab-separated one-line-per-task renderer (task_id, status, label, allocated_ip).
+#   PURPOSE: Tab-separated one-line-per-task renderer (task_id, status, label, node_id).
 #   INPUTS: { tasks: list[Task] }
 #   OUTPUTS: { None - prints one tab-separated line per task to stdout }
 #   SIDE_EFFECTS: Writes to stdout. Not used by the AiiDA plugin; free to change.
@@ -157,17 +157,17 @@ def _render_default(tasks: list[Task]) -> None:
 def _render_info(tasks: list[Task]) -> None:
     for task in tasks:
         print(
-            "task_id={}\tstatus={}\tlabel={}\tip={}".format(
+            "task_id={}\tstatus={}\tlabel={}\tnode_id={}".format(
                 task.task_id,
                 task.status.name,
                 task.label,
-                task.allocated_ip or "-",
+                task.allocated_node_id or "-",
             )
         )
 
 
 # START_CONTRACT: _render_json
-#   PURPOSE: Render tasks as a JSON list of 9-field objects with raw domain values (no display transformations).
+#   PURPOSE: Render tasks as a JSON list of objects with raw domain values (no display transformations); nested node object + audit timestamps.
 #   INPUTS: { tasks: list[Task], nodes_by_id: dict[NodeId, Node] - node lookup by allocated_node_id }
 #   OUTPUTS: { str - json.dumps(list_of_objects) }
 #   SIDE_EFFECTS: None
@@ -185,12 +185,21 @@ def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
                 "task_id": task.task_id.value,
                 "status": task.status.name,
                 "label": task.label,
-                "allocated_ip": task.allocated_ip,
-                "port": node.port if node else None,
-                "cloud": node.cloud if node else None,
                 "engine": task.context.engine,
                 "local_folder": task.context.local_folder,
                 "remote_folder": task.context.remote_folder,
+                "created_at": task.created_at.isoformat(),
+                "updated_at": task.updated_at.isoformat(),
+                "node": (
+                    {
+                        "ip": node.ip,
+                        "port": node.port,
+                        "username": node.username,
+                        "cloud": node.cloud,
+                    }
+                    if node is not None
+                    else None
+                ),
             }
         )
     return json.dumps(objects)
@@ -395,7 +404,7 @@ async def _render_view(
                     task.task_id,
                     task.label,
                     conn_params.username,
-                    task.allocated_ip or "",
+                    node.ip if node else "",
                     cloud_str,
                     task.context.remote_folder or "",
                 )

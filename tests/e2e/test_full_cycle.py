@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_full_cycle.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test exercising full scheduler lifecycle via real entrypoint code paths across two SSH nodes.
 #   SCOPE: Start daemon → submit 4 jobs via _submit_async → assert TO_DO → add 2 nodes via _manage_node_async → poll until DONE → assert outputs, distribution, logs → soft-remove both nodes.
@@ -13,7 +13,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - e2e-real-lifecycle: rewrite to drive the full lifecycle through the internal async entrypoints (_submit_async, _manage_node_async) instead of bypassing them with direct repository/UoW calls. Two SSH containers (one shared keypair) exercise multi-node scheduling; four jobs submitted before nodes are added so the allocator's no-provider spin is observable; distribution asserted by set equality + monopoly rejection; soft-remove via _manage_node_async exercised; scheduling activity asserted via in-memory log capture.
+#   LAST_CHANGE: v2.1.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.ip via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
 #   PREVIOUS_CHANGE: v1.4.0 - fix-static-node-connect-exclusion: drop the `cloud="e2e"` workaround.
 #   PREVIOUS_CHANGE: v1.3.0 - session-based-machine-handle section 7.x: Migrate from get_machine_state to get_session.
 # END_CHANGE_SUMMARY
@@ -24,6 +24,7 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -126,16 +127,42 @@ async def test_full_cycle(
             assert out_file.read_text() == expected, (
                 f"task {tid} output={out_file.read_text()!r}, expected {expected!r}"
             )
+            assert isinstance(task.created_at, datetime), (
+                f"task {tid} created_at={task.created_at!r} is not datetime"
+            )
+            assert isinstance(task.updated_at, datetime), (
+                f"task {tid} updated_at={task.updated_at!r} is not datetime"
+            )
         # END_BLOCK_VERIFY_OUTPUTS
 
         # START_BLOCK_ASSERT_DISTRIBUTION
-        ips = {t.allocated_ip for t in tasks if t is not None}
+        async with uow_factory() as uow:
+            node_ids = [
+                t.allocated_node_id
+                for t in tasks
+                if t is not None and t.allocated_node_id
+            ]
+            nodes_by_id = await uow.nodes.get_by_ids(node_ids) if node_ids else {}
+        ips = {
+            nodes_by_id[t.allocated_node_id].ip
+            for t in tasks
+            if t is not None
+            and t.allocated_node_id
+            and t.allocated_node_id in nodes_by_id
+        }
         assert ips == {ip_a, ip_b}, (
             f"expected both nodes used, got allocated_ips={ips}; "
             f"expected {{{ip_a}, {ip_b}}}"
         )
         for ip in (ip_a, ip_b):
-            count = sum(1 for t in tasks if t is not None and t.allocated_ip == ip)
+            count = sum(
+                1
+                for t in tasks
+                if t is not None
+                and t.allocated_node_id
+                and t.allocated_node_id in nodes_by_id
+                and nodes_by_id[t.allocated_node_id].ip == ip
+            )
             assert count < len(task_ids), (
                 f"node {ip} received all {len(task_ids)} tasks — monopoly rejected"
             )
@@ -279,7 +306,7 @@ async def _assert_nodes_present(
 # START_CONTRACT: _wait_all_done
 #   PURPOSE: Poll the DB until all task_ids reach DONE or the timeout elapses; collect RUNNING snapshots; fail the test on timeout.
 #   INPUTS: { uow_factory, task_ids: list[int] }
-#   OUTPUTS: { dict[int, str] - task_id -> allocated_ip for every task observed RUNNING }
+#   OUTPUTS: { dict[int, str] - task_id -> node.ip for every task observed RUNNING }
 #   SIDE_EFFECTS: None — read-only polls.
 #   LINKS: M-PERSISTENCE-UOW
 # END_CONTRACT: _wait_all_done
@@ -296,8 +323,9 @@ async def _wait_all_done(
             for tid in task_ids:
                 t = await uow.tasks.get(TaskId(tid))
                 statuses.append(t.status if t else None)
-                if t and t.status == DomainTaskStatus.RUNNING and t.allocated_ip:
-                    seen_running[tid] = t.allocated_ip
+                if t and t.status == DomainTaskStatus.RUNNING and t.allocated_node_id:
+                    node = await uow.nodes.get_by_id(t.allocated_node_id)
+                    seen_running[tid] = node.ip if node else ""
         if all(s == DomainTaskStatus.DONE for s in statuses):
             return seen_running
         await asyncio.sleep(_POLL_INTERVAL_S)

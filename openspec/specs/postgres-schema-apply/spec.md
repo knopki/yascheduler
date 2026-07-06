@@ -68,7 +68,8 @@ block SHALL:
 
 1. Declare `last_migration` as a PL/pgSQL `CONSTANT TEXT` set to the
    `prefix_id` of the latest migration (the single manual edit point in
-   `schema.sql`).
+   `schema.sql`). After the task-schema-and-entity-cleanup change, the value
+   SHALL be `'009'` (was `'005'`).
 2. Guard on `to_regclass('yascheduler_migrations') IS NULL` (uses
    `search_path`, no hardcoded schema name).
 3. Inside the guard: `EXECUTE` the `CREATE TABLE yascheduler_migrations
@@ -89,7 +90,7 @@ database (no seed, run all migrations via `apply_migrations`). If the
 
 #### Scenario: Fresh database is seeded to the latest migration
 - **WHEN** `apply_schema(config)` runs on a database with neither `yascheduler_migrations` nor `yascheduler_nodes`
-- **THEN** the DO block creates `yascheduler_migrations`, inserts a row with `migration_id = last_migration` (`'005'` after the serial-to-identity change), and subsequent `apply_migrations` skips all migrations
+- **THEN** the DO block creates `yascheduler_migrations`, inserts a row with `migration_id = last_migration` (`'009'` after the task-schema-and-entity-cleanup change), and subsequent `apply_migrations` skips all migrations
 
 #### Scenario: Legacy database is not seeded
 - **WHEN** `apply_schema(config)` runs on a database with `yascheduler_nodes` but no `yascheduler_migrations`
@@ -101,7 +102,7 @@ database (no seed, run all migrations via `apply_migrations`). If the
 
 #### Scenario: last_migration is a single edit point
 - **WHEN** a new migration `005_serial_to_identity.sql` is added
-- **THEN** the `last_migration` CONSTANT in the DO block is updated to `"005"` (one manual edit in `schema.sql`)
+- **THEN** the `last_migration` CONSTANT in the DO block is updated to `"009"` (one manual edit in `schema.sql`)
 
 ### Requirement: schema.sql is the full latest snapshot with no inline ALTERs
 
@@ -124,9 +125,33 @@ columns, PostgreSQL 10+). They SHALL NOT be declared as `SERIAL PRIMARY KEY`.
 The `GENERATED ALWAYS` clause rejects explicit inserts of the PK value
 without `OVERRIDING SYSTEM VALUE`, guarding against a class of future bugs.
 
+The `CREATE TABLE IF NOT EXISTS yascheduler_tasks` statement SHALL reflect the
+final shape: columns `task_id INTEGER PRIMARY KEY GENERATED ALWAYS AS
+IDENTITY`, `title VARCHAR(256)` (renamed from `label`), `metadata JSONB`,
+`status task_status NOT NULL DEFAULT 'TO_DO'` (the PostgreSQL enum, was
+`SMALLINT NOT NULL DEFAULT 0`), `allocated_node_id INTEGER REFERENCES
+yascheduler_nodes(node_id) ON DELETE SET NULL`, `created_at TIMESTAMPTZ NOT
+NULL DEFAULT NOW()`, `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`. The
+`ip` column SHALL NOT appear (dropped by migration 009). The
+`task_status` enum type SHALL be created in `schema.sql` before the
+`CREATE TABLE yascheduler_tasks` statement (via `CREATE TYPE task_status AS
+ENUM ('TO_DO', 'RUNNING', 'DONE');`). The `yascheduler_touch_updated_at()`
+trigger function and the `yascheduler_tasks_touch_updated_at` trigger SHALL
+be created in `schema.sql` after the `CREATE TABLE yascheduler_tasks`
+statement (so a fresh database gets the trigger without running migration
+007).
+
 #### Scenario: CREATE TABLE includes all current columns
 - **WHEN** `schema.sql` is inspected
-- **THEN** `CREATE TABLE IF NOT EXISTS yascheduler_nodes` includes `node_id`, `ip`, `port`, `username`, `ncpus`, `enabled`, `cloud` columns with `node_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY`; `CREATE TABLE IF NOT EXISTS yascheduler_tasks` includes `task_id`, `label`, `metadata`, `ip`, `status`, `allocated_node_id` columns with `task_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY`
+- **THEN** `CREATE TABLE IF NOT EXISTS yascheduler_nodes` includes `node_id`, `ip`, `port`, `username`, `ncpus`, `enabled`, `cloud` columns with `node_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY`; `CREATE TABLE IF NOT EXISTS yascheduler_tasks` includes `task_id`, `title`, `metadata`, `status`, `allocated_node_id`, `created_at`, `updated_at` columns (the `ip` column is absent, the `label` column is renamed to `title`, `created_at`/`updated_at` are added, `status` is the `task_status` enum) with `task_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY`
+
+#### Scenario: schema.sql creates the task_status enum type
+- **WHEN** `schema.sql` is inspected
+- **THEN** a `CREATE TYPE task_status AS ENUM ('TO_DO', 'RUNNING', 'DONE');` statement appears before `CREATE TABLE IF NOT EXISTS yascheduler_tasks`
+
+#### Scenario: schema.sql installs the updated_at trigger
+- **WHEN** `schema.sql` is inspected
+- **THEN** the `yascheduler_touch_updated_at()` function definition and the `CREATE TRIGGER yascheduler_tasks_touch_updated_at ... EXECUTE FUNCTION yascheduler_touch_updated_at()` statement appear after `CREATE TABLE IF NOT EXISTS yascheduler_tasks`
 
 #### Scenario: No inline ALTER statements
 - **WHEN** `schema.sql` is inspected

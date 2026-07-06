@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.8.0
+# VERSION: 1.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
 #   SCOPE: manage_node command + argparse + node-target parser + host-spec parser + node add/remove helpers (each helper owns its UoW).
@@ -15,14 +15,14 @@
 #   _parse_host_spec - argparse type: parse [user@]host[:port][~ncpus] grammar (UNCHANGED)
 #   _parse_node_target - argparse type: digit → NodeTarget(node_id=NodeId(n)); else delegate to _parse_host_spec
 #   _parse_node_args - argparse → Namespace (prog="yasetnode", flags, mutex group); add-by-id rejected via parser.error
-#   _remove_node_hard - Hard-remove: own UoW, mark RUNNING tasks DONE, remove node (by node_id), commit, print (takes Node; node.ip for task lookup + print)
-#   _remove_node_soft - Soft-remove: own UoW, disable (if tasks) or remove node (by node_id), commit, print (takes Node; node.ip for task lookup + print)
+#   _remove_node_hard - Hard-remove: own UoW, mark RUNNING tasks DONE, remove node (by node_id), commit, print (takes Node; node.node_id keys the task lookup, node.ip for print)
+#   _remove_node_soft - Soft-remove: own UoW, disable (if tasks) or remove node (by node_id), commit, print (takes Node; node.node_id keys the task lookup, node.ip for print)
 #   _add_node - Add node: own UoW, connect, optional setup, insert NewNode, commit, print; try/finally disconnect
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - simplify-cloud-connect-node-args: _add_node stops passing `username=username` and `port=spec.port` to repository.connect (connect reads them from node internally; the tmp node already carries them).
-#   PREVIOUS_CHANGE: v1.7.1 - ssh-rekey-node-id follow-up: _add_node flips the tmp row to enabled=True via dataclasses.replace(tmp, enabled=True) instead of reconstructing a Node.
+#   LAST_CHANGE: v1.9.0 - task-schema-and-entity-cleanup: _remove_node_hard/_remove_node_soft call list_ids_by_node_id_and_status(node.node_id, ...); the filter key changes from ip to node_id (the canonical allocation identity).
+#   PREVIOUS_CHANGE: v1.8.0 - simplify-cloud-connect-node-args: _add_node stops passing `username=username` and `port=spec.port` to repository.connect (connect reads them from node internally; the tmp node already carries them).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -225,7 +225,7 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 # START_CONTRACT: _remove_node_hard
 #   PURPOSE: Hard-remove a node — in its own UoW, mark RUNNING tasks DONE, remove the node (by node_id), commit, then announce.
-#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, node: Node - the resolved node (node.node_id keys the mutator; node.ip keys the task lookup + print) }
+#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, node: Node - the resolved node (node.node_id keys the mutator + task lookup) }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Opens its own UoW; updates task statuses and removes the node (by node_id); commits; prints success messages to stdout AFTER commit.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DI
@@ -233,8 +233,8 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
     # START_BLOCK_MARK_AND_REMOVE
     async with deps.uow_factory() as uow:
-        task_ids = await uow.tasks.list_ids_by_ip_and_status(
-            node.ip, TaskStatus.RUNNING
+        task_ids = await uow.tasks.list_ids_by_node_id_and_status(
+            node.node_id, TaskStatus.RUNNING
         )
         for task_id in task_ids:
             await uow.tasks.update_status(task_id, TaskStatus.DONE)
@@ -250,7 +250,7 @@ async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
 
 # START_CONTRACT: _remove_node_soft
 #   PURPOSE: Soft-remove a node — in its own UoW, disable (by node_id) if RUNNING tasks exist, else remove (by node_id); commit, then announce.
-#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, node: Node - the resolved node (node.node_id keys the mutator; node.ip keys the task lookup + print) }
+#   INPUTS: { deps: CLIDeps - DI holder providing uow_factory, node: Node - the resolved node (node.node_id keys the mutator + task lookup) }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Opens its own UoW; disables or removes the node (by node_id); commits; prints success messages to stdout AFTER commit.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DI
@@ -258,8 +258,8 @@ async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
 async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
     # START_BLOCK_DISABLE_OR_REMOVE
     async with deps.uow_factory() as uow:
-        task_ids = await uow.tasks.list_ids_by_ip_and_status(
-            node.ip, TaskStatus.RUNNING
+        task_ids = await uow.tasks.list_ids_by_node_id_and_status(
+            node.node_id, TaskStatus.RUNNING
         )
         if task_ids:
             await uow.nodes.disable(node.node_id)

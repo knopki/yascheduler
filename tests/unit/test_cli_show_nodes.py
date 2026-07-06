@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_show_nodes.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yanodes show_nodes() flag parsing, filtering, table/JSON rendering, and exit codes.
@@ -18,7 +18,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - add-node-id-identity: added node_id=NodeId(...) to all Node() constructions, updated _ips_from_table() column index (NODE_ID is now column 0, IP is column 1), added NODE_ID header and JSON assertions.
+#   LAST_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: remove allocated_ip from make_task helper, drop ip= kwarg from all call sites
 #   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
 # END_CHANGE_SUMMARY
 
@@ -98,7 +98,6 @@ def make_task(
     task_id: int = 1,
     status: TaskStatus = TaskStatus.RUNNING,
     label: str = "test",
-    ip: str | None = "10.0.0.1",
     allocated_node_id: NodeId | None = None,
 ) -> Task:
     """Return a Task domain object with sensible defaults."""
@@ -111,7 +110,6 @@ def make_task(
             local_folder="/tmp/local",
         ),
         status=status,
-        allocated_ip=ip,
         allocated_node_id=allocated_node_id,
     )
 
@@ -199,7 +197,6 @@ class TestShowNodesRendering:
                 make_task(
                     task_id=1,
                     label="my_job",
-                    ip="10.0.0.1",
                     allocated_node_id=NodeId(1),
                 )
             ]
@@ -257,9 +254,7 @@ class TestShowNodesRendering:
         )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(
-                    task_id=7, label="job7", ip="10.0.0.1", allocated_node_id=NodeId(1)
-                )
+                make_task(task_id=7, label="job7", allocated_node_id=NodeId(1))
             ]
         )
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
@@ -405,11 +400,7 @@ class TestShowNodesFiltering:
         _wire(
             uow,
             nodes,
-            [
-                make_task(
-                    task_id=1, label="j1", ip="10.0.0.1", allocated_node_id=NodeId(1)
-                )
-            ],
+            [make_task(task_id=1, label="j1", allocated_node_id=NodeId(1))],
         )
         _run(["--busy", "--free"])
         out, _ = capsys.readouterr()
@@ -426,11 +417,7 @@ class TestShowNodesFiltering:
         _wire(
             uow,
             nodes,
-            [
-                make_task(
-                    task_id=1, label="j1", ip="10.0.0.1", allocated_node_id=NodeId(1)
-                )
-            ],
+            [make_task(task_id=1, label="j1", allocated_node_id=NodeId(1))],
         )
         _run(["--enabled", "--busy", "--cloud", "hetzner"])
         out, _ = capsys.readouterr()
@@ -468,11 +455,7 @@ class TestShowNodesFiltering:
         _wire(
             uow,
             nodes,
-            [
-                make_task(
-                    task_id=1, label="j1", ip="10.0.0.2", allocated_node_id=NodeId(2)
-                )
-            ],
+            [make_task(task_id=1, label="j1", allocated_node_id=NodeId(2))],
         )
         _run(["--busy"])
         out, _ = capsys.readouterr()
@@ -488,11 +471,7 @@ class TestShowNodesFiltering:
         _wire(
             uow,
             nodes,
-            [
-                make_task(
-                    task_id=1, label="j1", ip="10.0.0.2", allocated_node_id=NodeId(2)
-                )
-            ],
+            [make_task(task_id=1, label="j1", allocated_node_id=NodeId(2))],
         )
         _run(["--free"])
         out, _ = capsys.readouterr()
@@ -611,11 +590,7 @@ class TestShowNodesStructure:
         _wire(
             uow,
             [Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22)],
-            [
-                make_task(
-                    task_id=1, label="j1", ip="10.0.0.1", allocated_node_id=NodeId(1)
-                )
-            ],
+            [make_task(task_id=1, label="j1", allocated_node_id=NodeId(1))],
         )
         _run([])
         # Each read called exactly once.

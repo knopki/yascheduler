@@ -1,24 +1,30 @@
 # FILE: tests/unit/test_persistence_allocated_node_id.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the task-allocated-node-id persistence-layer changes: _row_to_task reads NodeId, insert/save bind :node_id, and the 5 task SQL files include allocated_node_id.
-#   SCOPE: _row_to_task NodeId wrapping + NULL handling; insert/save :node_id binding (value and None); SQL-file content for the 5 task files that feed _row_to_task and the 3 status/aggregate files that do NOT.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL
-#   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SQLLOADER
+#   PURPOSE: Unit tests for the task-schema-and-entity-cleanup persistence-layer changes: _row_to_task reads NodeId + audit timestamps + title + enum-label status, insert/save bind :node_id + :title + :status (name), and the 5 task SQL files include allocated_node_id/created_at/updated_at/title.
+#   SCOPE: _row_to_task NodeId wrapping + NULL handling + title→label + enum name lookup + created_at/updated_at reads + no allocated_ip; insert/save :node_id/:title/:status binding (value and None); SQL-file content for the 5 task files that feed _row_to_task and the 3 status/aggregate files that do NOT; list_ids_by_node_id_and_status SQL file; Protocol-conformance test.
+#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL, M-DOMAIN-PORTS
+#   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SQLLOADER, M-DOMAIN-PORTS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestRowToTaskAllocatedNodeId - _row_to_task reads allocated_node_id → NodeId; NULL/missing key → None
-#   TestInsertSaveBindAllocatedNodeId - insert/save bind :node_id (value or None)
-#   TestTaskSqlIncludesAllocatedNodeId - 5 task SQL files include allocated_node_id; 3 status/aggregate files do NOT
+#   TestRowToTaskAllocatedNodeId - _row_to_task reads allocated_node_id → NodeId; NULL/missing key → None; reads title→label, status via name lookup, created_at/updated_at
+#   TestInsertSaveBindAllocatedNodeId - insert/save bind :node_id (value or None), :title, :status (name)
+#   TestTaskSqlIncludesAllocatedNodeId - 5 task SQL files include allocated_node_id/created_at/updated_at/title; 3 status/aggregate files do NOT
+#   TestGetIdsByNodeIdAndStatusSql - get_ids_by_node_id_and_status.sql replaces get_ids_by_ip_and_status.sql
+#   TestTaskRepositoryProtocolConformance - PostgresTaskRepository satisfies the updated TaskRepository Protocol (list_ids_by_node_id_and_status)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - task-allocated-node-id: extract allocated_node_id persistence tests from test_persistence_adapter.py into a focused module (the parent file exceeded the 1000-line GRACE-lite hard limit after the additions).
+#   LAST_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: _row_to_task reads title (renamed from label) → Task.label, reads status via TaskStatus[row["status"]] (name lookup, was int cast), reads created_at/updated_at, drops allocated_ip read. insert/save bind :title (was :label, value is task.label), :status as status.name (was status.value), drop :ip. list_ids_by_ip_and_status → list_ids_by_node_id_and_status. SQL file tests updated for the new column lists. Protocol-conformance test added.
+#   PREVIOUS_CHANGE: v1.0.0 - task-allocated-node-id: extract allocated_node_id persistence tests from test_persistence_adapter.py into a focused module (the parent file exceeded the 1000-line GRACE-lite hard limit after the additions).
 # END_CHANGE_SUMMARY
 
-from pytest_mock import MockerFixture
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from yascheduler.domain.model import (
     NewTask,
@@ -30,8 +36,12 @@ from yascheduler.domain.model import (
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
 )
+from yascheduler.domain.ports import TaskRepository
 from yascheduler.infra.persistence.postgres import PostgresTaskRepository
 from yascheduler.infra.persistence.sql_loader import load_query
+
+if TYPE_CHECKING:
+    from pytest_mock import MockerFixture
 
 
 def _make_repo(mocker: MockerFixture) -> PostgresTaskRepository:
@@ -43,21 +53,32 @@ def _make_repo(mocker: MockerFixture) -> PostgresTaskRepository:
     return repo
 
 
+def _row(
+    task_id: int = 1,
+    title: str = "job",
+    status: str = "TO_DO",
+    allocated_node_id: int | None = 5,
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
+) -> dict[str, object]:
+    """Build a DB-row dict in the post-cleanup shape (title, enum-label status, no ip)."""
+    return {
+        "task_id": task_id,
+        "title": title,
+        "status": status,
+        "metadata": '{"engine":"fleur"}',
+        "allocated_node_id": allocated_node_id,
+        "created_at": created_at or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        "updated_at": updated_at or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+    }
+
+
 class TestRowToTaskAllocatedNodeId:
     """_row_to_task reads allocated_node_id and wraps NodeId (None when NULL/absent)."""
 
     async def test_reads_allocated_node_id(self, mocker: MockerFixture) -> None:
         repo = _make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 1,
-                "label": "job",
-                "ip": "10.0.0.1",
-                "status": 1,
-                "metadata": '{"engine":"fleur"}',
-                "allocated_node_id": 5,
-            }
-        ]
+        repo._run.return_value = [_row(task_id=1, allocated_node_id=5)]  # type: ignore[attr-defined]
 
         task = await repo.get(TaskId(1))
 
@@ -66,16 +87,7 @@ class TestRowToTaskAllocatedNodeId:
 
     async def test_handles_null_allocated_node_id(self, mocker: MockerFixture) -> None:
         repo = _make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 1,
-                "label": "job",
-                "ip": None,
-                "status": 0,
-                "metadata": '{"engine":"fleur"}',
-                "allocated_node_id": None,
-            }
-        ]
+        repo._run.return_value = [_row(task_id=1, allocated_node_id=None)]  # type: ignore[attr-defined]
 
         task = await repo.get(TaskId(1))
 
@@ -86,38 +98,67 @@ class TestRowToTaskAllocatedNodeId:
         self, mocker: MockerFixture
     ) -> None:
         repo = _make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 1,
-                "label": "job",
-                "ip": None,
-                "status": 0,
-                "metadata": '{"engine":"fleur"}',
-                # allocated_node_id key absent
-            }
-        ]
+        r = _row(task_id=1, allocated_node_id=None)
+        del r["allocated_node_id"]
+        repo._run.return_value = [r]  # type: ignore[attr-defined]
 
         task = await repo.get(TaskId(1))
 
         assert task is not None
         assert task.allocated_node_id is None
 
+    async def test_reads_title_as_label(self, mocker: MockerFixture) -> None:
+        """DB column is title; domain field is label."""
+        repo = _make_repo(mocker)
+        repo._run.return_value = [_row(task_id=1, title="my_job")]  # type: ignore[attr-defined]
+
+        task = await repo.get(TaskId(1))
+
+        assert task is not None
+        assert task.label == "my_job"
+
+    async def test_reads_status_by_name_lookup(self, mocker: MockerFixture) -> None:
+        """status is read via TaskStatus[row["status"]] (name lookup, was int cast)."""
+        repo = _make_repo(mocker)
+        repo._run.return_value = [_row(task_id=1, status="RUNNING")]  # type: ignore[attr-defined]
+
+        task = await repo.get(TaskId(1))
+
+        assert task is not None
+        assert task.status == DomainTaskStatus.RUNNING
+
+    async def test_reads_audit_timestamps(self, mocker: MockerFixture) -> None:
+        """created_at/updated_at are read from the row (pg8000 returns datetime)."""
+        repo = _make_repo(mocker)
+        created = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        updated = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+        repo._run.return_value = [  # type: ignore[attr-defined]
+            _row(task_id=1, created_at=created, updated_at=updated)
+        ]
+
+        task = await repo.get(TaskId(1))
+
+        assert task is not None
+        assert task.created_at == created
+        assert task.updated_at == updated
+
+    async def test_does_not_read_allocated_ip(self, mocker: MockerFixture) -> None:
+        """_row_to_task does not read an ip/allocated_ip column (column dropped)."""
+        repo = _make_repo(mocker)
+        repo._run.return_value = [_row(task_id=1)]  # type: ignore[attr-defined]
+
+        task = await repo.get(TaskId(1))
+
+        assert task is not None
+        assert not hasattr(task, "allocated_ip")
+
 
 class TestInsertSaveBindAllocatedNodeId:
-    """insert/save bind :node_id (value when allocated_node_id set, None otherwise)."""
+    """insert/save bind :node_id (value when allocated_node_id set, None otherwise), :title, :status (name)."""
 
     async def test_insert_binds_allocated_node_id(self, mocker: MockerFixture) -> None:
         repo = _make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 99,
-                "label": "job",
-                "ip": None,
-                "status": 0,
-                "metadata": '{"engine":"fleur"}',
-                "allocated_node_id": 5,
-            }
-        ]
+        repo._run.return_value = [_row(task_id=99, allocated_node_id=5)]  # type: ignore[attr-defined]
 
         new_task = NewTask(
             label="job",
@@ -129,22 +170,16 @@ class TestInsertSaveBindAllocatedNodeId:
 
         _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
         assert kwargs["node_id"] == 5
+        assert kwargs["title"] == "job"
+        assert kwargs["status"] == "TO_DO"
+        assert "ip" not in kwargs
         assert result.allocated_node_id == NodeId(5)
 
     async def test_insert_binds_null_allocated_node_id_by_default(
         self, mocker: MockerFixture
     ) -> None:
         repo = _make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "task_id": 99,
-                "label": "job",
-                "ip": None,
-                "status": 0,
-                "metadata": '{"engine":"fleur"}',
-                "allocated_node_id": None,
-            }
-        ]
+        repo._run.return_value = [_row(task_id=99, allocated_node_id=None)]  # type: ignore[attr-defined]
 
         new_task = NewTask(
             label="job",
@@ -163,7 +198,6 @@ class TestInsertSaveBindAllocatedNodeId:
             label="job",
             context=TaskContext(engine="fleur"),
             status=DomainTaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
             allocated_node_id=NodeId(7),
         )
 
@@ -171,6 +205,9 @@ class TestInsertSaveBindAllocatedNodeId:
 
         _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
         assert kwargs["node_id"] == 7
+        assert kwargs["title"] == "job"
+        assert kwargs["status"] == "RUNNING"
+        assert "ip" not in kwargs
 
     async def test_save_binds_null_allocated_node_id(
         self, mocker: MockerFixture
@@ -190,45 +227,89 @@ class TestInsertSaveBindAllocatedNodeId:
 
 
 class TestTaskSqlIncludesAllocatedNodeId:
-    """The 5 task SQL files that feed _row_to_task include allocated_node_id; the 3 status/aggregate files do NOT."""
+    """The 5 task SQL files that feed _row_to_task include allocated_node_id/created_at/updated_at/title; the 3 status/aggregate files do NOT."""
 
     def test_insert_sql_includes_allocated_node_id(self) -> None:
         sql = load_query("task/insert")
         assert "allocated_node_id" in sql
         assert ":node_id" in sql
-        # RETURNING includes allocated_node_id
+        assert "title" in sql
+        # RETURNING includes allocated_node_id, created_at, updated_at
         assert "RETURNING" in sql
         returning = sql[sql.index("RETURNING") :]
         assert "allocated_node_id" in returning
+        assert "created_at" in returning
+        assert "updated_at" in returning
+        # ip column/param absent
+        assert "ip" not in sql
 
     def test_update_by_id_sql_includes_allocated_node_id(self) -> None:
         sql = load_query("task/update_by_id")
         assert "allocated_node_id = :node_id" in sql
+        assert "title = :title" in sql
         # RETURNING stays task_id only (existence check, not _row_to_task feed)
         assert "RETURNING task_id" in sql
+        # ip SET term absent
+        assert "ip" not in sql
 
     def test_get_by_id_sql_includes_allocated_node_id(self) -> None:
         sql = load_query("task/get_by_id")
         assert "allocated_node_id" in sql
+        assert "title" in sql
+        assert "created_at" in sql
+        assert "updated_at" in sql
+        assert "ip" not in sql
 
     def test_list_by_status_sql_includes_allocated_node_id(self) -> None:
         sql = load_query("task/list_by_status")
         assert "allocated_node_id" in sql
+        assert "title" in sql
+        assert "created_at" in sql
+        assert "updated_at" in sql
+        assert "task_status[]" in sql
+        assert "ip" not in sql
 
     def test_list_by_jobs_sql_includes_allocated_node_id(self) -> None:
         sql = load_query("task/list_by_jobs")
         assert "allocated_node_id" in sql
+        assert "title" in sql
+        assert "created_at" in sql
+        assert "updated_at" in sql
+        assert "ip" not in sql
 
     def test_update_status_sql_does_not_touch_allocated_node_id(self) -> None:
         sql = load_query("task/update_status")
         assert "allocated_node_id" not in sql
 
-    def test_get_ids_by_ip_and_status_sql_does_not_touch_allocated_node_id(
+    def test_get_ids_by_node_id_and_status_sql_does_not_touch_allocated_node_id_in_set(
         self,
     ) -> None:
-        sql = load_query("task/get_ids_by_ip_and_status")
-        assert "allocated_node_id" not in sql
+        sql = load_query("task/get_ids_by_node_id_and_status")
+        assert "allocated_node_id = :node_id" in sql
+        # Only the filter key; no SET clause (this is a SELECT).
 
     def test_count_by_status_sql_does_not_touch_allocated_node_id(self) -> None:
         sql = load_query("task/count_by_status")
         assert "allocated_node_id" not in sql
+
+
+class TestGetIdsByNodeIdAndStatusSql:
+    """get_ids_by_node_id_and_status.sql replaces get_ids_by_ip_and_status.sql (filter by allocated_node_id, not ip)."""
+
+    def test_file_exists_and_filters_by_node_id(self) -> None:
+        sql = load_query("task/get_ids_by_node_id_and_status")
+        assert "allocated_node_id = :node_id" in sql
+        assert "status = :status" in sql
+        assert "ip" not in sql
+
+
+class TestTaskRepositoryProtocolConformance:
+    """PostgresTaskRepository satisfies the updated TaskRepository Protocol (with list_ids_by_node_id_and_status)."""
+
+    def test_postgres_task_repository_is_task_repository(self) -> None:
+        # runtime_checkable Protocol — structural isinstance check.
+        repo = PostgresTaskRepository.__new__(PostgresTaskRepository)
+        # _PgRepository.__init__ sets _conn/_executor; for the isinstance
+        # check against the runtime_checkable Protocol, only method presence
+        # matters, so an uninitialised instance is fine.
+        assert isinstance(repo, TaskRepository)

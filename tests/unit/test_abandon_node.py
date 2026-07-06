@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_abandon_node.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup).
@@ -13,7 +13,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - cloud-port-node-arg: deallocate asserts expect clouds.deallocate(node) (was ("aws", "10.0.0.5")).
+#   LAST_CHANGE: v1.4.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
 #   PREVIOUS_CHANGE: v1.2.0 - node-id-keyed-mutators: uow.nodes.remove asserts expect NodeId(1) (was ip string "10.0.0.5").
 # END_CHANGE_SUMMARY
 """Unit tests for the abandon_node use case.
@@ -60,7 +60,6 @@ def _cloud_node(ip: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
 
 def _todo_task(
     task_id: int,
-    allocated_ip: str = "10.0.0.5",
     allocated_node_id: NodeId | None = None,
 ) -> Task:
     return Task(
@@ -68,7 +67,6 @@ def _todo_task(
         label="t",
         context=TaskContext(engine="e"),
         status=TaskStatus.TO_DO,
-        allocated_ip=allocated_ip,
         allocated_node_id=allocated_node_id,
     )
 
@@ -108,7 +106,7 @@ class TestAbandonNode:
     async def test_happy_path_vm_deleted_row_removed_tracker_discarded(self) -> None:
         """cloud node + one matching TO_DO task → all three actions fire, no raise."""
         node = _cloud_node()
-        task = _todo_task(42, allocated_ip="10.0.0.5", allocated_node_id=node.node_id)
+        task = _todo_task(42, allocated_node_id=node.node_id)
         uow = _build_uow(todo_tasks=[task])
 
         clouds = AsyncMock()
@@ -218,8 +216,8 @@ class TestAbandonNode:
     async def test_abandon_node_no_matching_task_no_discard(self) -> None:
         """Zero TO_DO tasks with allocated_ip == node.ip → tracker.discard NOT called."""
         node = _cloud_node()
-        # Unrelated task pointing at a different IP.
-        unrelated = _todo_task(99, allocated_ip="10.0.0.99")
+        # Unrelated task pointing at a different node.
+        unrelated = _todo_task(99)
         uow = _build_uow(todo_tasks=[unrelated])
 
         clouds = AsyncMock()
@@ -239,10 +237,10 @@ class TestAbandonNode:
     async def test_abandon_node_multiple_matching_tasks_logs_warning_no_discard(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Two TO_DO tasks with same allocated_ip → warning logged, no discard, no raise."""
+        """Two TO_DO tasks with same allocated_node_id → warning logged, no discard, no raise."""
         node = _cloud_node()
-        t1 = _todo_task(101, allocated_ip="10.0.0.5", allocated_node_id=node.node_id)
-        t2 = _todo_task(102, allocated_ip="10.0.0.5", allocated_node_id=node.node_id)
+        t1 = _todo_task(101, allocated_node_id=node.node_id)
+        t2 = _todo_task(102, allocated_node_id=node.node_id)
         uow = _build_uow(todo_tasks=[t1, t2])
 
         clouds = AsyncMock()

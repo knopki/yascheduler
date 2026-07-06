@@ -1,4 +1,4 @@
--- Migration 004: add allocated_node_id to yascheduler_tasks (task-allocated-node-id).
+-- Migration 004: add allocated_node_id to yascheduler_tasks.
 -- Additive + backfilling, applied in one transaction by the migration runner.
 -- The FK is ON DELETE SET NULL so removing a node nulls the task's
 -- allocated_node_id but preserves the task row and allocated_ip.
@@ -12,7 +12,7 @@ REFERENCES yascheduler_nodes (node_id) ON DELETE SET NULL;
 UPDATE yascheduler_tasks t
 SET
     allocated_node_id = (
-        SELECT n.node_id FROM yascheduler_nodes n
+        SELECT n.node_id FROM yascheduler_nodes AS n
         WHERE n.ip = t.ip
     )
 WHERE t.ip IS NOT NULL;

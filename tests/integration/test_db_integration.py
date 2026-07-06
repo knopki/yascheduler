@@ -1,9 +1,9 @@
 # FILE: tests/integration/test_db_integration.py
-# VERSION: 2.3.0
+# VERSION: 2.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
-#   SCOPE: Node CRUD, Task CRUD, status transitions, UoW-based composition queries (list_by_jobs, get_by_ips), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
+#   SCOPE: Node CRUD, Task CRUD, status transitions, UoW-based composition queries (list_by_jobs, get_by_ids), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
 #   DEPENDS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL, M-CONFIG-DB
 #   LINKS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
@@ -20,7 +20,7 @@
 #   test_set_task_error - with and without error message
 #   test_get_tasks_by_status - filtering across statuses
 #   test_get_tasks_by_jobs - array parameter with unnest
-#   test_get_task_ids_by_ip_and_status - filtered by IP and status
+#   test_get_task_ids_by_node_id_and_status - filtered by node_id and status
 #   test_get_tasks_with_cloud_by_id_status - in-test composition: list_by_jobs + get_by_ips
 #   test_tmp_node_lifecycle_via_insert - tmp-node inserted via insert(NewNode(cloud=..., enabled=False)) carries ip="", enabled=False, node_id; remove cleans up
 #   test_migration_003_backfills_prov_ips_and_drops_unique - migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key; pre-creates yascheduler_tasks at 002-era schema so 004 ALTER is valid
@@ -28,8 +28,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - task-allocated-node-id: test_task_lifecycle inserts a Node and calls allocate_to(node) (was allocate_to(ip) — signature changed); the DONE transition preserves allocated_node_id from the loaded task (manual Task construction passes allocated_node_id=task.allocated_node_id). test_migration_003_backfills_prov_ips_and_drops_unique pre-creates yascheduler_tasks at the 002-era schema (no allocated_node_id) so migration 004's ALTER ADD COLUMN does not collide with the fresh-snapshot CREATE TABLE.
-#   PREVIOUS_CHANGE: v2.2.0 - remove-tmp-node-fake-ip: replace test_add_tmp_node with test_tmp_node_lifecycle_via_insert (insert(NewNode(cloud=..., enabled=False)) → Node carrying node_id); add test_migration_003_backfills_prov_ips_and_drops_unique (backfill + DROP CONSTRAINT); add test_list_filters_empty_ip_in_sql (no python post-filter; SQL is the sole filter). The schema now seeds to migration 003 and drops ip UNIQUE.
+#   LAST_CHANGE: v2.4.0 - task-schema-and-entity-cleanup: removed all allocated_ip references; test_add_and_get_task uses allocated_node_id; test_task_lifecycle no longer asserts allocated_ip; test_set_task_error removes allocated_ip from Task construction; test_get_task_ids_by_ip_and_status → test_get_task_ids_by_node_id_and_status (uses list_ids_by_node_id_and_status); test_get_tasks_with_cloud_by_id_status uses allocated_node_id for node resolution.
+#   PREVIOUS_CHANGE: v2.3.0 - task-allocated-node-id: test_task_lifecycle inserts a Node and calls allocate_to(node) (was allocate_to(ip) — signature changed); the DONE transition preserves allocated_node_id from the loaded task (manual Task construction passes allocated_node_id=task.allocated_node_id). test_migration_003_backfills_prov_ips_and_drops_unique pre-creates yascheduler_tasks at the 002-era schema (no allocated_node_id) so migration 004's ALTER ADD COLUMN does not collide with the fresh-snapshot CREATE TABLE. The schema now seeds to migration 003 and drops ip UNIQUE.
 # END_CHANGE_SUMMARY
 
 """Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL."""
@@ -242,18 +242,19 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
     ctx = TaskContext.from_metadata({**meta, "param": 42})
 
     async with uow_factory() as uow:
+        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=4, enabled=True))
         task = await uow.tasks.insert(
             NewTask(
                 label="calc",
                 context=ctx,
                 status=DomainTaskStatus.TO_DO,
-                allocated_ip="10.0.0.1",
+                allocated_node_id=node.node_id,
             )
         )
         await uow.commit()
         assert task.task_id.value >= 1
         assert task.label == "calc"
-        assert task.allocated_ip == "10.0.0.1"
+        assert task.allocated_node_id == node.node_id
         assert task.status == DomainTaskStatus.TO_DO
         assert task.context.to_metadata() == {**meta, "param": 42}
 
@@ -262,7 +263,7 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
         assert retrieved is not None
         assert retrieved.task_id == task.task_id
         assert retrieved.label == "calc"
-        assert retrieved.allocated_ip == "10.0.0.1"
+        assert retrieved.allocated_node_id == node.node_id
         assert retrieved.status == DomainTaskStatus.TO_DO
         assert retrieved.context.to_metadata() == {**meta, "param": 42}
 
@@ -304,7 +305,7 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         running = await uow.tasks.get(task_id)
         assert running is not None
         assert running.status == DomainTaskStatus.RUNNING
-        assert running.allocated_ip == "10.0.0.5"
+        assert running.allocated_node_id == node_id
 
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
@@ -316,7 +317,6 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
             label=task.label,
             context=TaskContext.from_metadata(merged),
             status=DomainTaskStatus.DONE,
-            allocated_ip=task.allocated_ip,
             allocated_node_id=task.allocated_node_id,
         )
         await uow.tasks.save(updated)
@@ -360,7 +360,7 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
             label=task.label,
             context=TaskContext.from_metadata(merged),
             status=DomainTaskStatus.DONE,
-            allocated_ip=task.allocated_ip,
+            allocated_node_id=task.allocated_node_id,
         )
         await uow.tasks.save(updated)
         await uow.commit()
@@ -389,7 +389,7 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
             label=task2.label,
             context=TaskContext.from_metadata(merged),
             status=DomainTaskStatus.DONE,
-            allocated_ip=task2.allocated_ip,
+            allocated_node_id=task2.allocated_node_id,
         )
         await uow.tasks.save(updated)
         await uow.commit()
@@ -474,34 +474,38 @@ async def test_get_tasks_by_jobs(uow_factory: Callable[[], PostgresUnitOfWork]) 
         assert ids == {t1.task_id, t3.task_id}
 
 
-# START_CONTRACT: test_get_task_ids_by_ip_and_status
-#   PURPOSE: Verify filtering task IDs by IP address and status.
+# START_CONTRACT: test_get_task_ids_by_node_id_and_status
+#   PURPOSE: Verify filtering task IDs by node_id and status.
 #   INPUTS: { uow_factory: UoW factory fixture }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
 #   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_task_ids_by_ip_and_status
-async def test_get_task_ids_by_ip_and_status(
+# END_CONTRACT: test_get_task_ids_by_node_id_and_status
+async def test_get_task_ids_by_node_id_and_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
-    """Filter task IDs by IP and status."""
-    ip = "192.168.1.1"
+    """Filter task IDs by node_id and status."""
     ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
+        node = await uow.nodes.insert(NewNode(ip="192.168.1.1", ncpus=4, enabled=True))
+        node_id = node.node_id
         t1 = await uow.tasks.insert(
             NewTask(
                 label="x",
                 context=ctx,
                 status=DomainTaskStatus.RUNNING,
-                allocated_ip=ip,
+                allocated_node_id=node_id,
             )
+        )
+        other_node = await uow.nodes.insert(
+            NewNode(ip="10.0.0.1", ncpus=4, enabled=True)
         )
         await uow.tasks.insert(
             NewTask(
                 label="y",
                 context=ctx,
                 status=DomainTaskStatus.RUNNING,
-                allocated_ip="10.0.0.1",
+                allocated_node_id=other_node.node_id,
             )
         )
         await uow.tasks.insert(
@@ -509,13 +513,15 @@ async def test_get_task_ids_by_ip_and_status(
                 label="z",
                 context=ctx,
                 status=DomainTaskStatus.DONE,
-                allocated_ip=ip,
+                allocated_node_id=node_id,
             )
         )
         await uow.commit()
 
     async with uow_factory() as uow:
-        ids = await uow.tasks.list_ids_by_ip_and_status(ip, DomainTaskStatus.RUNNING)
+        ids = await uow.tasks.list_ids_by_node_id_and_status(
+            node_id, DomainTaskStatus.RUNNING
+        )
         assert ids == [t1.task_id]
 
 
@@ -529,10 +535,10 @@ async def test_get_task_ids_by_ip_and_status(
 async def test_get_tasks_with_cloud_by_id_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
-    """Compose list_by_jobs + get_by_ips to get cloud attribute."""
+    """Compose list_by_jobs + get_by_ids to get cloud attribute."""
     ctx = TaskContext(engine="fleur")
     async with uow_factory() as uow:
-        await uow.nodes.insert(
+        node = await uow.nodes.insert(
             NewNode(ip="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
         )
         await uow.commit()
@@ -543,7 +549,7 @@ async def test_get_tasks_with_cloud_by_id_status(
                 label="",
                 context=ctx,
                 status=DomainTaskStatus.RUNNING,
-                allocated_ip="10.0.0.1",
+                allocated_node_id=node.node_id,
             )
         )
         t2 = await uow.tasks.insert(
@@ -551,7 +557,7 @@ async def test_get_tasks_with_cloud_by_id_status(
                 label="",
                 context=ctx,
                 status=DomainTaskStatus.DONE,
-                allocated_ip="10.0.0.1",
+                allocated_node_id=node.node_id,
             )
         )
         await uow.commit()
@@ -561,14 +567,11 @@ async def test_get_tasks_with_cloud_by_id_status(
         matching = [task for task in tasks if task.status == DomainTaskStatus.RUNNING]
         assert len(matching) == 1
         assert matching[0].task_id == t.task_id
-        all_nodes = await uow.nodes.list_all()
-        node_ids = [n.node_id for n in all_nodes if n.ip == "10.0.0.1"]
-        nodes = await uow.nodes.get_by_ids(node_ids)
-        assert matching[0].allocated_ip is not None
-        node = next(
-            (n for n in nodes.values() if n.ip == matching[0].allocated_ip), None
-        )
-        assert node is not None
+        node_id = matching[0].allocated_node_id
+        assert node_id is not None
+        nodes = await uow.nodes.get_by_ids([node_id])
+        assert nodes
+        node = nodes[node_id]
         assert node.cloud == "azure"
 
 

@@ -567,15 +567,18 @@ contract is keyed on the resolvable symbol, not the file path.
   `queue_get_task(task_id)`, and `queue_get_task_async(task_id)` signatures
   SHALL NOT change; their public `task_id`/`jobs` parameters stay `int` /
   `list[int]`.
-- Each query method SHALL return Mappings (a `Sequence[Mapping]` for the
-  list variants `queue_get_tasks` / `queue_get_tasks_async`, an
-  `Optional[Mapping]` for the single-task variants `queue_get_task` /
-  `queue_get_task_async`) with EXACTLY the keys
-  `{task_id, label, ip, status, metadata, cloud}`.
-- The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
-  `TaskId`). The private `_task_to_dict(t: Task)` helper (`client.py:89`)
-  is the sole extraction site: it builds the dict with
-  `"task_id": t.task_id.value` so the public dict preserves the `int` shape.
+ - Each query method SHALL return Mappings (a `Sequence[Mapping]` for the
+   list variants `queue_get_tasks` / `queue_get_tasks_async`, an
+   `Optional[Mapping]` for the single-task variants `queue_get_task` /
+   `queue_get_task_async`) with EXACTLY the keys
+   `{task_id, label, status, metadata, node}`. The flat `ip` and `cloud` keys
+   are REMOVED and replaced by a nested `node` key. This is a **BREAKING**
+   change to the facade dict shape (was `{task_id, label, ip, status, metadata,
+   cloud}`).
+ - The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
+   `TaskId`). The private `_task_to_dict(t: Task, nodes_by_id: dict[NodeId,
+   Node])` helper is the sole extraction site: it builds the dict with
+   `"task_id": t.task_id.value` so the public dict preserves the `int` shape.
   The `Yascheduler` facade is the **sole** `int`/`TaskId` marshalling boundary,
   in both directions: on input (`queue_get_task(task_id: int)` /
   `queue_get_tasks(jobs: list[int])`) it wraps `TaskId(task_id)` /
@@ -584,11 +587,21 @@ contract is keyed on the resolvable symbol, not the file path.
 - `queue_submit_task(...) -> int` SHALL stay `int`; it wraps `submit_task`
   (which now returns `TaskId`) and returns `(await submit_task(...)).value`.
 - `status` SHALL be a `domain.TaskStatus` enum member (preserves `.name`
-  access and cross-class IntEnum equality; NOT a plain `int`).
-- `cloud` SHALL be `None` in the query method output (no facade path
-  populates it).
-- `ip` SHALL be `allocated_ip or ""` (empty string when the task has no
-  allocated node).
+  access and cross-class IntEnum equality; NOT a plain `int`). Unchanged.
+- `label` SHALL be the raw `task.label` string. Unchanged.
+- `metadata` SHALL be the raw `task.context` metadata dict. Unchanged.
+- `node` SHALL be an object built from `nodes_by_id.get(task.allocated_node_id)`,
+  or `null` when the task has no allocated node (`allocated_node_id` is
+  `None`). When non-null, the object has exactly `{ip, port, username, cloud}`:
+  - `ip`: the raw `node.ip` string (replaces the flat `ip` key, which was
+    `allocated_ip or ""`).
+  - `port`: the raw `node.port` int.
+  - `username`: the raw `node.username` string.
+  - `cloud`: the raw `node.cloud` string, or `null` for static nodes.
+  The `nodes_by_id` dict is obtained from the `query_tasks` use case, which
+  now returns `(list[Task], dict[NodeId, Node])` (see the `use-cases`
+  capability). The facade unpacks the tuple and passes `nodes_by_id` to
+  `_task_to_dict`.
 
 The public contract is keyed on the resolvable symbol and applies
 identically whether `Yascheduler` is imported via the package facade
@@ -604,9 +617,9 @@ identically whether `Yascheduler` is imported via the package facade
 - **WHEN** `Yascheduler(config_path, logger, my_factory)` is called with `deps_factory` positionally
 - **THEN** a `TypeError` is raised
 
-#### Scenario: Query returns six-key dict shape
+#### Scenario: Query returns five-key dict shape with nested node
 - **WHEN** `queue_get_tasks_async(jobs=[1])` returns a non-empty result
-- **THEN** each Mapping has exactly the keys `{task_id, label, ip, status, metadata, cloud}` and no others
+- **THEN** each Mapping has exactly the keys `{task_id, label, status, metadata, node}`; the flat `ip` and `cloud` keys are ABSENT (replaced by the nested `node` key)a, cloud}` and no others
 
 #### Scenario: task_id in returned dict is a bare int
 - **WHEN** a returned Mapping's `task_id` value is inspected
@@ -624,13 +637,9 @@ identically whether `Yascheduler` is imported via the package facade
 - **WHEN** a returned Mapping's `status` value is inspected
 - **THEN** it is an instance of `yascheduler.domain.TaskStatus` (not a plain `int`), with `.name` and `.value` matching the underlying IntEnum values 0/1/2
 
-#### Scenario: cloud is always None
-- **WHEN** any query method returns a Mapping
-- **THEN** the `cloud` key is present and its value is `None`
-
-#### Scenario: ip is empty string when task unallocated
-- **WHEN** a Task with `allocated_ip=None` is returned by a query method
-- **THEN** the Mapping's `ip` value is `""` (empty string)
+#### Scenario: node is null when task unallocated
+- **WHEN** a Task with `allocated_node_id=None` is returned by a query method
+- **THEN** the Mapping's `node` value is `null` (the flat `ip` and `cloud` keys are ABSENT; all node data is under the nested `node` key or `null`)
 
 #### Scenario: Contract holds via each import path
 - **WHEN** `Yascheduler` is imported via `from yascheduler import Yascheduler`, `from yascheduler.entrypoints import Yascheduler`, or `from yascheduler.client import Yascheduler`

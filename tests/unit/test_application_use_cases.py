@@ -283,13 +283,13 @@ class TestAllocateTask:
         _call_session, _call_engine, _call_task = start_on_machine.call_args[0]
         assert _call_session is free_session
         assert _call_engine is engine
-        assert _call_task.allocated_ip == "10.0.0.1"
         assert _call_task.allocated_node_id == NodeId(1)
+        assert not hasattr(_call_task, "allocated_ip")
         operations.start_occupancy_check.assert_called_once_with(free_session, engine)
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert saved_task.allocated_ip == "10.0.0.1"
         assert saved_task.allocated_node_id == NodeId(1)
+        assert not hasattr(saved_task, "allocated_ip")
         assert saved_task.status == TaskStatus.RUNNING
         uow.commit.assert_called_once()
         # tracker.discard called instead of clouds.mark_task_done

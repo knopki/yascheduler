@@ -852,15 +852,22 @@ One object per node, in the order returned by `uow.nodes.list_all()`.
 `show_nodes()` SHALL perform the node-to-running-task join in memory within a
 single UoW: it SHALL read `uow.nodes.list_all()` and
 `uow.tasks.list_by_status({TaskStatus.RUNNING})` (two reads within one UoW),
-build a `tasks_by_ip` dict mapping `allocated_ip` to the single running task
-on that ip (O(n+m) single pass over tasks), and look up each node's task via
-`tasks_by_ip.get(node.ip)`. It SHALL NOT perform an O(n*m) nested scan (the
-current implementation rebuilds a `node_tasks` list per node by scanning all
-tasks).
+build a `tasks_by_node_id` dict mapping `allocated_node_id` to the single
+running task on that node (O(n+m) single pass over tasks), and look up each
+node's task via `tasks_by_node_id.get(node.node_id)`. It SHALL NOT perform an
+O(n*m) nested scan.
+
+The join key is `node_id` (the task's `allocated_node_id` matches the node's
+`node_id`), NOT `ip`. The `allocated_ip` field is removed from `Task`; the
+join is by `allocated_node_id` exclusively.
 
 #### Scenario: yanodes join is O(n+m)
 - **WHEN** the implementation of `_fetch_nodes_view` (or equivalent) is inspected
-- **THEN** it builds a `tasks_by_ip` dict once and looks up each node's task by ip via dict access, rather than scanning the full task list per node
+- **THEN** it builds a `tasks_by_node_id` dict once and looks up each node's task by `node_id` via dict access, rather than scanning the full task list per node
+
+#### Scenario: yanodes join key is node_id not ip
+- **WHEN** the in-memory join is built
+- **THEN** the dict is `tasks_by_node_id = {t.allocated_node_id: t for t in tasks if t.allocated_node_id is not None}` and each node is matched via `tasks_by_node_id.get(node.node_id)`; no `allocated_ip` or `ip`-keyed dict is used
 
 #### Scenario: yanodes reads nodes and tasks within one UoW
 - **WHEN** `show_nodes()` is invoked
@@ -1459,19 +1466,22 @@ t.allocated_node_id])` (a single batch round-trip), building
 `nodes_by_id: dict[NodeId, Node]`. The UoW is closed before any SSH work
 in the view path.
 
-The renderers SHALL look up nodes via `nodes_by_id.get(task.allocated_node_id)`
-(was `nodes_by_ip.get(task.allocated_ip)`). The `_render_json` output
-object SHALL keep `allocated_ip` (transport display, unchanged wire
-field) and continue reading `node.port`/`node.cloud` from the resolved
-`Node`.
+The renderers SHALL look up nodes via `nodes_by_id.get(task.allocated_node_id)`.
+The `_render_json` output object SHALL emit a nested `node` object (see the
+"yastatus --json output format" requirement) built from the resolved `Node`,
+and SHALL NOT emit flat `allocated_ip`/`port`/`cloud` fields (those are
+removed in favor of the nested `node`). The `_render_info` renderer SHALL emit
+`node_id={task.allocated_node_id}` (was `ip={task.allocated_ip}`) as the
+placement field, because the `Task` entity no longer carries `allocated_ip`.
 
 The `_display_remote_output` helper SHALL resolve the node via
 `nodes_by_id.get(task.allocated_node_id)`, build `_ConnParams` from the
 node (via `_resolve_conn_params(node, config)`), and connect via
 `SSHMachineRepository().connect(node, ...)` (passing the `Node` so the
 session registers under `node.node_id`). The finally block SHALL call
-`repository.disconnect(session.machine.node_id)` (was
-`repository.disconnect(session.ip)`).
+`repository.disconnect(session.machine.node_id)`. The verbose renderer
+(`_render_view`) SHALL use `node.ip` (the resolved `Node`'s transport
+address) in its display line, NOT `task.allocated_ip` (which is removed).
 
 #### Scenario: yastatus queries tasks via CLIDeps
 
@@ -1482,6 +1492,11 @@ session registers under `node.node_id`). The finally block SHALL call
 
 - **WHEN** yastatus is invoked with `--view` or `--json` and tasks have `allocated_node_id` set
 - **THEN** the query-phase UoW calls `uow.nodes.get_by_ids([t.allocated_node_id for t in tasks if t.allocated_node_id])` (a single batch round-trip); the resulting `nodes_by_id: dict[NodeId, Node]` is closed over for the render phase
+
+#### Scenario: yastatus does not read allocated_ip
+
+- **WHEN** the `check_status.py` implementation is inspected
+- **THEN** no code reads `task.allocated_ip` (the field is removed from `Task`); node transport address is obtained from the resolved `Node.ip` via `nodes_by_id`
 
 #### Scenario: yastatus _display_remote_output connects via Node
 
@@ -1649,29 +1664,48 @@ does not wrap it).
 When `--json` is given, `yastatus` SHALL emit
 `json.dumps(list_of_objects)` where each object represents one task with raw
 domain values (NO display transformations — no `MAX`, no `-`, no banner).
-The object schema SHALL be exactly these 9 fields:
+The object schema SHALL be exactly these fields:
 
 ```
-{"task_id": int, "status": str, "label": str, "allocated_ip": str | null,
- "port": int | null, "cloud": str | null, "engine": str,
- "local_folder": str | null, "remote_folder": str | null}
+{"task_id": int, "status": str, "label": str, "engine": str,
+ "local_folder": str | null, "remote_folder": str | null,
+ "created_at": str, "updated_at": str,
+ "node": {"ip": str, "port": int, "username": str, "cloud": str | null} | null}
 ```
 
-- `task_id`: the raw `task.task_id` int.
+- `task_id`: the raw `task.task_id.value` int.
 - `status`: the `task.status.name` string (`"TO_DO"`, `"RUNNING"`, or
-  `"DONE"`) — NOT an int, NOT a display token.
-- `label`: the raw `task.label` string.
-- `allocated_ip`: the raw `task.allocated_ip` string, or `null` when the
-  task has no allocated IP (typically `TO_DO`).
-- `port`: the raw `node.port` int (looked up via `nodes_by_ip`), or `null`
-  when the task has no allocated IP. `22` stays `22` (no display
-  transformation).
-- `cloud`: the raw `node.cloud` string (looked up via `nodes_by_ip`), or
-  `null` for static nodes / unallocated tasks.
+  `"DONE"`) — NOT an int, NOT a display token. Unchanged from the prior
+  format.
+- `label`: the raw `task.label` string. Unchanged (the DB column is `title`,
+  but the domain field and JSON key remain `label`).
 - `engine`: the raw `task.context.engine` string (always present —
-  `TaskContext.engine` is a required field).
+  `TaskContext.engine` is a required field). Unchanged.
 - `local_folder`: the raw `task.context.local_folder` string, or `null`.
+  Unchanged.
 - `remote_folder`: the raw `task.context.remote_folder` string, or `null`.
+  Unchanged.
+- `created_at`: the `task.created_at` datetime serialized as an ISO-8601
+  string (via `.isoformat()`). New field (the DB column is added by migration
+  007).
+- `updated_at`: the `task.updated_at` datetime serialized as an ISO-8601
+  string. New field.
+- `node`: an object built from `nodes_by_id.get(task.allocated_node_id)`,
+  or `null` when the task has no allocated node (`allocated_node_id` is
+  `None`, e.g. a `TO_DO` task or a task whose node was deleted). When
+  non-null, the object has exactly:
+  - `ip`: the raw `node.ip` string (was the flat `allocated_ip` field; now
+    sourced from the resolved `Node`).
+  - `port`: the raw `node.port` int (was the flat `port` field; now sourced
+    from the resolved `Node`).
+  - `username`: the raw `node.username` string. New nested field (was not
+    in the flat 9-field shape).
+  - `cloud`: the raw `node.cloud` string, or `null` for static nodes (was
+    the flat `cloud` field; now sourced from the resolved `Node`).
+
+The flat `allocated_ip`, `port`, and `cloud` fields are REMOVED and
+replaced by the nested `node` object. This is a **BREAKING** change to the
+`yastatus --json` wire format.
 
 One object per task, in the order returned by the query
 (`list_by_status` or `list_by_jobs`). `--json` SHALL be in the
@@ -1685,19 +1719,19 @@ output is excluded by design).
 
 #### Scenario: yastatus --json uses raw status name
 - **WHEN** a task has status `RUNNING`
-- **THEN** the JSON object's `status` field is the string `"RUNNING"` (NOT `1`, NOT `"running"`)
+- **THEN** the JSON object's `status` field is the string `"RUNNING"` (NOT `1`, NOT `"running"`) — unchanged
 
-#### Scenario: yastatus --json uses raw port
-- **WHEN** a task is allocated to a node with `port=22`
-- **THEN** the JSON object's `port` field is `22` (NOT `null` or `"-"`)
+#### Scenario: yastatus --json uses nested node object
+- **WHEN** a task is allocated to a node with `ip="10.0.0.1"`, `port=22`, `username="root"`, `cloud="hetzner"`
+- **THEN** the JSON object's `node` field is `{"ip": "10.0.0.1", "port": 22, "username": "root", "cloud": "hetzner"}` (a nested object, NOT the flat `allocated_ip`/`port`/`cloud` fields)
 
-#### Scenario: yastatus --json uses raw cloud
-- **WHEN** a task is allocated to a node with `cloud="hetzner"`
-- **THEN** the JSON object's `cloud` field is `"hetzner"`; for a static node (`cloud=None`) it is `null`
+#### Scenario: yastatus --json TO_DO task has null node
+- **WHEN** a `TO_DO` task (no `allocated_node_id`) is rendered via `--json`
+- **THEN** the JSON object's `node` field is `null` (the task has not been placed on a node yet); the flat `allocated_ip`, `port`, and `cloud` fields are ABSENT (replaced by the nested `node`)
 
-#### Scenario: yastatus --json TO_DO task has null placement fields
-- **WHEN** a `TO_DO` task (no `allocated_ip`) is rendered via `--json`
-- **THEN** the JSON object's `allocated_ip`, `port`, and `cloud` fields are all `null` (the task has not been placed on a node yet)
+#### Scenario: yastatus --json includes audit timestamps
+- **WHEN** a task with `created_at` and `updated_at` datetimes is rendered via `--json`
+- **THEN** the JSON object's `created_at` and `updated_at` fields are ISO-8601 strings (e.g. `"2026-07-06T12:00:00+00:00"`)
 
 #### Scenario: yastatus --json engine always present
 - **WHEN** a task with `context.engine="g09"` is rendered via `--json`

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cli_check_status.py
-# VERSION: 2.1.0
+# VERSION: 2.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yastatus check_status() flag parsing, renderers, exit codes, and connection-params resolver.
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - simplify-cloud-connect-node-args: test_view_connects_with_resolved_params_and_disconnects asserts connect is called with node=... and no username/port kwargs.
-#   PREVIOUS_CHANGE: v2.0.0 - session-based-machine-handle: make_mock_repository returns session-like mock via repo.connect.
+#   LAST_CHANGE: v2.2.0 - task-schema-and-entity-cleanup: make_task drops allocated_ip (uses allocated_node_id); test_json_emits_list_with_nine_fields asserts new 9-key shape (nested node + created_at/updated_at, flat allocated_ip/port/cloud absent); test_json_todo_task_has_null_placement asserts node is null; test_info_tab_separated asserts node_id= (was ip=); default/info node-fetch assertions use get_by_ids (was get_by_ips).
+#   PREVIOUS_CHANGE: v2.1.0 - simplify-cloud-connect-node-args: test_view_connects_with_resolved_params_and_disconnects asserts connect is called with node=... and no username/port kwargs.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -124,7 +124,6 @@ def make_task(
     task_id: int = 1,
     status: TaskStatus = TaskStatus.RUNNING,
     label: str = "test",
-    ip: str | None = "10.0.0.1",
     engine: str = "g09",
     allocated_node_id: NodeId | None = None,
 ) -> Task:
@@ -138,7 +137,6 @@ def make_task(
             local_folder="/tmp/local",
         ),
         status=status,
-        allocated_ip=ip,
         allocated_node_id=allocated_node_id,
     )
 
@@ -368,7 +366,10 @@ class TestCheckStatusInfo:
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
                 make_task(
-                    task_id=1, status=TaskStatus.RUNNING, label="job_a", ip="10.0.0.1"
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    label="job_a",
+                    allocated_node_id=NodeId(1),
                 ),
             ]
         )
@@ -379,7 +380,7 @@ class TestCheckStatusInfo:
         assert "task_id=1" in out
         assert "status=RUNNING" in out
         assert "label=job_a" in out
-        assert "ip=10.0.0.1" in out
+        assert "node_id=1" in out
         assert "\t" in out
 
 
@@ -410,7 +411,6 @@ class TestCheckStatusJson:
                 make_task(
                     task_id=1,
                     status=TaskStatus.RUNNING,
-                    ip="10.0.0.1",
                     allocated_node_id=NodeId(1),
                 )
             ]
@@ -428,20 +428,28 @@ class TestCheckStatusJson:
             "task_id",
             "status",
             "label",
-            "allocated_ip",
-            "port",
-            "cloud",
             "engine",
             "local_folder",
             "remote_folder",
+            "created_at",
+            "updated_at",
+            "node",
         }
-        # Raw values: status name not int, port=22 not "-" or null, cloud string.
+        # Raw values: status name not int, node carries ip/port/username/cloud.
         assert obj["status"] == "RUNNING"
-        assert obj["port"] == 22
-        assert obj["cloud"] == "hetzner"
+        assert obj["node"] == {
+            "ip": "10.0.0.1",
+            "port": 22,
+            "username": "root",
+            "cloud": "hetzner",
+        }
         assert obj["engine"] == "g09"
         assert obj["local_folder"] == "/tmp/local"
         assert obj["remote_folder"] == "/tmp/remote"
+        # Flat allocated_ip/port/cloud keys are ABSENT (replaced by nested node).
+        assert "allocated_ip" not in obj
+        assert "port" not in obj
+        assert "cloud" not in obj
         # --json triggers the conditional nodes lookup (lazy-lookup invariant).
         uow.nodes.get_by_ids.assert_called_once()
 
@@ -456,7 +464,6 @@ class TestCheckStatusJson:
                 make_task(
                     task_id=1,
                     status=TaskStatus.RUNNING,
-                    ip="10.0.0.1",
                     allocated_node_id=NodeId(1),
                 )
             ]
@@ -478,18 +485,19 @@ class TestCheckStatusJson:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(
-            return_value=[make_task(task_id=5, status=TaskStatus.TO_DO, ip=None)]
+            return_value=[make_task(task_id=5, status=TaskStatus.TO_DO)]
         )
-        uow.nodes.get_by_ips = AsyncMock(return_value={})
 
         _run(["--json"])
 
         out, _ = capsys.readouterr()
         data = _json.loads(out)
         obj = data[0]
-        assert obj["allocated_ip"] is None
-        assert obj["port"] is None
-        assert obj["cloud"] is None
+        assert obj["node"] is None
+        # Flat allocated_ip/port/cloud keys are ABSENT (replaced by nested node).
+        assert "allocated_ip" not in obj
+        assert "port" not in obj
+        assert "cloud" not in obj
         # engine is always present (required field).
         assert obj["engine"] == "g09"
 
@@ -518,7 +526,6 @@ class TestCheckStatusJson:
                 make_task(
                     task_id=1,
                     status=TaskStatus.RUNNING,
-                    ip="10.0.0.1",
                     allocated_node_id=NodeId(1),
                 )
             ]
@@ -732,7 +739,6 @@ class TestCheckStatusViewHappyPath:
                 make_task(
                     task_id=1,
                     status=TaskStatus.RUNNING,
-                    ip="10.0.0.1",
                     allocated_node_id=NodeId(1),
                 )
             ]
@@ -781,7 +787,6 @@ class TestCheckStatusViewHappyPath:
                 make_task(
                     task_id=1,
                     status=TaskStatus.RUNNING,
-                    ip="10.0.0.1",
                     allocated_node_id=NodeId(1),
                 )
             ]
@@ -807,13 +812,15 @@ class TestCheckStatusViewHappyPath:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
+                make_task(
+                    task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(1)
+                )
             ]
         )
 
         _run([])
 
-        uow.nodes.get_by_ips.assert_not_called()
+        uow.nodes.get_by_ids.assert_not_called()
 
     def test_info_does_not_fetch_nodes(
         self,
@@ -823,13 +830,15 @@ class TestCheckStatusViewHappyPath:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=1, status=TaskStatus.RUNNING, ip="10.0.0.1")
+                make_task(
+                    task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(1)
+                )
             ]
         )
 
         _run(["-i"])
 
-        uow.nodes.get_by_ips.assert_not_called()
+        uow.nodes.get_by_ids.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -852,7 +861,6 @@ class TestCheckStatusQueryRenderSeparation:
                 make_task(
                     task_id=1,
                     status=TaskStatus.RUNNING,
-                    ip="10.0.0.1",
                     allocated_node_id=NodeId(1),
                 )
             ]

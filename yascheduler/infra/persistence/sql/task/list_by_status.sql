@@ -1,11 +1,12 @@
 SELECT
     task_id,
-    label,
-    ip,
+    title,
     status,
     metadata,
-    allocated_node_id
+    allocated_node_id,
+    created_at,
+    updated_at
 FROM yascheduler_tasks
-WHERE status IN (SELECT unnest(cast(:statuses AS int [])))
+WHERE status IN (SELECT unnest(cast(:statuses AS task_status[])))
 ORDER BY task_id
 LIMIT :lim;

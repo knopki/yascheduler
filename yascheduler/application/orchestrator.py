@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 7.1.0
+# VERSION: 7.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.1.0 - simplify-cloud-connect-node-args: _connect_machine_consumer stops passing `username=node.username` and `port=node.port` to repository.connect (connect reads them from node internally).
-#   PREVIOUS_CHANGE: v7.0.0 - ssh-rekey-node-id: _connect_machine_consumer connects via connect(node=node, ...) and keys failure-timer/grace/abandon by node.node_id; _occupancy_started/_connect_failures/_conn_machine_q rekeyed to NodeId.
+#   LAST_CHANGE: v7.2.0 - task-schema-and-entity-cleanup: _task_consumer_consumer MACHINE_GONE log drops the ip field (task.allocated_ip removed; node is gone so node.ip is unresolvable — log task_id + node_id only).
+#   PREVIOUS_CHANGE: v7.1.0 - simplify-cloud-connect-node-args: _connect_machine_consumer stops passing `username=node.username` and `port=node.port` to repository.connect (connect reads them from node internally).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -451,14 +451,12 @@ class Orchestrator:
         task_id, task = msg.id, msg.payload
         node_id = task.allocated_node_id
         session = self._repository.get_session(node_id) if node_id is not None else None
-        ip = task.allocated_ip or ""
         if session is None:
             # START_BLOCK_MACHINE_GONE
             self._log.warning(
-                "[Orchestrator][_task_consumer_consumer][MACHINE_GONE] task_id=%s node_id=%s ip=%s",
+                "[Orchestrator][_task_consumer_consumer][MACHINE_GONE] task_id=%s node_id=%s",
                 task_id,
                 node_id,
-                ip,
             )
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:

@@ -41,7 +41,7 @@
         <fn-queue_get_tasks_async PURPOSE="Query tasks by jobs/status (async)" />
         <fn-queue_get_task PURPOSE="Get single task by ID (sync)" />
         <fn-queue_get_task_async PURPOSE="Get single task by ID (async)" />
-        <fn-_task_to_dict PURPOSE="Project domain Task to the public 6-key Mapping shape" />
+        <fn-_task_to_dict PURPOSE="Project domain Task to the public 5-key Mapping shape {task_id, label, status, metadata, node} with nested node {ip, port, username, cloud} | null (was flat ip/cloud keys)" />
         <fn-to_sync PURPOSE="Private async-to-sync decorator (inlined from former shared.async_utils; not re-exported from M-SHARED)" />
         <const-_deps_factory PURPOSE="Keyword-only constructor seam: Config -> CLIDeps factory (defaults to make_cli_deps)" />
       </annotations>
@@ -250,9 +250,9 @@
         <fn-_parse_status_args PURPOSE="argparse → Namespace (prog=yastatus, mutex renderers, -o requires -v)" />
         <fn-_query_tasks PURPOSE="Conditional task query (list_by_jobs vs list_by_status)" />
         <fn-_render_default PURPOSE="AiiDA-compatible default renderer (&lt;id&gt;   &lt;STATUS&gt;)" />
-        <fn-_render_info PURPOSE="Tab-separated one-line-per-task renderer" />
-        <fn-_render_json PURPOSE="Raw-domain-values JSON (9 fields)" />
-        <fn-_render_view PURPOSE="Verbose renderer: SSH tail of OUTPUT, optional convergence snippet" />
+        <fn-_render_info PURPOSE="Tab-separated one-line-per-task renderer (task_id, status, label, node_id — was ip=allocated_ip)" />
+        <fn-_render_json PURPOSE="Raw-domain-values JSON (9 fields: task_id, status, label, engine, local_folder, remote_folder, created_at, updated_at, nested node {ip, port, username, cloud} | null — was flat allocated_ip/port/cloud)" />
+        <fn-_render_view PURPOSE="Verbose renderer: SSH tail of OUTPUT, optional convergence snippet (uses node.ip from resolved Node — was task.allocated_ip)" />
         <fn-_resolve_conn_params PURPOSE="Resolve SSH conn params mirroring orchestrator._connect_machine_consumer" />
         <fn-_display_remote_output PURPOSE="Connect via SSHMachineRepository+SSHMachineOperations, tail OUTPUT file" />
         <fn-_download_convergence_snippet PURPOSE="Download OUTPUT file via SFTP" />
@@ -350,11 +350,11 @@
         <type-TaskContextOverrides PURPOSE="TypedDict (total=False) of overridable TaskContext fields: remote_folder, local_folder, error, extra" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs() (re-exported from M-DOMAIN-ENGINE)" />
         <class-EngineRepository PURPOSE="Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)" />
-        <class-Task PURPOSE="Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocated_node_id: NodeId | None (None for unallocated tasks and tasks whose node was deleted — DB FK is ON DELETE SET NULL); lifecycle methods (allocate_to, mark_running, complete, fail, reject) and event recording (record_event, with_event factory, pull_events, _events tuple)" />
-        <fn-allocate_to PURPOSE="Bind task to a Node: allocate_to(node) sets both allocated_ip=node.ip and allocated_node_id=node.node_id atomically in one replace() call (guard stays on allocated_ip)" />
+        <class-Task PURPOSE="Post-persistence task entity; always carries task_id: TaskId (first field, identity-first); allocated_node_id: NodeId | None is the sole allocation signal (allocated_ip removed); created_at/updated_at: datetime (non-nullable, default_factory=datetime.now mirroring DB DEFAULT NOW(); DB always overrides via RETURNING/read; absent from NewTask); lifecycle methods (allocate_to, mark_running, complete, fail, reject) and event recording (record_event, with_event factory, pull_events, _events tuple)" />
+        <fn-allocate_to PURPOSE="Bind task to a Node: allocate_to(node) sets allocated_node_id=node.node_id in one replace() call (guard stays on allocated_node_id — the sole allocation signal; allocated_ip removed)" />
         <fn-with_context PURPOSE="Wholesale-replace task context, returning new Task" />
         <type-TaskId PURPOSE="Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
-        <type-NewTask PURPOSE="Pre-persistence task record (no task_id); carries allocated_node_id: NodeId | None = None (written by Task.allocate_to, not NewTask construction); converted to Task only by TaskRepository.insert" />
+        <type-NewTask PURPOSE="Pre-persistence task record (no task_id); carries allocated_node_id: NodeId | None = None (written by Task.allocate_to, not NewTask construction); no created_at/updated_at (DB-generated, only on Task); converted to Task only by TaskRepository.insert" />
         <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int; not equal to bare int)" />
         <type-NewNode PURPOSE="Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False); converted to Node only by NodeRepository.insert. The tmp-node row inserted by _select_and_insert_tmp is reused as the real node identity: clouds.allocate(provider, node) receives the tmp-node Node and returns a Node carrying the same node_id (single-row UPDATE lifecycle, not insert+remove)." />
         <class-Node PURPOSE="Post-persistence node record; always carries node_id: NodeId (first field, identity-first); node_id is the sole identity (ip-keyed lookups get/get_by_ips removed — get_by_id/get_by_ids are node_id-keyed); NodeRepository mutators key on node_id; ip no longer UNIQUE (dropped by migration 003 — dup-IP valid behind different jump hosts); tmp rows carry ip='' sentinel" />
@@ -385,7 +385,7 @@
       <path>yascheduler/domain/ports.py</path>
       <depends>M-DOMAIN-ENGINE, M-DOMAIN-MODEL</depends>
       <annotations>
-        <class-TaskRepository PURPOSE="Async port for task persistence: insert(NewTask)->Task (sole NewTask→Task conversion), get/update_status take TaskId, list_ids_by_ip_and_status returns list[TaskId], list_by_jobs takes list[TaskId]; the public Yascheduler facade is the sole int/TaskId boundary" />
+        <class-TaskRepository PURPOSE="Async port for task persistence: insert(NewTask)->Task (sole NewTask→Task conversion), get/update_status take TaskId, list_ids_by_node_id_and_status(node_id, status) returns list[TaskId] (was list_ids_by_ip_and_status, renamed when allocated_ip dropped), list_by_jobs takes list[TaskId]; the public Yascheduler facade is the sole int/TaskId boundary" />
         <class-NodeRepository PURPOSE="Async port for node persistence: insert(NewNode)->Node is the sole node-insertion path; get_by_id(NodeId), get_by_ids(list[NodeId])->dict[NodeId, Node] (batch — ip-keyed get/get_by_ips removed), full CRUD lifecycle; mutators enable/disable/remove take NodeId, update takes Node (keys on node_id); lookups are node_id-keyed; tmp-reservation uses insert(NewNode(cloud=..., enabled=False)) and the returned node_id is reused by clouds.allocate as the real node identity" />
         <fn-enable PURPOSE="Enable a node by NodeId (node-id-keyed mutator; was ip-keyed)" />
         <fn-disable PURPOSE="Disable a node by NodeId (node-id-keyed mutator; was ip-keyed)" />
@@ -472,11 +472,11 @@
     </M-APPLICATION-SUBMIT>
 
     <M-APPLICATION-QUERY-TASKS NAME="Query tasks use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Read-only task query by statuses XOR job IDs within a single UoW; no commit.</purpose>
+      <purpose>Read-only task query by statuses XOR job IDs within a single UoW; no commit. Returns tuple (tasks, nodes_by_id) after batch-loading allocated nodes.</purpose>
       <path>yascheduler/application/query_tasks.py</path>
       <depends>M-DOMAIN, M-PERSISTENCE-UOW</depends>
       <annotations>
-        <fn-query_tasks PURPOSE="Async read-only task query by statuses or job IDs via AbstractUnitOfWork" />
+        <fn-query_tasks PURPOSE="Async read-only task query by statuses or job IDs via AbstractUnitOfWork; returns tuple[list[Task], dict[NodeId, Node]] — batch-loads nodes via uow.nodes.get_by_ids after fetching tasks, returns (tasks, {}) when all tasks unallocated" />
       </annotations>
     </M-APPLICATION-QUERY-TASKS>
 
@@ -489,7 +489,7 @@
         <fn-_validate_engine PURPOSE="Validate task engine is configured and supported" />
         <fn-_allocate_free_machine PURPOSE="Find free machine and start task on it" />
         <fn-_find_free_machines PURPOSE="Find free compatible machines for task allocation; returns list[tuple[MachineSession, Node]] paired by s.machine.node_id (nodes_by_id = {n.node_id: n}; busy_node_ids = {t.allocated_node_id}; dup-IP nodes disambiguated via distinct node_id keys — ssh-rekey-node-id)" />
-        <fn-_try_start_on_machine PURPOSE="Attempt to start a task on a specific (session, node) pair; calls allocate_to(node) (binds both allocated_ip and allocated_node_id); emits TaskAllocated with node_id=node.node_id (was node_ip=session.ip)" />
+        <fn-_try_start_on_machine PURPOSE="Attempt to start a task on a specific (session, node) pair; calls allocate_to(node) (binds allocated_node_id=node.node_id — the sole allocation signal; allocated_ip removed); emits TaskAllocated with node_id=node.node_id (was node_ip=session.ip)" />
         <type-_TmpSelection PURPOSE="NamedTuple(name: str, node_id: NodeId) — tmp-node handle is the NodeId from insert(NewNode(cloud=..., enabled=False)), NOT a placeholder ip (remove-tmp-node-fake-ip)" />
         <fn-_select_and_insert_tmp PURPOSE="Under allocation_lock, compute capacity, select provider, and insert tmp-node via insert(NewNode(cloud=..., enabled=False)) committed before lock release; returns _TmpSelection(name, node_id=tmp_node.node_id)" />
         <fn-_cleanup_tmp_node_best_effort PURPOSE="Best-effort tmp-node removal by NodeId (remove(tmp_node_id) directly — no get(ip) lookup); logs failures, never raises" />
@@ -647,7 +647,7 @@
       <path>yascheduler/infra/persistence/postgres.py</path>
       <depends>M-DOMAIN, M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS</depends>
       <annotations>
-        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, update_status, list_by_status, list_by_jobs, count_by_status); save and insert bind allocated_node_id via :node_id param; _row_to_task reads allocated_node_id and wraps NodeId; save/update_status raise TaskRowNotFoundError on 0-row UPDATE" />
+        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, update_status, list_by_status, list_by_jobs, list_ids_by_node_id_and_status, count_by_status); save and insert bind allocated_node_id via :node_id param and write status via status.name (enum-label string, was status.value int); _row_to_task reads allocated_node_id, wraps NodeId, reads title to Task.label, reads status via TaskStatus name lookup (was int cast), reads created_at/updated_at, drops allocated_ip read (column dropped); save/update_status raise TaskRowNotFoundError on 0-row UPDATE" />
         <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port (full CRUD lifecycle); add_tmp removed — insert(NewNode) is the sole insertion path (serves tmp-reservation via NewNode(cloud=..., enabled=False)); list_enabled/list_disabled drop the python '.' post-filters (list_disabled filters ip != '' in SQL); mutators enable/disable/remove take NodeId and pass node_id.value (pg8000 cannot adapt a NodeId), update takes Node and keys WHERE node_id = node.node_id.value" />
       </annotations>
     </M-PERSISTENCE-POSTGRES>

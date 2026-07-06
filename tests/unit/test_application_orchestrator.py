@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -23,7 +23,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - deallocate-node-id-identity test update: TestDeallocatorConsumer passes UMessage(NodeId, Node) (was UMessage(ip, ip)); test_calls_deallocate_node_with_uow_factory drops the mock_uow.nodes.get mock (consumer no longer opens a UoW); test_disconnects_when_node_not_found replaced by test_consumer_does_not_duplicate_ssh_teardown (asserts the consumer does NOT call repository.contains/disconnect directly — SSH teardown owned by deallocate_node); added test_consumer_logs_node_id_and_ip_on_error (error log carries node_id=%s ip=%s) and test_queue_dedup_on_node_id_not_ip (two UMessages with distinct NodeId but the same ip are both kept).
+#   LAST_CHANGE: v1.8.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
 #   PREVIOUS_CHANGE: v1.6.1 - add-node-id-identity test update: prepend node_id=NodeId(<n>) to all Node(...) constructions and add NodeId to 3 local imports.
 # END_CHANGE_SUMMARY
 #
@@ -442,7 +442,6 @@ class TestOrchestratorTaskAbandoned:
                 webhook_custom_params={"k": "v"},
             ),
             status=TaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
             allocated_node_id=NodeId(42),
         )
         msg = UMessage(TaskId(42), task)
@@ -785,7 +784,6 @@ class TestConsumeConditionalDiscard:
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
             allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
@@ -822,7 +820,6 @@ class TestConsumeConditionalDiscard:
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
             allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
@@ -852,14 +849,12 @@ class TestConsumeInFlightGuard:
             label="a",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
         )
         task_b = Task(
             task_id=TaskId(2),
             label="b",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
-            allocated_ip="10.0.0.2",
         )
 
         mock_uow = AsyncMock()
@@ -903,7 +898,6 @@ class TestConsumeInFlightGuard:
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
             allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
@@ -940,7 +934,6 @@ class TestConsumeInFlightGuard:
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
             allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)
@@ -979,7 +972,6 @@ class TestConsumeInFlightGuard:
             label="t",
             context=TaskContext(engine="e"),
             status=TaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
             allocated_node_id=NodeId(1),
         )
         msg = UMessage(TaskId(5), task)

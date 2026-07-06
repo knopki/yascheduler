@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_persistence_adapter.py
-# VERSION: 1.2.2
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
 #   SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
@@ -24,11 +24,16 @@
 #   test_repo_node_list_all_ordered_by_node_id - list_all ordering by node_id
 #   test_uow_integration - UoW creates repos, commit persists, exit closes
 #   test_uow_rollback_integration - rollback discards uncommitted changes on exception
+#   test_repo_task_insert_returns_created_updated_at - insert returns Task with created_at/updated_at set
+#   test_repo_task_save_triggers_updated_at - save (UPDATE) triggers updated_at to advance
+#   test_repo_task_list_by_status_enum_cast - list_by_status with cast(:statuses AS task_status[]) works
+#   test_repo_task_count_by_status_name_lookup - count_by_status returns keys via name lookup
+#   test_repo_task_list_ids_by_node_id_and_status - list_ids_by_node_id_and_status filters correctly
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - remove-tmp-node-fake-ip: replace test_repo_node_add_tmp with test_repo_node_tmp_via_insert (insert(NewNode(cloud=..., enabled=False)) → Node with ip="" sentinel and node_id; add_tmp abolished).
-#   PREVIOUS_CHANGE: v1.2.2 - Adapt to add-node-id-identity: Node(node_id=...) first field, NewNode for insert, repo.add→insert, NodeId assertions, add get_by_id + list_all ordering tests.
+#   LAST_CHANGE: v1.5.0 - task-schema-and-entity-cleanup: test_repo_task_save_updates and test_repo_task_list_by_status no longer use allocated_ip (field removed); added 11.3 tests: insert returns created_at/updated_at, save advances updated_at, list_by_status with enum cast, count_by_status name lookup keys, list_ids_by_node_id_and_status.
+#   PREVIOUS_CHANGE: v1.4.0 - task-schema-and-entity-cleanup: test_repo_task_save_updates and test_repo_task_list_by_status no longer use allocated_ip (field removed from Task/NewTask); Task construction uses allocated_node_id instead.
 # END_CHANGE_SUMMARY
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
@@ -140,7 +145,6 @@ async def test_repo_task_save_updates(
         label="renamed",
         context=ctx,
         status=DomainTaskStatus.RUNNING,
-        allocated_ip="10.0.0.5",
     )
     await repo.save(updated)
 
@@ -148,7 +152,6 @@ async def test_repo_task_save_updates(
     assert retrieved is not None
     assert retrieved.label == "renamed"
     assert retrieved.status == DomainTaskStatus.RUNNING
-    assert retrieved.allocated_ip == "10.0.0.5"
 
 
 # START_CONTRACT: test_repo_task_list_by_status
@@ -178,7 +181,6 @@ async def test_repo_task_list_by_status(
             label="running",
             context=ctx,
             status=DomainTaskStatus.RUNNING,
-            allocated_ip="10.0.0.1",
         )
     )
 
@@ -235,6 +237,161 @@ async def test_repo_task_update_status_atomic(
     assert retrieved is not None
     assert retrieved.status == DomainTaskStatus.RUNNING
     assert retrieved.label == "keep-label"
+
+
+# START_CONTRACT: test_repo_task_insert_returns_created_updated_at
+#   PURPOSE: Verify insert returns a Task with created_at and updated_at set.
+#   INPUTS: { pg_conn, pg_executor }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: None
+#   LINKS: PostgresTaskRepository.insert
+# END_CONTRACT: test_repo_task_insert_returns_created_updated_at
+async def test_repo_task_insert_returns_created_updated_at(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
+    """Insert returns Task with created_at and updated_at populated."""
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
+    ctx = TaskContext(engine="fleur")
+    task = await repo.insert(
+        NewTask(label="ts-test", context=ctx, status=DomainTaskStatus.TO_DO)
+    )
+    assert task.created_at is not None
+    assert task.updated_at is not None
+    assert task.created_at <= task.updated_at
+
+
+# START_CONTRACT: test_repo_task_save_triggers_updated_at
+#   PURPOSE: Verify save (UPDATE) triggers the touch trigger, advancing updated_at while preserving created_at.
+#   INPUTS: { pg_conn, pg_executor }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: None
+#   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.save
+# END_CONTRACT: test_repo_task_save_triggers_updated_at
+async def test_repo_task_save_triggers_updated_at(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
+    """Save (UPDATE) triggers updated_at to advance; created_at unchanged."""
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
+    ctx = TaskContext(engine="fleur")
+    task = await repo.insert(
+        NewTask(label="touch-test", context=ctx, status=DomainTaskStatus.TO_DO)
+    )
+    assert task.created_at is not None
+    assert task.updated_at is not None
+    created_before = task.created_at
+    updated_before = task.updated_at
+
+    # Perform an update via save
+    updated = Task(
+        task_id=task.task_id,
+        label="touch-test",
+        context=ctx,
+        status=DomainTaskStatus.RUNNING,
+    )
+    await repo.save(updated)
+
+    retrieved = await repo.get(task.task_id)
+    assert retrieved is not None
+    assert retrieved.created_at == created_before
+    assert retrieved.updated_at is not None
+    assert retrieved.updated_at > updated_before
+
+
+# START_CONTRACT: test_repo_task_list_by_status_enum_cast
+#   PURPOSE: Verify list_by_status with cast(:statuses AS task_status[]) works.
+#   INPUTS: { pg_conn, pg_executor }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: None
+#   LINKS: PostgresTaskRepository.list_by_status
+# END_CONTRACT: test_repo_task_list_by_status_enum_cast
+async def test_repo_task_list_by_status_enum_cast(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
+    """list_by_status with enum-label cast works."""
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
+    ctx = TaskContext(engine="fleur")
+    t1 = await repo.insert(
+        NewTask(label="enum-todo", context=ctx, status=DomainTaskStatus.TO_DO)
+    )
+    await repo.insert(
+        NewTask(label="enum-done", context=ctx, status=DomainTaskStatus.DONE)
+    )
+
+    todos = await repo.list_by_status({DomainTaskStatus.TO_DO})
+    assert len(todos) == 1
+    assert todos[0].task_id == t1.task_id
+
+
+# START_CONTRACT: test_repo_task_count_by_status_name_lookup
+#   PURPOSE: Verify count_by_status returns keys via TaskStatus name lookup.
+#   INPUTS: { pg_conn, pg_executor }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: None
+#   LINKS: PostgresTaskRepository.count_by_status
+# END_CONTRACT: test_repo_task_count_by_status_name_lookup
+async def test_repo_task_count_by_status_name_lookup(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
+    """count_by_status keys are TaskStatus members accessible via name lookup."""
+    repo = PostgresTaskRepository(pg_conn, pg_executor)
+    ctx = TaskContext(engine="fleur")
+    await repo.insert(NewTask(label="n1", context=ctx, status=DomainTaskStatus.TO_DO))
+    await repo.insert(NewTask(label="n2", context=ctx, status=DomainTaskStatus.TO_DO))
+    await repo.insert(NewTask(label="n3", context=ctx, status=DomainTaskStatus.DONE))
+
+    counts = await repo.count_by_status()
+    # Keys are TaskStatus enum members, accessible by name
+    assert counts[DomainTaskStatus.TO_DO] == 2
+    assert counts[DomainTaskStatus.DONE] == 1
+
+
+# START_CONTRACT: test_repo_task_list_ids_by_node_id_and_status
+#   PURPOSE: Verify list_ids_by_node_id_and_status filters by allocated_node_id and status.
+#   INPUTS: { pg_conn, pg_executor }
+#   OUTPUTS: { None - assertion-based }
+#   SIDE_EFFECTS: Inserts a node + tasks with allocated_node_id
+#   LINKS: PostgresTaskRepository.list_ids_by_node_id_and_status, PostgresNodeRepository.insert
+# END_CONTRACT: test_repo_task_list_ids_by_node_id_and_status
+async def test_repo_task_list_ids_by_node_id_and_status(
+    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+) -> None:
+    """list_ids_by_node_id_and_status filters by allocated_node_id and status."""
+    task_repo = PostgresTaskRepository(pg_conn, pg_executor)
+    node_repo = PostgresNodeRepository(pg_conn, pg_executor)
+    ctx = TaskContext(engine="fleur")
+
+    node = await node_repo.insert(NewNode(ip="10.0.0.99", ncpus=2, enabled=True))
+    other = await node_repo.insert(NewNode(ip="10.0.0.98", ncpus=2, enabled=True))
+
+    t1 = await task_repo.insert(
+        NewTask(
+            label="for-node",
+            context=ctx,
+            status=DomainTaskStatus.TO_DO,
+            allocated_node_id=node.node_id,
+        )
+    )
+    await task_repo.insert(
+        NewTask(
+            label="other-node",
+            context=ctx,
+            status=DomainTaskStatus.TO_DO,
+            allocated_node_id=other.node_id,
+        )
+    )
+    await task_repo.insert(
+        NewTask(
+            label="done-on-node",
+            context=ctx,
+            status=DomainTaskStatus.DONE,
+            allocated_node_id=node.node_id,
+        )
+    )
+
+    ids = await task_repo.list_ids_by_node_id_and_status(
+        node.node_id, DomainTaskStatus.TO_DO
+    )
+    assert ids == [t1.task_id]
 
 
 # ====================================================================
