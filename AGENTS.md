@@ -55,7 +55,6 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
   the composition-root-only `Config` consumption rule
 - `openspec/specs/db-migrations`
 - `openspec/specs/dependency-injection`
-- `openspec/specs/domain-engine-types`
 - `openspec/specs/domain-entities`
 - `openspec/specs/domain-events-and-dispatch` — domain event types, the
   `MessageBus`, UoW collect/publish hooks, and the `webhook_handler` adapter
@@ -64,7 +63,6 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 - `openspec/specs/e2e-testing`
 - `openspec/specs/orchestrator`
 - `openspec/specs/package-facades`
-- `openspec/specs/platform-adapters`
 - `openspec/specs/postgres-persistence` — `PostgresUnitOfWork`,
   `PostgresTaskRepository`/`PostgresNodeRepository`, the SQL file layout and
   `load_query` caching, and the `TaskRowNotFoundError`/

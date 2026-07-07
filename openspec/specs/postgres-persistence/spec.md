@@ -15,84 +15,29 @@ synchronous calls dispatched through a `ThreadPoolExecutor`.
 
 The system SHALL keep task SQL in versioned files under
 `yascheduler/infra/persistence/sql/task/` loaded via `load_query` (see
-`M-PERSISTENCE-SQLLOADER`). The file set and column lists reflect the post-010
-schema (`engine`, `remote_folder`, `local_folder`, `webhook_url`, `error`,
-`webhook_custom_params`, `extra` typed columns; `metadata` column dropped):
+`M-PERSISTENCE-SQLLOADER`). SQL query files follow the column set defined in
+`yascheduler/infra/persistence/sql/schema.sql`; see that file for exact DDL.
 
 - `sql/schema.sql` — the full latest snapshot (every `CREATE TABLE` includes
   all current columns; no inline `ALTER`s). The DO block's `last_migration`
-  CONSTANT is the single manual edit point when a migration is added. After the
-  drop-task-context-entity change, `last_migration` is `'010'` and
-  `yascheduler_tasks` reflects the final shape (`title` column, `task_status`
-  enum, `created_at`/`updated_at` columns, no `ip` column, seven new typed
-  columns extracted from the former `metadata` JSONB, no `metadata` column).
+  CONSTANT is the single manual edit point when a migration is added.
 - `sql/migrations/` — forward-only migration files (`{prefix_id}_{rest}.sql`
   or `.py`), applied by `apply_migrations` in string-sorted `prefix_id` order.
-- `sql/task/insert.sql` — `INSERT INTO yascheduler_tasks (title, engine,
-  remote_folder, local_folder, webhook_url, error, webhook_custom_params, extra,
-  status, allocated_node_id) VALUES (:title, :engine, :remote_folder,
-  :local_folder, :webhook_url, :error, :webhook_custom_params, :extra, :status,
-  :node_id) RETURNING task_id, title, engine, remote_folder, local_folder,
-  webhook_url, error, webhook_custom_params, extra, status, allocated_node_id,
-  created_at, updated_at`. The `:title` named parameter binds the domain
-  `Task.label` value. The `:status` named parameter binds the enum-label string
-  (`new_task.status.name`). `:engine`, `:remote_folder`, `:local_folder`,
-  `:webhook_url`, `:error` bind the typed `NewTask` fields (`remote_folder` and
-  `error` are NOT on `NewTask`, so they are bound as `NULL` via the SQL default
-  or explicitly `None`). `:webhook_custom_params` and `:extra` bind the JSONB
-  dicts (pg8000 adapts `dict` to JSONB natively; no `json.dumps` at the call
-  site). `created_at`/`updated_at` are NOT bound (the DB `DEFAULT NOW()`
-  populates them) and are read back via `RETURNING`. The `metadata` column and
-  `:metadata` parameter are removed.
-- `sql/task/update_by_id.sql` — `UPDATE yascheduler_tasks SET title=:title,
-  engine=:engine, remote_folder=:remote_folder, local_folder=:local_folder,
-  webhook_url=:webhook_url, error=:error, webhook_custom_params=
-  :webhook_custom_params, extra=:extra, status=:status, allocated_node_id=
-  :node_id WHERE task_id = :task_id RETURNING task_id` (partial update keyed by
-  `task_id`; NOT an upsert). The `BEFORE UPDATE` trigger
-  `yascheduler_tasks_touch_updated_at` sets `updated_at = NOW()` on the row.
-  The `metadata=:metadata` SET term is removed.
-- `sql/task/get_by_id.sql` — `SELECT task_id, title, engine, remote_folder,
-  local_folder, webhook_url, error, webhook_custom_params, extra, status,
-  allocated_node_id, created_at, updated_at FROM yascheduler_tasks WHERE
-  task_id = :task_id`. The `metadata` column is absent.
-- `sql/task/list_by_status.sql` — `SELECT task_id, title, engine,
-  remote_folder, local_folder, webhook_url, error, webhook_custom_params,
-  extra, status, allocated_node_id, created_at, updated_at FROM
-  yascheduler_tasks WHERE status IN (...) ORDER BY task_id LIMIT :lim`. The
-  `status IN (...)` filter uses `cast(:statuses AS task_status[])`.
-- `sql/task/list_by_jobs.sql` — `SELECT task_id, title, engine, remote_folder,
-  local_folder, webhook_url, error, webhook_custom_params, extra, status,
-  allocated_node_id, created_at, updated_at FROM yascheduler_tasks WHERE
-  task_id IN (...) ORDER BY task_id`.
-- `sql/task/update_status.sql` — unchanged (status-only update; does NOT touch
-  the typed columns or `allocated_node_id`).
-- `sql/task/get_ids_by_node_id_and_status.sql` — unchanged (returns `task_id`
-  only; no typed-column read needed).
-- `sql/task/count_by_status.sql` — unchanged (aggregate; no typed-column read
-  needed).
-- `sql/task/update_meta.sql` — DELETED (dead; zero callers in source and
-  tests). The `load_query("task/update_meta")` call path is removed.
+- `sql/task/insert.sql` — INSERT with RETURNING.
+- `sql/task/update_by_id.sql` — UPDATE keyed by `task_id`; NOT an upsert.
+- `sql/task/get_by_id.sql` — SELECT by task_id.
+- `sql/task/list_by_status.sql` — SELECT filtered by status.
+- `sql/task/list_by_jobs.sql` — SELECT filtered by task_id list.
+- `sql/task/update_status.sql` — status-only update.
+- `sql/task/get_ids_by_node_id_and_status.sql` — returns task_id only.
+- `sql/task/count_by_status.sql` — aggregate.
+- `sql/task/update_meta.sql` — DELETED (dead; zero callers). The
+  `load_query("task/update_meta")` call path is removed.
 
-#### Scenario: insert.sql binds typed columns
-- **WHEN** `task/insert.sql` is inspected for its column list
-- **THEN** it includes `title, engine, remote_folder, local_folder, webhook_url, error, webhook_custom_params, extra, status, allocated_node_id` in the INSERT column list and `:title, :engine, :remote_folder, :local_folder, :webhook_url, :error, :webhook_custom_params, :extra, :status, :node_id` in the VALUES; `:metadata` is absent
+#### Scenario: SQL files loaded via load_query
+- **WHEN** `load_query("task/insert")` is called
+- **THEN** the content of `sql/task/insert.sql` is returned; subsequent calls return the cached content
 
-#### Scenario: update_by_id.sql binds typed columns
-- **WHEN** `task/update_by_id.sql` is inspected for its SET clause
-- **THEN** it SETs `title=:title, engine=:engine, remote_folder=:remote_folder, local_folder=:local_folder, webhook_url=:webhook_url, error=:error, webhook_custom_params=:webhook_custom_params, extra=:extra, status=:status, allocated_node_id=:node_id`; `metadata=:metadata` is absent
-
-#### Scenario: get_by_id.sql selects typed columns
-- **WHEN** `task/get_by_id.sql` is inspected for its SELECT list
-- **THEN** it includes `task_id, title, engine, remote_folder, local_folder, webhook_url, error, webhook_custom_params, extra, status, allocated_node_id, created_at, updated_at`; `metadata` is absent
-
-#### Scenario: list_by_status.sql and list_by_jobs.sql select typed columns
-- **WHEN** `task/list_by_status.sql` and `task/list_by_jobs.sql` are inspected for their SELECT lists
-- **THEN** both include `task_id, title, engine, remote_folder, local_folder, webhook_url, error, webhook_custom_params, extra, status, allocated_node_id, created_at, updated_at`; `metadata` is absent
-
-#### Scenario: update_meta.sql is deleted
-- **WHEN** the `sql/task/` directory is inspected for `update_meta.sql`
-- **THEN** the file is absent (dead; zero callers); `load_query("task/update_meta")` is not called anywhere
 ### Requirement: PostgresUnitOfWork transactional boundaries
 
 `PostgresUnitOfWork` (`infra/persistence/postgres_uow.py`) SHALL manage a shared
@@ -138,6 +83,10 @@ subclass taking `task_id: TaskId`). The row-existence check SHALL happen BEFORE
 `save()` appends the task to the UoW's `_saved_tasks` list, so a raise never
 leaves an orphan task that `publish_events` would later dispatch for.
 
+#### Scenario: save raises TaskRowNotFoundError for missing task_id
+- **WHEN** `save(task)` is called with a `task_id` that does not exist in the database
+- **THEN** `TaskRowNotFoundError` is raised BEFORE the task is appended to `_saved_tasks`
+
 `save(task)` SHALL bind `node_id=task.allocated_node_id.value` (or `None` when
 `task.allocated_node_id is None`) as the pg8000 named parameter for the
 `allocated_node_id` column, alongside `title` (the DB column name for the
@@ -149,10 +98,8 @@ columns. The SQL SHALL NOT set `ip` (dropped) and SHALL NOT set `updated_at`
 bound as the dict values from `task.webhook_custom_params` / `task.extra`
 (pg8000 adapts `dict` to JSONB natively; no `json.dumps` at the call site).
 
-`insert(new_task: NewTask) -> Task` SHALL run `task/insert.sql ... RETURNING
-task_id, title, engine, remote_folder, local_folder, webhook_url, error,
-webhook_custom_params, extra, status, allocated_node_id, created_at,
-updated_at` and return `_row_to_task(rows[0])` (the `NewTask.task_id` is
+`insert(new_task: NewTask) -> Task` SHALL run `task/insert.sql ... RETURNING`
+and return `_row_to_task(rows[0])` (the `NewTask.task_id` is
 ignored — none exists; the DB generates it), avoiding a second `get`
 round-trip. `insert` SHALL bind `node_id=new_task.allocated_node_id.value` (or
 `None`) as the pg8000 named parameter for the `allocated_node_id` column,
@@ -184,40 +131,10 @@ preserved). `_row_to_task` SHALL NOT read a `metadata` column (the column is
 dropped). `_row_to_task` SHALL NOT construct a `TaskContext` (the value object
 is removed — see the `domain-entities` delta). The 4 task SQL files that
 return task rows (`get_by_id`, `list_by_status`, `list_by_jobs`, `insert`'s
-RETURNING) SHALL include `title, engine, remote_folder, local_folder,
-webhook_url, error, webhook_custom_params, extra, status, allocated_node_id,
-created_at, updated_at` in their SELECT/RETURNING column lists.
+RETURNING) SHALL include the column set from `schema.sql`.
 `update_by_id.sql`'s RETURNING SHALL include only `task_id` (the current
 `save` does not refresh the in-memory `Task`; `updated_at` is observable via
 the trigger on the next read).
-
-#### Scenario: save binds typed columns
-- **WHEN** `save(task)` is called on a Task with `engine="cp2k"`, `remote_folder="/r"`, `local_folder="/l"`, `webhook_url=None`, `error=None`, `webhook_custom_params={"parent": 42}`, `extra={"input.in": "ATOMS"}`
-- **THEN** the SQL binds `:engine="cp2k"`, `:remote_folder="/r"`, `:local_folder="/l"`, `:webhook_url=None`, `:error=None`, `:webhook_custom_params={"parent": 42}` (dict → JSONB via pg8000), `:extra={"input.in": "ATOMS"}` (dict → JSONB), alongside `:title=task.label`, `:status=task.status.name`, `:node_id=task.allocated_node_id.value or None`; `:metadata` is NOT bound (the column and parameter are removed)
-
-#### Scenario: insert binds typed columns and NULLs for NewTask-absent fields
-- **WHEN** `insert(new_task)` is called on a NewTask with `engine="cp2k"`, `local_folder="/l"`, `webhook_custom_params={}`, `extra={"input.in": "ATOMS"}`
-- **THEN** the SQL binds `:engine="cp2k"`, `:local_folder="/l"`, `:webhook_url=None`, `:webhook_custom_params={}` (dict → JSONB), `:extra={"input.in": "ATOMS"}` (dict → JSONB), alongside `:title=new_task.label`, `:status="TO_DO"`, `:node_id=None`; `:remote_folder=None` and `:error=None` are bound (the columns are nullable and `NewTask` carries no such fields); `:metadata` is NOT bound
-
-#### Scenario: _row_to_task reads typed columns
-- **WHEN** `_row_to_task(row)` is called on a row with `row["engine"]="cp2k"`, `row["remote_folder"]="/r"`, `row["local_folder"]="/l"`, `row["webhook_url"]=None`, `row["error"]=None`, `row["webhook_custom_params"]={"parent": 42}`, `row["extra"]={"input.in": "ATOMS"}`
-- **THEN** the returned `Task` has `engine="cp2k"`, `remote_folder="/r"`, `local_folder="/l"`, `webhook_url=None`, `error=None`, `webhook_custom_params={"parent": 42}`, `extra={"input.in": "ATOMS"}`; no `TaskContext` is constructed; `row["metadata"]` is NOT accessed
-
-#### Scenario: _row_to_task json.loads fallback for JSONB-as-str
-- **WHEN** `_row_to_task(row)` is called on a row where pg8000 returned `row["webhook_custom_params"]` as a `str` (e.g. `'{"parent": 42}'`)
-- **THEN** `_row_to_task` SHALL `json.loads` the string into a `dict` before assigning it to `Task.webhook_custom_params` (defensive fallback; pg8000 normally returns `dict` for JSONB)
-
-#### Scenario: No metadata column read
-- **WHEN** `_row_to_task(row)` is inspected for access to `row["metadata"]`
-- **THEN** no such access exists (the column is dropped; the field is removed from the SQL SELECT/RETURNING lists)
-
-#### Scenario: No TaskContext construction in _row_to_task
-- **WHEN** `_row_to_task` is inspected for `TaskContext` references
-- **THEN** no `TaskContext.from_metadata` call and no `TaskContext(...)` construction exist (the value object is removed)
-
-#### Scenario: No json.dumps in insert or save
-- **WHEN** `insert` and `save` are inspected for `json.dumps` calls
-- **THEN** no `json.dumps` exists on the `:metadata` parameter (the `metadata` column is removed); `webhook_custom_params` and `extra` are bound as `dict` values and pg8000 adapts them to JSONB natively
 
 ### Requirement: PostgresNodeRepository implements NodeRepository
 
@@ -270,90 +187,12 @@ unreachable after daemon restart and excluded from `list_disabled.sql`'s
 `_row_to_node` SHALL map `ip=row["ip"]` unchanged; `""` is a valid `str` and
 the mapping works without changes.
 
-#### Scenario: Insert returns Node with generated id
-
-- **WHEN** `insert(NewNode(ip="10.0.0.1", ncpus=4))` is called
-- **THEN** a `Node` is returned with `node_id == NodeId(<generated>)` and matching non-id fields
-
-#### Scenario: Get by id returns None when missing
-
-- **WHEN** `get_by_id(NodeId(999))` is called and no row matches
-- **THEN** returns `None`; the SQL parameter is bound as `node_id.value` (the bare int)
-
-#### Scenario: Get by ids returns dict keyed by NodeId
-
-- **WHEN** `get_by_ids([NodeId(5), NodeId(7)])` is called and rows with node_id=5 and node_id=7 exist
-- **THEN** a `dict[NodeId, Node]` is returned with keys `NodeId(5)` and `NodeId(7)`; missing node_ids are absent from the dict; the SQL parameter is `[5, 7]` (the bare ints from `NodeId.value`)
-
-#### Scenario: Get by ids with empty list returns empty dict
-
-- **WHEN** `get_by_ids([])` is called
-- **THEN** `node/get_by_ids.sql` runs with `:node_ids = []` (empty array); the result is empty; an empty `dict[NodeId, Node]` is returned
+The `get(ip)`, `get_by_ips`, and `add_tmp` methods are removed — node lookups
+use `get_by_id` / `get_by_ids` only, and the tmp path uses `insert`.
 
 #### Scenario: Row mapping wraps NodeId
-
-- **WHEN** any node SELECT returns a row `{"node_id": 7, "ip": "10.0.0.1", ...}`
+- **WHEN** any node SELECT returns a row `{"node_id": 7, "ip": "[IP]", ...}`
 - **THEN** `_row_to_node` returns a `Node` with `node_id == NodeId(7)`
-
-#### Scenario: List all is ordered by node_id and includes tmp rows
-
-- **WHEN** `list_all()` is called on a DB with a mix of enabled, disabled, and tmp (`ip=""`) rows
-- **THEN** returns all rows (including `ip=""` tmp rows) ordered by `node_id` ascending
-
-#### Scenario: List enabled has no python post-filter
-
-- **WHEN** `list_enabled()` is called on a DB with enabled real nodes and disabled tmp rows (`ip=""`)
-- **THEN** returns only `enabled=TRUE` rows (the SQL `WHERE enabled = TRUE` is the only filter); no python post-filter runs
-
-#### Scenario: List disabled filters empty-ip rows in SQL
-
-- **WHEN** `list_disabled()` is called on a DB with real-disabled VMs (`ip<>""`) and tmp rows (`ip=""`)
-- **THEN** returns only disabled rows with `ip <> ""` (the SQL `WHERE enabled = FALSE AND ip <> ''` is the filter)
-
-#### Scenario: Enable binds node_id.value
-
-- **WHEN** `enable(NodeId(7))` is called
-- **THEN** `node/enable.sql` runs with `:node_id` bound to `7` (the bare int from `NodeId.value`)
-
-#### Scenario: Disable binds node_id.value
-
-- **WHEN** `disable(NodeId(7))` is called
-- **THEN** `node/disable.sql` runs with `:node_id` bound to `7` (the bare int from `NodeId.value`)
-
-#### Scenario: Remove binds node_id.value
-
-- **WHEN** `remove(NodeId(7))` is called
-- **THEN** `node/remove.sql` runs with `:node_id` bound to `7` (the bare int from `NodeId.value`)
-
-#### Scenario: Update binds node.node_id.value as key
-
-- **WHEN** `update(node)` is called with a `Node` whose `node_id == NodeId(7)`
-- **THEN** `node/update.sql` runs with `:node_id` bound to `7` (from `node.node_id.value`) as the `WHERE` key, alongside the field params
-
-#### Scenario: Insert serves the tmp-reservation path
-
-- **WHEN** `insert(NewNode(cloud="aws", enabled=False))` is called (relying on `NewNode.ip=""` and `NewNode.ncpus=0` defaults)
-- **THEN** a row is inserted with `ip=""`, `enabled=FALSE`, `cloud="aws"`, `username="root"`, `port=22`; a `Node` is returned carrying the generated `node_id` (the tmp-node cleanup handle AND the real-node identity reused by `clouds.allocate`)
-
-#### Scenario: Row mapping handles empty-string ip
-
-- **WHEN** a node SELECT returns a row `{"node_id": 12, "ip": "", "enabled": false, ...}`
-- **THEN** `_row_to_node` returns a `Node` with `node_id == NodeId(12)`, `ip == ""`, `enabled == False` (the `""` is a valid `str`, no mapping change)
-
-#### Scenario: No get(ip) method
-
-- **WHEN** `PostgresNodeRepository` is inspected for `get`
-- **THEN** no `get(ip: str)` method is defined; node lookups are `get_by_id` / `get_by_ids` only
-
-#### Scenario: No get_by_ips method
-
-- **WHEN** `PostgresNodeRepository` is inspected for `get_by_ips`
-- **THEN** no `get_by_ips(ips: list[str])` method is defined; batch lookups are `get_by_ids` only
-
-#### Scenario: No add_tmp method
-
-- **WHEN** `PostgresNodeRepository` is inspected for `add_tmp`
-- **THEN** no `add_tmp` method is defined; the tmp path uses `insert`; `node/insert_tmp.sql` is removed from the SQL file layout
 
 ### Requirement: All repository methods avoid blocking the event loop
 

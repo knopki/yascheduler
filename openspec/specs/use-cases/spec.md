@@ -37,32 +37,16 @@ is assigned post-insert via `with_remote_folder`; `error` is only ever set by
 `fail`/`reject` on a post-persistence `Task`.
 
 #### Scenario: Successful task submission
-- **WHEN** `submit_task("my-job", metadata, "fleur", engines, uow_factory, remote_tasks_dir)` is called with valid inputs (metadata contains `local_folder`, input-file payloads, and optionally `webhook_url`/`webhook_custom_params`)
-- **THEN** a `NewTask(label="my-job", engine="fleur", local_folder=metadata["local_folder"], webhook_url=..., webhook_custom_params=..., extra={input-file payloads})` is constructed, persisted via `uow.tasks.insert` → `Task`, `task.with_remote_folder(<constructed path>)` is applied, `task.with_event(TaskCreated, engine_name="fleur")` is applied, the resulting task is saved and committed, and the `TaskId` is returned
+- **WHEN** `submit_task(...)` is called with valid inputs
+- **THEN** a `NewTask` is constructed, persisted via `uow.tasks.insert` → `Task`, `with_remote_folder` and `with_event(TaskCreated)` are applied, saved, committed, and the `TaskId` is returned
 
 #### Scenario: Unsupported engine
 - **WHEN** `submit_task(...)` is called with an engine_name not in the EngineRepository
 - **THEN** `UnsupportedEngineError` is raised
 
-#### Scenario: Missing input file
-- **WHEN** `submit_task(...)` is called with metadata missing a required input file (per `engine.input_files`)
-- **THEN** `MissingInputFileError` is raised
-
 #### Scenario: submit_task constructs NewTask not Task
 - **WHEN** `submit_task(...)` builds the pre-persistence record
-- **THEN** it constructs `NewTask(label=label, engine=engine_name, local_folder=..., webhook_url=..., webhook_custom_params=..., extra=...)` (no `task_id=0` sentinel, no `remote_folder`, no `error`); the `task_id=0` fiction is gone
-
-#### Scenario: submit_task extracts typed fields from metadata dict
-- **WHEN** `submit_task("job", {"local_folder": "/l", "input.in": "ATOMS", "webhook_url": "https://..."}, "cp2k", engines, uow_factory, remote_tasks_dir)` is called
-- **THEN** the `NewTask` has `engine="cp2k"`, `local_folder="/l"`, `webhook_url="https://..."`, `webhook_custom_params={}` (default), `extra={"input.in": "ATOMS"}` (input-file payload routed to extra); no `TaskContext.from_metadata` is called
-
-#### Scenario: submit_task assigns remote_folder post-insert
-- **WHEN** `submit_task(...)` has persisted the `NewTask` via `uow.tasks.insert` and received the resulting `Task` with a generated `task_id`
-- **THEN** it calls `task.with_remote_folder(str(remote_tasks_dir / f"{dt_str}_{task.task_id}"))` (constructed from the generated id and a timestamp), then `with_event(TaskCreated, engine_name=task.engine)`, then `save` + `commit`
-
-#### Scenario: No TaskContext or with_context in submit_task
-- **WHEN** `submit_task.py` is inspected for `TaskContext`, `with_context`, or `context.replace` references
-- **THEN** none are present (the function extracts typed fields directly from the caller metadata dict and uses `with_remote_folder`)
+- **THEN** it constructs `NewTask(...)` (no `task_id=0` sentinel, no `remote_folder`, no `error`)
 
 ### Requirement: AllocateTask use case
 
@@ -98,40 +82,20 @@ matching the task against engines and when recording the `TaskAllocated` /
 `TaskFailed` events. No `TaskContext` indirection.
 
 #### Scenario: Successful allocation to a free machine
-- **WHEN** `allocate_task(task_id, engines, uow_factory, repository, operations, clouds, start_task_on_machine, tracker, allocation_lock)` is called (with `task_id: TaskId`) and a free compatible machine exists
-- **THEN** the task is allocated to the machine via `task.allocate_to(node)`, `task.mark_running()` is applied, the `TaskAllocated` event (carrying `task_id: TaskId`, `node_id: NodeId`, `engine_name=task.engine`) is recorded, and the function returns True
+- **WHEN** `allocate_task(...)` is called and a free compatible machine exists
+- **THEN** the task is allocated via `task.allocate_to(node)`, `task.mark_running()` is applied, `TaskAllocated` event recorded, and the function returns True
 
-#### Scenario: No free machine matches
+#### Scenario: No free machine matches, cloud-fallback attempted
 - **WHEN** `allocate_task(...)` is called and no free machine matches
-- **THEN** the cloud-fallback path is attempted (or the function returns False if no cloud provider is available)
+- **THEN** the cloud-fallback path is attempted (tracker dedup, capacity check, provider selection, tmp-node insert, cloud allocation, final persist); returns False if no provider available
 
 #### Scenario: Duplicate allocation rejected by tracker
-- **WHEN** `allocate_task` is called for a `task_id: TaskId` already in `AllocationTracker`
-- **THEN** `tracker.add(task_id)` returns False and the cloud-fallback path returns immediately without creating a second VM
-
-#### Scenario: Throttle returns None — no tmp-node inserted
-- **WHEN** `clouds.select_provider(platforms, counts)` returns `None` because the selected provider's op semaphore is locked
-- **THEN** the use case calls `tracker.discard(task_id)` and returns False (no tmp-node inserted, no exception raised)
+- **WHEN** `allocate_task` is called for a `task_id` already in `AllocationTracker`
+- **THEN** `tracker.add(task_id)` returns False and the cloud-fallback path returns immediately
 
 #### Scenario: Unsupported engine
-- **WHEN** `allocate_task(...)` is called and the task's engine (read from `task.engine`, was `task.context.engine`) is not in `EngineRepository`
-- **THEN** the task is marked DONE with error via `task.reject("unsupported engine")`, saved, committed, and `TaskFailed` event is recorded (carrying `task_id: TaskId`); `task.error == "unsupported engine"` (bare human string per the error column format contract)
-
-#### Scenario: _find_free_machines returns session-node pairs matched by node_id
-- **WHEN** `_find_free_machines(engine, uow_factory, repository)` is called and free compatible machines exist
-- **THEN** it returns `list[tuple[MachineSession, Node]]` where each `Node` carries `node_id`, paired by `s.machine.node_id == node.node_id`; the `Node` is sourced from `uow.nodes.list_enabled()` and carried forward so the bind site has `node.node_id`
-
-#### Scenario: _find_free_machines disambiguates dup-IP nodes by node_id
-- **WHEN** two enabled nodes share the same IP but have different node_ids (a transient state during cloud provisioning)
-- **THEN** `_find_free_machines` matches sessions to nodes by `node_id` (not by IP), so the correct `Node` is bound to the task
-
-#### Scenario: _try_start_on_machine failure does not leak tracker slot
-- **WHEN** `uow.nodes.update(node)` or its commit raises after `clouds.allocate` succeeded
-- **THEN** the use case best-effort calls `clouds.deallocate(node)` (logged not raised), best-effort calls `_cleanup_tmp_node_best_effort(uow_factory, tmp_node_id, ...)` (logged not raised), and re-raises the original persist exception
-
-#### Scenario: allocate_task reads task.engine not task.context.engine
-- **WHEN** `allocate_task.py` is inspected for engine reads
-- **THEN** it reads `task.engine` (was `task.context.engine`) for engine matching and `with_event(TaskAllocated, node_id=..., engine_name=task.engine)` / `with_event(TaskFailed, reason=...)` event construction; no `task.context` references
+- **WHEN** `allocate_task(...)` is called and the task's engine is not in `EngineRepository`
+- **THEN** the task is marked DONE with error via `task.reject(...)`, saved, committed, and `TaskFailed` event recorded
 
 ### Requirement: DeallocateIdleNodes use case
 
@@ -176,34 +140,16 @@ Internal log lines in both `deallocate_nodes` and `deallocate_node` SHALL
 include both `node_id` and `ip` for correlation.
 
 #### Scenario: Idle cloud node disabled
-
-- **WHEN** `deallocate_nodes(uow_factory, config_clouds, idle_machines)` is called and an idle cloud node exceeds tolerance
-- **THEN** the node is disabled via `uow.nodes.disable(node.node_id)` and committed; the `Node` (carrying `node_id`) is included in the returned `list[Node]` for orchestrator-level SSH disconnect and cloud deallocation
-
-#### Scenario: Non-cloud node skipped
-
-- **WHEN** a non-cloud node (`node.cloud is None`) is idle
-- **THEN** it is not disabled in phase 1 (filtered by `node.cloud == ccfg.prefix`) and not included in the returned `list[Node]` (phase 2 filters `and node.cloud`)
+- **WHEN** `deallocate_nodes(...)` is called and an idle cloud node exceeds tolerance
+- **THEN** the node is disabled via `uow.nodes.disable(node.node_id)` and committed; the `Node` is included in the returned `list[Node]`
 
 #### Scenario: Returns disabled Node objects carrying node_id
-
 - **WHEN** `deallocate_nodes(...)` completes
-- **THEN** a `list[Node]` is returned (was `list[str]` of IPs); each `Node` carries its `node_id`, `ip`, `cloud`, and other fields, so the orchestrator's `_deallocator_consumer` can call `deallocate_node(node, ...)` directly without a `uow.nodes.get(ip)` round-trip lookup
-
-#### Scenario: Phase 2 filters by node_id not in busy_node_ids
-
-- **WHEN** `deallocate_nodes` phase 2 filters disabled nodes
-- **THEN** the filter is `node.node_id not in busy_node_ids and node.cloud` — the `"." in node.ip` guard is NOT present (dead code from the fake-ip era; `list_disabled.sql` `WHERE ip <> ''` already excludes tmp-node rows at SQL level)
+- **THEN** a `list[Node]` is returned (was `list[str]` of IPs); each `Node` carries its `node_id`, so the orchestrator can call `deallocate_node(node, ...)` directly without a DB round-trip
 
 #### Scenario: Deallocate node brackets cloud delete with disable+remove
-
 - **WHEN** `deallocate_node(node, repository, clouds, uow_factory)` is called for a cloud node
-- **THEN** the node's SSH session is disconnected via `repository.contains(node.node_id)` + `repository.disconnect(node.node_id)` (before the `if node.cloud:` guard), then the node is disabled via `uow.nodes.disable(node.node_id)` and committed, then `clouds.deallocate(node)` is called, then the node is removed via `uow.nodes.remove(node.node_id)` and committed
-
-#### Scenario: Internal logs include node_id and ip
-
-- **WHEN** `deallocate_node` or `deallocate_nodes` logs any line
-- **THEN** the line includes both `node_id=%s` and `ip=%s` fields
+- **THEN** SSH disconnect runs first, then `uow.nodes.disable` + commit, then `clouds.deallocate(node)`, then `uow.nodes.remove` + commit
 
 ### Requirement: AbandonNode use case
 
@@ -244,44 +190,16 @@ directly.
 Internal log lines SHALL include both `node_id` and `ip` for correlation.
 
 #### Scenario: Happy path — VM deleted, DB row removed, tracker released
-
-- **WHEN** `abandon_node(node, clouds, uow_factory, tracker)` is called for a cloud node (`node.cloud` non-None) with one TO_DO task whose `allocated_node_id == node.node_id`
-- **THEN** `clouds.deallocate(node)` is called, `uow.nodes.remove(node.node_id)` is called and committed, `tracker.discard(task.task_id)` is called for the matching task, and the function returns without raising
-
-#### Scenario: Non-cloud node skips VM deletion
-
-- **WHEN** `abandon_node(...)` is called with `node.cloud is None`
-- **THEN** `clouds.deallocate` is NOT called, `uow.nodes.remove(node.node_id)` is still called and committed, and the stuck-task lookup still runs
+- **WHEN** `abandon_node(node, clouds, uow_factory, tracker)` is called for a cloud node with one matching TO_DO task
+- **THEN** `clouds.deallocate(node)` is called, `uow.nodes.remove(node.node_id)` is called and committed, `tracker.discard(task.task_id)` is called, and the function returns without raising
 
 #### Scenario: Cloud deletion failure does not block DB cleanup
-
 - **WHEN** `clouds.deallocate(node)` raises an exception
-- **THEN** the exception is logged at `error` level with `node_id`, `ip`, `cloud`, and the message, `uow.nodes.remove(node.node_id)` is still called and committed, and the function continues to the stuck-task lookup
+- **THEN** the exception is logged, `uow.nodes.remove(node.node_id)` is still called and committed, and the function continues to the stuck-task lookup
 
-#### Scenario: DB remove failure is re-raised
-
-- **WHEN** `uow.nodes.remove(node.node_id)` or its commit raises an exception
-- **THEN** the exception is logged at `error` level with `node_id`, `ip`, and the message, and the exception is re-raised
-
-#### Scenario: Internal logs include node_id and ip
-
-- **WHEN** `abandon_node` logs any line
-- **THEN** the line includes both `node_id=%s` and `ip=%s` fields
-
-#### Scenario: No matching TO_DO task
-
+#### Scenario: No matching TO_DO task skips tracker discard
 - **WHEN** the stuck-task lookup finds zero TO_DO tasks with `allocated_node_id == node.node_id`
 - **THEN** `tracker.discard` is NOT called, the function returns without raising, and the VM deletion + DB removal still ran
-
-#### Scenario: Multiple matching TO_DO tasks is logged not fatal
-
-- **WHEN** the stuck-task lookup finds more than one TO_DO task with `allocated_node_id == node.node_id`
-- **THEN** a warning is logged, `tracker.discard` is NOT called (ambiguous which task to release), the VM deletion + DB removal still ran, and the function returns without raising
-
-#### Scenario: No adapter imports at runtime
-
-- **WHEN** `abandon_node.py` is imported
-- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.infra` at runtime (TYPE_CHECKING imports are allowed)
 
 ### Requirement: ConsumeTask use case
 
@@ -361,197 +279,20 @@ assigned `remote_folder` post-insert via `with_remote_folder`). No
 `TaskContext` indirection.
 
 #### Scenario: Successful consumption
-- **WHEN** `consume_task(task_id, session, operations, engines, uow_factory, local_tasks_dir, tracker)` is called (with `task_id: TaskId`) on a completed task and `download_outputs` returns empty `transient_errors` and empty `permanent_errors`
-- **THEN** the task is loaded via UoW (`uow.tasks.get(task_id)`), output files are downloaded via `operations.download_outputs(session, ..., task_id=task.task_id)`, the task is updated via `task.with_download_results(local_folder=str(store_folder), remote_folder=remote_folder)` then transitioned via `task.complete()` (error stays None), saved via `uow.tasks.save()`, committed, and `tracker.discard(task_id)` is called, and the function returns `True`
+- **WHEN** `consume_task(...)` is called and `download_outputs` returns empty `transient_errors` and empty `permanent_errors`
+- **THEN** the task is completed via `task.complete()`, saved, committed, `tracker.discard(task_id)` is called, and the function returns `True`
 
 #### Scenario: Permanent download error finalises with DONE+error
-- **WHEN** `operations.download_outputs(session, ...)` returns empty `transient_errors` and non-empty `permanent_errors=[("/remote/1.out", OSError("No such file"))]`
-- **THEN** the task is updated via `task.with_download_results(...)` then transitioned via `task.fail("Download error: /remote/1.out: No such file")` (the new format contract), saved, committed, a `TaskFailed` event (carrying `task_id: TaskId`, `reason="Download error: /remote/1.out: No such file"`) is recorded, `tracker.discard(task_id)` is called, and the function returns `True`; `task.error == "Download error: /remote/1.out: No such file"`
+- **WHEN** `download_outputs` returns non-empty `permanent_errors`
+- **THEN** the task is failed via `task.fail(...)`, saved, committed, `tracker.discard(task_id)` is called, and the function returns `True`
 
 #### Scenario: Transient-only download error defers for retry
-- **WHEN** `operations.download_outputs(session, ...)` returns non-empty `transient_errors` and empty `permanent_errors`
-- **THEN** the task is left in `RUNNING` (no status change, no save, no event, no `with_download_results` call), `tracker.discard(task_id)` is NOT called, and the function returns `False` so the orchestrator re-consumes the task on the next producer cycle; `task.error` stays None (nothing was written)
-
-#### Scenario: Mixed transient and permanent errors finalise with DONE+error
-- **WHEN** `operations.download_outputs(session, ...)` returns both non-empty `transient_errors=[("/remote/1.out", SFTPRetryExc("timeout"))]` and non-empty `permanent_errors=[("/remote/2.out", OSError("No such file"))]`
-- **THEN** permanent takes priority: the task is updated via `task.with_download_results(...)` then transitioned via `task.fail("Download error: /remote/2.out: No such file, /remote/1.out: timeout")` (both lists combined, permanent first — behavior preserved), saved, committed, a `TaskFailed` event (carrying `task_id: TaskId`) is recorded, `tracker.discard(task_id)` is called, and the function returns `True`
-
-#### Scenario: Retry-then-success leaves error None
-- **WHEN** a task's first consume attempt defers (transient-only, no save, error stays None) and a later attempt downloads successfully and calls `task.complete()`
-- **THEN** the persisted task has `error=None` (the deferral wrote nothing; the successful `complete()` does not touch `error`; `with_download_results` does not touch `error`)
-
-#### Scenario: with_download_results does not update extra
-- **WHEN** `consume_task._decide_finalisation` finalises a task with `task.extra={"input.in": "ATOMS"}`
-- **THEN** the finalised task has `extra={"input.in": "ATOMS"}` unchanged — `with_download_results` does NOT merge, clear, or modify `extra`; the legacy `extra_updates` block is removed
+- **WHEN** `download_outputs` returns non-empty `transient_errors` and empty `permanent_errors`
+- **THEN** the task is left in `RUNNING`, no `tracker.discard` is called, and the function returns `False`
 
 #### Scenario: consume_task reads typed fields not task.context
-- **WHEN** `consume_task.py` is inspected for `task.context` or `task.context.X` references
-- **THEN** none are present; reads use `task.remote_folder`, `task.engine`, `task.local_folder` (was `task.context.X`); mutations use `task.with_download_results(...)` (was `task.with_context(updated_context)`)
-
-#### Scenario: No adapter imports at runtime
-- **WHEN** `consume_task.py` is imported
-- **THEN** it does NOT import `SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.infra` at runtime (TYPE_CHECKING imports are allowed)
-### Requirement: DeallocateIdleNodes use case
-
-The system SHALL provide a `deallocate_nodes` async function that disables
-idle cloud nodes exceeding tolerance. The function SHALL accept `uow_factory`,
-`config_clouds: Sequence[CloudConfig]`, and `idle_machines: dict[NodeId, float]`
-(`NodeId` -> free_since monotonic timestamp). It SHALL NOT accept `repository`
-or `operations` (the per-node SSH/cloud teardown lives in `deallocate_node`).
-
-The per-node wrapper `deallocate_node(node, repository, clouds, uow_factory)`
-SHALL own the disable + remove bracketing around the pure
-`clouds.deallocate(cloud, ip)` call. Ordering SHALL be preserved: `disable`
-→ `delete_node` → `remove` across two short UoWs (disable before cloud
-delete protects against allocator re-selection on failure; remove after
-cloud delete ensures the DB row is only dropped once the VM is gone).
-
-`deallocate_node` SHALL call `uow.nodes.disable(node.node_id)` and
-`uow.nodes.remove(node.node_id)` (keying on `node_id`, not `ip`).
-`clouds.deallocate(node.cloud, node.ip)` SHALL continue to take `ip`
-(ip is the cloud host address, not node identity). `deallocate_node` SHALL
-call `repository.contains(node.node_id)` and `repository.disconnect(node.node_id)`
-BEFORE the `if node.cloud:` guard, so SSH teardown is owned by
-`deallocate_node` and runs regardless of whether the node is a cloud node.
-
-`deallocate_nodes` SHALL iterate the enabled nodes returned by
-`uow.nodes.list_enabled()` and call `uow.nodes.disable(node.node_id)` for
-each node whose `node_id` is in `idle_machines` and whose `node_id` is not
-in `busy_node_ids` (the node_ids of RUNNING tasks' `allocated_node_id`).
-
-`deallocate_nodes` SHALL return `list[Node]` (was `list[str]`). Phase 2
-(collect free disabled cloud nodes) SHALL return the `Node` objects it
-reads from `uow.nodes.list_disabled()`, each carrying `node_id`, instead
-of discarding them to bare `ip` strings. This eliminates the
-`uow.nodes.get(ip)` round-trip lookup previously performed by the
-orchestrator's `_deallocator_consumer` to reconstruct the `Node` from `ip`.
-
-`deallocate_nodes` phase 2 SHALL filter disabled nodes by
-`node.node_id not in busy_node_ids and node.cloud`. The prior `"." in node.ip`
-post-filter SHALL NOT be present — it was dead code from the fake-ip era.
-
-Internal log lines in both `deallocate_nodes` and `deallocate_node` SHALL
-include both `node_id` and `ip` for correlation.
-
-#### Scenario: Idle cloud node disabled
-
-- **WHEN** `deallocate_nodes(uow_factory, config_clouds, idle_machines)` is called and an idle cloud node exceeds tolerance
-- **THEN** the node is disabled via `uow.nodes.disable(node.node_id)` and committed; the `Node` (carrying `node_id`) is included in the returned `list[Node]` for orchestrator-level SSH disconnect and cloud deallocation
-
-#### Scenario: Non-cloud node skipped
-
-- **WHEN** a non-cloud node (`node.cloud is None`) is idle
-- **THEN** it is not disabled in phase 1 (filtered by `node.cloud == ccfg.prefix`) and not included in the returned `list[Node]` (phase 2 filters `and node.cloud`)
-
-#### Scenario: Returns disabled Node objects carrying node_id
-
-- **WHEN** `deallocate_nodes(...)` completes
-- **THEN** a `list[Node]` is returned (was `list[str]` of IPs); each `Node` carries its `node_id`, `ip`, `cloud`, and other fields, so the orchestrator's `_deallocator_consumer` can call `deallocate_node(node, ...)` directly without a `uow.nodes.get(ip)` round-trip lookup
-
-#### Scenario: Phase 2 filters by node_id not in busy_node_ids
-
-- **WHEN** `deallocate_nodes` phase 2 filters disabled nodes
-- **THEN** the filter is `node.node_id not in busy_node_ids and node.cloud` — the `"." in node.ip` guard is NOT present (dead code from the fake-ip era; `list_disabled.sql` `WHERE ip <> ''` already excludes tmp-node rows at SQL level)
-
-#### Scenario: Deallocate node brackets cloud delete with disable+remove
-
-- **WHEN** `deallocate_node(node, repository, clouds, uow_factory)` is called for a cloud node
-- **THEN** the node's SSH session is disconnected via `repository.contains(node.node_id)` + `repository.disconnect(node.node_id)` (before the `if node.cloud:` guard), then the node is disabled via `uow.nodes.disable(node.node_id)` and committed, then `clouds.deallocate(node.cloud, node.ip)` is called, then the node is removed via `uow.nodes.remove(node.node_id)` and committed
-
-#### Scenario: Internal logs include node_id and ip
-
-- **WHEN** `deallocate_node` or `deallocate_nodes` logs any line
-- **THEN** the line includes both `node_id=%s` and `ip=%s` fields
-### Requirement: AbandonNode use case
-
-The system SHALL provide an `abandon_node` async function in
-`yascheduler/application/abandon_node.py` that cleans up a cloud node that
-never established its SSH connection, releasing the originating task to
-re-allocate on the next cycle. The function SHALL accept `node: Node`,
-`clouds: CloudProvisioner` (Protocol type), `uow_factory: Callable[[],
-AbstractUnitOfWork]`, and `tracker: AllocationTracker`. It SHALL NOT import
-from `yascheduler.infra` at runtime (TYPE_CHECKING only).
-
-The use case SHALL NOT call `repository.disconnect` — by construction the
-node was never registered in the repository (that is why it is being
-abandoned). The use case SHALL:
-
-1. If `node.cloud` is non-None, call `clouds.deallocate(node.cloud, node.ip)`
-   as a best-effort cloud VM deletion. Failure here SHALL be logged at
-   `error` level with `node_id`, `ip`, `cloud`, and the exception, and SHALL NOT
-   suppress the subsequent DB-row removal.
-2. Open a UoW, call `uow.tasks.list_by_status({TaskStatus.TO_DO})`, and
-   in-memory filter for the task whose `allocated_node_id == node.node_id`.
-   This read SHALL happen BEFORE the node-row removal in step 3 — the
-   `allocated_node_id` FK is `ON DELETE SET NULL`, so removing the node row
-   first would null `allocated_node_id` and the in-memory filter would no
-   longer match. Hold the matching task(s) in memory.
-3. Open a UoW, call `uow.nodes.remove(node.node_id)`, and commit. Failure here
-   SHALL be logged at `error` level with `node_id`, `ip`, and the exception and
-   re-raised.
-4. If exactly one matching task was found in step 2, call
-   `tracker.discard(task.task_id)`. If zero or multiple matched, no `discard`
-   is called.
-
-The use case SHALL NOT mark the task `FAILED` or emit a domain event — the
-task re-enters `allocate_task` on the next cycle. The use case SHALL NOT
-modify `node.enabled` or call `uow.nodes.disable` — the row is removed
-directly.
-
-Internal log lines SHALL include both `node_id` and `ip` for correlation.
-
-#### Scenario: Happy path — VM deleted, DB row removed, tracker released
-
-- **WHEN** `abandon_node(node, clouds, uow_factory, tracker)` is called for a cloud node (`node.cloud` non-None) with one TO_DO task whose `allocated_node_id == node.node_id`
-- **THEN** `clouds.deallocate(node.cloud, node.ip)` is called, `uow.nodes.remove(node.node_id)` is called and committed, `tracker.discard(task.task_id)` is called for the matching task, and the function returns without raising
-
-#### Scenario: Non-cloud node skips VM deletion
-
-- **WHEN** `abandon_node(...)` is called with `node.cloud is None`
-- **THEN** `clouds.deallocate` is NOT called, `uow.nodes.remove(node.node_id)` is still called and committed, and the stuck-task lookup still runs
-
-#### Scenario: Cloud deletion failure does not block DB cleanup
-
-- **WHEN** `clouds.deallocate(node.cloud, node.ip)` raises an exception
-- **THEN** the exception is logged at `error` level with `node_id`, `ip`, `cloud`, and the message, `uow.nodes.remove(node.node_id)` is still called and committed, and the function continues to the stuck-task lookup
-
-#### Scenario: DB remove failure is re-raised
-
-- **WHEN** `uow.nodes.remove(node.node_id)` or its commit raises an exception
-- **THEN** the exception is logged at `error` level with `node_id`, `ip`, and the message, and the exception is re-raised
-
-#### Scenario: Internal logs include node_id and ip
-
-- **WHEN** `abandon_node` logs any line
-- **THEN** the line includes both `node_id=%s` and `ip=%s` fields
-
-#### Scenario: No matching TO_DO task
-
-- **WHEN** the stuck-task lookup finds zero TO_DO tasks with `allocated_node_id == node.node_id`
-- **THEN** `tracker.discard` is NOT called, the function returns without raising, and the VM deletion + DB removal still ran
-
-#### Scenario: Multiple matching TO_DO tasks is logged not fatal
-
-- **WHEN** the stuck-task lookup finds more than one TO_DO task with `allocated_node_id == node.node_id`
-- **THEN** a warning is logged, `tracker.discard` is NOT called (ambiguous which task to release), the VM deletion + DB removal still ran, and the function returns without raising
-
-#### Scenario: No adapter imports at runtime
-
-- **WHEN** `abandon_node.py` is imported
-- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.infra` at runtime (TYPE_CHECKING imports are allowed)
-### Requirement: Use cases importable from application
-
-The system SHALL expose all use cases from `yascheduler.application`. No use
-case SHALL import adapter-specific types (`AllSSHRetryExc`, `SFTPRetryExc`,
-`SFTPError`) from `yascheduler.infra` at runtime.
-
-#### Scenario: Import use case
-- **WHEN** `from yascheduler.application.submit_task import submit_task` is executed
-- **THEN** the function is available
-
-#### Scenario: No adapter runtime imports in use cases
-- **WHEN** any use case module is imported
-- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, or `SFTPError` from `yascheduler.infra` at runtime
+- **WHEN** `consume_task.py` is inspected for `task.context` references
+- **THEN** none are present; reads use `task.remote_folder`, `task.engine`, `task.local_folder` directly
 
 ### Requirement: QueryTasks use case
 
@@ -629,22 +370,6 @@ the `allocate_task`, `consume_task`, and `abandon_node` use cases. It is
 internal to the orchestrator and never crosses the public `Yascheduler`
 facade boundary.
 
-#### Scenario: Add new task to tracker
+#### Scenario: AllocationTracker is a set[TaskId] deduplication helper
 - **WHEN** `tracker.add(TaskId(42))` is called for an untracked task_id
-- **THEN** returns True and `TaskId(42)` is in `tracker`
-
-#### Scenario: Add duplicate task to tracker
-- **WHEN** `tracker.add(TaskId(42))` is called while `TaskId(42)` is already tracked
-- **THEN** returns False and the set is unchanged
-
-#### Scenario: Discard tracked task
-- **WHEN** `tracker.discard(TaskId(42))` is called after a successful allocation or completion
-- **THEN** `TaskId(42)` is no longer in `tracker`
-
-#### Scenario: Discard untracked task is a no-op
-- **WHEN** `tracker.discard(TaskId(99))` is called for a task not in the tracker
-- **THEN** no error is raised and the set is unchanged
-
-#### Scenario: Containment check
-- **WHEN** `TaskId(42) in tracker` is evaluated
-- **THEN** returns True if `TaskId(42)` is tracked, False otherwise
+- **THEN** returns True and `TaskId(42)` is in `tracker`; a second `add` returns False; `discard` removes it; `discard` of an untracked id is a no-op

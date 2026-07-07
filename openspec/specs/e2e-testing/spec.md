@@ -1,3 +1,5 @@
+# End-to-end testing
+
 ## Purpose
 
 End-to-end test infrastructure and full-cycle tests that validate the scheduler's complete task lifecycle against real PostgreSQL and SSH containers.
@@ -20,13 +22,6 @@ The `YASCHEDULER_CONF_PATH` environment variable SHALL be set to the generated I
 - **WHEN** the session-scoped config fixture is resolved
 - **THEN** `config.engines` contains exactly one engine named `test_shell` with `spawn="{engine_path}/run.sh"`, `check_pname="sleep"`, `input_files=("1.input",)`, `output_files=("1.input.out",)`, `deployable` containing one `LocalFilesDeploy` pointing to `run.sh`
 
-#### Scenario: ssh_pool fixture provides two distinct SSH containers sharing one keypair
-- **WHEN** the session-scoped `ssh_pool` fixture is resolved
-- **THEN** it returns a list of two dicts, each with `host`, `port`, `username`, `key_path`
-- **AND** the two `host` values are distinct (different container IPs)
-- **AND** the two `key_path` values are identical (shared keypair)
-- **AND** the two `username` values are identical
-
 #### Scenario: Persistence fixtures provide empty database per test
 - **WHEN** two E2E tests run sequentially and the first inserts a node via `uow_factory`
 - **THEN** the second test sees zero nodes (the `pg_conn` teardown TRUNCATEs both tables)
@@ -39,9 +34,9 @@ The `YASCHEDULER_CONF_PATH` environment variable SHALL be set to the generated I
 ### Requirement: Test engine script
 The project SHALL provide a shell script `run.sh` as the test engine executable. The script SHALL sleep for 3 seconds then copy `1.input` to `1.input.out` in the current working directory. The script SHALL be executable and use `#!/bin/sh` shebang.
 
-#### Scenario: Test engine produces output from input
-- **WHEN** `run.sh` executes in a directory containing `1.input` with content "hello e2e"
-- **THEN** after completion, `1.input.out` exists with content "hello e2e"
+#### Scenario: Test engine script copies input to output
+- **WHEN** `run.sh` is executed with `1.input` present in the working directory
+- **THEN** it sleeps for 3 seconds, then copies `1.input` to `1.input.out`
 
 ### Requirement: Full cycle E2E test
 
@@ -117,10 +112,6 @@ latter is removed). The local folder is read via `task.local_folder` (was
 #### Scenario: Each DONE task has error None and local_folder set
 - **WHEN** a task reaches DONE
 - **THEN** `task.error is None` (success path; was `context.error is None`) and `task.local_folder` is set (was `context.local_folder`); the output file exists at `<task.local_folder>/1.input.out` matching the per-job payload
-
-#### Scenario: No TaskContext or task.context references in e2e tests
-- **WHEN** `tests/e2e/test_full_cycle.py` is inspected for `TaskContext`, `task.context`, or `context.error`/`context.local_folder` references
-- **THEN** none are present; the test reads `task.error`, `task.local_folder`, and resolves node IP via `uow.nodes.get_by_id(task.allocated_node_id).ip`
 
 ### Requirement: Live Hetzner cloud-provider E2E test
 
@@ -273,7 +264,4 @@ The error field is read via `task.error` (was `task.context.error`). No
 #### Scenario: Each DONE task has error None and local_folder set (hetzner)
 - **WHEN** a task reaches DONE on a hetzner-provisioned node
 - **THEN** `task.error is None` (was `context.error is None`) and `task.local_folder` is set (was `context.local_folder`); the output file exists at `<task.local_folder>/1.input.out` matching the per-job payload
-
-#### Scenario: No TaskContext or task.context references in hetzner e2e test
-- **WHEN** `tests/e2e/test_hetzner_live.py` is inspected for `TaskContext`, `task.context`, or `context.error`/`context.local_folder` references
-- **THEN** none are present; the test reads `task.error`, `task.local_folder`, and resolves node IP via `uow.nodes.get_by_id(task.allocated_node_id).ip`
+- **AND** no `TaskContext`, `task.context`, or `context.error`/`context.local_folder` references are present in the test (the test reads `task.error`, `task.local_folder`, and resolves node IP via `uow.nodes.get_by_id(task.allocated_node_id).ip`)

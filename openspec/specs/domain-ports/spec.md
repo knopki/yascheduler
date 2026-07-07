@@ -42,33 +42,9 @@ take/return `Task` / mappings, which carry `TaskId` internally).
 - **WHEN** a class implements `TaskRepository` with matching async method signatures
 - **THEN** it satisfies the Protocol structurally
 
-#### Scenario: List tasks by status without limit
-- **WHEN** `list_by_status({TaskStatus.TO_DO})` is called
-- **THEN** returns all tasks with TO_DO status (each `Task` carries a `TaskId`)
-
-#### Scenario: List tasks by status with limit
-- **WHEN** `list_by_status({TaskStatus.TO_DO}, limit=10)` is called
-- **THEN** returns at most 10 tasks with TO_DO status
-
 #### Scenario: insert converts NewTask to Task
 - **WHEN** `insert(new_task)` is called with a `NewTask` (no `task_id`)
 - **THEN** a `Task` carrying the DB-generated `TaskId` is returned (the sole `NewTask → Task` conversion)
-
-#### Scenario: get takes TaskId
-- **WHEN** `get(TaskId(42))` is called
-- **THEN** returns a `Task` (with `task_id: TaskId`) or `None`
-
-#### Scenario: update_status takes TaskId
-- **WHEN** `update_status(TaskId(42), TaskStatus.RUNNING)` is called
-- **THEN** the status of the task with `task_id=42` is updated (the `TaskId` is the key)
-
-#### Scenario: list_ids_by_node_id_and_status returns TaskIds
-- **WHEN** `list_ids_by_node_id_and_status(NodeId("n1"), TaskStatus.RUNNING)` is called
-- **THEN** returns a `list[TaskId]` (not `list[int]`); the caller feeds them directly to `update_status(TaskId, ...)`
-
-#### Scenario: list_by_jobs takes TaskIds
-- **WHEN** `list_by_jobs([TaskId(1), TaskId(2), TaskId(3)])` is called
-- **THEN** returns tasks whose `task_id` is in the given list of `TaskId`s
 
 ### Requirement: NodeRepository port
 
@@ -127,65 +103,21 @@ with `WHERE node_id = :node_id`.
 The `list_*` methods remain unkeyed (return all/enabled/disabled; ordering
 by `node_id` ascending is preserved on `list_all`).
 
-#### Scenario: Full node lifecycle through port
-
-- **WHEN** a consumer calls `insert`, `get_by_id`, `get_by_ids`, `update`, `enable`, `disable`, `list_enabled`, `list_disabled`, `list_all`, `remove` through the port
-- **THEN** the Protocol defines all these operations with async signatures; `get(ip)` and `get_by_ips(ips)` are NOT defined; `add_tmp` is NOT defined
-
 #### Scenario: Insert takes NewNode returns Node
 
-- **WHEN** `insert(NewNode(ip="10.0.0.1", ncpus=4))` is called
+- **WHEN** `insert(NewNode(ip="[IP]", ncpus=4))` is called
 - **THEN** a `Node` is returned whose `node_id` is the database-generated `NodeId` and whose other fields match the `NewNode`
-
-#### Scenario: Insert serves the tmp-reservation path
-
-- **WHEN** `insert(NewNode(cloud="aws", enabled=False))` is called (relying on `NewNode.ip=""` and `NewNode.ncpus=0` defaults)
-- **THEN** a tmp-node row is inserted with `ip=""`, `enabled=FALSE`, `cloud="aws"`, `username="root"` (default), `port=22` (default); a `Node` is returned carrying the generated `node_id` (the cleanup handle AND the real-node identity reused by `clouds.allocate`)
 
 #### Scenario: Get node by id
 
 - **WHEN** `get_by_id(NodeId(5))` is called and a row with node_id=5 exists
 - **THEN** a `Node` is returned with `node_id == NodeId(5)`; if no such row exists, `None` is returned
 
-#### Scenario: Get nodes by ids returns dict keyed by NodeId
-
-- **WHEN** `get_by_ids([NodeId(5), NodeId(7)])` is called and rows with node_id=5 and node_id=7 exist
-- **THEN** a `dict[NodeId, Node]` is returned with keys `NodeId(5)` and `NodeId(7)` mapping to the respective `Node` objects; missing node_ids are absent from the dict (not mapped to `None`)
-
-#### Scenario: No get(ip) method on the port
-
-- **WHEN** the `NodeRepository` Protocol is inspected for `get`
-- **THEN** no `get(ip: str)` method is defined; node lookups are `get_by_id` / `get_by_ids` only
-
-#### Scenario: No get_by_ips method on the port
-
-- **WHEN** the `NodeRepository` Protocol is inspected for `get_by_ips`
-- **THEN** no `get_by_ips(ips: list[str])` method is defined; batch lookups are `get_by_ids` only
-
-#### Scenario: No add_tmp method on the port
-
-- **WHEN** the `NodeRepository` Protocol is inspected for `add_tmp`
-- **THEN** no `add_tmp` method is defined; tmp-node insertion goes through `insert`
-
-#### Scenario: Enable takes NodeId
-
-- **WHEN** `enable(NodeId(7))` is called
-- **THEN** the node with `node_id=7` is enabled; the key is `NodeId`, not `ip`
-
-#### Scenario: Disable takes NodeId
-
-- **WHEN** `disable(NodeId(7))` is called
-- **THEN** the node with `node_id=7` is disabled; the key is `NodeId`, not `ip`
-
 #### Scenario: Remove takes NodeId
 
 - **WHEN** `remove(NodeId(7))` is called
 - **THEN** the node row with `node_id=7` is deleted; the key is `NodeId`, not `ip`
 
-#### Scenario: Update takes Node and keys on node_id
-
-- **WHEN** `update(node)` is called with a `Node` carrying `node_id=NodeId(7)`
-- **THEN** the row with `node_id=7` is updated; the SQL `WHERE` clause keys on `node_id`, not `ip`
 ### Requirement: MachineRepository, MachineSession, and MachineOperations ports
 
 The system SHALL define three `@runtime_checkable` Protocols in
@@ -195,84 +127,37 @@ The system SHALL define three `@runtime_checkable` Protocols in
   (`connect`/`disconnect`/`disconnect_all`), queries
   (`list_free`/`list_connected`/`get_session`/`__contains__`/`__len__`).
   Returns `MachineSession` from `connect`/`list_free`/`list_connected`/
-  `get_session`. SHALL NOT declare state transitions, accessor
-  getters, or the monitor mechanism — those are on `MachineSession`.
+  `get_session`.
 - `MachineSession` — the connected-machine entity handle: identity
   (`ip`, `machine`), state transitions (`occupy`/`release`/`update`),
-  connect-time config (`adapter`, `platforms`, `data_dir`,
-  `engines_dir`, `tasks_dir`), adapter-derived accessors (`path`,
-  `quote`, `hostname`), base primitives (`run`/`run_full`/`run_bg`/
-  `upload`/`open_sftp`/`get_cpu_cores`/`setup_node`/`pgrep`/
-  `list_processes`), monitor mechanism (`install_monitor`/
-  `cancel_monitor`), and lifecycle (`is_closed`).
+  connect-time config, adapter-derived accessors, base primitives
+  (`run`/`run_full`/`run_bg`/`upload`/`open_sftp`/`get_cpu_cores`/
+  `setup_node`/`pgrep`/`list_processes`), monitor mechanism, and lifecycle.
 - `MachineOperations` — operations on a single machine, with method
   signatures taking `session: MachineSession`. Methods: `run`,
   `run_full`, `run_bg`, `get_cpu_cores`, `setup_node`,
   `start_task_on_machine`, `download_outputs`, `occupancy_check`,
   `start_occupancy_check`.
 
-The full method-signature specification of these three Protocols lives
-in the `ssh-infrastructure` capability spec (Requirement:
-MachineRepository port, Requirement: MachineSession port, Requirement:
-SSHMachineSession implements MachineSession, Requirement: MachineOperations port,
-Requirement: SSHMachineOperations composition). The `domain-ports`
-capability asserts only that all three Protocols are defined here, are
+Full method-signature specification lives in the `ssh-infrastructure` spec.
+`domain-ports` asserts only that all three Protocols are defined here, are
 `@runtime_checkable`, and are exposed via `yascheduler.domain.ports` and
-`yascheduler.domain` facades.
+`yascheduler.domain` facades. Application-layer consumers SHALL type
+their SSH-side parameters against these Protocols.
 
-Application-layer consumers (`allocate_task.py`, `consume_task.py`,
-`deallocate_nodes.py`, `abandon_node.py`, `orchestrator.py`) SHALL type
-their SSH-side parameters against `MachineRepository`,
-`MachineSession`, and/or `MachineOperations` (one or more, depending on
-which methods they call).
-
-#### Scenario: Import MachineRepository from domain facade
-
-- **WHEN** a consumer imports `from yascheduler.domain import MachineRepository`
-- **THEN** the Protocol class resolves without ImportError
-
-#### Scenario: Import MachineOperations from domain facade
-
-- **WHEN** a consumer imports `from yascheduler.domain import MachineOperations`
-- **THEN** the Protocol class resolves without ImportError
-
-#### Scenario: Import MachineSession from domain facade
-
-- **WHEN** a consumer imports `from yascheduler.domain import MachineSession`
-- **THEN** the Protocol class resolves without ImportError
-
-#### Scenario: All three Protocols are runtime_checkable
-
-- **WHEN** `isinstance(repo_obj, MachineRepository)`,
-  `isinstance(session_obj, MachineSession)`, and
-  `isinstance(ops_obj, MachineOperations)` are evaluated
-- **THEN** all three Protocols are `@runtime_checkable` and
-  structural-subtype their implementations
-
-#### Scenario: Application consumers type against the three Protocols
-
-- **WHEN** `application/orchestrator.py`, `application/allocate_task.py`,
-  `application/consume_task.py`, `application/deallocate_nodes.py`, and
-  `application/abandon_node.py` are inspected for SSH-side parameter
-  annotations
-- **THEN** the annotations are `MachineRepository`, `MachineSession`,
-  and/or `MachineOperations` (per the methods each consumer calls)
+#### Scenario: Three Protocols defined in domain/ports.py
+- **WHEN** `yascheduler.domain.ports` is inspected
+- **THEN** `MachineRepository`, `MachineSession`, and `MachineOperations` are defined as `@runtime_checkable` Protocols
 
 ### Requirement: CloudConfig structural Protocol
 
 The system SHALL define a `@runtime_checkable` `CloudConfig` Protocol in
-`yascheduler/domain/ports.py` capturing the cloud-config surface that
-application-layer consumers (`deallocate_nodes`, `orchestrator`) read.
+`yascheduler/domain/ports.py`. The authoritative field list, DTO inheritance
+contract, and importability scenarios live in the `cloud` spec.
 
-The authoritative field list, the explicit-inheritance contract with the
-`ConfigCloud*` DTOs, and the importability scenarios live in the `cloud`
-capability. `domain-ports` asserts only that the Protocol is defined here, is
-`@runtime_checkable`, and is exposed via `yascheduler.domain.ports` and
-`yascheduler.domain` facades.
-
-#### Scenario: CloudConfig importable from domain facade
-- **WHEN** a consumer imports `from yascheduler.domain import CloudConfig`
-- **THEN** the Protocol class resolves without ImportError
+#### Scenario: CloudConfig Protocol defined in domain/ports.py
+- **WHEN** `yascheduler.domain.ports` is inspected
+- **THEN** `CloudConfig` is defined as a `@runtime_checkable` Protocol
 
 ### Requirement: CloudProvisioner port
 
@@ -323,43 +208,9 @@ and passes it back to `allocate`/`deallocate` unchanged.
 - **WHEN** `allocate("aws", node)` is called with a valid provider name and a tmp-node `Node` carrying `node_id == NodeId(7)`
 - **THEN** returns a `Node` with `node_id == NodeId(7)`, a real `ip` (the provisioned VM's address), `enabled=True`, and `ncpus` populated from the VM; no DB write inside the adapter; the caller persists via `NodeRepository.update(node)`
 
-#### Scenario: Deallocate cloud node reads provider and host from the node
-
-- **WHEN** `deallocate(node)` is called with a `Node` carrying `cloud="aws"` and `ip="10.0.0.1"`
-- **THEN** the VM at `10.0.0.1` is deleted via the `aws` provider's SDK
-
-#### Scenario: Deallocate no-ops when node has no cloud
-
-- **WHEN** `deallocate(node)` is called with a `Node` whose `cloud` is `None`
-- **THEN** no provider SDK is invoked; the adapter logs and returns
-
-#### Scenario: Select provider returns provider name string
+#### Scenario: Select provider returns provider name string or None
 
 - **WHEN** `select_provider(["linux"], {"aws": 0})` is called and aws has capacity and supports linux
-- **THEN** returns the string `"aws"` (the selected provider's name)
+- **THEN** returns the string `"aws"`; returns `None` when no capacity or op semaphore is locked
 
-#### Scenario: Select provider returns None on no capacity
 
-- **WHEN** `select_provider(["linux"], {"aws": 10})` is called and aws max_nodes is 10
-- **THEN** returns `None`
-
-#### Scenario: Select provider returns None on throttle
-
-- **WHEN** the selected provider's op semaphore is locked
-- **THEN** `select_provider` returns `None` (does not raise)
-
-### Requirement: Ports are importable from domain
-
-The system SHALL expose all port Protocols from `yascheduler.domain.ports`,
-including `CloudConfig`, `MachineRepository`, `MachineSession`, and
-`MachineOperations`.
-
-#### Scenario: Import ports for adapter implementation
-
-- **WHEN** an adapter module imports `from yascheduler.domain.ports import TaskRepository`
-- **THEN** the Protocol class is available for structural subtyping
-
-#### Scenario: Import MachineRepository, MachineSession, and MachineOperations from domain facade
-
-- **WHEN** a consumer imports `from yascheduler.domain import MachineRepository, MachineSession, MachineOperations`
-- **THEN** all three Protocol classes resolve without ImportError

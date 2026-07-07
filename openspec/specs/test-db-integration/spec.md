@@ -84,25 +84,6 @@ SHALL be asserted to persist the new format contract values (bare strings for
 - **WHEN** a task is saved with `engine="cp2k"`, `remote_folder="/r"`, `local_folder="/l"`, `webhook_url="https://..."`, `webhook_custom_params={"k": "v"}`, `error=None`, `extra={}` and retrieved
 - **THEN** the retrieved task has the same values for all seven typed columns; `error` is `None` (NULL in the DB)
 
-#### Scenario: No TaskContext or metadata in tests
-- **WHEN** the integration test suite is inspected for `TaskContext`, `task.context`, `to_metadata`, `from_metadata`, or `row["metadata"]` references
-- **THEN** none are present (the value object and the `metadata` column are removed; tests use the typed `Task` fields and the typed columns directly)
-
-#### Scenario: No json.dumps/json.loads on metadata in tests
-- **WHEN** the integration test suite is inspected for `json.dumps(...metadata...)` or `json.loads(...metadata...)` references
-- **THEN** none are present (the `metadata` column is removed; `webhook_custom_params` and `extra` are bound as `dict` and adapted by pg8000 natively; `_row_to_task` reads them as `dict` directly with a `json.loads` str-fallback)
-### Requirement: add_tmp_node integration
-
-Tests SHALL verify `PostgresNodeRepository.add_tmp(cloud)` generates a
-provisional IP starting with "prov" and inserts a disabled node. The
-`username` column falls back to its DB default (`'root'`); the test SHALL
-NOT pass a `username` argument and SHALL NOT assert a caller-supplied
-username on the retrieved row.
-
-#### Scenario: Temporary node creation
-- **WHEN** `uow.nodes.add_tmp("az")` is called
-- **THEN** the returned IP starts with "prov" and `uow.nodes.get(ip)` shows `enabled=False, cloud="az", username="root"` (the DB default)
-
 ### Requirement: Yascheduler query path integration against PostgreSQL
 
 The project SHALL provide an integration test that exercises

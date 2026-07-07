@@ -1,3 +1,5 @@
+# Unit testing
+
 ## Purpose
 
 Unit tests for yascheduler: domain entities, domain exceptions, domain ports,
@@ -65,14 +67,6 @@ to compile and pass against the new model.
 - **WHEN** `task.with_remote_folder("/r/new")` is called on a Task with `remote_folder=None`
 - **THEN** the returned Task has `remote_folder="/r/new"` and all other fields (`task_id`, `label`, `engine`, `local_folder`, `webhook_url`, `webhook_custom_params`, `error`, `extra`, `status`, `allocated_node_id`, `_events`) preserved unchanged; the original task is unchanged (frozen dataclass)
 
-#### Scenario: with_remote_folder preserves the events tuple
-- **WHEN** `task.with_remote_folder("/r/new")` is called on a task with a non-empty `_events` tuple
-- **THEN** the returned Task has an `_events` tuple equal to the original task's `_events`
-
-#### Scenario: with_remote_folder performs no status validation
-- **WHEN** `task.with_remote_folder("/r/new")` is called on a DONE task
-- **THEN** no error is raised and a new Task with the new `remote_folder` is returned
-
 #### Scenario: with_remote_folder chains with with_event
 - **WHEN** `task.with_remote_folder("/r/new").with_event(TaskCreated, engine_name=task.engine)` is called
 - **THEN** the returned Task has `remote_folder="/r/new"` and the `TaskCreated` event appended
@@ -80,10 +74,6 @@ to compile and pass against the new model.
 #### Scenario: with_download_results sets both fields and preserves extra
 - **WHEN** `task.with_download_results(local_folder="/l", remote_folder="/r")` is called on a Task with `extra={"input.in": "ATOMS"}`
 - **THEN** the returned Task has `local_folder="/l"`, `remote_folder="/r"`, and `extra={"input.in": "ATOMS"}` unchanged (extra NOT modified)
-
-#### Scenario: with_download_results accepts equal values
-- **WHEN** `task.with_download_results(local_folder=task.local_folder, remote_folder=task.remote_folder)` is called (same values)
-- **THEN** a new Task is returned with the same values; no error is raised
 
 #### Scenario: with_download_results is keyword-only
 - **WHEN** `task.with_download_results("/l", "/r")` is called with positional arguments
@@ -107,11 +97,7 @@ to compile and pass against the new model.
 
 #### Scenario: No TaskContext or with_context in tests
 - **WHEN** the unit test suite is inspected for `TaskContext`, `TaskContextOverrides`, `with_context`, `task.context`, `to_metadata`, or `from_metadata` references
-- **THEN** none are present (the value object is removed; tests use the typed `Task` / `NewTask` fields directly)
-
-#### Scenario: No TaskContext drift-lock test
-- **WHEN** the unit test suite is inspected for a drift-lock test asserting `set(TaskContextOverrides.__annotations__) == {...}`
-- **THEN** no such test exists (the `TaskContextOverrides` TypedDict is removed; the drift-lock concern is moot)
+- **THEN** none are present (the value object is removed; tests use the typed `Task` / `NewTask` fields directly); the drift-lock test for `TaskContextOverrides` is also absent (the TypedDict is removed)
 
 ### Requirement: Domain exception hierarchy
 
@@ -194,10 +180,6 @@ or a `ConfigBuilder` helper, not via direct attribute assignment
 - **WHEN** a test needs a `Config` with a different `engines` field
 - **THEN** it uses `dataclasses.replace(config, engines=new_engines)` (not `config.engines = new_engines`, which raises `FrozenInstanceError`)
 
-#### Scenario: ConfigBuilder helper for high-density test files
-- **WHEN** a test file has ≥4 `replace` call sites
-- **THEN** it MAY use a `ConfigBuilder` helper defined in `tests/unit/conftest.py` to avoid repetition; the builder produces a frozen `Config` instance
-
 #### Scenario: VastAI round-trips via registry
 - **WHEN** `parse_config(path)` is called with an INI containing `[cloud.vastai]`
 - **THEN** the cloud is parsed via the `CLOUD_CONFIG_PARSERS` registry entry for `vastai` and appears in `config.clouds`
@@ -271,16 +253,6 @@ listing and info mode, node listing with task info, node add/remove/enable/disab
 #### Scenario: yasubmit happy path returns task ID
 - **WHEN** `yasubmit` is invoked with valid arguments and mocked dependencies
 - **THEN** it prints the created task ID
-
-### Requirement: CLI smoke tests
-
-Tests SHALL verify CLI entry point functions exist, are synchronous `def`
-entry points that call `asyncio.run(_<name>_async(argv))` (not `@to_sync`-
-decorated), and `daemonize` references `make_daemon`.
-
-#### Scenario: CLI entry points are importable
-- **WHEN** each CLI entry point module is imported
-- **THEN** the expected function symbols are present
 
 ### Requirement: Client queue-submit characterization
 
@@ -369,9 +341,9 @@ The project SHALL provide spec-compliant mock factories in
 Tests SHALL construct domain entities directly (`yascheduler.domain.Task`,
 `yascheduler.domain.Node`) or via local helpers in each test file.
 
-#### Scenario: Domain entities constructed directly in tests
-- **WHEN** a unit test needs a `Task` or `Node` instance
-- **THEN** it constructs `yascheduler.domain.Task(...)` / `yascheduler.domain.Node(...)` directly (or via a file-local helper)
+#### Scenario: Mock factories provided for remote machine and clouds
+- **WHEN** `tests/fixtures/mock_remote_machine.py` and `tests/fixtures/mock_clouds.py` are imported
+- **THEN** they provide spec-compliant mock factories for testing
 
 ### Requirement: WebhookPayload
 
@@ -410,27 +382,3 @@ Tests SHALL construct the client with a `FakeCLIDeps`-returning `deps_factory` w
 #### Scenario: Returned dict shape and types are correct
 - **WHEN** a Task with `allocated_ip=None` is seeded into the fake repository and queried
 - **THEN** the returned dict has `ip == ""`, `status` is `isinstance(status, domain.TaskStatus)` (not a plain int), and `cloud is None`
-
-### Requirement: pytest configuration
-
-The project SHALL declare pytest configuration under `[tool.pytest.ini_options]` in `pyproject.toml`, with `testpaths` pointing to `tests/unit/`. Integration and e2e tests run via explicit paths only.
-
-#### Scenario: Default pytest run executes only unit tests
-- **WHEN** developer runs `pytest` without arguments
-- **THEN** only tests under `tests/unit/` are discovered and executed
-
-### Requirement: Test directory structure
-
-`tests/` SHALL contain `unit/`, `integration/`, and `e2e/` subdirectories, each with `__init__.py`.
-
-#### Scenario: Test directories exist
-- **WHEN** the project is checked out
-- **THEN** `tests/unit/`, `tests/integration/`, and `tests/e2e/` directories exist with `__init__.py`
-
-### Requirement: CI unit test workflow
-
-A GitHub Actions workflow triggered on push and pull request SHALL run unit tests via `pytest`. CI SHALL NOT execute integration or e2e tests.
-
-#### Scenario: CI excludes integration tests
-- **WHEN** the CI workflow runs
-- **THEN** only tests under `tests/unit/` execute
