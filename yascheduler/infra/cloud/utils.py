@@ -13,7 +13,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 #   PREVIOUS_CHANGE: v1.1.0 - Move get_key_name to ssh_keys.py.
 # END_CHANGE_SUMMARY
 

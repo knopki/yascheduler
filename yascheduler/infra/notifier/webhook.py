@@ -2,7 +2,7 @@
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Webhook event handler and outbound payload DTO — sends HTTP notifications for task lifecycle events.
-#   SCOPE: WebhookPayload frozen dataclass, webhook_handler async function dispatching webhooks per event type, _send_webhook retry helper.
+#   SCOPE: WebhookPayload frozen dataclass, webhook_handler async function, _send_webhook retry helper.
 #   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
 #   LINKS: M-DOMAIN-EVENTS, M-NOTIFIER-WEBHOOK
 # END_MODULE_CONTRACT
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - webhook_handler extracts .value when building WebhookPayload: task_id=event.task_id.value (add-task-id-identity). event.task_id is now a TaskId; dataclasses.asdict recurses into nested dataclasses, so passing the TaskId directly would produce {"task_id": {"value": 42}, ...} (a wire-shape break). WebhookPayload.task_id stays int (the correct target type); the .value extraction is the domain→transport boundary unwrap.
-#   PREVIOUS_CHANGE: v1.1.0 - Absorb WebhookPayload from yascheduler/webhook.py (relocate-webhook-payload); root module deleted, M-WEBHOOK graph record removed.
+#   LAST_CHANGE: v1.2.0 - webhook_handler extracts .value when building WebhookPayload: task_id=event.task_id.value. event.task_id is now a TaskId; dataclasses.asdict recurses into nested dataclasses, so passing the TaskId directly would produce {"task_id": {"value": 42}, ...} (a wire-shape break). WebhookPayload.task_id stays int; the .value extraction is the domain→transport boundary unwrap.
+#   PREVIOUS_CHANGE: v1.1.0 - Absorb WebhookPayload from yascheduler/webhook.py; root module deleted, M-WEBHOOK graph record removed.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -50,20 +50,6 @@ class WebhookPayload:
     custom_params: Mapping[str, Any] = field(default_factory=dict)
 
 
-# START_CONTRACT: _get_semaphore
-#   PURPOSE: Lazy-initialize module-level concurrency semaphore for webhook requests
-#   INPUTS: { None }
-#   OUTPUTS: { asyncio.Semaphore - shared semaphore instance (max 10 concurrent) }
-#   SIDE_EFFECTS: Creates and stores global _webhook_sem on first call
-#   LINKS: M-NOTIFIER-WEBHOOK, fn-webhook_handler
-# END_CONTRACT: _get_semaphore
-def _get_semaphore() -> Semaphore:
-    global _webhook_sem
-    if _webhook_sem is None:
-        _webhook_sem = Semaphore(10)
-    return _webhook_sem
-
-
 # START_CONTRACT: webhook_handler
 #   PURPOSE: Async handler that sends webhooks for task lifecycle events.
 #   INPUTS: { event: DomainEvent - domain event (event.task_id is a TaskId) with optional webhook_url, http: aiohttp.ClientSession }
@@ -71,6 +57,13 @@ def _get_semaphore() -> Semaphore:
 #   SIDE_EFFECTS: Sends HTTP POST via _send_webhook (body built via asdict(WebhookPayload(task_id=event.task_id.value, ...))); suppresses final errors after backoff exhausts.
 #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
 # END_CONTRACT: webhook_handler
+def _get_semaphore() -> Semaphore:
+    global _webhook_sem
+    if _webhook_sem is None:
+        _webhook_sem = Semaphore(10)
+    return _webhook_sem
+
+
 async def webhook_handler(event: DomainEvent, http: aiohttp.ClientSession) -> None:
     if event.webhook_url is None:
         return

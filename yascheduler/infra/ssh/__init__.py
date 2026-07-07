@@ -2,7 +2,7 @@
 # VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH adapter package root — re-exports repository, session, operations, and retry exceptions.
-#   SCOPE: Package marker; public re-exports of MachineRepository, SSHMachineRepository, SSHMachineSession, SSHMachineOperations, AllSSHRetryExc, SFTPRetryExc.
+#   SCOPE: SSH subpackage facade: connected-machine repository, operations facade, retry exception aliases.
 #   DEPENDS: M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS, M-SSH-EXCEPTIONS
 #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS, M-SSH-EXCEPTIONS
 # END_MODULE_CONTRACT
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Re-export SSHMachineSession (session-based-machine-handle section 8). Joined __all__ and explicit import next to SSHMachineRepository.
-#   PREVIOUS_CHANGE: v1.2.0 - Re-export MachineRepository (Protocol), SSHMachineRepository, SSHMachineOperations (decompose-ssh-gateway). SSHMachineGateway removed (god-class dissolved into repository + operations). _MachineState NOT re-exported (private to repository.py; tests import via yascheduler.infra.ssh.repository._MachineState).
+#   LAST_CHANGE: v1.3.0 - Re-export SSHMachineSession. Joined __all__ and explicit import next to SSHMachineRepository.
+#   PREVIOUS_CHANGE: v1.2.0 - Re-export MachineRepository (Protocol), SSHMachineRepository, SSHMachineOperations. SSHMachineGateway removed (god-class dissolved into repository + operations). _MachineState NOT re-exported (private to repository.py).
 # END_CHANGE_SUMMARY
 
 from yascheduler.domain import MachineRepository

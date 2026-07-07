@@ -2,7 +2,7 @@
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Migration base class for .py migrations with injected config/conn/log and begin()/commit() helpers.
-#   SCOPE: Migration class.
+#   SCOPE: Migration base class for .py migration subclasses; runner instantiates with (config, conn, log).
 #   DEPENDS: M-INFRA-DB-CONFIG, M-PERSISTENCE
 #   LINKS: M-PERSISTENCE-MIGRATIONS
 # END_MODULE_CONTRACT
@@ -12,7 +12,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Introduce Migration base class for .py migrations (add-db-migrations). Subclasses receive injected config/conn/log and use begin()/commit() for non-transactional ops (CREATE INDEX CONCURRENTLY, VACUUM).
+#   LAST_CHANGE: v1.0.0 - Introduce Migration base class for .py migrations. Subclasses receive injected config/conn/log and use begin()/commit() for non-transactional ops (CREATE INDEX CONCURRENTLY, VACUUM).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

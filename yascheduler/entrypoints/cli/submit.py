@@ -2,7 +2,7 @@
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasubmit CLI command — parse AiiDA script, submit task via DI.
-#   SCOPE: submit command + argparse + script metadata/input file helpers + metadata assembly.
+#   SCOPE: submit command — parse AiiDA script and submit task via DI.
 #   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG, M-DOMAIN-ENGINE, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-DI, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -17,7 +17,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Runtime import Engine from yascheduler.domain (split from Config which stays from yascheduler.config) (engine-to-domain-frozen).
+#   LAST_CHANGE: v1.2.0 - Runtime import Engine from yascheduler.domain (Config stays from yascheduler.config).
 #   PREVIOUS_CHANGE: v1.1.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
 # END_CHANGE_SUMMARY
 
@@ -45,13 +45,6 @@ if TYPE_CHECKING:
     from yascheduler.domain import Engine
 
 
-# START_CONTRACT: _parse_submit_args
-#   PURPOSE: Parse yasubmit argparse — one positional script path (type=existing_path) plus shared --config and --log-level flags.
-#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
-#   OUTPUTS: { argparse.Namespace - parsed args with .script as Path, .config as Path, .log_level as str }
-#   SIDE_EFFECTS: argparse may call sys.exit on --help/error (exit 0/2).
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-ENTRYPOINTS-CLI-ARGS
-# END_CONTRACT: _parse_submit_args
 def _parse_submit_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yasubmit",
@@ -66,13 +59,6 @@ def _parse_submit_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-# START_CONTRACT: _parse_script_metadata
-#   PURPOSE: Parse key=value pairs from AiiDA script file content; malformed lines ignored.
-#   INPUTS: { script_text: str - raw script text }
-#   OUTPUTS: { dict[str, str] - key → value mapping }
-#   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
-# END_CONTRACT: _parse_script_metadata
 def _parse_script_metadata(script_text: str) -> dict[str, str]:
     script_params: dict[str, str] = {}
     for line in script_text.splitlines():
@@ -84,13 +70,6 @@ def _parse_script_metadata(script_text: str) -> dict[str, str]:
     return script_params
 
 
-# START_CONTRACT: _read_input_files
-#   PURPOSE: Read input files declared by engine config, return filename → content; base64 fallback for binary.
-#   INPUTS: { engine: Engine - declares .input_files, local_folder: str - folder containing the files }
-#   OUTPUTS: { dict[str, str] - filename → text content or base64-encoded bytes }
-#   SIDE_EFFECTS: Reads files from disk.
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
-# END_CONTRACT: _read_input_files
 def _read_input_files(engine: Engine, local_folder: str) -> dict[str, str]:
     metadata: dict[str, str] = {}
     for input_file in engine.input_files:
@@ -103,14 +82,6 @@ def _read_input_files(engine: Engine, local_folder: str) -> dict[str, str]:
     return metadata
 
 
-# START_CONTRACT: _build_metadata
-#   PURPOSE: Assemble the task metadata dict — local_folder, engine input files, webhook branch when PARENT and webhook_url set.
-#   INPUTS: { script_params: dict[str, str] - parsed script, config: Config - engines + local.webhook_url, local_folder: str }
-#   OUTPUTS: { dict[str, Any] - metadata with local_folder, input files, and optional webhook_url/webhook_custom_params }
-#   SIDE_EFFECTS: Reads input files from disk via _read_input_files.
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
-#   NOTE: Promotion to application/submit_script.py awaits a second consumer; today only yasubmit parses AiiDA scripts.
-# END_CONTRACT: _build_metadata
 def _build_metadata(
     script_params: dict[str, str],
     config: Config,

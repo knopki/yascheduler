@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - drop-task-context-entity: download_outputs drops the legacy meta_add list-of-pairs (a metadata-blob relic); returns typed fields directly as (local_folder: str, remote_folder: str, transient_errors, permanent_errors). consume_task receives them as named values, not via a meta_dict.
-#   PREVIOUS_CHANGE: v1.2.1 - download_outputs takes task_id: TaskId | None (was int | None); used only for logging (task_id=%s renders the bare integer via TaskId.__str__) (add-task-id-identity).
+#   LAST_CHANGE: v1.3.0 - download_outputs drops the legacy meta_add list-of-pairs (a metadata-blob relic); returns typed fields directly as (local_folder: str, remote_folder: str, transient_errors, permanent_errors). consume_task receives them as named values, not via a meta_dict.
+#   PREVIOUS_CHANGE: v1.2.1 - download_outputs takes task_id: TaskId | None (was int | None); used only for logging (task_id=%s renders the bare integer via TaskId.__str__).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

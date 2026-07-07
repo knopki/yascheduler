@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Retype upcloud_create_node_sync and upcloud_create_node cloud_config params PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
-#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudUpcloud from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
+#   LAST_CHANGE: v1.8.0 - Retype upcloud_create_node_sync and upcloud_create_node cloud_config params PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
+#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudUpcloud from yascheduler.infra.cloud facade.
 # END_CHANGE_SUMMARY
 #
 """Upcloud cloud methods"""

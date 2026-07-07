@@ -2,7 +2,7 @@
 # VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Cross-layer application settings as frozen stdlib dataclasses — local daemon config and remote SSH defaults.
-#   SCOPE: LocalSettings (daemon paths, webhook, concurrency limits) and RemoteDefaults (SSH paths, username, jump host); no INI parsing on the DTOs.
+#   SCOPE: Local and remote typed config DTOs: LocalSettings (daemon paths, webhook, concurrency limits) and RemoteDefaults (SSH paths, username, jump host); no INI parsing on the DTOs.
 #   DEPENDS: none
 #   LINKS: M-DOMAIN-PORTS, M-APPLICATION-ORCHESTRATOR
 # END_MODULE_CONTRACT
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Remove cloud_package_upgrade field from LocalSettings (move-cloud-package-upgrade): the cloud-init package_upgrade knob is a cloud-only concern and is relocated to the per-provider ConfigCloud* DTOs (package_upgrade: bool = True); a leftover [local] cloud_package_upgrade INI key now surfaces as an "unknown field" ConfigWarning. No __post_init__ change (the field had no validation; _INT_DEFAULTS only ever included the int ge(1)/ge(0) fields, so it is unaffected).
-#   PREVIOUS_CHANGE: v1.2.0 - Add cloud_package_upgrade: bool = True field to LocalSettings (add-hetzner-live-e2e); the flag controls cloud-init package_upgrade on freshly-provisioned VMs and is read by CloudProvisionerImpl._get_cloud_config_data. No __post_init__ validation (any bool accepted); the field is not in _GE1_LIMIT_FIELDS so it is not int-validated.
+#   LAST_CHANGE: v1.3.0 - Remove cloud_package_upgrade field from LocalSettings; the cloud-init package_upgrade knob is a cloud-only concern relocated to per-provider ConfigCloud* DTOs.
+#   PREVIOUS_CHANGE: v1.2.0 - Add cloud_package_upgrade: bool = True field to LocalSettings; controls cloud-init package_upgrade on freshly-provisioned VMs.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

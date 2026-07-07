@@ -2,7 +2,7 @@
 # VERSION: 2.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yascheduler CLI command — start the daemon (foreground, intended for manual/debug/container use) via the shared daemon core.
-#   SCOPE: daemonize command — thin sync entry point that builds an argparse parser, configures the root logger, loads Config, and runs the async daemon core via asyncio.run.
+#   SCOPE: daemonize command — thin sync entry point delegating to daemon_common.
 #   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-ENTRYPOINTS-CONFIG-PARSER, M-SHARED
 #   LINKS: M-CLI-COMMANDS, M-DAEMON-COMMON
 # END_MODULE_CONTRACT
@@ -12,9 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - restore--log-level-short-flag: pass short="-l" to add_log_level_arg so `yascheduler -l DEBUG` works again (regressed in v2.0.0 consolidate-daemon-entrypoints). -l is free here because daemonize registers --log-file long-only via add_log_file_arg. daemon_sysv keeps -l for --log-file (its own parser, no shared sys.argv re-parse, no collision).
-#   PREVIOUS_CHANGE: v2.0.0 - Reimplemented as a thin entry point (consolidate-daemon-entrypoints): relocated from yascheduler/infra/cli/daemonize.py; builds its own argparse parser via args.py helpers (prog=yascheduler, --config/--log-level/--log-file); delegates logging to daemon_common.configure_logger and the async runtime + signal handling to daemon_common.run_daemon; @to_sync replaced by asyncio.run; --log-level uses explicit choices (no logging._levelToName private API); --log-file default None (stderr); uniform 0/1/2 exit-code contract with Error: on stderr.
-#   PREVIOUS_CHANGE: v1.1.2 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v2.1.0 - Pass short="-l" to add_log_level_arg so `yascheduler -l DEBUG` works again (regressed in v2.0.0). -l is free here because daemonize registers --log-file long-only via add_log_file_arg. daemon_sysv keeps -l for --log-file (its own parser, no shared sys.argv re-parse, no collision).
+#   PREVIOUS_CHANGE: v2.0.0 - Reimplemented as a thin entry point: builds its own argparse parser via args.py helpers; delegates logging to daemon_common.configure_logger and async runtime to daemon_common.run_daemon; uniform 0/1/2 exit-code contract with Error: on stderr.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ from yascheduler.entrypoints.config_parser import parse_config
 #   PURPOSE: Start the yascheduler daemon in the foreground via the shared daemon core; exit 0 on clean shutdown, 1 on runtime error, 2 on argparse error.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
 #   OUTPUTS: { None - runs the event loop until stopped; prints Error: ... to stderr and calls sys.exit(1) on runtime failure }
-#   SIDE_EFFECTS: Parses argv (may exit 2 on argparse error / missing --config); accepts -l as a short alias for --log-level (backward-compat with the pre-refactor behavior); configures the root logger, loads Config, runs the async daemon core via asyncio.run; may call sys.exit(1).
+#   SIDE_EFFECTS: Parses argv, configures logger, loads Config, runs async daemon core; may call sys.exit(1).
 #   LINKS: M-CLI-COMMANDS, M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS
 # END_CONTRACT: daemonize
 def daemonize(argv: list[str] | None = None) -> None:
@@ -48,7 +47,7 @@ def daemonize(argv: list[str] | None = None) -> None:
     )
     add_config_arg(parser)
     # -l/--log-level short flag restored for backward compatibility with the
-    # pre-consolidate-daemon-entrypoints behavior (`yascheduler -l DEBUG`). -l
+    # preserves `yascheduler -l DEBUG` behavior. -l
     # is free here because --log-file is long-only via add_log_file_arg; this is
     # independent of daemon_sysv's -l/--log-file (each launcher parses once).
     add_log_level_arg(parser, default="INFO", short="-l")

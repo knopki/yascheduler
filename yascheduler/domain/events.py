@@ -2,7 +2,7 @@
 # VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain events for task lifecycle transitions.
-#   SCOPE: DomainEvent base, TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned, Event union type.
+#   SCOPE: Lifecycle event types (DomainEvent base, TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned) and the Event union.
 #   DEPENDS: none
 #   LINKS: M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - ssh-rekey-node-id: TaskAllocated and TaskAbandoned replace node_ip: str with node_id: NodeId (the node identity, not the transport address). Emission sites pass task.allocated_node_id (was task.allocated_ip / session.ip). webhook_handler builds WebhookPayload(task_id, status, custom_params) and does not read the field — wire format unchanged. NodeId imported under TYPE_CHECKING alongside TaskId.
-#   PREVIOUS_CHANGE: v1.2.0 - DomainEvent.task_id: int -> TaskId (add-task-id-identity); the 5 subclasses inherit the new type. TaskId imported under TYPE_CHECKING (annotations are strings via from __future__ import annotations). Python 3.9 compat preserved: typing.Union for the Event alias, no PEP 604.
+#   LAST_CHANGE: v1.3.0 - TaskAllocated and TaskAbandoned replace node_ip: str with node_id: NodeId (the node identity, not the transport address). NodeId imported under TYPE_CHECKING alongside TaskId.
+#   PREVIOUS_CHANGE: v1.2.0 - DomainEvent.task_id: int -> TaskId; the 5 subclasses inherit the new type. TaskId imported under TYPE_CHECKING.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

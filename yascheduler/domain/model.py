@@ -2,7 +2,7 @@
 # VERSION: 1.22.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
-#   SCOPE: TaskStatus, MachineState enums; ProcessResult value object; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
+#   SCOPE: Lifecycle state enums, task/node identity and value types, and the public surface consumed by application/infra layers.
 #   DEPENDS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 #   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.22.0 - drop-task-context-entity: TaskContext / TaskContextOverrides; typed fields folded onto Task / NewTask; Task.fail/reject simplified to direct replace(status=DONE, error=reason); new Task.with_remote_folder and Task.with_download_results methods; with_event reads self.webhook_url / self.webhook_custom_params directly.
-#   PREVIOUS_CHANGE: v1.21.0 - task-schema-and-entity-cleanup: Task/NewTask drop allocated_ip; Task gains created_at/updated_at: datetime
+#   LAST_CHANGE: v1.22.0 - TaskContext / TaskContextOverrides folded onto Task / NewTask typed fields; Task.fail/reject simplified; new with_remote_folder and with_download_results methods.
+#   PREVIOUS_CHANGE: v1.21.0 - Task/NewTask drop allocated_ip; Task gains created_at/updated_at: datetime
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -59,8 +59,7 @@ from .exceptions import (
     TaskNotTodoError,
 )
 
-# Re-exports from .engine for backward compatibility with
-# `from yascheduler.domain.model import Engine` / EngineRepository / Deploy*.
+# Re-exports from .engine for the canonical import path.
 __all__ = [
     "Deploy",
     "Engine",

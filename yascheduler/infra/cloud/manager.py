@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
-#   SCOPE: CloudProvisionerImpl class implementing allocate(provider, node: Node)->Node (derives the identity via replace on the passed node after create_node, threads it through _setup_vm/_connect_to_vm, returns replace(node, enabled=True, ncpus); reuses node.node_id as node identity), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None), select_provider with provider selection via select_provider_pure, cloud-config building, cloud-init wait, and node setup via SSHMachineRepository + SSHMachineOperations.
+#   SCOPE: CloudProvisionerImpl: allocate/deallocate/select_provider lifecycle with SSH setup and cloud-init.
 #   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-DOMAIN-SETTINGS
 #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE, M-CLOUD-INIT
 # END_MODULE_CONTRACT
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.17.0 - cloud-port-node-arg: allocate/deallocate take node: Node; allocate derives identity via replace(node, ...) (no fresh Node); deallocate reads node.cloud/node.ip, no-ops on cloud is None.
-#   PREVIOUS_CHANGE: v2.16.0 - simplify-cloud-connect-node-args: allocate constructs the identity Node once (after create_node) and threads it through _setup_vm/_connect_to_vm; the three Node constructions collapse to one (no ersatz Node). _setup_vm returns replace(node, enabled=True, ncpus); _connect_to_vm passes the Node straight to connect with no username/port args. Setup-failure except blocks call disconnect(node.node_id) before delete_node. Removed the `# FIXME: just use Node` comment; added `replace` to the dataclasses import.
+#   LAST_CHANGE: v2.17.0 - allocate/deallocate take node: Node; allocate derives identity via replace(node, ...) (no fresh Node); deallocate reads node.cloud/node.ip, no-ops on cloud is None.
+#   PREVIOUS_CHANGE: v2.16.0 - allocate constructs the identity Node once (after create_node) and threads it through _setup_vm/_connect_to_vm; the three Node constructions collapse to one (no ersatz Node). _setup_vm returns replace(node, enabled=True, ncpus); _connect_to_vm passes the Node straight to connect with no username/port args. Setup-failure except blocks call disconnect(node.node_id) before delete_node. Removed the `# FIXME: just use Node` comment; added `replace` to the dataclasses import.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -276,13 +276,6 @@ class CloudProvisionerImpl:
 
     # ---- Private helpers ----
 
-    # START_CONTRACT: CloudProvisionerImpl._is_platform_supported
-    #   PURPOSE: Check if a platform string is supported by the given adapter.
-    #   INPUTS: { adapter: CloudAdapter, platform: str }
-    #   OUTPUTS: { bool }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-CLOUD-ADAPTERS
-    # END_CONTRACT: CloudProvisionerImpl._is_platform_supported
     def _is_platform_supported(self, adapter: CloudAdapter, platform: str) -> bool:
         """Check if adapter supports the given platform."""
         return any(check(platform) for check in adapter.supported_platform_checks)
@@ -291,9 +284,7 @@ class CloudProvisionerImpl:
     #   PURPOSE: Async wrapper around get_or_create_ssh_key with lock for thread safety.
     #   INPUTS: { None }
     #   OUTPUTS: { SSHKey - loaded or generated SSH key }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-CLOUD-PROVISIONER, M-CLOUD-SSH-KEYS
-    # END_CONTRACT: CloudProvisionerImpl._get_ssh_key
+    #   SIDE_EFFECTS: Loads or generates SSH key file.
     async def _get_ssh_key(self) -> SSHKey:
         """Async-thread-safe SSH key load/generate."""
         async with self.ssh_key_lock:

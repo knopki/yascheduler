@@ -2,7 +2,7 @@
 # VERSION: 1.4.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit of Work implementation for PostgreSQL using pg8000.
-#   SCOPE: PostgresUnitOfWork managing transactions, repositories, event dispatch, and connection lifecycle.
+#   SCOPE: PostgresUnitOfWork managing transaction lifecycle, repository wiring, event collection and dispatch.
 #   DEPENDS: M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN-EVENTS
 #   LINKS: M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG, M-APPLICATION-MESSAGE-BUS
 # END_MODULE_CONTRACT
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config (config-aggregate-to-entrypoints / P4).
-#   PREVIOUS_CHANGE: v1.4.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.5.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
+#   PREVIOUS_CHANGE: v1.4.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ class PostgresUnitOfWork:
     #   PURPOSE: Pull events from all saved aggregates, returning collected events and updating saved tasks.
     #   INPUTS: { None }
     #   OUTPUTS: { list[DomainEvent] - flat list of all collected events }
-    #   SIDE_EFFECTS: Replaces _saved_tasks with clean (event-free) task instances.
+    #   SIDE_EFFECTS: None — internal state only.
     #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
     # END_CONTRACT: PostgresUnitOfWork.collect_events
     async def collect_events(self) -> list[DomainEvent]:
@@ -195,7 +195,7 @@ class PostgresUnitOfWork:
     #   PURPOSE: Collect events and dispatch them via the message bus.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Dispatches events; clears _saved_tasks.
+    #   SIDE_EFFECTS: Dispatches events via MessageBus.
     #   LINKS: M-APPLICATION-MESSAGE-BUS
     # END_CONTRACT: PostgresUnitOfWork.publish_events
     async def publish_events(self) -> None:
@@ -203,13 +203,8 @@ class PostgresUnitOfWork:
         await self._bus.dispatch(events)
         self._saved_tasks.clear()
 
-    # START_CONTRACT: _require_conn
-    #   PURPOSE: Return the active connection or raise UnitOfWorkNotInitializedError if UoW was not entered.
-    #   INPUTS: { None }
-    #   OUTPUTS: { Connection - the active pg8000 connection }
-    #   SIDE_EFFECTS: None
-    #   LINKS: pg8000.native.Connection
-    # END_CONTRACT: _require_conn
+    # START_CONTRACT: _create_connection
+
     def _require_conn(self) -> Connection:
         """Return active connection, or raise if not yet entered."""
         if self._conn is None:
@@ -235,13 +230,6 @@ class PostgresUnitOfWork:
             password=self._config.password,
         )
 
-    # START_CONTRACT: _run_sync
-    #   PURPOSE: Run a synchronous function in the thread pool executor.
-    #   INPUTS: { fn: Callable[[], T] - synchronous callable }
-    #   OUTPUTS: { T - the return value of fn }
-    #   SIDE_EFFECTS: Executes fn in a separate thread.
-    #   LINKS: asyncio.loop.run_in_executor
-    # END_CONTRACT: _run_sync
     async def _run_sync(self, fn: Callable[[], T]) -> T:
         """Execute fn in the thread pool, return its result."""
         loop = asyncio.get_running_loop()

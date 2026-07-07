@@ -2,22 +2,22 @@
 # VERSION: 6.0.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
-#   SCOPE: consume_task async function returning bool (True=finalised, False=deferred for retry); helpers.
+#   SCOPE: Task consumption / finalisation lifecycle — download outputs, finalise (DONE) or defer (retry).
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-OPERATIONS, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   consume_task - Load task via UoW, download outputs, finalise (DONE/DONE+error) or defer (stay RUNNING); returns bool
+#   consume_task - Load task, download outputs, finalise (DONE) or defer (stay RUNNING)
 #   _prepare_store_folder - Create local output directory from typed Task fields
-#   _format_download_error - Format combined download errors into "Download error: <path>: <msg>, <path>: <msg>" per the Task.error column format contract
-#   _finalize_task - On finalise: apply domain lifecycle, save via UoW, record events, discard tracker slot; returns True. On defer: no side effects, returns False
-#   _decide_finalisation - Decide finalise vs defer from (transient_errors, permanent_errors); on finalise apply task.with_download_results(local_folder=, remote_folder=).complete()/.fail(...) (no extra update, no with_context)
+#   _format_download_error - Format combined download errors into error string
+#   _finalize_task - Apply domain lifecycle, save via UoW, discard tracker slot; returns True
+#   _decide_finalisation - Decide finalise vs defer from (transient_errors, permanent_errors)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.0.1 - consume-task-contract-side-effect: _prepare_store_folder SIDE_EFFECTS now declares the AssertionError raise on the task.remote_folder RUNNING-task precondition (was the line-67 FIXME); exception is uncaught locally and propagates to the orchestrator consumer worker's `except Exception`.
-#   PREVIOUS_CHANGE: v6.0.0 - drop-task-context-entity follow-up: drop the legacy meta_add list-of-pairs indirection (a metadata-blob relic); _decide_finalisation and _finalize_task take local_folder/remote_folder as named args from download_outputs' new 4-tuple return. _prepare_store_folder asserts task.remote_folder is not None for type narrowing (the task is RUNNING — remote_folder was assigned post-insert).
+#   LAST_CHANGE: v6.0.1 - _prepare_store_folder SIDE_EFFECTS declares AssertionError raise on RUNNING-task precondition.
+#   PREVIOUS_CHANGE: v6.0.0 - Drop legacy meta_add indirection; _decide_finalisation and _finalize_task take local_folder/remote_folder as named args.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -80,13 +80,6 @@ async def _prepare_store_folder(
     return store_folder, output_files, remote_folder
 
 
-# START_CONTRACT: _format_download_error
-#   PURPOSE: Format the combined download errors into the Task.error column contract string "Download error: <path>: <msg>, <path>: <msg>".
-#   INPUTS: { combined_errors: list[tuple[str | None, Exception]] - permanent + transient download errors (permanent first) }
-#   OUTPUTS: { str - Error message }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL
-# END_CONTRACT: _format_download_error
 def _format_download_error(
     combined_errors: list[tuple[str | None, Exception]],
 ) -> str:

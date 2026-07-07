@@ -2,7 +2,7 @@
 # VERSION: 1.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
-#   SCOPE: manage_node command + argparse + node-target parser + host-spec parser + node add/remove helpers (each helper owns its UoW).
+#   SCOPE: manage_node command — add, soft-remove, or hard-remove nodes.
 #   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-UOW, M-SSH-KEYS
 # END_MODULE_CONTRACT
@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - task-schema-and-entity-cleanup: _remove_node_hard/_remove_node_soft call list_ids_by_node_id_and_status(node.node_id, ...); the filter key changes from ip to node_id (the canonical allocation identity).
-#   PREVIOUS_CHANGE: v1.8.0 - simplify-cloud-connect-node-args: _add_node stops passing `username=username` and `port=spec.port` to repository.connect (connect reads them from node internally; the tmp node already carries them).
+#   LAST_CHANGE: v1.9.0 - _remove_node_hard/_remove_node_soft call list_ids_by_node_id_and_status(node.node_id, ...); filter key changes from ip to node_id.
+#   PREVIOUS_CHANGE: v1.8.0 - _add_node stops passing username and port to repository.connect (connect reads them from node internally).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -77,7 +77,8 @@ class NodeTarget:
 #   PURPOSE: argparse type — parse [user@]host[:port][~ncpus] into a frozen HostSpec; validate grammar and ranges.
 #   INPUTS: { s: str - raw host-spec string from argparse }
 #   OUTPUTS: { HostSpec - parsed spec with parser-applied port=22 and ncpus=None defaults }
-#   SIDE_EFFECTS: None — raises argparse.ArgumentTypeError on malformed input (argparse surfaces as exit 2).
+#   SIDE_EFFECTS: None
+#   RAISES: argparse.ArgumentTypeError - on malformed input (argparse surfaces as exit 2)
 #   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
 # END_CONTRACT: _parse_host_spec
 def _parse_host_spec(s: str) -> HostSpec:
@@ -159,13 +160,6 @@ def _parse_host_spec(s: str) -> HostSpec:
     return HostSpec(host=host, username=username, port=port, ncpus=ncpus)
 
 
-# START_CONTRACT: _parse_node_target
-#   PURPOSE: argparse type — discriminate a purely-digit node_id from a host-spec grammar; return a frozen NodeTarget (exactly one field set).
-#   INPUTS: { s: str - raw positional string from argparse }
-#   OUTPUTS: { NodeTarget - node_id set when s.isdigit() (NodeId(int(s))); else host_spec set via _parse_host_spec }
-#   SIDE_EFFECTS: None — raises argparse.ArgumentTypeError on malformed host grammar (argparse surfaces as exit 2); raises ValueError from NodeId.__post_init__ when the digit is <= 0 (argparse surfaces as exit 2).
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
-# END_CONTRACT: _parse_node_target
 def _parse_node_target(s: str) -> NodeTarget:
     if s.isdigit():
         return NodeTarget(node_id=NodeId(int(s)), host_spec=None)
@@ -176,7 +170,7 @@ def _parse_node_target(s: str) -> NodeTarget:
 #   PURPOSE: Parse yasetnode argparse — one positional host (type=_parse_node_target → NodeTarget) + three store_true flags.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
 #   OUTPUTS: { argparse.Namespace - parsed args with .host as NodeTarget }
-#   SIDE_EFFECTS: argparse may call sys.exit on --help/error (exit 0/2); body-level parser.error for --skip-setup × remove and node_id-positional × add-path.
+#   SIDE_EFFECTS: argparse may call sys.exit on --help/error (exit 0/2).
 #   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
 # END_CONTRACT: _parse_node_args
 def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:

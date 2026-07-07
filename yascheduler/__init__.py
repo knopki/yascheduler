@@ -2,7 +2,7 @@
 # VERSION: 1.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Package entry point exposing public client and constants.
-#   SCOPE: Re-exports Yascheduler, CONFIG_FILE, PID_FILE, LOG_FILE, __version__.
+#   SCOPE: Public package surface: Yascheduler facade and runtime path constants.
 #   DEPENDS: M-ENTRYPOINTS
 #   LINKS: M-ENTRYPOINTS
 # END_MODULE_CONTRACT
@@ -16,7 +16,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Re-export path constants from yascheduler.entrypoints instead of yascheduler.shared (prune-shared-kernel).
+#   LAST_CHANGE: v1.9.0 - Re-export path constants from yascheduler.entrypoints instead of yascheduler.shared.
 #   PREVIOUS_CHANGE: v1.8.0 - Source Yascheduler from yascheduler.entrypoints facade (M-ENTRYPOINTS) instead of yascheduler.client.
 # END_CHANGE_SUMMARY
 

@@ -1,8 +1,8 @@
 # FILE: yascheduler/application/query_tasks.py
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Query tasks use case — read-only task queries by status or job IDs via UoW, returning tasks alongside their allocated nodes.
-#   SCOPE: query_tasks async function.
+#   PURPOSE: Read-only task query by statuses or job IDs.
+#   SCOPE: Read-only task query by statuses XOR job IDs within a single UoW; returns tasks alongside their allocated nodes.
 #   DEPENDS: M-DOMAIN-MODEL, M-APPLICATION-UOW
 #   LINKS: M-DOMAIN-MODEL, M-APPLICATION-UOW, M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: query_tasks return type widens from list[Task] to tuple[list[Task], dict[NodeId, Node]]; after fetching tasks, batch-loads nodes via uow.nodes.get_by_ids when any task has an allocated_node_id (else returns (tasks, {})). The facade unpacks the tuple and passes nodes_by_id to _task_to_dict, which projects the nested node object.
-#   PREVIOUS_CHANGE: v1.1.0 - query_tasks jobs param narrows Sequence[int] | None -> Sequence[TaskId] | None; forwards list(jobs) to list_by_jobs(list[TaskId]) (add-task-id-identity). The public Yascheduler.queue_get_tasks_async(jobs: list[int]) facade is the sole int/TaskId boundary on this path (wraps [TaskId(i) for i in jobs]).
+#   LAST_CHANGE: v1.2.0 - Return type widens to tuple[list[Task], dict[NodeId, Node]]; batch-load nodes via uow.nodes.get_by_ids.
+#   PREVIOUS_CHANGE: v1.1.0 - jobs param narrows to Sequence[TaskId]; forwards list(jobs) to list_by_jobs(list[TaskId]).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory for DB access
 #   }
 #   OUTPUTS: { tuple[list[Task], dict[NodeId, Node]] - Matching tasks and their allocated nodes keyed by node_id; ([], {}) if neither filter is non-empty }
-#   SIDE_EFFECTS: Opens a single UoW for reading (no commit).
+#   SIDE_EFFECTS: None — read-only.
 #   RAISES: ValueError - if both jobs and statuses are non-empty (mutually exclusive)
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL
 # END_CONTRACT: query_tasks

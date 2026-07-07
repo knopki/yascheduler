@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Migrate CloudAdapter from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); drop 4× bare field(); remove stale FIXME marker (migrate-cloud-from-attrs).
-#   PREVIOUS_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - Migrate CloudAdapter from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); drop 4× bare field(); remove stale FIXME marker.
+#   PREVIOUS_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 # END_CHANGE_SUMMARY
 """Cloud adapters"""
 

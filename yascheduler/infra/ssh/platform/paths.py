@@ -2,7 +2,7 @@
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Normalize remote data/engines/tasks dirs using the adapter's path type.
-#   SCOPE: _init_paths (moved verbatim from helpers.py).
+#   SCOPE: _init_paths.
 #   DEPENDS: M-PLATFORM-ADAPTERS
 #   LINKS: M-PLATFORM-ADAPTERS
 # END_MODULE_CONTRACT
@@ -12,7 +12,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py (decompose-ssh-gateway); _init_paths moved verbatim, no behavioral change.
+#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py; _init_paths moved verbatim, no behavioral change.
 #   PREVIOUS_CHANGE: none
 # END_CHANGE_SUMMARY
 

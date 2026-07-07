@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.1 - fix-hetzner-ssh-key-uniqueness: get_ssh_key_id recovery branch now triggers on APIException code `uniqueness_error` (Hetzner's current duplicate-key wording "SSH key not unique") in addition to the legacy "already" substring; previously the new wording skipped the fingerprint/name lookup and re-raised, breaking all allocations once a key already existed on the Hetzner project.
-#   PREVIOUS_CHANGE: v1.8.0 - Retype hetzner_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
+#   LAST_CHANGE: v1.8.1 - recovery branch now triggers on APIException code `uniqueness_error` (Hetzner's current duplicate-key wording "SSH key not unique") in addition to the legacy "already" substring; previously the new wording skipped the fingerprint/name lookup and re-raised, breaking all allocations once a key already existed on the Hetzner project.
+#   PREVIOUS_CHANGE: v1.8.0 - Retype hetzner_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
 # END_CHANGE_SUMMARY
 #
 """Hetzner cloud methods"""

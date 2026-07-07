@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Import ProcessInfo from .protocol (not .common); list_processes/pgrep return AsyncGenerator[ProcessInfo, None] (prune-platform-protocols).
-#   PREVIOUS_CHANGE: v1.1.0 - Switch Deploy* import from yascheduler.config to yascheduler.domain; replace PEngineRepository type hints with EngineRepository from yascheduler.domain (engine-to-domain-frozen).
+#   LAST_CHANGE: v1.2.0 - Import ProcessInfo from .protocol (not .common); list_processes/pgrep return AsyncGenerator[ProcessInfo, None].
+#   PREVIOUS_CHANGE: v1.1.0 - Switch Deploy* import from yascheduler.config to yascheduler.domain; replace PEngineRepository type hints with EngineRepository from yascheduler.domain.
 # END_CHANGE_SUMMARY
 
 import asyncio
@@ -86,7 +86,7 @@ def windows_quote(s: str) -> str:
 #   PURPOSE: Get number of CPU cores on remote Windows via PowerShell
 #   INPUTS: { run: OuterRunCallable - async command runner }
 #   OUTPUTS: { int - number of CPU cores (defaults to 1 on error) }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs command on remote machine.
 #   LINKS: M-REMOTE-WINDOWS
 # END_CONTRACT: windows_get_cpu_cores
 async def windows_get_cpu_cores(run: OuterRunCallable) -> int:
@@ -105,7 +105,7 @@ async def windows_get_cpu_cores(run: OuterRunCallable) -> int:
 #   PURPOSE: Yield running process info from remote Windows via Get-CimInstance
 #   INPUTS: { conn: SSHClientConnection - SSH connection } | { query: Optional[str] - optional PowerShell where filter }
 #   OUTPUTS: { AsyncGenerator[ProcessInfo, None] - stream of process info }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs command on remote machine.
 #   LINKS: M-REMOTE-WINDOWS
 # END_CONTRACT: windows_list_processes
 async def windows_list_processes(
@@ -144,7 +144,7 @@ async def windows_list_processes(
 #   PURPOSE: Find processes matching a pattern on Windows via where-filter and yield their info
 #   INPUTS: { conn: SSHClientConnection - SSH connection } | { quote: QuoteCallable - PowerShell quoting function } | { pattern: Union[str, Pattern[str]] - match pattern } | { full: bool - match against name or full cmdline if True }
 #   OUTPUTS: { AsyncGenerator[ProcessInfo, None] - stream of matching process info }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs command on remote machine.
 #   LINKS: M-REMOTE-WINDOWS
 # END_CONTRACT: windows_pgrep
 async def windows_pgrep(

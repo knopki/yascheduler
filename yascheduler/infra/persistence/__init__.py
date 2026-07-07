@@ -2,7 +2,7 @@
 # VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Persistence subpackage facade — re-exports persistence symbols for the adapters layer facade.
-#   SCOPE: Re-export load_query, UnitOfWorkNotInitializedError, TaskRowNotFoundError, apply_schema, apply_migrations, PostgresUnitOfWork, PostgresDbConfig; package marker.
+#   SCOPE: Persistence subpackage facade: UoW, repositories, schema applier, migration runner, SQL loader, exceptions.
 #   DEPENDS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG
 #   LINKS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-INFRA-DB-CONFIG
 # END_MODULE_CONTRACT

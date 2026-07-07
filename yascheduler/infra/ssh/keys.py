@@ -12,9 +12,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extract ConfigLocal.get_private_keys() into this pure module-level
-#   function (ssh-keys-extraction-vastai-parser-fix). Same scan + is_file() filtering; takes an
-#   explicit keys_dir argument instead of reading instance state.
+#   LAST_CHANGE: v1.0.0 - Extract ConfigLocal.get_private_keys() into this pure module-level function. Same scan + is_file() filtering; takes an explicit keys_dir argument instead of reading instance state.
 # END_CHANGE_SUMMARY
 
 from collections.abc import Sequence

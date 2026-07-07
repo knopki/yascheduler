@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Type compatibility shims: Self and Unpack for older Python versions.
-#   SCOPE: Self and Unpack type re-exports.
+#   SCOPE: Python version compat re-exports: Self and Unpack type aliases for older Python versions.
 #   DEPENDS: none
 #   LINKS: M-SHARED
 # END_MODULE_CONTRACT
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Remove ParamSpec (consumed only by the former to_sync; moved with it into entrypoints.client). Keep Self and Unpack. (prune-shared-kernel).
-#   PREVIOUS_CHANGE: v1.7.0 - Re-export Unpack (PEP 692) with version branch (task-context-replace).
+#   LAST_CHANGE: v1.8.0 - Remove ParamSpec (consumed only by to_sync; moved with it into entrypoints.client). Keep Self and Unpack.
+#   PREVIOUS_CHANGE: v1.7.0 - Re-export Unpack (PEP 692) with version branch.
 # END_CHANGE_SUMMARY
 
 import sys

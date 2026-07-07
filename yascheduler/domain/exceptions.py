@@ -2,7 +2,7 @@
 # VERSION: 1.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
-#   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling, connection.
+#   SCOPE: Domain error hierarchy: DomainError base class and sub-hierarchies for validation, task lifecycle, machine state, scheduling, and cloud provider errors.
 #   DEPENDS: none
 #   LINKS: M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
@@ -28,8 +28,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - The 6 task-keyed exceptions (TaskAlreadyAllocatedError, TaskNotAllocatedError, TaskNotTodoError, TaskNotRunningError, NoCompatibleNodeError, CloudCapacityExhaustedError) take task_id: TaskId (was int); f"task {task_id} ..." messages render the bare integer via TaskId.__str__ (add-task-id-identity). Added `from __future__ import annotations` and import TaskId under TYPE_CHECKING to break the model↔exceptions runtime import cycle (annotations are strings, so no NameError; f-string messages use the parameter, not the annotation).
-#   PREVIOUS_CHANGE: v1.9.0 - Add CloudError(DomainError) intermediate root; reparent CloudAllocateError/CloudSetupError under it (cloud-error-hierarchy).
+#   LAST_CHANGE: v1.10.0 - The 6 task-keyed exceptions take task_id: TaskId; f-string messages render the bare integer via TaskId.__str__. Added `from __future__ import annotations` and import TaskId under TYPE_CHECKING to break the model↔exceptions runtime import cycle.
+#   PREVIOUS_CHANGE: v1.9.0 - Add CloudError(DomainError) intermediate root; reparent CloudAllocateError/CloudSetupError under it.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

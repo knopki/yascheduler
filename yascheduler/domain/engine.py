@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/engine.py
 # VERSION: 1.1.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Engine value object, EngineRepository collection, Deploy strategies as frozen stdlib dataclasses.
-#   SCOPE: LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy, Deploy Union alias, Engine value object with validate_inputs, EngineRepository frozen collection with filter/filter_platforms/get_platform_packages.
+#   PURPOSE: Define calculation engine value objects and deploy strategy types.
+#   SCOPE: Engine types (Engine value object, EngineRepository collection, Deploy strategy types) and their contracts.
 #   DEPENDS: M-SHARED
 #   LINKS: M-DOMAIN-MODEL, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-SUBMIT, M-APPLICATION-ORCHESTRATOR, M-DI
 # END_MODULE_CONTRACT
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - drop-task-context-entity: Engine.validate_inputs takes extra: Mapping[str, object] (was ctx: TaskContext); reads the task's extra dict directly.
-#   PREVIOUS_CHANGE: v1.0.0 - Relocate Engine, Deploy*, EngineRepository from yascheduler.config to yascheduler.domain as frozen stdlib dataclasses; merge 7-field domain.model.Engine with 4 fields from config.Engine (deployable, platform_packages, check_cmd_code, sleep_interval); drop UserDict inheritance, __hash__, engines_dir; INI parsing moves to entrypoints.config_parser (engine-to-domain-frozen).
+#   LAST_CHANGE: v1.1.0 - Engine.validate_inputs takes extra: Mapping[str, object] (was ctx: TaskContext); reads the task's extra dict directly.
+#   PREVIOUS_CHANGE: v1.0.0 - Relocate Engine, Deploy*, EngineRepository from yascheduler.config to yascheduler.domain as frozen stdlib dataclasses; merge 7-field domain.model.Engine with 4 fields from config.Engine; drop UserDict inheritance, __hash__, engines_dir; INI parsing moves to entrypoints.config_parser.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -97,10 +97,8 @@ class Engine:
 class EngineRepository:
     """Frozen collection of engines keyed by name.
 
-    Replaces the former config.EngineRepository (UserDict with neutralized
-    mutators + unused __hash__ + engines_dir). The target surface is the 7
-    methods below; UserDict-inherited methods (items, keys, __len__, __iter__)
-    are intentionally NOT carried over.
+    Exposes get, __getitem__, __contains__, values, filter,
+    filter_platforms, and get_platform_packages.
     """
 
     data: Mapping[str, Engine] = field(default_factory=dict)

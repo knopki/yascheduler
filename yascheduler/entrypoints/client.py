@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public Python/CLI client for submitting and querying tasks.
-#   SCOPE: Task submission (via DI/CLIDeps) and status query (via query_tasks use case + UoW); private to_sync async-to-sync bridge helper.
+#   SCOPE: Task submission and status query via DI.
 #   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL, M-ENTRYPOINTS-PATHS
 #   LINKS: M-DI, M-AIIDA, M-ENTRYPOINTS, M-ENTRYPOINTS-PATHS
 # END_MODULE_CONTRACT
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.10.0 - drop-task-context-entity: _task_to_dict reconstructs the flat metadata dict inline from the six typed Task fields (engine, remote_folder, local_folder, webhook_url, webhook_custom_params, error — None omitted) plus **t.extra (was t.context.to_metadata()). Public dict shape {task_id, label, status, metadata, node} unchanged.
-#   PREVIOUS_CHANGE: v2.9.0 - task-schema-and-entity-cleanup: queue_get_tasks_async unpacks (tasks, nodes_by_id) from query_tasks (return type widened to tuple); _task_to_dict(t, nodes_by_id) drops flat "ip"/"cloud" keys and adds a nested "node" object {ip, port, username, cloud} (or null) built from nodes_by_id.get(t.allocated_node_id). Public keys are now {task_id, label, status, metadata, node}. BREAKING facade dict shape change.
+#   LAST_CHANGE: v2.10.0 - _task_to_dict reconstructs flat metadata dict inline from six typed Task fields plus t.extra. Public dict shape {task_id, label, status, metadata, node} unchanged.
+#   PREVIOUS_CHANGE: v2.9.0 - queue_get_tasks_async unpacks (tasks, nodes_by_id) from query_tasks; _task_to_dict adds nested "node" object. BREAKING facade dict shape change.
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -79,13 +79,6 @@ def to_sync(
     return outer
 
 
-# START_CONTRACT: _task_to_dict
-#   PURPOSE: Project a domain Task to the public 5-key Mapping shape returned by query methods.
-#   INPUTS: { t: Task - domain Task aggregate (t.task_id: TaskId), nodes_by_id: dict[NodeId, Node] - node lookup by allocated_node_id }
-#   OUTPUTS: { Mapping[str, Any] - public shape }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL
-# END_CONTRACT: _task_to_dict
 def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]:
     node = nodes_by_id.get(t.allocated_node_id) if t.allocated_node_id else None
     metadata: dict[str, Any] = {"engine": t.engine}
@@ -193,7 +186,7 @@ class Yascheduler:
     #   PURPOSE: Query tasks asynchronously by job IDs or statuses via the query_tasks use case.
     #   INPUTS: { jobs: Optional[Sequence[int]], status: Optional[Sequence[int]] }
     #   OUTPUTS: { Sequence[Mapping[str, Any]] - list of task dicts with 5 keys each (task_id, label, status, metadata, node) }
-    #   SIDE_EFFECTS: Opens a UoW (DB connection) per call via deps_factory; reads task records and batch-loads allocated nodes
+    #   SIDE_EFFECTS: Opens a DB connection via UoW per call.
     #   RAISES: ValueError - if both jobs and statuses are non-empty (mutual exclusivity)
     #   LINKS: M-ENTRYPOINTS-CLIENT, M-APPLICATION-QUERY-TASKS, M-DI
     # END_CONTRACT: queue_get_tasks_async

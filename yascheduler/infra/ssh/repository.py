@@ -2,7 +2,7 @@
 # VERSION: 2.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. True collection only — no state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession).
-#   SCOPE: SSHMachineRepository class (owns _sessions: dict[NodeId, SSHMachineSession] keyed by NodeId) + MySSHClient + DEFAULT_CONN_OPTS + _resolve_tunnel connection-building helpers (used by _open_connection).
+#   SCOPE: SSHMachineRepository: connected-machine collection lifecycle, keyed by NodeId; connection-building helpers.
 #   DEPENDS: M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION
 #   LINKS: M-SSH-REPOSITORY
 # END_MODULE_CONTRACT
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - simplify-cloud-connect-node-args: connect/_connect_impl drop the redundant `username`/`port` params; both are read from `node.username`/`node.port` internally and forwarded into `_open_connection`. Removed four `# FIXME` comments.
-#   PREVIOUS_CHANGE: v2.1.0 - ssh-rekey-node-id: _sessions rekeyed from dict[str, SSHMachineSession] (ip-keyed) to dict[NodeId, SSHMachineSession]; connect(ip,…)->connect(node: Node,…); disconnect(ip)->disconnect(node_id).
+#   LAST_CHANGE: v2.2.0 - connect/_connect_impl drop the redundant `username`/`port` params; both are read from `node.username`/`node.port` internally and forwarded into `_open_connection`. Removed four `# FIXME` comments.
+#   PREVIOUS_CHANGE: v2.1.0 - _sessions rekeyed from dict[str, SSHMachineSession] (ip-keyed) to dict[NodeId, SSHMachineSession]; connect(ip,…)->connect(node: Node,…); disconnect(ip)->disconnect(node_id).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

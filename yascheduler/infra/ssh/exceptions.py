@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Extracted from remote_machine/protocol.py; re-exports from platform/protocol.
+#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
+#   PREVIOUS_CHANGE: v1.0.0 - Re-exports from platform/protocol.
 # END_CHANGE_SUMMARY
 
 """SSH retry exception types — public façade for infra/ssh/ consumers."""

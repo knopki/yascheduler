@@ -1,8 +1,8 @@
 # FILE: yascheduler/application/submit_task.py
 # VERSION: 1.6.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Submit task use case — validates inputs, creates a domain NewTask, persists via UoW and returns the generated TaskId.
-#   SCOPE: submit_task async function.
+#   PURPOSE: Register a new task in TO_DO state after validation.
+#   SCOPE: Task submission use case — validation, NewTask construction, persistence via UoW.
 #   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-APPLICATION-UOW
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - drop-task-context-entity: extract typed fields from the caller metadata dict and construct NewTask(label, engine, local_folder, webhook_url, webhook_custom_params, extra) directly (no TaskContext.from_metadata); apply task.with_remote_folder(...).with_event(TaskCreated, engine_name=task.engine) (no with_context, no context.replace).
-#   PREVIOUS_CHANGE: v1.5.0 - submit_task return type int -> TaskId; constructs NewTask(label, context) (pre-persistence shape, no task_id=0 sentinel) and persists via uow.tasks.insert (sole NewTask→Task conversion). The task_id=0 fiction is gone (add-task-id-identity).
+#   LAST_CHANGE: v1.6.0 - Extract typed fields from caller metadata dict; construct NewTask directly; use with_remote_folder/with_event (no TaskContext).
+#   PREVIOUS_CHANGE: v1.5.0 - Return type int -> TaskId; construct NewTask(label, context) pre-persistence; persist via uow.tasks.insert (no task_id=0 sentinel).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

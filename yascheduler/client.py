@@ -1,8 +1,8 @@
 # FILE: yascheduler/client.py
 # VERSION: 3.0.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Compat shim re-exporting Yascheduler from yascheduler.entrypoints.client; real implementation lives in entrypoints/client.py.
-#   SCOPE: Re-export Yascheduler only (no Config, no internal helpers).
+#   PURPOSE: Compat shim preserving deep import path for external consumers.
+#   SCOPE: Re-export Yascheduler only — compat shim for deep import path.
 #   DEPENDS: M-ENTRYPOINTS-CLIENT
 #   LINKS: M-ENTRYPOINTS-CLIENT
 # END_MODULE_CONTRACT

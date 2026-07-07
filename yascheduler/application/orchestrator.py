@@ -2,19 +2,19 @@
 # VERSION: 7.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
-#   SCOPE: Orchestrator class with start/stop lifecycle, 4 loop pairs, stats, and SSH helpers; private _asleep_until async-sleep helper; per-IP never-connected-node failure timer + abandon dispatch (cloud nodes only — static nodes (cloud is None) are connected but retried indefinitely without abandon (consumer-side guard bypasses grace-check)); in-flight consume guard preventing concurrent consume of the same RUNNING task; producer-error resilience in _create_producer_consumers and _print_stats (try/except Exception → log and continue next tick; CancelledError propagates to the graceful-drain path); consumer-error resilience in _create_producer_consumers inner worker() (try/except Exception → log and continue next message; finally queue.item_done preserved; CancelledError propagates to the drain); worker tasks registered in self._bg_jobs so stop() cancels them; stop() idempotent (single-execution `_stopped` guard) and exception-safe (per-step try/except isolation; dead-bg-job tolerance via `except Exception`; http_session nulled after close).
+#   SCOPE: Daemon orchestrator: producer-consumer loops driving submit/allocate/consume/deallocate use cases with SSH/cloud collaborators.
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   Orchestrator - Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected cloud nodes; in-flight consume guard
-#   _asleep_until - Private async sleep-until helper (inlined from former yascheduler.shared.async_utils)
+#   _asleep_until - Private async sleep-until helper
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.3.0 - drop-task-context-entity: _consumer_consume reads task.engine (was task.context.engine) for occupancy-check engine lookup.
-#   PREVIOUS_CHANGE: v7.2.0 - task-schema-and-entity-cleanup: _task_consumer_consumer MACHINE_GONE log drops the ip field (task.allocated_ip removed; node is gone so node.ip is unresolvable — log task_id + node_id only).
+#   LAST_CHANGE: v7.3.0 - _consumer_consume reads task.engine for occupancy-check engine lookup.
+#   PREVIOUS_CHANGE: v7.2.0 - _task_consumer_consumer MACHINE_GONE log drops ip field (task.allocated_ip removed).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -67,13 +67,6 @@ if TYPE_CHECKING:
     from .uow import AbstractUnitOfWork
 
 
-# START_CONTRACT: _asleep_until
-#   PURPOSE: Sleep until a given datetime asynchronously.
-#   INPUTS: { end: datetime - target time to sleep until }
-#   OUTPUTS: { None - no return value }
-#   SIDE_EFFECTS: Awaits asyncio.sleep for the remaining interval; returns immediately if now >= end.
-#   LINKS: M-APPLICATION-ORCHESTRATOR
-# END_CONTRACT: _asleep_until
 async def _asleep_until(end: datetime) -> None:
     "Sleep until :end:"
     now = datetime.now()
@@ -199,9 +192,7 @@ class Orchestrator:
     #   PURPOSE: Periodically log queue sizes, node counts, and task counts.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Logs statistics every 10 seconds. Transient Exceptions from DB or
-    #     repository reads are logged and the loop continues on its next tick; CancelledError
-    #     (a BaseException) propagates past `except Exception` so the shutdown path is preserved.
+    #   SIDE_EFFECTS: Logs statistics periodically.
     #   LINKS: M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator._print_stats
     async def _print_stats(self) -> None:
@@ -361,13 +352,6 @@ class Orchestrator:
         except Exception as err:
             self._log.error("An error occuried on remote machine creation: %s", err)
 
-    # START_CONTRACT: Orchestrator._connect_grace_for
-    #   PURPOSE: Resolve the per-cloud connect-failure grace window for a node, with a conservative fallback.
-    #   INPUTS: { cloud: str | None - the node's cloud prefix (matches ConfigCloud.prefix) }
-    #   OUTPUTS: { int - connect_grace seconds from the matching CloudConfig, or 120 if no match (covers misconfigured/unknown clouds; matches the slowest cloud default) }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-PORTS, M-APPLICATION-ORCHESTRATOR
-    # END_CONTRACT: Orchestrator._connect_grace_for
     def _connect_grace_for(self, cloud: str | None) -> int:
         if cloud is None:
             return 120
@@ -597,7 +581,7 @@ class Orchestrator:
     #   PURPOSE: Compute available cloud capacity as max(0, total_max_nodes - current_count) over active clouds.
     #   INPUTS: { None - reads self._uow_factory and self._active_clouds }
     #   OUTPUTS: { int - available node slots across all active clouds }
-    #   SIDE_EFFECTS: Opens a short UoW to read yascheduler_nodes; no writes.
+    #   SIDE_EFFECTS: None — read-only.
     #   LINKS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-DOMAIN-MODEL
     # END_CONTRACT: Orchestrator._clouds_get_capacity
     async def _clouds_get_capacity(self) -> int:
@@ -730,13 +714,6 @@ class Orchestrator:
                 pass
         # END_BLOCK_WAIT_MACHINES
 
-    # START_CONTRACT: Orchestrator._shutdown_barrier
-    #   PURPOSE: Wait for background jobs to complete.
-    #   INPUTS: { None }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: None
-    #   LINKS:
-    # END_CONTRACT: Orchestrator._shutdown_barrier
     async def _shutdown_barrier(self) -> None:
         await asyncio.gather(*self._bg_jobs, return_exceptions=True)
 
@@ -799,8 +776,8 @@ class Orchestrator:
     #   PURPOSE: Signal the daemon to stop and clean up non-session resources.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Cancels bg jobs (tolerant of jobs that died with a non-CancelledError before shutdown — includes worker tasks registered in `_bg_jobs`), disconnects machines, stops clouds, closes http_session; idempotent — the cleanup body runs exactly once across concurrent/interleaved/repeated callers via a `_stopped` guard; each cleanup step is isolated so one failing step does not skip the others; `http_session` is nulled after close.
-    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS; idempotency + per-step isolation contract documented in openspec/changes/fix-daemon-resource-leak-on-start-return
+    #   SIDE_EFFECTS: Cancels bg jobs, disconnects machines, stops clouds, closes http_session; idempotent via _stopped guard; per-step isolation.
+    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS
     # END_CONTRACT: Orchestrator.stop
     async def stop(self) -> None:
         # START_BLOCK_STOP_GUARD

@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.2 - drop-task-context-entity: download_outputs pass-through signature matches the new 4-tuple return (local_folder, remote_folder, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
-#   PREVIOUS_CHANGE: v2.1.1 - download_outputs pass-through takes task_id: TaskId | None (was int | None) to match the collaborator + domain port (add-task-id-identity).
+#   LAST_CHANGE: v2.1.2 - download_outputs pass-through signature matches the new 4-tuple return (local_folder, remote_folder, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
+#   PREVIOUS_CHANGE: v2.1.1 - download_outputs pass-through takes task_id: TaskId | None (was int | None) to match the collaborator + domain port.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

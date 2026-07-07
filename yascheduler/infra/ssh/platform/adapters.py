@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Migrated RemoteMachineAdapter from attrs.define/evolve/field to stdlib dataclasses.dataclass/replace/field (migrate-ssh-platform-from-attrs); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.1.0 - Migrated RemoteMachineAdapter from attrs.define/evolve/field to stdlib dataclasses.dataclass/replace/field; no behavioral change.
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 # END_CHANGE_SUMMARY
 #
 

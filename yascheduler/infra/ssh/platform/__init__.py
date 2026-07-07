@@ -2,7 +2,7 @@
 # VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Platform detection and OS-specific command adapters for SSH-connected machines.
-#   SCOPE: Re-exports from platform submodules, including the detection registry/symbols migrated from the dissolved helpers.py.
+#   SCOPE: Re-exports from platform submodules, including the detection registry/symbols.
 #   DEPENDS: none
 #   LINKS: M-PLATFORM-ADAPTERS, M-PLATFORM-DETECT, M-PLATFORM-PATHS, M-PLATFORM-RUN-FN
 # END_MODULE_CONTRACT
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Re-export ADAPTERS (from .registry), _detect_platform + MAX_SESSIONS (from .detect), _init_paths (from .paths), make_run_fn (from .run_fn) — symbols migrated from the dissolved helpers.py / gateway._make_run_fn (decompose-ssh-gateway). repository.py and operations/base.py import these from here instead of helpers.py / gateway.
-#   PREVIOUS_CHANGE: v1.2.0 - Relocate ProcessInfo import source to .protocol (was .common); drop PNode and PProcessInfo from re-export block and __all__ (prune-platform-protocols). ProcessInfo stays in __all__ unchanged.
+#   LAST_CHANGE: v1.3.0 - Re-export ADAPTERS (from .registry), _detect_platform + MAX_SESSIONS (from .detect), _init_paths (from .paths), make_run_fn (from .run_fn). repository.py and operations/base.py import these from here instead of helpers.py / gateway.
+#   PREVIOUS_CHANGE: v1.2.0 - Relocate ProcessInfo import source to .protocol (was .common); drop PNode and PProcessInfo from re-export block and __all__. ProcessInfo stays in __all__ unchanged.
 # END_CHANGE_SUMMARY
 
 from .adapters import (

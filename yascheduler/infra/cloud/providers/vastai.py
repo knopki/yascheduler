@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Retype vastai_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
-#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudVastAI from yascheduler.infra.cloud facade (cloud-configs-to-infra-registry); the DTO relocated from yascheduler.config.cloud and the cloud subpackage facade is the canonical import path.
+#   LAST_CHANGE: v1.8.0 - Retype vastai_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
+#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudVastAI from yascheduler.infra.cloud facade.
 # END_CHANGE_SUMMARY
 
 """VastAI cloud methods"""
@@ -50,13 +50,6 @@ if TYPE_CHECKING:
 BASE_URL = "https://console.vast.ai/api/v0"
 
 
-# START_CONTRACT: _get_headers
-#   PURPOSE: Build authorization headers for VastAI API requests
-#   INPUTS: { api_key: str - VastAI API key }
-#   OUTPUTS: { dict[str, str] - headers with Bearer auth and JSON content type }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-VASTAI
-# END_CONTRACT: _get_headers
 def _get_headers(api_key: str) -> dict[str, str]:
     """Get headers for VastAI API requests"""
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -66,7 +59,7 @@ def _get_headers(api_key: str) -> dict[str, str]:
 #   PURPOSE: Execute authenticated HTTP request to VastAI API with error handling
 #   INPUTS: { session: aiohttp.ClientSession - HTTP session, method: str - HTTP method, url: str - request URL, api_key: str - API key, **kwargs: Any - additional request params }
 #   OUTPUTS: { dict[str, Any] - parsed JSON response }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Makes HTTP request to VastAI API.
 #   LINKS: M-CLOUD-VASTAI
 # END_CONTRACT: _api_request
 async def _api_request(
@@ -92,7 +85,7 @@ async def _api_request(
 #   PURPOSE: Search VastAI marketplace for available GPU offers matching criteria
 #   INPUTS: { session: aiohttp.ClientSession, api_key: str, min_vram_mb: int, num_gpus: int, max_price: float }
 #   OUTPUTS: { list[dict[str, Any]] - available offers }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Makes HTTP request to VastAI API.
 #   LINKS: M-CLOUD-VASTAI
 # END_CONTRACT: _search_offers
 async def _search_offers(

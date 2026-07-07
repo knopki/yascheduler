@@ -2,7 +2,7 @@
 # VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Abstract Unit of Work Protocol defining the transactional boundary contract for use cases.
-#   SCOPE: AbstractUnitOfWork Protocol with tasks, nodes, commit, rollback, event dispatch, and async context manager support.
+#   SCOPE: AbstractUnitOfWork Protocol defining the transactional boundary contract for use cases — task/node repositories, commit/rollback, event dispatch, and async context manager.
 #   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-EVENTS
 #   LINKS: M-DOMAIN-PORTS, M-PERSISTENCE-UOW, M-DOMAIN-EVENTS
 # END_MODULE_CONTRACT

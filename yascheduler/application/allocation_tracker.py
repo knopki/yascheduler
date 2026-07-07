@@ -2,7 +2,7 @@
 # VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: In-memory dedup of in-flight cloud allocations by task_id.
-#   SCOPE: AllocationTracker class — constructed once by orchestrator, injected into allocate_task and consume_task use cases.
+#   SCOPE: AllocationTracker class — in-memory set[TaskId] tracking in-flight cloud allocations, constructed once by orchestrator.
 #   DEPENDS: none
 #   LINKS: M-APPLICATION-ALLOCATION-TRACKER
 # END_MODULE_CONTRACT
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - AllocationTracker tracks set[TaskId] (was set[int]); add/discard/__contains__ take task_id: TaskId (add-task-id-identity). The tracker is internal to the orchestrator and never crosses the public Yascheduler facade boundary. Added `from __future__ import annotations` + TYPE_CHECKING import of TaskId.
-#   PREVIOUS_CHANGE: v1.0.0 - Extract on_tasks set + mark_task_done from CloudProvisionerImpl (cloud-provisioner-pure).
+#   LAST_CHANGE: v1.1.0 - AllocationTracker tracks set[TaskId]; add/discard/__contains__ take task_id: TaskId.
+#   PREVIOUS_CHANGE: v1.0.0 - Extract on_tasks set + mark_task_done from CloudProvisionerImpl.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -41,13 +41,6 @@ class AllocationTracker:
     def __init__(self) -> None:
         self._on_tasks: set[TaskId] = set()
 
-    # START_CONTRACT: AllocationTracker.add
-    #   PURPOSE: Record a task as having an in-flight cloud allocation.
-    #   INPUTS: { task_id: TaskId }
-    #   OUTPUTS: { bool - True if newly added, False if already tracked }
-    #   SIDE_EFFECTS: Mutates internal set.
-    #   LINKS: M-APPLICATION-ALLOCATE
-    # END_CONTRACT: AllocationTracker.add
     def add(self, task_id: TaskId) -> bool:
         """Returns True if newly added, False if already tracked."""
         if task_id in self._on_tasks:
@@ -55,13 +48,6 @@ class AllocationTracker:
         self._on_tasks.add(task_id)
         return True
 
-    # START_CONTRACT: AllocationTracker.discard
-    #   PURPOSE: Release an in-flight allocation slot (no-op if not tracked).
-    #   INPUTS: { task_id: TaskId }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Mutates internal set (idempotent).
-    #   LINKS: M-APPLICATION-CONSUME, M-APPLICATION-ALLOCATE
-    # END_CONTRACT: AllocationTracker.discard
     def discard(self, task_id: TaskId) -> None:
         self._on_tasks.discard(task_id)
 

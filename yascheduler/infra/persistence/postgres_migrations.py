@@ -1,28 +1,28 @@
 # FILE: yascheduler/infra/persistence/postgres_migrations.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Synchronous migration runner — scans sql/migrations/, applies pending .sql/.py migrations in string-sorted prefix_id order, each in its own transaction, recording each in yascheduler_migrations.
-#   SCOPE: apply_migrations(config); private helpers for prefix parsing, scanning, pending filter, .py class discovery, sql/py application, rollback.
+#   PURPOSE: Apply pending database schema/data migrations in forward-only order.
+#   SCOPE: Forward-only DDL/DML migration application over sql/migrations/ via one pg8000 connection, one transaction per migration, with yascheduler_migrations tracker recording.
 #   DEPENDS: M-INFRA-DB-CONFIG, M-PERSISTENCE-MIGRATION-BASE
 #   LINKS: M-PERSISTENCE, M-PERSISTENCE-SCHEMA, M-ENTRYPOINTS-CLI-INIT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   apply_migrations - apply pending migrations from sql/migrations/ to the DB behind config
-#   _prefix_id - token before the first '_' in a migration filename
-#   _scan_migrations - glob *.sql + *.py under _MIGRATIONS_DIR, sorted by filename
-#   _last_applied - SELECT MAX(migration_id) from yascheduler_migrations (None if empty/absent)
-#   _pending - filter scanned files to those with prefix_id > last (or all when last is None)
-#   _one_migration_subclass - discover exactly one Migration subclass in a .py migration module
-#   _apply_sql_migration - BEGIN → run sql text → INSERT tracker → COMMIT (rollback on error)
-#   _apply_py_migration - BEGIN → load module → migrate() → best-effort tracker record (rollback on error)
-#   _record_py_tracker - record a .py migration in the tracker; reopen txn on transient DatabaseError
+#   _prefix_id - prefix token of a migration filename
+#   _scan_migrations - sorted list of *.sql + *.py files under _MIGRATIONS_DIR
+#   _last_applied - MAX(migration_id) from yascheduler_migrations, or None
+#   _pending - filter scanned files to prefix_id > last
+#   _one_migration_subclass - the single Migration subclass defined in a .py module
+#   _apply_sql_migration - apply a .sql migration in one transaction
+#   _apply_py_migration - apply a .py migration (Migration subclass) in one transaction
+#   _record_py_tracker - record a .py migration in the tracker (reopen txn on transient error)
 #   _rollback - best-effort ROLLBACK wrapper
 #   _MIGRATIONS_DIR - path to the bundled sql/migrations/ directory
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Introduce forward-only migration runner (add-db-migrations). Applies .sql (multi-statement) and .py (Migration subclass) migrations in string-sorted prefix_id order, each in its own transaction, recording each in yascheduler_migrations.
+#   LAST_CHANGE: v1.0.0 - Introduce forward-only migration runner. Applies .sql (multi-statement) and .py (Migration subclass) migrations in string-sorted prefix_id order, one transaction per migration.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -46,13 +46,6 @@ if TYPE_CHECKING:
 _MIGRATIONS_DIR = Path(__file__).parent / "sql" / "migrations"
 
 
-# START_CONTRACT: _prefix_id
-#   PURPOSE: Extract the prefix_id (token before the first '_') from a migration filename.
-#   INPUTS: { filename: Path - migration file path; only filename.name is used }
-#   OUTPUTS: { str - the prefix_id token }
-#   SIDE_EFFECTS: None
-#   LINKS: _pending, _scan_migrations
-# END_CONTRACT: _prefix_id
 def _prefix_id(filename: Path) -> str:
     return filename.name.split("_", 1)[0]
 
@@ -61,7 +54,7 @@ def _prefix_id(filename: Path) -> str:
 #   PURPOSE: List all .sql and .py migration files under _MIGRATIONS_DIR, sorted by filename (string sort).
 #   INPUTS: { None }
 #   OUTPUTS: { list[Path] - sorted migration file paths }
-#   SIDE_EFFECTS: None — reads the directory only
+#   SIDE_EFFECTS: Reads the _MIGRATIONS_DIR directory.
 #   LINKS: _prefix_id, apply_migrations
 # END_CONTRACT: _scan_migrations
 def _scan_migrations() -> list[Path]:
@@ -73,7 +66,7 @@ def _scan_migrations() -> list[Path]:
 #   PURPOSE: Read the highest recorded migration_id from yascheduler_migrations; None means "apply all".
 #   INPUTS: { conn: Connection - open pg8000 native connection }
 #   OUTPUTS: { str | None - MAX(migration_id), or None when the tracker is empty or (defensively) absent }
-#   SIDE_EFFECTS: None — read-only query
+#   SIDE_EFFECTS: Reads the yascheduler_migrations table.
 #   LINKS: apply_migrations, M-PERSISTENCE-SCHEMA (tracker created by the schema DO block)
 # END_CONTRACT: _last_applied
 def _last_applied(conn: Connection) -> str | None:
@@ -125,13 +118,6 @@ def _one_migration_subclass(module: ModuleType) -> type[Migration]:
     return candidates[0]
 
 
-# START_CONTRACT: _rollback
-#   PURPOSE: Best-effort ROLLBACK; swallows any error because the connection may be in a bad state.
-#   INPUTS: { conn: Connection - open pg8000 native connection (may be in an aborted txn) }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Issues ROLLBACK on the connection (may itself fail; the failure is swallowed)
-#   LINKS: _apply_sql_migration, _apply_py_migration
-# END_CONTRACT: _rollback
 def _rollback(conn: Connection) -> None:
     # START_BLOCK_ROLLBACK
     try:

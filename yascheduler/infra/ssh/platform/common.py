@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Relocate ProcessInfo dataclass to protocol.py; module now hosts only run/run_bg (prune-platform-protocols).
-#   PREVIOUS_CHANGE: v1.1.0 - Migrated ProcessInfo from attrs.define to stdlib dataclasses.dataclass (migrate-ssh-platform-from-attrs); no behavioral change.
+#   LAST_CHANGE: v1.2.0 - Relocate ProcessInfo dataclass to protocol.py; module now hosts only run/run_bg.
+#   PREVIOUS_CHANGE: v1.1.0 - Migrated ProcessInfo from attrs.define to stdlib dataclasses.dataclass; no behavioral change.
 # END_CHANGE_SUMMARY
 #
 

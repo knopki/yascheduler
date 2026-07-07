@@ -2,7 +2,7 @@
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Ordered platform adapter registry for platform detection.
-#   SCOPE: ADAPTERS — ordered list of RemoteMachineAdapter instances moved verbatim from helpers.py.
+#   SCOPE: ADAPTERS — ordered list of RemoteMachineAdapter instances.
 #   DEPENDS: M-PLATFORM-ADAPTERS
 #   LINKS: M-PLATFORM-ADAPTERS
 # END_MODULE_CONTRACT
@@ -12,7 +12,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py (decompose-ssh-gateway); ADAPTERS moved verbatim, no behavioral change.
+#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py; ADAPTERS moved verbatim, no behavioral change.
 #   PREVIOUS_CHANGE: none
 # END_CHANGE_SUMMARY
 

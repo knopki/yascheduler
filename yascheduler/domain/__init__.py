@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/__init__.py
 # VERSION: 2.11.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Domain layer entry point — re-exports events, model entities, engine types, exception hierarchy, port interfaces, and cross-layer settings.
-#   SCOPE: Re-exports domain events from .events, domain entities from .model, engine types from .engine (via .model), exception tree from .exceptions, port Protocols from .ports (including CloudConfig, MachineRepository, MachineSession, MachineOperations), and LocalSettings/RemoteDefaults from .settings.
+#   PURPOSE: Re-export domain symbols for cross-layer consumption.
+#   SCOPE: Public domain surface: entities, value objects, ports, events, exceptions, and cross-layer settings — re-exported for application/infra consumers.
 #   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-ENGINE, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS
 #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL, M-DOMAIN-ENGINE, M-DOMAIN-EXCEPTIONS, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS
 # END_MODULE_CONTRACT
@@ -57,8 +57,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.11.0 - drop-task-context-entity: remove TaskContext / TaskContextOverrides re-exports (folded into Task / NewTask typed fields).
-#   PREVIOUS_CHANGE: v2.10.0 - Re-export NewTask and TaskId from .model (add-task-id-identity). Task now carries task_id: TaskId as its first field (post-persistence shape); NewTask is the pre-persistence input shape; the NewTask→Task conversion happens only in TaskRepository.insert. DomainEvent.task_id and the task-keyed exceptions now carry TaskId.
+#   LAST_CHANGE: v2.11.0 - Remove TaskContext / TaskContextOverrides re-exports (folded into Task / NewTask typed fields).
+#   PREVIOUS_CHANGE: v2.10.0 - Re-export NewTask and TaskId from .model; DomainEvent.task_id and task-keyed exceptions now carry TaskId.
 # END_CHANGE_SUMMARY
 
 __all__ = [

@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - Retype _render_custom_data, create_vm_params, create_node, az_create_node cloud_config params to CloudInitConfig | None (cloud-init-rename-and-prune / D2); drop isinstance boundary guard in az_create_node (redundant: both sides of the call chain are now the same concrete CloudInitConfig class; D4); import CloudInitConfig from yascheduler.infra.cloud facade.
-#   PREVIOUS_CHANGE: v1.9.0 - Retype _render_custom_data, create_vm_params, create_node cloud_config params from PCloudConfig | None to CloudConfig | None (concrete infra/cloud/cloud_config.CloudConfig); add isinstance boundary guard in az_create_node (public signature stays PCloudConfig | None for CreateNodeCallable assignability); drop # type: ignore[misc] on render_base64() (replace now returns CloudConfig with concrete render_base64); fix bootcmd list→tuple literal (resolve-type-bridge-debt / D3a).
+#   LAST_CHANGE: v1.10.0 - Retype _render_custom_data, create_vm_params, create_node, az_create_node cloud_config params to CloudInitConfig | None; drop isinstance boundary guard in az_create_node (redundant: both sides of the call chain are now the same concrete CloudInitConfig class); import CloudInitConfig from yascheduler.infra.cloud facade.
+#   PREVIOUS_CHANGE: v1.9.0 - Retype _render_custom_data, create_vm_params, create_node cloud_config params from PCloudConfig | None to CloudConfig | None (concrete infra/cloud/cloud_config.CloudConfig); add isinstance boundary guard in az_create_node (public signature stays PCloudConfig | None for CreateNodeCallable assignability); drop # type: ignore[misc] on render_base64() (replace now returns CloudConfig with concrete render_base64); fix bootcmd list→tuple literal.
 # END_CHANGE_SUMMARY
 #
 """Azure cloud methods"""
@@ -114,7 +114,7 @@ else:
 #   PURPOSE: Fetch subnet and NSG for NIC creation
 #   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client }
 #   OUTPUTS: { tuple - subnet and NSG }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Fetches Azure network resources via API.
 #   LINKS: M-CLOUD-AZ
 # END_CONTRACT: _fetch_network_resources
 async def _fetch_network_resources(

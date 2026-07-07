@@ -2,7 +2,7 @@
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Shared argparse helpers for CLI entry points — validators and flag adders consumed by all six CLI commands and the three daemon launchers.
-#   SCOPE: argparse type validator (existing_path) and three flag adders (add_config_arg, add_log_level_arg, add_log_file_arg) plus LOG_LEVEL_CHOICES constant.
+#   SCOPE: Shared argparse helpers for CLI entry points.
 #   DEPENDS: M-ENTRYPOINTS
 #   LINKS: M-ENTRYPOINTS-CLI-ARGS
 # END_MODULE_CONTRACT
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - restore--log-level-short-flag: add_log_level_arg gains an optional `short` parameter so a caller can register a short flag alias (e.g. "-l") for --log-level; restores the pre-consolidate-daemon-entrypoints `yascheduler -l DEBUG` behavior on daemonize without affecting daemon_sysv (which keeps -l for --log-file).
-#   PREVIOUS_CHANGE: v1.1.0 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
+#   LAST_CHANGE: v1.2.0 - add_log_level_arg gains optional `short` parameter so a caller can register a short flag alias (e.g. "-l") for --log-level; preserves the `yascheduler -l DEBUG` behavior on daemonize without affecting daemon_sysv (which keeps -l for --log-file).
+#   PREVIOUS_CHANGE: v1.1.0 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -34,7 +34,8 @@ LOG_LEVEL_CHOICES = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 #   PURPOSE: argparse type validator — return Path(s) if s points to an existing file, else raise ArgumentTypeError (argparse converts to exit 2).
 #   INPUTS: { s: str - path string from argparse }
 #   OUTPUTS: { Path - resolved path if it points to an existing file }
-#   SIDE_EFFECTS: None — raises argparse.ArgumentTypeError on missing/non-file path; argparse surfaces this as exit 2.
+#   SIDE_EFFECTS: None
+#   RAISES: argparse.ArgumentTypeError - on missing/non-file path; argparse surfaces as exit 2
 #   LINKS: M-ENTRYPOINTS-CLI-ARGS
 # END_CONTRACT: existing_path
 def existing_path(s: str) -> Path:
@@ -102,7 +103,7 @@ def add_log_level_arg(
 #   PURPOSE: Add a --log-file PATH argument (path string, no existence check) used by the three daemon entry points.
 #   INPUTS: { parser: argparse.ArgumentParser - parser to mutate, default: str | None - default log file path (None → stderr / journald) }
 #   OUTPUTS: { None - mutates parser in place }
-#   SIDE_EFFECTS: Registers --log-file on the parser; FileHandler creation happens in daemon_common.configure_logger and will fail loudly on an unwritable path.
+#   SIDE_EFFECTS: Registers --log-file on the parser.
 #   LINKS: M-ENTRYPOINTS-CLI-ARGS
 # END_CONTRACT: add_log_file_arg
 def add_log_file_arg(

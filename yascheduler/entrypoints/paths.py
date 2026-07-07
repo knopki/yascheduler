@@ -15,7 +15,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Relocated from yascheduler/shared/variables.py to yascheduler/entrypoints/paths.py (prune-shared-kernel).
+#   LAST_CHANGE: v1.7.0 - Relocated from yascheduler/shared/variables.py to yascheduler/entrypoints/paths.py.
 #   PREVIOUS_CHANGE: v1.6.0 - Moved from yascheduler/variables.py to yascheduler/shared/variables.py.
 # END_CHANGE_SUMMARY
 from os import getenv

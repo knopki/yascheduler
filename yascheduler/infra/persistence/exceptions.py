@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - TaskRowNotFoundError takes task_id: TaskId (was int); f"task row not found for task_id={task_id}" renders the bare integer via TaskId.__str__ (add-task-id-identity). Added `from __future__ import annotations` + TYPE_CHECKING import (no runtime cycle: this module is a leaf; annotations are strings so no NameError).
-#   PREVIOUS_CHANGE: v1.1.0 - Added TaskRowNotFoundError(RuntimeError) raised by PostgresTaskRepository.save/update_status on 0-row UPDATE outcome (fix-save-silent-zero-rows).
+#   LAST_CHANGE: v1.2.0 - TaskRowNotFoundError takes TaskId instead of int.
+#   PREVIOUS_CHANGE: v1.1.0 - Added TaskRowNotFoundError(RuntimeError) raised by PostgresTaskRepository.save/update_status on 0-row UPDATE outcome.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ class UnitOfWorkNotInitializedError(RuntimeError):
 #   PURPOSE: Signal that an UPDATE targeting a task_id affected 0 rows (the row does not exist).
 #   INPUTS: { task_id: TaskId - the task_id that was targeted but not found }
 #   OUTPUTS: { None - no return value }
-#   SIDE_EFFECTS: None — raises self; stores task_id on the instance
+#   SIDE_EFFECTS: None
 #   LINKS: M-PERSISTENCE-POSTGRES (PostgresTaskRepository.save/update_status)
 # END_CONTRACT: TaskRowNotFoundError
 class TaskRowNotFoundError(RuntimeError):

@@ -2,7 +2,7 @@
 # VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Abandon never-connected cloud node use case — VM delete + DB-row remove + release stuck TO_DO task.
-#   SCOPE: abandon_node async function.
+#   SCOPE: Never-connected cloud node cleanup — VM delete, DB row remove, release stuck TO_DO task.
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-APPLICATION-ABANDON-NODE, M-APPLICATION-ORCHESTRATOR
 # END_MODULE_CONTRACT
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - cloud-port-node-arg: calls clouds.deallocate(node) (was clouds.deallocate(node.cloud, node.ip)).
-#   PREVIOUS_CHANGE: v1.3.0 - ssh-rekey-node-id: stuck-task matching rekeyed from t.allocated_ip == node.ip to t.allocated_node_id == node.node_id (dup-IP nodes now disambiguated). REORDERED: read the stuck TO_DO task BEFORE uow.nodes.remove(node.node_id) — the allocated_node_id FK is ON DELETE SET NULL, so reading after remove would null allocated_node_id and the in-memory filter would no longer match. clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host). uow.nodes.remove(node.node_id) unchanged.
+#   LAST_CHANGE: v1.4.0 - calls clouds.deallocate(node).
+#   PREVIOUS_CHANGE: v1.3.0 - matching rekeyed from t.allocated_ip to t.allocated_node_id; read stuck TO_DO task BEFORE node row remove.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 #     tracker: AllocationTracker - In-flight allocation dedup to release the stuck task into
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Best-effort cloud VM delete (logged not raised); reads the stuck TO_DO task (BEFORE removing the node row — the allocated_node_id FK is ON DELETE SET NULL, so reading after remove would null allocated_node_id and the in-memory filter t.allocated_node_id == node.node_id would no longer match); removes yascheduler_nodes row + commit (re-raised on failure so the orchestrator's outer try/except keeps the worker alive); on success, discards the stuck TO_DO task from AllocationTracker so it re-allocates on the next cycle. Does NOT call repository.disconnect (node was never in the repository). Does NOT mark the task FAILED or emit a domain event (per Non-Goal on re-allocation limits).
+#   SIDE_EFFECTS: Best-effort cloud VM delete; removes node row from DB; discards stuck task from AllocationTracker.
 #   RAISES: Re-raises any exception from uow.nodes.remove / uow.commit (caller catches to keep the worker alive). Cloud-delete failures are swallowed (logged at error) so DB cleanup still runs.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: abandon_node

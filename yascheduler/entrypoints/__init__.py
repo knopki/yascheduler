@@ -2,7 +2,7 @@
 # VERSION: 2.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Layer facade for the entrypoints layer (outermost hexagonal layer: driving adapters + composition root).
-#   SCOPE: Re-exports public symbols from entrypoints residents: Yascheduler, make_daemon, make_cli_deps, CLIDeps, Config, CONFIG_FILE, LOG_FILE, PID_FILE.
+#   SCOPE: Layer facade: Yascheduler, daemon factory, CLI deps factory, and Config aggregate.
 #   DEPENDS: M-ENTRYPOINTS-CLIENT, M-DI, M-ENTRYPOINTS-PATHS, M-ENTRYPOINTS-CONFIG
 #   LINKS: M-ENTRYPOINTS-CLIENT, M-DI, M-ENTRYPOINTS-PATHS, M-ENTRYPOINTS-CONFIG
 # END_MODULE_CONTRACT
@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.5.0 - Re-export Config from .config (config-aggregate-to-entrypoints / P4); composition-root aggregate relocated from yascheduler.config to yascheduler.entrypoints.
-#   PREVIOUS_CHANGE: v2.4.0 - Re-export CONFIG_FILE/LOG_FILE/PID_FILE from .paths (prune-shared-kernel).
+#   LAST_CHANGE: v2.5.0 - Re-export Config from .config (composition-root aggregate lives in entrypoints).
+#   PREVIOUS_CHANGE: v2.4.0 - Re-export CONFIG_FILE/LOG_FILE/PID_FILE from .paths.
 # END_CHANGE_SUMMARY
 
 """Entrypoints layer facade."""

@@ -2,7 +2,7 @@
 # VERSION: 2.20.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
-#   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudConfig, CloudProvisioner Protocol classes.
+#   SCOPE: Protocol-based port interfaces for persistence (TaskRepository, NodeRepository), machine collection/sessions/operations (MachineRepository, MachineSession, MachineOperations), and cloud provisioning (CloudConfig, CloudProvisioner).
 #   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-ENGINE
 #   LINKS: M-DOMAIN-MODEL, M-PERSISTENCE-POSTGRES, M-CLOUD-CONFIGS, M-APPLICATION-DEALLOCATE, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
 # END_MODULE_CONTRACT
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.20.0 - drop-task-context-entity: MachineOperations.download_outputs return type is the new 4-tuple (local_folder: str, remote_folder: str, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
-#   PREVIOUS_CHANGE: v2.19.0 - task-schema-and-entity-cleanup: TaskRepository.list_ids_by_ip_and_status(ip: str, status) → list_ids_by_node_id_and_status(node_id: NodeId, status).
+#   LAST_CHANGE: v2.20.0 - MachineOperations.download_outputs return type is the new 4-tuple (local_folder, remote_folder, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
+#   PREVIOUS_CHANGE: v2.19.0 - TaskRepository.list_ids_by_ip_and_status(ip: str, status) → list_ids_by_node_id_and_status(node_id: NodeId, status).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -128,11 +128,10 @@ class CloudConfig(Protocol):
 
 
 # START_CONTRACT: MachineSession
-#   PURPOSE: Connected-machine entity handle — the public counterpart to the dissolved private _MachineState.
-#     Carries domain identity (ip, mutable machine snapshot), connect-time config (read-only),
+#   PURPOSE: Connected-machine entity handle — identity, state transitions, connect-time config,
 #     adapter-derived accessors, base SSH primitives, and the per-session monitor mechanism.
 #     What MachineOperations methods operate on; what MachineRepository hands out and tracks by NodeId.
-#   INPUTS: { None - Protocol has no inputs }
+#   INPUTS: { None - Protocol defines surface only }
 #   OUTPUTS: { None - Protocol defines surface only }
 #   SIDE_EFFECTS: None at Protocol level; implementations own connection teardown via _close (private to concrete class)
 #   LINKS: M-DOMAIN-PORTS, M-SSH-SESSION, M-SSH-REPOSITORY, M-SSH-OPERATIONS

@@ -4,7 +4,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Systemd service entry point for the scheduler daemon — runs in the foreground under systemd's supervision (logs to stderr → journald).
-#   SCOPE: Thin sync main() that builds an argparse parser, configures the root logger, loads Config, and runs the async daemon core via asyncio.run. No python-daemon.
+#   SCOPE: Systemd foreground daemon launcher — thin sync entry point.
 #   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-ENTRYPOINTS-CONFIG-PARSER
 #   LINKS: M-DAEMON-SYSTEMD, M-DAEMON-COMMON
 # END_MODULE_CONTRACT
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Reimplemented as a thin entry point (consolidate-daemon-entrypoints): builds its own argparse parser via args.py helpers (prog=yascheduler, --config/--log-level/--log-file default None for journald); delegates to daemon_common.run_daemon; no python-daemon (foreground under systemd); --log-file default None is a BREAKING change from LOG_FILE (journald convention); uniform 0/1/2 exit-code contract.
-#   PREVIOUS_CHANGE: v1.8.0 - Relocated into yascheduler/entrypoints/cli/ subpackage (relocate-daemon-launchers-to-cli); the entrypoints/daemon/ subpackage was liquidated and the launcher is now a sibling of init/show_nodes/submit/manage_node.
+#   LAST_CHANGE: v2.0.0 - Reimplemented as a thin entry point: builds its own argparse parser via args.py helpers (--config/--log-level/--log-file default None for journald); delegates to daemon_common.run_daemon; no python-daemon (foreground under systemd); --log-file default None is a BREAKING change from LOG_FILE (journald convention); uniform 0/1/2 exit-code contract.
+#   PREVIOUS_CHANGE: v1.8.0 - Relocated into yascheduler/entrypoints/cli/ subpackage; entrypoints/daemon/ liquidated; launcher now sibling of init/show_nodes/submit/manage_node.
 # END_CHANGE_SUMMARY
 """Yascheduler systemd daemon entry point (foreground, logs to stderr → journald)."""
 

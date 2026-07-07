@@ -1,41 +1,41 @@
 # FILE: yascheduler/entrypoints/config_parser.py
 # VERSION: 1.5.0
 # START_MODULE_CONTRACT
-#   PURPOSE: INI config parsing — adapter layer between ConfigParser and domain/infra types; owns parse_config assembly and all per-section parsers.
-#   SCOPE: parse_engine_section, parse_engines, engine_valid_fields (P2 engine parsers); parse_cloud_section, parse_clouds, cloud_valid_fields, CLOUD_CONFIG_PARSERS (P3 cloud parsers + registry); _parse_db_section, _db_valid_fields, _parse_local_section, _local_valid_fields, _parse_remote_section, _remote_valid_fields (P4 db/local/remote parsers); parse_config public assembly (P4); _check_spawn, _check_check_, _check_at_least_one_elem, _check_az_user, _fmt_key parser-internal validators/helpers.
+#   PURPOSE: INI config parsing — adapter between ConfigParser and domain/infra types.
+#   SCOPE: Per-section INI parsers and the parse_config assembly.
 #   DEPENDS: M-DOMAIN-ENGINE, M-CLOUD-CONFIGS, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS, M-INFRA-DB-CONFIG, M-ENTRYPOINTS-CONFIG
 #   LINKS: M-DI, M-ENTRYPOINTS-CONFIG
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   parse_config - Public assembly: read INI, parse all sections, return frozen Config aggregate
-#   _parse_db_section - Build PostgresDbConfig from a [db] INI section
-#   _db_valid_fields - Return valid INI keys for the [db] section
-#   _parse_local_section - Build LocalSettings from a [local] INI section
-#   _local_valid_fields - Return valid INI keys for the [local] section
-#   _parse_remote_section - Build RemoteDefaults from a [remote] INI section
-#   _remote_valid_fields - Return valid INI keys for the [remote] section
-#   parse_engine_section - Build a frozen Engine from a single [engine.*] INI section
-#   parse_engines - Build an EngineRepository from all [engine.*] sections in a ConfigParser
-#   engine_valid_fields - Return valid INI keys for an [engine.*] section (dataclass fields + deploy aliases, minus name/deployable)
-#   parse_cloud_section - Dispatch a single [clouds] sub-section to its per-prefix parser via CLOUD_CONFIG_PARSERS
-#   parse_clouds - Build the list of ConfigCloud DTOs from a [clouds] section, inheriting remote.username for missing prefix users
-#   cloud_valid_fields - Return valid INI keys for a given cloud prefix (dataclass fields + aliases, minus prefix/username/jump_username + provider-specific excludes)
-#   CLOUD_CONFIG_PARSERS - Registry mapping cloud provider prefix -> per-prefix parser callable (open/closed seam)
-#   _check_spawn - Parser-side validator: reject unknown template placeholders in spawn
-#   _check_check_ - Parser-side validator: require check_cmd or check_pname
-#   _check_at_least_one_elem - Parser-side validator: require non-empty sequence fields
-#   _check_az_user - Parser-side validator: reject username="root" for Azure
-#   _fmt_key - Helper: format `{prefix}_{name}` INI key
-#   _parse_azure_section - Build ConfigCloudAzure from a [clouds] section
-#   _parse_hetzner_section - Build ConfigCloudHetzner from a [clouds] section
-#   _parse_upcloud_section - Build ConfigCloudUpcloud from a [clouds] section
-#   _parse_vastai_section - Build ConfigCloudVastAI from a [clouds] section
+#   parse_config - Read INI, parse all sections, return frozen Config aggregate
+#   _parse_db_section - Build PostgresDbConfig from [db] INI section
+#   _db_valid_fields - Valid INI keys for [db] section
+#   _parse_local_section - Build LocalSettings from [local] INI section
+#   _local_valid_fields - Valid INI keys for [local] section
+#   _parse_remote_section - Build RemoteDefaults from [remote] INI section
+#   _remote_valid_fields - Valid INI keys for [remote] section
+#   parse_engine_section - Build frozen Engine from [engine.*] INI section
+#   parse_engines - Build EngineRepository from all [engine.*] sections
+#   engine_valid_fields - Valid INI keys for [engine.*] section
+#   parse_cloud_section - Dispatch [clouds] sub-section to per-prefix parser
+#   parse_clouds - Build list of ConfigCloud DTOs from [clouds] section
+#   cloud_valid_fields - Valid INI keys for a given cloud prefix
+#   CLOUD_CONFIG_PARSERS - Registry: provider prefix → per-prefix parser callable
+#   _check_spawn - Validate spawn template placeholders
+#   _check_check_ - Require check_cmd or check_pname
+#   _check_at_least_one_elem - Require non-empty sequence fields
+#   _check_az_user - Reject username="root" for Azure
+#   _fmt_key - Format `{prefix}_{name}` INI key
+#   _parse_azure_section - Build ConfigCloudAzure from [clouds] section
+#   _parse_hetzner_section - Build ConfigCloudHetzner from [clouds] section
+#   _parse_upcloud_section - Build ConfigCloudUpcloud from [clouds] section
+#   _parse_vastai_section - Build ConfigCloudVastAI from [clouds] section
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Move cloud-init package_upgrade knob to the per-provider cloud config (move-cloud-package-upgrade): remove cloud_package_upgrade=sec.getboolean(...) from _parse_local_section, and add package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True) to _parse_azure_section/_parse_hetzner_section/_parse_upcloud_section/_parse_vastai_section. cloud_valid_fields(prefix) auto-introspects dataclasses.fields(dto_cls), so {prefix}_package_upgrade is auto-registered as a valid key with no edit to _CLOUD_FIELD_RULES, and _local_valid_fields() drops cloud_package_upgrade automatically so a leftover [local] key now surfaces as a ConfigWarning.
-#   PREVIOUS_CHANGE: v1.4.0 - _parse_local_section reads optional [local] cloud_package_upgrade key via sec.getboolean(..., fallback=True) (add-hetzner-live-e2e); the new LocalSettings field defaults to True preserving pre-change cloud-init behavior, and _local_valid_fields() introspection already accepts the key with no "unknown field" warning.
+#   LAST_CHANGE: v1.5.0 - Move cloud-init package_upgrade knob to per-provider cloud config: remove from _parse_local_section, add to _parse_azure_section/_parse_hetzner_section/_parse_upcloud_section/_parse_vastai_section. cloud_valid_fields auto-introspects dataclass fields so {prefix}_package_upgrade is auto-registered.
+#   PREVIOUS_CHANGE: v1.4.0 - _parse_local_section reads optional [local] cloud_package_upgrade key; LocalSettings field defaults to True preserving pre-change behavior.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -73,13 +73,6 @@ if TYPE_CHECKING:
     from yascheduler.infra.cloud.cloud_configs import ConfigCloud
 
 
-# START_CONTRACT: _check_spawn
-#   PURPOSE: Validate spawn command has only supported template placeholders.
-#   INPUTS: { engine: Engine - engine instance under construction, value: str - spawn command string }
-#   OUTPUTS: { None - raises ValueError on invalid placeholders }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-ENGINE
-# END_CONTRACT: _check_spawn
 def _check_spawn(engine: Engine, value: str) -> None:
     try:
         value.format(task_path="", engine_path="", ncpus="")
@@ -88,13 +81,6 @@ def _check_spawn(engine: Engine, value: str) -> None:
         raise ValueError(msg.format(name=engine.name, placeholder=err.args[0])) from err
 
 
-# START_CONTRACT: _check_check_
-#   PURPOSE: Ensure at least one of check_cmd or check_pname is set on the engine.
-#   INPUTS: { engine: Engine - engine instance under construction }
-#   OUTPUTS: { None - raises ValueError if both check_cmd and check_pname are unset }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-ENGINE
-# END_CONTRACT: _check_check_
 def _check_check_(engine: Engine) -> None:
     if not engine.check_cmd and not engine.check_pname:
         raise ValueError(
@@ -102,13 +88,6 @@ def _check_check_(engine: Engine) -> None:
         )
 
 
-# START_CONTRACT: _check_at_least_one_elem
-#   PURPOSE: Validate that a sequence field on the engine has at least one element.
-#   INPUTS: { engine: Engine - engine instance under construction, field_name: str - field name for the error message, value: Sequence - the sequence value to check }
-#   OUTPUTS: { None - raises ValueError if sequence is empty or None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-ENGINE
-# END_CONTRACT: _check_at_least_one_elem
 def _check_at_least_one_elem(
     engine: Engine, field_name: str, value: Sequence[object] | None
 ) -> None:
@@ -212,29 +191,15 @@ def parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository:
 
 
 # ============================================================================
-# Cloud config parsers (cloud-configs-to-infra-registry / P3)
+# Cloud config parsers
 # ============================================================================
 
 
-# START_CONTRACT: _check_az_user
-#   PURPOSE: Reject username="root" for Azure (parser-side validator).
-#   INPUTS: { username: str - the Azure username candidate }
-#   OUTPUTS: { None - raises ValueError if username == "root" }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-CONFIGS
-# END_CONTRACT: _check_az_user
 def _check_az_user(username: str) -> None:
     if username == "root":
         raise ValueError("Root user is forbidden on Azure")
 
 
-# START_CONTRACT: _fmt_key
-#   PURPOSE: Format the INI key `{prefix}_{name}` for a cloud provider config field.
-#   INPUTS: { prefix: str - provider prefix (e.g. "az", "hetzner"), name: str - field alias name }
-#   OUTPUTS: { str - "{prefix}_{name}" }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-CONFIGS
-# END_CONTRACT: _fmt_key
 def _fmt_key(prefix: str, name: str) -> str:
     return f"{prefix}_{name}"
 
@@ -531,17 +496,10 @@ def parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[ConfigCloud]
 
 # ============================================================================
 # db / local / remote section parsers + parse_config assembly
-# (config-aggregate-to-entrypoints / P4)
+# (composition-root config aggregate)
 # ============================================================================
 
 
-# START_CONTRACT: _db_valid_fields
-#   PURPOSE: Return valid INI keys for the [db] section (PostgresDbConfig dataclass fields).
-#   INPUTS: { None }
-#   OUTPUTS: { Sequence[str] - list of valid config keys }
-#   SIDE_EFFECTS: None
-#   LINKS: M-INFRA-DB-CONFIG, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _db_valid_fields
 def _db_valid_fields() -> Sequence[str]:
     return [f.name for f in dataclasses.fields(PostgresDbConfig)]
 
@@ -564,13 +522,6 @@ def _parse_db_section(sec: SectionProxy) -> PostgresDbConfig:
     )
 
 
-# START_CONTRACT: _local_valid_fields
-#   PURPOSE: Return valid INI keys for the [local] section (LocalSettings dataclass fields).
-#   INPUTS: { None }
-#   OUTPUTS: { Sequence[str] - list of valid config keys }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _local_valid_fields
 def _local_valid_fields() -> Sequence[str]:
     return [f.name for f in dataclasses.fields(LocalSettings)]
 
@@ -620,13 +571,6 @@ def _parse_local_section(sec: SectionProxy) -> LocalSettings:
     )
 
 
-# START_CONTRACT: _remote_valid_fields
-#   PURPOSE: Return valid INI keys for the [remote] section (RemoteDefaults dataclass fields, with user/jump_user aliases replacing username/jump_username).
-#   INPUTS: { None }
-#   OUTPUTS: { Sequence[str] - list of valid config keys }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _remote_valid_fields
 def _remote_valid_fields() -> Sequence[str]:
     exclude_names = ["username", "jump_username"]
     include_names = ["user", "jump_user"]

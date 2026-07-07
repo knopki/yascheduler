@@ -2,7 +2,7 @@
 # VERSION: 1.0.1
 # START_MODULE_CONTRACT
 #   PURPOSE: SQL query file loader — reads .sql files from the bundled sql/ directory with caching.
-#   SCOPE: load_query() with @functools.cache; pg8000 :param syntax preserved as-is.
+#   SCOPE: load_query() with @functools.cache; reads .sql files from bundled sql/ directory.
 #   DEPENDS: none
 #   LINKS: M-PERSISTENCE-POSTGRES
 # END_MODULE_CONTRACT
@@ -13,7 +13,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 #   PREVIOUS_CHANGE: v1.0.0 - Extract load_query from __init__.py into dedicated module.
 # END_CHANGE_SUMMARY
 
@@ -28,7 +28,7 @@ _SQL_DIR = Path(__file__).parent / "sql"
 #            read from disk at most once per process lifetime.
 #   INPUTS: { name: str - query name in dotted-path form, e.g. "task/get_by_id" }
 #   OUTPUTS: { str - the full SQL text of the named file }
-#   SIDE_EFFECTS: None (first call performs a disk read; subsequent calls hit the cache)
+#   SIDE_EFFECTS: Reads SQL file from disk on first call per process.
 #   LINKS: functools.cache
 # END_CONTRACT: load_query
 @functools.cache

@@ -2,7 +2,7 @@
 # VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Adapters layer facade — sole public surface for cross-layer consumers (application, composition root).
-#   SCOPE: Re-exports SSHMachineRepository, SSHMachineOperations, retry exceptions, cloud provisioner + adapter protocol, schema initializer, migration runner, webhook handler, Postgres UoW.
+#   SCOPE: Re-exports from infra subpackages for cross-layer consumers.
 #   DEPENDS: M-SSH, M-CLOUD, M-PERSISTENCE, M-NOTIFIER
 #   LINKS: M-SSH, M-CLOUD, M-PERSISTENCE, M-NOTIFIER
 # END_MODULE_CONTRACT
@@ -22,7 +22,7 @@
 #
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.4.0 - Re-export apply_migrations alongside apply_schema (add-db-migrations); yainit and test fixtures call it after apply_schema.
-#   PREVIOUS_CHANGE: v1.3.0 - Re-export SSHMachineRepository + SSHMachineOperations instead of SSHMachineGateway (decompose-ssh-gateway).
+#   PREVIOUS_CHANGE: v1.3.0 - Re-export SSHMachineRepository + SSHMachineOperations.
 # END_CHANGE_SUMMARY
 
 from .cloud import CloudAdapter, CloudProvisionerImpl, resolve_adapter

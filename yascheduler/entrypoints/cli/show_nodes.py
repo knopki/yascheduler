@@ -2,25 +2,25 @@
 # VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output.
-#   SCOPE: show_nodes command + argparse + in-memory node-to-task join + table/JSON renderers.
+#   SCOPE: show_nodes command — list nodes and running tasks.
 #   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG, M-DOMAIN-MODEL, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES, M-APPLICATION-UOW
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   show_nodes - Sync entry point: asyncio.run(_show_nodes_async(argv))
-#   _show_nodes_async - Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2
+#   _show_nodes_async - Parse flags, read nodes+tasks, filter, render, print; exit 0/1/2
 #   _parse_nodes_args - Parse yanodes argparse flags
 #   _fetch_nodes_view - Read nodes+tasks within one UoW, join in memory
 #   _filter_rows - AND-compose active filters
-#   _render_nodes_table - Fixed-width table with display transformations (NODE_ID first column)
-#   _render_nodes_json - Raw-domain-values JSON (node_id via .value first field)
-#   _NodeView - Private CLI-only node+task projection DTO (node_id: NodeId first; task_id: TaskId | None)
+#   _render_nodes_table - Fixed-width text table renderer
+#   _render_nodes_json - Raw-domain-values JSON renderer
+#   _NodeView - Private CLI-only node+task projection DTO
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - ssh-rekey-node-id: in-memory join rekeyed from tasks_by_ip (dict[str, Task] keyed by allocated_ip, looked up by node.ip) to tasks_by_node_id (dict[NodeId, Task] keyed by allocated_node_id, looked up by node.node_id). Dup-IP nodes now disambiguated.
-#   PREVIOUS_CHANGE: v1.3.0 - _NodeView.task_id narrows int | None -> TaskId | None; _fetch_nodes_view carries task.task_id (a TaskId) through the join; JSON renderer extracts r.task_id.value (json.dumps would raise TypeError on a TaskId); table renderer str(row.task_id) unchanged via __str__ (add-task-id-identity).
+#   LAST_CHANGE: v1.4.0 - In-memory join rekeyed from tasks_by_ip to tasks_by_node_id (dict[NodeId, Task] keyed by allocated_node_id). Dup-IP nodes now disambiguated.
+#   PREVIOUS_CHANGE: v1.3.0 - _NodeView.task_id narrows int | None -> TaskId | None; JSON renderer extracts r.task_id.value; table renderer str(row.task_id) unchanged via __str__.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -58,13 +58,6 @@ class _NodeView:
     label: str | None
 
 
-# START_CONTRACT: _parse_nodes_args
-#   PURPOSE: Parse yanodes CLI flags plus shared --config and --log-level.
-#   INPUTS: { argv: list[str] | None - optional argv for argparse, None reads sys.argv }
-#   OUTPUTS: { argparse.Namespace - parsed flags }
-#   SIDE_EFFECTS: None — argparse may call sys.exit on --help/error.
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES, M-ENTRYPOINTS-CLI-ARGS
-# END_CONTRACT: _parse_nodes_args
 def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yanodes",
@@ -120,7 +113,7 @@ def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
 #   PURPOSE: Read nodes and running tasks within one UoW and join them in memory into a list of _NodeView.
 #   INPUTS: { uow: AbstractUnitOfWork - open UoW }
 #   OUTPUTS: { list[_NodeView] - one per node, in list_all() order }
-#   SIDE_EFFECTS: Two reads within one UoW (nodes + tasks); no commit.
+#   SIDE_EFFECTS: Reads nodes and tasks from DB within one UoW.
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL
 #   NOTE: Promotion to application/query_nodes.py awaits a second consumer; today the daemon tracks
 #         occupancy via ConnectedMachine/AllocationTracker and the client does not query nodes.
@@ -160,13 +153,6 @@ async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
     return rows
 
 
-# START_CONTRACT: _filter_rows
-#   PURPOSE: Apply active filters to rows with AND composition.
-#   INPUTS: { rows: list[_NodeView], args: argparse.Namespace }
-#   OUTPUTS: { list[_NodeView] - rows passing all active filters, order preserved }
-#   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
-# END_CONTRACT: _filter_rows
 def _filter_rows(rows: list[_NodeView], args: argparse.Namespace) -> list[_NodeView]:
     # START_BLOCK_FILTER
     predicates: list[Callable[[_NodeView], bool]] = []

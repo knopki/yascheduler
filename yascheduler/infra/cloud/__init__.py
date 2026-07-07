@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Public re-exports from infra/cloud submodules.
-#   SCOPE: Re-exports of cloud adapter, protocol, config DTOs, provisioner, cloud-init renderer, and SSH key symbols.
+#   SCOPE: Cloud subpackage facade: provisioner, adapter Protocol, config DTOs, cloud-init renderer, SSH key helpers.
 #   DEPENDS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVISIONER, M-CLOUD-CONFIGS, M-CLOUD-INIT
 #   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-CONFIGS, M-CLOUD-INIT
 # END_MODULE_CONTRACT
@@ -31,8 +31,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Re-export CloudInitConfig from .cloud_init (renamed from CloudConfig in cloud_config.py; cloud-init-rename-and-prune / D1); drop PCloudConfig and CloudCapacity re-exports (Protocol collapsed into CloudInitConfig / dead dataclass deleted; D2+D3).
-#   PREVIOUS_CHANGE: v1.7.0 - Re-export AzureImageReference, ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI from .cloud_configs (cloud-configs-to-infra-registry); the DTOs relocated from yascheduler.config.cloud (deleted) and the cloud subpackage facade is now the canonical import path for the DTOs.
+#   LAST_CHANGE: v1.8.0 - Re-export CloudInitConfig from .cloud_init (renamed from CloudConfig in cloud_config.py); drop PCloudConfig and CloudCapacity re-exports (Protocol collapsed into CloudInitConfig / dead dataclass deleted).
+#   PREVIOUS_CHANGE: v1.7.0 - Re-export AzureImageReference, ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI from .cloud_configs.
 # END_CHANGE_SUMMARY
 
 """Cloud adapters module"""

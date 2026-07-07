@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - fix-cloud-init-empty-lists: render() omits empty list-valued fields (bootcmd, packages). cloud-init's cloud-config schema enforces minItems: 1 on both, so emitting "bootcmd": [] / "packages": [] failed validation ("... is too short") and made cloud-init exit 2 — which surfaced as SETUP_FAILED + VM deletion on every cloud allocation when no engine platform_packages matched. package_upgrade (bool) is always kept.
-#   PREVIOUS_CHANGE: v1.3.0 - Rename file cloud_config.py → cloud_init.py and class CloudConfig → CloudInitConfig; drop PCloudConfig base class (Protocol removed in cloud-init-rename-and-prune / D1+D2); disambiguate from the ConfigCloud* provider-config DTOs in cloud_configs.py and from the domain CloudConfig Protocol in domain/ports.py.
+#   LAST_CHANGE: v1.4.0 - render() omits empty list-valued fields (bootcmd, packages). cloud-init's cloud-config schema enforces minItems: 1 on both, so emitting "bootcmd": [] / "packages": [] failed validation ("... is too short") and made cloud-init exit 2 — which surfaced as SETUP_FAILED + VM deletion on every cloud allocation when no engine platform_packages matched. package_upgrade (bool) is always kept.
+#   PREVIOUS_CHANGE: v1.3.0 - Rename file cloud_config.py → cloud_init.py and class CloudConfig → CloudInitConfig; drop PCloudConfig base class (Protocol removed); disambiguate from the ConfigCloud* provider-config DTOs in cloud_configs.py and from the domain CloudConfig Protocol in domain/ports.py.
 # END_CHANGE_SUMMARY
 
 """Cloud-init user-data renderer module"""

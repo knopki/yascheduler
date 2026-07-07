@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.1 - start-task-contract-side-effect: TaskDeployer.start_task_on_machine SIDE_EFFECTS now declares the AssertionError raise on the task.remote_folder precondition (was the line-206 FIXME); checked before session.occupy() so it stays outside the rollback path, uncaught locally, propagates to the orchestrator allocator worker's `except Exception`.
-#   PREVIOUS_CHANGE: v1.4.0 - drop-task-context-entity: read task.extra[input_file] and task.remote_folder — typed fields folded onto Task.
+#   LAST_CHANGE: v1.4.1 - TaskDeployer.start_task_on_machine SIDE_EFFECTS now declares the AssertionError raise on the task.remote_folder precondition (was the line-206 FIXME); checked before session.occupy() so it stays outside the rollback path, uncaught locally, propagates to the orchestrator allocator worker's `except Exception`.
+#   PREVIOUS_CHANGE: v1.4.0 - read task.extra[input_file] and task.remote_folder — typed fields folded onto Task.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

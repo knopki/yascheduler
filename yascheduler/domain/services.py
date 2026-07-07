@@ -2,7 +2,7 @@
 # VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain services: cross-entity business logic for the scheduler domain.
-#   SCOPE: match_task_to_node pure function for allocating tasks to compatible free machines.
+#   SCOPE: Pure domain allocation service: match_task_to_node function for allocating tasks to compatible free machines.
 #   DEPENDS: M-DOMAIN-MODEL
 #   LINKS: M-DOMAIN-MODEL
 # END_MODULE_CONTRACT
@@ -12,7 +12,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - Extract match_task_to_node as pure domain service.
+#   LAST_CHANGE: v1.6.0 - match_task_to_node as pure domain service.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

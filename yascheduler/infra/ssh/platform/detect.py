@@ -2,7 +2,7 @@
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Platform detection — run adapter checks on a connected host, return first match and all matched platforms.
-#   SCOPE: _detect_platform + MAX_SESSIONS (moved verbatim from helpers.py).
+#   SCOPE: _detect_platform + MAX_SESSIONS.
 #   DEPENDS: M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL, M-PLATFORM-EXC
 #   LINKS: M-PLATFORM-ADAPTERS
 # END_MODULE_CONTRACT
@@ -13,7 +13,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py (decompose-ssh-gateway); _detect_platform + MAX_SESSIONS moved verbatim, no behavioral change.
+#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py; _detect_platform + MAX_SESSIONS moved verbatim, no behavioral change.
 #   PREVIOUS_CHANGE: none
 # END_CHANGE_SUMMARY
 

@@ -14,7 +14,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Relocate ConfigWarning, warn_unknown_fields, opt_str_val from yascheduler.config.utils to entrypoints/_config_utils.py and migrate to stdlib (config-aggregate-to-entrypoints / P4); drop attrs dependency. make_default_field and config_repr dropped (attrs-specific / unused).
+#   LAST_CHANGE: v1.0.0 - Relocate ConfigWarning, warn_unknown_fields, opt_str_val from yascheduler.config.utils to entrypoints/_config_utils.py and migrate to stdlib; drop attrs dependency. make_default_field and config_repr dropped (attrs-specific / unused).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

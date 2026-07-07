@@ -2,7 +2,7 @@
 # VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Application layer facade — sole public surface for cross-layer consumers and composition root.
-#   SCOPE: Re-export AbstractUnitOfWork, Orchestrator, MessageBus, submit_task, query_tasks, abandon_node, AllocationTracker.
+#   SCOPE: Application layer facade — sole re-export surface for cross-layer consumers and composition root.
 #   DEPENDS: M-APPLICATION-UOW, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-SUBMIT, M-APPLICATION-QUERY-TASKS, M-APPLICATION-ALLOCATION-TRACKER, M-APPLICATION-ABANDON-NODE
 #   LINKS: M-APPLICATION-UOW, M-APPLICATION-SUBMIT, M-APPLICATION-QUERY-TASKS, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-MESSAGE-BUS, M-DI, M-APPLICATION-ALLOCATION-TRACKER, M-APPLICATION-ABANDON-NODE
 # END_MODULE_CONTRACT
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Re-export abandon_node use case (fix-never-connected-node-leak).
-#   PREVIOUS_CHANGE: v1.4.0 - Re-export query_tasks use case (client-query-uow).
+#   LAST_CHANGE: v1.5.0 - Re-export abandon_node use case.
+#   PREVIOUS_CHANGE: v1.4.0 - Re-export query_tasks use case.
 # END_CHANGE_SUMMARY
 
 from .abandon_node import abandon_node

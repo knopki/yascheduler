@@ -1,19 +1,19 @@
 # FILE: yascheduler/infra/ssh/session.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-#   PURPOSE: SSHMachineSession — concrete connected-machine entity handle: domain identity, mutable machine snapshot, connect-time config, adapter-derived accessors, base SSH primitives, and the per-session monitor mechanism with self-owned teardown.
-#   SCOPE: SSHMachineSession class (owns _conn, _adapter, _machine, _closed, _monitor_task) + my_backoff_exc canonical partial (moved from operations/base.py).
+#   PURPOSE: Connected-machine entity handle owning SSH connection, machine state, and per-session monitor lifecycle.
+#   SCOPE: SSHMachineSession class (owns _conn, _adapter, _machine, _closed, _monitor_task) + my_backoff_exc canonical partial.
 #   DEPENDS: M-DOMAIN, M-SSH-EXCEPTIONS, M-PLATFORM
 #   LINKS: M-SSH-SESSION
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   my_backoff_exc - Partial backoff decorator for SSHRetryExc (canonical copy; moved from operations/base.py)
+#   my_backoff_exc - Partial backoff decorator for SSHRetryExc (canonical copy)
 #   SSHMachineSession - Concrete MachineSession implementation owning connection, adapter, machine snapshot, monitor task, and teardown
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial module created (session-based-machine-handle section 2). SSHMachineSession extracted as the first-class connected-machine entity handle (replaces the private _MachineState in repository.py). Owns domain face (ip, machine, is_closed, occupy, release, update), connect-time config (adapter, platforms, data_dir, engines_dir, tasks_dir), adapter-derived accessors (path, quote, hostname), base primitives (run, run_full, run_bg, upload, open_sftp, get_cpu_cores, setup_node, pgrep, list_processes) moved from operations/base.py, and the monitor mechanism (install_monitor, cancel_monitor, _close) moved off the repository. my_backoff_exc canonical copy moved here from operations/base.py. _close() sets _closed=True synchronously before any await (disconnect-scope isolation invariant).
+#   LAST_CHANGE: v1.0.0 - Initial module. SSHMachineSession owns the connection, machine snapshot, connect-time config, adapter-derived accessors, base SSH primitives, and the per-session monitor lifecycle.
 #   PREVIOUS_CHANGE: none
 # END_CHANGE_SUMMARY
 
@@ -126,7 +126,7 @@ class SSHMachineSession:
     #   PURPOSE: Read-modify-write transitioning the snapshot to BUSY.
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Replaces self._machine with machine.occupy() (raises MachineBusyError if already BUSY — propagated).
+    #   SIDE_EFFECTS: None — internal state only.
     #   LINKS: M-SSH-SESSION, M-DOMAIN-MODEL
     # END_CONTRACT: SSHMachineSession.occupy
     def occupy(self) -> None:
@@ -136,7 +136,7 @@ class SSHMachineSession:
     #   PURPOSE: Read-modify-write transitioning the snapshot to FREE with free_since = time.monotonic().
     #   INPUTS: { None }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Replaces self._machine with machine.release().
+    #   SIDE_EFFECTS: None — internal state only.
     #   LINKS: M-SSH-SESSION, M-DOMAIN-MODEL
     # END_CONTRACT: SSHMachineSession.release
     def release(self) -> None:
@@ -146,7 +146,7 @@ class SSHMachineSession:
     #   PURPOSE: Replace the internal machine snapshot (used by rollback paths).
     #   INPUTS: { machine: ConnectedMachine - the new snapshot }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Replaces self._machine.
+    #   SIDE_EFFECTS: None — internal state only.
     #   LINKS: M-SSH-SESSION, M-DOMAIN-MODEL
     # END_CONTRACT: SSHMachineSession.update
     def update(self, machine: ConnectedMachine) -> None:
@@ -207,7 +207,7 @@ class SSHMachineSession:
     #   PURPOSE: Run command via self._adapter and return raw SSHCompletedProcess; retries on SSHRetryExc.
     #   INPUTS: { cmd: str - command to run }
     #   OUTPUTS: { SSHCompletedProcess - raw asyncssh result }
-    #   SIDE_EFFECTS: None — pure remote command execution via self._conn and self._adapter.
+    #   SIDE_EFFECTS: Runs command on remote machine via SSH.
     #   LINKS: M-SSH-SESSION, M-PLATFORM
     # END_CONTRACT: SSHMachineSession.run_full
     @my_backoff_exc()

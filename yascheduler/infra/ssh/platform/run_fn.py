@@ -2,7 +2,7 @@
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Pure closure binding conn + adapter.quote into an OuterRunCallable for adapter.get_cpu_cores / setup_node.
-#   SCOPE: make_run_fn — extracted verbatim from gateway._make_run_fn, renamed (leading underscore dropped) and promoted to a public utility of the platform/ package.
+#   SCOPE: make_run_fn factory.
 #   DEPENDS: M-PLATFORM-PROTOCOL
 #   LINKS: M-PLATFORM-PROTOCOL
 # END_MODULE_CONTRACT
@@ -12,7 +12,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from gateway._make_run_fn (decompose-ssh-gateway); renamed to public make_run_fn, behavior unchanged. Both repository.connect and operations.base now import it from here instead of through the gateway class.
+#   LAST_CHANGE: v1.0.0 - Extracted from gateway._make_run_fn; renamed to public make_run_fn, behavior unchanged. Both repository.connect and operations.base now import it from here instead of through the gateway class.
 #   PREVIOUS_CHANGE: none
 # END_CHANGE_SUMMARY
 

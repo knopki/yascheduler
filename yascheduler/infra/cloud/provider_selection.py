@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.1.0 - Extract _adapter_supports_any_platform helper from nested any(any(...)) for readability and early-break short-circuit (review-hardening).
+#   LAST_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
+#   PREVIOUS_CHANGE: v1.1.0 - Extract _adapter_supports_any_platform helper from nested any(any(...)) for readability and early-break short-circuit.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

@@ -26,8 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Consolidate ProcessInfo into protocol.py (frozen dataclass); remove PProcessInfo and PNode Protocols (prune-platform-protocols). Consumers import ProcessInfo from .protocol; ListProcessesCallable/PgrepCallable now annotate AsyncGenerator[ProcessInfo, None].
-#   PREVIOUS_CHANGE: v1.1.0 - Delete PEngine and PEngineRepository Protocols (engine-to-domain-frozen); consumers import Engine/EngineRepository from yascheduler.domain directly. Switch Deploy* import from yascheduler.config to yascheduler.domain. SetupNodeCallable.__call__ now references EngineRepository (TYPE_CHECKING import from yascheduler.domain).
+#   LAST_CHANGE: v1.2.0 - Consolidate ProcessInfo into protocol.py (frozen dataclass); remove PProcessInfo and PNode Protocols. Consumers import ProcessInfo from .protocol; ListProcessesCallable/PgrepCallable now annotate AsyncGenerator[ProcessInfo, None].
+#   PREVIOUS_CHANGE: v1.1.0 - Delete PEngine and PEngineRepository Protocols; consumers import Engine/EngineRepository from yascheduler.domain directly. Switch Deploy* import from yascheduler.config to yascheduler.domain. SetupNodeCallable.__call__ now references EngineRepository (TYPE_CHECKING import from yascheduler.domain).
 # END_CHANGE_SUMMARY
 
 import asyncio

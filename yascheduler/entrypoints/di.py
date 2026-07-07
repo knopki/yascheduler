@@ -2,7 +2,7 @@
 # VERSION: 5.12.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
-#   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
+#   SCOPE: Factories per entry point (daemon, CLI).
 #   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-ENTRYPOINTS-CONFIG, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-ENTRYPOINTS-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-KEYS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS
 # END_MODULE_CONTRACT
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.12.1 - CLIDeps.submit return type int -> TaskId (forwards submit_task which now returns TaskId); import TaskId (add-task-id-identity). The public Yascheduler.queue_submit_task_async facade extracts .value to preserve the public -> int contract.
-#   PREVIOUS_CHANGE: v5.12.0 - make_daemon now constructs SSHMachineRepository + SSHMachineOperations (two ports) instead of a single SSHMachineRepository / SSHMachineOperations (decompose-ssh-gateway). Both are shared between CloudProvisionerImpl (machine_repository + machine_operations) and Orchestrator (repository + operations) on the clouds is None branch. CloudProvisionerImpl.machine_gateway renamed to machine_repository; machine_operations parameter added.
+#   LAST_CHANGE: v5.12.1 - CLIDeps.submit return type int -> TaskId (forwards submit_task which now returns TaskId); import TaskId. The public Yascheduler.queue_submit_task_async facade extracts .value to preserve the public -> int contract.
+#   PREVIOUS_CHANGE: v5.12.0 - make_daemon now constructs SSHMachineRepository + SSHMachineOperations (two ports) instead of a single SSHMachineRepository / SSHMachineOperations. Both are shared between CloudProvisionerImpl (machine_repository + machine_operations) and Orchestrator (repository + operations) on the clouds is None branch.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
 #   INPUTS: { config: Config, log: Optional[Logger], clouds: Optional[CloudProvisionerImpl] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates UoW factory, AllocationTracker, asyncio.Lock, CloudProvisionerImpl, SSHMachineRepository / SSHMachineOperations; injects list_private_keys_fn.
+#   SIDE_EFFECTS: Creates UoW factory, SSH connections, and cloud provisioner.
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: make_daemon
 async def make_daemon(

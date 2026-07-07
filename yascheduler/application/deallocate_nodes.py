@@ -2,7 +2,7 @@
 # VERSION: 4.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion.
-#   SCOPE: deallocate_node, deallocate_nodes async functions.
+#   SCOPE: Idle cloud node deallocation — disable idle nodes, return Node objects for VM deletion.
 #   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-SSH-REPOSITORY, M-CLOUD-PROVISIONER
 #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
 # END_MODULE_CONTRACT
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.8.0 - cloud-port-node-arg: deallocate_node calls clouds.deallocate(node) (was clouds.deallocate(node.cloud, node.ip)).
-#   PREVIOUS_CHANGE: v4.7.0 - ssh-rekey-node-id: deallocate_nodes takes idle_machines: dict[NodeId, float] (was dict[str, float] keyed by ip); busy matching rekeyed to busy_node_ids = {t.allocated_node_id}; phase-1 disable matches by node.node_id in idle_machines and node.node_id not in busy_node_ids; phase-2 filter node.node_id not in busy_node_ids and node.cloud. deallocate_node calls repository.contains(node.node_id)/repository.disconnect(node.node_id) (was node.ip). clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host).
+#   LAST_CHANGE: v4.8.0 - deallocate_node calls clouds.deallocate(node).
+#   PREVIOUS_CHANGE: v4.7.0 - idle_machines keyed by NodeId; busy matching rekeyed to busy_node_ids; deallocate_node uses node.node_id for disconnect.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Disconnects remote machine, disables node (by node_id) via UoW, deletes cloud VM via port, removes node (by node_id) via second UoW. If the second UoW fails after cloud delete succeeded, logs loudly for manual reconciliation (row stays disabled) and does not re-raise — the cloud VM is already gone.
+#   SIDE_EFFECTS: Disconnects remote machine, disables node via UoW, deletes cloud VM, removes node row. If remove fails after cloud delete, logs for manual reconciliation.
 #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-UOW
 # END_CONTRACT: deallocate_node
 async def deallocate_node(

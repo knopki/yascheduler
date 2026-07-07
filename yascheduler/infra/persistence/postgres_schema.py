@@ -2,7 +2,7 @@
 # VERSION: 1.0.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Synchronous, transactional application of schema.sql via pg8000.
-#   SCOPE: apply_schema() — one-shot schema init for CLI and test fixtures.
+#   SCOPE: One-shot schema.sql application via pg8000 for CLI init and test fixtures.
 #   DEPENDS: M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG
 #   LINKS: M-PERSISTENCE, M-CLI-COMMANDS
 # END_MODULE_CONTRACT
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config (config-aggregate-to-entrypoints / P4).
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
+#   LAST_CHANGE: v1.1.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 # END_CHANGE_SUMMARY
 
 import logging

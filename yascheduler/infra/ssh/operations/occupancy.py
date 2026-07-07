@@ -2,7 +2,7 @@
 # VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: OccupancyChecker — pgrep/cmd-based occupancy check logic + monitor installer composing the session's generic monitor mechanism. Stateless: takes (log) at construction, (session, ...) per call.
-#   SCOPE: OccupancyChecker class (_occupancy_by_pgrep, _occupancy_by_cmd, occupancy_check, start_occupancy_check).
+#   SCOPE: OccupancyChecker: occupancy probing via pgrep or shell command on a remote session.
 #   DEPENDS: M-SSH-SESSION, M-DOMAIN-ENGINE, M-SSH-EXCEPTIONS
 #   LINKS: M-SSH-OPS-OCCUPANCY
 # END_MODULE_CONTRACT
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - fix-occupancy-monitor-cancel-hang: drop asyncio.wait_for wrapper from _check_factory. On Python <3.12 wait_for swallowed the outer monitor Task's cancellation, so SSHMachineSession._close()'s task.cancel()+await task hung forever (manifested as test_ssh_gateway_bg_tasks.py infinite hang on <=3.11). occupancy_check's underlying SSH primitives already self-bound via my_backoff_exc; failed checks still fall back to busy. Removed now-unused asyncio import.
-#   PREVIOUS_CHANGE: v1.2.0 - session-based-machine-handle sections 5.6-5.9: All four method bodies rewritten to operate via MachineSession parameter. _occupancy_by_pgrep uses session.pgrep(), _occupancy_by_cmd uses session.run_full(), occupancy_check/start_occupancy_check dispatch on session. install_monitor/occupy/release called on session instead of repository.
+#   LAST_CHANGE: v1.3.0 - drop asyncio.wait_for wrapper from _check_factory. On Python <3.12 wait_for swallowed the outer monitor Task's cancellation, so SSHMachineSession._close()'s task.cancel()+await task hung forever (manifested as test_ssh_gateway_bg_tasks.py infinite hang on <=3.11). occupancy_check's underlying SSH primitives already self-bound via my_backoff_exc; failed checks still fall back to busy. Removed now-unused asyncio import.
+#   PREVIOUS_CHANGE: v1.2.0 - All four method bodies rewritten to operate via MachineSession parameter. _occupancy_by_pgrep uses session.pgrep(), _occupancy_by_cmd uses session.run_full(), occupancy_check/start_occupancy_check dispatch on session. install_monitor/occupy/release called on session instead of repository.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -54,9 +54,7 @@ class OccupancyChecker:
     #     Returns False (free) only when pgrep succeeds and yields no process.
     #   INPUTS: { session: MachineSession, pattern: str - process name pattern to match }
     #   OUTPUTS: { bool - True if busy or SSH failed, False if confirmed free }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-SSH-OPS-OCCUPANCY
-    # END_CONTRACT: OccupancyChecker._occupancy_by_pgrep
+    #   SIDE_EFFECTS: Runs pgrep command on remote machine.
     async def _occupancy_by_pgrep(self, session: MachineSession, pattern: str) -> bool:
         # START_BLOCK_OCCUPANCY_PGREP
         try:
@@ -88,9 +86,7 @@ class OccupancyChecker:
     #     Returns False only when the check succeeds with a non-matching exit code.
     #   INPUTS: { session: MachineSession, cmd: str - check command to run, expected_code: int - busy exit code }
     #   OUTPUTS: { bool - True if busy or SSH failed, False if confirmed free }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-SSH-OPS-OCCUPANCY
-    # END_CONTRACT: OccupancyChecker._occupancy_by_cmd
+    #   SIDE_EFFECTS: Runs check command on remote machine.
     async def _occupancy_by_cmd(
         self, session: MachineSession, cmd: str, expected_code: int
     ) -> bool:
@@ -117,6 +113,7 @@ class OccupancyChecker:
     #     Returns True (busy) when process found OR when SSH fails (safe default).
     #     Returns False (free) only when check succeeds and finds no process.
     #   INPUTS: { session: MachineSession, config: Engine - engine metadata for checks }
+    #   SIDE_EFFECTS: Runs pgrep or check_cmd on remote machine.
     #   LINKS: M-SSH-OPS-OCCUPANCY
     # END_CONTRACT: OccupancyChecker.occupancy_check
     async def occupancy_check(self, session: MachineSession, config: Engine) -> bool:

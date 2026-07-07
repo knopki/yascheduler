@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Copied from yascheduler/remote_machine/checks.py, updated header.
+#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial version.
 # END_CHANGE_SUMMARY
 #
 
@@ -39,7 +39,7 @@ from asyncstdlib import lru_cache
 #   PURPOSE: Check if remote machine runs generic Linux via uname
 #   INPUTS: { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { bool - True if remote is Linux }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: check_is_linux
 @lru_cache
@@ -57,7 +57,7 @@ async def check_is_linux(conn: SSHClientConnection) -> bool:
 #   PURPOSE: Check if remote machine runs Darwin/macOS via uname
 #   INPUTS: { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { bool - True if remote is Darwin }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: check_is_darwin
 @lru_cache
@@ -75,7 +75,7 @@ async def check_is_darwin(conn: SSHClientConnection) -> bool:
 #   PURPOSE: Get os-release fields (ID, ID_LIKE, VERSION_ID) from remote Linux
 #   INPUTS: { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { Optional[tuple[str, ...]] - (ID, ID_LIKE, VERSION_ID) tuple or None }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: _get_os_release
 @lru_cache
@@ -93,7 +93,7 @@ async def _get_os_release(conn: SSHClientConnection) -> Optional[tuple[str, ...]
 #   PURPOSE: Check if remote is Debian-like via os-release ID/ID_LIKE
 #   INPUTS: { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { bool - True if remote is Debian-like }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: check_is_debian_like
 async def check_is_debian_like(conn: SSHClientConnection) -> bool:
@@ -109,7 +109,7 @@ async def check_is_debian_like(conn: SSHClientConnection) -> bool:
 #   PURPOSE: Check if remote is Debian via os-release ID
 #   INPUTS: { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { bool - True if remote is Debian }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: check_is_debian
 async def check_is_debian(conn: SSHClientConnection) -> bool:
@@ -122,7 +122,7 @@ async def check_is_debian(conn: SSHClientConnection) -> bool:
 #   PURPOSE: Check if remote matches a specific Debian version
 #   INPUTS: { version: str - Debian version string } | { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { bool - True if remote matches the version }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: _check_debian_version
 async def _check_debian_version(version: str, conn: SSHClientConnection) -> bool:
@@ -146,7 +146,7 @@ check_is_debian_15 = partial(_check_debian_version, "15")
 #   PURPOSE: Check if remote runs Windows via PowerShell OSVersion check
 #   INPUTS: { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { bool - True if remote is Windows with PowerShell }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: check_is_windows
 @lru_cache
@@ -160,7 +160,7 @@ async def check_is_windows(conn: SSHClientConnection) -> bool:
 #   PURPOSE: Get Windows OS caption via WMI Win32_OperatingSystem
 #   INPUTS: { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { Optional[str] - OS caption string or None }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: get_wmi_w32_os_caption
 @lru_cache
@@ -175,7 +175,7 @@ async def get_wmi_w32_os_caption(conn: SSHClientConnection) -> Optional[str]:
 #   PURPOSE: Check if remote Windows caption contains a specific version string
 #   INPUTS: { version: str - Windows version string } | { conn: SSHClientConnection - SSH connection to remote }
 #   OUTPUTS: { bool - True if caption contains version }
-#   SIDE_EFFECTS: None
+#   SIDE_EFFECTS: Runs SSH command on remote machine.
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: _check_is_windows_caption_version
 async def _check_is_windows_caption_version(

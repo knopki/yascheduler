@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Deduplicating async queue for producer-consumer scheduling loops.
-#   SCOPE: UniqueQueue class, UMessage dataclass.
+#   SCOPE: Deduplicating async queue (UniqueQueue) and typed message (UMessage) for producer-consumer scheduling loops.
 #   DEPENDS: none
 #   LINKS: M-QUEUE
 # END_MODULE_CONTRACT
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Added asyncio.Lock to UniqueQueue to close check-then-act race window in put() under full-queue concurrent puts.
-#   PREVIOUS_CHANGE: v1.8.0 - Migrated UMessage from attrs to stdlib dataclasses; equality and hash are now keyed on id only via manual __eq__/__hash__ with eq=False (payload excluded; field(compare=False) was rejected because it conflicts with __slots__); manual __slots__ retained for immutability parity with prior attrs @define.
+#   LAST_CHANGE: v1.9.0 - Added asyncio.Lock to UniqueQueue.put() for check-then-act race window.
+#   PREVIOUS_CHANGE: v1.8.0 - Migrated UMessage from attrs to stdlib dataclasses; id-only __eq__/__hash__ with eq=False.
 # END_CHANGE_SUMMARY
 """Async queue with message deduplication"""
 
@@ -40,25 +40,11 @@ class UMessage(Generic[TUMsgId, TUMsgPayload]):
     payload: TUMsgPayload
 
     # START_BLOCK_DEFINE_ID_ONLY_EQUALITY
-    # START_CONTRACT: __eq__
-    #   PURPOSE: Id-only equality — two UMessage instances are equal iff their id values are equal; payload is excluded (D2 invariant). __hash__ is keyed on id only, consistent with __eq__, so deque membership and set membership in UniqueQueue.put agree.
-    #   INPUTS: { other: object - RHS operand }
-    #   OUTPUTS: { bool - True if other is UMessage with equal id; NotImplemented if wrong type }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: __eq__
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, UMessage):
             return NotImplemented
         return self.id == other.id
 
-    # START_CONTRACT: __hash__
-    #   PURPOSE: Hash keyed on id only, consistent with id-only __eq__.
-    #   INPUTS: { None }
-    #   OUTPUTS: { int - hash of self.id }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: __hash__
     def __hash__(self) -> int:
         return hash(self.id)
 
@@ -73,13 +59,6 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     _queue: deque[UMessage[TUMsgId, TUMsgPayload]]
     _done_pending: set[UMessage[TUMsgId, TUMsgPayload]]
 
-    # START_CONTRACT: __init__
-    #   PURPOSE: Initialize queue with name, maxsize, and _put_lock
-    #   INPUTS: { name: str - queue identifier } | { maxsize: int - maximum queue size, default 0 (unlimited) }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Initializes internal queue state, done_pending set, and _put_lock
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: __init__
     def __init__(
         self, name: str, *argv: object, maxsize: int = 0, **kwargs: object
     ) -> None:  # noqa: ANN002,ANN003
@@ -93,23 +72,9 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
         self._done_pending.add(item)
         return item
 
-    # START_CONTRACT: get
-    #   PURPOSE: Get next message from queue; tracks retrieved items in done_pending set for completion tracking
-    #   INPUTS: { None }
-    #   OUTPUTS: { UMessage - the next message from the queue }
-    #   SIDE_EFFECTS: Removes item from queue and adds to done_pending set
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: get
     async def get(self) -> UMessage[TUMsgId, TUMsgPayload]:
         return await super().get()
 
-    # START_CONTRACT: put
-    #   PURPOSE: Put message into queue under _put_lock, skip if ID already in seen set or queue
-    #   INPUTS: { item: UMessage - message to enqueue }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Appends item to queue if not duplicate; lock serializes check-then-act
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: put
     async def put(self, item: UMessage[TUMsgId, TUMsgPayload]) -> None:
         async with self._put_lock:
             # skip already added
@@ -117,35 +82,14 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
                 return
             await super().put(item)
 
-    # START_CONTRACT: task_done
-    #   PURPOSE: Mark task as done (not implemented, use item_done instead)
-    #   INPUTS: { None }
-    #   OUTPUTS: { None - always raises NotImplementedError }
-    #   SIDE_EFFECTS: Raises NotImplementedError
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: task_done
     def task_done(self) -> None:
         raise NotImplementedError("task_done() not implemented, use item_done()")
 
-    # START_CONTRACT: item_done
-    #   PURPOSE: Indicate a specific enqueued task is complete
-    #   INPUTS: { item: UMessage - the completed message }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Removes item from done_pending set, decrements unfinished task counter
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: item_done
     def item_done(self, item: UMessage) -> None:
         """Indicate that a enqueued task is complete."""
         self._done_pending.remove(item)
         super().task_done()
 
-    # START_CONTRACT: psize
-    #   PURPOSE: Return number of pending items (not done but not in queue)
-    #   INPUTS: { None }
-    #   OUTPUTS: { int - number of items in done_pending set }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: psize
     def psize(self) -> int:
         """Number of items not done but not in queue."""
         return len(self._done_pending)

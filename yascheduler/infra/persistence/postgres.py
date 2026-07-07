@@ -2,7 +2,7 @@
 # VERSION: 1.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
-#   SCOPE: _PgRepository base, PostgresTaskRepository and PostgresNodeRepository wrappers around pg8000 Connection.
+#   SCOPE: Async task and node CRUD over pg8000 via ThreadPoolExecutor.
 #   DEPENDS: M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS, M-DOMAIN-MODEL, M-DOMAIN-PORTS
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS
 # END_MODULE_CONTRACT
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - drop-task-context-entity: _row_to_task reads the seven typed columns directly from the row; webhook_custom_params/extra use json.loads str-fallback; save/insert bind the typed columns directly; insert binds remote_folder=None and error=None.
-#   PREVIOUS_CHANGE: v1.11.1 - task-schema-and-entity-cleanup: _row_to_task reads created_at/updated_at via row["created_at"]/row["updated_at"] (direct access — DB NOT NULL, was row.get() returning Any|None).
+#   LAST_CHANGE: v1.12.0 - _row_to_task reads the seven typed columns directly from the row; webhook_custom_params/extra use json.loads str-fallback; save/insert bind the typed columns directly; insert binds remote_folder=None and error=None.
+#   PREVIOUS_CHANGE: v1.11.1 - _row_to_task reads created_at/updated_at via row["created_at"]/row["updated_at"] (direct access — DB NOT NULL, was row.get() returning Any|None).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ class _PgRepository:
     #   PURPOSE: Execute SQL via thread pool and return rows as dicts keyed by column name.
     #   INPUTS: { sql: str - query with :named params, **params: Any }
     #   OUTPUTS: { list[dict[str, Any]] - each row as a dict }
-    #   SIDE_EFFECTS: None
+    #   SIDE_EFFECTS: Executes SQL query via pg8000 connection.
     #   LINKS: None
     # END_CONTRACT: _run
     async def _run(self, sql: str, **params: Any) -> list[dict[str, Any]]:  # noqa: ANN401

@@ -2,30 +2,30 @@
 # VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
-#   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
+#   SCOPE: check_status command — query and display task status.
 #   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
 #   check_status - Sync entry point: asyncio.run(_check_status_async(argv))
-#   _check_status_async - Parse flags, query tasks via DI, dispatch renderer, exit 0/1/2
-#   _parse_status_args - Parse yastatus argparse flags (mutex renderers, -o requires -v)
-#   _query_tasks - Conditional task query within the single query-phase UoW
-#   _render_default - AiiDA-compatible default renderer (<id>   <STATUS>)
-#   _render_info - Tab-separated one-line-per-task renderer (task_id, status, label, node_id)
-#   _render_json - Raw-domain-values JSON (nested node object + created_at/updated_at)
-#   _render_view - Verbose renderer: SSH tail of OUTPUT, optional convergence snippet (uses node.ip from resolved Node)
-#   _resolve_conn_params - Resolve SSH conn params mirroring orchestrator._connect_machine_consumer
-#   _display_remote_output - Connect via SSHMachineRepository / SSHMachineOperations, tail OUTPUT file
+#   _check_status_async - Parse flags, query tasks, dispatch renderer, exit 0/1/2
+#   _parse_status_args - Parse yastatus argparse flags
+#   _query_tasks - Conditional task query within single UoW
+#   _render_default - AiiDA-compatible default renderer (<id> <STATUS>)
+#   _render_info - Tab-separated one-line-per-task renderer
+#   _render_json - Raw-domain-values JSON renderer
+#   _render_view - Verbose renderer: SSH tail of OUTPUT, optional convergence
+#   _resolve_conn_params - Resolve SSH connection params
+#   _display_remote_output - Connect via SSH, tail OUTPUT file
 #   _download_convergence_snippet - Download OUTPUT file via SFTP
 #   _parse_convergence - Parse CRYSTAL output for convergence info
 #   _ConnParams - Frozen SSH connection params DTO
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: _render_json and _render_view read task.engine/task.local_folder/task.remote_folder (was task.context.X).
-#   PREVIOUS_CHANGE: v1.6.0 - task-schema-and-entity-cleanup: _render_info emits node_id= (was ip=); _render_json drops flat allocated_ip/port/cloud fields, adds nested node object {ip, port, username, cloud} (or null) + created_at/updated_at (ISO-8601); _render_view reads node.ip from the resolved Node (was task.allocated_ip). BREAKING yastatus --json wire format change.
+#   LAST_CHANGE: v1.7.0 - _render_json and _render_view read task.engine/task.local_folder/task.remote_folder directly.
+#   PREVIOUS_CHANGE: v1.6.0 - _render_info emits node_id=; _render_json drops flat allocated_ip/port/cloud fields, adds nested node object {ip, port, username, cloud} (or null) + created_at/updated_at (ISO-8601); _render_view reads node.ip from the resolved Node.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -54,13 +54,6 @@ if TYPE_CHECKING:
     from yascheduler.domain import MachineSession, Node, Task
 
 
-# START_CONTRACT: _parse_status_args
-#   PURPOSE: Parse yastatus CLI flags — mutex renderers (-v/-i/--json) plus -o (requires -v) and -j filter.
-#   INPUTS: { argv: list[str] | None - optional argv for argparse, None reads sys.argv }
-#   OUTPUTS: { argparse.Namespace - parsed flags }
-#   SIDE_EFFECTS: argparse may call sys.exit on --help/error (exit 0/2); parser.error exits 2 for -o-without--v.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_CONTRACT: _parse_status_args
 def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yastatus",
@@ -114,13 +107,6 @@ def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-# START_CONTRACT: _query_tasks
-#   PURPOSE: Conditional task query — list_by_jobs when -j is given, else list_by_status({RUNNING, TO_DO}).
-#   INPUTS: { uow: AbstractUnitOfWork - open query-phase UoW, args: argparse.Namespace - parsed flags }
-#   OUTPUTS: { list[Task] - tasks matching the filter, in repository order }
-#   SIDE_EFFECTS: One read within the UoW; no commit.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL
-# END_CONTRACT: _query_tasks
 async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> list[Task]:
     # START_BLOCK_QUERY
     if args.jobs:
@@ -137,9 +123,7 @@ async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> lis
 #   PURPOSE: AiiDA-compatibility default renderer — emit <task_id><ws><STATUS_NAME> per task.
 #   INPUTS: { tasks: list[Task] }
 #   OUTPUTS: { None - prints one line per task to stdout }
-#   SIDE_EFFECTS: Writes to stdout. Do NOT decorate: the AiiDA scheduler plugin parses this via
-#                 `for job_id, status in job.split()` (exactly 2 elements per line) and maps STATUS_NAME
-#                 through _MAP_STATUS_YASCHEDULER (keys {TO_DO, RUNNING, DONE}).
+#   SIDE_EFFECTS: Writes to stdout.
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
 # END_CONTRACT: _render_default
 def _render_default(tasks: list[Task]) -> None:
@@ -151,7 +135,7 @@ def _render_default(tasks: list[Task]) -> None:
 #   PURPOSE: Tab-separated one-line-per-task renderer (task_id, status, label, node_id).
 #   INPUTS: { tasks: list[Task] }
 #   OUTPUTS: { None - prints one tab-separated line per task to stdout }
-#   SIDE_EFFECTS: Writes to stdout. Not used by the AiiDA plugin; free to change.
+#   SIDE_EFFECTS: Writes to stdout.
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
 # END_CONTRACT: _render_info
 def _render_info(tasks: list[Task]) -> None:
@@ -244,13 +228,6 @@ def _resolve_conn_params(node: Node, config: Config) -> _ConnParams:
     )
 
 
-# START_CONTRACT: _download_convergence_snippet
-#   PURPOSE: Download the remote OUTPUT file via SFTP into a local temp path for convergence parsing.
-#   INPUTS: { session: MachineSession, remote_folder: str, local_path: Path }
-#   OUTPUTS: { bool - True on success, False on OSError (e.g. missing remote file) }
-#   SIDE_EFFECTS: Opens an SFTP channel and writes to local_path.
-#   LINKS: M-SSH-SESSION
-# END_CONTRACT: _download_convergence_snippet
 async def _download_convergence_snippet(
     session: MachineSession,
     remote_folder: str,
@@ -266,13 +243,6 @@ async def _download_convergence_snippet(
         return False
 
 
-# START_CONTRACT: _parse_convergence
-#   PURPOSE: Parse a CRYSTAL OUTPUT snippet into a human-readable convergence + optgeom summary string.
-#   INPUTS: { filepath: Path - local path to a downloaded OUTPUT snippet }
-#   OUTPUTS: { str - formatted convergence/optgeom lines, or the CRYSTOUT_Error message on parse failure }
-#   SIDE_EFFECTS: Reads filepath; deferred-imports numpy/pycrystal (optional scientific deps) inside the body.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_CONTRACT: _parse_convergence
 def _parse_convergence(filepath: Path) -> str:
     """Parse CRYSTAL output file for convergence and geometry optimization info."""
     from numpy import nan  # pyright: ignore[reportMissingImports]
@@ -439,8 +409,7 @@ async def _render_view(
 #          parsing convergence. Exit 0 on success, 1 on runtime failure, 2 on argparse error.
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
 #   OUTPUTS: { None - prints to stdout; calls sys.exit(1) on failure }
-#   SIDE_EFFECTS: Opens ONE short query-phase UoW (closed before any SSH), reads config, may connect via SSH,
-#                 writes/removes a convergence tempfile in view mode.
+#   SIDE_EFFECTS: Opens query-phase UoW, reads config, may connect via SSH, writes/removes convergence tempfile.
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS
 # END_CONTRACT: _check_status_async
 async def _check_status_async(argv: list[str] | None) -> None:

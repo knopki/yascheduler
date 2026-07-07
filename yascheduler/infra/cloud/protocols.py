@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Delete PCloudConfig Protocol (single-implementer, zero runtime dispatch; collapsed into concrete CloudInitConfig) and CloudCapacity dataclass (dead code; last consumer removed in archived cloud-provisioner-pure); retype CreateNodeCallable.__call__ cloud_config param Optional[PCloudConfig] → Optional[CloudInitConfig] (cloud-init-rename-and-prune / D2+D3).
-#   PREVIOUS_CHANGE: v1.2.0 - Import ConfigCloud from .cloud_configs (intra-package) instead of yascheduler.config (cloud-configs-to-infra-registry); removes the only runtime `infra -> yascheduler.config` edge in the cloud subpackage, shrinking the outside-layer-set exemption surface by one edge.
+#   LAST_CHANGE: v1.3.0 - Delete PCloudConfig Protocol (single-implementer, zero runtime dispatch; collapsed into concrete CloudInitConfig) and CloudCapacity dataclass (dead code; last consumer removed); retype CreateNodeCallable.__call__ cloud_config param Optional[PCloudConfig] → Optional[CloudInitConfig].
+#   PREVIOUS_CHANGE: v1.2.0 - Import ConfigCloud from .cloud_configs (intra-package) instead of yascheduler.config; removes the only runtime `infra -> yascheduler.config` edge in the cloud subpackage, shrinking the outside-layer-set exemption surface by one edge.
 # END_CHANGE_SUMMARY
 
 """Cloud protocols"""

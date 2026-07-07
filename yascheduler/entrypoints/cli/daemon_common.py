@@ -2,19 +2,19 @@
 # VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Shared daemon core — configure_logger and run_daemon, consumed by all three daemon entry points (daemonize, daemon_systemd, daemon_sysv).
-#   SCOPE: Root-logger configuration (StreamHandler→stderr always + FileHandler when set; backoff/asyncssh suppressed; captureWarnings) and the async daemon runtime (make_daemon + SIGTERM/SIGINT handlers + `try/finally`-wrapped `orch.start()` guaranteeing `orch.stop()` runs on any exit path — normal start return, start exception, or signal-driven shutdown where the handler's `stop()` runs first and the `finally`'s `stop()` is an idempotent no-op).
+#   SCOPE: Root-logger configuration and async daemon runtime (make_daemon + signal handlers + try/finally cleanup).
 #   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG-PARSER, M-APPLICATION-ORCHESTRATOR
 #   LINKS: M-DAEMON-COMMON
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   configure_logger - Configure the ROOT logger: stderr StreamHandler always + FileHandler when log_file set; backoff/asyncssh → ERROR; captureWarnings(True); NO basicConfig.
+#   configure_logger - Configure the ROOT logger: stderr StreamHandler always + FileHandler when set; backoff/asyncssh → ERROR; captureWarnings(True).
 #   run_daemon - Async daemon core: await make_daemon, register SIGTERM/SIGINT handlers on the running loop, await orch.start() under try/finally so orch.stop() runs on every exit path.
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - run_daemon wraps `await orch.start()` in `try/finally: await orch.stop()` so cleanup runs on every exit path (normal start return, start exception, signal). The signal handler's `stop()` is the first execution; the `finally`'s `stop()` is an idempotent no-op per the Orchestrator contract (fix-daemon-resource-leak-on-start-return).
-#   PREVIOUS_CHANGE: v1.0.1 - post-review fix: signal-handler closure now binds `sig` by value via a factory (was a bare closure suppressed by bugbear B023; both handlers dispatched SIGINT because the loop variable was captured by reference).
+#   LAST_CHANGE: v1.1.0 - run_daemon wraps await orch.start() in try/finally so cleanup runs on every exit path (normal start return, start exception, signal). The signal handler's stop() is the first execution; the finally's stop() is an idempotent no-op per the Orchestrator contract.
+#   PREVIOUS_CHANGE: v1.0.1 - Signal-handler closure binds sig by value via a factory (B023-safe).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 #   PURPOSE: Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers).
 #   INPUTS: { log_file: str | Path | None - log file path or None (stderr only), level: int - root logger level (e.g. logging.INFO) }
 #   OUTPUTS: { logging.Logger - the configured root logger }
-#   SIDE_EFFECTS: Adds a StreamHandler(sys.stderr) to the root logger (always); adds a FileHandler(log_file) to the root logger when log_file is not None; sets the backoff and asyncssh loggers to ERROR (suppress retry/key-exchange noise) but lets them propagate to the root handlers; calls logging.captureWarnings(True); does NOT call logging.basicConfig.
+#   SIDE_EFFECTS: Adds StreamHandler(sys.stderr) to root logger (always); adds FileHandler(log_file) when log_file is not None; sets backoff/asyncssh to ERROR; calls logging.captureWarnings(True).
 #   LINKS: M-DAEMON-COMMON
 # END_CONTRACT: configure_logger
 def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
@@ -70,7 +70,7 @@ def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
 #   PURPOSE: Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator.
 #   INPUTS: { config: Config - daemon configuration, logger: logging.Logger - root logger for signal-handler messages }
 #   OUTPUTS: { None - runs the event loop until stopped }
-#   SIDE_EFFECTS: Awaits make_daemon(config, logger) to build the Orchestrator; registers SIGTERM/SIGINT handlers on the running event loop (cancel outstanding tasks, sleep 250ms for SSL connections to close, log "Done"); awaits orch.start(); guarantees `orch.stop()` runs on any exit path (normal `start()` return, `start()` exception, signal) via `try/finally` — the signal handler's `stop()` is the first execution; the `finally`'s `stop()` is a no-op (idempotent per the orchestrator contract).
+#   SIDE_EFFECTS: Builds Orchestrator, registers SIGTERM/SIGINT handlers, runs orch.start() with try/finally cleanup.
 #   LINKS: M-DAEMON-COMMON, M-DI, M-APPLICATION-ORCHESTRATOR
 # END_CONTRACT: run_daemon
 async def run_daemon(config: Config, logger: logging.Logger) -> None:

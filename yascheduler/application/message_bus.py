@@ -2,7 +2,7 @@
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
 #   PURPOSE: In-process message bus that dispatches domain events to registered handlers.
-#   SCOPE: MessageBus class with register and async dispatch methods.
+#   SCOPE: MessageBus class — in-process event dispatch with type-based handler registry.
 #   DEPENDS: M-DOMAIN-EVENTS
 #   LINKS: M-DOMAIN-EVENTS, M-APPLICATION-UOW
 # END_MODULE_CONTRACT
@@ -44,7 +44,7 @@ class MessageBus:
     #   PURPOSE: Register a handler callable for a specific event type.
     #   INPUTS: { event_type: type, handler: Callable }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Appends handler to internal registry.
+    #   SIDE_EFFECTS: None — in-memory only.
     #   LINKS: M-DOMAIN-EVENTS
     # END_CONTRACT: MessageBus.register
     def register(self, event_type: type, handler: Callable) -> None:
@@ -54,7 +54,7 @@ class MessageBus:
     #   PURPOSE: Dispatch a sequence of domain events to their registered handlers.
     #   INPUTS: { events: Sequence[DomainEvent] }
     #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Invokes registered async handlers for each event; logs handler errors without skipping remaining handlers.
+    #   SIDE_EFFECTS: Invokes registered handlers (their own side effects).
     #   LINKS: M-DOMAIN-EVENTS
     # END_CONTRACT: MessageBus.dispatch
     async def dispatch(self, events: Sequence[DomainEvent]) -> None:

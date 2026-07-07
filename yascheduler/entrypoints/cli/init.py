@@ -2,7 +2,7 @@
 # VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yainit CLI command — install service unit files and/or apply DB schema + migrations, with --schema/--daemon subset-selector flags.
-#   SCOPE: init command + argparse + systemd/sysv service install + DB schema application + migration application delegation.
+#   SCOPE: init command — service install and/or DB schema+migrations application.
 #   DEPENDS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS
 #   LINKS: M-ENTRYPOINTS-CLI-INIT, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
 # END_MODULE_CONTRACT
@@ -16,7 +16,7 @@
 #
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.3.0 - Call apply_migrations(config.db) after apply_schema(config.db) in _init_schema (add-db-migrations).
-#   PREVIOUS_CHANGE: v1.2.2 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
+#   PREVIOUS_CHANGE: v1.2.2 - Import CONFIG_FILE from yascheduler.entrypoints facade.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

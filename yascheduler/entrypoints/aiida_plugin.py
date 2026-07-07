@@ -14,7 +14,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Relocate yascheduler/aiida_plugin.py → yascheduler/entrypoints/aiida_plugin.py (fulfill add-entrypoints-layer deferred commitment). No compat shim at old path; [project.entry-points."aiida.schedulers"] object path rewritten in pyproject.toml. make_aiida stub deleted from di.py in the same change (never wired through DI; plugin talks to yascheduler over SSH transport, not via the composition root).
+#   LAST_CHANGE: v1.7.0 - Relocate yascheduler/aiida_plugin.py → yascheduler/entrypoints/aiida_plugin.py. No compat shim at old path; [project.entry-points."aiida.schedulers"] object path rewritten in pyproject.toml. make_aiida stub deleted from di.py (never wired through DI; plugin talks to yascheduler over SSH transport, not via the composition root).
 #   PREVIOUS_CHANGE: v1.6.0 - Initial GRACE-lite markup.
 # END_CHANGE_SUMMARY
 #
@@ -49,13 +49,6 @@ _CMD_PREFIX = ""  # NB under virtualenv, this should refer to virtualenv's /bin/
 
 
 class YaschedJobResource(NodeNumberJobResource):
-    # START_CONTRACT: __init__
-    #   PURPOSE: Initialize YaschedJobResource with keyword arguments for AiiDA job resource
-    #   INPUTS: { kwargs: dict - keyword arguments passed to parent NodeNumberJobResource }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Calls parent constructor with provided arguments
-    #   LINKS: M-AIIDA
-    # END_CONTRACT: __init__
     def __init__(self, *_, **kwargs) -> None:  # noqa: ANN002, ANN003
         super().__init__(**kwargs)
 
@@ -308,7 +301,8 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   PURPOSE: Report that job kill is not supported (raises FeatureNotAvailable)
     #   INPUTS: { jobid: str - the job ID to kill }
     #   OUTPUTS: { None - raises FeatureNotAvailable }
-    #   SIDE_EFFECTS: Raises FeatureNotAvailable exception
+    #   SIDE_EFFECTS: None
+    #   RAISES: FeatureNotAvailable - job cancellation is not supported
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_kill_command
     def _get_kill_command(self, jobid: str) -> NoReturn:

@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Prune to honest shared kernel: drop re-exports of to_sync/asleep_until/CONFIG_FILE/LOG_FILE/PID_FILE/ParamSpec (relocated or inlined per prune-shared-kernel); keep Self/Unpack.
-#   PREVIOUS_CHANGE: v1.7.0 - Re-export Unpack from .compat (task-context-replace).
+#   LAST_CHANGE: v1.8.0 - Prune to honest shared kernel: drop re-exports of to_sync/asleep_until/CONFIG_FILE/LOG_FILE/PID_FILE/ParamSpec (relocated or inlined); keep Self/Unpack.
+#   PREVIOUS_CHANGE: v1.7.0 - Re-export Unpack from .compat.
 # END_CHANGE_SUMMARY
 
 from .compat import Self, Unpack
