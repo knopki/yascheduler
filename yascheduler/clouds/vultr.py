@@ -13,6 +13,7 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from functools import cache
 from typing import Optional, cast
 
+import asyncssh
 from asyncssh.public_key import SSHKey as ASSHKey
 
 from ..config import ConfigCloudVultr
@@ -159,6 +160,57 @@ def build_baremetal_user_data(
     return "#cloud-config\n" + json.dumps(config)
 
 
+SSH_AUTH_ATTEMPTS = 12
+SSH_AUTH_INTERVAL = 15
+
+
+async def _check_ssh_auth(
+    log: logging.Logger,
+    instance_id: str,
+    ip_addr: str,
+    key: ASSHKey,
+    username: str,
+    attempts: int = SSH_AUTH_ATTEMPTS,
+    interval: int = SSH_AUTH_INTERVAL,
+) -> bool:
+    """Poll SSH auth until it succeeds or attempts run out.
+
+    On bare metal the SSH port may open before cloud-init has installed
+    authorized_keys, so the first few connects get Permission denied.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            conn = await asyncio.wait_for(
+                asyncssh.connect(
+                    ip_addr,
+                    port=22,
+                    username=username,
+                    client_keys=[key],
+                    known_hosts=None,
+                    connect_timeout=10,
+                ),
+                timeout=15,
+            )
+            conn.close()
+            log.info(
+                "Bare-metal %s SSH auth OK on attempt %s/%s",
+                instance_id,
+                attempt,
+                attempts,
+            )
+            return True
+        except Exception as exc:
+            log.debug(
+                "Bare-metal %s SSH auth attempt %s/%s failed: %s",
+                instance_id,
+                attempt,
+                attempts,
+                exc,
+            )
+            await asyncio.sleep(interval)
+    return False
+
+
 def vultr_create_node_sync(
     log: logging.Logger,
     cfg: ConfigCloudVultr,
@@ -236,56 +288,12 @@ def vultr_create_node_sync(
         "Bare-metal %s SSH port open, waiting for cloud-init to install keys",
         instance_id,
     )
-    import os
-    import tempfile
-
-    import paramiko
-
-    key_pem = key.export_private_key("openssh")
-    with tempfile.NamedTemporaryFile(suffix=".key", delete=False) as tf:
-        tf.write(key_pem)
-        tf.flush()
-        os.chmod(tf.name, 0o600)
-        key_path = tf.name
-    try:
-        ssh_ok = False
-        attempts = 12
-        for attempt in range(1, attempts + 1):
-            if time.time() >= deadline:
-                break
-            try:
-                transport = paramiko.Transport((ip_addr, 22))
-                transport.set_log_channel("paramiko.vultr")
-                transport.use_compression(True)
-                transport.connect(
-                    username=cfg.username,
-                    pkey=paramiko.RSAKey.from_private_key_file(key_path),
-                )
-                transport.close()
-                ssh_ok = True
-                log.info(
-                    "Bare-metal %s SSH auth OK on attempt %s/%s",
-                    instance_id,
-                    attempt,
-                    attempts,
-                )
-                break
-            except Exception as exc:
-                log.debug(
-                    "Bare-metal %s SSH auth attempt %s/%s failed: %s",
-                    instance_id,
-                    attempt,
-                    attempts,
-                    exc,
-                )
-                time.sleep(15)
-        if not ssh_ok:
-            raise APIError(
-                f"Bare-metal {instance_id} SSH auth failed on {ip_addr} "
-                f"after {attempts} attempts"
-            )
-    finally:
-        os.unlink(key_path)
+    ssh_ok = asyncio.run(_check_ssh_auth(log, instance_id, ip_addr, key, cfg.username))
+    if not ssh_ok:
+        raise APIError(
+            f"Bare-metal {instance_id} SSH auth failed on {ip_addr} "
+            f"after {SSH_AUTH_ATTEMPTS} attempts"
+        )
 
     log.info("CREATED %s", ip_addr)
     return cast(str, ip_addr)
