@@ -59,7 +59,8 @@ layer in the project. Both direct and indirect imports are checked.
 - **THEN** the `layers` contract reports a violation
 
 #### Scenario: Composition root imports from infra — allowed
-- **WHEN** `yascheduler.entrypoints.di` imports `PostgresUnitOfWork`, `SSHMachineRepository`, `SSHMachineOperations`, `CloudProvisionerImpl`, `resolve_adapter`, and `webhook_handler` from `yascheduler.infra`
+
+- **WHEN** `yascheduler.entrypoints.di` imports `PostgresUnitOfWork`, `SSHMachineRepository`, `TaskDeployer`, `OutputDownloader`, `OccupancyChecker`, `CloudProvisionerImpl`, `resolve_adapter`, and `webhook_handler` from `yascheduler.infra`
 - **THEN** the `layers` contract reports no violation (composition root is a resident of `yascheduler.entrypoints` and its imports flow in the layer direction)
 
 ### Requirement: Within-package relative imports (R1)
@@ -115,8 +116,8 @@ any import.
 - **THEN** it uses `from yascheduler.domain import Task`, not `from yascheduler.domain.model import Task`
 
 #### Scenario: Application imports adapter symbols via infra layer facade
-- **WHEN** a module in `yascheduler.application` needs to import `SSHMachineRepository`, `SSHMachineOperations`, or `CloudProvisionerImpl`
-- **THEN** it uses `from yascheduler.infra import SSHMachineRepository, SSHMachineOperations, CloudProvisionerImpl`, not `from yascheduler.infra.ssh import SSHMachineRepository` or `from yascheduler.infra.ssh.repository import SSHMachineRepository`
+- **WHEN** a module in `yascheduler.application` needs to import `SSHMachineRepository`, `TaskDeployer`, `OutputDownloader`, `OccupancyChecker`, or `CloudProvisionerImpl`
+- **THEN** it uses `from yascheduler.infra import SSHMachineRepository, TaskDeployer, OutputDownloader, OccupancyChecker, CloudProvisionerImpl`, not `from yascheduler.infra.ssh import SSHMachineRepository` or `from yascheduler.infra.ssh.repository import SSHMachineRepository`
 
 #### Scenario: Composition root imports use layer facades
 - **WHEN** a module in the composition root (`entrypoints/di.py`, `entrypoints/client.py`) imports a symbol from any layer
@@ -214,7 +215,8 @@ exceptions, and ports as the public surface of the domain layer. See
 `yascheduler/domain/__init__.py` for the exact re-export list.
 
 #### Scenario: Domain facade exposes all required categories
-- **WHEN** a consumer imports `from yascheduler.domain import Task, TaskCreated, DomainError, TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudProvisioner`
+
+- **WHEN** a consumer imports `from yascheduler.domain import Task, TaskCreated, DomainError, TaskRepository, NodeRepository, MachineRepository, MachineSession, CloudProvisioner`
 - **THEN** all symbols resolve without ImportError
 
 ### Requirement: Extended facade contents (lazy publication driven by consumers)
@@ -228,8 +230,8 @@ import from their deep submodules. See the respective `__init__.py` files for
 the exact re-export lists.
 
 #### Scenario: Infra layer facade exposes the cross-layer surface
-- **WHEN** a consumer imports `from yascheduler.infra import SSHMachineRepository, SSHMachineOperations, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
-- **THEN** all nine symbols resolve without ImportError
+- **WHEN** a consumer imports `from yascheduler.infra import SSHMachineRepository, TaskDeployer, OutputDownloader, OccupancyChecker, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
+- **THEN** all eleven symbols resolve without ImportError
 
 #### Scenario: Application facade exposes UoW, Orchestrator, MessageBus, submit_task
 - **WHEN** a consumer imports `from yascheduler.application import AbstractUnitOfWork, Orchestrator, MessageBus, submit_task`

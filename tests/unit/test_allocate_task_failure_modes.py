@@ -124,7 +124,7 @@ class TestAllocateTaskFailureModes:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
         uow.commit = AsyncMock(side_effect=RuntimeError("db connection lost"))
@@ -143,7 +143,7 @@ class TestAllocateTaskFailureModes:
                 engines=engines,
                 uow_factory=lambda: uow,
                 repository=repository,
-                operations=operations,
+                occupancy_checker=occupancy_checker,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
@@ -164,7 +164,7 @@ class TestAllocateTaskFailureModes:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
         uow.nodes.remove = AsyncMock(side_effect=RuntimeError("cleanup db lost"))
@@ -183,7 +183,7 @@ class TestAllocateTaskFailureModes:
                 engines=engines,
                 uow_factory=lambda: uow,
                 repository=repository,
-                operations=operations,
+                occupancy_checker=occupancy_checker,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
@@ -208,10 +208,10 @@ class TestAllocateTaskFailureModes:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
-        cloud_node = Node(node_id=NodeId(1), ip="10.0.0.100", ncpus=4, cloud="aws")
+        cloud_node = Node(node_id=NodeId(1), ip="[IP]", ncpus=4, cloud="aws")
         uow.nodes.remove = AsyncMock()
         # First commit (step 1) succeeds; second commit (step 3 persist) fails;
         # subsequent commits (best-effort tmp cleanup) succeed.
@@ -239,7 +239,7 @@ class TestAllocateTaskFailureModes:
                 engines=engines,
                 uow_factory=lambda: uow,
                 repository=repository,
-                operations=operations,
+                occupancy_checker=occupancy_checker,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
@@ -280,7 +280,7 @@ class TestAllocateTaskFailureModes:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
 
@@ -292,7 +292,7 @@ class TestAllocateTaskFailureModes:
             engines=engines,
             uow_factory=lambda: uow,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=AsyncMock(),
             tracker=tracker,

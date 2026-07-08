@@ -89,7 +89,9 @@ def _make_orchestrator(
     repository.disconnect_all = (
         disconnect_all if disconnect_all is not None else AsyncMock()
     )
-    operations = MagicMock()
+    task_deployer = MagicMock()
+    output_downloader = MagicMock()
+    occupancy_checker = MagicMock()
 
     log = MagicMock(spec=logging.Logger)
 
@@ -99,7 +101,9 @@ def _make_orchestrator(
         uow_factory=lambda: AsyncMock(),
         clouds=clouds,
         repository=repository,
-        operations=operations,
+        task_deployer=task_deployer,
+        output_downloader=output_downloader,
+        occupancy_checker=occupancy_checker,
         engines=engines,
         log=log,
         config_clouds=[],

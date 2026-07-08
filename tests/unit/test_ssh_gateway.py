@@ -15,7 +15,6 @@
 #   _make_state - Build a fully-mocked SSHMachineSession (bypasses connect); name kept for import-compat with sibling test modules
 #   TestConnectionLifecycle - connect / disconnect / disconnect_all
 #   TestListFree - list_free filtering by state and platform (returns sessions)
-#   TestCommandExecution - run / run_full / run_bg via the operations facade taking a session
 #   TestSessionFileTransfer - session.upload / session.open_sftp
 #   TestRepositoryCollection - contains, len, get_session
 # END_MODULE_MAP
@@ -41,9 +40,7 @@ from yascheduler.domain.model import (
     MachineState,
     Node,
     NodeId,
-    ProcessResult,
 )
-from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.platform.protocol import ProcessInfo
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 from yascheduler.infra.ssh.session import SSHMachineSession
@@ -194,11 +191,6 @@ def _make_state(
 @pytest.fixture
 def repository() -> SSHMachineRepository:
     return SSHMachineRepository()
-
-
-@pytest.fixture
-def operations(repository: SSHMachineRepository) -> SSHMachineOperations:
-    return SSHMachineOperations(repository=repository)
 
 
 @pytest.fixture
@@ -485,57 +477,6 @@ class TestListFree:
 
         result = repository.list_free(platforms=None)
         assert result[0].machine.ip == "10.0.0.1"  # older free_since first
-
-
-# =============================================================================
-# Command Execution (via operations facade taking a session)
-# =============================================================================
-
-
-class TestCommandExecution:
-    """run, run_full, run_bg via the operations facade (session-typed)."""
-
-    @pytest.mark.asyncio
-    async def test_run_returns_process_result(
-        self, operations: SSHMachineOperations
-    ) -> None:
-        """run(session, cmd) returns a ProcessResult from the adapter output."""
-        session = _make_state()
-        result = await operations.run(session, "echo hello")
-        assert isinstance(result, ProcessResult)
-        assert result.exit_code == 0
-        assert result.stdout == "stdout"
-        assert result.stderr == ""
-
-    @pytest.mark.asyncio
-    async def test_run_delegates_to_session_run(
-        self, operations: SSHMachineOperations
-    ) -> None:
-        """operations.run(session, cmd) delegates to session.run(cmd)."""
-        session = _make_state()
-        with patch.object(session, "run", AsyncMock()) as mock_run:
-            mock_run.return_value = ProcessResult(exit_code=0, stdout="out", stderr="")
-            result = await operations.run(session, "echo hello")
-            mock_run.assert_awaited_once_with("echo hello")
-            assert result.exit_code == 0
-
-    @pytest.mark.asyncio
-    async def test_run_full_returns_ssh_completed_process(
-        self, operations: SSHMachineOperations
-    ) -> None:
-        """run_full(session, cmd) returns the raw adapter.run result."""
-        session = _make_state()
-        proc = await operations.run_full(session, "echo hello")
-        assert proc.returncode == 0
-        assert proc.stdout == "stdout"
-
-    @pytest.mark.asyncio
-    async def test_run_bg_starts_background_process(
-        self, operations: SSHMachineOperations
-    ) -> None:
-        """run_bg(session, cmd, cwd=...) delegates to session.run_bg (returns None)."""
-        session = _make_state()
-        await operations.run_bg(session, "long_running", cwd="/tmp")
 
 
 # =============================================================================

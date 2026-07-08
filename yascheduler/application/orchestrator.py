@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 7.3.0
+# VERSION: 7.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Daemon orchestrator: producer-consumer loops driving submit/allocate/consume/deallocate use cases with SSH/cloud collaborators.
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-SETTINGS, M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
+#   LINKS: M-QUEUE, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.3.0 - _consumer_consume reads task.engine for occupancy-check engine lookup.
-#   PREVIOUS_CHANGE: v7.2.0 - _task_consumer_consumer MACHINE_GONE log drops ip field (task.allocated_ip removed).
+#   LAST_CHANGE: v7.4.0 - Orchestrator.__init__ takes three concrete collaborators (task_deployer/output_downloader/occupancy_checker) instead of operations: MachineOperations; _start_task_on_machine calls self._task_deployer and session.get_cpu_cores directly; consumer loop passes occupancy_checker to allocate_task, output_downloader to consume_task, and calls self._occupancy_checker.start_occupancy_check directly.
+#   PREVIOUS_CHANGE: v7.3.0 - _consumer_consume reads task.engine for occupancy-check engine lookup.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import (
     CloudProvisioner,
     MachineConnectionError,
-    MachineOperations,
     MachineRepository,
     MachineSession,
     MachineState,
@@ -62,6 +61,11 @@ if TYPE_CHECKING:
         LocalSettings,
         RemoteDefaults,
     )
+    from yascheduler.infra import (
+        OccupancyChecker,
+        OutputDownloader,
+        TaskDeployer,
+    )
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
@@ -77,18 +81,18 @@ async def _asleep_until(end: datetime) -> None:
 
 # START_CONTRACT: Orchestrator
 #   PURPOSE: Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases.
-#   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, gateway, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock }
+#   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, gateway, task_deployer, output_downloader, occupancy_checker, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock }
 #   OUTPUTS: { Orchestrator instance }
 #   SIDE_EFFECTS: Creates queues, cancellation event.
-#   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW
+#   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
 # END_CONTRACT: Orchestrator
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, repository, operations, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock, list_private_keys_fn, http_session }
+    #   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, repository, task_deployer, output_downloader, occupancy_checker, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock, list_private_keys_fn, http_session }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues.
-    #   LINKS: M-APPLICATION-UOW, M-QUEUE, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS
+    #   LINKS: M-APPLICATION-UOW, M-QUEUE, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY, M-SSH-KEYS
     # END_CONTRACT: Orchestrator.__init__
     def __init__(
         self,
@@ -97,7 +101,9 @@ class Orchestrator:
         uow_factory: Callable[[], AbstractUnitOfWork],
         clouds: CloudProvisioner,
         repository: MachineRepository,
-        operations: MachineOperations,
+        task_deployer: TaskDeployer,
+        output_downloader: OutputDownloader,
+        occupancy_checker: OccupancyChecker,
         engines: EngineRepository,
         log: logging.Logger,
         config_clouds: Sequence[CloudConfig],
@@ -113,7 +119,9 @@ class Orchestrator:
         self._uow_factory = uow_factory
         self._clouds = clouds
         self._repository = repository
-        self._operations = operations
+        self._task_deployer = task_deployer
+        self._output_downloader = output_downloader
+        self._occupancy_checker = occupancy_checker
         self._engines = engines
         self._log = log
         self._config_clouds = config_clouds
@@ -161,11 +169,11 @@ class Orchestrator:
     # ---- Task deployment wrapper ----
 
     # START_CONTRACT: Orchestrator._start_task_on_machine
-    #   PURPOSE: Thin wrapper — resolve ncpus via UoW, delegate to operations.start_task_on_machine.
+    #   PURPOSE: Thin wrapper — resolve ncpus via UoW, delegate to task_deployer.start_task_on_machine.
     #   INPUTS: { session: MachineSession, engine: Engine, task: Task }
     #   OUTPUTS: { bool - True on successful spawn }
-    #   SIDE_EFFECTS: Reads node from DB, calls operations.start_task_on_machine.
-    #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
+    #   SIDE_EFFECTS: Reads node from DB, calls task_deployer.start_task_on_machine; falls back to session.get_cpu_cores when the node is absent.
+    #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS, M-SSH-OPS-DEPLOY, M-SSH-SESSION
     # END_CONTRACT: Orchestrator._start_task_on_machine
     async def _start_task_on_machine(
         self,
@@ -180,9 +188,9 @@ class Orchestrator:
                 if task.allocated_node_id is not None
                 else None
             )
-        ncpus = (node and node.ncpus) or await self._operations.get_cpu_cores(session)
+        ncpus = (node and node.ncpus) or await session.get_cpu_cores()
         # END_BLOCK_RESOLVE_NCPUS
-        return await self._operations.start_task_on_machine(
+        return await self._task_deployer.start_task_on_machine(
             session, engine, task, ncpus, self._remote_defaults.engines_dir
         )
 
@@ -394,7 +402,7 @@ class Orchestrator:
                 engines=self._engines,
                 uow_factory=self._uow_factory,
                 repository=self._repository,
-                operations=self._operations,
+                occupancy_checker=self._occupancy_checker,
                 clouds=self._clouds,
                 start_task_on_machine=self._start_task_on_machine,
                 tracker=self._tracker,
@@ -482,7 +490,7 @@ class Orchestrator:
         if key not in self._occupancy_started:
             engine = self._engines.get(task.engine)
             if engine:
-                self._operations.start_occupancy_check(session, engine)
+                self._occupancy_checker.start_occupancy_check(session, engine)
                 self._occupancy_started.add(key)
                 session = self._repository.get_session(key)
                 if session is None:
@@ -503,7 +511,7 @@ class Orchestrator:
                 finalised = await consume_task(
                     task_id=task_id,
                     session=session,
-                    operations=self._operations,
+                    output_downloader=self._output_downloader,
                     engines=self._engines,
                     uow_factory=self._uow_factory,
                     local_tasks_dir=self._local_tasks_dir,
@@ -690,7 +698,7 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
+    #   LINKS: M-SSH-REPOSITORY
     # END_CONTRACT: Orchestrator._await_first_machine
     async def _await_first_machine(self) -> None:
         # START_BLOCK_WAIT_MACHINES
@@ -777,7 +785,7 @@ class Orchestrator:
     #   INPUTS: { None }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Cancels bg jobs, disconnects machines, stops clouds, closes http_session; idempotent via _stopped guard; per-step isolation.
-    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS
+    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY
     # END_CONTRACT: Orchestrator.stop
     async def stop(self) -> None:
         # START_BLOCK_STOP_GUARD

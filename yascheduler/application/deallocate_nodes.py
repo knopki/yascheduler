@@ -39,13 +39,13 @@ logger = logging.getLogger(__name__)
 #   PURPOSE: Disconnect and cloud-deallocate a single node.
 #   INPUTS: {
 #     node: Node - The node to deallocate,
-#     repository: MachineRepository, operations: MachineOperations - SSH gateway,
+#     repository: MachineRepository - SSH gateway,
 #     clouds: CloudProvisioner - Cloud provider manager,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
 #   }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Disconnects remote machine, disables node via UoW, deletes cloud VM, removes node row. If remove fails after cloud delete, logs for manual reconciliation.
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-UOW
+#   LINKS: M-SSH-REPOSITORY, M-CLOUD-PROVISIONER, M-APPLICATION-UOW
 # END_CONTRACT: deallocate_node
 async def deallocate_node(
     node: Node,

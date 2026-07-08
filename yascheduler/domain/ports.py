@@ -1,8 +1,8 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.20.0
+# VERSION: 2.21.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions/operations, and cloud provisioning.
-#   SCOPE: Protocol-based port interfaces for persistence (TaskRepository, NodeRepository), machine collection/sessions/operations (MachineRepository, MachineSession, MachineOperations), and cloud provisioning (CloudConfig, CloudProvisioner).
+#   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions, and cloud provisioning.
+#   SCOPE: Protocol-based port interfaces for persistence (TaskRepository, NodeRepository), machine collection/sessions (MachineRepository, MachineSession), and cloud provisioning (CloudConfig, CloudProvisioner).
 #   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-ENGINE
 #   LINKS: M-DOMAIN-MODEL, M-PERSISTENCE-POSTGRES, M-CLOUD-CONFIGS, M-APPLICATION-DEALLOCATE, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
 # END_MODULE_CONTRACT
@@ -13,13 +13,12 @@
 #   CloudConfig - Structural Protocol for cloud provider config
 #   MachineRepository - Async port for the connected-machine collection
 #   MachineSession - Connected-machine entity handle
-#   MachineOperations - Async port for operations on a single machine
 #   CloudProvisioner - Async port for cloud node provisioning
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.20.0 - MachineOperations.download_outputs return type is the new 4-tuple (local_folder, remote_folder, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
-#   PREVIOUS_CHANGE: v2.19.0 - TaskRepository.list_ids_by_ip_and_status(ip: str, status) → list_ids_by_node_id_and_status(node_id: NodeId, status).
+#   LAST_CHANGE: v2.21.0 - Remove MachineOperations Protocol (SSHMachineOperations facade dissolved). Operations-side collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) are concrete classes typed directly by consumers; session pass-throughs are called on MachineSession.
+#   PREVIOUS_CHANGE: v2.20.0 - MachineOperations.download_outputs return type is the new 4-tuple (local_folder, remote_folder, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ if TYPE_CHECKING:
 
     from asyncssh.sftp import SFTPClient
 
-    from .engine import Engine, EngineRepository
+    from .engine import EngineRepository
     from .model import (
         ConnectedMachine,
         NewNode,
@@ -130,11 +129,12 @@ class CloudConfig(Protocol):
 # START_CONTRACT: MachineSession
 #   PURPOSE: Connected-machine entity handle — identity, state transitions, connect-time config,
 #     adapter-derived accessors, base SSH primitives, and the per-session monitor mechanism.
-#     What MachineOperations methods operate on; what MachineRepository hands out and tracks by NodeId.
+#     What MachineRepository hands out and tracks by NodeId; what collaborators
+#     (TaskDeployer/OutputDownloader/OccupancyChecker) operate on per call.
 #   INPUTS: { None - Protocol defines surface only }
 #   OUTPUTS: { None - Protocol defines surface only }
 #   SIDE_EFFECTS: None at Protocol level; implementations own connection teardown via _close (private to concrete class)
-#   LINKS: M-DOMAIN-PORTS, M-SSH-SESSION, M-SSH-REPOSITORY, M-SSH-OPERATIONS
+#   LINKS: M-DOMAIN-PORTS, M-SSH-SESSION, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
 # END_CONTRACT: MachineSession
 @runtime_checkable
 class MachineSession(Protocol):
@@ -259,68 +259,6 @@ class MachineRepository(Protocol):
     def __len__(self) -> int: ...
 
     def __contains__(self, node_id: NodeId) -> bool: ...
-
-
-@runtime_checkable
-class MachineOperations(Protocol):
-    """Operations on a single connected machine — use-case methods plus
-    facade pass-throughs. All machine-reference parameters are typed
-    `session: MachineSession` (resolved per-tick by the orchestrator via
-    `repository.get_session(node_id)`).
-
-    Does NOT declare base primitives (run/run_full/run_bg/upload/
-    open_sftp/pgrep/list_processes/get_cpu_cores/setup_node) as abstract —
-    those live on MachineSession; the facade pass-throughs below delegate
-    to them. Does NOT expose upload/get_sftp/pgrep/list_processes —
-    collaborators access them via the session parameter.
-    """
-
-    # ---- Use-case methods (forwarded to collaborators) ----
-    async def start_task_on_machine(
-        self,
-        session: MachineSession,
-        engine: Engine,
-        task: Task,
-        ncpus: int,
-        engines_dir: PurePath,
-    ) -> bool: ...
-
-    async def download_outputs(
-        self,
-        session: MachineSession,
-        remote_dir: str,
-        local_dir: Path,
-        files: list[str],
-        task_id: TaskId | None = None,
-    ) -> tuple[
-        str,
-        str,
-        list[tuple[str | None, Exception]],
-        list[tuple[str | None, Exception]],
-    ]: ...
-
-    async def occupancy_check(
-        self, session: MachineSession, config: Engine
-    ) -> bool: ...
-
-    def start_occupancy_check(
-        self, session: MachineSession, config: Engine
-    ) -> None: ...
-
-    # ---- Facade pass-throughs (delegate to session.*) ----
-    async def run(self, session: MachineSession, cmd: str) -> ProcessResult: ...
-
-    async def run_full(self, session: MachineSession, cmd: str) -> Any: ...  # noqa: ANN401 - infra SSHCompletedProcess returned through domain Protocol
-
-    async def run_bg(
-        self, session: MachineSession, cmd: str, *, cwd: str | None = None
-    ) -> None: ...
-
-    async def get_cpu_cores(self, session: MachineSession) -> int: ...
-
-    async def setup_node(
-        self, session: MachineSession, engines: EngineRepository
-    ) -> None: ...
 
 
 @runtime_checkable

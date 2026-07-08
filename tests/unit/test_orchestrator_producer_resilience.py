@@ -86,7 +86,9 @@ def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
     repository = MagicMock()
     repository.__len__ = MagicMock(return_value=1)
     repository.disconnect_all = AsyncMock()
-    operations = MagicMock()
+    task_deployer = MagicMock()
+    output_downloader = MagicMock()
+    occupancy_checker = MagicMock()
 
     log = MagicMock(spec=logging.Logger)
 
@@ -96,7 +98,9 @@ def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
         uow_factory=lambda: mock_uow,
         clouds=AsyncMock(),
         repository=repository,
-        operations=operations,
+        task_deployer=task_deployer,
+        output_downloader=output_downloader,
+        occupancy_checker=occupancy_checker,
         engines=engines,
         log=log,
         config_clouds=[],

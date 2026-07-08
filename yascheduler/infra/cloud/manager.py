@@ -1,11 +1,11 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.17.0
+# VERSION: 2.18.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
 #   SCOPE: CloudProvisionerImpl: allocate/deallocate/select_provider lifecycle with SSH setup and cloud-init.
-#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-DOMAIN-SETTINGS
-#   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE, M-CLOUD-INIT
+#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-ENGINE, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-KEYS, M-DOMAIN-SETTINGS
+#   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-SESSION, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS, M-SSH-KEYS, M-DOMAIN-ENGINE, M-CLOUD-INIT
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.17.0 - allocate/deallocate take node: Node; allocate derives identity via replace(node, ...) (no fresh Node); deallocate reads node.cloud/node.ip, no-ops on cloud is None.
-#   PREVIOUS_CHANGE: v2.16.0 - allocate constructs the identity Node once (after create_node) and threads it through _setup_vm/_connect_to_vm; the three Node constructions collapse to one (no ersatz Node). _setup_vm returns replace(node, enabled=True, ncpus); _connect_to_vm passes the Node straight to connect with no username/port args. Setup-failure except blocks call disconnect(node.node_id) before delete_node. Removed the `# FIXME: just use Node` comment; added `replace` to the dataclasses import.
+#   LAST_CHANGE: v2.18.0 - CloudProvisionerImpl drops machine_operations field (SSHMachineOperations facade dissolved); _setup_vm calls session.run/session.setup_node/session.get_cpu_cores directly on the session returned by machine_repository.connect.
+#   PREVIOUS_CHANGE: v2.17.0 - allocate/deallocate take node: Node; allocate derives identity via replace(node, ...) (no fresh Node); deallocate reads node.cloud/node.ip, no-ops on cloud is None.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
 
     from yascheduler.domain import EngineRepository, LocalSettings, RemoteDefaults
-    from yascheduler.infra import SSHMachineOperations, SSHMachineRepository
+    from yascheduler.infra import SSHMachineRepository
 
     from .adapters import CloudAdapter
     from .cloud_configs import ConfigCloud
@@ -58,8 +58,7 @@ if TYPE_CHECKING:
 #   INPUTS: {
 #     adapters: dict[str, CloudAdapter] - provider name to adapter,
 #     configs: dict[str, ConfigCloud] - provider name to config,
-#     machine_repository: SSHMachineRepository - SSH connection collection (connect/disconnect),
-#     machine_operations: SSHMachineOperations - single-machine operations (setup_node, get_cpu_cores, run),
+#     machine_repository: SSHMachineRepository - SSH connection collection (connect/disconnect); _setup_vm calls session pass-throughs directly,
 #     local_config: LocalSettings - local daemon config (keys),
 #     remote_config: RemoteDefaults - remote machine defaults,
 #     engines: EngineRepository - engine definitions for cloud-config,
@@ -67,7 +66,7 @@ if TYPE_CHECKING:
 #   }
 #   OUTPUTS: { CloudProvisionerImpl - frozen instance }
 #   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS
+#   LINKS: M-DOMAIN-PORTS, M-SSH-REPOSITORY, M-SSH-SESSION, M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDER-SELECTION, M-DOMAIN-EXCEPTIONS
 # END_CONTRACT: CloudProvisionerImpl
 @dataclass(frozen=True)
 class CloudProvisionerImpl:
@@ -80,7 +79,6 @@ class CloudProvisionerImpl:
     adapters: dict[str, CloudAdapter]
     configs: dict[str, ConfigCloud]
     machine_repository: SSHMachineRepository
-    machine_operations: SSHMachineOperations
     local_config: LocalSettings
     remote_config: RemoteDefaults
     engines: EngineRepository
@@ -144,7 +142,7 @@ class CloudProvisionerImpl:
     #   SIDE_EFFECTS: Creates cloud VM, writes SSH key, installs engines. On setup failure: best-effort disconnect (node.node_id) then delete VM.
     #   RAISES: CloudAllocateError - provider unknown or VM creation fails;
     #           CloudSetupError - SSH/cloud-init/setup fails
-    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS
+    #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-SESSION
     # END_CONTRACT: CloudProvisionerImpl.allocate
     async def allocate(self, provider: str, node: Node) -> Node:
         # START_BLOCK_RESOLVE_ALLOCATE_PROVIDER
@@ -335,7 +333,7 @@ class CloudProvisionerImpl:
     #   OUTPUTS: { Node - enabled=True, ncpus populated (via dataclasses.replace); the caller persists via uow.nodes.update }
     #   SIDE_EFFECTS: Connects to VM (session registers under node.node_id), runs cloud-init, installs engines.
     #   RAISES: CloudSetupError - on any SSH/cloud-init/setup failure
-    #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
+    #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
     # END_CONTRACT: CloudProvisionerImpl._setup_vm
     async def _setup_vm(
         self,
@@ -357,7 +355,7 @@ class CloudProvisionerImpl:
         self.log.debug("[CloudProvisionerImpl][setup_vm][CLOUD_INIT] ip=%s", node.ip)
         try:
             result = await asyncio.wait_for(
-                self.machine_operations.run(session, "cloud-init status --wait"),
+                session.run("cloud-init status --wait"),
                 timeout=adapter.create_node_timeout,
             )
             if result.exit_code != 0:
@@ -381,14 +379,14 @@ class CloudProvisionerImpl:
         # START_BLOCK_SETUP_NODE
         self.log.debug("[CloudProvisionerImpl][setup_vm][SETUP_NODE] ip=%s", node.ip)
         try:
-            await self.machine_operations.setup_node(session, self.engines)
+            await session.setup_node(self.engines)
         except Exception as err:
             raise CloudSetupError(f"Setup node {node.ip} failed: {err}") from err
         # END_BLOCK_SETUP_NODE
 
         # START_BLOCK_GET_CPUS
         try:
-            ncpus = await self.machine_operations.get_cpu_cores(session)
+            ncpus = await session.get_cpu_cores()
         except Exception as err:
             raise CloudSetupError(f"Get CPU cores for {node.ip} failed: {err}") from err
         # END_BLOCK_GET_CPUS
@@ -411,7 +409,7 @@ class CloudProvisionerImpl:
     #   OUTPUTS: { MachineSession - connected machine session instance }
     #   SIDE_EFFECTS: Opens SSH connection to VM (session registered under node.node_id).
     #   RAISES: CloudSetupError - if SSH connection fails
-    #   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
+    #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
     # END_CONTRACT: CloudProvisionerImpl._connect_to_vm
     async def _connect_to_vm(
         self,

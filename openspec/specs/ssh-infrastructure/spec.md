@@ -200,66 +200,9 @@ method; they SHALL NOT cache sessions.
 - **WHEN** `await repository.connect(node, ...)` returns
 - **THEN** the return value is a `MachineSession` whose `ip == node.ip`, `machine.node_id == node.node_id`, `machine.state == FREE`, `machine.platform`, and `machine.ncpus` match the connection
 
-### Requirement: MachineOperations port
-
-The system SHALL define a `@runtime_checkable` `MachineOperations`
-Protocol in `yascheduler/domain/ports.py` representing operations on a
-single machine. The Protocol's methods SHALL take `session: MachineSession`.
-The Protocol SHALL NOT itself declare base primitives (`run`, `run_full`,
-`run_bg`, `upload`, `open_sftp`, `pgrep`, `list_processes`,
-`get_cpu_cores`, `setup_node`) — those are on `MachineSession` and the
-facade delegates to them. The Protocol SHALL declare the three use-case
-methods that the orchestrator and use cases call:
-
-**Use-case methods:**
-- `start_task_on_machine(session: MachineSession, engine: Engine, task: Task, ncpus: int, engines_dir: PurePath) -> bool` (async)
-- `download_outputs(session: MachineSession, remote_dir: str, local_dir: Path, files: list[str], task_id: int | None = None) -> tuple[list[tuple[str, Any]], list[tuple[str | None, Exception]], list[tuple[str | None, Exception]]]` (async) — returns `(meta_add, transient_errors, permanent_errors)`
-- `occupancy_check(session: MachineSession, config: Engine) -> bool` (async) — True if busy or SSH failed (safe default), False only when confirmed free
-- `start_occupancy_check(session: MachineSession, config: Engine) -> None` (sync)
-
-**Facade-pass-through methods (delegating to `session.*`):**
-- `run(session: MachineSession, cmd: str) -> ProcessResult` (async)
-- `run_full(session: MachineSession, cmd: str) -> SSHCompletedProcess` (async)
-- `run_bg(session: MachineSession, cmd: str, *, cwd: str | None = None) -> None` (async)
-- `get_cpu_cores(session: MachineSession) -> int` (async)
-- `setup_node(session: MachineSession, engines: EngineRepository) -> None` (async)
-
-The `config` parameter of `start_occupancy_check` and `occupancy_check`,
-and the `engine` parameter of `start_task_on_machine`, SHALL be the
-concrete `Engine` frozen dataclass from `yascheduler.domain.engine`.
-
-`MachineOperations` is `@runtime_checkable`. The Protocol SHALL NOT
-expose `download`, `get_sftp`, `pgrep`, `list_processes`, or `upload`
-— the first is replaced by `download_outputs`; the rest are accessed
-via the `session` parameter when collaborators need them internally.
-
-#### Scenario: Operations satisfies Protocol structurally
-
-- **WHEN** a class implements all `MachineOperations` methods with matching signatures
-- **THEN** it satisfies the `@runtime_checkable` Protocol structurally
-
-### Requirement: SSHMachineOperations composition
-
-The system SHALL provide an `SSHMachineOperations` class in
-`yascheduler/infra/ssh/operations/` satisfying the `MachineOperations`
-Protocol. The class SHALL receive a `MachineRepository` reference and a
-logger at construction. The class SHALL compose three stateless
-collaborators — `TaskDeployer`, `OutputDownloader`, `OccupancyChecker` —
-exposed as the `deploy`, `download`, `occupancy` attributes respectively.
-
-`SSHMachineOperations` SHALL NOT declare base primitives itself. Its
-methods SHALL delegate to the corresponding session methods. Its use-case
-methods SHALL forward to the corresponding collaborator method, passing
-the session through. Composition (not inheritance) SHALL be used.
-
-#### Scenario: Collaborators are stateless
-
-- **WHEN** `TaskDeployer`, `OutputDownloader`, `OccupancyChecker` are constructed
-- **THEN** each accepts only `(log)`; none holds a repository reference or an operations reference
-
 ### Requirement: download_outputs per-file SFTP isolation and retry
 
-The system SHALL provide `SSHMachineOperations.download_outputs(session,
+The system SHALL provide `OutputDownloader.download_outputs(session,
 remote_dir, local_dir, files, task_id)` returning
 `(local_folder: str, remote_folder: str, transient_errors, permanent_errors)`.
 The method SHALL catch all per-file exceptions and classify each into
@@ -286,12 +229,13 @@ The `local_folder`/`remote_folder` return values are `str(local_dir)` and
 
 ### Requirement: start_task_on_machine rolls back BUSY on failure
 
-The `start_task_on_machine` method SHALL roll back the session-level
-BUSY marking on any deploy or spawn failure. The method SHALL mark the
-session BUSY at `session.occupy()` before performing the deploy and spawn
-steps. If any exception (including `CancelledError`) escapes, the method
-SHALL roll back by calling `session.release()`, then re-raise the original
-exception. The rollback SHALL run under `except BaseException`.
+The `TaskDeployer.start_task_on_machine` method SHALL roll back the
+session-level BUSY marking on any deploy or spawn failure. The method
+SHALL mark the session BUSY at `session.occupy()` before performing the
+deploy and spawn steps. If any exception (including `CancelledError`)
+escapes, the method SHALL roll back by calling `session.release()`, then
+re-raise the original exception. The rollback SHALL run under
+`except BaseException`.
 
 The rollback SHALL be defensive against concurrent state changes:
 - If the session is closed (`session.is_closed` is `True`), log a warning and re-raise without rollback.
@@ -304,7 +248,7 @@ by the caller and unaffected by this rollback.
 
 #### Scenario: Upload failure rolls back BUSY
 
-- **WHEN** `start_task_on_machine` calls `session.occupy()` marking the session BUSY, then the deploy step raises
+- **WHEN** `TaskDeployer.start_task_on_machine` calls `session.occupy()` marking the session BUSY, then the deploy step raises
 - **THEN** the `except BaseException` handler calls `session.release()`, logs an info line, and re-raises the original exception
 - **AND** the session's `machine.state` is `FREE` after the call returns
 
@@ -349,9 +293,9 @@ The system SHALL periodically check if an engine process is still
 running on a machine and update the machine state to FREE when the
 process exits. The check logic (`occupancy_check`,
 `_occupancy_by_pgrep`, `_occupancy_by_cmd`) lives in
-`infra/ssh/operations/occupancy.py`; the monitor mechanism
-(`install_monitor`/`cancel_monitor`) lives on `SSHMachineSession`
-(in `infra/ssh/session.py`).
+`infra/ssh/operations/occupancy.py` on the `OccupancyChecker` class; the
+monitor mechanism (`install_monitor`/`cancel_monitor`) lives on
+`SSHMachineSession` (in `infra/ssh/session.py`).
 
 The `OccupancyChecker.start_occupancy_check(session, config)` SHALL
 additionally call `session.occupy()` before installing the monitor

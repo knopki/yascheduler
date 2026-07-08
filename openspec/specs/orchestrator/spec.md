@@ -12,8 +12,10 @@ idle cloud nodes.
 
 The system SHALL provide an `Orchestrator` class that runs 4 producer-consumer
 loops. The `Orchestrator` SHALL accept `uow_factory: Callable[[],
-AbstractUnitOfWork]`, `repository: MachineRepository` and `operations:
-MachineOperations` (Protocol types for all code paths), `clouds: CloudProvisioner` (Protocol type), `allocation_tracker:
+AbstractUnitOfWork]`, `repository: MachineRepository` (Protocol type),
+`task_deployer: TaskDeployer`, `output_downloader: OutputDownloader`,
+`occupancy_checker: OccupancyChecker` (concrete collaborator types),
+`clouds: CloudProvisioner` (Protocol type), `allocation_tracker:
 AllocationTracker`, `active_clouds: Sequence[CloudConfig]` (domain Protocol
 type), and `allocation_lock: asyncio.Lock`. The orchestrator SHALL own the
 tracker, the filtered cloud config list, and the lock — constructing them once
@@ -24,12 +26,13 @@ The `Orchestrator` SHALL NOT import `AllSSHRetryExc` or `backoff` from
 `@backoff.on_exception` decorators — all retry logic SHALL live in the
 adapter.
 
-The `Orchestrator` SHALL type `self._repository` as `MachineRepository` and
-`self._operations` as `MachineOperations` (Protocols). The orchestrator's
+The `Orchestrator` SHALL type `self._repository` as `MachineRepository`
+(Protocol). The orchestrator's
 `_start_task_on_machine` SHALL be a thin wrapper that resolves `ncpus` via
 `uow.nodes.get_by_id(task.allocated_node_id)` (falling back to
-`operations.get_cpu_cores(session)` when the node is absent) and delegates
-the actual upload + spawn to `operations.start_task_on_machine(session, ...)`.
+`session.get_cpu_cores()` when the node is absent) and delegates
+the actual upload + spawn to
+`self._task_deployer.start_task_on_machine(session, ...)`.
 The orchestrator SHALL NOT contain any reference to adapter-specific methods
 (`get_sftp`, `get_path`, `get_quote`, `run_full`).
 
@@ -62,20 +65,20 @@ orchestrator SHALL NOT hold an `self._config` reference.
 - **WHEN** `orchestrator.py` is imported
 - **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, or `backoff` from `yascheduler.infra` at runtime (TYPE_CHECKING imports are allowed)
 
-#### Scenario: Task deployment delegated to operations resolves session by allocated_node_id
+#### Scenario: Task deployment delegated to TaskDeployer resolves session by allocated_node_id
 
 - **WHEN** the orchestrator allocates a task to a machine
-- **THEN** the orchestrator resolves a `session` via `repository.get_session(task.allocated_node_id)`, resolves `ncpus` via `uow.nodes.get_by_id(task.allocated_node_id)` (falling back to `operations.get_cpu_cores(session)` when the node is absent), and calls `operations.start_task_on_machine(session, engine, task, ncpus, self._remote_defaults.engines_dir)` — never touches `get_sftp`, `get_path`, or `get_quote` directly, never keys a session lookup by `ip`
+- **THEN** the orchestrator resolves a `session` via `repository.get_session(task.allocated_node_id)`, resolves `ncpus` via `uow.nodes.get_by_id(task.allocated_node_id)` (falling back to `session.get_cpu_cores()` when the node is absent), and calls `self._task_deployer.start_task_on_machine(session, engine, task, ncpus, self._remote_defaults.engines_dir)` — never touches `get_sftp`, `get_path`, or `get_quote` directly, never keys a session lookup by `ip`
 
 #### Scenario: Orchestrator does not import Config
 
 - **WHEN** `orchestrator.py` is inspected for `Config` imports
 - **THEN** no `from yascheduler.entrypoints import Config` or `from yascheduler.entrypoints.config import Config` import appears (TYPE_CHECKING or runtime); the orchestrator imports `LocalSettings` and `RemoteDefaults` from `yascheduler.domain` under TYPE_CHECKING
 
-#### Scenario: Orchestrator constructed with unpacked settings
+#### Scenario: Orchestrator constructed with unpacked settings and three collaborators
 
 - **WHEN** `Orchestrator(...)` is constructed by the composition root
-- **THEN** the call passes `local_settings=` and `remote_defaults=` keyword arguments (instances of `LocalSettings` and `RemoteDefaults`), not a `Config` aggregate; the `list_private_keys_fn` callable is passed as before; `repository=` and `operations=` are passed as separate keyword arguments (not a single `gateway=`)
+- **THEN** the call passes `local_settings=` and `remote_defaults=` keyword arguments (instances of `LocalSettings` and `RemoteDefaults`), not a `Config` aggregate; the `list_private_keys_fn` callable is passed as before; `repository=`, `task_deployer=`, `output_downloader=`, and `occupancy_checker=` are passed as separate keyword arguments
 ### Requirement: Allocate loop
 
 The system SHALL poll TO_DO tasks via UoW and dispatch to the
@@ -83,10 +86,10 @@ The system SHALL poll TO_DO tasks via UoW and dispatch to the
 SHALL load domain `Task` objects from `TaskRepository.list_by_status`. The
 producer SHALL compute cloud capacity via the inline `_clouds_get_capacity`
 method (UoW read of `uow.nodes.list_all()` + `Counter` over
-`active_clouds`). SSH collection operations SHALL use `MachineRepository`;
-per-machine SSH operations SHALL use `MachineOperations`. The
-`_allocator_consumer` SHALL NOT apply `@backoff.on_exception` — retry
-logic lives in the adapter.
+`active_clouds`). SSH collection operations SHALL use `MachineRepository`.
+The orchestrator SHALL pass its `occupancy_checker` instance into each
+`allocate_task` invocation. The `_allocator_consumer` SHALL NOT apply
+`@backoff.on_exception` — retry logic lives in the adapter.
 
 #### Scenario: Task allocated in order
 - **WHEN** multiple TO_DO tasks exist
@@ -100,9 +103,9 @@ logic lives in the adapter.
 
 The system SHALL poll RUNNING tasks via UoW and dispatch to the `consume_task`
 use case when the remote machine reports completion. Queue messages SHALL
-carry domain `Task` objects. Per-machine SSH operations SHALL use
-`MachineOperations` with a `session` resolved via
-`repository.get_session(task.allocated_node_id)`.
+carry domain `Task` objects. The orchestrator SHALL pass its
+`output_downloader` instance into each `consume_task` invocation. The
+`session` is resolved via `repository.get_session(task.allocated_node_id)`.
 
 The orchestrator SHALL maintain an in-process `set[TaskId]` of in-flight consume
 task ids (`self._consuming`). The consume producer SHALL skip yielding a task
@@ -113,9 +116,9 @@ block so a failed consume does not permanently block re-yield.
 The orchestrator SHALL maintain an in-process `set[NodeId]` of node_ids whose
 occupancy check has been started (`self._occupancy_started`). On the first
 consumer tick for a task, the orchestrator SHALL add `task.allocated_node_id`
-to `_occupancy_started` and call `operations.start_occupancy_check(session,
-engine)`. On finalised consume, the orchestrator SHALL discard the node_id
-from `_occupancy_started`.
+to `_occupancy_started` and call
+`self._occupancy_checker.start_occupancy_check(session, engine)`. On finalised
+consume, the orchestrator SHALL discard the node_id from `_occupancy_started`.
 
 #### Scenario: Consume task in-flight guard
 

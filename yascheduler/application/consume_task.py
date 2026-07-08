@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 6.0.1
+# VERSION: 6.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
 #   SCOPE: Task consumption / finalisation lifecycle — download outputs, finalise (DONE) or defer (retry).
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-OPERATIONS, M-DOMAIN-ENGINE
+#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-OPS-DOWNLOAD, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-OPS-DOWNLOAD, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.0.1 - _prepare_store_folder SIDE_EFFECTS declares AssertionError raise on RUNNING-task precondition.
-#   PREVIOUS_CHANGE: v6.0.0 - Drop legacy meta_add indirection; _decide_finalisation and _finalize_task take local_folder/remote_folder as named args.
+#   LAST_CHANGE: v6.1.0 - operations: MachineOperations parameter renamed to output_downloader: OutputDownloader (facade dissolved); consume_task calls output_downloader.download_outputs directly.
+#   PREVIOUS_CHANGE: v6.0.1 - _prepare_store_folder SIDE_EFFECTS declares AssertionError raise on RUNNING-task precondition.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -34,11 +34,11 @@ if TYPE_CHECKING:
 
     from yascheduler.domain import (
         EngineRepository,
-        MachineOperations,
         MachineSession,
         Task,
         TaskId,
     )
+    from yascheduler.infra import OutputDownloader
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
@@ -208,7 +208,7 @@ async def _finalize_task(
 #   INPUTS: {
 #     task_id: TaskId - ID of the task to consume,
 #     session: MachineSession - Session of the machine where the task ran,
-#     operations: MachineOperations - SSH operations for output download,
+#     output_downloader: OutputDownloader - SSH operations for output download,
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable - Factory providing AbstractUnitOfWork,
 #     local_tasks_dir: Path - Local base directory for output storage,
@@ -216,12 +216,12 @@ async def _finalize_task(
 #   }
 #   OUTPUTS: { bool - True when finalised (DONE applied, remote dir cleaned by gateway, tracker slot discarded) or task not found in DB (vacuously finalised, tracker slot discarded); False when deferred (stay RUNNING, remote dir preserved, tracker slot retained) }
 #   SIDE_EFFECTS: Downloads files via SFTP; on finalise applies domain lifecycle, saves via UoW, records events, discards tracker slot; on task-not-found discards tracker slot; on defer none.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-OPS-DOWNLOAD, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: consume_task
 async def consume_task(
     task_id: TaskId,
     session: MachineSession,
-    operations: MachineOperations,
+    output_downloader: OutputDownloader,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
     local_tasks_dir: Path,
@@ -244,7 +244,7 @@ async def consume_task(
         remote_folder,
         transient_errors,
         permanent_errors,
-    ) = await operations.download_outputs(
+    ) = await output_downloader.download_outputs(
         session=session,
         remote_dir=task_remote_folder,
         local_dir=store_folder,

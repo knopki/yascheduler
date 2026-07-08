@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
@@ -35,7 +36,7 @@ from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
 
 from yascheduler.domain import Engine
 from yascheduler.domain.model import ConnectedMachine, MachineState, NodeId
-from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.operations import OccupancyChecker
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 from yascheduler.infra.ssh.session import SSHMachineSession
 
@@ -114,8 +115,8 @@ def repository() -> SSHMachineRepository:
 
 
 @pytest.fixture
-def operations(repository: SSHMachineRepository) -> SSHMachineOperations:
-    return SSHMachineOperations(repository=repository)
+def occupancy_checker() -> OccupancyChecker:
+    return OccupancyChecker(log=logging.getLogger(__name__))
 
 
 @pytest.fixture
@@ -141,7 +142,7 @@ class TestBgTaskScoping:
     async def test_disconnect_does_not_cancel_other_machines_monitors(
         self,
         repository: SSHMachineRepository,
-        operations: SSHMachineOperations,
+        occupancy_checker: OccupancyChecker,
         mock_pengine: MagicMock,
     ) -> None:
         """Regression: disconnect(B) cancels only B's monitor; A and C untouched.
@@ -149,7 +150,7 @@ class TestBgTaskScoping:
         Pins the fix for the bug where disconnect iterated the entire
         _monitors set and cancelled every machine's monitor.
         """
-        ip_a, ip_b, ip_c = "10.0.0.1", "10.0.0.2", "10.0.0.3"
+        ip_a, ip_b, ip_c = "[IP]", "[IP]", "[IP]"
         sessions = {}
         for idx, ip in enumerate((ip_a, ip_b, ip_c), 1):
             session = _make_state(ip=ip, node_id=idx, state=MachineState.FREE)
@@ -165,9 +166,9 @@ class TestBgTaskScoping:
 
         # NOTE: real asyncio.sleep (not AsyncMock) — required so task.cancel()
         # during disconnect raises CancelledError at a clean await point.
-        with patch.object(operations.occupancy, "occupancy_check", _always_busy):
+        with patch.object(occupancy_checker, "occupancy_check", _always_busy):
             for session in (session_a, session_b, session_c):
-                operations.occupancy.start_occupancy_check(session, mock_pengine)
+                occupancy_checker.start_occupancy_check(session, mock_pengine)
             # Let each monitor enter its loop
             await asyncio.sleep(0.05)
 
@@ -196,7 +197,7 @@ class TestBgTaskScoping:
     async def test_start_occupancy_check_replaces_prior_monitor(
         self,
         repository: SSHMachineRepository,
-        operations: SSHMachineOperations,
+        occupancy_checker: OccupancyChecker,
         mock_pengine: MagicMock,
     ) -> None:
         """Re-registering occupancy for an IP cancels the prior monitor.
@@ -204,7 +205,7 @@ class TestBgTaskScoping:
         Pins the spec scenario: only the second task remains under
         _monitors[ip]; the first is cancelled.
         """
-        ip = "10.0.0.1"
+        ip = "[IP]"
         session = _make_state(ip=ip, node_id=1, state=MachineState.FREE)
         repository._sessions[NodeId(1)] = session
         mock_pengine.check_pname = None
@@ -214,8 +215,8 @@ class TestBgTaskScoping:
         async def _always_busy(*args: object, **kwargs: object) -> bool:
             return True
 
-        with patch.object(operations.occupancy, "occupancy_check", _always_busy):
-            operations.occupancy.start_occupancy_check(session, mock_pengine)
+        with patch.object(occupancy_checker, "occupancy_check", _always_busy):
+            occupancy_checker.start_occupancy_check(session, mock_pengine)
             first = session._monitor_task  # noqa: SLF001
             assert first is not None
             await asyncio.sleep(0.02)
@@ -223,7 +224,7 @@ class TestBgTaskScoping:
 
             # Reset machine to FREE so the second start_occupancy_check can occupy it
             session.release()
-            operations.occupancy.start_occupancy_check(session, mock_pengine)
+            occupancy_checker.start_occupancy_check(session, mock_pengine)
             second = session._monitor_task  # noqa: SLF001
             assert second is not None
             # Let the prior task finish cancelling. _checker swallows
@@ -248,11 +249,11 @@ class TestBgTaskScoping:
     async def test_disconnect_unknown_ip_leaves_other_monitors_alive(
         self,
         repository: SSHMachineRepository,
-        operations: SSHMachineOperations,
+        occupancy_checker: OccupancyChecker,
         mock_pengine: MagicMock,
     ) -> None:
         """disconnect on an unknown IP is a no-op for every other monitor."""
-        ip_a, ip_b = "10.0.0.1", "10.0.0.2"
+        ip_a, ip_b = "[IP]", "[IP]"
         sessions = {}
         for idx, ip in enumerate((ip_a, ip_b), 1):
             session = _make_state(ip=ip, node_id=idx, state=MachineState.FREE)
@@ -266,9 +267,9 @@ class TestBgTaskScoping:
         async def _always_busy(*args: object, **kwargs: object) -> bool:
             return True
 
-        with patch.object(operations.occupancy, "occupancy_check", _always_busy):
-            operations.occupancy.start_occupancy_check(session_a, mock_pengine)
-            operations.occupancy.start_occupancy_check(session_b, mock_pengine)
+        with patch.object(occupancy_checker, "occupancy_check", _always_busy):
+            occupancy_checker.start_occupancy_check(session_a, mock_pengine)
+            occupancy_checker.start_occupancy_check(session_b, mock_pengine)
             await asyncio.sleep(0.05)
 
             task_a = session_a._monitor_task  # noqa: SLF001

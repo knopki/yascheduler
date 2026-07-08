@@ -221,7 +221,7 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=MagicMock(),
-            operations=MagicMock(),
+            occupancy_checker=MagicMock(),
             clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
@@ -257,8 +257,8 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[free_session])
-        operations = MagicMock()
-        operations.start_occupancy_check = MagicMock()
+        occupancy_checker = MagicMock()
+        occupancy_checker.start_occupancy_check = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -268,7 +268,7 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[Node(node_id=NodeId(1), ip="[IP]", ncpus=4, enabled=True)]
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -289,7 +289,7 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -304,7 +304,9 @@ class TestAllocateTask:
         assert _call_engine is engine
         assert _call_task.allocated_node_id == NodeId(1)
         assert not hasattr(_call_task, "allocated_ip")
-        operations.start_occupancy_check.assert_called_once_with(free_session, engine)
+        occupancy_checker.start_occupancy_check.assert_called_once_with(
+            free_session, engine
+        )
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.allocated_node_id == NodeId(1)
@@ -327,7 +329,7 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])  # No free machines
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -357,7 +359,7 @@ class TestAllocateTask:
         clouds.select_provider.return_value = "aws"
         cloud_node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.100",
+            ip="[IP]",
             ncpus=4,
             cloud="aws",
             enabled=True,
@@ -373,7 +375,7 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -416,7 +418,7 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -453,7 +455,7 @@ class TestAllocateTask:
                 engines=engines,
                 uow_factory=uow_factory,
                 repository=repository,
-                operations=operations,
+                occupancy_checker=occupancy_checker,
                 clouds=clouds,
                 start_task_on_machine=start_on_machine,
                 tracker=tracker,
@@ -487,7 +489,7 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -513,7 +515,7 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -543,7 +545,7 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -572,7 +574,7 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,

@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.11.0
+# VERSION: 2.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Re-export domain symbols for cross-layer consumption.
 #   SCOPE: Public domain surface: entities, value objects, ports, events, exceptions, and cross-layer settings — re-exported for application/infra consumers.
@@ -49,7 +49,6 @@
 #   NodeRepository - Async port for node persistence
 #   MachineRepository - Async port for the connected-machine collection (lifecycle, queries)
 #   MachineSession - Connected-machine entity handle (identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)
-#   MachineOperations - Async port for operations on a single machine (deploy, download, occupancy, facade pass-throughs)
 #   CloudConfig - Structural contract for cloud provider config (7-field surface application consumers read)
 #   CloudProvisioner - Async port for cloud node provisioning
 #   LocalSettings - Frozen dataclass: local daemon settings (paths, webhook, concurrency limits)
@@ -57,8 +56,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.11.0 - Remove TaskContext / TaskContextOverrides re-exports (folded into Task / NewTask typed fields).
-#   PREVIOUS_CHANGE: v2.10.0 - Re-export NewTask and TaskId from .model; DomainEvent.task_id and task-keyed exceptions now carry TaskId.
+#   LAST_CHANGE: v2.12.0 - Drop MachineOperations re-export (SSHMachineOperations facade dissolved; consumers type against the concrete collaborator classes from yascheduler.infra).
+#   PREVIOUS_CHANGE: v2.11.0 - Remove TaskContext / TaskContextOverrides re-exports (folded into Task / NewTask typed fields).
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -110,7 +109,6 @@ __all__ = [
     "NodeRepository",
     "MachineRepository",
     "MachineSession",
-    "MachineOperations",
     "CloudConfig",
     "CloudProvisioner",
     # Settings
@@ -169,7 +167,6 @@ from .model import (
 from .ports import (
     CloudConfig,
     CloudProvisioner,
-    MachineOperations,
     MachineRepository,
     MachineSession,
     NodeRepository,

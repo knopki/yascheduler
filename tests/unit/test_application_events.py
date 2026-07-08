@@ -150,7 +150,7 @@ class TestAllocateTaskEvents:
             engines=engines,
             uow_factory=uow_factory,
             repository=MagicMock(),
-            operations=MagicMock(),
+            occupancy_checker=MagicMock(),
             clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
@@ -183,8 +183,8 @@ class TestAllocateTaskEvents:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[free_session])
-        operations = MagicMock()
-        operations.start_occupancy_check = MagicMock()
+        occupancy_checker = MagicMock()
+        occupancy_checker.start_occupancy_check = MagicMock()
 
         from datetime import datetime
 
@@ -210,7 +210,7 @@ class TestAllocateTaskEvents:
         uow.nodes = AsyncMock()
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[Node(node_id=NodeId(1), ip="[IP]", ncpus=4, enabled=True)]
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -231,7 +231,7 @@ class TestAllocateTaskEvents:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
@@ -255,15 +255,15 @@ class TestConsumeTaskEvents:
     """Verify consume_task records TaskCompleted or TaskFailed events."""
 
     @pytest.fixture
-    def mock_operations(self) -> MagicMock:
-        operations = MagicMock()
-        operations.download_outputs = AsyncMock(return_value=("", "", [], []))
-        return operations
+    def mock_output_downloader(self) -> MagicMock:
+        output_downloader = MagicMock()
+        output_downloader.download_outputs = AsyncMock(return_value=("", "", [], []))
+        return output_downloader
 
     async def _run_consume(
         self,
         session: Any,  # noqa: ANN401 - test stub for MachineSession
-        operations: MagicMock,
+        output_downloader: MagicMock,
         task: Task,
         uow_factory: Callable[[], AbstractUnitOfWork],
         engines: EngineRepository,
@@ -273,7 +273,7 @@ class TestConsumeTaskEvents:
         await consume_task(
             task_id=task.task_id,
             session=session,  # type: ignore[arg-type]
-            operations=operations,
+            output_downloader=output_downloader,
             engines=engines,
             uow_factory=uow_factory,
             local_tasks_dir=local_tasks_dir,
@@ -282,7 +282,7 @@ class TestConsumeTaskEvents:
 
     async def test_consume_success_records_task_completed_event(
         self,
-        mock_operations: MagicMock,
+        mock_output_downloader: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
@@ -304,7 +304,7 @@ class TestConsumeTaskEvents:
 
         await self._run_consume(
             session=SimpleNamespace(),  # opaque to consume_task; only forwarded to operations.download_outputs
-            operations=mock_operations,
+            output_downloader=mock_output_downloader,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -321,11 +321,11 @@ class TestConsumeTaskEvents:
 
     async def test_consume_failure_records_task_failed_event(
         self,
-        mock_operations: MagicMock,
+        mock_output_downloader: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
-        mock_operations.download_outputs = AsyncMock(
+        mock_output_downloader.download_outputs = AsyncMock(
             return_value=("", "", [], [("/remote/file", OSError("Connection refused"))])
         )
 
@@ -347,7 +347,7 @@ class TestConsumeTaskEvents:
 
         await self._run_consume(
             session=SimpleNamespace(),  # opaque to consume_task; only forwarded to operations.download_outputs
-            operations=mock_operations,
+            output_downloader=mock_output_downloader,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,

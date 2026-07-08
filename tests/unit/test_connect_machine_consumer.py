@@ -108,7 +108,9 @@ def make_orchestrator(
 
     repository = MagicMock()
     repository.__len__ = MagicMock(return_value=0)
-    operations = MagicMock()
+    task_deployer = MagicMock()
+    output_downloader = MagicMock()
+    occupancy_checker = MagicMock()
 
     engine = MagicMock(spec=Engine, sleep_interval=0)
     engine.name = "test_engine"
@@ -128,7 +130,9 @@ def make_orchestrator(
         uow_factory=uow_factory,
         clouds=clouds,
         repository=repository,
-        operations=operations,
+        task_deployer=task_deployer,
+        output_downloader=output_downloader,
+        occupancy_checker=occupancy_checker,
         engines=engines,
         log=MagicMock(),
         config_clouds=config_clouds,

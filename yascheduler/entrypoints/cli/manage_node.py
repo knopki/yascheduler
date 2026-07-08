@@ -1,10 +1,10 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.9.0
+# VERSION: 1.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
 #   SCOPE: manage_node command — add, soft-remove, or hard-remove nodes.
-#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-UOW, M-SSH-KEYS
+#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-KEYS, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
+#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-SSH-REPOSITORY, M-APPLICATION-UOW, M-SSH-KEYS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - _remove_node_hard/_remove_node_soft call list_ids_by_node_id_and_status(node.node_id, ...); filter key changes from ip to node_id.
-#   PREVIOUS_CHANGE: v1.8.0 - _add_node stops passing username and port to repository.connect (connect reads them from node internally).
+#   LAST_CHANGE: v1.10.0 - manage_node no longer constructs SSHMachineOperations (facade dissolved); _add_node takes repository only and calls session.setup_node directly on the session returned by repository.connect.
+#   PREVIOUS_CHANGE: v1.9.0 - _remove_node_hard/_remove_node_soft call list_ids_by_node_id_and_status(node.node_id, ...); filter key changes from ip to node_id.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from dataclasses import dataclass, replace
 from yascheduler.domain import NewNode, Node, NodeId, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.infra import SSHMachineOperations, SSHMachineRepository
+from yascheduler.infra import SSHMachineRepository
 from yascheduler.infra.ssh.keys import list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
@@ -272,19 +272,18 @@ async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
 #   PURPOSE: Add a node — V1 single-row lifecycle: insert enabled=False tmp row (UoW#1) to obtain node_id, connect+setup under that node_id, flip to enabled=True via update (UoW#2); always disconnect(T.node_id) in finally; on connect-failure best-effort remove(T.node_id) then re-raise.
 #   INPUTS: {
 #     deps: CLIDeps - DI holder providing uow_factory,
-#     repository: SSHMachineRepository, operations: SSHMachineOperations - gateway constructed by manage_node (mockable),
+#     repository: SSHMachineRepository - gateway constructed by manage_node (mockable),
 #     spec: HostSpec - parsed host spec (the add path is host-only; add-by-id is rejected in _parse_node_args),
 #     config: Config - for username default + private keys + engines,
-#     skip_setup: bool - skip gateway.setup_node when True
+#     skip_setup: bool - skip session.setup_node when True
 #   }
 #   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens UoW#1 (insert enabled=False → Node(T), commit), opens SSH under T.node_id, optionally sets up the remote node, opens UoW#2 (update enabled=True, commit), prints to stdout; ALWAYS calls repository.disconnect(T.node_id) via try/finally (resource-leak fix). On connect-failure opens a UoW to remove+commit T.node_id (best-effort) then re-raises so the operator sees the real error.
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-UOW, M-DOMAIN-MODEL, M-ENTRYPOINTS-CONFIG, M-DI
+#   SIDE_EFFECTS: Opens UoW#1 (insert enabled=False → Node(T), commit), opens SSH under T.node_id, optionally sets up the remote node (session.setup_node directly on the returned session), opens UoW#2 (update enabled=True, commit), prints to stdout; ALWAYS calls repository.disconnect(T.node_id) via try/finally (resource-leak fix). On connect-failure opens a UoW to remove+commit T.node_id (best-effort) then re-raises so the operator sees the real error.
+#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION, M-APPLICATION-UOW, M-DOMAIN-MODEL, M-ENTRYPOINTS-CONFIG, M-DI
 # END_CONTRACT: _add_node
 async def _add_node(
     deps: CLIDeps,
     repository: SSHMachineRepository,
-    operations: SSHMachineOperations,
     spec: HostSpec,
     config: Config,
     skip_setup: bool,
@@ -332,7 +331,7 @@ async def _add_node(
             raise
         if not skip_setup:
             print("Setup host...")
-            await operations.setup_node(session, config.engines)
+            await session.setup_node(config.engines)
         # Flip the tmp row to enabled=True (single UPDATE on the same node_id).
         async with deps.uow_factory() as uow:
             await uow.nodes.update(replace(tmp, enabled=True))
@@ -348,7 +347,7 @@ async def _add_node(
 #   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
 #   OUTPUTS: { None - prints success messages to stdout, Error: ... to stderr on failure, calls sys.exit(1) on failure }
 #   SIDE_EFFECTS: Reads config, opens a read-only validation UoW, dispatches to a per-helper UoW that mutates+commits, optionally opens SSH; may call sys.exit.
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS
+#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-DI, M-APPLICATION-UOW, M-SSH-REPOSITORY
 # END_CONTRACT: _manage_node_async
 async def _manage_node_async(argv: list[str] | None) -> None:
     args = _parse_node_args(argv)
@@ -365,7 +364,6 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         config = parse_config(args.config)
         deps = make_cli_deps(config)
         repository = SSHMachineRepository()
-        operations = SSHMachineOperations(repository=repository)
         # END_BLOCK_CONFIGURE
 
         # START_BLOCK_VALIDATE
@@ -424,9 +422,7 @@ async def _manage_node_async(argv: list[str] | None) -> None:
             await _remove_node_soft(deps, resolved_node)
         else:
             assert target.host_spec is not None  # add path is host-only
-            await _add_node(
-                deps, repository, operations, target.host_spec, config, args.skip_setup
-            )
+            await _add_node(deps, repository, target.host_spec, config, args.skip_setup)
         # END_BLOCK_DISPATCH
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

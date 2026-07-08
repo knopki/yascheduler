@@ -1,26 +1,29 @@
 # FILE: yascheduler/infra/ssh/operations/__init__.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
-#   PURPOSE: Facade for single-machine SSH operations.
-#   SCOPE: Re-exports SSHMachineOperations and collaborator classes (TaskDeployer, OutputDownloader, OccupancyChecker).
-#   DEPENDS: M-SSH-OPERATIONS-BASE, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
+#   PURPOSE: Single-machine SSH operations collaborators — stateless deploy/download/occupancy classes that take a session per call.
+#   SCOPE: Re-exports TaskDeployer, OutputDownloader, OccupancyChecker (the concrete collaborator classes consumers type against).
+#   DEPENDS: M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
 #   LINKS: M-SSH-OPERATIONS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   SSHMachineOperations - Operations on a single machine; composes deploy/download/occupancy collaborators
 #   TaskDeployer - Upload inputs and spawn calculation process (re-exported from .deployment)
 #   OutputDownloader - Per-file SFTP-isolated download with retry and error classification (re-exported from .download)
 #   OccupancyChecker - pgrep/cmd-based occupancy check + monitor installer (re-exported from .occupancy)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial package created. Extracted operations responsibility from the dissolved SSHMachineGateway god-class; composes three sibling collaborators (TaskDeployer, OutputDownloader, OccupancyChecker) via composition, not inheritance.
-#   PREVIOUS_CHANGE: none
+#   LAST_CHANGE: v2.0.0 - Dissolve the SSHMachineOperations facade. The package now exports the three collaborators directly; consumers (orchestrator, use cases, di) construct and type against them.
+#   PREVIOUS_CHANGE: v1.0.0 - Initial package created. Extracted operations responsibility from the dissolved SSHMachineGateway god-class; composes three sibling collaborators (TaskDeployer, OutputDownloader, OccupancyChecker) via composition, not inheritance.
 # END_CHANGE_SUMMARY
 
-from .base import SSHMachineOperations
+from .deployment import TaskDeployer
+from .download import OutputDownloader
+from .occupancy import OccupancyChecker
 
 __all__ = [
-    "SSHMachineOperations",
+    "TaskDeployer",
+    "OutputDownloader",
+    "OccupancyChecker",
 ]

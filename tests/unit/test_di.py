@@ -195,7 +195,9 @@ class TestMakeDaemon:
                 "yascheduler.entrypoints.di.resolve_adapter", return_value=None
             ) as mock_resolve,
             patch("yascheduler.entrypoints.di.SSHMachineRepository") as mock_repo_ctor,
-            patch("yascheduler.entrypoints.di.SSHMachineOperations") as mock_ops_ctor,
+            patch("yascheduler.entrypoints.di.TaskDeployer") as mock_deploy_ctor,
+            patch("yascheduler.entrypoints.di.OutputDownloader") as mock_dl_ctor,
+            patch("yascheduler.entrypoints.di.OccupancyChecker") as mock_occ_ctor,
             patch(
                 "yascheduler.entrypoints.di.CloudProvisionerImpl"
             ) as mock_clouds_ctor,
@@ -207,8 +209,12 @@ class TestMakeDaemon:
         ):
             mock_repo = MagicMock()
             mock_repo_ctor.return_value = mock_repo
-            mock_ops = MagicMock()
-            mock_ops_ctor.return_value = mock_ops
+            mock_deploy = MagicMock()
+            mock_deploy_ctor.return_value = mock_deploy
+            mock_dl = MagicMock()
+            mock_dl_ctor.return_value = mock_dl
+            mock_occ = MagicMock()
+            mock_occ_ctor.return_value = mock_occ
             resolved_log = MagicMock()
             mock_get_logger.return_value = resolved_log
 
@@ -218,19 +224,23 @@ class TestMakeDaemon:
 
         mock_get_logger.assert_called_once_with("Orchestrator")
         mock_resolve.assert_not_called()
-        # share-ssh-gateway: exactly one SSHMachineRepository + SSHMachineOperations
-        # on the clouds is None path, shared by CloudProvisionerImpl (machine_repository
-        # + machine_operations) and Orchestrator (repository + operations).
+        # share-ssh-gateway: exactly one SSHMachineRepository + one of each
+        # collaborator (TaskDeployer/OutputDownloader/OccupancyChecker).
+        # CloudProvisionerImpl gets machine_repository only (no machine_operations);
+        # Orchestrator gets repository + the three collaborators.
         mock_repo_ctor.assert_called_once()
-        mock_ops_ctor.assert_called_once()
+        mock_deploy_ctor.assert_called_once()
+        mock_dl_ctor.assert_called_once()
+        mock_occ_ctor.assert_called_once()
         clouds_kwargs = mock_clouds_ctor.call_args.kwargs
         orch_kwargs = mock_orch.call_args.kwargs
         assert clouds_kwargs["machine_repository"] is mock_repo
-        assert clouds_kwargs["machine_operations"] is mock_ops
+        assert "machine_operations" not in clouds_kwargs
         assert orch_kwargs["repository"] is mock_repo
-        assert orch_kwargs["operations"] is mock_ops
+        assert orch_kwargs["task_deployer"] is mock_deploy
+        assert orch_kwargs["output_downloader"] is mock_dl
+        assert orch_kwargs["occupancy_checker"] is mock_occ
         assert orch_kwargs["repository"] is clouds_kwargs["machine_repository"]
-        assert orch_kwargs["operations"] is clouds_kwargs["machine_operations"]
         assert "clouds" in orch_kwargs
         assert orch_kwargs["clouds"] is not None
         assert orch_kwargs["local_settings"] is config.local
@@ -258,25 +268,30 @@ class TestMakeDaemon:
         with (
             patch("yascheduler.entrypoints.di.resolve_adapter") as mock_resolve,
             patch("yascheduler.entrypoints.di.SSHMachineRepository") as mock_repo_ctor,
-            patch("yascheduler.entrypoints.di.SSHMachineOperations") as mock_ops_ctor,
+            patch("yascheduler.entrypoints.di.TaskDeployer") as mock_deploy_ctor,
+            patch("yascheduler.entrypoints.di.OutputDownloader") as mock_dl_ctor,
+            patch("yascheduler.entrypoints.di.OccupancyChecker") as mock_occ_ctor,
             patch("yascheduler.entrypoints.di.Orchestrator") as mock_orch,
             patch("logging.getLogger"),
         ):
             mock_repo = MagicMock()
             mock_repo_ctor.return_value = mock_repo
-            mock_ops = MagicMock()
-            mock_ops_ctor.return_value = mock_ops
+            mock_deploy = MagicMock()
+            mock_deploy_ctor.return_value = mock_deploy
+            mock_dl = MagicMock()
+            mock_dl_ctor.return_value = mock_dl
+            mock_occ = MagicMock()
+            mock_occ_ctor.return_value = mock_occ
 
             await make_daemon(config, clouds=custom_clouds)
 
         mock_resolve.assert_not_called()
-        # pre-built-clouds path keeps its own repository + operations —
-        # the orchestrator gets a fresh SSHMachineRepository + SSHMachineOperations,
-        # NOT the ones on custom_clouds.
+        # pre-built-clouds path keeps its own repository + collaborators —
+        # the orchestrator gets a fresh SSHMachineRepository + fresh
+        # TaskDeployer/OutputDownloader/OccupancyChecker, NOT the ones on
+        # custom_clouds.
         orch_repo = mock_orch.call_args.kwargs["repository"]
-        orch_ops = mock_orch.call_args.kwargs["operations"]
         assert orch_repo is mock_repo
-        assert orch_ops is mock_ops
         assert orch_repo is not custom_clouds.machine_repository
 
     @pytest.mark.asyncio

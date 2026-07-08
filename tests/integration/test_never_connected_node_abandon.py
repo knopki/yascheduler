@@ -107,7 +107,9 @@ def _build_orchestrator(
 
     repository = MagicMock()
     repository.__len__ = MagicMock(return_value=0)
-    operations = MagicMock()
+    task_deployer = MagicMock()
+    output_downloader = MagicMock()
+    occupancy_checker = MagicMock()
 
     if tracker is None:
         tracker = AllocationTracker()
@@ -120,7 +122,9 @@ def _build_orchestrator(
         uow_factory=uow_factory,
         clouds=AsyncMock(),
         repository=repository,
-        operations=operations,
+        task_deployer=task_deployer,
+        output_downloader=output_downloader,
+        occupancy_checker=occupancy_checker,
         engines=engines,
         log=MagicMock(),
         config_clouds=config_clouds,

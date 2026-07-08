@@ -173,17 +173,6 @@ def make_mock_repository(
     return repo
 
 
-def make_mock_operations(
-    stdout: str = "remote output", returncode: int = 0
-) -> MagicMock:
-    """Return a MagicMock SSHMachineOperations with async run_full."""
-    ops = MagicMock()
-    ops.run_full = AsyncMock(
-        return_value=MagicMock(returncode=returncode, stdout=stdout)
-    )
-    return ops
-
-
 @pytest.fixture
 def stub_config_deps(
     monkeypatch: pytest.MonkeyPatch,

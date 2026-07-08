@@ -38,10 +38,9 @@ import asyncssh
 import pytest
 
 from yascheduler.domain import Engine
-from yascheduler.domain.model import NodeId, Task, TaskId
-from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.domain.model import Task, TaskId
+from yascheduler.infra.ssh.operations import TaskDeployer
 from yascheduler.infra.ssh.operations.deployment import _write_remote_file
-from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -275,19 +274,17 @@ class TestStartTaskAbortOnUploadFailure:
         _exec_spawn_command is NOT called; the exception propagates to the caller;
         the upstream handler logs "Can't upload task_id=N files: <err>" with the task_id.
         """
-        repository = SSHMachineRepository()
-        operations = SSHMachineOperations(repository=repository)
+        deployer = TaskDeployer(log=logging.getLogger(__name__))
         session, _sftp = _make_sftp_state(write_side_effect=ValueError("bad input"))
-        repository._sessions[NodeId(1)] = session
 
         spawn_calls: list[Any] = []
-        operations.deploy._exec_spawn_command = AsyncMock(  # type: ignore[method-assign]
+        deployer._exec_spawn_command = AsyncMock(  # type: ignore[method-assign]
             side_effect=lambda *a, **kw: spawn_calls.append((a, kw))
         )
 
         with caplog.at_level(logging.ERROR):
             with pytest.raises(ValueError, match="bad input"):
-                await operations.start_task_on_machine(
+                await deployer.start_task_on_machine(
                     session,
                     _make_engine(input_files=("input.txt",)),
                     _make_task(extra={"input.txt": "hello"}),
@@ -310,17 +307,15 @@ class TestStartTaskAbortOnUploadFailure:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """An asyncssh.misc.Error during an input file write aborts start_task_on_machine."""
-        repository = SSHMachineRepository()
-        operations = SSHMachineOperations(repository=repository)
+        deployer = TaskDeployer(log=logging.getLogger(__name__))
         err = asyncssh.misc.Error(2, "No such file")
         session, _sftp = _make_sftp_state(write_side_effect=err)
-        repository._sessions[NodeId(1)] = session
 
-        operations.deploy._exec_spawn_command = AsyncMock()  # type: ignore[method-assign]
+        deployer._exec_spawn_command = AsyncMock()  # type: ignore[method-assign]
 
         with caplog.at_level(logging.ERROR):
             with pytest.raises(asyncssh.misc.Error):
-                await operations.start_task_on_machine(
+                await deployer.start_task_on_machine(
                     session,
                     _make_engine(input_files=("input.txt",)),
                     _make_task(extra={"input.txt": "hello"}),
@@ -328,7 +323,7 @@ class TestStartTaskAbortOnUploadFailure:
                     PurePosixPath("/engines"),
                 )
 
-        operations.deploy._exec_spawn_command.assert_not_awaited()  # type: ignore[attr-defined]
+        deployer._exec_spawn_command.assert_not_awaited()  # type: ignore[attr-defined]
         # Both diagnostic lines present: the structured SFTPError (from the
         # _write_remote_file branch) and the task_id-bearing upload-failure
         # log (from the start_task_on_machine DEPLOY handler).
@@ -369,14 +364,12 @@ class TestSuccessfulWrite:
     @pytest.mark.asyncio
     async def test_upload_loop_continues_across_files(self) -> None:
         """_upload_task_data writes every input file when none raise; returns True."""
-        repository = SSHMachineRepository()
-        operations = SSHMachineOperations(repository=repository)
+        deployer = TaskDeployer(log=logging.getLogger(__name__))
         state, sftp = _make_sftp_state(write_side_effect=None)
-        repository._sessions[NodeId(1)] = state
 
         # Two input files; the _FakeSFTPFile is shared across calls so we can
         # count write invocations across the loop.
-        ok = await operations.deploy._upload_task_data(
+        ok = await deployer._upload_task_data(
             state,
             _make_task(extra={"input.txt": "a", "fort.9": "AAAA"}),
             PurePosixPath("/remote/tasks/7"),

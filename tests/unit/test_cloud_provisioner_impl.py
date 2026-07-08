@@ -127,6 +127,9 @@ def _make_mock_repository(**kwargs: Any) -> MagicMock:
     Records every connect call's kwargs in ``repo.connect_calls`` so tests can
     assert the node is passed straight through and no ``username``/``port``
     kwargs are supplied (they now come from ``node.username``/``node.port``).
+
+    The returned session exposes ``run``, ``setup_node``, and ``get_cpu_cores``
+    as AsyncMocks (``CloudProvisionerImpl._setup_vm`` calls these directly).
     """
     repo = MagicMock()
     repo.connect_calls = []
@@ -135,38 +138,18 @@ def _make_mock_repository(**kwargs: Any) -> MagicMock:
         repo.connect_calls.append(kw)
         machine = MagicMock()
         node = kw.get("node")
-        machine.ip = node.ip if node is not None else "10.0.0.1"
+        machine.ip = node.ip if node is not None else "[IP]"
+        # Session methods called directly by CloudProvisionerImpl._setup_vm.
+        machine.run = AsyncMock(
+            return_value=MagicMock(exit_code=0, stdout="", stderr="")
+        )
+        machine.setup_node = AsyncMock()
+        machine.get_cpu_cores = AsyncMock(return_value=kwargs.get("ncpus", 4))
         return machine
 
     repo.connect = _connect
 
     return repo
-
-
-def _make_mock_operations(**kwargs: Any) -> MagicMock:
-    """Create a mock SSHMachineOperations."""
-    ops = MagicMock()
-
-    async def _run(machine: Any, cmd: str) -> MagicMock:
-        result = MagicMock()
-        result.exit_code = 0
-        result.stdout = ""
-        result.stderr = ""
-        return result
-
-    ops.run = _run
-
-    async def _setup_node(ip: str, engines: Any) -> None:
-        pass
-
-    ops.setup_node = _setup_node
-
-    async def _get_cpu_cores(ip: str) -> int:
-        return kwargs.get("ncpus", 4)
-
-    ops.get_cpu_cores = _get_cpu_cores
-
-    return ops
 
 
 def _tmp_node(node_id: int = 999, cloud: str | None = "test") -> Node:
@@ -235,7 +218,6 @@ def make_provisioner(
     adapters: dict[str, Any] | None = None,
     configs: dict[str, Any] | None = None,
     machine_repository: MagicMock | None = None,
-    machine_operations: MagicMock | None = None,
     local_config: MagicMock | None = None,
     remote_config: MagicMock | None = None,
     engines: MagicMock | None = None,
@@ -252,7 +234,6 @@ def make_provisioner(
         adapters=adapters or {},
         configs=configs or {},
         machine_repository=machine_repository or _make_mock_repository(),
-        machine_operations=machine_operations or _make_mock_operations(),
         local_config=local_config or MagicMock(),
         remote_config=remote_config or MagicMock(),
         engines=engines or MagicMock(),
@@ -275,13 +256,11 @@ class TestAllocate:
         """Full flow: create VM -> SSH -> cloud-init -> setup -> return Node."""
         adapter, config = _make_mock_adapter(name="test", priority=10)
         repo = _make_mock_repository()
-        ops = _make_mock_operations(ncpus=4)
 
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
             machine_repository=repo,
-            machine_operations=ops,
             engines=mock_engines,
             local_config=mock_local_config,
         )
@@ -409,28 +388,31 @@ class TestAllocate:
         adapter.create_node_timeout = 0.05
 
         repo = MagicMock()
-        ops = MagicMock()
 
         async def _connect(**kw: Any) -> Any:
             machine = MagicMock()
-            machine.ip = kw.get("ip", "10.0.0.1")
+            machine.ip = kw.get("ip", "[IP]")
             return machine
 
         repo.connect = _connect
         # Fix B: allocate now awaits machine_repository.disconnect on setup failure.
         repo.disconnect = AsyncMock()
 
-        async def _hang(*args: Any, **kwargs: Any) -> Any:
+        # The session returned by repo.connect must expose run/setup_node/get_cpu_cores.
+        # side_effect must be an async function so that awaiting session.run(cmd)
+        # actually blocks (a lambda returning a coroutine would surface the
+        # coroutine object as the result, defeating asyncio.wait_for).
+        async def _slow_run(cmd: str) -> Any:
             await asyncio.sleep(60)
-            return MagicMock(exit_code=0, stdout="", stderr="")
 
-        ops.run = _hang
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=_slow_run)
+        repo.connect = AsyncMock(return_value=session)
 
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": config},
             machine_repository=repo,
-            machine_operations=ops,
             engines=mock_engines,
             local_config=mock_local_config,
         )

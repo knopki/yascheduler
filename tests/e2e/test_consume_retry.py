@@ -30,7 +30,6 @@ from asyncssh.sftp import SFTPFailure
 from yascheduler.domain.model import NewNode, Node, NodeId, Task, TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
-from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 if TYPE_CHECKING:
@@ -63,7 +62,6 @@ async def _setup_node_and_submit(
         await uow.commit()
 
     repository = SSHMachineRepository(log=log)
-    operations = SSHMachineOperations(repository=repository)
     session = await repository.connect(
         node=db_node,
         client_keys=[ssh_container["key_path"]],
@@ -71,7 +69,7 @@ async def _setup_node_and_submit(
         engines_dir=e2e_config.remote.engines_dir,
         tasks_dir=e2e_config.remote.tasks_dir,
     )
-    await operations.setup_node(session, e2e_config.engines)
+    await session.setup_node(e2e_config.engines)
     await repository.disconnect(db_node.node_id)
 
     deps = make_cli_deps(e2e_config)
@@ -115,7 +113,7 @@ async def test_consume_retry_then_success(
     # Install the download_outputs wrapper BEFORE starting the orchestrator so
     # the first consume cycle hits the patched impl (no timing race where the
     # real download runs first and finalises the task).
-    real_download = orchestrator._operations.download_outputs
+    real_download = orchestrator._output_downloader.download_outputs
     call_count = {"n": 0}
     target_task_id = task_id
 
@@ -149,7 +147,7 @@ async def test_consume_retry_then_success(
             task_id=task_id,
         )
 
-    orchestrator._operations.download_outputs = flaky_download_outputs  # type: ignore[method-assign]
+    orchestrator._output_downloader.download_outputs = flaky_download_outputs  # type: ignore[method-assign]
 
     orch_task = asyncio.create_task(orchestrator.start())
 
@@ -207,7 +205,7 @@ async def test_consume_permanent_marks_done_with_error(
             [("/remote/1.input.out", OSError("No such file"))],
         )
 
-    orchestrator._operations.download_outputs = permanent_download_outputs  # type: ignore[method-assign]
+    orchestrator._output_downloader.download_outputs = permanent_download_outputs  # type: ignore[method-assign]
 
     orch_task = asyncio.create_task(orchestrator.start())
 
@@ -237,7 +235,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
 
     # Install the transient-only patch BEFORE start() to avoid a timing race
     # where the real download runs first and finalises the task.
-    real_download = orchestrator._operations.download_outputs
+    real_download = orchestrator._output_downloader.download_outputs
 
     # Wrap to observe whether rmtree would have been called. We patch
     # download_outputs to always return transient errors so rmtree is gated
@@ -265,7 +263,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
             [],
         )
 
-    orchestrator._operations.download_outputs = transient_only_download  # type: ignore[method-assign]
+    orchestrator._output_downloader.download_outputs = transient_only_download  # type: ignore[method-assign]
 
     orch_task = asyncio.create_task(orchestrator.start())
 
@@ -311,7 +309,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
     finally:
         # Restore real download so the orchestrator can finalise the task on
         # shutdown cycle, then stop.
-        orchestrator._operations.download_outputs = real_download  # type: ignore[method-assign]
+        orchestrator._output_downloader.download_outputs = real_download  # type: ignore[method-assign]
         await _stop_orchestrator(orchestrator, orch_task)
         await _cleanup_node(uow_factory, ssh_container)
 

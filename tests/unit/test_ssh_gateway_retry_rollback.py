@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway_retry_rollback.py
-# VERSION: 1.2.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for non-idempotent retry removal (run_bg/upload/download single-attempt) and start_task_on_machine BUSY rollback.
@@ -14,9 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: repository._machines → repository._sessions; operations.run_bg/start_task_on_machine take session; operations.upload/get_sftp removed — use session.upload/session.open_sftp; rollback uses session.is_closed; occupy spy on session not repository. Log substring "rolling back BUSY" (no "repository").
-#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for fix-nonidempotent-ssh-retries: run_bg/upload/download single-attempt propagation; start_task_on_machine BUSY rollback (upload failure, spawn failure, CancelledError, unexpected non-BUSY state, concurrent disconnect).
+#   LAST_CHANGE: v2.0.0 - dissolve-machine-operations-facade: SSHMachineOperations deleted; tests use TaskDeployer directly.
+#   PREVIOUS_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -38,7 +37,7 @@ from yascheduler.domain.model import (
     Task,
     TaskId,
 )
-from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.operations import TaskDeployer
 from yascheduler.infra.ssh.platform.protocol import (
     ChannelOpenError,
     SFTPConnectionLost,
@@ -52,13 +51,8 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def repository() -> SSHMachineRepository:
-    return SSHMachineRepository()
-
-
-@pytest.fixture
-def operations(repository: SSHMachineRepository) -> SSHMachineOperations:
-    return SSHMachineOperations(repository=repository)
+def task_deployer() -> TaskDeployer:
+    return TaskDeployer(log=logging.getLogger(__name__))
 
 
 def _make_engine() -> Engine:
@@ -107,22 +101,21 @@ class TestNonIdempotentRetry:
 
     @pytest.mark.asyncio
     async def test_run_bg_no_longer_retries_on_ssh_error(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+        self,
     ) -> None:
         """run_bg propagates ChannelOpenError immediately, single attempt (no retry)."""
         session = _make_state()
         adapter = cast("MagicMock", session.adapter)
         adapter.run_bg = AsyncMock(side_effect=ChannelOpenError(11, "open failed"))
-        repository._sessions[NodeId(1)] = session
 
         with pytest.raises(ChannelOpenError):
-            await operations.run_bg(session, "spawn-cmd", cwd="/tmp")
+            await session.run_bg("spawn-cmd", cwd="/tmp")
 
         adapter.run_bg.assert_awaited_once()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_upload_no_longer_retries_on_sftp_error(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+        self,
     ) -> None:
         """upload propagates SFTPConnectionLost immediately, single put attempt."""
         session = _make_state()
@@ -134,7 +127,6 @@ class TestNonIdempotentRetry:
             yield sftp
 
         session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
-        repository._sessions[NodeId(1)] = session
 
         with pytest.raises(SFTPConnectionLost):
             await session.upload(Path("/tmp/local"), "/remote/file")
@@ -143,7 +135,7 @@ class TestNonIdempotentRetry:
 
     @pytest.mark.asyncio
     async def test_download_no_longer_retries_on_sftp_error(
-        self, repository: SSHMachineRepository, operations: SSHMachineOperations
+        self,
     ) -> None:
         """download equivalent via open_sftp propagates SFTPConnectionLost immediately, single get attempt."""
         session = _make_state()
@@ -155,7 +147,6 @@ class TestNonIdempotentRetry:
             yield sftp
 
         session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
-        repository._sessions[NodeId(1)] = session
 
         with pytest.raises(SFTPConnectionLost):
             async with session.open_sftp() as sftp_client:
@@ -175,23 +166,23 @@ class TestStartTaskRollback:
     @pytest.mark.asyncio
     async def test_rollback_busy_on_upload_failure(
         self,
-        repository: SSHMachineRepository,
-        operations: SSHMachineOperations,
+        task_deployer: TaskDeployer,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Upload failure -> machine released, info log, original error re-raised."""
+        repository = SSHMachineRepository()
         session = _make_state()
         _wire_realpath(session)
         repository._sessions[NodeId(1)] = session
 
         with patch.object(
-            operations.deploy,
+            task_deployer,
             "_upload_task_data",
             AsyncMock(side_effect=OSError("upload boom")),
         ):
             with caplog.at_level(logging.INFO):
                 with pytest.raises(OSError, match="upload boom"):
-                    await operations.start_task_on_machine(
+                    await task_deployer.start_task_on_machine(
                         session,
                         _make_engine(),
                         _make_task(),
@@ -205,28 +196,28 @@ class TestStartTaskRollback:
     @pytest.mark.asyncio
     async def test_rollback_busy_on_spawn_failure(
         self,
-        repository: SSHMachineRepository,
-        operations: SSHMachineOperations,
+        task_deployer: TaskDeployer,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Spawn failure (ChannelOpenError) -> machine released, info log, re-raised."""
+        repository = SSHMachineRepository()
         session = _make_state()
         _wire_realpath(session)
         repository._sessions[NodeId(1)] = session
 
         with (
             patch.object(
-                operations.deploy, "_upload_task_data", AsyncMock(return_value=True)
+                task_deployer, "_upload_task_data", AsyncMock(return_value=True)
             ),
             patch.object(
-                operations.deploy,
+                task_deployer,
                 "_exec_spawn_command",
                 AsyncMock(side_effect=ChannelOpenError(11, "no chan")),
             ),
         ):
             with caplog.at_level(logging.INFO):
                 with pytest.raises(ChannelOpenError):
-                    await operations.start_task_on_machine(
+                    await task_deployer.start_task_on_machine(
                         session,
                         _make_engine(),
                         _make_task(),
@@ -240,23 +231,23 @@ class TestStartTaskRollback:
     @pytest.mark.asyncio
     async def test_rollback_on_cancelled_error(
         self,
-        repository: SSHMachineRepository,
-        operations: SSHMachineOperations,
+        task_deployer: TaskDeployer,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """CancelledError (BaseException) is caught, machine released, then re-raised."""
+        repository = SSHMachineRepository()
         session = _make_state()
         _wire_realpath(session)
         repository._sessions[NodeId(1)] = session
 
         with patch.object(
-            operations.deploy,
+            task_deployer,
             "_upload_task_data",
             AsyncMock(side_effect=asyncio.CancelledError()),
         ):
             with caplog.at_level(logging.INFO):
                 with pytest.raises(asyncio.CancelledError):
-                    await operations.start_task_on_machine(
+                    await task_deployer.start_task_on_machine(
                         session,
                         _make_engine(),
                         _make_task(),
@@ -270,11 +261,11 @@ class TestStartTaskRollback:
     @pytest.mark.asyncio
     async def test_rollback_warns_on_unexpected_state(
         self,
-        repository: SSHMachineRepository,
-        operations: SSHMachineOperations,
+        task_deployer: TaskDeployer,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Non-BUSY state at rollback -> warn, still release, re-raise."""
+        repository = SSHMachineRepository()
         session = _make_state()
         _wire_realpath(session)
         repository._sessions[NodeId(1)] = session
@@ -287,13 +278,13 @@ class TestStartTaskRollback:
             raise OSError("boom")
 
         with patch.object(
-            operations.deploy,
+            task_deployer,
             "_upload_task_data",
             AsyncMock(side_effect=_fail_with_unexpected_state),
         ):
             with caplog.at_level(logging.WARNING):
                 with pytest.raises(OSError):
-                    await operations.start_task_on_machine(
+                    await task_deployer.start_task_on_machine(
                         session,
                         _make_engine(),
                         _make_task(),
@@ -308,11 +299,11 @@ class TestStartTaskRollback:
     @pytest.mark.asyncio
     async def test_rollback_warns_on_concurrent_disconnect(
         self,
-        repository: SSHMachineRepository,
-        operations: SSHMachineOperations,
+        task_deployer: TaskDeployer,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Session closed (concurrent disconnect) -> warn, skip release, re-raise."""
+        repository = SSHMachineRepository()
         session = _make_state()
         _wire_realpath(session)
         repository._sessions[NodeId(1)] = session
@@ -328,14 +319,14 @@ class TestStartTaskRollback:
         with (
             occupy_spy as spy,
             patch.object(
-                operations.deploy,
+                task_deployer,
                 "_upload_task_data",
                 AsyncMock(side_effect=_fail_after_disconnect),
             ),
         ):
             with caplog.at_level(logging.WARNING):
                 with pytest.raises(OSError):
-                    await operations.start_task_on_machine(
+                    await task_deployer.start_task_on_machine(
                         session,
                         _make_engine(),
                         _make_task(),

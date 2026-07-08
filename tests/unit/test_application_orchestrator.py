@@ -162,7 +162,9 @@ def make_orchestrator(
     repository = MagicMock()
     repository.__len__ = MagicMock(return_value=1)
     repository.disconnect_all = AsyncMock()
-    operations = MagicMock()
+    task_deployer = MagicMock()
+    output_downloader = MagicMock()
+    occupancy_checker = MagicMock()
 
     # EngineRepository.values() must yield at least one Engine so
     # Orchestrator.__init__ can compute min(sleep_interval).
@@ -186,7 +188,9 @@ def make_orchestrator(
         uow_factory=uow_factory,
         clouds=clouds,
         repository=repository,
-        operations=operations,
+        task_deployer=task_deployer,
+        output_downloader=output_downloader,
+        occupancy_checker=occupancy_checker,
         engines=engines,
         log=log,
         config_clouds=[],
@@ -755,7 +759,7 @@ class TestAllocatorConsumer:
             engines=orch._engines,
             uow_factory=orch._uow_factory,
             repository=orch._repository,
-            operations=orch._operations,
+            occupancy_checker=orch._occupancy_checker,
             clouds=orch._clouds,
             start_task_on_machine=orch._start_task_on_machine,
             tracker=orch._tracker,

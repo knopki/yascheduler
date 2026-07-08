@@ -1,10 +1,10 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.19.0
+# VERSION: 5.20.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: Task-to-machine allocation with cloud fallback — free machine search, cloud provisioning, tmp-node lifecycle, and persistence.
-#   DEPENDS: M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
+#   DEPENDS: M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER, M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.19.0 - _validate_engine and _try_start_on_machine read task.engine; with_event(TaskAllocated, ..., engine_name=task.engine).
-#   PREVIOUS_CHANGE: v5.18.0 - _TmpSelection carries the tmp Node; _allocate_cloud_node takes tmp_node: Node; _persist_node_with_cleanup calls clouds.deallocate(node).
+#   LAST_CHANGE: v5.20.0 - operations: MachineOperations parameter renamed to occupancy_checker: OccupancyChecker (facade dissolved); _try_start_on_machine calls occupancy_checker.start_occupancy_check directly.
+#   PREVIOUS_CHANGE: v5.19.0 - _validate_engine and _try_start_on_machine read task.engine; with_event(TaskAllocated, ..., engine_name=task.engine).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -51,9 +51,9 @@ if TYPE_CHECKING:
         CloudProvisioner,
         Engine,
         EngineRepository,
-        MachineOperations,
         MachineRepository,
     )
+    from yascheduler.infra import OccupancyChecker
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
@@ -107,21 +107,21 @@ async def _validate_engine(
 #     node: Node - The Node paired with the session (carries node_id for allocate_to),
 #     engine: Engine - The resolved engine config,
 #     task: Task - The task to allocate,
-#     operations: MachineOperations - SSH operations for occupancy checks,
+#     occupancy_checker: OccupancyChecker - SSH operations for occupancy checks,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
 #     tracker: AllocationTracker - In-flight cloud allocation tracker
 #   }
 #   OUTPUTS: { bool - True if task started successfully on this machine }
 #   SIDE_EFFECTS: Sets task running via allocate_to(node), starts occupancy check, records TaskAllocated event, discards tracker slot.
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-OPS-OCCUPANCY, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _try_start_on_machine
 async def _try_start_on_machine(
     session: MachineSession,
     node: Node,
     engine: Engine,
     task: Task,
-    operations: MachineOperations,
+    occupancy_checker: OccupancyChecker,
     uow_factory: Callable[[], AbstractUnitOfWork],
     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
@@ -142,7 +142,7 @@ async def _try_start_on_machine(
         session.ip,
         node.node_id,
     )
-    operations.start_occupancy_check(session, engine)
+    occupancy_checker.start_occupancy_check(session, engine)
     task = task.with_event(TaskAllocated, node_id=node.node_id, engine_name=task.engine)
     async with uow_factory() as uow:
         await uow.tasks.save(task)
@@ -184,18 +184,18 @@ async def _find_free_machines(
 
 # START_CONTRACT: _allocate_free_machine
 #   PURPOSE: Find a free compatible machine and start the task on it.
-#   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, repository: MachineRepository, operations: MachineOperations,
+#   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, repository: MachineRepository, occupancy_checker: OccupancyChecker,
 #     start_task_on_machine: Callable, tracker: AllocationTracker }
 #   OUTPUTS: { bool - True if allocated to a machine, False if not }
 #   SIDE_EFFECTS: Updates task status via allocate_to(node), starts occupancy check, records TaskAllocated event, discards tracker slot. Iterates (session, node) pairs from _find_free_machines; per-pair failures isolated and logged.
-#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _allocate_free_machine
 async def _allocate_free_machine(
     task: Task,
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
     repository: MachineRepository,
-    operations: MachineOperations,
+    occupancy_checker: OccupancyChecker,
     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
 ) -> bool:
@@ -216,7 +216,7 @@ async def _allocate_free_machine(
                 node,
                 engine,
                 task,
-                operations,
+                occupancy_checker,
                 uow_factory,
                 start_task_on_machine,
                 tracker,
@@ -421,7 +421,7 @@ async def _persist_node_with_cleanup(
 #     task_id: TaskId - The task id to allocate,
 #     engines: EngineRepository - Config engine repository,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     repository: MachineRepository, operations: MachineOperations - SSH gateway with connected machines,
+#     repository: MachineRepository, occupancy_checker: OccupancyChecker - SSH gateway with connected machines,
 #     clouds: CloudProvisioner - Cloud provider port,
 #     start_task_on_machine: Callable - Callback to upload+spawn on remote machine,
 #     tracker: AllocationTracker - In-flight cloud allocation tracker,
@@ -429,14 +429,14 @@ async def _persist_node_with_cleanup(
 #   }
 #   OUTPUTS: { bool - True if allocated to a machine, False if cloud requested or error }
 #   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), tracker.add/discard, tmp-node insertion, cloud allocation. On failure best-effort cleanup of VM and tmp-node.
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: allocate_task
 async def allocate_task(
     task_id: TaskId,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
     repository: MachineRepository,
-    operations: MachineOperations,
+    occupancy_checker: OccupancyChecker,
     clouds: CloudProvisioner,
     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
@@ -458,7 +458,7 @@ async def allocate_task(
         engine,
         uow_factory,
         repository,
-        operations,
+        occupancy_checker,
         start_task_on_machine,
         tracker,
     ):

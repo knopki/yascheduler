@@ -68,7 +68,12 @@ if TYPE_CHECKING:
 
 
 class FakeMachineSession:
-    """Minimal MachineSession carrying ip + a mutable ConnectedMachine snapshot."""
+    """Minimal MachineSession carrying ip + a mutable ConnectedMachine snapshot.
+
+    Exposes ``run``/``setup_node``/``get_cpu_cores`` as configurable AsyncMock
+    attributes so tests can set up return values / side effects (the real
+    ``CloudProvisionerImpl._setup_vm`` calls these directly on the session).
+    """
 
     def __init__(self, ip: str, platform: str = "linux") -> None:
         self._ip = ip
@@ -83,6 +88,10 @@ class FakeMachineSession:
             free_since=0.0,
             node_id=NodeId(last_octet),
         )
+        # Session methods called directly by CloudProvisionerImpl._setup_vm.
+        self.run: AsyncMock = AsyncMock()
+        self.setup_node: AsyncMock = AsyncMock()
+        self.get_cpu_cores: AsyncMock = AsyncMock(return_value=4)
 
     @property
     def ip(self) -> str:
@@ -101,12 +110,20 @@ class FakeMachineRepository:
     pops the session (safe no-op if absent, like SSHMachineRepository.disconnect).
     Set connect_raises to make connect() fail before registering (mirrors a
     _connect_to_vm SSH failure — Fix B never-connected scenario).
+
+    ``session_run_side_effect``, when set, is applied as the ``side_effect`` of
+    the session's ``run`` AsyncMock (``CloudProvisionerImpl._setup_vm`` calls
+    ``session.run(...)`` directly). Similarly ``session_get_cpu_cores_return``
+    sets the return value of ``session.get_cpu_cores``.
     """
 
     def __init__(
         self,
         connect_raises: BaseException | None = None,
         disconnect_raises: BaseException | None = None,
+        *,
+        session_run_side_effect: Any = None,
+        session_get_cpu_cores_return: int = 4,
     ) -> None:
         self._sessions: dict[str, FakeMachineSession] = {}
         self._node_id_to_ip: dict[NodeId, str] = {}
@@ -114,6 +131,8 @@ class FakeMachineRepository:
         self.disconnect_calls: list[NodeId] = []
         self._connect_raises = connect_raises
         self._disconnect_raises = disconnect_raises
+        self._session_run_side_effect = session_run_side_effect
+        self._session_get_cpu_cores_return = session_get_cpu_cores_return
 
     async def connect(
         self,
@@ -126,6 +145,20 @@ class FakeMachineRepository:
         self.connect_calls.append(node)
         platform = kwargs.get("platform", "linux")
         session = FakeMachineSession(ip=node.ip, platform=platform)
+        if self._session_run_side_effect is not None:
+            # A MagicMock configured with exit_code/stdout/stderr attributes is
+            # a plain return value — use return_value so `await session.run(cmd)`
+            # resolves to it directly. side_effect would call the MagicMock and
+            # surface a fresh child mock, dropping the configured attributes.
+            # A real async function (e.g. _slow_run blocking 60s) is a callable
+            # side effect — use side_effect so AsyncMock calls it with the cmd.
+            if isinstance(self._session_run_side_effect, MagicMock):
+                session.run = AsyncMock(return_value=self._session_run_side_effect)
+            else:
+                session.run = AsyncMock(side_effect=self._session_run_side_effect)
+        session.get_cpu_cores = AsyncMock(
+            return_value=self._session_get_cpu_cores_return
+        )
         self._sessions[node.ip] = session
         self._node_id_to_ip[node.node_id] = node.ip
         return session
@@ -446,7 +479,7 @@ class FakeCloudProvisioner:
 
 def _make_real_adapter_config(
     name: str = "test",
-    ip: str = "10.0.0.50",
+    ip: str = "[IP]",
     create_node_timeout: float = 300,
 ) -> tuple[MagicMock, MagicMock]:
     """Build a mock CloudAdapter + ConfigCloud for real CloudProvisionerImpl tests."""
@@ -490,46 +523,8 @@ def _make_real_remote_config() -> MagicMock:
     return cfg
 
 
-class _FakeMachineOperations:
-    """Configurable SSHMachineOperations for real CloudProvisionerImpl tests.
-
-    run() returns the configured cloud-init ProcessResult; setup_node and
-    get_cpu_cores are configurable via raise_setup / raise_cpus / ncpus.
-    """
-
-    def __init__(
-        self,
-        *,
-        cloud_init_result: Any = None,
-        cloud_init_hang: bool = False,
-        raise_setup: BaseException | None = None,
-        raise_cpus: BaseException | None = None,
-        ncpus: int = 4,
-    ) -> None:
-        self._cloud_init_result = cloud_init_result
-        self._cloud_init_hang = cloud_init_hang
-        self._raise_setup = raise_setup
-        self._raise_cpus = raise_cpus
-        self._ncpus = ncpus
-
-    async def run(self, session: Any, cmd: str) -> Any:
-        if self._cloud_init_hang:
-            await asyncio.sleep(60)
-        return self._cloud_init_result
-
-    async def setup_node(self, session: Any, engines: Any) -> None:
-        if self._raise_setup is not None:
-            raise self._raise_setup
-
-    async def get_cpu_cores(self, session: Any) -> int:
-        if self._raise_cpus is not None:
-            raise self._raise_cpus
-        return self._ncpus
-
-
 def _make_real_provisioner(
     machine_repository: Any,
-    machine_operations: Any,
     *,
     adapters: dict[str, Any] | None = None,
     configs: dict[str, Any] | None = None,
@@ -550,7 +545,6 @@ def _make_real_provisioner(
         adapters=a,
         configs=c,
         machine_repository=machine_repository,
-        machine_operations=machine_operations,
         local_config=_make_real_local_config(),
         remote_config=_make_real_remote_config(),
         engines=engines,
@@ -653,7 +647,7 @@ async def _allocate(
         engines=engines or _make_engine_repo(_make_engine()),
         uow_factory=lambda: uow,
         repository=repo,
-        operations=MagicMock(),
+        occupancy_checker=MagicMock(),
         clouds=clouds,
         start_task_on_machine=start_cb,
         tracker=AllocationTracker(),
@@ -768,11 +762,12 @@ class TestFixB:
 
     async def test_cloud_setup_error_disconnects_before_deleting_vm(self) -> None:
         """CloudSetupError from _setup_vm (cloud-init failure) triggers disconnect(ip) before delete_node, leaving _sessions empty."""
-        repo = FakeMachineRepository()
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=2, stdout="status: error", stderr="")
+        repo = FakeMachineRepository(
+            session_run_side_effect=MagicMock(
+                exit_code=2, stdout="status: error", stderr=""
+            ),
         )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with (
             _patch_ssh_key(),
@@ -799,11 +794,7 @@ class TestFixB:
         registered because every failure there is wrapped.
         """
         repo = FakeMachineRepository()
-        # A successful-looking ops (never reached once _setup_vm is patched).
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=0, stdout="", stderr="")
-        )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with (
             _patch_ssh_key(),
@@ -825,10 +816,7 @@ class TestFixB:
         """When _connect_to_vm itself fails (session never registered), allocate's except still calls disconnect(ip) safely and the VM is deleted."""
         # connect_raises makes _connect_to_vm raise before registering a session.
         repo = FakeMachineRepository(connect_raises=OSError("ssh connect refused"))
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=0, stdout="", stderr="")
-        )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with (
             _patch_ssh_key(),
@@ -843,20 +831,19 @@ class TestFixB:
 
     async def test_success_path_does_not_disconnect(self) -> None:
         """On a successful _setup_vm, the session stays registered — the orchestrator reuses the connection."""
-        repo = FakeMachineRepository()
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=0, stdout="", stderr=""),
-            ncpus=8,
+        repo = FakeMachineRepository(
+            session_run_side_effect=MagicMock(exit_code=0, stdout="", stderr=""),
+            session_get_cpu_cores_return=8,
         )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with _patch_ssh_key():
             node = await prov.allocate("test", _tmp_node(1))
 
-        assert node.ip == "10.0.0.50"
+        assert node.ip == "[IP]"
         assert node.ncpus == 8
         assert repo.disconnect_calls == []
-        assert "10.0.0.50" in repo._sessions
+        assert "[IP]" in repo._sessions
         adapter.delete_node.assert_not_awaited()
 
     async def test_disconnect_failure_does_not_skip_vm_deletion(self) -> None:
@@ -866,12 +853,12 @@ class TestFixB:
         best-effort wrap that raise would skip delete_node and orphan the VM.
         """
         repo = FakeMachineRepository(
-            disconnect_raises=RuntimeError("wait_closed failed")
+            disconnect_raises=RuntimeError("wait_closed failed"),
+            session_run_side_effect=MagicMock(
+                exit_code=2, stdout="status: error", stderr=""
+            ),
         )
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=2, stdout="status: error", stderr="")
-        )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with (
             _patch_ssh_key(),
@@ -951,11 +938,12 @@ class TestFixD:
 
     async def test_cloud_init_error_contains_stdout(self) -> None:
         """cloud-init exit_code=2 with stdout='status: error' yields a CloudSetupError whose message contains stdout=status: error."""
-        repo = FakeMachineRepository()
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=2, stdout="status: error", stderr="")
+        repo = FakeMachineRepository(
+            session_run_side_effect=MagicMock(
+                exit_code=2, stdout="status: error", stderr=""
+            ),
         )
-        prov, _adapter = _make_real_provisioner(repo, ops)
+        prov, _adapter = _make_real_provisioner(repo)
 
         with _patch_ssh_key(), pytest.raises(CloudSetupError) as exc_info:
             await prov.allocate("test", _tmp_node(1))
@@ -966,9 +954,15 @@ class TestFixD:
 
     async def test_cloud_init_timeout_message_unchanged(self) -> None:
         """asyncio.TimeoutError in the CLOUD_INIT block yields the unchanged 'timed out' message (does not read result.stdout/stderr)."""
-        repo = FakeMachineRepository()
-        ops = _FakeMachineOperations(cloud_init_hang=True)
-        prov, adapter = _make_real_provisioner(repo, ops)
+
+        # AsyncMock side_effect treats a bare coroutine as an iterator, not a
+        # callable — wrap in an async function so session.run(cmd) blocks for
+        # 60s and asyncio.wait_for cancels at create_node_timeout.
+        async def _slow_run(cmd: str) -> Any:
+            await asyncio.sleep(60)
+
+        repo = FakeMachineRepository(session_run_side_effect=_slow_run)
+        prov, adapter = _make_real_provisioner(repo)
         # adapter is the same object as prov.adapters["test"] (adapters=None).
         adapter.create_node_timeout = 0.05
 
@@ -977,6 +971,6 @@ class TestFixD:
 
         msg = str(exc_info.value)
         assert "timed out" in msg
-        assert "10.0.0.50" in msg
+        assert "[IP]" in msg
         assert "0.05s" in msg
         assert "stdout=" not in msg

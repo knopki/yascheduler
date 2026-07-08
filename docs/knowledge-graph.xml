@@ -207,7 +207,7 @@
     <M-ENTRYPOINTS-CLI-MANAGE-NODE NAME="yasetnode CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>yasetnode CLI command — add, soft-remove, or hard-remove nodes via UoW (+ SSH gateway on the add path)</purpose>
       <path>yascheduler/entrypoints/cli/manage_node.py</path>
-      <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-ADAPTERS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-PERSISTENCE-UOW</depends>
+      <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-ADAPTERS, M-SSH-KEYS, M-SSH-REPOSITORY, M-PERSISTENCE-UOW</depends>
       <annotations>
         <fn-manage_node PURPOSE="Sync entry point: asyncio.run(_manage_node_async)" />
         <type-HostSpec PURPOSE="Frozen parsed host spec (host, username, port, ncpus)" />
@@ -218,7 +218,7 @@
     <M-ENTRYPOINTS-CLI-CHECK-STATUS NAME="yastatus CLI entry point" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Query and display task status with default/info/json/view renderers; verbose mode tails remote OUTPUT and optional convergence.</purpose>
       <path>yascheduler/entrypoints/cli/check_status.py</path>
-      <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-ADAPTERS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-PERSISTENCE-UOW</depends>
+      <depends>M-DOMAIN, M-ENTRYPOINTS, M-ENTRYPOINTS-CONFIG-PARSER, M-ADAPTERS, M-SSH-KEYS, M-SSH-REPOSITORY, M-PERSISTENCE-UOW</depends>
       <annotations>
         <fn-check_status PURPOSE="Sync entry point: asyncio.run(_check_status_async)" />
       </annotations>
@@ -267,7 +267,6 @@
         <export-NodeRepository PURPOSE="Async port for node persistence" />
         <export-MachineRepository PURPOSE="Async port for the connected-machine collection" />
         <export-MachineSession PURPOSE="Connected-machine entity handle Protocol" />
-        <export-MachineOperations PURPOSE="Async port for operations on a single machine" />
         <export-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
         <export-CloudAllocateError PURPOSE="Cloud node allocation failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
         <export-CloudSetupError PURPOSE="Cloud node setup failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
@@ -355,7 +354,6 @@
         <fn-get_by_ids PURPOSE="Batch node lookup by primary key: get_by_ids(list[NodeId]) -&gt; dict[NodeId, Node]" />
         <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries); keyed by NodeId (connect(node: Node)/disconnect(node_id)/get_session(node_id)/contains(node_id)); ip survives only as node.ip read inside connect for the asyncssh host" />
         <class-MachineSession PURPOSE="Connected-machine entity handle Protocol (domain identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)" />
-        <class-MachineOperations PURPOSE="Async port for operations on a single machine (facade pass-throughs + use-case methods forwarding to stateless collaborators)" />
         <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host) — 7-field surface application consumers read" />
         <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider, node: Node) -&gt; Node (receives the tmp-node Node and reuses its node_id as the real node identity; caller flips enabled=TRUE via NodeRepository.update — single-row lifecycle), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None; ip stays the cloud SDK host identifier), select_provider(platforms, counts) -&gt; str | None (sync)" />
         <type-connect_grace PURPOSE="Per-cloud SSH connect-failure deadline in seconds (declared on CloudConfig Protocol + each ConfigCloud* DTO with provider-specific default)" />
@@ -444,7 +442,7 @@
     <M-APPLICATION-ALLOCATE NAME="Allocate task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Match a TO_DO task to a free machine or request cloud provisioning (owns cloud-fallback flow: tracker dedup, capacity, tmp-node, final persist).</purpose>
       <path>yascheduler/application/allocate_task.py</path>
-      <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <fn-allocate_task PURPOSE="Assign a TO_DO task to a free machine or own full cloud-fallback flow via CloudProvisioner port" />
       </annotations>
@@ -453,7 +451,7 @@
     <M-APPLICATION-CONSUME NAME="Consume task use case" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Download outputs from remote machine and finalise (DONE/DONE+error) or defer (stay RUNNING for retry) the task; returns bool finalisation signal.</purpose>
       <path>yascheduler/application/consume_task.py</path>
-      <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-OPERATIONS, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-OPS-DOWNLOAD, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <fn-consume_task PURPOSE="Download task outputs and finalise (True) or defer for retry (False); branches on (transient_errors, permanent_errors)" />
       </annotations>
@@ -488,9 +486,9 @@
     </M-APPLICATION-ALLOCATION-TRACKER>
 
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineRepository + MachineOperations Protocols. Private-key discovery is injected via list_private_keys_fn (M-SSH-KEYS), keeping this module free of yascheduler.infra imports.</purpose>
+      <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineRepository Protocol and three concrete operations collaborators (TaskDeployer/OutputDownloader/OccupancyChecker). Private-key discovery is injected via list_private_keys_fn (M-SSH-KEYS), keeping this module free of yascheduler.infra imports.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
-      <depends>M-DOMAIN, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-QUEUE, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER</depends>
+      <depends>M-DOMAIN, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-QUEUE, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER</depends>
       <annotations>
         <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected cloud nodes (static nodes retried without abandon)" />
         <fn-start PURPOSE="Start all producer-consumer loops" />
@@ -507,7 +505,7 @@
     <M-DI NAME="Dependency Injection" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Composition root with factories per entry point: daemon, CLI. Wires MessageBus with webhook handlers; injects list_private_keys into the Orchestrator.</purpose>
       <path>yascheduler/entrypoints/di.py</path>
-      <depends>M-APPLICATION, M-DOMAIN, M-ADAPTERS, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-NOTIFIER-WEBHOOK, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER</depends>
+      <depends>M-APPLICATION, M-DOMAIN, M-ADAPTERS, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER, M-NOTIFIER-WEBHOOK, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
         <class-CLIDeps PURPOSE="Lightweight dependency container for CLI submit" />
         <fn-make_daemon PURPOSE="Async factory creating Orchestrator with UoW factory (no DB, no auto-migration)" />
@@ -683,7 +681,9 @@
       <depends>M-CLOUD, M-NOTIFIER, M-PERSISTENCE, M-SSH, M-SSH-KEYS</depends>
       <annotations>
         <export-SSHMachineRepository PURPOSE="Concrete MachineRepository implementation" />
-        <export-SSHMachineOperations PURPOSE="Concrete MachineOperations implementation" />
+        <export-TaskDeployer PURPOSE="Upload inputs and spawn calculation process" />
+        <export-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification" />
+        <export-OccupancyChecker PURPOSE="pgrep/cmd-based occupancy check + monitor installer" />
         <export-AllSSHRetryExc PURPOSE="Tuple of all retryable SSH exceptions" />
         <export-SFTPRetryExc PURPOSE="Tuple of retryable SFTP exceptions" />
         <export-CloudProvisionerImpl PURPOSE="Cloud provisioner implementation" />
@@ -728,7 +728,7 @@
     <M-CLOUD-PROVISIONER NAME="Cloud provisioner" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, setup, SSH keys); no DB access.</purpose>
       <path>yascheduler/infra/cloud/manager.py</path>
-      <depends>M-DOMAIN, M-DOMAIN-SETTINGS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
+      <depends>M-DOMAIN, M-DOMAIN-SETTINGS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-SESSION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
       <annotations>
         <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access); allocate(provider, node: Node)-&gt;Node (derives the identity via replace on the passed node after create_node — no fresh Node construction; reuses node.node_id, single-row UPDATE lifecycle), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None), select_provider" />
         <class-CloudAllocateError PURPOSE="Cloud allocation failure (domain exception realized via yascheduler.domain)" />
@@ -888,7 +888,9 @@
       <annotations>
         <export-SSHMachineRepository PURPOSE="Concrete MachineRepository implementation" />
         <export-SSHMachineSession PURPOSE="Concrete MachineSession implementation (connected-machine entity handle)" />
-        <export-SSHMachineOperations PURPOSE="Concrete MachineOperations facade implementation" />
+        <export-TaskDeployer PURPOSE="Upload inputs and spawn calculation process" />
+        <export-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification" />
+        <export-OccupancyChecker PURPOSE="pgrep/cmd-based occupancy check + monitor installer" />
         <export-AllSSHRetryExc PURPOSE="Tuple of all retryable SSH exceptions" />
         <export-SFTPRetryExc PURPOSE="Tuple of retryable SFTP exceptions" />
       </annotations>
@@ -938,15 +940,13 @@
     </M-SSH-REPOSITORY>
 
     <M-SSH-OPERATIONS NAME="SSH machine operations" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>SSHMachineOperations — facade over MachineSession. Use-case methods forward to stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker); facade pass-throughs delegate to session.*. Implements the MachineOperations Protocol. No base primitives declared on the facade (moved to SSHMachineSession).</purpose>
+      <purpose>SSH single-machine operations collaborators — TaskDeployer/OutputDownloader/OccupancyChecker (stateless, session-per-call). The former SSHMachineOperations facade is dissolved; consumers type against the concrete collaborator classes directly.</purpose>
       <path>yascheduler/infra/ssh/operations/</path>
-      <depends>M-SSH-SESSION, M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
+      <depends>M-SSH-SESSION, M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN, M-DOMAIN-ENGINE, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
       <annotations>
-        <class-SSHMachineOperations PURPOSE="Facade over MachineSession; composes stateless deploy/download/occupancy collaborators; facade pass-throughs delegate to session.*" />
-        <fn-start_task_on_machine PURPOSE="Upload inputs and spawn process; forwards to deploy.start_task_on_machine with session" />
-        <fn-download_outputs PURPOSE="Per-file SFTP-isolated download; forwards to download.download_outputs with session" />
-        <fn-occupancy_check PURPOSE="Check if engine process is still running; forwards to occupancy.occupancy_check with session" />
-        <fn-start_occupancy_check PURPOSE="Start background occupancy monitoring; forwards to occupancy.start_occupancy_check with session" />
+        <export-TaskDeployer PURPOSE="Re-exported from .deployment; uploads inputs and spawns calculation process" />
+        <export-OutputDownloader PURPOSE="Re-exported from .download; per-file SFTP-isolated download with retry and error classification" />
+        <export-OccupancyChecker PURPOSE="Re-exported from .occupancy; pgrep/cmd-based occupancy check + monitor installer" />
       </annotations>
     </M-SSH-OPERATIONS>
 
@@ -982,14 +982,7 @@
       </annotations>
     </M-SSH-OPS-OCCUPANCY>
 
-    <M-SSH-OPERATIONS-BASE NAME="SSH machine operations facade" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>SSHMachineOperations — facade over MachineSession. Use-case methods forward to stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker); facade pass-throughs delegate to session.*. No base primitives, no narrow local Protocols, no my_backoff_exc — all moved to SSHMachineSession.</purpose>
-      <path>yascheduler/infra/ssh/operations/base.py</path>
-      <depends>M-SSH-SESSION, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
-      <annotations>
-        <class-SSHMachineOperations PURPOSE="Facade over MachineSession; composes stateless deploy/download/occupancy collaborators; facade pass-throughs delegate to session.*" />
-      </annotations>
-    </M-SSH-OPERATIONS-BASE>
+
 
     <M-PLATFORM-REGISTRY NAME="Platform adapter registry" TYPE="UTILITY" STATUS="implemented">
       <purpose>Ordered platform adapter registry for platform detection (ADAPTERS).</purpose>
@@ -1174,10 +1167,12 @@
     <CrossLink from="M-PERSISTENCE-UOW" to="M-APPLICATION-MESSAGE-BUS" relation="dispatches events via bus after commit" />
     <CrossLink from="M-PERSISTENCE-UOW" to="M-DOMAIN-EVENTS" relation="collects events from saved aggregates via pull_events" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-EVENTS" relation="records TaskAbandoned event on lost nodes" />
-    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-PORTS" relation="uses MachineRepository + MachineOperations Protocols with Engine-typed start_task_on_machine" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-PORTS" relation="uses MachineRepository Protocol with Engine-typed start_task_on_machine; the three operations collaborators are concrete classes typed directly (no Protocol)" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-DOMAIN-EVENTS" relation="records TaskCreated event on submission" />
     <CrossLink from="M-APPLICATION-ALLOCATE" to="M-DOMAIN-EVENTS" relation="records TaskAllocated and TaskFailed events" />
+    <CrossLink from="M-APPLICATION-ALLOCATE" to="M-SSH-OPS-OCCUPANCY" relation="_try_start_on_machine calls occupancy_checker.start_occupancy_check(session, engine) after successful spawn" />
     <CrossLink from="M-APPLICATION-CONSUME" to="M-DOMAIN-EVENTS" relation="records TaskCompleted and TaskFailed events" />
+    <CrossLink from="M-APPLICATION-CONSUME" to="M-SSH-OPS-DOWNLOAD" relation="consume_task calls output_downloader.download_outputs(session, ...)" />
     <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EVENTS" relation="Task aggregate stores events and provides record_event/pull_events" />
     <CrossLink from="M-NOTIFIER-WEBHOOK" to="M-DOMAIN-EVENTS" relation="handles domain events for webhook delivery" />
 
@@ -1197,7 +1192,6 @@
     <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-DI" relation="uses make_cli_deps for CLI status" />
     <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-APPLICATION-UOW" relation="reads tasks and nodes via UoW" />
     <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-SSH-REPOSITORY" relation="verbose mode connects (repository.connect/disconnect), tails OUTPUT, downloads convergence" />
-    <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-SSH-OPERATIONS" relation="verbose mode runs commands and SFTP via operations" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-APPLICATION-UOW" relation="uses AbstractUnitOfWork for transactional task creation" />
     <CrossLink from="M-APPLICATION-UOW" to="M-DOMAIN-PORTS" relation="references TaskRepository and NodeRepository" />
 
@@ -1214,7 +1208,7 @@
     <CrossLink from="M-CLOUD-CONFIGS" to="M-DOMAIN-PORTS" relation="DTOs explicitly inherit CloudConfig Protocol as typing aid (structural matching still works without inheritance)" />
     <CrossLink from="M-APPLICATION-DEALLOCATE" to="M-DOMAIN-PORTS" relation="config_clouds typed as Sequence[CloudConfig] (domain Protocol)" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-PORTS" relation="config_clouds and active_clouds typed as Sequence[CloudConfig] (domain Protocol)" />
-    <CrossLink from="M-DI" to="M-DOMAIN-PORTS" relation="active_clouds typed as list[CloudConfig] (domain Protocol); casts the infra Union to the Protocol view" />
+    <CrossLink from="M-DI" to="M-DOMAIN-PORTS" relation="active_clouds typed as list[ConfigCloud] (covariance + inheritance makes it assignable to Sequence[CloudConfig] without cast)" />
 
     <CrossLink from="M-ENTRYPOINTS-CONFIG-PARSER" to="M-ENTRYPOINTS-CONFIG" relation="parse_config assembles the frozen Config aggregate" />
     <CrossLink from="M-DI" to="M-ENTRYPOINTS-CONFIG" relation="imports Config and unpacks config.local/config.remote into Orchestrator" />
@@ -1226,7 +1220,6 @@
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-APPLICATION-ALLOCATION-TRACKER" relation="owns and injects tracker for in-flight allocation dedup" />
     <CrossLink from="M-PLATFORM-LINUX" to="M-DOMAIN-ENGINE" relation="deploys engines via EngineRepository + Deploy strategies" />
     <CrossLink from="M-PLATFORM-WINDOWS" to="M-DOMAIN-ENGINE" relation="deploys engines via EngineRepository + Deploy strategies" />
-    <CrossLink from="M-SSH-OPERATIONS" to="M-DOMAIN-ENGINE" relation="setup_node receives EngineRepository" />
     <CrossLink from="M-CLOUD-PROVISIONER" to="M-DOMAIN-ENGINE" relation="TYPE_CHECKING references EngineRepository for node setup" />
     <CrossLink from="M-APPLICATION-ALLOCATE" to="M-DOMAIN-ENGINE" relation="TYPE_CHECKING references Engine and EngineRepository" />
     <CrossLink from="M-APPLICATION-CONSUME" to="M-DOMAIN-ENGINE" relation="TYPE_CHECKING references EngineRepository" />
@@ -1241,18 +1234,20 @@
     <!-- SSH adapter cross-links -->
     <CrossLink from="M-SSH-REPOSITORY" to="M-PLATFORM-ADAPTERS" relation="uses platform detection and adapters (ADAPTERS, _detect_platform, _init_paths, make_run_fn)" />
     <CrossLink from="M-SSH-REPOSITORY" to="M-SSH-SESSION" relation="owns collection of: _sessions dict, constructs via connect, delegates teardown via session._close()" />
-    <CrossLink from="M-SSH-OPERATIONS" to="M-SSH-SESSION" relation="facade pass-throughs (run/run_full/run_bg/get_cpu_cores/setup_node) delegate to session.*" />
-    <CrossLink from="M-SSH-OPERATIONS" to="M-SSH-OPERATIONS-BASE" relation="package re-exports SSHMachineOperations facade from base.py" />
     <CrossLink from="M-SSH-OPS-DEPLOY" to="M-SSH-SESSION" relation="takes session per call: open_sftp, run_bg, occupy, update, is_closed, hostname, path, quote" />
     <CrossLink from="M-SSH-OPS-DOWNLOAD" to="M-SSH-SESSION" relation="takes session per call: open_sftp, path" />
     <CrossLink from="M-SSH-OPS-OCCUPANCY" to="M-SSH-SESSION" relation="installs monitor on: session.occupy, session.install_monitor, session.pgrep, session.run_full, session.release" />
     <CrossLink from="M-SSH-SESSION" to="M-PLATFORM-RUN-FN" relation="uses make_run_fn(conn, adapter) for get_cpu_cores and setup_node" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-REPOSITORY" relation="consumes MachineRepository Protocol (collection lifecycle, queries) injected via constructor; resolves session per tick via get_session(ip)" />
-    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-OPERATIONS" relation="consumes MachineOperations Protocol (exec, deploy, download, occupancy) injected via constructor; passes session per call" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-OPS-DEPLOY" relation="_start_task_on_machine delegates upload+spawn to task_deployer.start_task_on_machine" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-OPS-OCCUPANCY" relation="consume loop calls occupancy_checker.start_occupancy_check(session, engine) on first tick per node_id" />
+    <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-OPS-DOWNLOAD" relation="threads output_downloader into consume_task use case" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-KEYS" relation="consumes injected list_private_keys_fn to enumerate client keys without importing yascheduler.infra" />
     <CrossLink from="M-DI" to="M-SSH-KEYS" relation="imports list_private_keys and injects it as list_private_keys_fn into Orchestrator" />
-    <CrossLink from="M-DI" to="M-SSH-REPOSITORY" relation="make_daemon constructs one SSHMachineRepository on the clouds is None branch and injects the same instance into CloudProvisionerImpl.machine_repository and Orchestrator.repository (shared registry spans cloud setup and orchestrator runtime)" />
-    <CrossLink from="M-DI" to="M-SSH-OPERATIONS" relation="make_daemon constructs one SSHMachineOperations bound to the shared repository and injects the same instance into CloudProvisionerImpl.machine_operations and Orchestrator.operations" />
+    <CrossLink from="M-DI" to="M-SSH-REPOSITORY" relation="make_daemon constructs one SSHMachineRepository on the clouds is None branch and injects the same instance into CloudProvisionerImpl.machine_repository and Orchestrator.repository (shared registry spans cloud setup and orchestrator runtime); the three stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) are constructed once each and injected into Orchestrator only" />
+    <CrossLink from="M-DI" to="M-SSH-OPS-DEPLOY" relation="make_daemon constructs TaskDeployer(log) and injects into Orchestrator.task_deployer" />
+    <CrossLink from="M-DI" to="M-SSH-OPS-DOWNLOAD" relation="make_daemon constructs OutputDownloader(log) and injects into Orchestrator.output_downloader" />
+    <CrossLink from="M-DI" to="M-SSH-OPS-OCCUPANCY" relation="make_daemon constructs OccupancyChecker(log) and injects into Orchestrator.occupancy_checker" />
     <CrossLink from="M-CLOUD-PROVISIONER" to="M-SSH-KEYS" relation="calls list_private_keys(local_config.keys_dir) in _connect_to_vm" />
     <CrossLink from="M-ENTRYPOINTS-CLI-MANAGE-NODE" to="M-SSH-KEYS" relation="calls list_private_keys(config.local.keys_dir) on the add path" />
     <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-SSH-KEYS" relation="calls list_private_keys(config.local.keys_dir) in verbose view" />
@@ -1260,7 +1255,6 @@
     <CrossLink from="M-SHARED" to="M-SHARED-COMPAT" relation="re-exports Self/Unpack from compat module" />
     <CrossLink from="M-DAEMONIZE" to="M-DAEMON-COMMON" relation="foreground daemon launch delegates to shared daemon core" />
     <CrossLink from="M-PLATFORM" to="M-PLATFORM-ADAPTERS" relation="package root re-exports platform adapters" />
-    <CrossLink from="M-SSH-OPERATIONS" to="M-PLATFORM" relation="facade pass-through setup_node delegates to session.setup_node, which uses adapter.setup_node via make_run_fn" />
     <CrossLink from="M-CLOUD-ADAPTERS-NEW" to="M-CLOUD-PROVIDERS" relation="lazy-imports provider callables via providers facade" />
     <CrossLink from="M-CLOUD-PROVIDER-AZ" to="M-CLOUD" relation="imports CloudInitConfig/get_rnd_name from cloud facade" />
     <CrossLink from="M-CLOUD-PROVIDER-HETZNER" to="M-CLOUD" relation="imports get_key_name/get_rnd_name from cloud facade" />

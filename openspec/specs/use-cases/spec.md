@@ -53,8 +53,9 @@ is assigned post-insert via `with_remote_folder`; `error` is only ever set by
 The system SHALL provide an `allocate_task` async function that matches a
 TO_DO task to a free machine or requests cloud provisioning. The function SHALL
 accept `task_id: TaskId`, `uow_factory`, `repository: MachineRepository`
-(Protocol type), `operations: MachineOperations` (Protocol type), `clouds:
-CloudProvisioner` (Protocol type), `tracker: AllocationTracker`, and
+(Protocol type), `occupancy_checker: OccupancyChecker` (concrete
+collaborator type, for `start_occupancy_check`), `clouds:`
+`CloudProvisioner` (Protocol type), `tracker: AllocationTracker`, and
 `allocation_lock: asyncio.Lock`. It SHALL NOT import from `yascheduler.infra` at
 runtime. It SHALL NOT accept `adapters` or `configs` parameters — provider
 selection is delegated to the `clouds.select_provider` port method.
@@ -96,6 +97,11 @@ matching the task against engines and when recording the `TaskAllocated` /
 #### Scenario: Unsupported engine
 - **WHEN** `allocate_task(...)` is called and the task's engine is not in `EngineRepository`
 - **THEN** the task is marked DONE with error via `task.reject(...)`, saved, committed, and `TaskFailed` event recorded
+
+#### Scenario: Occupancy check started via occupancy_checker
+
+- **WHEN** `allocate_task(...)` successfully starts a task on a machine
+- **THEN** `occupancy_checker.start_occupancy_check(session, engine)` is called (was `operations.start_occupancy_check`)
 
 ### Requirement: DeallocateIdleNodes use case
 
@@ -207,8 +213,8 @@ The system SHALL provide a `consume_task` async function that downloads
 outputs from a remote machine and finalises or defers the task. The function SHALL
 accept `task_id: TaskId`, `session: MachineSession` (resolved by the
 orchestrator via `repository.get_session(task.allocated_node_id)`),
-`operations: MachineOperations` (Protocol type, for `download_outputs`),
-`engines: EngineRepository`, `uow_factory: Callable[[], AbstractUnitOfWork]`,
+`output_downloader: OutputDownloader` (concrete collaborator type, for
+`download_outputs`), `engines: EngineRepository`, `uow_factory: Callable[[], AbstractUnitOfWork]`,
 `local_tasks_dir: Path`, and `tracker: AllocationTracker`. It SHALL NOT import
 `SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.infra` at runtime.
 
@@ -221,7 +227,7 @@ the operations, in-flight allocation slot NOT released).
 The function SHALL receive the `session` directly (resolved by the
 orchestrator from `task.allocated_node_id` via
 `repository.get_session(node_id)`) and delegate SFTP download with retry and
-error classification to `operations.download_outputs(session, ...)`.
+error classification to `output_downloader.download_outputs(session, ...)`.
 `download_outputs` receives `task_id=task.task_id` (a `TaskId`); it uses the
 value for logging and remote folder naming, where `TaskId.__str__` renders
 the bare integer. The function SHALL receive `(local_folder, remote_folder,
