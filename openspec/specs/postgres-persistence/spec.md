@@ -99,15 +99,22 @@ bound as the dict values from `task.webhook_custom_params` / `task.extra`
 (pg8000 adapts `dict` to JSONB natively; no `json.dumps` at the call site).
 
 `insert(new_task: NewTask) -> Task` SHALL run `task/insert.sql ... RETURNING`
-and return `_row_to_task(rows[0])` (the `NewTask.task_id` is
-ignored — none exists; the DB generates it), avoiding a second `get`
-round-trip. `insert` SHALL bind `node_id=new_task.allocated_node_id.value` (or
-`None`) as the pg8000 named parameter for the `allocated_node_id` column,
-alongside `title` (carrying `new_task.label`), `engine`, `local_folder`,
-`webhook_url`, `webhook_custom_params`, `extra`, `status` (the
-`new_task.status.name` string). `remote_folder` and `error` are NOT on
-`NewTask`; they are bound as `None` (the column is nullable; the DB stores
-NULL until `with_remote_folder` / `fail` / `reject` sets them on a subsequent
+and return `materialize_task(self._row_to_task(rows[0]))` (the `NewTask.task_id`
+is ignored — none exists; the DB generates it), avoiding a second `get`
+round-trip. `materialize_task` (see the `domain-entities` capability) attaches
+the `TaskCreated` event to the returned `Task`'s `events` field. The
+infrastructure layer SHALL NOT import `TaskCreated` directly; `materialize_task`
+owns event construction in the domain layer. `insert` SHALL bind `node_id=None`
+as the pg8000 named parameter for the `allocated_node_id` column (a freshly
+inserted TO_DO task is unallocated), alongside `title` (carrying
+`new_task.label`), `engine`, `local_folder`, `webhook_url`,
+`webhook_custom_params`, `extra`, `status` (`TaskStatus.TO_DO.name`). The
+prior paragraph's reference to `new_task.allocated_node_id` /
+`new_task.status.name` is REMOVED — `NewTask` carries no `allocated_node_id`
+and no `status`; `insert` binds `None` and `TaskStatus.TO_DO.name` as
+constants. `remote_folder` and `error` are NOT on `NewTask`; they are bound
+as `None` (the column is nullable; the DB stores NULL until `run` sets
+`remote_folder` and `reject`/`fail`/`abandon` sets `error` on a subsequent
 `save`). `created_at`/`updated_at` are NOT bound — the DB `DEFAULT NOW()`
 populates them on insert, and they are read back via `RETURNING`.
 
@@ -129,12 +136,21 @@ returns them as a `str`, `_row_to_task` SHALL `json.loads` them (defensive —
 pg8000's JSONB adaptation normally returns `dict`, but a str fallback path is
 preserved). `_row_to_task` SHALL NOT read a `metadata` column (the column is
 dropped). `_row_to_task` SHALL NOT construct a `TaskContext` (the value object
-is removed — see the `domain-entities` delta). The 4 task SQL files that
-return task rows (`get_by_id`, `list_by_status`, `list_by_jobs`, `insert`'s
-RETURNING) SHALL include the column set from `schema.sql`.
+is removed — see the `domain-entities` delta). `_row_to_task` SHALL always set
+`events=()` (events are transient; the DB has no events column). The 4 task
+SQL files that return task rows (`get_by_id`, `list_by_status`, `list_by_jobs`,
+`insert`'s RETURNING) SHALL include the column set from `schema.sql`.
 `update_by_id.sql`'s RETURNING SHALL include only `task_id` (the current
 `save` does not refresh the in-memory `Task`; `updated_at` is observable via
 the trigger on the next read).
+
+#### Scenario: insert returns Task with TaskCreated via materialize_task
+- **WHEN** `insert(new_task)` is called with a valid `NewTask`
+- **THEN** the returned `Task` has the DB-generated `task_id`, `status=TO_DO`, `allocated_node_id=None`, `remote_folder=None`, `error=None`, and `events` containing one `TaskCreated` event (attached by `materialize_task`)
+
+#### Scenario: _row_to_task always sets events to empty tuple
+- **WHEN** `_row_to_task(row)` is called for any DB row
+- **THEN** the returned `Task` has `events=()` (events are transient; only `insert` via `materialize_task` attaches `TaskCreated`)
 
 ### Requirement: PostgresNodeRepository implements NodeRepository
 

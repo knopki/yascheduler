@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.22.0
+# VERSION: 1.23.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: Lifecycle state enums, task/node identity and value types, and the public surface consumed by application/infra layers.
@@ -14,6 +14,7 @@
 #   TaskId - Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
 #   NewTask - Pre-persistence task record
 #   Task - Post-persistence task entity
+#   materialize_task - Free function attaching TaskCreated to a freshly-inserted Task's events
 #   NodeId - Node primary-key value object
 #   NewNode - Pre-persistence node record
 #   Node - Post-persistence node record
@@ -23,8 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.22.0 - TaskContext / TaskContextOverrides folded onto Task / NewTask typed fields; Task.fail/reject simplified; new with_remote_folder and with_download_results methods.
-#   PREVIOUS_CHANGE: v1.21.0 - Task/NewTask drop allocated_ip; Task gains created_at/updated_at: datetime
+#   LAST_CHANGE: v1.23.0 - Task lifecycle rewritten as five atomic transition methods that each validate the source state, set all changed fields, and emit the matching event inline. Renamed _events -> events. Added materialize_task free function. complete/fail/abandon now set local_folder/remote_folder; reject/fail emit TaskFailed; abandon emits TaskAbandoned only when node_id is not None.
+#   PREVIOUS_CHANGE: v1.22.0 - TaskContext / TaskContextOverrides folded onto Task / NewTask typed fields; Task.fail/reject simplified; new with_remote_folder and with_download_results methods.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +34,6 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum, IntEnum, unique
-from typing import TypeVar, overload
 
 from .engine import (
     Deploy,
@@ -53,8 +53,6 @@ from .events import (
 )
 from .exceptions import (
     MachineBusyError,
-    TaskAlreadyAllocatedError,
-    TaskNotAllocatedError,
     TaskNotRunningError,
     TaskNotTodoError,
 )
@@ -68,8 +66,6 @@ __all__ = [
     "LocalFilesDeploy",
     "RemoteArchiveDeploy",
 ]
-
-_E = TypeVar("_E", bound=DomainEvent)
 
 
 @unique
@@ -153,24 +149,35 @@ class NewTask:
 
 
 # START_CONTRACT: Task
-#   PURPOSE: Post-persistence task entity — always carries its database-generated task_id (identity-first) and a status lifecycle.
-#   INPUTS: { task_id: TaskId, label: str, engine: str, remote_folder: str | None, local_folder: str | None, webhook_url: str | None, webhook_custom_params: dict, error: str | None, extra: dict, created_at: datetime, updated_at: datetime, status: TaskStatus, allocated_node_id: NodeId | None, _events: tuple }
-#   OUTPUTS: { None - dataclass }
+#   PURPOSE: Post-persistence task entity — always carries its database-generated task_id and a status lifecycle expressed as atomic transition methods.
+#   INPUTS: { task_id: TaskId, label: str, engine: str, remote_folder: str | None, local_folder: str | None, webhook_url: str | None, webhook_custom_params: dict, error: str | None, extra: dict, created_at: datetime, updated_at: datetime, status: TaskStatus, allocated_node_id: NodeId | None, events: tuple }
+#   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert (the only NewTask→Task conversion site)
+#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS
 # END_CONTRACT: Task
 @dataclass(frozen=True)
 class Task:
-    """Post-persistence task entity with lifecycle methods and allocation state.
+    """Post-persistence task entity with atomic lifecycle transitions.
+
+    Every state change happens through one of transition methods
+    that validates the source state, sets all fields that
+    change, constructs and appends the matching :class:`DomainEvent` to
+    ``events``, and returns a new ``Task`` via :func:`replace`. No method
+    leaves the entity in a semantically-empty intermediate state.
 
     ``allocated_node_id`` is the sole allocation signal: it is ``None`` for
     unallocated tasks (TO_DO with no node bound) and for tasks whose node was
-    deleted (the DB FK is ``ON DELETE SET NULL``). It is set by
-    :meth:`allocate_to`.
+    deleted.
+
+    ``events`` is a public field; the UoW reads it directly.
+    ``remote_folder`` is ``None`` on a freshly-inserted
+    TO_DO task; it is set by :meth:`run` when the task transitions to RUNNING.
+    ``local_folder`` is ``None`` until :meth:`complete` or :meth:`fail` sets it
+    from the download results. ``error`` is ``None`` until :meth:`reject`,
+    :meth:`fail`, or :meth:`abandon` sets it.
 
     ``created_at``/``updated_at`` default to ``datetime.now()`` mirroring the
-    DB schema (``DEFAULT NOW()``; ``updated_at`` is advanced by the
-    ``yascheduler_tasks_touch_updated_at`` BEFORE UPDATE trigger).
+    DB schema (``DEFAULT NOW()``.
     The DB always overrides them via RETURNING on insert and on every read.
     """
 
@@ -187,180 +194,178 @@ class Task:
     status: TaskStatus = TaskStatus.TO_DO
     extra: dict[str, object] = field(default_factory=dict)
     allocated_node_id: NodeId | None = None
-    _events: tuple[DomainEvent, ...] = field(default=(), repr=False)
+    events: tuple[DomainEvent, ...] = field(default=(), repr=True)
 
-    # START_CONTRACT: Task.allocate_to
-    #   PURPOSE: Bind task to a Node if not already allocated — sets allocated_node_id in one replace() call.
-    #   INPUTS: { node: Node - the node to bind (carries node_id) }
-    #   OUTPUTS: { Task - new Task with allocated_node_id set }
+    # START_CONTRACT: Task.run
+    #   PURPOSE: Transition TO_DO→RUNNING, bind to a node, set remote_folder, and emit TaskAllocated inline.
+    #   INPUTS: { node_id: NodeId - the node to bind, remote_folder: str - the remote execution path }
+    #   OUTPUTS: { Task - new Task  }
     #   SIDE_EFFECTS: None
-    #   RAISES: TaskAlreadyAllocatedError - if already allocated (guard checks self.allocated_node_id is not None)
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskAlreadyAllocatedError
-    # END_CONTRACT: Task.allocate_to
-    def allocate_to(self, node: Node) -> Task:
-        """Bind task to a node, raising TaskAlreadyAllocatedError if already allocated."""
-        # START_BLOCK_VALIDATE_NOT_ALLOCATED
-        if self.allocated_node_id is not None:
-            raise TaskAlreadyAllocatedError(self.task_id)
-        # END_BLOCK_VALIDATE_NOT_ALLOCATED
-        # START_BLOCK_APPLY_ALLOCATION
-        return replace(self, allocated_node_id=node.node_id)
-        # END_BLOCK_APPLY_ALLOCATION
-
-    # START_CONTRACT: Task.mark_running
-    #   PURPOSE: Transition task status to RUNNING.
-    #   INPUTS: { None }
-    #   OUTPUTS: { Task - New Task instance with status=RUNNING }
-    #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotAllocatedError - if not yet allocated to a node; TaskNotTodoError - if status is not TO_DO
-    #   LINKS:
-    # END_CONTRACT: Task.mark_running
-    def mark_running(self) -> Task:
-        """Transition task status to RUNNING."""
-        # START_BLOCK_VALIDATE_STATE
-        if self.allocated_node_id is None:
-            raise TaskNotAllocatedError(self.task_id)
-        if self.status != TaskStatus.TO_DO:
-            raise TaskNotTodoError(self.task_id)
-        # END_BLOCK_VALIDATE_STATE
-        return replace(self, status=TaskStatus.RUNNING)
-
-    # START_CONTRACT: Task.complete
-    #   PURPOSE: Mark task as DONE if currently RUNNING.
-    #   INPUTS: { None }
-    #   OUTPUTS: { Task - New Task instance with status=DONE }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotRunningError
-    # END_CONTRACT: Task.complete
-    def complete(self) -> Task:
-        """Mark task as DONE if currently RUNNING."""
-        # START_BLOCK_COMPLETE_VALIDATE_RUNNING
-        if self.status != TaskStatus.RUNNING:
-            raise TaskNotRunningError(self.task_id)
-        # END_BLOCK_COMPLETE_VALIDATE_RUNNING
-        return replace(self, status=TaskStatus.DONE)
-
-    # START_CONTRACT: Task.fail
-    #   PURPOSE: Mark task as DONE with error reason if currently RUNNING.
-    #   INPUTS: { reason: str - Failure description }
-    #   OUTPUTS: { Task - New Task instance with status=DONE and error set }
-    #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotRunningError - if not RUNNING
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotRunningError
-    # END_CONTRACT: Task.fail
-    def fail(self, reason: str) -> Task:
-        """Mark task as DONE with error reason if currently RUNNING."""
-        # START_BLOCK_FAIL_VALIDATE_RUNNING
-        if self.status != TaskStatus.RUNNING:
-            raise TaskNotRunningError(self.task_id)
-        # END_BLOCK_FAIL_VALIDATE_RUNNING
-        # START_BLOCK_MARK_FAILED
-        return replace(self, status=TaskStatus.DONE, error=reason)
-        # END_BLOCK_MARK_FAILED
-
-    # START_CONTRACT: Task.reject
-    #   PURPOSE: Mark a TO_DO task as DONE with error reason (e.g. unsupported engine).
-    #   INPUTS: { reason: str - Rejection description }
-    #   OUTPUTS: { Task - New Task instance with status=DONE and error set }
-    #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotTodoError - if not TO_DO
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotTodoError
-    # END_CONTRACT: Task.reject
-    def reject(self, reason: str) -> Task:
-        """Mark a TO_DO task as DONE with error reason."""
+    #   RAISES: TaskNotTodoError - if status is not TO_DO
+    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotTodoError, M-DOMAIN-EVENTS: TaskAllocated
+    # END_CONTRACT: Task.run
+    def run(self, node_id: NodeId, remote_folder: str) -> Task:
+        """Transition TO_DO→RUNNING, binding the node and setting remote_folder."""
         # START_BLOCK_VALIDATE_TODO
         if self.status != TaskStatus.TO_DO:
             raise TaskNotTodoError(self.task_id)
         # END_BLOCK_VALIDATE_TODO
-        # START_BLOCK_MARK_REJECTED
-        return replace(self, status=TaskStatus.DONE, error=reason)
-        # END_BLOCK_MARK_REJECTED
-
-    # START_CONTRACT: Task.record_event
-    #   PURPOSE: Append a domain event to the task's event tuple, returning a new Task.
-    #   INPUTS: { event: DomainEvent }
-    #   OUTPUTS: { Task - New instance with event appended to _events }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EVENTS
-    # END_CONTRACT: Task.record_event
-    def record_event(self, event: DomainEvent) -> Task:
-        return replace(self, _events=self._events + (event,))
-
-    # START_CONTRACT: Task.with_remote_folder
-    #   PURPOSE: Set remote_folder post-insert
-    #   INPUTS: { remote_folder: str - the remote path assigned to the task }
-    #   OUTPUTS: { Task - new Task with remote_folder set }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-MODEL
-    # END_CONTRACT: Task.with_remote_folder
-    def with_remote_folder(self, remote_folder: str) -> Task:
-        """Return a new Task with remote_folder set (submit-time copy-with)."""
-        return replace(self, remote_folder=remote_folder)
-
-    # START_CONTRACT: Task.with_download_results
-    #   PURPOSE: Set local_folder and remote_folder post-download.
-    #   INPUTS: { local_folder: str - local output path (keyword-only), remote_folder: str - remote output path (keyword-only) }
-    #   OUTPUTS: { Task - new Task with local_folder and remote_folder set }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-MODEL
-    # END_CONTRACT: Task.with_download_results
-    def with_download_results(self, *, local_folder: str, remote_folder: str) -> Task:
-        """Return a new Task with local_folder and remote_folder set"""
-        return replace(self, local_folder=local_folder, remote_folder=remote_folder)
-
-    # START_CONTRACT: Task.with_event
-    #   PURPOSE: Construct an event of the given type with base fields (task_id, webhook_url, webhook_custom_params) populated from the typed task fields and subclass-specific fields from the caller, then append via record_event.
-    #   INPUTS: {
-    #     event_type: type[E] - Concrete event subclass to construct,
-    #     **fields: object - Subclass-specific fields (keyword-only via overloads); any base fields passed are silently dropped
-    #   }
-    #   OUTPUTS: { Task - New instance with the constructed event appended to _events }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EVENTS
-    # END_CONTRACT: Task.with_event
-    @overload
-    def with_event(
-        self, event_type: type[TaskCreated], *, engine_name: str
-    ) -> Task: ...
-    @overload
-    def with_event(
-        self, event_type: type[TaskAllocated], *, node_id: NodeId, engine_name: str
-    ) -> Task: ...
-    @overload
-    def with_event(
-        self, event_type: type[TaskCompleted], *, local_folder: str, has_errors: bool
-    ) -> Task: ...
-    @overload
-    def with_event(self, event_type: type[TaskFailed], *, reason: str) -> Task: ...
-    @overload
-    def with_event(
-        self, event_type: type[TaskAbandoned], *, node_id: NodeId
-    ) -> Task: ...
-    def with_event(self, event_type: type[_E], **fields: object) -> Task:
-        # START_BLOCK_DROP_BASE_FIELDS
-        fields.pop("task_id", None)
-        fields.pop("webhook_url", None)
-        fields.pop("webhook_custom_params", None)
-        # END_BLOCK_DROP_BASE_FIELDS
-        # START_BLOCK_CONSTRUCT_AND_RECORD
-        event = event_type(
+        # START_BLOCK_APPLY_RUN
+        event = TaskAllocated(
             task_id=self.task_id,
             webhook_url=self.webhook_url,
             webhook_custom_params=self.webhook_custom_params,
-            **fields,
+            node_id=node_id,
+            engine_name=self.engine,
         )
-        return self.record_event(event)
-        # END_BLOCK_CONSTRUCT_AND_RECORD
+        return replace(
+            self,
+            allocated_node_id=node_id,
+            remote_folder=remote_folder,
+            status=TaskStatus.RUNNING,
+            events=self.events + (event,),
+        )
+        # END_BLOCK_APPLY_RUN
 
-    # START_CONTRACT: Task.pull_events
-    #   PURPOSE: Extract accumulated events, returning a clean Task and the event tuple.
-    #   INPUTS: { None }
-    #   OUTPUTS: { tuple[Task, tuple[DomainEvent, ...]] - (clean_task, collected_events) }
+    # START_CONTRACT: Task.reject
+    #   PURPOSE: Transition TO_DO→DONE with an error reason and emit TaskFailed inline.
+    #   INPUTS: { reason: str - rejection description }
+    #   OUTPUTS: { Task - new Task with status=DONE, error set, and TaskFailed appended to events }
     #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EVENTS
-    # END_CONTRACT: Task.pull_events
-    def pull_events(self) -> tuple[Task, tuple[DomainEvent, ...]]:
-        return replace(self, _events=()), self._events
+    #   RAISES: TaskNotTodoError - if status is not TO_DO
+    #   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
+    # END_CONTRACT: Task.reject
+    def reject(self, reason: str) -> Task:
+        """Transition TO_DO→DONE with an error reason (e.g. unsupported engine)."""
+        # START_BLOCK_VALIDATE_TODO
+        if self.status != TaskStatus.TO_DO:
+            raise TaskNotTodoError(self.task_id)
+        # END_BLOCK_VALIDATE_TODO
+        # START_BLOCK_APPLY_REJECT
+        event = TaskFailed(
+            task_id=self.task_id,
+            webhook_url=self.webhook_url,
+            webhook_custom_params=self.webhook_custom_params,
+            reason=reason,
+        )
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            error=reason,
+            events=self.events + (event,),
+        )
+        # END_BLOCK_APPLY_REJECT
+
+    # START_CONTRACT: Task.complete
+    #   PURPOSE: Transition RUNNING→DONE with download folders and emit TaskCompleted inline.
+    #   INPUTS: { local_folder: str - local output path (keyword-only), remote_folder: str - remote output path (keyword-only) }
+    #   OUTPUTS: { Task - new Task with status=DONE, local_folder and remote_folder set, and TaskCompleted appended to events }
+    #   SIDE_EFFECTS: None
+    #   RAISES: TaskNotRunningError - if status is not RUNNING
+    #   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
+    # END_CONTRACT: Task.complete
+    def complete(self, *, local_folder: str, remote_folder: str) -> Task:
+        """Transition RUNNING→DONE on successful completion, setting folders."""
+        # START_BLOCK_VALIDATE_RUNNING
+        if self.status != TaskStatus.RUNNING:
+            raise TaskNotRunningError(self.task_id)
+        # END_BLOCK_VALIDATE_RUNNING
+        # START_BLOCK_APPLY_COMPLETE
+        event = TaskCompleted(
+            task_id=self.task_id,
+            webhook_url=self.webhook_url,
+            webhook_custom_params=self.webhook_custom_params,
+            local_folder=local_folder,
+        )
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            local_folder=local_folder,
+            remote_folder=remote_folder,
+            events=self.events + (event,),
+        )
+        # END_BLOCK_APPLY_COMPLETE
+
+    # START_CONTRACT: Task.fail
+    #   PURPOSE: Transition RUNNING→DONE with an error reason and partial download folders, emitting TaskFailed.
+    #   INPUTS: { reason: str - failure description, local_folder: str - local output path (keyword-only), remote_folder: str - remote output path (keyword-only) }
+    #   OUTPUTS: { Task - new Task with status=DONE, error/local_folder/remote_folder set, and TaskFailed appended to events }
+    #   SIDE_EFFECTS: None
+    #   RAISES: TaskNotRunningError - if status is not RUNNING
+    #   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
+    # END_CONTRACT: Task.fail
+    def fail(self, reason: str, *, local_folder: str, remote_folder: str) -> Task:
+        """Transition RUNNING→DONE on failure, setting error and partial folders."""
+        # START_BLOCK_VALIDATE_RUNNING
+        if self.status != TaskStatus.RUNNING:
+            raise TaskNotRunningError(self.task_id)
+        # END_BLOCK_VALIDATE_RUNNING
+        # START_BLOCK_APPLY_FAIL
+        event = TaskFailed(
+            task_id=self.task_id,
+            webhook_url=self.webhook_url,
+            webhook_custom_params=self.webhook_custom_params,
+            reason=reason,
+        )
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            error=reason,
+            local_folder=local_folder,
+            remote_folder=remote_folder,
+            events=self.events + (event,),
+        )
+        # END_BLOCK_APPLY_FAIL
+
+    # START_CONTRACT: Task.abandon
+    #   PURPOSE: Transition RUNNING→DONE with an error when the node disappeared, emitting TaskAbandoned only when node_id is not None.
+    #   INPUTS: { node_id: NodeId | None - the node to abandon, error: str - failure description }
+    #   OUTPUTS: { Task - new Task }
+    #   SIDE_EFFECTS: None
+    #   RAISES: TaskNotRunningError - if status is not RUNNING
+    #   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
+    # END_CONTRACT: Task.abandon
+    def abandon(self, node_id: NodeId | None, error: str = "node is gone") -> Task:
+        """Transition RUNNING→DONE when the node disappeared."""
+        # START_BLOCK_VALIDATE_RUNNING
+        if self.status != TaskStatus.RUNNING:
+            raise TaskNotRunningError(self.task_id)
+        # END_BLOCK_VALIDATE_RUNNING
+        # START_BLOCK_APPLY_ABANDON
+        new_events = self.events
+        if node_id is not None:
+            event = TaskAbandoned(
+                task_id=self.task_id,
+                webhook_url=self.webhook_url,
+                webhook_custom_params=self.webhook_custom_params,
+                node_id=node_id,
+            )
+            new_events = new_events + (event,)
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            error=error,
+            events=new_events,
+        )
+        # END_BLOCK_APPLY_ABANDON
+
+
+# START_CONTRACT: materialize_task
+#   PURPOSE: Attach a TaskCreated event to a freshly-inserted Task's events.
+#   INPUTS: { task: Task - the freshly-inserted Task }
+#   OUTPUTS: { Task - new Task with one TaskCreated }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-PORTS
+# END_CONTRACT: materialize_task
+def materialize_task(task: Task) -> Task:
+    """Return a Task with a TaskCreated event appended to events."""
+    event = TaskCreated(
+        task_id=task.task_id,
+        webhook_url=task.webhook_url,
+        webhook_custom_params=task.webhook_custom_params,
+        engine_name=task.engine,
+    )
+    return replace(task, events=(event,))
 
 
 # START_CONTRACT: NodeId

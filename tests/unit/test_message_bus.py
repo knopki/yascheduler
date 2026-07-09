@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import functools
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -158,7 +159,7 @@ class TestUoWEventDispatch:
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
         )
-        task = task.record_event(event)
+        task = replace(task, events=(event,))
 
         bus_dispatch = bus.dispatch
         collected_events: list[object] = []
@@ -250,7 +251,7 @@ class TestUoWEventDispatch:
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
         )
-        t1 = t1.record_event(e1)
+        t1 = replace(t1, events=(e1,))
         t2 = Task(
             task_id=TaskId(2),
             label="t2",
@@ -264,7 +265,7 @@ class TestUoWEventDispatch:
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
         )
-        t2 = t2.record_event(e2)
+        t2 = replace(t2, events=(e2,))
 
         bus_dispatch = bus.dispatch
 
@@ -280,12 +281,9 @@ class TestUoWEventDispatch:
 
             async def collect_events(self) -> list[DomainEvent]:
                 events: list[DomainEvent] = []
-                remaining: list[Task] = []
                 for t in self._saved:
-                    clean, evts = t.pull_events()
-                    events.extend(evts)
-                    remaining.append(clean)
-                self._saved = remaining
+                    events.extend(t.events)
+                self._saved.clear()
                 return events
 
             async def publish_events(self) -> None:

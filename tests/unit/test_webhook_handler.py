@@ -98,7 +98,7 @@ async def _call(event: DomainEvent) -> AsyncMock:
         ),
         (
             TaskCompleted,
-            {"local_folder": "/tmp/out", "has_errors": False},
+            {"local_folder": "/tmp/out"},
             TaskStatus.DONE,
         ),
         (TaskFailed, {"reason": "oops"}, TaskStatus.DONE),

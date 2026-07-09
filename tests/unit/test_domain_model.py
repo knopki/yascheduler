@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, Engine, Task, Node, ConnectedMachine.
-#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_remote_folder, Task.with_download_results, Task.allocate_to(node) binding allocated_node_id (sole allocation signal), Task.error column format contract.
+#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods (run/reject/complete/fail/abandon), ConnectedMachine state transitions, materialize_task, Task.error column format contract, public events field.
 #   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -15,18 +15,20 @@
 #   test_engine_validate_inputs - ok when files present, raises MissingInputFileError when missing
 #   test_task_construction - default TO_DO status
 #   test_task_immutability - FrozenInstanceError on mutation
-#   test_allocate_to_takes_node_and_binds_allocated_node_id - allocate_to(node) sets allocated_node_id (sole allocation signal)
-#   test_allocate_to_rejects_already_allocated - raises TaskAlreadyAllocatedError, allocated_node_id unchanged
-#   test_mark_running_raises_when_allocated_node_id_none - mark_running guard on allocated_node_id
-#   test_task_mark_running - transitions to RUNNING
-#   test_task_complete - transitions RUNNING->DONE
-#   test_task_fail - transitions to DONE with error set
-#   test_task_fail_not_running - raises TaskNotRunningError
-#   test_task_reject - transitions TO_DO->DONE with error set
+#   test_task_run - run(node_id, remote_folder) transitions TO_DO->RUNNING, sets fields, appends TaskAllocated
+#   test_task_run_on_non_todo_raises - run on non-TO_DO raises TaskNotTodoError
+#   test_task_reject - transitions TO_DO->DONE with error set, appends TaskFailed
+#   test_task_reject_on_running_raises - reject on RUNNING raises TaskNotTodoError
+#   test_task_complete - transitions RUNNING->DONE, appends TaskCompleted
+#   test_task_complete_on_todo_raises - complete on TO_DO raises TaskNotRunningError
+#   test_task_fail - transitions RUNNING->DONE with error set, appends TaskFailed
+#   test_task_fail_on_todo_raises - fail on TO_DO raises TaskNotRunningError
+#   test_task_abandon - abandon(node_id) transitions RUNNING->DONE, appends TaskAbandoned
+#   test_task_abandon_none - abandon(None) transitions RUNNING->DONE, no event emitted
+#   test_task_abandon_on_todo_raises - abandon on TO_DO raises TaskNotRunningError
 #   test_new_task_defaults - NewTask typed-field defaults, no task_id, no remote_folder, no error
-#   TestTaskWithRemoteFolder - with_remote_folder sets the field, preserves others, no validation, chains
-#   TestTaskWithDownloadResults - with_download_results sets both fields, preserves extra, keyword-only, no validation, chains
 #   TestTaskErrorFormat - Task.error column format contract (bare on reject/fail, None on success)
+#   TestMaterializeTask - materialize_task adds TaskCreated event
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
@@ -40,12 +42,16 @@ from datetime import datetime
 
 import pytest
 
-from yascheduler.domain.events import TaskCreated
+from yascheduler.domain.events import (
+    TaskAbandoned,
+    TaskAllocated,
+    TaskCompleted,
+    TaskCreated,
+    TaskFailed,
+)
 from yascheduler.domain.exceptions import (
     MachineBusyError,
     MissingInputFileError,
-    TaskAlreadyAllocatedError,
-    TaskNotAllocatedError,
     TaskNotRunningError,
     TaskNotTodoError,
 )
@@ -61,6 +67,7 @@ from yascheduler.domain.model import (
     Task,
     TaskId,
     TaskStatus,
+    materialize_task,
 )
 
 _DT = datetime(2025, 1, 1)
@@ -174,19 +181,15 @@ class TestEngine:
 
 
 # START_CONTRACT: test_task
-#   PURPOSE: Verify Task construction, immutability, and lifecycle methods
+#   PURPOSE: Verify Task construction, immutability, and lifecycle methods (run/reject/complete/fail/abandon)
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertions }
 #   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task, TaskAlreadyAllocatedError, TaskNotAllocatedError]
+#   LINKS: [M-DOMAIN-MODEL: Task, TaskNotTodoError, TaskNotRunningError]
 # END_CONTRACT: test_task
 class TestTask:
     def make_task(self, **overrides: object) -> Task:
         return _make_task(**overrides)
-
-    @staticmethod
-    def _node(node_id: int = 7, ip: str = "10.0.0.1") -> Node:
-        return Node(node_id=NodeId(node_id), ip=ip, ncpus=4)
 
     def test_construction_default_status(self) -> None:
         task = self.make_task()
@@ -204,60 +207,59 @@ class TestTask:
         with pytest.raises(FrozenInstanceError):
             task.status = TaskStatus.RUNNING  # type: ignore[misc]
 
-    def test_allocate_to_takes_node_and_binds_allocated_node_id(self) -> None:
+    def test_run(self) -> None:
         task = self.make_task()
-        node = self._node(node_id=7, ip="10.0.0.1")
-        allocated = task.allocate_to(node)
-        assert allocated.allocated_node_id == NodeId(7)
-        assert allocated.task_id == task.task_id
-        assert allocated.status == task.status
-        assert task.allocated_node_id is None
-        assert not hasattr(allocated, "allocated_ip")
-
-    def test_allocate_to_rejects_already_allocated(self) -> None:
-        task = self.make_task(allocated_node_id=NodeId(7))
-        node = self._node(node_id=8, ip="10.0.0.2")
-        with pytest.raises(TaskAlreadyAllocatedError) as exc_info:
-            task.allocate_to(node)
-        assert "1" in str(exc_info.value)
-        assert task.allocated_node_id == NodeId(7)
-
-    def test_mark_running_raises_when_allocated_node_id_none(self) -> None:
-        task = self.make_task()
-        with pytest.raises(TaskNotAllocatedError) as exc_info:
-            task.mark_running()
-        assert "1" in str(exc_info.value)
-
-    def test_mark_running(self) -> None:
-        task = self.make_task()
-        running = task.allocate_to(self._node()).mark_running()
+        running = task.run(NodeId(7), "/r")
         assert running.status == TaskStatus.RUNNING
+        assert running.allocated_node_id == NodeId(7)
+        assert running.remote_folder == "/r"
         assert running.task_id == task.task_id
+        assert len(running.events) == 1
+        evt = running.events[0]
+        assert isinstance(evt, TaskAllocated)
+        assert evt.node_id == NodeId(7)
+        assert evt.engine_name == "cp2k"
+
+    def test_run_on_non_todo_raises(self) -> None:
+        task = self.make_task(status=TaskStatus.RUNNING)
+        with pytest.raises(TaskNotTodoError) as exc_info:
+            task.run(NodeId(7), "/r")
+        assert "1" in str(exc_info.value)
 
     def test_complete_on_running(self) -> None:
         task = self.make_task()
-        running = task.allocate_to(self._node()).mark_running()
-        done = running.complete()
+        running = task.run(NodeId(7), "/r")
+        done = running.complete(local_folder="/l", remote_folder="/r")
         assert done.status == TaskStatus.DONE
         assert done.error is None
+        assert done.local_folder == "/l"
+        assert done.remote_folder == "/r"
+        assert len(done.events) == 2
+        assert isinstance(done.events[1], TaskCompleted)
+        assert done.events[1].local_folder == "/l"
 
     def test_complete_on_todo_raises(self) -> None:
         task = self.make_task()
         with pytest.raises(TaskNotRunningError) as exc_info:
-            task.complete()
+            task.complete(local_folder="/l", remote_folder="/r")
         assert "1" in str(exc_info.value)
 
     def test_fail_on_running(self) -> None:
         task = self.make_task()
-        running = task.allocate_to(self._node()).mark_running()
-        failed = running.fail("out of memory")
+        running = task.run(NodeId(7), "/r")
+        failed = running.fail("out of memory", local_folder="/l", remote_folder="/r")
         assert failed.status == TaskStatus.DONE
         assert failed.error == "out of memory"
+        assert failed.local_folder == "/l"
+        assert failed.remote_folder == "/r"
+        assert len(failed.events) == 2
+        assert isinstance(failed.events[1], TaskFailed)
+        assert failed.events[1].reason == "out of memory"
 
     def test_fail_on_todo_raises(self) -> None:
         task = self.make_task()
         with pytest.raises(TaskNotRunningError) as exc_info:
-            task.fail("reason")
+            task.fail("reason", local_folder="/l", remote_folder="/r")
         assert "1" in str(exc_info.value)
 
     def test_reject_on_todo(self) -> None:
@@ -265,12 +267,40 @@ class TestTask:
         rejected = task.reject("unsupported engine")
         assert rejected.status == TaskStatus.DONE
         assert rejected.error == "unsupported engine"
+        assert len(rejected.events) == 1
+        assert isinstance(rejected.events[0], TaskFailed)
+        assert rejected.events[0].reason == "unsupported engine"
 
     def test_reject_on_running_raises(self) -> None:
         task = self.make_task()
-        running = task.allocate_to(self._node()).mark_running()
+        running = task.run(NodeId(7), "/r")
         with pytest.raises(TaskNotTodoError):
             running.reject("reason")
+
+    def test_abandon_with_node_id(self) -> None:
+        task = self.make_task()
+        running = task.run(NodeId(7), "/r")
+        abandoned = running.abandon(NodeId(7))
+        assert abandoned.status == TaskStatus.DONE
+        assert abandoned.error == "node is gone"
+        assert len(abandoned.events) == 2
+        assert isinstance(abandoned.events[1], TaskAbandoned)
+        assert abandoned.events[1].node_id == NodeId(7)
+
+    def test_abandon_none_no_event(self) -> None:
+        task = self.make_task()
+        running = task.run(NodeId(7), "/r")
+        abandoned = running.abandon(None)
+        assert abandoned.status == TaskStatus.DONE
+        assert abandoned.error == "node is gone"
+        # No TaskAbandoned event when node_id is None
+        assert len(abandoned.events) == 1  # only the TaskAllocated from run
+
+    def test_abandon_on_todo_raises(self) -> None:
+        task = self.make_task()
+        with pytest.raises(TaskNotRunningError) as exc_info:
+            task.abandon(NodeId(7))
+        assert "1" in str(exc_info.value)
 
 
 # START_CONTRACT: test_node
@@ -449,118 +479,6 @@ class TestConnectedMachine:
         assert m.free_since is None
 
 
-# START_CONTRACT: test_with_remote_folder
-#   PURPOSE: Verify Task.with_remote_folder sets the field, preserves all others, no status validation, chains with with_event/fail/complete.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task.with_remote_folder]
-# END_CONTRACT: test_with_remote_folder
-class TestTaskWithRemoteFolder:
-    def test_sets_remote_folder(self) -> None:
-        task = _make_task(remote_folder=None)
-        result = task.with_remote_folder("/remote/20240101_000000_7")
-        assert result.remote_folder == "/remote/20240101_000000_7"
-        assert result.task_id == task.task_id
-        assert result.label == task.label
-        assert result.engine == task.engine
-        assert result.local_folder == task.local_folder
-        assert result.webhook_url == task.webhook_url
-        assert result.webhook_custom_params == task.webhook_custom_params
-        assert result.error == task.error
-        assert result.extra == task.extra
-        assert result.status == task.status
-        assert result.allocated_node_id == task.allocated_node_id
-        assert result._events == task._events
-
-    def test_preserves_original(self) -> None:
-        task = _make_task(remote_folder=None)
-        result = task.with_remote_folder("/r/new")
-        assert task.remote_folder is None
-        assert result.remote_folder == "/r/new"
-
-    @pytest.mark.parametrize("status", list(TaskStatus))
-    def test_no_status_validation(self, status: TaskStatus) -> None:
-        task = _make_task(status=status)
-        result = task.with_remote_folder("/r")
-        assert result.remote_folder == "/r"
-        assert result.status == status
-
-    def test_chains_with_with_event(self) -> None:
-        task = _make_task(engine="cp2k")
-        result = task.with_remote_folder("/r").with_event(
-            TaskCreated, engine_name="cp2k"
-        )
-        assert result.remote_folder == "/r"
-        assert len(result._events) == 1
-        evt = result._events[0]
-        assert isinstance(evt, TaskCreated)
-        assert evt.engine_name == "cp2k"
-        assert evt.task_id == task.task_id
-
-    def test_chains_with_fail(self) -> None:
-        task = _make_task()
-        running = task.allocate_to(_node()).mark_running()
-        result = running.with_remote_folder("/r").fail("reason")
-        assert result.status == TaskStatus.DONE
-        assert result.error == "reason"
-        assert result.remote_folder == "/r"
-
-
-# START_CONTRACT: test_with_download_results
-#   PURPOSE: Verify Task.with_download_results sets local_folder+remote_folder, preserves extra, keyword-only, no status validation, chains.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task.with_download_results]
-# END_CONTRACT: test_with_download_results
-class TestTaskWithDownloadResults:
-    def test_sets_both_fields(self) -> None:
-        task = _make_task(local_folder=None, remote_folder=None)
-        result = task.with_download_results(
-            local_folder="/local/out", remote_folder="/remote/out"
-        )
-        assert result.local_folder == "/local/out"
-        assert result.remote_folder == "/remote/out"
-        assert result.task_id == task.task_id
-        assert result.engine == task.engine
-        assert result.status == task.status
-
-    def test_does_not_touch_extra(self) -> None:
-        task = _make_task(extra={"input.in": "ATOMS"})
-        result = task.with_download_results(local_folder="/l", remote_folder="/r")
-        assert result.extra == {"input.in": "ATOMS"}
-
-    def test_accepts_equal_values(self) -> None:
-        task = _make_task(local_folder="/l", remote_folder="/r")
-        result = task.with_download_results(local_folder="/l", remote_folder="/r")
-        assert result.local_folder == "/l"
-        assert result.remote_folder == "/r"
-
-    def test_keyword_only(self) -> None:
-        task = _make_task()
-        with pytest.raises(TypeError):
-            task.with_download_results("/l", "/r")  # type: ignore[call-arg, misc]
-
-    @pytest.mark.parametrize("status", list(TaskStatus))
-    def test_no_status_validation(self, status: TaskStatus) -> None:
-        task = _make_task(status=status)
-        result = task.with_download_results(local_folder="/l", remote_folder="/r")
-        assert result.local_folder == "/l"
-        assert result.remote_folder == "/r"
-        assert result.status == status
-
-    def test_chains_with_complete(self) -> None:
-        task = _make_task()
-        running = task.allocate_to(_node()).mark_running()
-        result = running.with_download_results(
-            local_folder="/l", remote_folder="/r"
-        ).complete()
-        assert result.status == TaskStatus.DONE
-        assert result.local_folder == "/l"
-        assert result.remote_folder == "/r"
-
-
 # START_CONTRACT: test_error_format
 #   PURPOSE: Verify Task.error column format contract — bare on reject/fail, None on success.
 #   INPUTS: { None }
@@ -571,8 +489,8 @@ class TestTaskWithDownloadResults:
 class TestTaskErrorFormat:
     def test_error_is_none_on_success(self) -> None:
         task = _make_task()
-        running = task.allocate_to(_node()).mark_running()
-        done = running.complete()
+        running = task.run(NodeId(7), "/r")
+        done = running.complete(local_folder="/l", remote_folder="/r")
         assert done.error is None
 
     def test_error_is_bare_reason_on_reject(self) -> None:
@@ -582,9 +500,33 @@ class TestTaskErrorFormat:
 
     def test_error_is_bare_reason_on_fail(self) -> None:
         task = _make_task()
-        running = task.allocate_to(_node()).mark_running()
-        failed = running.fail("node is gone")
+        running = task.run(NodeId(7), "/r")
+        failed = running.fail("node is gone", local_folder="/l", remote_folder="/r")
         assert failed.error == "node is gone"
+
+
+# START_CONTRACT: test_materialize_task
+#   PURPOSE: Verify materialize_task adds a TaskCreated event to a Task with events=().
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-MODEL: materialize_task]
+# END_CONTRACT: test_materialize_task
+class TestMaterializeTask:
+    def test_materialize_task_adds_task_created_event(self) -> None:
+        task = _make_task(events=())
+        result = materialize_task(task)
+        assert len(result.events) == 1
+        evt = result.events[0]
+        assert isinstance(evt, TaskCreated)
+        assert evt.task_id == task.task_id
+        assert evt.webhook_url == task.webhook_url
+        assert evt.webhook_custom_params == task.webhook_custom_params
+        assert evt.engine_name == task.engine
+        # All other fields preserved
+        assert result.label == task.label
+        assert result.status == task.status
+        assert result.remote_folder == task.remote_folder
 
 
 # START_CONTRACT: test_task_id
@@ -660,15 +602,10 @@ class TestNewTask:
     def test_has_no_lifecycle_methods(self) -> None:
         nt = NewTask(label="x", engine="cp2k")
         for method in (
-            "allocate_to",
-            "mark_running",
+            "run",
             "complete",
             "fail",
             "reject",
-            "with_remote_folder",
-            "with_download_results",
-            "with_event",
-            "pull_events",
-            "record_event",
+            "abandon",
         ):
             assert not hasattr(nt, method)

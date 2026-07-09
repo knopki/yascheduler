@@ -213,7 +213,7 @@ async def test_hard_remove_path_succeeds_with_running_task(
     async with uow_factory() as uow:
         node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
         task = await uow.tasks.insert(NewTask(label="job", engine="fleur"))
-        task = task.allocate_to(node).mark_running().with_remote_folder("/r")
+        task = task.run(node.node_id, "/r")
         await uow.tasks.save(task)
         await uow.commit()
         node_id = node.node_id

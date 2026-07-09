@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain exception hierarchy.
-#   SCOPE: Test all 15 exception classes for inheritance, field access, and message format.
+#   SCOPE: Test all 13 exception classes for inheritance, field access, and message format.
 #   DEPENDS: none
 #   LINKS:
 # END_MODULE_CONTRACT
@@ -14,8 +14,7 @@
 #   test_unsupported_engine_error_fields - engine_name stored, message contains it
 #   test_missing_input_file_error_fields - engine_name + filename stored, message format
 #   test_task_error_hierarchy - TaskError inherits from DomainError
-#   test_task_already_allocated_error - task_id stored, message format
-#   test_task_not_allocated_error - task_id stored, message format
+#   test_task_error_hierarchy - TaskError inherits from DomainError
 #   test_machine_busy_error - ip stored, message contains it
 #   test_machine_connection_error_fields - ip and reason stored; message contains both
 #   test_machine_connection_error_is_domain_error - catchable as DomainError and Exception
@@ -56,9 +55,7 @@ from yascheduler.domain.exceptions import (
     MissingInputFileError,
     NoCompatibleNodeError,
     SchedulingError,
-    TaskAlreadyAllocatedError,
     TaskError,
-    TaskNotAllocatedError,
     UnsupportedEngineError,
     ValidationError,
 )
@@ -140,34 +137,6 @@ def test_task_error_hierarchy() -> None:
     assert TaskError.__mro__[1] is DomainError, (
         "TaskError must inherit from DomainError, not Exception directly"
     )
-
-
-# START_CONTRACT: test_task_already_allocated_error
-#   PURPOSE: Verify TaskAlreadyAllocatedError stores task_id and message mentions it.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_task_already_allocated_error
-def test_task_already_allocated_error() -> None:
-    exc = TaskAlreadyAllocatedError(task_id=TaskId(42))
-    assert exc.task_id == TaskId(42)
-    assert "already allocated" in str(exc)
-    assert "42" in str(exc)
-
-
-# START_CONTRACT: test_task_not_allocated_error
-#   PURPOSE: Verify TaskNotAllocatedError stores task_id and message mentions it.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_task_not_allocated_error
-def test_task_not_allocated_error() -> None:
-    exc = TaskNotAllocatedError(task_id=TaskId(99))
-    assert exc.task_id == TaskId(99)
-    assert "not allocated" in str(exc)
-    assert "99" in str(exc)
 
 
 # START_CONTRACT: test_machine_busy_error
@@ -457,22 +426,20 @@ def test_cloud_error_not_reexported_from_adapters() -> None:
 
 
 # START_CONTRACT: test_all_exceptions_importable
-#   PURPOSE: Verify all 15 exception classes are importable from yascheduler.domain.exceptions.
+#   PURPOSE: Verify all 13 exception classes are importable from yascheduler.domain.exceptions.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_all_exceptions_importable
 def test_all_exceptions_importable() -> None:
-    """Verify all 15 exception classes import correctly by instantiating each once."""
+    """Verify all 13 exception classes import correctly by instantiating each once."""
     instances = [
         DomainError(),
         ValidationError(),
         UnsupportedEngineError(engine_name="x"),
         MissingInputFileError(engine_name="x", filename="f"),
         TaskError(),
-        TaskAlreadyAllocatedError(task_id=TaskId(1)),
-        TaskNotAllocatedError(task_id=TaskId(2)),
         MachineBusyError(ip="0.0.0.0"),
         MachineConnectionError(ip="0.0.0.0", reason="x"),
         SchedulingError(),
@@ -482,6 +449,6 @@ def test_all_exceptions_importable() -> None:
         CloudAllocateError("test"),
         CloudSetupError("test"),
     ]
-    assert len(instances) == 15
+    assert len(instances) == 13
     for inst in instances:
         assert isinstance(inst, Exception)

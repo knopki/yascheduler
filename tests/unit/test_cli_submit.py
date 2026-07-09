@@ -78,7 +78,6 @@ def make_mock_deps(config: MagicMock) -> MagicMock:
     deps = MagicMock(spec=CLIDeps)
     deps.submit = AsyncMock(return_value=TaskId(42))
     deps.engines = config.engines
-    deps.remote_tasks_dir = Path("/tmp/tasks")
     return deps
 
 

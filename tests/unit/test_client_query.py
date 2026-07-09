@@ -33,7 +33,6 @@ tests stable across future refactors of the query body.
 
 from __future__ import annotations
 
-from pathlib import PurePath
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -101,7 +100,6 @@ class FakeCLIDeps:
         self.uow_factory = lambda: uow
         # Unused by query path; present to mirror CLIDeps shape.
         self.engines = SimpleNamespace()
-        self.remote_tasks_dir = PurePath("/tmp/tasks")
 
 
 def _make_task(

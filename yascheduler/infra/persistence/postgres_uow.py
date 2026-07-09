@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres_uow.py
-# VERSION: 1.4.1
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit of Work implementation for PostgreSQL using pg8000.
 #   SCOPE: PostgresUnitOfWork managing transaction lifecycle, repository wiring, event collection and dispatch.
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
-#   PREVIOUS_CHANGE: v1.4.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
+#   LAST_CHANGE: v1.6.0 - collect_events reads task.events directly and clears _saved_tasks.
+#   PREVIOUS_CHANGE: v1.5.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -175,7 +175,7 @@ class PostgresUnitOfWork:
         self._saved_tasks.clear()
 
     # START_CONTRACT: PostgresUnitOfWork.collect_events
-    #   PURPOSE: Pull events from all saved aggregates, returning collected events and updating saved tasks.
+    #   PURPOSE: Read events from all saved aggregates via the public events field and clear _saved_tasks.
     #   INPUTS: { None }
     #   OUTPUTS: { list[DomainEvent] - flat list of all collected events }
     #   SIDE_EFFECTS: None — internal state only.
@@ -183,12 +183,9 @@ class PostgresUnitOfWork:
     # END_CONTRACT: PostgresUnitOfWork.collect_events
     async def collect_events(self) -> list[DomainEvent]:
         events: list[DomainEvent] = []
-        saved = list(self._saved_tasks)
+        for task in self._saved_tasks:
+            events.extend(task.events)
         self._saved_tasks.clear()
-        for task in saved:
-            clean_task, task_events = task.pull_events()
-            events.extend(task_events)
-            self._saved_tasks.append(clean_task)
         return events
 
     # START_CONTRACT: PostgresUnitOfWork.publish_events

@@ -1,15 +1,4 @@
-# Domain Events and Dispatch
-
-## Purpose
-
-The domain event types emitted by the Task aggregate and use cases, the in-process
-`MessageBus` that decouples event recording from side-effect handlers, the
-`collect_events` / `publish_events` UoW hooks, and the `webhook_handler` adapter —
-the registered side-effect handler that translates events into outbound HTTP
-webhook calls. Events are immutable value objects carrying webhook delivery
-metadata on the base class.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: DomainEvent base type with webhook fields
 
@@ -85,40 +74,6 @@ format is unchanged. No external breakage.
 - **WHEN** `TaskCompleted(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, local_folder="/data/out")` is created
 - **THEN** `event.local_folder == "/data/out"` and the event has NO `has_errors` field (the field is removed)
 
-### Requirement: MessageBus dispatches events to handlers
-
-`MessageBus` (`yascheduler.application.message_bus`) SHALL expose
-`register(event_type, handler)` (multiple handlers per event type; handlers are
-async callables accepting a single `DomainEvent`; use `functools.partial` to bind
-dependencies) and `async dispatch(events: Sequence[DomainEvent])` which dispatches
-each event to all registered handlers for its type. An event with no registered
-handlers is silently ignored.
-
-#### Scenario: Multiple handlers for one event
-- **WHEN** two handlers are registered for `TaskCompleted`
-- **THEN** both are called when a `TaskCompleted` event is dispatched
-
-#### Scenario: Event with no handlers is silently ignored
-- **WHEN** `bus.dispatch([TaskCreated(...)])` is called and no handler is registered for `TaskCreated`
-- **THEN** no error is raised
-
-### Requirement: Dispatch after commit via UoW
-
-Events SHALL be dispatched in `PostgresUnitOfWork.commit()` after the database
-transaction commits, via `collect_events()` / `publish_events()` on the
-`AbstractUnitOfWork` Protocol. `collect_events()` pulls events from saved
-aggregates; `publish_events()` dispatches them via `MessageBus.dispatch()`. An
-exception triggering `rollback()` SHALL discard collected events without
-dispatch.
-
-#### Scenario: Events dispatched after commit
-- **WHEN** `uow.commit()` is called and aggregates have recorded events
-- **THEN** the database commit completes first, then events are collected and dispatched
-
-#### Scenario: Rollback discards events
-- **WHEN** an exception triggers `uow.rollback()`
-- **THEN** collected events are discarded without dispatch
-
 ### Requirement: Events collected from aggregates via public events field
 
 The system SHALL collect events from Task aggregates via `collect_events()`.
@@ -185,47 +140,8 @@ The `node_id` value for `TaskAbandoned` is sourced from the `node_id` param of
 - **WHEN** `_task_consumer_consumer` detects the machine is gone (and `node_id is not None`)
 - **THEN** `task.abandon(node_id)` is called; the returned Task carries a `TaskAbandoned(node_id=node_id)` event in `events`. When `node_id is None` (double-abandon edge), `task.abandon(None)` is called and no `TaskAbandoned` event is emitted.
 
-### Requirement: Webhook handler — the registered side-effect handler
+## REMOVED Requirements
 
-`webhook_handler` (`yascheduler.infra.notifier.webhook`) SHALL be an async
-function that processes `TaskCreated`, `TaskAllocated`, `TaskCompleted`,
-`TaskFailed`, and `TaskAbandoned` events by sending webhook notifications. It
-SHALL build `WebhookPayload(task_id=event.task_id.value, status=<status>.value,
-custom_params=event.webhook_custom_params)` and serialize it via
-`dataclasses.asdict(payload)` into the HTTP POST body. The `.value` extraction
-at the `WebhookPayload` construction site is REQUIRED: `dataclasses.asdict`
-recurses into nested dataclasses, so passing `task_id=event.task_id` (a `TaskId`)
-would produce `{"task_id": {"value": 42}, ...}` instead of `{"task_id": 42,
-...}`. `WebhookPayload.task_id` SHALL be typed `int`.
-
-When `webhook_url` is `None`, the event is skipped (no HTTP request). Webhook
-HTTP failures SHALL be logged and the exception suppressed so they never
-propagate back into the use-case layer. Delivery SHALL use fibonacci-backoff
-retry (`backoff.fibo`, `max_time=60`) with a semaphore for rate limiting.
-
-`WebhookPayload` (`task_id`, `status`, `custom_params`; default `custom_params =
-{}`) is the wire shape `{"task_id": int, "status": int, "custom_params": ...}`.
-
-#### Scenario: TaskCreated sends TO_DO webhook
-- **WHEN** `webhook_handler(TaskCreated(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, engine_name="fleur"), http)` is called
-- **THEN** an HTTP POST is sent with `{"task_id": 42, "status": 0, "custom_params": {}}` (status=0 is TO_DO; `task_id` is the bare int `.value`)
-
-#### Scenario: TaskCompleted sends DONE webhook
-- **WHEN** `webhook_handler(TaskCompleted(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, local_folder="/data/..."), http)` is called
-- **THEN** an HTTP POST is sent with `{"task_id": 42, "status": 2, "custom_params": {}}`
-
-#### Scenario: WebhookPayload task_id is the bare int
-- **WHEN** `webhook_handler` builds `WebhookPayload` from an event with `task_id=TaskId(42)`
-- **THEN** `payload.task_id == 42` (a bare `int`); `dataclasses.asdict(payload)` produces `{"task_id": 42, ...}`, NOT `{"task_id": {"value": 42}, ...}`
-
-#### Scenario: No webhook URL — event skipped
-- **WHEN** `webhook_handler` is called with an event whose `webhook_url is None`
-- **THEN** no HTTP request is made
-
-#### Scenario: Webhook failure is logged, not raised
-- **WHEN** the webhook HTTP request fails
-- **THEN** the error is logged; the exception is NOT propagated back into the use-case layer
-
-#### Scenario: Retry on transient failure
-- **WHEN** the webhook endpoint returns 503
-- **THEN** the request is retried with fibonacci backoff up to `max_time=60` seconds
+### Requirement: Task.with_event event factory
+**Reason**: Events are now constructed and appended inline by `Task` transition methods (`run`, `reject`, `complete`, `fail`, `abandon`) and by `materialize_task` (for `TaskCreated`). The `with_event` factory and the `record_event` primitive are no longer needed — every emission site is a transition. Keeping `with_event` would preserve a primitive that bypasses the transition encapsulation.
+**Migration**: Replace `task.with_event(EventType, **fields)` calls with the matching transition method. `task.with_event(TaskAllocated, node_id=..., engine_name=...)` → `task.run(node_id, remote_folder)`. `task.with_event(TaskFailed, reason=...)` after `reject`/`fail` → call `reject(reason)` or `fail(reason, ...)` alone. `task.with_event(TaskCreated, ...)` → handled by `materialize_task` inside `insert`. `task.with_event(TaskAbandoned, node_id=...)` after `fail` → `task.abandon(node_id)`. `record_event(event)` callers → use the transition methods.

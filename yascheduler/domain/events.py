@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/events.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain events for task lifecycle transitions.
 #   SCOPE: Lifecycle event types (DomainEvent base, TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned) and the Event union.
@@ -11,15 +11,15 @@
 #   DomainEvent - Base frozen dataclass with task_id (TaskId), webhook_url, webhook_custom_params (all required)
 #   TaskCreated - Task submitted event with engine_name
 #   TaskAllocated - Task assigned to node with node_id (NodeId) and engine_name
-#   TaskCompleted - Task finished with local_folder and has_errors
+#   TaskCompleted - Task finished with local_folder
 #   TaskFailed - Task failed with reason
 #   TaskAbandoned - Task abandoned on lost node with node_id (NodeId)
 #   Event - Union type alias of all event types
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - TaskAllocated and TaskAbandoned replace node_ip: str with node_id: NodeId (the node identity, not the transport address). NodeId imported under TYPE_CHECKING alongside TaskId.
-#   PREVIOUS_CHANGE: v1.2.0 - DomainEvent.task_id: int -> TaskId; the 5 subclasses inherit the new type. TaskId imported under TYPE_CHECKING.
+#   LAST_CHANGE: v1.4.0 - Remove TaskCompleted.has_errors (unused; every complete path was a success, errors go through fail -> TaskFailed). Webhook wire format unaffected (webhook_handler does not read has_errors).
+#   PREVIOUS_CHANGE: v1.3.0 - TaskAllocated and TaskAbandoned replace node_ip: str with node_id: NodeId (the node identity, not the transport address). NodeId imported under TYPE_CHECKING alongside TaskId.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -52,7 +52,6 @@ class TaskAllocated(DomainEvent):
 @dataclass(frozen=True)
 class TaskCompleted(DomainEvent):
     local_folder: str
-    has_errors: bool
 
 
 @dataclass(frozen=True)

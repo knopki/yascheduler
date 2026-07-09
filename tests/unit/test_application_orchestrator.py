@@ -487,8 +487,8 @@ class TestOrchestratorTaskAbandoned:
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
         assert saved_task.error == "node is gone"
-        assert len(saved_task._events) == 1
-        event = saved_task._events[0]
+        assert len(saved_task.events) == 1
+        event = saved_task.events[0]
         assert isinstance(event, TaskAbandoned)
         assert event.task_id == TaskId(42)
         assert event.node_id == NodeId(42)
@@ -764,6 +764,7 @@ class TestAllocatorConsumer:
             start_task_on_machine=orch._start_task_on_machine,
             tracker=orch._tracker,
             allocation_lock=orch._allocation_lock,
+            remote_tasks_dir=orch._remote_defaults.tasks_dir,
         )
 
 

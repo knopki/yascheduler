@@ -652,6 +652,7 @@ async def _allocate(
         start_task_on_machine=start_cb,
         tracker=AllocationTracker(),
         allocation_lock=asyncio.Lock(),
+        remote_tasks_dir=PurePath("/remote/tasks"),
     )
 
 

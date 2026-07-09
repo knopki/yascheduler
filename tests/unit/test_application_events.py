@@ -56,6 +56,7 @@ from yascheduler.domain.model import (
     Task,
     TaskId,
     TaskStatus,
+    materialize_task,
 )
 from yascheduler.domain.ports import CloudProvisioner
 
@@ -73,7 +74,7 @@ class TestSubmitTaskEvents:
         uow = mock_uow_factory.return_value
 
         def _insert_side_effect(new_task: NewTask) -> Task:
-            return Task(
+            task = Task(
                 task_id=TaskId(55),
                 label=new_task.label,
                 engine=new_task.engine,
@@ -87,6 +88,7 @@ class TestSubmitTaskEvents:
                 updated_at=datetime(2025, 1, 1),
                 status=TaskStatus.TO_DO,
             )
+            return materialize_task(task)
 
         uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
 
@@ -96,12 +98,11 @@ class TestSubmitTaskEvents:
             engine_name="test_engine",
             engines=mock_engine_repo,
             uow_factory=mock_uow_factory,
-            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         saved_arg: Task = uow.tasks.save.call_args[0][0]
-        assert len(saved_arg._events) == 1
-        event = saved_arg._events[0]
+        assert len(saved_arg.events) == 1
+        event = saved_arg.events[0]
         assert isinstance(event, TaskCreated)
         assert event.task_id == TaskId(55)
         assert event.engine_name == "test_engine"
@@ -155,11 +156,12 @@ class TestAllocateTaskEvents:
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert len(saved_task._events) == 1
-        event = saved_task._events[0]
+        assert len(saved_task.events) == 1
+        event = saved_task.events[0]
         assert isinstance(event, TaskFailed)
         assert event.reason == "unsupported engine"
 
@@ -236,13 +238,14 @@ class TestAllocateTaskEvents:
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         # save was called — check the last save has a TaskAllocated event
         save_calls = uow.tasks.save.call_args_list
         last_save_task: Task = save_calls[-1][0][0]
         allocated_events = [
-            e for e in last_save_task._events if isinstance(e, TaskAllocated)
+            e for e in last_save_task.events if isinstance(e, TaskAllocated)
         ]
         assert len(allocated_events) == 1
         assert allocated_events[0].node_id == NodeId(1)
@@ -313,8 +316,8 @@ class TestConsumeTaskEvents:
         )
 
         saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert len(saved_task._events) == 1
-        event = saved_task._events[0]
+        assert len(saved_task.events) == 1
+        event = saved_task.events[0]
         assert isinstance(event, TaskCompleted)
         assert event.task_id == TaskId(1)
         tracker.discard.assert_called_once_with(TaskId(1))
@@ -356,8 +359,8 @@ class TestConsumeTaskEvents:
         )
 
         saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert len(saved_task._events) == 1
-        event = saved_task._events[0]
+        assert len(saved_task.events) == 1
+        event = saved_task.events[0]
         assert isinstance(event, TaskFailed)
         assert event.task_id == TaskId(1)
         tracker.discard.assert_called_once_with(TaskId(1))

@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.13.0 - make_daemon constructs three stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) instead of SSHMachineOperations; CloudProvisionerImpl is constructed without machine_operations; Orchestrator is wired with task_deployer/output_downloader/occupancy_checker.
-#   PREVIOUS_CHANGE: v5.12.1 - CLIDeps.submit return type int -> TaskId (forwards submit_task which now returns TaskId); import TaskId. The public Yascheduler.queue_submit_task_async facade extracts .value to preserve the public -> int contract.
+#   LAST_CHANGE: v5.14.0 - CLIDeps drops remote_tasks_dir (submit_task no longer takes it; remote_folder is computed in allocate_task._try_start_on_machine at run time). CLIDeps.submit calls submit_task without remote_tasks_dir.
+#   PREVIOUS_CHANGE: v5.13.0 - make_daemon constructs three stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) instead of SSHMachineOperations; CloudProvisionerImpl is constructed without machine_operations; Orchestrator is wired with task_deployer/output_downloader/occupancy_checker.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -59,7 +59,6 @@ from yascheduler.infra import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import PurePath
 
     from yascheduler.domain import EngineRepository
     from yascheduler.infra.cloud import ConfigCloud
@@ -69,7 +68,7 @@ if TYPE_CHECKING:
 
 # START_CONTRACT: CLIDeps
 #   PURPOSE: Lightweight dependency container for CLI submit operations.
-#   INPUTS: { engines, uow_factory, remote_tasks_dir }
+#   INPUTS: { engines, uow_factory }
 #   OUTPUTS: { CLIDeps instance }
 #   SIDE_EFFECTS: None
 #   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-UOW
@@ -78,7 +77,6 @@ if TYPE_CHECKING:
 class CLIDeps:
     engines: EngineRepository
     uow_factory: Callable[[], AbstractUnitOfWork]
-    remote_tasks_dir: PurePath
 
     # START_CONTRACT: CLIDeps.submit
     #   PURPOSE: Submit a new task via the submit_task use case.
@@ -99,7 +97,6 @@ class CLIDeps:
             engine_name,
             self.engines,
             self.uow_factory,
-            self.remote_tasks_dir,
         )
 
 
@@ -250,5 +247,4 @@ def make_cli_deps(config: Config) -> CLIDeps:
     return CLIDeps(
         engines=config.engines,
         uow_factory=_uow_factory,
-        remote_tasks_dir=config.remote.tasks_dir,
     )

@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.10.0
+# VERSION: 1.11.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
 #   SCOPE: Domain error hierarchy: DomainError base class and sub-hierarchies for validation, task lifecycle, machine state, scheduling, and cloud provider errors.
@@ -13,8 +13,6 @@
 #   UnsupportedEngineError - Unknown calculation engine requested
 #   MissingInputFileError - Required engine input file not provided
 #   TaskError - Task lifecycle errors
-#   TaskAlreadyAllocatedError - Task already bound to a node
-#   TaskNotAllocatedError - Task not yet allocated to a node
 #   TaskNotTodoError - Task not in TODO status
 #   TaskNotRunningError - Task not in RUNNING status
 #   MachineBusyError - Operation attempted on a busy machine
@@ -28,8 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - The 6 task-keyed exceptions take task_id: TaskId; f-string messages render the bare integer via TaskId.__str__. Added `from __future__ import annotations` and import TaskId under TYPE_CHECKING to break the model↔exceptions runtime import cycle.
-#   PREVIOUS_CHANGE: v1.9.0 - Add CloudError(DomainError) intermediate root; reparent CloudAllocateError/CloudSetupError under it.
+#   LAST_CHANGE: v1.11.0 - Remove TaskAlreadyAllocatedError and TaskNotAllocatedError (guarded the TO_DO + allocated intermediate state produced by the prior allocate_to + mark_running two-step; run collapses allocation and the TO_DO->RUNNING transition into one atomic method, so neither guard arises). The remaining TaskNotTodoError (raised by run and reject) and TaskNotRunningError (raised by complete, fail, abandon) cover all five transition guards.
+#   PREVIOUS_CHANGE: v1.10.0 - The 6 task-keyed exceptions take task_id: TaskId; f-string messages render the bare integer via TaskId.__str__. Added `from __future__ import annotations` and import TaskId under TYPE_CHECKING to break the model↔exceptions runtime import cycle.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -67,22 +65,6 @@ class MissingInputFileError(ValidationError):
 
 class TaskError(DomainError):
     """Task lifecycle errors."""
-
-
-class TaskAlreadyAllocatedError(TaskError):
-    """Task already bound to a node."""
-
-    def __init__(self, task_id: TaskId) -> None:
-        self.task_id = task_id
-        super().__init__(f"task {task_id} is already allocated to a node")
-
-
-class TaskNotAllocatedError(TaskError):
-    """Task not yet allocated to a node."""
-
-    def __init__(self, task_id: TaskId) -> None:
-        self.task_id = task_id
-        super().__init__(f"task {task_id} is not allocated to any node")
 
 
 class TaskNotTodoError(TaskError):

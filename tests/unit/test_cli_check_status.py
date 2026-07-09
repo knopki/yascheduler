@@ -117,7 +117,6 @@ def make_mock_deps(config: MagicMock, uow: AsyncMock) -> MagicMock:
     deps.uow_factory = MagicMock(return_value=uow)
     deps.submit = AsyncMock(return_value=TaskId(42))
     deps.engines = config.engines
-    deps.remote_tasks_dir = PurePosixPath("/tmp/tasks")
     return deps
 
 

@@ -1,11 +1,4 @@
-# Use Cases
-
-## Purpose
-
-Application-layer use cases that orchestrate domain operations for task
-submission, allocation, consumption, and node deallocation.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: SubmitTask use case
 
@@ -23,6 +16,14 @@ and `error` are NOT on `NewTask`), persist it via
 `insert` calls `materialize_task` internally to attach `TaskCreated` to the
 returned `Task`'s `events`), then `save`, `commit`, and return `task.task_id`
 (a `TaskId`).
+
+The prior `task.with_remote_folder(remote_folder)` and
+`task.with_event(TaskCreated, engine_name=task.engine)` calls are REMOVED.
+`remote_folder` is no longer set at submit time — it is set by `run` when the
+task transitions to RUNNING in `allocate_task._try_start_on_machine` (see the
+AllocateTask requirement). `TaskCreated` is attached by `materialize_task`
+inside `insert`, not by the use case. The function SHALL NOT construct any
+`DomainEvent` subclass.
 
 The typed fields are extracted from the caller-supplied `metadata` dict
 (produced by `cli/submit.py::_build_metadata`); `engine` is set from the
@@ -118,110 +119,6 @@ call are REMOVED. The `remote_folder` construction moves from `submit_task` to
 - **WHEN** `allocate_task(...)` successfully starts a task on a machine
 - **THEN** `occupancy_checker.start_occupancy_check(session, engine)` is called (was `operations.start_occupancy_check`)
 
-### Requirement: DeallocateIdleNodes use case
-
-The system SHALL provide a `deallocate_nodes` async function that disables
-idle cloud nodes exceeding tolerance. The function SHALL accept `uow_factory`,
-`config_clouds: Sequence[CloudConfig]`, and `idle_machines: dict[NodeId, float]`
-(`NodeId` -> free_since monotonic timestamp). It SHALL NOT accept `repository`
-or `operations` (the per-node SSH/cloud teardown lives in `deallocate_node`).
-
-The per-node wrapper `deallocate_node(node, repository, clouds, uow_factory)`
-SHALL own the disable + remove bracketing around the pure
-`clouds.deallocate(node)` call. Ordering SHALL be preserved: `disable`
-→ `delete_node` → `remove` across two short UoWs (disable before cloud
-delete protects against allocator re-selection on failure; remove after
-cloud delete ensures the DB row is only dropped once the VM is gone).
-
-`deallocate_node` SHALL call `uow.nodes.disable(node.node_id)` and
-`uow.nodes.remove(node.node_id)` (keying on `node_id`, not `ip`).
-`clouds.deallocate(node)` SHALL take the whole `Node` and read `node.cloud`
-(provider) and `node.ip` (cloud host) internally. `deallocate_node` SHALL
-call `repository.contains(node.node_id)` and `repository.disconnect(node.node_id)`
-BEFORE the `if node.cloud:` guard, so SSH teardown is owned by
-`deallocate_node` and runs regardless of whether the node is a cloud node.
-
-`deallocate_nodes` SHALL iterate the enabled nodes returned by
-`uow.nodes.list_enabled()` and call `uow.nodes.disable(node.node_id)` for
-each node whose `node_id` is in `idle_machines` and whose `node_id` is not
-in `busy_node_ids` (the node_ids of RUNNING tasks' `allocated_node_id`).
-
-`deallocate_nodes` SHALL return `list[Node]` (was `list[str]`). Phase 2
-(collect free disabled cloud nodes) SHALL return the `Node` objects it
-reads from `uow.nodes.list_disabled()`, each carrying `node_id`, instead
-of discarding them to bare `ip` strings. This eliminates the
-`uow.nodes.get(ip)` round-trip lookup previously performed by the
-orchestrator's `_deallocator_consumer` to reconstruct the `Node` from `ip`.
-
-`deallocate_nodes` phase 2 SHALL filter disabled nodes by
-`node.node_id not in busy_node_ids and node.cloud`. The prior `"." in node.ip`
-post-filter SHALL NOT be present — it was dead code from the fake-ip era.
-
-Internal log lines in both `deallocate_nodes` and `deallocate_node` SHALL
-include both `node_id` and `ip` for correlation.
-
-#### Scenario: Idle cloud node disabled
-- **WHEN** `deallocate_nodes(...)` is called and an idle cloud node exceeds tolerance
-- **THEN** the node is disabled via `uow.nodes.disable(node.node_id)` and committed; the `Node` is included in the returned `list[Node]`
-
-#### Scenario: Returns disabled Node objects carrying node_id
-- **WHEN** `deallocate_nodes(...)` completes
-- **THEN** a `list[Node]` is returned (was `list[str]` of IPs); each `Node` carries its `node_id`, so the orchestrator can call `deallocate_node(node, ...)` directly without a DB round-trip
-
-#### Scenario: Deallocate node brackets cloud delete with disable+remove
-- **WHEN** `deallocate_node(node, repository, clouds, uow_factory)` is called for a cloud node
-- **THEN** SSH disconnect runs first, then `uow.nodes.disable` + commit, then `clouds.deallocate(node)`, then `uow.nodes.remove` + commit
-
-### Requirement: AbandonNode use case
-
-The system SHALL provide an `abandon_node` async function in
-`yascheduler/application/abandon_node.py` that cleans up a cloud node that
-never established its SSH connection, releasing the originating task to
-re-allocate on the next cycle. The function SHALL accept `node: Node`,
-`clouds: CloudProvisioner` (Protocol type), `uow_factory: Callable[[],
-AbstractUnitOfWork]`, and `tracker: AllocationTracker`. It SHALL NOT import
-from `yascheduler.infra` at runtime (TYPE_CHECKING only).
-
-The use case SHALL NOT call `repository.disconnect` — by construction the
-node was never registered in the repository (that is why it is being
-abandoned). The use case SHALL:
-
-1. If `node.cloud` is non-None, call `clouds.deallocate(node)`
-   as a best-effort cloud VM deletion. Failure here SHALL be logged at
-   `error` level with `node_id`, `ip`, `cloud`, and the exception, and SHALL NOT
-   suppress the subsequent DB-row removal.
-2. Open a UoW, call `uow.tasks.list_by_status({TaskStatus.TO_DO})`, and
-   in-memory filter for the task whose `allocated_node_id == node.node_id`.
-   This read SHALL happen BEFORE the node-row removal in step 3 — the
-   `allocated_node_id` FK is `ON DELETE SET NULL`, so removing the node row
-   first would null `allocated_node_id` and the in-memory filter would no
-   longer match. Hold the matching task(s) in memory.
-3. Open a UoW, call `uow.nodes.remove(node.node_id)`, and commit. Failure here
-   SHALL be logged at `error` level with `node_id`, `ip`, and the exception and
-   re-raised.
-4. If exactly one matching task was found in step 2, call
-   `tracker.discard(task.task_id)`. If zero or multiple matched, no `discard`
-   is called.
-
-The use case SHALL NOT mark the task `FAILED` or emit a domain event — the
-task re-enters `allocate_task` on the next cycle. The use case SHALL NOT
-modify `node.enabled` or call `uow.nodes.disable` — the row is removed
-directly.
-
-Internal log lines SHALL include both `node_id` and `ip` for correlation.
-
-#### Scenario: Happy path — VM deleted, DB row removed, tracker released
-- **WHEN** `abandon_node(node, clouds, uow_factory, tracker)` is called for a cloud node with one matching TO_DO task
-- **THEN** `clouds.deallocate(node)` is called, `uow.nodes.remove(node.node_id)` is called and committed, `tracker.discard(task.task_id)` is called, and the function returns without raising
-
-#### Scenario: Cloud deletion failure does not block DB cleanup
-- **WHEN** `clouds.deallocate(node)` raises an exception
-- **THEN** the exception is logged, `uow.nodes.remove(node.node_id)` is still called and committed, and the function continues to the stuck-task lookup
-
-#### Scenario: No matching TO_DO task skips tracker discard
-- **WHEN** the stuck-task lookup finds zero TO_DO tasks with `allocated_node_id == node.node_id`
-- **THEN** `tracker.discard` is NOT called, the function returns without raising, and the VM deletion + DB removal still ran
-
 ### Requirement: ConsumeTask use case
 
 The system SHALL provide a `consume_task` async function that downloads
@@ -299,9 +196,8 @@ constructed.
 `task.context.remote_folder`), `task.engine` (was `task.context.engine`), and
 `task.local_folder` (was `task.context.local_folder`) directly from the
 typed fields. The assertion `assert task.remote_folder is not None` SHALL
-guard the `task.remote_folder` read (the task is RUNNING — `run`
-assigned `remote_folder` at allocate time). No
-`TaskContext` indirection.
+guard the `task.remote_folder` read (the task is RUNNING — `run` assigned
+`remote_folder` at allocate time). No `TaskContext` indirection.
 
 #### Scenario: Successful consumption
 - **WHEN** `consume_task(...)` is called and `download_outputs` returns empty `transient_errors` and empty `permanent_errors`
@@ -322,83 +218,3 @@ assigned `remote_folder` at allocate time). No
 #### Scenario: consume_task does not call with_download_results or with_event
 - **WHEN** `consume_task.py` is inspected for `with_download_results` or `with_event` calls
 - **THEN** none are present; the terminal transitions `complete`/`fail` set the folders and emit the events inline
-
-### Requirement: QueryTasks use case
-
-The system SHALL provide a `query_tasks` async function that returns
-domain `Task` aggregates matching a jobs- or statuses-based read query,
-alongside a `dict[NodeId, Node]` of the nodes allocated to those tasks (for
-the caller to project a nested `node` field). The function SHALL accept
-`jobs: Sequence[TaskId] | None` (was `Sequence[int] | None`), `statuses:
-Sequence[TaskStatus] | None`, and `uow_factory: Callable[[], AbstractUnitOfWork]`.
-It SHALL raise `ValueError` if both `jobs` and `statuses` are supplied. It
-SHALL open a single Unit of Work, dispatch to `uow.tasks.list_by_status(set(statuses))`
-when `statuses` is non-empty or `uow.tasks.list_by_jobs(list(jobs))` (a
-`list[TaskId]`) when `jobs` is non-empty, and return `([], {})` when neither
-is non-empty (truthiness semantics, matching `yascheduler.client.queue_get_tasks_async`'s
-existing dispatch). It SHALL NOT call `uow.commit` (read-only). It SHALL NOT
-import from `yascheduler.infra` at runtime.
-
-Within the same single UoW, after fetching tasks, the use case SHALL
-batch-load the nodes allocated to those tasks via
-`uow.nodes.get_by_ids(list({t.allocated_node_id for t in tasks if
-t.allocated_node_id is not None}))` (a single batch round-trip), building
-`nodes_by_id: dict[NodeId, Node]`. When no task has an `allocated_node_id`
-(all tasks are unallocated), the use case SHALL skip the `get_by_ids` call
-and return `(tasks, {})`. The use case SHALL return the tuple
-`(tasks, nodes_by_id)`.
-
-The return type widens from `list[Task]` to `tuple[list[Task], dict[NodeId,
-Node]]`. This is the only signature change. The use case does NOT project
-the nested `node` field into task dicts; that is the facade's responsibility
-(see the `package-facades` capability). It returns raw domain objects.
-
-The public `Yascheduler.queue_get_tasks_async(jobs: list[int])` facade is the
-sole `int`/`TaskId` boundary on this path: it wraps `[TaskId(i) for i in jobs]`
-before calling `query_tasks(jobs=[TaskId(...)], ...)`.
-
-#### Scenario: Query by statuses dispatches to list_by_status
-- **WHEN** `query_tasks(jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=f)` is called
-- **THEN** a UoW is opened via `f()`, `uow.tasks.list_by_status({TaskStatus.TO_DO})` is awaited, `uow.nodes.get_by_ids(...)` is called with the `allocated_node_id`s of the returned tasks, the UoW closes without `commit`, and the returned `(list[Task], dict[NodeId, Node])` tuple is forwarded to the caller
-
-#### Scenario: Query by jobs dispatches to list_by_jobs
-- **WHEN** `query_tasks(jobs=[TaskId(1), TaskId(2), TaskId(3)], statuses=None, uow_factory=f)` is called
-- **THEN** a UoW is opened via `f()`, `uow.tasks.list_by_jobs([TaskId(1), TaskId(2), TaskId(3)])` is awaited, `uow.nodes.get_by_ids(...)` is called with the `allocated_node_id`s of the returned tasks, the UoW closes without `commit`, and the returned `list[Task]` is forwarded to the caller
-
-#### Scenario: Both jobs and statuses supplied raises ValueError
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=[TaskStatus.TO_DO], uow_factory=f)` is called
-- **THEN** `ValueError` is raised and no UoW is opened
-
-#### Scenario: Neither jobs nor statuses returns empty tuple
-- **WHEN** `query_tasks(jobs=None, statuses=None, uow_factory=f)` is called
-- **THEN** `([], {})` is returned without dispatching to either repository method and without opening a UoW
-
-#### Scenario: Query returns nodes_by_id with resolved nodes
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=NodeId("n1")`
-- **THEN** `uow.nodes.get_by_ids([NodeId("n1")])` is called, the returned dict `{NodeId("n1"): node}` is included in the `(tasks, nodes_by_id)` tuple
-
-#### Scenario: Query skips get_by_ids when all tasks unallocated
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=None`
-- **THEN** `uow.nodes.get_by_ids` is NOT called (no node IDs to resolve), and the return is `([task], {})`
-
-#### Scenario: Use case is read-only
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` runs to completion successfully
-- **THEN** `uow.commit()` is never called on the opened UoW
-
-### Requirement: AllocationTracker tracks in-flight cloud allocations
-
-The system SHALL provide an `AllocationTracker` class in
-`yascheduler.application.allocation_tracker` that maintains an in-memory
-`set[TaskId]` of task_ids with in-flight cloud allocations (was `set[int]`).
-The class SHALL expose `add(task_id: TaskId) -> bool` (returns True if newly
-added, False if already tracked), `discard(task_id: TaskId) -> None`, and
-`__contains__(task_id: TaskId) -> bool`.
-
-The tracker SHALL be constructed once by the orchestrator and injected into
-the `allocate_task`, `consume_task`, and `abandon_node` use cases. It is
-internal to the orchestrator and never crosses the public `Yascheduler`
-facade boundary.
-
-#### Scenario: AllocationTracker is a set[TaskId] deduplication helper
-- **WHEN** `tracker.add(TaskId(42))` is called for an untracked task_id
-- **THEN** returns True and `TaskId(42)` is in `tracker`; a second `add` returns False; `discard` removes it; `discard` of an untracked id is a no-op

@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.12.0
+# VERSION: 1.13.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: Async task and node CRUD over pg8000 via ThreadPoolExecutor.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - _row_to_task reads the seven typed columns directly from the row; webhook_custom_params/extra use json.loads str-fallback; save/insert bind the typed columns directly; insert binds remote_folder=None and error=None.
-#   PREVIOUS_CHANGE: v1.11.1 - _row_to_task reads created_at/updated_at via row["created_at"]/row["updated_at"] (direct access — DB NOT NULL, was row.get() returning Any|None).
+#   LAST_CHANGE: v1.13.0 - insert calls materialize_task(self._row_to_task(rows[0])) to attach TaskCreated to the returned Task's events (the domain layer owns event construction; infra does not import TaskCreated). _row_to_task still sets events=().
+#   PREVIOUS_CHANGE: v1.12.0 - _row_to_task reads the seven typed columns directly from the row; webhook_custom_params/extra use json.loads str-fallback; save/insert bind the typed columns directly; insert binds remote_folder=None and error=None.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from yascheduler.domain import (
     Task,
     TaskId,
     TaskStatus,
+    materialize_task,
 )
 
 from .exceptions import TaskRowNotFoundError
@@ -174,14 +175,14 @@ class PostgresTaskRepository(_PgRepository):
         return [TaskId(int(row["task_id"])) for row in rows]
 
     # START_CONTRACT: insert
-    #   PURPOSE: Insert a new task row and return a Task with the DB-generated task_id.
+    #   PURPOSE: Insert a new task row and return a Task with the DB-generated task_id and a TaskCreated event attached.
     #   INPUTS: { new_task: NewTask - pre-persistence task record (no task_id; the DB generates it) }
-    #   OUTPUTS: { Task - the newly created task }
+    #   OUTPUTS: { Task - the newly created task) }
     #   SIDE_EFFECTS: Inserts row into yascheduler_tasks.
-    #   LINKS: task/insert.sql, _row_to_task
+    #   LINKS: task/insert.sql, _row_to_task, materialize_task
     # END_CONTRACT: insert
     async def insert(self, new_task: NewTask) -> Task:
-        """Insert a NewTask, return the persisted Task with the generated ID."""
+        """Insert a NewTask, return the persisted Task with TaskCreated in events."""
         rows = await self._run(
             load_query("task/insert"),
             title=new_task.label,
@@ -192,7 +193,7 @@ class PostgresTaskRepository(_PgRepository):
             webhook_custom_params=new_task.webhook_custom_params,
             extra=new_task.extra,
         )
-        return self._row_to_task(rows[0])
+        return materialize_task(self._row_to_task(rows[0]))
 
     # START_CONTRACT: list_by_status
     #   PURPOSE: Query tasks filtered by a set of status values.

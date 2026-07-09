@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the task-allocated-node-id application-layer changes: _find_free_machines session↔Node pairing and _try_start_on_machine node_id logging.
-#   SCOPE: _find_free_machines returns list[tuple[MachineSession, Node]] paired by ip (dup-IP collapses to last-wins); _try_start_on_machine takes (session, node), calls allocate_to(node), logs node_id=%s.
+#   SCOPE: _find_free_machines returns list[tuple[MachineSession, Node]] paired by ip (dup-IP collapses to last-wins); _try_start_on_machine takes (session, node), calls task.run(node_id, remote_folder), logs node_id=%s.
 #   DEPENDS: M-APPLICATION-ALLOCATE
 #   LINKS: M-APPLICATION-ALLOCATE
 # END_MODULE_CONTRACT
@@ -19,6 +19,7 @@
 
 import logging
 import time
+from pathlib import PurePath
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -191,6 +192,7 @@ class TestTryStartOnMachineNodeIdLogging:
                 uow_factory,
                 start_on_machine,
                 tracker,
+                PurePath("/remote/tasks"),
             )
 
         assert result is True

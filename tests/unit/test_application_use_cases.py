@@ -52,6 +52,7 @@ from yascheduler.application.deallocate_nodes import deallocate_node, deallocate
 from yascheduler.application.submit_task import submit_task
 from yascheduler.application.uow import AbstractUnitOfWork
 from yascheduler.domain import Engine, EngineRepository
+from yascheduler.domain.events import TaskCreated
 from yascheduler.domain.exceptions import (
     CloudAllocateError,
     MissingInputFileError,
@@ -90,7 +91,6 @@ class TestSubmitTask:
                 engine_name="nonexistent_engine",
                 engines=mock_engine_repo,
                 uow_factory=mock_uow_factory,
-                remote_tasks_dir=PurePath("/remote/tasks"),
             )
         assert "nonexistent_engine" in str(exc_info.value)
         mock_uow_factory.assert_not_called()
@@ -106,7 +106,6 @@ class TestSubmitTask:
                 engine_name="test_engine",
                 engines=mock_engine_repo,
                 uow_factory=mock_uow_factory,
-                remote_tasks_dir=PurePath("/remote/tasks"),
             )
         assert "inp" in str(exc_info.value)
         assert "test_engine" in str(exc_info.value)
@@ -115,13 +114,13 @@ class TestSubmitTask:
     async def test_submit_task_success_returns_task_id(
         self, engine: Engine, mock_engine_repo: MagicMock, mock_uow_factory: MagicMock
     ) -> None:
-        """Happy path: validates, inserts, saves with remote_folder, commits, returns id."""
+        """Happy path: validates, inserts, saves, commits, returns id."""
         uow = mock_uow_factory.return_value
 
         def _insert_side_effect(new_task: NewTask) -> Task:
             from datetime import datetime
 
-            return Task(
+            task = Task(
                 task_id=TaskId(42),
                 label=new_task.label,
                 engine=new_task.engine,
@@ -135,6 +134,10 @@ class TestSubmitTask:
                 updated_at=datetime(2025, 1, 1),
                 status=TaskStatus.TO_DO,
             )
+            # insert now calls materialize_task, so the returned Task has TaskCreated in events
+            from yascheduler.domain.model import materialize_task
+
+            return materialize_task(task)
 
         uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
 
@@ -144,7 +147,6 @@ class TestSubmitTask:
             engine_name="test_engine",
             engines=mock_engine_repo,
             uow_factory=mock_uow_factory,
-            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert task_id == TaskId(42)
@@ -156,13 +158,13 @@ class TestSubmitTask:
         assert inserted_arg.extra == {"inp": "content"}
         assert inserted_arg.engine == "test_engine"
 
-        # save was called with the task that now has remote_folder set
+        # save was called with the task that has TaskCreated in events
         uow.tasks.save.assert_called_once()
         saved_arg: Task = uow.tasks.save.call_args[0][0]
         assert saved_arg.task_id == TaskId(42)
-        assert saved_arg.remote_folder is not None
-        assert str(saved_arg.remote_folder).startswith("/remote/tasks/")
-        assert saved_arg.remote_folder.endswith("_42")  # dt_str_taskid
+        assert saved_arg.remote_folder is None  # remote_folder not set at submit time
+        assert len(saved_arg.events) == 1
+        assert isinstance(saved_arg.events[0], TaskCreated)
 
         uow.commit.assert_called_once()
 
@@ -226,6 +228,7 @@ class TestAllocateTask:
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False
@@ -294,6 +297,7 @@ class TestAllocateTask:
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is True
@@ -380,6 +384,7 @@ class TestAllocateTask:
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False  # Cloud path returns False
@@ -460,6 +465,7 @@ class TestAllocateTask:
                 start_task_on_machine=start_on_machine,
                 tracker=tracker,
                 allocation_lock=allocation_lock,
+                remote_tasks_dir=PurePath("/remote/tasks"),
             )
 
         # tmp-node inserted via insert(NewNode(cloud=..., enabled=False))
@@ -520,6 +526,7 @@ class TestAllocateTask:
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False
@@ -579,6 +586,7 @@ class TestAllocateTask:
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False

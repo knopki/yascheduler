@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 7.4.0
+# VERSION: 7.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Daemon orchestrator: producer-consumer loops driving submit/allocate/consume/deallocate use cases with SSH/cloud collaborators.
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.4.0 - Orchestrator.__init__ takes three concrete collaborators (task_deployer/output_downloader/occupancy_checker) instead of operations: MachineOperations; _start_task_on_machine calls self._task_deployer and session.get_cpu_cores directly; consumer loop passes occupancy_checker to allocate_task, output_downloader to consume_task, and calls self._occupancy_checker.start_occupancy_check directly.
-#   PREVIOUS_CHANGE: v7.3.0 - _consumer_consume reads task.engine for occupancy-check engine lookup.
+#   LAST_CHANGE: v7.5.0 - _task_consumer_consumer calls task.abandon(node_id) (single atomic transition; abandon handles the node_id is None double-abandon edge — emits TaskAbandoned only when node_id is not None). Removed TaskAbandoned import (no longer constructed directly). _allocator_consumer passes remote_defaults.tasks_dir to allocate_task (remote_folder is now computed in _try_start_on_machine at run time, not at submit time).
+#   PREVIOUS_CHANGE: v7.4.0 - Orchestrator.__init__ takes three concrete collaborators (task_deployer/output_downloader/occupancy_checker) instead of operations: MachineOperations; _start_task_on_machine calls self._task_deployer and session.get_cpu_cores directly; consumer loop passes occupancy_checker to allocate_task, output_downloader to consume_task, and calls self._occupancy_checker.start_occupancy_check directly.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from yascheduler.domain import (
     Node,
     NodeId,
     Task,
-    TaskAbandoned,
     TaskId,
     TaskStatus,
 )
@@ -407,6 +406,7 @@ class Orchestrator:
                 start_task_on_machine=self._start_task_on_machine,
                 tracker=self._tracker,
                 allocation_lock=self._allocation_lock,
+                remote_tasks_dir=self._remote_defaults.tasks_dir,
             )
         except Exception as err:
             self._log.error("Allocator error for task %s: %s", msg.id, err)
@@ -452,15 +452,9 @@ class Orchestrator:
             )
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:
-                task = task.fail("node is gone")
-                # node_id is task.allocated_node_id; None only in the
-                # double-abandon edge (the node row was already deleted via
-                # abandon_node/deallocate_node, FK ON DELETE SET NULL nulled
-                # allocated_node_id). In that edge there is no node to abandon,
-                # so the TaskAbandoned event is skipped — the task is still
-                # failed + persisted + tracker-discarded below.
-                if node_id is not None:
-                    task = task.with_event(TaskAbandoned, node_id=node_id)
+                # Single atomic transition: RUNNING→DONE with error; emits
+                # TaskAbandoned only when node_id is not None.
+                task = task.abandon(node_id)
                 # START_BLOCK_ABANDON_PERSIST
                 # Persist the TaskAbandoned transition. The row may have been
                 # concurrently deleted between the producer's list_by_status

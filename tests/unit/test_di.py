@@ -74,31 +74,26 @@ class TestCLIDeps:
     """CLIDeps dataclass: constructor, submit."""
 
     def test_constructor_stores_fields(self) -> None:
-        """CLIDeps stores engines, uow_factory, remote_tasks_dir."""
+        """CLIDeps stores engines, uow_factory."""
         engines = MagicMock(spec=EngineRepository)
         uow_factory = MagicMock()
-        remote_tasks_dir = PurePosixPath("/tmp/tasks")
 
         deps = CLIDeps(
             engines=engines,
             uow_factory=uow_factory,
-            remote_tasks_dir=remote_tasks_dir,
         )
 
         assert deps.engines is engines
         assert deps.uow_factory is uow_factory
-        assert deps.remote_tasks_dir is remote_tasks_dir
 
     @pytest.mark.asyncio
     async def test_submit_delegates_to_submit_task(self) -> None:
         """submit() delegates to submit_task with all positional args."""
         engines = MagicMock(spec=EngineRepository)
         uow_factory = MagicMock()
-        remote_tasks_dir = PurePosixPath("/tmp/tasks")
         deps = CLIDeps(
             engines=engines,
             uow_factory=uow_factory,
-            remote_tasks_dir=remote_tasks_dir,
         )
 
         with patch(
@@ -114,7 +109,6 @@ class TestCLIDeps:
             "g09",
             engines,
             uow_factory,
-            remote_tasks_dir,
         )
 
 
@@ -123,7 +117,7 @@ class TestMakeCliDeps:
 
     @pytest.mark.asyncio
     async def test_returns_cli_deps_with_correct_fields(self) -> None:
-        """make_cli_deps returns CLIDeps with config-derived engines and remote_tasks_dir."""
+        """make_cli_deps returns CLIDeps with config-derived engines."""
         config = create_mock_config()
 
         with patch("yascheduler.entrypoints.di.aiohttp.ClientSession"):
@@ -131,7 +125,6 @@ class TestMakeCliDeps:
 
         assert isinstance(deps, CLIDeps)
         assert deps.engines is config.engines
-        assert deps.remote_tasks_dir is config.remote.tasks_dir
 
     @pytest.mark.asyncio
     async def test_uow_factory_creates_postgres_unit_of_work(self) -> None:

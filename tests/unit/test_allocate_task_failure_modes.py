@@ -29,6 +29,7 @@ tracker entry on any unhandled exception (step 1 commit, step 2 cleanup, step
 from __future__ import annotations
 
 import asyncio
+from pathlib import PurePath
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -148,6 +149,7 @@ class TestAllocateTaskFailureModes:
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
                 allocation_lock=asyncio.Lock(),
+                remote_tasks_dir=PurePath("/remote/tasks"),
             )
 
         tracker.discard.assert_called_once_with(todo_task.task_id)
@@ -188,6 +190,7 @@ class TestAllocateTaskFailureModes:
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
                 allocation_lock=asyncio.Lock(),
+                remote_tasks_dir=PurePath("/remote/tasks"),
             )
 
         # Original CloudAllocateError propagates, not the cleanup RuntimeError.
@@ -244,6 +247,7 @@ class TestAllocateTaskFailureModes:
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
                 allocation_lock=asyncio.Lock(),
+                remote_tasks_dir=PurePath("/remote/tasks"),
             )
 
         # Original persist exception propagates.
@@ -297,6 +301,7 @@ class TestAllocateTaskFailureModes:
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
             allocation_lock=asyncio.Lock(),
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False

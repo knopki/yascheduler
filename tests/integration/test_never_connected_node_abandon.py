@@ -14,7 +14,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - task-status-field-invariants: seed rewritten to the real persisted shape (TO_DO + allocated_node_id = NULL); tracker pre-seeded with task_id mirroring allocate_task's in-flight binding; tracker-release assertion dropped (abandon_node's matching-by-allocated_node_id path is dead for NULL allocated_node_id — out-of-scope leak, see proposal Non-Goals).
+#   LAST_CHANGE: v1.5.0 - refactor-task-state-transitions: replace allocate_to with replace for test-only fixture construction.
 #   PREVIOUS_CHANGE: v1.3.0 - drop-task-context-entity: NewTask constructed with flat typed fields (engine=...); pre-bound task now insert + allocate_to(node) + save (NewTask no longer carries allocated_node_id/status); TaskContext import removed.
 # END_CHANGE_SUMMARY
 """Integration tests for the never-connected-node abandon path.

@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 6.1.0
+# VERSION: 6.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
 #   SCOPE: Task consumption / finalisation lifecycle — download outputs, finalise (DONE) or defer (retry).
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.1.0 - operations: MachineOperations parameter renamed to output_downloader: OutputDownloader (facade dissolved); consume_task calls output_downloader.download_outputs directly.
-#   PREVIOUS_CHANGE: v6.0.1 - _prepare_store_folder SIDE_EFFECTS declares AssertionError raise on RUNNING-task precondition.
+#   LAST_CHANGE: v6.2.0 - _decide_finalisation uses atomic Task transitions: task.fail(reason, local_folder=, remote_folder=) and task.complete(local_folder=, remote_folder=) set folders and emit TaskFailed/TaskCompleted inline. Removed with_download_results + with_event chain and the has_errors=False argument. Removed TaskCompleted/TaskFailed imports (no longer constructed here).
+#   PREVIOUS_CHANGE: v6.1.0 - operations: MachineOperations parameter renamed to output_downloader: OutputDownloader (facade dissolved); consume_task calls output_downloader.download_outputs directly.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -26,8 +26,6 @@ import asyncio
 import logging
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
-
-from yascheduler.domain import TaskCompleted, TaskFailed
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -63,8 +61,7 @@ async def _prepare_store_folder(
     engines: EngineRepository,
 ) -> tuple[Path, list[str], str]:
     # START_BLOCK_CREATE_DIR
-    # task is RUNNING here — submit_task assigned remote_folder post-insert via with_remote_folder.
-    assert task.remote_folder is not None
+    assert task.remote_folder is not None  # task is RUNNING here
     remote_folder: str = task.remote_folder
     engine = engines[task.engine]
     output_files = [str(PurePosixPath(remote_folder) / x) for x in engine.output_files]
@@ -91,8 +88,7 @@ def _format_download_error(
 
 
 # START_CONTRACT: _decide_finalisation
-#   PURPOSE: Decide finalise vs defer from (transient_errors, permanent_errors) and apply domain
-#     status + event when finalising. Finalise when permanent_errors non-empty OR transient_errors
+#   PURPOSE: Decide finalise vs defer from and apply the terminal transition. Finalise when permanent_errors non-empty OR transient_errors
 #     empty (full success, permanent-only, or mixed). Defer (return None) when transient-only.
 #   INPUTS: {
 #     task: Task - Domain task to finalise or defer,
@@ -122,19 +118,23 @@ def _decide_finalisation(
     # START_BLOCK_FINALISE
     # Finalise on success or any permanent error. When both lists are
     # non-empty, permanent takes priority and the task fails with a combined
-    # message including both.
+    # message including both. The terminal transitions set the folders AND
+    # emit the matching event inline.
     combined_errors = permanent_errors + transient_errors
-    task = task.with_download_results(
-        local_folder=local_folder or task.local_folder or "",
-        remote_folder=remote_folder or task.remote_folder or "",
-    )
+    final_local_folder = local_folder or task.local_folder or ""
+    final_remote_folder = remote_folder or task.remote_folder or ""
 
     if combined_errors:
         error_msg = _format_download_error(combined_errors)
-        task = task.fail(error_msg).with_event(TaskFailed, reason=error_msg)
+        task = task.fail(
+            error_msg,
+            local_folder=final_local_folder,
+            remote_folder=final_remote_folder,
+        )
     else:
-        task = task.complete().with_event(
-            TaskCompleted, local_folder=str(store_folder), has_errors=False
+        task = task.complete(
+            local_folder=str(store_folder),
+            remote_folder=final_remote_folder,
         )
     # END_BLOCK_FINALISE
     return task

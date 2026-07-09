@@ -42,23 +42,21 @@ The system SHALL provide a `NewTask` domain entity as an immutable
 `created_at`/`updated_at` timestamps, no `status`, no `allocated_node_id`, no
 `remote_folder`, and no `error`. The DB supplies `status` (DEFAULT 'TO_DO'),
 `allocated_node_id` (DEFAULT NULL), `created_at`/`updated_at` (DEFAULT NOW()) on
-insert; `remote_folder` is assigned post-insert by `Task.with_remote_folder`;
-`error` is only ever set by `Task.fail` / `Task.reject` on a post-persistence
+insert; `remote_folder` is assigned post-insert by `Task.run` (the TO_DO→RUNNING transition);
+`error` is only ever set by `Task.reject` / `Task.fail` / `Task.abandon` on a post-persistence
 `Task`. It is a pure data carrier with **no lifecycle methods**
-(`allocate_to`/`mark_running`/`complete`/`fail`/`reject`/
-`with_remote_folder`/`with_download_results`/`with_event`/`pull_events`/
-`record_event` stay on `Task` — `NewTask` is converted to a `Task` only by
+(`run`/`reject`/`complete`/`fail`/`abandon` stay on `Task` — `NewTask` is converted to a `Task` only by
 `TaskRepository.insert` (see the `domain-ports` capability)).
 
-`allocated_node_id` is bound by `Task.allocate_to(node)` after insert, not by
+`allocated_node_id` is bound by `Task.run(node_id, remote_folder)` after insert, not by
 `NewTask` construction. A task that must be pre-bound to a node (e.g. the
 never-connected-node-abandon integration test) is inserted as an unbound
-`NewTask`, then `task.allocate_to(node)` + `repo.save(task)` bind it.
+`NewTask`, then `task.run(node_id, remote_folder)` + `repo.save(task)` bind it.
 
 `NewTask` carries NO `remote_folder` and NO `error` fields: `remote_folder` is
-assigned post-insert by `Task.with_remote_folder` (the remote path is constructed
-from the generated `task_id`); `error` is only ever set by `Task.fail` /
-`Task.reject` on a post-persistence `Task`. The two fields appear on `Task` only.
+assigned post-insert by `Task.run` (the TO_DO→RUNNING transition sets it from the
+generated `task_id`); `error` is only ever set by `Task.reject` / `Task.fail` /
+`Task.abandon` on a post-persistence `Task`. The two fields appear on `Task` only.
 
 #### Scenario: NewTask is the pre-persistence input shape
 - **WHEN** a caller prepares a task record for insertion
@@ -76,13 +74,15 @@ The system SHALL provide a `Task` domain entity as an immutable
 `created_at: datetime`, `updated_at: datetime`,
 `status: TaskStatus = TaskStatus.TO_DO`,
 `allocated_node_id: NodeId | None = None`,
-`_events: tuple[DomainEvent, ...] = field(default=(), repr=False)`.
+`events: tuple[DomainEvent, ...] = field(default=(), repr=True)`.
 
 A `Task` SHALL always carry a `task_id: TaskId` (never `None`); it is the only
 task shape that flows out of a repository. Pre-persistence task records use
 `NewTask` (see the "NewTask pre-persistence record" requirement). The conversion
 from `NewTask` to `Task` happens in exactly one place: `TaskRepository.insert`
-(see the `domain-ports` capability).
+(see the `domain-ports` capability), which calls `materialize_task` (see the
+"materialize_task free function" requirement) to attach `TaskCreated` to
+`events`.
 
 `task_id` SHALL be the first field (identity first). Field order is valid for a
 frozen dataclass: `task_id`, `label`, `engine`, `remote_folder`, `local_folder`,
@@ -95,42 +95,76 @@ required, and `TaskId(0)` raises `ValueError` in `__post_init__`.
 
 `allocated_node_id` is `None` for unallocated tasks (TO_DO with no node bound)
 and for tasks whose node was deleted (the DB FK is `ON DELETE SET NULL`). It is
-set by `allocate_to(node)`. `allocated_ip` is removed from `Task`; the node
-transport address is obtained from the resolved `Node.ip` via `nodes_by_id`
-(see the `cli` capability).
+set only by `run(node_id, remote_folder)` (the `TO_DO→RUNNING` transition).
+`allocated_ip` is removed from `Task`; the node transport address is obtained
+from the resolved `Node.ip` via `nodes_by_id` (see the `cli` capability).
 
-The lifecycle methods (`allocate_to`, `mark_running`, `complete`, `fail`,
-`reject`, `with_remote_folder`, `with_download_results`, `with_event`,
-`pull_events`, `record_event`) operate on the typed fields directly (no
-`TaskContext` indirection). `with_event` constructs events with
-`task_id=self.task_id` (a `TaskId` — no `.value` extraction needed) and reads
-`webhook_url=self.webhook_url`, `webhook_custom_params=self.webhook_custom_params`
-(was `self.context.X`); event subclasses carry `task_id: TaskId` (see the
-`domain-events` capability).
+The lifecycle SHALL be expressed as five atomic transition methods
+(`run`, `reject`, `complete`, `fail`, `abandon`) that each validate the source
+state, set all fields that change, construct and append the matching
+`DomainEvent` to `events`, and return a new `Task` via `replace`. No
+intermediate-state-producing mutators (`allocate_to`, `mark_running`,
+`with_remote_folder`, `with_download_results`) SHALL exist. No event primitives
+(`record_event`, `with_event`, `pull_events`) SHALL exist on `Task`; events are
+emitted inline by the transitions and read directly off the public `events`
+field by the UoW.
 
-#### Scenario: Allocate task to a node
-- **WHEN** `task.allocate_to(node)` is called on a TO_DO task with a `Node` carrying `node_id=NodeId(7)`
-- **THEN** a new Task is returned with `allocated_node_id=NodeId(7)` and original status preserved
+`events` SHALL be a public field (no leading underscore) with `repr=True`. The
+UoW reads it directly in `collect_events` (see the `domain-events-and-dispatch`
+capability); no `pull_events` helper exists.
 
-#### Scenario: Transition to RUNNING
-- **WHEN** `task.mark_running()` is called on a TO_DO task with `allocated_node_id` set
-- **THEN** a new Task is returned with `status=RUNNING`
+`remote_folder` is `None` on a freshly-inserted TO_DO task; it is set by `run`
+when the task transitions to RUNNING. `local_folder` is `None` until `complete`
+or `fail` sets it from the download results. `error` is `None` until `reject`,
+`fail`, or `abandon` sets it.
 
-#### Scenario: Transition to DONE
-- **WHEN** `task.complete()` is called on a RUNNING task
-- **THEN** a new Task is returned with `status=DONE`; `error` is NOT touched (remains whatever it was — `None` on the success path)
+#### Scenario: run transitions TO_DO to RUNNING and emits TaskAllocated
+- **WHEN** `task.run(node_id=NodeId(7), remote_folder="/remote/20240101_000000_7")` is called on a TO_DO task with `allocated_node_id=None`
+- **THEN** a new Task is returned with `status=RUNNING`, `allocated_node_id=NodeId(7)`, `remote_folder="/remote/20240101_000000_7"`, and `events` containing one `TaskAllocated(node_id=NodeId(7), engine_name=task.engine)`
 
-#### Scenario: Fail task with reason
-- **WHEN** `task.fail("disk full")` is called on a RUNNING task
-- **THEN** a new Task is returned with `status=DONE` and `error="disk full"`
+#### Scenario: run raises TaskNotTodoError on non-TO_DO
+- **WHEN** `task.run(node_id=NodeId(7), remote_folder="/r")` is called on a RUNNING task
+- **THEN** `TaskNotTodoError(task.task_id)` is raised and `events` is unchanged
 
-#### Scenario: Reject task with reason
+#### Scenario: reject transitions TO_DO to DONE with error and emits TaskFailed
 - **WHEN** `task.reject("unsupported engine")` is called on a TO_DO task
-- **THEN** a new Task is returned with `status=DONE` and `error="unsupported engine"`
+- **THEN** a new Task is returned with `status=DONE`, `error="unsupported engine"`, and `events` containing one `TaskFailed(reason="unsupported engine")`
 
-#### Scenario: with_event passes TaskId to the event
-- **WHEN** `task.with_event(TaskCreated, engine_name=task.engine)` is called on a Task whose `task_id` is `TaskId(7)`
-- **THEN** the constructed `TaskCreated` event has `event.task_id == TaskId(7)` (the `TaskId` is passed through, not unwrapped to `int`) and `event.webhook_url == task.webhook_url`, `event.webhook_custom_params == task.webhook_custom_params` (read from the typed fields, not from a nested context)
+#### Scenario: reject raises TaskNotTodoError on non-TO_DO
+- **WHEN** `task.reject("reason")` is called on a RUNNING task
+- **THEN** `TaskNotTodoError(task.task_id)` is raised
+
+#### Scenario: complete transitions RUNNING to DONE with folders and emits TaskCompleted
+- **WHEN** `task.complete(local_folder="/local/out", remote_folder="/remote/out")` is called on a RUNNING task
+- **THEN** a new Task is returned with `status=DONE`, `local_folder="/local/out"`, `remote_folder="/remote/out"`, `error` unchanged (None on the success path), and `events` containing one `TaskCompleted(local_folder="/local/out")`
+
+#### Scenario: complete raises TaskNotRunningError on non-RUNNING
+- **WHEN** `task.complete(local_folder="/l", remote_folder="/r")` is called on a TO_DO task
+- **THEN** `TaskNotRunningError(task.task_id)` is raised
+
+#### Scenario: fail transitions RUNNING to DONE with error and partial folders and emits TaskFailed
+- **WHEN** `task.fail("disk full", local_folder="/local/partial", remote_folder="/remote/partial")` is called on a RUNNING task
+- **THEN** a new Task is returned with `status=DONE`, `error="disk full"`, `local_folder="/local/partial"`, `remote_folder="/remote/partial"`, and `events` containing one `TaskFailed(reason="disk full")`
+
+#### Scenario: fail raises TaskNotRunningError on non-RUNNING
+- **WHEN** `task.fail("reason", local_folder="/l", remote_folder="/r")` is called on a TO_DO task
+- **THEN** `TaskNotRunningError(task.task_id)` is raised
+
+#### Scenario: abandon transitions RUNNING to DONE with error and emits TaskAbandoned when node_id is not None
+- **WHEN** `task.abandon(node_id=NodeId(7))` is called on a RUNNING task
+- **THEN** a new Task is returned with `status=DONE`, `error="node is gone"`, folders unchanged, and `events` containing one `TaskAbandoned(node_id=NodeId(7))`
+
+#### Scenario: abandon emits no event when node_id is None (double-abandon edge)
+- **WHEN** `task.abandon(node_id=None)` is called on a RUNNING task whose `allocated_node_id` was nulled by an FK cascade
+- **THEN** a new Task is returned with `status=DONE`, `error="node is gone"`, folders unchanged, and `events` empty (no `TaskAbandoned` emitted — there is no node to abandon)
+
+#### Scenario: abandon raises TaskNotRunningError on non-RUNNING
+- **WHEN** `task.abandon(node_id=NodeId(7))` is called on a TO_DO task
+- **THEN** `TaskNotRunningError(task.task_id)` is raised
+
+#### Scenario: events field is public and shown in repr
+- **WHEN** `repr(task)` is evaluated on a Task with one recorded event
+- **THEN** the `events=(...)` field appears in the repr output (was hidden when the field was `_events` with `repr=False`)
 
 ### Requirement: Node persistent record
 
@@ -242,33 +276,33 @@ The system SHALL provide a `MachineState` enum with values `FREE` and `BUSY`.
 - **WHEN** `MachineState` is inspected
 - **THEN** `MachineState.FREE` and `MachineState.BUSY` are defined
 
-### Requirement: Task.with_remote_folder
+### Requirement: materialize_task free function
 
-The system SHALL provide a `Task.with_remote_folder(self, remote_folder: str) -> Task`
-method that returns a new `Task` with `remote_folder` set and all other fields
-preserved. The method SHALL perform no status validation and no side effect — it is
-a pure copy-with used at submit time, after `TaskRepository.insert` generates the
-`task_id` and the remote path is constructed from it.
+The system SHALL provide a `materialize_task(task: Task) -> Task` free function
+in `yascheduler/domain/model.py` that returns a new `Task` with a `TaskCreated`
+event appended to `events`. It SHALL read `task_id`, `webhook_url`,
+`webhook_custom_params`, and `engine` off the freshly-inserted `Task` (produced
+by `_row_to_task`) and construct
+`TaskCreated(task_id=task.task_id, webhook_url=task.webhook_url,
+webhook_custom_params=task.webhook_custom_params, engine_name=task.engine)`,
+then return `replace(task, events=(event,))`.
 
-#### Scenario: with_remote_folder sets the field
-- **WHEN** `task.with_remote_folder("/remote/20240101_000000_7")` is called on a Task with `remote_folder=None`
-- **THEN** a new Task is returned with `remote_folder="/remote/20240101_000000_7"` and all other fields preserved unchanged
+`materialize_task` is the sole `TaskCreated` emission site. It is called by
+`PostgresTaskRepository.insert` (see the `postgres-persistence` capability) on
+the `_row_to_task` output. It SHALL NOT be called from use cases or the
+orchestrator. It is a domain-layer function; the infrastructure layer SHALL NOT
+import `TaskCreated` directly.
 
-### Requirement: Task.with_download_results
+`replace` SHALL be used inside `materialize_task` and inside `Task` transition
+methods only — not at use-case or orchestrator call sites.
 
-The system SHALL provide a
-`Task.with_download_results(self, *, local_folder: str, remote_folder: str) -> Task`
-method (keyword-only) that returns a new `Task` with `local_folder` and
-`remote_folder` set and all other fields preserved. The method SHALL NOT update
-`extra`. The method SHALL perform no status validation and no side effect — it is
-a pure copy-with used at consume time, after `download_outputs` returns.
+#### Scenario: materialize_task attaches TaskCreated
+- **WHEN** `materialize_task(task)` is called on a freshly-inserted Task with `task_id=TaskId(42)`, `engine="fleur"`, `webhook_url="https://..."`, `webhook_custom_params={}`, `events=()`
+- **THEN** a new Task is returned with `events` containing one `TaskCreated(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, engine_name="fleur")`
 
-The call site MAY pass values equal to the existing field values — calling with
-the same values is a no-op-equivalent and is not an error.
-
-#### Scenario: with_download_results sets both fields
-- **WHEN** `task.with_download_results(local_folder="/local/out", remote_folder="/remote/out")` is called on a Task with `local_folder=None`, `remote_folder=None`
-- **THEN** a new Task is returned with `local_folder="/local/out"`, `remote_folder="/remote/out"`, and all other fields preserved unchanged
+#### Scenario: materialize_task preserves all other fields
+- **WHEN** `materialize_task(task)` is called on a Task
+- **THEN** the returned Task has the same `task_id`, `label`, `engine`, `remote_folder`, `local_folder`, `webhook_url`, `webhook_custom_params`, `error`, `extra`, `created_at`, `updated_at`, `status`, `allocated_node_id` as the input
 
 ### Requirement: NodeId value object
 

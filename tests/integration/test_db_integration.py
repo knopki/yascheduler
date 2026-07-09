@@ -16,7 +16,7 @@
 #   test_remove_node - node removed after removal
 #   test_count_aggregations - count_by_cloud, count_by_status
 #   test_add_and_get_task - round-trip insert + get with typed fields and JSONB extra
-#   test_task_lifecycle - insert -> allocate_to(node)/mark_running -> DONE with with_download_results (preserves allocated_node_id)
+#   test_task_lifecycle - insert -> run(node_id, remote_folder) -> DONE with complete (preserves allocated_node_id)
 #   test_set_task_error - with and without error message (typed error field)
 #   test_get_tasks_by_status - filtering across statuses
 #   test_get_tasks_by_jobs - array parameter with unnest
@@ -28,7 +28,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.6.0 - task-status-field-invariants: test_get_tasks_by_status builds the RUNNING task via real domain transitions (allocate_to + mark_running + with_remote_folder) so the row satisfies the task_status_field_invariants CHECK (a bare Task(status=RUNNING) with NULL allocated_node_id/remote_folder is now rejected by the DB).
+#   LAST_CHANGE: v2.7.0 - refactor-task-state-transitions: replace allocate_to/mark_running/with_remote_folder chains with task.run(node_id, remote_folder); replace with_download_results(...).complete() with task.complete(local_folder=, remote_folder=).
 #   PREVIOUS_CHANGE: v2.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields; TaskContext.from_metadata/to_metadata removed; context.X reads → task.X; lifecycle test uses with_download_results; extra preserved through download path.
 # END_CHANGE_SUMMARY
 
@@ -247,13 +247,12 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
                 extra={"param": 42},
             )
         )
-        # Transition to a CHECK-valid RUNNING state via real domain
-        # transitions (allocate_to + mark_running + with_remote_folder).
+        # Transition to a CHECK-valid RUNNING state via task.run.
         # A TO_DO + allocated_node_id save is rejected by the
         # task_status_field_invariants CHECK (TO_DO requires
-        # allocated_node_id IS NULL); production always pairs allocate_to
-        # with mark_running before save.
-        task = task.allocate_to(node).mark_running().with_remote_folder("/r")
+        # allocated_node_id IS NULL); production always uses run
+        # before save.
+        task = task.run(node.node_id, "/r")
         await uow.tasks.save(task)
         await uow.commit()
         assert task.task_id.value >= 1
@@ -277,7 +276,7 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
 
 
 # START_CONTRACT: test_task_lifecycle
-#   PURPOSE: Verify full task lifecycle: insert -> allocate_to/mark_running -> DONE with with_download_results.
+#   PURPOSE: Verify full task lifecycle: insert -> run -> DONE with complete.
 #   INPUTS: { uow_factory: UoW factory fixture }
 #   OUTPUTS: { None - assertion-based test }
 #   SIDE_EFFECTS: None
@@ -305,11 +304,8 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
         assert task is not None
-        # Construct the Node for allocate_to using the DB-assigned node_id.
-        alloc_node = Node(node_id=node_id, ip="10.0.0.5", ncpus=4)
-        # CHECK-valid RUNNING: allocate_to + mark_running + with_remote_folder
-        # (RUNNING requires allocated_node_id + remote_folder).
-        updated = task.allocate_to(alloc_node).mark_running().with_remote_folder("/r")
+        # CHECK-valid RUNNING: task.run sets allocated_node_id + remote_folder.
+        updated = task.run(node_id, "/r")
         await uow.tasks.save(updated)
         await uow.commit()
 
@@ -322,9 +318,7 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
         assert task is not None
-        updated = task.with_download_results(
-            local_folder="/l", remote_folder="/r"
-        ).complete()
+        updated = task.complete(local_folder="/l", remote_folder="/r")
         await uow.tasks.save(updated)
         await uow.commit()
 
@@ -427,9 +421,7 @@ async def test_get_tasks_by_status(
         # CHECK-valid RUNNING via real domain transitions (a bare
         # Task(status=RUNNING) with NULL allocated_node_id/remote_folder is
         # rejected by task_status_field_invariants).
-        await uow.tasks.save(
-            t2.allocate_to(node).mark_running().with_remote_folder("/r")
-        )
+        await uow.tasks.save(t2.run(node.node_id, "/r"))
         await uow.tasks.save(
             Task(
                 task_id=t3.task_id,
@@ -501,11 +493,11 @@ async def test_get_task_ids_by_node_id_and_status(
         )
 
         t1 = await uow.tasks.insert(NewTask(label="x", engine="fleur"))
-        t1 = t1.allocate_to(node).mark_running().with_remote_folder("/r/x")
+        t1 = t1.run(node.node_id, "/r/x")
         await uow.tasks.save(t1)
 
         ty = await uow.tasks.insert(NewTask(label="y", engine="fleur"))
-        ty = ty.allocate_to(other_node).mark_running().with_remote_folder("/r/y")
+        ty = ty.run(other_node.node_id, "/r/y")
         await uow.tasks.save(ty)
 
         # tz: a DONE task allocated to `node`. Build via the real lifecycle
@@ -514,9 +506,9 @@ async def test_get_task_ids_by_node_id_and_status(
         # task_status_field_invariants CHECK (a TO_DO + allocated_node_id save
         # is rejected; DONE is unconstrained).
         tz = await uow.tasks.insert(NewTask(label="z", engine="fleur"))
-        tz = tz.allocate_to(node).mark_running().with_remote_folder("/r/z")
+        tz = tz.run(node.node_id, "/r/z")
         await uow.tasks.save(tz)
-        tz_done = tz.complete()
+        tz_done = tz.complete(local_folder="/l", remote_folder="/r/z")
         await uow.tasks.save(tz_done)
         await uow.commit()
 
@@ -547,7 +539,7 @@ async def test_get_tasks_with_cloud_by_id_status(
 
     async with uow_factory() as uow:
         t = await uow.tasks.insert(NewTask(label="", engine="fleur"))
-        t = t.allocate_to(node).mark_running().with_remote_folder("/r/t")
+        t = t.run(node.node_id, "/r/t")
         await uow.tasks.save(t)
 
         # t2: a DONE task allocated to `node`, built via the real lifecycle so
@@ -555,9 +547,9 @@ async def test_get_tasks_with_cloud_by_id_status(
         # CHECK (a TO_DO + allocated_node_id save is rejected; RUNNING requires
         # remote_folder; DONE is unconstrained).
         t2 = await uow.tasks.insert(NewTask(label="", engine="fleur"))
-        t2 = t2.allocate_to(node).mark_running().with_remote_folder("/r/t2")
+        t2 = t2.run(node.node_id, "/r/t2")
         await uow.tasks.save(t2)
-        t2_done = t2.complete()
+        t2_done = t2.complete(local_folder="/l", remote_folder="/r/t2")
         await uow.tasks.save(t2_done)
         await uow.commit()
 

@@ -32,7 +32,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - task-status-field-invariants: tests that built a bare Task(status=RUNNING) with NULL allocated_node_id/remote_folder (rejected by the new task_status_field_invariants CHECK) now use real domain transitions (allocate_to + mark_running + with_remote_folder) or re-save as CHECK-valid TO_DO; added `replace` import for copy-with.
+#   LAST_CHANGE: v1.7.0 - refactor-task-state-transitions: replace allocate_to/mark_running/with_remote_folder chains with task.run(node_id, remote_folder); replace with_remote_folder with replace for test-only fixture construction.
 #   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields (no TaskContext); context.X reads → task.X; TaskContext import removed.
 # END_CHANGE_SUMMARY
 
@@ -99,7 +99,7 @@ async def test_repo_task_insert_and_get(
     assert inserted.remote_folder is None
 
     # Set remote_folder post-insert to verify round-trip
-    inserted = inserted.with_remote_folder("/r")
+    inserted = replace(inserted, remote_folder="/r")
     await repo.save(inserted)
 
     # Retrieve by ID
@@ -143,11 +143,10 @@ async def test_repo_task_save_updates(
     task = await task_repo.insert(NewTask(label="initial", engine="fleur"))
     node = await node_repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
 
-    # Build a CHECK-valid RUNNING task via real domain transitions
-    # (allocate_to + mark_running + with_remote_folder). A bare
-    # Task(status=RUNNING) with NULL allocated_node_id/remote_folder is
+    # Build a CHECK-valid RUNNING task via task.run.
+    # A bare Task(status=RUNNING) with NULL allocated_node_id/remote_folder is
     # rejected by the task_status_field_invariants CHECK.
-    updated = task.allocate_to(node).mark_running().with_remote_folder("/r")
+    updated = task.run(node.node_id, "/r")
     updated = replace(updated, label="renamed")
     await task_repo.save(updated)
 
@@ -173,10 +172,8 @@ async def test_repo_task_list_by_status(
     t1 = await task_repo.insert(NewTask(label="todo", engine="fleur"))
     node = await node_repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
     t2 = await task_repo.insert(NewTask(label="running", engine="fleur"))
-    # CHECK-valid RUNNING via real domain transitions (a bare
-    # Task(status=RUNNING) with NULL allocated_node_id/remote_folder is
-    # rejected by task_status_field_invariants).
-    t2 = t2.allocate_to(node).mark_running().with_remote_folder("/r")
+    # CHECK-valid RUNNING via task.run.
+    t2 = t2.run(node.node_id, "/r")
     await task_repo.save(t2)
     t2_id = t2.task_id
 
@@ -230,7 +227,7 @@ async def test_repo_task_update_status_atomic(
     # so the subsequent update_status to DONE is CHECK-valid (DONE is
     # unconstrained). A bare update_status(TO_DO → RUNNING) would be rejected
     # because RUNNING requires allocated_node_id + remote_folder.
-    task = task.allocate_to(node).mark_running().with_remote_folder("/r")
+    task = task.run(node.node_id, "/r")
     await task_repo.save(task)
 
     await task_repo.update_status(task.task_id, DomainTaskStatus.DONE)
@@ -355,20 +352,20 @@ async def test_repo_task_list_ids_by_node_id_and_status(
     # remote_folder set). The query is exercised against RUNNING, which is
     # the production usage (_remove_node_hard/_soft look up RUNNING tasks).
     t1 = await task_repo.insert(NewTask(label="for-node", engine="fleur"))
-    t1 = t1.allocate_to(node).mark_running().with_remote_folder("/r/t1")
+    t1 = t1.run(node.node_id, "/r/t1")
     await task_repo.save(t1)
 
     # t2: a RUNNING task on `other` (should NOT match the node query).
     t2 = await task_repo.insert(NewTask(label="other-node", engine="fleur"))
-    t2 = t2.allocate_to(other).mark_running().with_remote_folder("/r/t2")
+    t2 = t2.run(other.node_id, "/r/t2")
     await task_repo.save(t2)
 
     # t3: a DONE task on `node` (CHECK-valid: DONE is unconstrained), built
     # via the real lifecycle so every persisted state satisfies the CHECK.
     t3 = await task_repo.insert(NewTask(label="done-on-node", engine="fleur"))
-    t3 = t3.allocate_to(node).mark_running().with_remote_folder("/r/t3")
+    t3 = t3.run(node.node_id, "/r/t3")
     await task_repo.save(t3)
-    t3_done = t3.complete()
+    t3_done = t3.complete(local_folder="/l", remote_folder="/r/t3")
     await task_repo.save(t3_done)
 
     ids = await task_repo.list_ids_by_node_id_and_status(

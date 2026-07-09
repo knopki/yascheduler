@@ -89,7 +89,6 @@ def make_mock_deps(config: MagicMock, uow: AsyncMock) -> MagicMock:
     deps = MagicMock(spec=CLIDeps)
     deps.uow_factory = MagicMock(return_value=uow)
     deps.engines = config.engines
-    deps.remote_tasks_dir = PurePosixPath("/tmp/tasks")
     return deps
 
 

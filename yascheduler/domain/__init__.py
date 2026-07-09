@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.12.0
+# VERSION: 2.13.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Re-export domain symbols for cross-layer consumption.
 #   SCOPE: Public domain surface: entities, value objects, ports, events, exceptions, and cross-layer settings — re-exported for application/infra consumers.
@@ -21,7 +21,8 @@
 #   Engine - Calculation engine value object (from M-DOMAIN-ENGINE)
 #   EngineRepository - Frozen collection of engines (from M-DOMAIN-ENGINE)
 #   LocalFilesDeploy / LocalArchiveDeploy / RemoteArchiveDeploy / Deploy - Deploy strategies (from M-DOMAIN-ENGINE)
-#   Task - Task entity with typed fields (engine, remote_folder, local_folder, webhook_url, webhook_custom_params, error, extra) and lifecycle methods
+#   Task - Task entity with atomic transition methods (run, reject, complete, fail, abandon) and public events field
+#   materialize_task - Free function attaching TaskCreated to a freshly-inserted Task's events
 #   TaskId - Task primary-key value object (frozen dataclass wrapping int)
 #   NewTask - Pre-persistence task record (no task_id, no remote_folder, no error)
 #   NodeId - Node primary-key value object (frozen dataclass wrapping int)
@@ -33,8 +34,6 @@
 #   UnsupportedEngineError - Unknown calculation engine requested
 #   MissingInputFileError - Required engine input file not provided
 #   TaskError - Task lifecycle errors
-#   TaskAlreadyAllocatedError - Task already bound to a node
-#   TaskNotAllocatedError - Task not yet allocated to a node
 #   TaskNotTodoError - Task not in TODO status
 #   TaskNotRunningError - Task not in RUNNING status
 #   MachineBusyError - Operation attempted on a busy machine
@@ -56,8 +55,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.12.0 - Drop MachineOperations re-export (SSHMachineOperations facade dissolved; consumers type against the concrete collaborator classes from yascheduler.infra).
-#   PREVIOUS_CHANGE: v2.11.0 - Remove TaskContext / TaskContextOverrides re-exports (folded into Task / NewTask typed fields).
+#   LAST_CHANGE: v2.13.0 - Remove TaskAlreadyAllocatedError / TaskNotAllocatedError re-exports (classes removed from exceptions.py). Add materialize_task re-export (free function attaching TaskCreated to a freshly-inserted Task's events; called by PostgresTaskRepository.insert).
+#   PREVIOUS_CHANGE: v2.12.0 - Drop MachineOperations re-export (SSHMachineOperations facade dissolved; consumers type against the concrete collaborator classes from yascheduler.infra).
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -82,6 +81,7 @@ __all__ = [
     "TaskId",
     "NewTask",
     "Task",
+    "materialize_task",
     "NodeId",
     "NewNode",
     "Node",
@@ -92,8 +92,6 @@ __all__ = [
     "UnsupportedEngineError",
     "MissingInputFileError",
     "TaskError",
-    "TaskAlreadyAllocatedError",
-    "TaskNotAllocatedError",
     "TaskNotTodoError",
     "TaskNotRunningError",
     "MachineBusyError",
@@ -144,9 +142,7 @@ from .exceptions import (
     MissingInputFileError,
     NoCompatibleNodeError,
     SchedulingError,
-    TaskAlreadyAllocatedError,
     TaskError,
-    TaskNotAllocatedError,
     TaskNotRunningError,
     TaskNotTodoError,
     UnsupportedEngineError,
@@ -163,6 +159,7 @@ from .model import (
     Task,
     TaskId,
     TaskStatus,
+    materialize_task,
 )
 from .ports import (
     CloudConfig,

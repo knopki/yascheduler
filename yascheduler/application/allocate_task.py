@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.20.0
+# VERSION: 5.21.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: Task-to-machine allocation with cloud fallback — free machine search, cloud provisioning, tmp-node lifecycle, and persistence.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.20.0 - operations: MachineOperations parameter renamed to occupancy_checker: OccupancyChecker (facade dissolved); _try_start_on_machine calls occupancy_checker.start_occupancy_check directly.
-#   PREVIOUS_CHANGE: v5.19.0 - _validate_engine and _try_start_on_machine read task.engine; with_event(TaskAllocated, ..., engine_name=task.engine).
+#   LAST_CHANGE: v5.21.0 - Adopt atomic Task transitions: _validate_engine calls task.reject("unsupported engine"); _try_start_on_machine computes remote_folder from remote_tasks_dir + task.task_id and calls task.run(node.node_id, remote_folder). allocate_task takes remote_tasks_dir and threads it through _allocate_free_machine -> _try_start_on_machine.
+#   PREVIOUS_CHANGE: v5.20.0 - operations: MachineOperations parameter renamed to occupancy_checker: OccupancyChecker (facade dissolved); _try_start_on_machine calls occupancy_checker.start_occupancy_check directly.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -37,8 +37,6 @@ from yascheduler.domain import (
     Node,
     NodeId,
     Task,
-    TaskAllocated,
-    TaskFailed,
     TaskId,
     TaskStatus,
 )
@@ -46,6 +44,7 @@ from yascheduler.domain import (
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Callable, Sequence
+    from pathlib import PurePath
 
     from yascheduler.domain import (
         CloudProvisioner,
@@ -74,7 +73,7 @@ class _TmpSelection(NamedTuple):
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
 #   }
 #   OUTPUTS: { Engine | None - The resolved engine, or None if invalid }
-#   SIDE_EFFECTS: Sets task error and records TaskFailed event if engine is unsupported.
+#   SIDE_EFFECTS: On unsupported engine, transitions task via reject() , saves, and commits.
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS
 # END_CONTRACT: _validate_engine
 async def _validate_engine(
@@ -89,9 +88,7 @@ async def _validate_engine(
         logger.warning(
             "Unsupported engine '%s' for task_id=%s", engine_name, task.task_id
         )
-        task = task.reject("unsupported engine").with_event(
-            TaskFailed, reason="unsupported engine"
-        )
+        task = task.reject("unsupported engine")
         async with uow_factory() as uow:
             await uow.tasks.save(task)
             await uow.commit()
@@ -104,16 +101,17 @@ async def _validate_engine(
 #   PURPOSE: Attempt to start a task on a specific (session, node) pair.
 #   INPUTS: {
 #     session: MachineSession - The machine session to try,
-#     node: Node - The Node paired with the session (carries node_id for allocate_to),
+#     node: Node - The Node paired with the session,
 #     engine: Engine - The resolved engine config,
 #     task: Task - The task to allocate,
 #     occupancy_checker: OccupancyChecker - SSH operations for occupancy checks,
 #     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
 #     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
-#     tracker: AllocationTracker - In-flight cloud allocation tracker
+#     tracker: AllocationTracker - In-flight cloud allocation tracker,
+#     remote_tasks_dir - Remote base directory for task folders
 #   }
-#   OUTPUTS: { bool - True if task started successfully on this machine }
-#   SIDE_EFFECTS: Sets task running via allocate_to(node), starts occupancy check, records TaskAllocated event, discards tracker slot.
+#   OUTPUTS: { bool }
+#   SIDE_EFFECTS: starts occupancy check, saves, commits
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-OPS-OCCUPANCY, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _try_start_on_machine
 async def _try_start_on_machine(
@@ -125,8 +123,11 @@ async def _try_start_on_machine(
     uow_factory: Callable[[], AbstractUnitOfWork],
     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
+    remote_tasks_dir: PurePath,
 ) -> bool:
-    task = task.allocate_to(node).mark_running()
+    dt_str = task.created_at.strftime("%Y%m%d_%H%M%S")
+    remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")
+    task = task.run(node.node_id, remote_folder)
     logger.debug(
         "[AllocateTask][_try_allocate_to_machine] task_id=%s ip=%s node_id=%s",
         task.task_id,
@@ -143,7 +144,6 @@ async def _try_start_on_machine(
         node.node_id,
     )
     occupancy_checker.start_occupancy_check(session, engine)
-    task = task.with_event(TaskAllocated, node_id=node.node_id, engine_name=task.engine)
     async with uow_factory() as uow:
         await uow.tasks.save(task)
         await uow.commit()
@@ -185,9 +185,9 @@ async def _find_free_machines(
 # START_CONTRACT: _allocate_free_machine
 #   PURPOSE: Find a free compatible machine and start the task on it.
 #   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, repository: MachineRepository, occupancy_checker: OccupancyChecker,
-#     start_task_on_machine: Callable, tracker: AllocationTracker }
+#     start_task_on_machine: Callable, tracker: AllocationTracker, remote_tasks_dir: PurePath }
 #   OUTPUTS: { bool - True if allocated to a machine, False if not }
-#   SIDE_EFFECTS: Updates task status via allocate_to(node), starts occupancy check, records TaskAllocated event, discards tracker slot. Iterates (session, node) pairs from _find_free_machines; per-pair failures isolated and logged.
+#   SIDE_EFFECTS: Transitions task via run(node.node_id, remote_folder) on the first successful pair, starts occupancy check, saves, commits, discards tracker slot. Iterates (session, node) pairs from _find_free_machines; per-pair failures isolated and logged.
 #   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: _allocate_free_machine
 async def _allocate_free_machine(
@@ -198,6 +198,7 @@ async def _allocate_free_machine(
     occupancy_checker: OccupancyChecker,
     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
+    remote_tasks_dir: PurePath,
 ) -> bool:
     free_sessions = await _find_free_machines(engine, uow_factory, repository)
 
@@ -220,6 +221,7 @@ async def _allocate_free_machine(
                 uow_factory,
                 start_task_on_machine,
                 tracker,
+                remote_tasks_dir,
             ):
                 return True
         except Exception as err:
@@ -425,7 +427,8 @@ async def _persist_node_with_cleanup(
 #     clouds: CloudProvisioner - Cloud provider port,
 #     start_task_on_machine: Callable - Callback to upload+spawn on remote machine,
 #     tracker: AllocationTracker - In-flight cloud allocation tracker,
-#     allocation_lock: asyncio.Lock - Lock for critical section coordination
+#     allocation_lock: asyncio.Lock - Lock for critical section coordination,
+#     remote_tasks_dir: PurePath - Remote base directory for task folders
 #   }
 #   OUTPUTS: { bool - True if allocated to a machine, False if cloud requested or error }
 #   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), tracker.add/discard, tmp-node insertion, cloud allocation. On failure best-effort cleanup of VM and tmp-node.
@@ -441,6 +444,7 @@ async def allocate_task(
     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
     tracker: AllocationTracker,
     allocation_lock: asyncio.Lock,
+    remote_tasks_dir: PurePath,
 ) -> bool:
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
@@ -461,6 +465,7 @@ async def allocate_task(
         occupancy_checker,
         start_task_on_machine,
         tracker,
+        remote_tasks_dir,
     ):
         return True
 

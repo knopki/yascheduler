@@ -23,7 +23,6 @@
         <const-CONFIG_FILE PURPOSE="Default config file path (re-exported via yascheduler.entrypoints)" />
         <const-PID_FILE PURPOSE="Default PID file path (re-exported via yascheduler.entrypoints)" />
         <const-LOG_FILE PURPOSE="Default log file path (re-exported via yascheduler.entrypoints)" />
-        <const-__version__ PURPOSE="Package version from metadata" />
       </annotations>
     </M-MAIN>
 
@@ -33,14 +32,6 @@
       <depends>M-APPLICATION, M-DOMAIN, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS-CONFIG-PARSER, M-DI, M-ENTRYPOINTS-PATHS</depends>
       <annotations>
         <class-Yascheduler PURPOSE="Public client class" />
-        <fn-queue_submit_task PURPOSE="Submit a new task (sync)" />
-        <fn-queue_submit_task_async PURPOSE="Submit a new task (async)" />
-        <fn-queue_get_tasks PURPOSE="Query tasks by jobs/status (sync)" />
-        <fn-queue_get_tasks_async PURPOSE="Query tasks by jobs/status (async)" />
-        <fn-queue_get_task PURPOSE="Get single task by ID (sync)" />
-        <fn-queue_get_task_async PURPOSE="Get single task by ID (async)" />
-        <fn-to_sync PURPOSE="Private async-to-sync decorator (inlined from former shared.async_utils; not re-exported from M-SHARED)" />
-        <const-_deps_factory PURPOSE="Keyword-only constructor seam: Config -&gt; CLIDeps factory (defaults to make_cli_deps)" />
       </annotations>
     </M-ENTRYPOINTS-CLIENT>
 
@@ -48,12 +39,6 @@
       <purpose>Layer facade for the outermost hexagonal layer (driving adapters + composition root); re-exports Yascheduler from .client.</purpose>
       <path>yascheduler/entrypoints/__init__.py</path>
       <depends>M-ENTRYPOINTS-CLIENT, M-ENTRYPOINTS-CONFIG, M-DI, M-ENTRYPOINTS-PATHS</depends>
-      <annotations>
-        <export-Yascheduler PURPOSE="Public client class re-exported from entrypoints.client" />
-        <const-CONFIG_FILE PURPOSE="Default config file path re-exported from entrypoints.paths" />
-        <const-LOG_FILE PURPOSE="Default log file path re-exported from entrypoints.paths" />
-        <const-PID_FILE PURPOSE="Default PID file path re-exported from entrypoints.paths" />
-      </annotations>
     </M-ENTRYPOINTS>
 
     <M-ENTRYPOINTS-PATHS NAME="Entrypoints path constants" TYPE="UTILITY" STATUS="implemented">
@@ -102,19 +87,12 @@
       <purpose>Per-command CLI adapter modules — parse args, call use cases via DI, format output.</purpose>
       <path>yascheduler/entrypoints/cli/__init__.py</path>
       <depends>none</depends>
-      <annotations>
-        <fn-daemonize PURPOSE="Start yascheduler daemon (entrypoints/cli/daemonize.py)" />
-      </annotations>
     </M-CLI-COMMANDS>
 
     <M-SHARED NAME="Shared kernel" TYPE="UTILITY" STATUS="implemented">
       <purpose>Shared kernel: typing shims (Self, Unpack) consumed by ≥2 architectural layers.</purpose>
       <path>yascheduler/shared/__init__.py</path>
       <depends>M-SHARED-COMPAT</depends>
-      <annotations>
-        <type-Self PURPOSE="Self type re-exported from typing_extensions for older Python versions" />
-        <type-Unpack PURPOSE="Unpack re-exported from typing_extensions for older Python versions" />
-      </annotations>
     </M-SHARED>
 
     <M-SHARED-COMPAT NAME="Shared compat shims" TYPE="UTILITY" STATUS="implemented">
@@ -159,7 +137,7 @@
       <path>yascheduler/entrypoints/cli/args.py</path>
       <depends>M-ENTRYPOINTS</depends>
       <annotations>
-        <fn-existing_path PURPOSE="argparse type validator: Path(s) if s is an existing file else ArgumentTypeError (exit 2)" />
+        <fn-existing_path PURPOSE="argparse type validator" />
         <fn-add_config_arg PURPOSE="Add --config PATH (type=existing_path, default=CONFIG_FILE)" />
         <fn-add_log_level_arg PURPOSE="Add --log-level flag (optional short alias)" />
         <fn-add_log_file_arg PURPOSE="Add --log-file PATH (default=None unless caller overrides)" />
@@ -211,7 +189,7 @@
       <annotations>
         <fn-manage_node PURPOSE="Sync entry point: asyncio.run(_manage_node_async)" />
         <type-HostSpec PURPOSE="Frozen parsed host spec (host, username, port, ncpus)" />
-        <type-NodeTarget PURPOSE="Frozen parsed node target (node_id: NodeId|None, host_spec: HostSpec|None; exactly one set)" />
+        <type-NodeTarget PURPOSE="Frozen parsed node target" />
       </annotations>
     </M-ENTRYPOINTS-CLI-MANAGE-NODE>
 
@@ -232,45 +210,6 @@
       <purpose>Domain layer entry point — re-exports domain events, model entities, exception hierarchy, and port interfaces.</purpose>
       <path>yascheduler/domain/__init__.py</path>
       <depends>M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-DOMAIN-EXCEPTIONS, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS</depends>
-      <annotations>
-        <export-DomainEvent PURPOSE="Base frozen dataclass for all task lifecycle events" />
-        <export-Event PURPOSE="Union type alias of all event types" />
-        <export-TaskAbandoned PURPOSE="Task abandoned on lost node event" />
-        <export-TaskAllocated PURPOSE="Task assigned to node event" />
-        <export-TaskCompleted PURPOSE="Task finished event" />
-        <export-TaskCreated PURPOSE="Task submitted event" />
-        <export-TaskFailed PURPOSE="Task failed event" />
-        <export-TaskStatus PURPOSE="IntEnum: TO_DO=0, RUNNING=1, DONE=2" />
-        <export-MachineState PURPOSE="Enum: FREE, BUSY" />
-        <export-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
-        <export-Engine PURPOSE="Calculation engine specification with platform support" />
-        <export-Task PURPOSE="Task entity with lifecycle methods" />
-        <export-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates &gt;0; __str__ renders bare int)" />
-        <export-NewNode PURPOSE="Pre-persistence node record (no node_id); converted to Node by NodeRepository.insert" />
-        <export-Node PURPOSE="Post-persistence node record; carries node_id: NodeId" />
-        <export-ConnectedMachine PURPOSE="Runtime connected machine with state transitions" />
-        <export-DomainError PURPOSE="Base class for all domain exceptions" />
-        <export-ValidationError PURPOSE="Input validation errors" />
-        <export-UnsupportedEngineError PURPOSE="Unknown calculation engine requested" />
-        <export-MissingInputFileError PURPOSE="Required engine input file not provided" />
-        <export-TaskError PURPOSE="Task lifecycle errors" />
-        <export-TaskAlreadyAllocatedError PURPOSE="Task already bound to a node" />
-        <export-TaskNotAllocatedError PURPOSE="Task not yet allocated to a node" />
-        <export-TaskNotTodoError PURPOSE="Task not in TODO status" />
-        <export-TaskNotRunningError PURPOSE="Task not in RUNNING status" />
-        <export-MachineBusyError PURPOSE="Operation attempted on a busy machine" />
-        <export-SchedulingError PURPOSE="Scheduling/allocation errors" />
-        <export-NoCompatibleNodeError PURPOSE="No matching node found for task" />
-        <export-CloudCapacityExhaustedError PURPOSE="Cloud provider at capacity" />
-        <export-MachineConnectionError PURPOSE="SSH connection failure carrying ip and reason" />
-        <export-TaskRepository PURPOSE="Async port for task persistence" />
-        <export-NodeRepository PURPOSE="Async port for node persistence" />
-        <export-MachineRepository PURPOSE="Async port for the connected-machine collection" />
-        <export-MachineSession PURPOSE="Connected-machine entity handle Protocol" />
-        <export-CloudProvisioner PURPOSE="Async port for cloud node provisioning" />
-        <export-CloudAllocateError PURPOSE="Cloud node allocation failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
-        <export-CloudSetupError PURPOSE="Cloud node setup failure (re-exported from M-DOMAIN-EXCEPTIONS)" />
-      </annotations>
     </M-DOMAIN>
 
     <M-DOMAIN-EXCEPTIONS NAME="Domain exceptions" TYPE="CORE_LOGIC" STATUS="implemented">
@@ -283,10 +222,8 @@
         <class-UnsupportedEngineError PURPOSE="Unknown calculation engine requested" />
         <class-MissingInputFileError PURPOSE="Required engine input file not provided" />
         <class-TaskError PURPOSE="Task lifecycle errors" />
-        <class-TaskAlreadyAllocatedError PURPOSE="Task already bound to a node" />
-        <class-TaskNotAllocatedError PURPOSE="Task not yet allocated to a node" />
-        <class-TaskNotTodoError PURPOSE="Task not in TODO status" />
-        <class-TaskNotRunningError PURPOSE="Task not in RUNNING status" />
+        <class-TaskNotTodoError PURPOSE="Task not in TODO status (raised by run and reject)" />
+        <class-TaskNotRunningError PURPOSE="Task not in RUNNING status (raised by complete, fail, abandon)" />
         <class-MachineBusyError PURPOSE="Operation attempted on a busy machine" />
         <class-SchedulingError PURPOSE="Scheduling/allocation errors" />
         <class-NoCompatibleNodeError PURPOSE="No matching node found for task" />
@@ -308,17 +245,13 @@
         <class-ProcessResult PURPOSE="Exit code and captured output from remote execution" />
         <class-Engine PURPOSE="Calculation engine specification with validate_inputs (re-exported from M-DOMAIN-ENGINE)" />
         <class-EngineRepository PURPOSE="Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)" />
-        <class-Task PURPOSE="Post-persistence task entity with lifecycle methods and event recording; task_id: TaskId is the first (identity) field; allocated_node_id: NodeId | None is the sole allocation signal" />
-        <fn-allocate_to PURPOSE="Bind task to a Node: allocate_to(node) sets allocated_node_id=node.node_id in one replace call (guard stays on allocated_node_id — the sole allocation signal)" />
-        <fn-with_remote_folder PURPOSE="Submit-time copy-with: returns new Task with remote_folder set (assigned post-insert from the generated task_id); no validation guard; chains with with_event/fail/complete" />
-        <fn-with_download_results PURPOSE="Consume-time copy-with: returns new Task with local_folder and remote_folder set (keyword-only); does NOT update extra (extra carries only input-file payloads, download path never touches them); no validation guard" />
-        <const-error_column_format PURPOSE="Task.error write contract: bare human strings for allocate_task reject and orchestrator fail; 'Download error: {path}: {msg}, {path}: {msg}' for consume_task download failures (combined permanent+transient); NULL/None on success" />
-        <type-TaskId PURPOSE="Task primary-key value object (frozen dataclass wrapping int; validates &gt;0; __str__ renders bare int; not equal to bare int)" />
-        <type-NewTask PURPOSE="Pre-persistence task record (no task_id, no status, no allocated_node_id, no remote_folder, no error, no created_at/updated_at — all DB-generated or Task-only); carries engine, label, local_folder, webhook_url, webhook_custom_params, extra; converted to Task only by TaskRepository.insert" />
+        <class-Task PURPOSE="Post-persistence task entity" />
+        <type-TaskId PURPOSE="Task primary-key value object)" />
+        <type-NewTask PURPOSE="Pre-persistence task record" />
         <type-NodeId PURPOSE="Node primary-key value object (frozen dataclass wrapping int; validates &gt;0; __str__ renders bare int; not equal to bare int)" />
-        <type-NewNode PURPOSE="Pre-persistence node record (no node_id); ip and ncpus carry defaults ('' and 0) so the tmp-reservation call site can construct NewNode(cloud=..., enabled=False); converted to Node only by NodeRepository.insert. The tmp-node row inserted by _select_and_insert_tmp is reused as the real node identity: clouds.allocate(provider, node) receives the tmp-node Node and returns a Node carrying the same node_id (single-row UPDATE lifecycle, not insert+remove)." />
-        <class-Node PURPOSE="Post-persistence node record; node_id: NodeId is the first (identity) field and sole identity; tmp rows carry ip='' sentinel; dup-IP is valid behind different jump hosts" />
-        <class-ConnectedMachine PURPOSE="Runtime connected machine; node_id: NodeId is the FIRST field (identity-first — identifies which Node this represents); ip is the transport address (asyncssh host, NOT the identity — two machines sharing ip with different node_id are distinct); occupy/release/replace carry node_id through automatically (frozen dataclass); construction site SSHMachineRepository._connect_impl passes node_id=node.node_id" />
+        <type-NewNode PURPOSE="Pre-persistence node record" />
+        <class-Node PURPOSE="Post-persistence node record" />
+        <class-ConnectedMachine PURPOSE="Runtime connected machine" />
       </annotations>
     </M-DOMAIN-MODEL>
 
@@ -329,10 +262,6 @@
       <annotations>
         <class-Engine PURPOSE="Calculation engine value object with validate_inputs" />
         <class-EngineRepository PURPOSE="Frozen collection of engines with filter/filter_platforms/get_platform_packages" />
-        <fn-validate_inputs PURPOSE="Verify all required engine input files exist in the task context" />
-        <fn-filter PURPOSE="Filter engines by predicate, return new frozen repository" />
-        <fn-filter_platforms PURPOSE="Filter engines by supported platforms, return new frozen repository" />
-        <fn-get_platform_packages PURPOSE="Collect unique platform packages across engines" />
         <class-LocalFilesDeploy PURPOSE="Deploy local files to remote" />
         <class-LocalArchiveDeploy PURPOSE="Deploy local archive to remote" />
         <class-RemoteArchiveDeploy PURPOSE="Download and deploy remote archive" />
@@ -345,17 +274,12 @@
       <path>yascheduler/domain/ports.py</path>
       <depends>M-DOMAIN-ENGINE, M-DOMAIN-MODEL</depends>
       <annotations>
-        <class-TaskRepository PURPOSE="Async port for task persistence: insert(NewTask)-&gt;Task (sole NewTask→Task conversion), get/update_status take TaskId, list_ids_by_node_id_and_status(node_id, status) returns list[TaskId], list_by_jobs takes list[TaskId]; the public Yascheduler facade is the sole int/TaskId boundary" />
-        <class-NodeRepository PURPOSE="Async port for node persistence: insert(NewNode)-&gt;Node is the sole node-insertion path; get_by_id(NodeId), get_by_ids(list[NodeId])-&gt;dict[NodeId, Node]; mutators take NodeId, update takes Node; tmp-reservation reuses the returned node_id as the real node identity" />
-        <fn-enable PURPOSE="Enable a node by NodeId" />
-        <fn-disable PURPOSE="Disable a node by NodeId" />
-        <fn-remove PURPOSE="Delete a node row by NodeId" />
-        <fn-insert PURPOSE="Sole node-insertion path: insert(NewNode) -&gt; Node; serves both the real-node and tmp-reservation paths (tmp via NewNode(cloud=..., enabled=False))" />
-        <fn-get_by_ids PURPOSE="Batch node lookup by primary key: get_by_ids(list[NodeId]) -&gt; dict[NodeId, Node]" />
-        <class-MachineRepository PURPOSE="Async port for the connected-machine collection (lifecycle, queries); keyed by NodeId (connect(node: Node)/disconnect(node_id)/get_session(node_id)/contains(node_id)); ip survives only as node.ip read inside connect for the asyncssh host" />
-        <class-MachineSession PURPOSE="Connected-machine entity handle Protocol (domain identity, state transitions, connect-time config, adapter-derived accessors, base primitives, monitor mechanism)" />
-        <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host) — 7-field surface application consumers read" />
-        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning: allocate(provider, node: Node) -&gt; Node (receives the tmp-node Node and reuses its node_id as the real node identity; caller flips enabled=TRUE via NodeRepository.update — single-row lifecycle), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None; ip stays the cloud SDK host identifier), select_provider(platforms, counts) -&gt; str | None (sync)" />
+        <class-TaskRepository PURPOSE="Async port for task persistence:" />
+        <class-NodeRepository PURPOSE="Async port for node persistence" />
+        <class-MachineRepository PURPOSE="Async port for the connected-machine collection " />
+        <class-MachineSession PURPOSE="Connected-machine entity handle Protocol " />
+        <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config " />
+        <class-CloudProvisioner PURPOSE="Port for cloud node provisioning:" />
         <type-connect_grace PURPOSE="Per-cloud SSH connect-failure deadline in seconds (declared on CloudConfig Protocol + each ConfigCloud* DTO with provider-specific default)" />
       </annotations>
     </M-DOMAIN-PORTS>
@@ -368,7 +292,7 @@
         <class-DomainEvent PURPOSE="Base frozen dataclass with task_id: TaskId, webhook_url, webhook_custom_params" />
         <class-TaskCreated PURPOSE="Task submitted event with engine_name" />
         <class-TaskAllocated PURPOSE="Task assigned to node with node_id (NodeId) and engine_name" />
-        <class-TaskCompleted PURPOSE="Task finished with local_folder and has_errors" />
+        <class-TaskCompleted PURPOSE="Task finished with local_folder" />
         <class-TaskFailed PURPOSE="Task failed with reason" />
         <class-TaskAbandoned PURPOSE="Task abandoned on lost node with node_id (NodeId)" />
         <type-Event PURPOSE="Union type alias of all event types" />
@@ -389,18 +313,9 @@
          ═══════════════════════════════════════════════ -->
 
     <M-APPLICATION NAME="Application layer facade" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root; re-exports AbstractUnitOfWork, Orchestrator, MessageBus, submit_task, query_tasks, abandon_node, AllocationTracker.</purpose>
+      <purpose>Application layer facade — sole public surface for cross-layer consumers and composition root.</purpose>
       <path>yascheduler/application/__init__.py</path>
       <depends>M-APPLICATION-ABANDON-NODE, M-APPLICATION-ALLOCATION-TRACKER, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-QUERY-TASKS, M-APPLICATION-SUBMIT, M-APPLICATION-UOW</depends>
-      <annotations>
-        <export-AbstractUnitOfWork PURPOSE="Unit-of-work boundary for application use cases" />
-        <export-Orchestrator PURPOSE="Task lifecycle orchestrator" />
-        <export-MessageBus PURPOSE="In-process event bus for domain events" />
-        <export-submit_task PURPOSE="Use case: register a new task in TO_DO state" />
-        <export-query_tasks PURPOSE="Use case: read-only task query by statuses or job IDs" />
-        <export-abandon_node PURPOSE="Use case: clean up never-connected cloud node + release stuck TO_DO task" />
-        <export-AllocationTracker PURPOSE="In-memory dedup of in-flight cloud allocations" />
-      </annotations>
     </M-APPLICATION>
 
     <M-APPLICATION-UOW NAME="Abstract Unit of Work Protocol" TYPE="CORE_LOGIC" STATUS="implemented">
@@ -453,12 +368,12 @@
       <path>yascheduler/application/consume_task.py</path>
       <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-OPS-DOWNLOAD, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
-        <fn-consume_task PURPOSE="Download task outputs and finalise (True) or defer for retry (False); branches on (transient_errors, permanent_errors)" />
+        <fn-consume_task PURPOSE="Download task outputs and finalise  or defer for retry" />
       </annotations>
     </M-APPLICATION-CONSUME>
 
     <M-APPLICATION-DEALLOCATE NAME="Deallocate idle nodes use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Disable idle cloud nodes and return Node objects (carrying node_id) for VM deletion; per-node wrapper owns disable+remove bracketing around pure cloud delete.</purpose>
+      <purpose>Disable idle cloud nodes and return Node objects for VM deletion.</purpose>
       <path>yascheduler/application/deallocate_nodes.py</path>
       <depends>M-DOMAIN, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-CLOUD-PROVISIONER</depends>
       <annotations>
@@ -468,7 +383,7 @@
     </M-APPLICATION-DEALLOCATE>
 
     <M-APPLICATION-ABANDON-NODE NAME="Abandon never-connected node use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Clean up a cloud node that never established its SSH connection: best-effort cloud VM delete, remove yascheduler_nodes row, discard the stuck TO_DO task from AllocationTracker so it re-allocates next cycle.</purpose>
+      <purpose>Clean up a cloud node that never established its SSH connection</purpose>
       <path>yascheduler/application/abandon_node.py</path>
       <depends>M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
@@ -481,24 +396,16 @@
       <path>yascheduler/application/allocation_tracker.py</path>
       <depends>none</depends>
       <annotations>
-        <class-AllocationTracker PURPOSE="In-memory set tracking task_ids with in-flight cloud allocations (add/discard/__contains__)" />
+        <class-AllocationTracker PURPOSE="In-memory set tracking task_ids with in-flight cloud allocations" />
       </annotations>
     </M-APPLICATION-ALLOCATION-TRACKER>
 
     <M-APPLICATION-ORCHESTRATOR NAME="Daemon Orchestrator" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Manages producer-consumer loops calling use cases; delegates SSH work to MachineRepository Protocol and three concrete operations collaborators (TaskDeployer/OutputDownloader/OccupancyChecker). Private-key discovery is injected via list_private_keys_fn (M-SSH-KEYS), keeping this module free of yascheduler.infra imports.</purpose>
+      <purpose>Manages producer-consumer loops calling use cases.</purpose>
       <path>yascheduler/application/orchestrator.py</path>
       <depends>M-DOMAIN, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-ABANDON-NODE, M-QUEUE, M-PERSISTENCE-UOW, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER</depends>
       <annotations>
-        <class-Orchestrator PURPOSE="Daemon loop manager: connect machines, allocate, consume, deallocate, abandon never-connected cloud nodes (static nodes retried without abandon)" />
-        <fn-start PURPOSE="Start all producer-consumer loops" />
-        <fn-stop PURPOSE="Idempotent exception-safe cleanup: single-execution _stopped guard (set synchronously, no await between check and set), per-step try/except isolation for clouds.stop/disconnect_all/http_session.close, dead-bg-job tolerance via except Exception, http_session nulled after close" />
-        <const-allocation_tracker PURPOSE="Owned AllocationTracker injected into allocate/consume use cases" />
-        <const-active_clouds PURPOSE="Filtered Sequence[ConfigCloud] with max_nodes&gt;0 and resolved adapter" />
-        <const-allocation_lock PURPOSE="Owned asyncio.Lock serializing allocate_task critical section" />
-        <const-_connect_failures PURPOSE="Per-IP monotonic first-seen failure timestamp (in-memory only; daemon restart resets grace windows)" />
-        <const-_consuming PURPOSE="In-flight consume task ids (set[TaskId]); producer skips yielding these, consumer adds/discards around consume_task await (in-memory only; same-event-loop atomic)" />
-        <const-_deallocate_q PURPOSE="UniqueQueue[NodeId, Node] keyed on node.node_id (strictly unique SERIAL PK) — dedup on NodeId, not ip (ip is non-unique post migration 003); payload is the Node object so the consumer calls deallocate_node without a uow.nodes.get(ip) round-trip" />
+        <class-Orchestrator PURPOSE="Daemon loop manager" />
       </annotations>
     </M-APPLICATION-ORCHESTRATOR>
 
@@ -514,7 +421,7 @@
     </M-DI>
 
     <M-ENTRYPOINTS-CONFIG-PARSER NAME="INI config parser" TYPE="ENTRY_POINT" STATUS="implemented">
-      <purpose>INI config parsing and assembly — parse_config assembles frozen Config aggregate; engine.* / [clouds] / [db] / [local] / [remote] section parsers; config utilities relocated to sibling _config_utils.py.</purpose>
+      <purpose>INI config parsing and assembly — parse_config assembles frozen Config aggregate.</purpose>
       <path>yascheduler/entrypoints/config_parser.py</path>
       <depends>M-DOMAIN-ENGINE, M-DOMAIN-SETTINGS, M-CLOUD-CONFIGS, M-PERSISTENCE, M-ENTRYPOINTS-CONFIG-UTILS</depends>
       <annotations>
@@ -563,7 +470,6 @@
       <depends>none</depends>
       <annotations>
         <fn-load_query PURPOSE="Load SQL file contents by name with lru_cache" />
-        <const-_SQL_DIR PURPOSE="Path to the sql/ query directory" />
       </annotations>
     </M-PERSISTENCE-SQLLOADER>
 
@@ -582,8 +488,8 @@
       <path>yascheduler/infra/persistence/postgres.py</path>
       <depends>M-DOMAIN, M-PERSISTENCE-SQLLOADER, M-PERSISTENCE-EXCEPTIONS</depends>
       <annotations>
-        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port (get, save, update_status, list_by_status, list_by_jobs, list_ids_by_node_id_and_status, count_by_status); save/insert bind allocated_node_id via :node_id param and write status via status.name (enum-label string); _row_to_task wraps NodeId, reads title to Task.label, resolves status via TaskStatus name lookup; save/update_status raise TaskRowNotFoundError on 0-row UPDATE" />
-        <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port (full CRUD lifecycle); add_tmp removed — insert(NewNode) is the sole insertion path (serves tmp-reservation via NewNode(cloud=..., enabled=False)); list_enabled/list_disabled drop the python '.' post-filters (list_disabled filters ip != '' in SQL); mutators enable/disable/remove take NodeId and pass node_id.value (pg8000 cannot adapt a NodeId), update takes Node and keys WHERE node_id = node.node_id.value" />
+        <class-PostgresTaskRepository PURPOSE="PostgreSQL implementation of TaskRepository port" />
+        <class-PostgresNodeRepository PURPOSE="PostgreSQL implementation of NodeRepository port " />
       </annotations>
     </M-PERSISTENCE-POSTGRES>
 
@@ -597,7 +503,7 @@
     </M-PERSISTENCE-UOW>
 
     <M-PERSISTENCE-SCHEMA NAME="Schema applier" TYPE="DATA_LAYER" STATUS="implemented">
-      <purpose>Synchronous transactional application of schema.sql via pg8000 for CLI init and test fixtures. schema.sql is the full latest snapshot and begins with a DO block that bootstraps the yascheduler_migrations tracker (three-case logic: seed on fresh DB, empty on legacy DB, no-op on modern DB).</purpose>
+      <purpose>Synchronous transactional application of schema.sql via pg8000 for CLI init and test fixtures</purpose>
       <path>yascheduler/infra/persistence/postgres_schema.py</path>
       <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-SQLLOADER</depends>
       <annotations>
@@ -606,12 +512,11 @@
     </M-PERSISTENCE-SCHEMA>
 
     <M-PERSISTENCE-MIGRATIONS NAME="Migration runner" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Forward-only migration runner — scans sql/migrations/, applies pending .sql/.py migrations in string-sorted prefix_id order, each in its own transaction, recording each in yascheduler_migrations. .sql migrations run as a multi-statement string; .py migrations discover exactly one Migration subclass via inspect.</purpose>
+      <purpose>Forward-only migration runner.</purpose>
       <path>yascheduler/infra/persistence/postgres_migrations.py</path>
       <depends>M-INFRA-DB-CONFIG, M-PERSISTENCE-MIGRATION-BASE, M-PERSISTENCE-SCHEMA</depends>
       <annotations>
-        <fn-apply_migrations PURPOSE="Apply pending migrations from sql/migrations/ to the DB behind config (one connection, one transaction per migration)" />
-        <const-_MIGRATIONS_DIR PURPOSE="Path to the bundled sql/migrations/ directory" />
+        <fn-apply_migrations PURPOSE="Apply pending migrations from sql/migrations/ to the DB behind config" />
       </annotations>
     </M-PERSISTENCE-MIGRATIONS>
 
@@ -620,7 +525,7 @@
       <path>yascheduler/infra/persistence/migration_base.py</path>
       <depends>M-INFRA-DB-CONFIG</depends>
       <annotations>
-        <class-Migration PURPOSE="Base class for .py migrations; instantiated by the runner with (config, conn, log); subclasses implement migrate" />
+        <class-Migration PURPOSE="Base class for .py migrations" />
       </annotations>
     </M-PERSISTENCE-MIGRATION-BASE>
 
@@ -657,7 +562,7 @@
     </M-ENTRYPOINTS-CONFIG>
 
     <M-CLOUD-CONFIGS NAME="Cloud config DTOs" TYPE="DATA_LAYER" STATUS="implemented">
-      <purpose>Cloud provider config DTOs (Azure, Hetzner, UpCloud, VastAI) and the ConfigCloud union — frozen stdlib dataclasses relocated from yascheduler.config.cloud.</purpose>
+      <purpose>Cloud provider config DTOs and the ConfigCloud union — frozen stdlib dataclasses relocated from yascheduler.config.cloud.</purpose>
       <path>yascheduler/infra/cloud/cloud_configs.py</path>
       <depends>M-DOMAIN-PORTS, M-SHARED</depends>
       <annotations>
@@ -730,7 +635,7 @@
       <path>yascheduler/infra/cloud/manager.py</path>
       <depends>M-DOMAIN, M-DOMAIN-SETTINGS, M-SSH-KEYS, M-SSH-REPOSITORY, M-SSH-SESSION, M-CLOUD-CONFIGS, M-CLOUD-INIT, M-CLOUD-PROVIDER-SELECTION, M-CLOUD-SSH-KEYS</depends>
       <annotations>
-        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter (pure cloud API; no DB access); allocate(provider, node: Node)-&gt;Node (derives the identity via replace on the passed node after create_node — no fresh Node construction; reuses node.node_id, single-row UPDATE lifecycle), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None), select_provider" />
+        <class-CloudProvisionerImpl PURPOSE="Concrete CloudProvisioner port adapter; allocate(provider, node: Node)-&gt;Node (derives the identity via replace on the passed node after create_node — no fresh Node construction; reuses node.node_id, single-row UPDATE lifecycle), deallocate(node: Node) (reads node.cloud/node.ip internally, no-ops on cloud is None), select_provider" />
         <class-CloudAllocateError PURPOSE="Cloud allocation failure (domain exception realized via yascheduler.domain)" />
         <class-CloudSetupError PURPOSE="Cloud setup/bootstrap failure (domain exception realized via yascheduler.domain)" />
       </annotations>
@@ -746,19 +651,9 @@
     </M-CLOUD-PROVIDER-SELECTION>
 
     <M-CLOUD-PROVIDERS NAME="Cloud providers facade" TYPE="INTEGRATION" STATUS="implemented">
-      <purpose>Providers subpackage facade — re-exports provider create/delete callables (no registry logic; registry lives in M-CLOUD-ADAPTERS-NEW).</purpose>
+      <purpose>Providers subpackage facade — re-exports provider create/delete callables.</purpose>
       <path>yascheduler/infra/cloud/providers/__init__.py</path>
       <depends>M-CLOUD-PROVIDER-AZ, M-CLOUD-PROVIDER-HETZNER, M-CLOUD-PROVIDER-UPCLOUD, M-CLOUD-PROVIDER-VASTAI</depends>
-      <annotations>
-        <fn-az_create_node PURPOSE="Create Azure node (re-export)" />
-        <fn-az_delete_node PURPOSE="Delete Azure node (re-export)" />
-        <fn-hetzner_create_node PURPOSE="Create Hetzner node (re-export)" />
-        <fn-hetzner_delete_node PURPOSE="Delete Hetzner node (re-export)" />
-        <fn-upcloud_create_node PURPOSE="Create UpCloud node (re-export)" />
-        <fn-upcload_delete_node PURPOSE="Delete UpCloud node (re-export)" />
-        <fn-vastai_create_node PURPOSE="Create VastAI node (re-export)" />
-        <fn-vastai_delete_node PURPOSE="Delete VastAI node (re-export)" />
-      </annotations>
     </M-CLOUD-PROVIDERS>
 
     <M-CLOUD-PROVIDER-AZ NAME="Azure provider" TYPE="INTEGRATION" STATUS="implemented">
@@ -901,53 +796,27 @@
       <path>yascheduler/infra/ssh/session.py</path>
       <depends>M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN</depends>
       <annotations>
-        <type-MachineSession PURPOSE="Domain Protocol for the connected-machine entity handle (defined in M-DOMAIN-PORTS, surfaced here as the contract implemented)" />
-        <class-SSHMachineSession PURPOSE="Concrete MachineSession implementation owning _conn, _adapter, _machine, _closed, _monitor_task" />
-        <const-my_backoff_exc PURPOSE="Partial backoff decorator for SSHRetryExc (canonical copy; moved from operations/base.py)" />
-        <fn-install_monitor PURPOSE="Install occupancy monitor on this session, replacing any prior monitor; no-op on closed session" />
-        <fn-cancel_monitor PURPOSE="Pop and cancel this session's monitor (no await)" />
-        <fn-occupy PURPOSE="Read-modify-write transitioning the snapshot to BUSY" />
-        <fn-release PURPOSE="Read-modify-write transitioning the snapshot to FREE with free_since=now" />
-        <fn-update PURPOSE="Replace the internal machine snapshot (used by rollback paths)" />
-        <fn-run PURPOSE="Run command and return ProcessResult (delegates to run_full)" />
-        <fn-run_full PURPOSE="Run command via self._adapter and return raw SSHCompletedProcess (@my_backoff_exc)" />
-        <fn-run_bg PURPOSE="Start background process on remote (no backoff — non-idempotent)" />
-        <fn-upload PURPOSE="Upload file via SFTP (no backoff — non-idempotent)" />
-        <fn-open_sftp PURPOSE="Async context manager yielding an SFTP client" />
-        <fn-get_cpu_cores PURPOSE="Return CPU core count via adapter.get_cpu_cores(make_run_fn(conn, adapter)) (@my_backoff_exc — idempotent read)" />
-        <fn-setup_node PURPOSE="Install engine dependencies on remote node via adapter.setup_node with make_run_fn(conn, adapter)" />
-        <fn-pgrep PURPOSE="Yield remote processes matching pattern" />
-        <fn-list_processes PURPOSE="Yield all running processes on remote machine" />
+        <type-MachineSession PURPOSE="Domain Protocol for the connected-machine entity handle" />
+        <class-SSHMachineSession PURPOSE="Concrete MachineSession implementation" />
+        <const-my_backoff_exc PURPOSE="Partial backoff decorator for SSHRetryExc" />
       </annotations>
     </M-SSH-SESSION>
 
     <M-SSH-REPOSITORY NAME="SSH machine repository" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. True collection only — no state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession). Implements the MachineRepository Protocol.</purpose>
+      <purpose>SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. Implements the MachineRepository Protocol.</purpose>
       <path>yascheduler/infra/ssh/repository.py</path>
       <depends>M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION</depends>
       <annotations>
-        <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _sessions: dict[NodeId, SSHMachineSession] keyed by NodeId; connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id); delegates teardown to session._close" />
+        <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _sessions" />
         <class-MySSHClient PURPOSE="Insecure SSH client trusting all host keys (connection-building bit; stays)" />
         <const-DEFAULT_CONN_OPTS PURPOSE="Default SSH connection options (connection-building bit; stays)" />
-        <fn-connect PURPOSE="Open SSH connection (using node.ip as the asyncssh host; reads login user from node.username and port from node.port — takes no username/port parameters), detect platform, construct ConnectedMachine(node_id=node.node_id, ip=node.ip, …), register SSHMachineSession under _sessions[node.node_id]; returns MachineSession" />
-        <fn-disconnect PURPOSE="Pop _sessions[node_id] then await session._close (pop-before-await ordering preserved)" />
-        <fn-disconnect_all PURPOSE="Disconnect every connected session (iterates list of NodeId keys)" />
-        <fn-list_free PURPOSE="Return FREE sessions filtered by platform, oldest first by session.machine.free_since" />
-        <fn-list_connected PURPOSE="Return all registered sessions (list[MachineSession])" />
-        <fn-get_session PURPOSE="Return the live session for node_id, or None (after disconnect)" />
-        <fn-contains PURPOSE="Return whether node_id is registered (explicit form of __contains__)" />
       </annotations>
     </M-SSH-REPOSITORY>
 
     <M-SSH-OPERATIONS NAME="SSH machine operations" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>SSH single-machine operations collaborators — TaskDeployer/OutputDownloader/OccupancyChecker (stateless, session-per-call). The former SSHMachineOperations facade is dissolved; consumers type against the concrete collaborator classes directly.</purpose>
+      <purpose>SSH single-machine operations collaborators.</purpose>
       <path>yascheduler/infra/ssh/operations/</path>
       <depends>M-SSH-SESSION, M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN, M-DOMAIN-ENGINE, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
-      <annotations>
-        <export-TaskDeployer PURPOSE="Re-exported from .deployment; uploads inputs and spawns calculation process" />
-        <export-OutputDownloader PURPOSE="Re-exported from .download; per-file SFTP-isolated download with retry and error classification" />
-        <export-OccupancyChecker PURPOSE="Re-exported from .occupancy; pgrep/cmd-based occupancy check + monitor installer" />
-      </annotations>
     </M-SSH-OPERATIONS>
 
     <M-SSH-OPS-DEPLOY NAME="Task deployer" TYPE="CORE_LOGIC" STATUS="implemented">
@@ -965,7 +834,7 @@
       <path>yascheduler/infra/ssh/operations/download.py</path>
       <depends>M-SSH-SESSION, M-SSH-EXCEPTIONS, M-PLATFORM</depends>
       <annotations>
-        <class-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification; stateless (takes log); 4-tuple return (local_folder, remote_folder, transient_errors, permanent_errors)" />
+        <class-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification" />
         <fn-download_outputs PURPOSE="Per-file SFTP-isolated download via session.open_sftp/session.path with retry, error classification, conservative post-loop rmtree" />
         <fn-my_backoff_sftp PURPOSE="Partial backoff decorator for SFTPRetryExc (canonical; first user is download_outputs)" />
       </annotations>
@@ -982,8 +851,6 @@
       </annotations>
     </M-SSH-OPS-OCCUPANCY>
 
-
-
     <M-PLATFORM-REGISTRY NAME="Platform adapter registry" TYPE="UTILITY" STATUS="implemented">
       <purpose>Ordered platform adapter registry for platform detection (ADAPTERS).</purpose>
       <path>yascheduler/infra/ssh/platform/registry.py</path>
@@ -998,7 +865,7 @@
       <path>yascheduler/infra/ssh/platform/detect.py</path>
       <depends>M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL, M-PLATFORM-EXC</depends>
       <annotations>
-        <const-MAX_SESSIONS PURPOSE="Default MaxSessions on OpenSSH server (10); bounds detection concurrency" />
+        <const-MAX_SESSIONS PURPOSE="Default MaxSessions on OpenSSH server" />
       </annotations>
     </M-PLATFORM-DETECT>
 
@@ -1165,7 +1032,7 @@
     <CrossLink from="M-DI" to="M-APPLICATION-MESSAGE-BUS" relation="creates MessageBus and registers webhook handlers" />
     <CrossLink from="M-DI" to="M-NOTIFIER-WEBHOOK" relation="registers webhook_handler for all event types" />
     <CrossLink from="M-PERSISTENCE-UOW" to="M-APPLICATION-MESSAGE-BUS" relation="dispatches events via bus after commit" />
-    <CrossLink from="M-PERSISTENCE-UOW" to="M-DOMAIN-EVENTS" relation="collects events from saved aggregates via pull_events" />
+    <CrossLink from="M-PERSISTENCE-UOW" to="M-DOMAIN-EVENTS" relation="collects events from saved aggregates via task.events" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-EVENTS" relation="records TaskAbandoned event on lost nodes" />
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-DOMAIN-PORTS" relation="uses MachineRepository Protocol with Engine-typed start_task_on_machine; the three operations collaborators are concrete classes typed directly (no Protocol)" />
     <CrossLink from="M-APPLICATION-SUBMIT" to="M-DOMAIN-EVENTS" relation="records TaskCreated event on submission" />
@@ -1173,7 +1040,7 @@
     <CrossLink from="M-APPLICATION-ALLOCATE" to="M-SSH-OPS-OCCUPANCY" relation="_try_start_on_machine calls occupancy_checker.start_occupancy_check(session, engine) after successful spawn" />
     <CrossLink from="M-APPLICATION-CONSUME" to="M-DOMAIN-EVENTS" relation="records TaskCompleted and TaskFailed events" />
     <CrossLink from="M-APPLICATION-CONSUME" to="M-SSH-OPS-DOWNLOAD" relation="consume_task calls output_downloader.download_outputs(session, ...)" />
-    <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EVENTS" relation="Task aggregate stores events and provides record_event/pull_events" />
+    <CrossLink from="M-DOMAIN-MODEL" to="M-DOMAIN-EVENTS" relation="Task aggregate stores events in public events field; transition methods append events inline" />
     <CrossLink from="M-NOTIFIER-WEBHOOK" to="M-DOMAIN-EVENTS" relation="handles domain events for webhook delivery" />
 
     <CrossLink from="M-ENTRYPOINTS-CLIENT" to="M-DI" relation="uses make_cli_deps for task submission" />
