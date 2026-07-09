@@ -5,7 +5,7 @@
 -- last_migration is the single manual edit point when a migration is added.
 DO $$
 DECLARE
-  last_migration CONSTANT TEXT := '010';
+  last_migration CONSTANT TEXT := '011';
 BEGIN
   IF to_regclass('yascheduler_migrations') IS NULL THEN
     EXECUTE 'CREATE TABLE yascheduler_migrations (
@@ -51,7 +51,17 @@ CREATE TABLE IF NOT EXISTS yascheduler_tasks (
     webhook_url VARCHAR(2048),
     webhook_custom_params JSONB NOT NULL DEFAULT '{}'::JSONB,
     error TEXT,
-    extra JSONB NOT NULL DEFAULT '{}'::JSONB
+    extra JSONB NOT NULL DEFAULT '{}'::JSONB,
+    CONSTRAINT task_status_field_invariants CHECK (
+        (status = 'TO_DO' AND allocated_node_id IS NULL AND error IS NULL)
+        OR (
+            status = 'RUNNING'
+            AND allocated_node_id IS NOT NULL
+            AND error IS NULL
+            AND remote_folder IS NOT NULL
+        )
+        OR (status = 'DONE')
+    )
 );
 
 -- Only install the trigger if the updated_at column exists (safe for legacy DBs

@@ -3,7 +3,7 @@
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for migration 004 (add-allocated-node-id) and the schema.sql snapshot against real PostgreSQL via testcontainers.
-#   SCOPE: migration 004 adds nullable allocated_node_id column with FK ON DELETE SET NULL; backfills existing tasks by joining ip; leaves unallocated (ip IS NULL) tasks NULL; FK nulls allocated_node_id on node delete (allocated_ip dropped by migration 009); fresh DB seeds to 010; schema.sql CREATE TABLE includes the column.
+#   SCOPE: migration 004 adds nullable allocated_node_id column with FK ON DELETE SET NULL; backfills existing tasks by joining ip; leaves unallocated (ip IS NULL) tasks NULL; FK nulls allocated_node_id on node delete (allocated_ip dropped by migration 009); fresh DB seeds to 011; schema.sql CREATE TABLE includes the column.
 #   DEPENDS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SQLLOADER
 #   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SQLLOADER
 # END_MODULE_CONTRACT
@@ -18,12 +18,12 @@
 #   test_migration_004_backfills_existing_tasks - migration 004 backfills allocated_node_id by joining ip
 #   test_migration_004_leaves_unallocated_tasks_null - ip IS NULL tasks stay NULL
 #   test_fk_on_delete_set_null - deleting a node nulls the task's allocated_node_id (row preserved, no allocated_ip)
-#   test_fresh_db_seeds_to_010 - fresh DB seeds yascheduler_migrations to '010'; apply_migrations skips 010
+#   test_fresh_db_seeds_to_011 - fresh DB seeds yascheduler_migrations to '011'; apply_migrations skips 011
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: migration 010 extracts typed columns from metadata JSONB; fresh DB seeds to '010'; tracker list assertions append '010'; test_fresh_db_seeds_to_009 renamed to test_fresh_db_seeds_to_010; test_fk_on_delete_set_null raw INSERT uses engine column (metadata dropped from fresh schema).
-#   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: test_fk_on_delete_set_null no longer asserts allocated_ip (ip column dropped after migration 009); SELECT drops ip column; test_fresh_db_seeds_to_005 renamed to test_fresh_db_seeds_to_009 (seeds to '009' after migrations 006-009).
+#   LAST_CHANGE: v1.5.0 - task-status-field-invariants: fresh DB seeds to '011' (migration 011 adds task_status_field_invariants CHECK); tracker list assertions append '011'; test_fresh_db_seeds_to_010 renamed to test_fresh_db_seeds_to_011; test_fk_on_delete_set_null raw INSERT sets remote_folder so the RUNNING row satisfies the CHECK.
+#   PREVIOUS_CHANGE: v1.4.0 - drop-task-context-entity: migration 010 extracts typed columns from metadata JSONB; fresh DB seeds to '010'; tracker list assertions append '010'; test_fresh_db_seeds_to_009 renamed to test_fresh_db_seeds_to_010; test_fk_on_delete_set_null raw INSERT uses engine column (metadata dropped from fresh schema).
 # END_CHANGE_SUMMARY
 
 """Integration tests for migration 004 (add-allocated-node-id) via testcontainers.
@@ -37,7 +37,7 @@ specs/postgres-schema-apply/spec.md:
 * unallocated tasks (ip IS NULL) stay allocated_node_id = NULL
 * FK ON DELETE SET NULL nulls allocated_node_id when the node is removed
   (the task row is preserved; allocated_ip column is dropped by migration 009)
-* a fresh DB seeds yascheduler_migrations to '010' and apply_migrations skips 010
+* a fresh DB seeds yascheduler_migrations to '011' and apply_migrations skips 011
 """
 
 from __future__ import annotations
@@ -191,14 +191,17 @@ def test_migration_004_backfills_existing_tasks() -> None:
             # Two nodes with distinct ips.
             conn.run("INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.1')")
             conn.run("INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.2')")
-            # Two tasks referencing those ips.
+            # Two tasks referencing those ips. status=1 (RUNNING); metadata
+            # carries remote_folder so migration 010 extracts it and the row
+            # satisfies the task_status_field_invariants CHECK when migration
+            # 011 runs (RUNNING requires allocated_node_id + remote_folder).
             conn.run(
                 "INSERT INTO yascheduler_tasks (label, ip, status, metadata) "
-                "VALUES ('a', '10.0.0.1', 1, '{}'::jsonb)"
+                "VALUES ('a', '10.0.0.1', 1, '{\"remote_folder\": \"/r/a\"}'::jsonb)"
             )
             conn.run(
                 "INSERT INTO yascheduler_tasks (label, ip, status, metadata) "
-                "VALUES ('b', '10.0.0.2', 1, '{}'::jsonb)"
+                "VALUES ('b', '10.0.0.2', 1, '{\"remote_folder\": \"/r/b\"}'::jsonb)"
             )
         finally:
             conn.close()
@@ -220,6 +223,7 @@ def test_migration_004_backfills_existing_tasks() -> None:
                 "008",
                 "009",
                 "010",
+                "011",
             ]
             conn.run("BEGIN")
             try:
@@ -299,10 +303,10 @@ def test_migration_004_leaves_unallocated_tasks_null() -> None:
 
 
 # START_CONTRACT: test_fk_on_delete_set_null
-#   PURPOSE: Deleting a node nulls the task's allocated_node_id; the task row is preserved (allocated_ip column was dropped by migration 009).
+#   PURPOSE: Deleting a node nulls a DONE task's allocated_node_id; the task row is preserved. (A RUNNING task's DELETE is now rejected by the task_status_field_invariants CHECK — see test_task_status_field_check for that scenario.)
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations; inserts a node + a task referencing it; deletes the node
+#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations; inserts a node + a DONE task referencing it; deletes the node
 #   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
 # END_CONTRACT: test_fk_on_delete_set_null
 def test_fk_on_delete_set_null() -> None:
@@ -316,10 +320,14 @@ def test_fk_on_delete_set_null() -> None:
             conn.run(
                 "INSERT INTO yascheduler_nodes (ip, enabled) VALUES ('10.0.0.1', TRUE)"
             )
+            # DONE task referencing the node. DONE is unconstrained by the
+            # task_status_field_invariants CHECK, so the FK ON DELETE SET NULL
+            # cascade succeeds (a RUNNING task's DELETE would be rejected —
+            # covered by the CHECK-rejection tests).
             conn.run(
-                "INSERT INTO yascheduler_tasks (title, status, engine, allocated_node_id) "
-                "VALUES ('job', 'RUNNING', 'fleur', "
-                "(SELECT node_id FROM yascheduler_nodes WHERE ip = '10.0.0.1'))"
+                "INSERT INTO yascheduler_tasks (title, status, engine, allocated_node_id, remote_folder) "
+                "VALUES ('job', 'DONE', 'fleur', "
+                "(SELECT node_id FROM yascheduler_nodes WHERE ip = '10.0.0.1'), '/remote/job')"
             )
             # Sanity: the task references the node.
             conn.run("BEGIN")
@@ -349,30 +357,30 @@ def test_fk_on_delete_set_null() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_fresh_db_seeds_to_010
-#   PURPOSE: On a fresh DB, apply_schema seeds yascheduler_migrations to '010'; apply_migrations skips 010 (already seeded).
+# START_CONTRACT: test_fresh_db_seeds_to_011
+#   PURPOSE: On a fresh DB, apply_schema seeds yascheduler_migrations to '011'; apply_migrations skips 011 (already seeded).
 #   INPUTS: { None }
 #   OUTPUTS: { None - assertion-based }
 #   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
 #   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_fresh_db_seeds_to_010
-def test_fresh_db_seeds_to_010() -> None:
+# END_CONTRACT: test_fresh_db_seeds_to_011
+def test_fresh_db_seeds_to_011() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
         apply_schema(config)
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["010"]
+            assert _tracker_rows(conn) == ["011"]
             assert "allocated_node_id" in _columns(conn, "yascheduler_tasks")
         finally:
             conn.close()
 
-        # apply_migrations finds MAX='010' and skips 010 (already seeded).
+        # apply_migrations finds MAX='011' and skips 011 (already seeded).
         apply_migrations(config)
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["010"]
+            assert _tracker_rows(conn) == ["011"]
         finally:
             conn.close()

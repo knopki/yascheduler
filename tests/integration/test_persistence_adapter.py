@@ -32,13 +32,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields (no TaskContext); context.X reads → task.X; TaskContext import removed.
-#   PREVIOUS_CHANGE: v1.5.0 - task-schema-and-entity-cleanup: test_repo_task_save_updates and test_repo_task_list_by_status no longer use allocated_ip (field removed); added 11.3 tests: insert returns created_at/updated_at, save advances updated_at, list_by_status with enum cast, count_by_status name lookup keys, list_ids_by_node_id_and_status.
+#   LAST_CHANGE: v1.6.0 - task-status-field-invariants: tests that built a bare Task(status=RUNNING) with NULL allocated_node_id/remote_folder (rejected by the new task_status_field_invariants CHECK) now use real domain transitions (allocate_to + mark_running + with_remote_folder) or re-save as CHECK-valid TO_DO; added `replace` import for copy-with.
+#   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields (no TaskContext); context.X reads → task.X; TaskContext import removed.
 # END_CHANGE_SUMMARY
 
 """Integration tests for persistence adapter repositories and Unit of Work."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pg8000.native
 import pytest
@@ -49,7 +50,6 @@ from yascheduler.domain.model import (
     NewTask,
     Node,
     NodeId,
-    Task,
     TaskId,
 )
 from yascheduler.domain.model import (
@@ -138,18 +138,20 @@ async def test_repo_task_save_updates(
     pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
 ) -> None:
     """Save updates an existing task's fields via update_by_id."""
-    repo = PostgresTaskRepository(pg_conn, pg_executor)
-    task = await repo.insert(NewTask(label="initial", engine="fleur"))
+    task_repo = PostgresTaskRepository(pg_conn, pg_executor)
+    node_repo = PostgresNodeRepository(pg_conn, pg_executor)
+    task = await task_repo.insert(NewTask(label="initial", engine="fleur"))
+    node = await node_repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
 
-    updated = Task(
-        task_id=task.task_id,
-        label="renamed",
-        engine="fleur",
-        status=DomainTaskStatus.RUNNING,
-    )
-    await repo.save(updated)
+    # Build a CHECK-valid RUNNING task via real domain transitions
+    # (allocate_to + mark_running + with_remote_folder). A bare
+    # Task(status=RUNNING) with NULL allocated_node_id/remote_folder is
+    # rejected by the task_status_field_invariants CHECK.
+    updated = task.allocate_to(node).mark_running().with_remote_folder("/r")
+    updated = replace(updated, label="renamed")
+    await task_repo.save(updated)
 
-    retrieved = await repo.get(task.task_id)
+    retrieved = await task_repo.get(task.task_id)
     assert retrieved is not None
     assert retrieved.label == "renamed"
     assert retrieved.status == DomainTaskStatus.RUNNING
@@ -166,23 +168,23 @@ async def test_repo_task_list_by_status(
     pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
 ) -> None:
     """list_by_status filters correctly."""
-    repo = PostgresTaskRepository(pg_conn, pg_executor)
-    t1 = await repo.insert(NewTask(label="todo", engine="fleur"))
-    t2_id = (await repo.insert(NewTask(label="running", engine="fleur"))).task_id
-    await repo.save(
-        Task(
-            task_id=t2_id,
-            label="running",
-            engine="fleur",
-            status=DomainTaskStatus.RUNNING,
-        )
-    )
+    task_repo = PostgresTaskRepository(pg_conn, pg_executor)
+    node_repo = PostgresNodeRepository(pg_conn, pg_executor)
+    t1 = await task_repo.insert(NewTask(label="todo", engine="fleur"))
+    node = await node_repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
+    t2 = await task_repo.insert(NewTask(label="running", engine="fleur"))
+    # CHECK-valid RUNNING via real domain transitions (a bare
+    # Task(status=RUNNING) with NULL allocated_node_id/remote_folder is
+    # rejected by task_status_field_invariants).
+    t2 = t2.allocate_to(node).mark_running().with_remote_folder("/r")
+    await task_repo.save(t2)
+    t2_id = t2.task_id
 
-    todos = await repo.list_by_status({DomainTaskStatus.TO_DO})
+    todos = await task_repo.list_by_status({DomainTaskStatus.TO_DO})
     assert len(todos) == 1
     assert todos[0].task_id == t1.task_id
 
-    running = await repo.list_by_status({DomainTaskStatus.RUNNING})
+    running = await task_repo.list_by_status({DomainTaskStatus.RUNNING})
     assert len(running) == 1
     assert running[0].task_id == t2_id
 
@@ -220,13 +222,21 @@ async def test_repo_task_update_status_atomic(
     pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
 ) -> None:
     """update_status only changes the status field."""
-    repo = PostgresTaskRepository(pg_conn, pg_executor)
-    task = await repo.insert(NewTask(label="keep-label", engine="fleur"))
+    task_repo = PostgresTaskRepository(pg_conn, pg_executor)
+    node_repo = PostgresNodeRepository(pg_conn, pg_executor)
+    node = await node_repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
+    task = await task_repo.insert(NewTask(label="keep-label", engine="fleur"))
+    # Seed a CHECK-valid RUNNING row (allocated_node_id + remote_folder set)
+    # so the subsequent update_status to DONE is CHECK-valid (DONE is
+    # unconstrained). A bare update_status(TO_DO → RUNNING) would be rejected
+    # because RUNNING requires allocated_node_id + remote_folder.
+    task = task.allocate_to(node).mark_running().with_remote_folder("/r")
+    await task_repo.save(task)
 
-    await repo.update_status(task.task_id, DomainTaskStatus.RUNNING)
-    retrieved = await repo.get(task.task_id)
+    await task_repo.update_status(task.task_id, DomainTaskStatus.DONE)
+    retrieved = await task_repo.get(task.task_id)
     assert retrieved is not None
-    assert retrieved.status == DomainTaskStatus.RUNNING
+    assert retrieved.status == DomainTaskStatus.DONE
     assert retrieved.label == "keep-label"
 
 
@@ -266,13 +276,11 @@ async def test_repo_task_save_triggers_updated_at(
     created_before = task.created_at
     updated_before = task.updated_at
 
-    # Perform an update via save
-    updated = Task(
-        task_id=task.task_id,
-        label="touch-test",
-        engine="fleur",
-        status=DomainTaskStatus.RUNNING,
-    )
+    # Perform an update via save — re-save as a CHECK-valid TO_DO row with a
+    # changed label (the trigger fires on any UPDATE; the status value is
+    # incidental to this test). A bare Task(status=RUNNING) with NULL
+    # allocated_node_id/remote_folder is rejected by task_status_field_invariants.
+    updated = replace(task, label="touch-test-renamed")
     await repo.save(updated)
 
     retrieved = await repo.get(task.task_id)
@@ -343,28 +351,28 @@ async def test_repo_task_list_ids_by_node_id_and_status(
     node = await node_repo.insert(NewNode(ip="10.0.0.99", ncpus=2, enabled=True))
     other = await node_repo.insert(NewNode(ip="10.0.0.98", ncpus=2, enabled=True))
 
+    # t1: a RUNNING task on `node` (CHECK-valid: allocated_node_id +
+    # remote_folder set). The query is exercised against RUNNING, which is
+    # the production usage (_remove_node_hard/_soft look up RUNNING tasks).
     t1 = await task_repo.insert(NewTask(label="for-node", engine="fleur"))
-    t1 = t1.allocate_to(node)
+    t1 = t1.allocate_to(node).mark_running().with_remote_folder("/r/t1")
     await task_repo.save(t1)
 
+    # t2: a RUNNING task on `other` (should NOT match the node query).
     t2 = await task_repo.insert(NewTask(label="other-node", engine="fleur"))
-    t2 = t2.allocate_to(other)
+    t2 = t2.allocate_to(other).mark_running().with_remote_folder("/r/t2")
     await task_repo.save(t2)
 
+    # t3: a DONE task on `node` (CHECK-valid: DONE is unconstrained), built
+    # via the real lifecycle so every persisted state satisfies the CHECK.
     t3 = await task_repo.insert(NewTask(label="done-on-node", engine="fleur"))
-    t3 = t3.allocate_to(node)
+    t3 = t3.allocate_to(node).mark_running().with_remote_folder("/r/t3")
     await task_repo.save(t3)
-    t3_done = Task(
-        task_id=t3.task_id,
-        label=t3.label,
-        engine=t3.engine,
-        status=DomainTaskStatus.DONE,
-        allocated_node_id=t3.allocated_node_id,
-    )
+    t3_done = t3.complete()
     await task_repo.save(t3_done)
 
     ids = await task_repo.list_ids_by_node_id_and_status(
-        node.node_id, DomainTaskStatus.TO_DO
+        node.node_id, DomainTaskStatus.RUNNING
     )
     assert ids == [t1.task_id]
 
