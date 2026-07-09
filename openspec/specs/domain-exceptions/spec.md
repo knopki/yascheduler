@@ -1,13 +1,14 @@
 ## Purpose
 
-Defines the domain exception hierarchy for business-level error handling: DomainError base class with sub-hierarchies for validation, task lifecycle, machine state, and scheduling errors.
+Defines the domain exception hierarchy for business-level error handling: a `DomainError` base class with sub-hierarchies for validation, task lifecycle, machine state, scheduling, and cloud-provider operational failures.
 
 ## Requirements
 
 ### Requirement: DomainError base class
 
 The system SHALL provide a `DomainError(Exception)` base class for all
-business-level exceptions.
+business-level exceptions. All domain exception classes SHALL be exposed via
+`yascheduler.domain.exceptions` and `yascheduler.domain`.
 
 #### Scenario: DomainError is catchable as Exception
 - **WHEN** a `DomainError` subclass is raised
@@ -28,18 +29,13 @@ The system SHALL provide `ValidationError(DomainError)` with subclasses:
 
 ### Requirement: TaskError hierarchy
 
-The system SHALL provide `TaskError(DomainError)` with subclasses:
-`TaskNotTodoError`, `TaskNotRunningError`. Each SHALL take `task_id: TaskId`
-(was `int`); the `f"task {task_id} ..."` message renders the bare integer via
-`TaskId.__str__`, so the message text is unchanged in appearance.
+The system SHALL provide `TaskError(DomainError)` with subclasses
+`TaskNotTodoError` and `TaskNotRunningError`. Each SHALL take a `TaskId` and
+render the bare integer in its message.
 
-`TaskAlreadyAllocatedError` and `TaskNotAllocatedError` are REMOVED. They
-guarded the `TO_DO + allocated` intermediate state produced by the prior
-`allocate_to` + `mark_running` two-step. With `run` collapsing allocation
-and the `TO_DO→RUNNING` transition into one atomic method, allocation is
-atomic with running and neither guard arises. The remaining
-`TaskNotTodoError` (raised by `run` and `reject`) and `TaskNotRunningError`
-(raised by `complete`, `fail`, `abandon`) cover all five transition guards.
+`TaskAlreadyAllocatedError` and `TaskNotAllocatedError` are not part of the
+hierarchy: allocation and the `TO_DO→RUNNING` transition are atomic, so neither
+guard arises.
 
 #### Scenario: TaskNotTodoError carries TaskId
 - **WHEN** `TaskNotTodoError(TaskId(42))` is raised
@@ -77,14 +73,13 @@ failures when establishing SSH connections to remote machines.
 
 ### Requirement: SchedulingError hierarchy
 
-The system SHALL provide `SchedulingError(DomainError)` with subclasses:
-`NoCompatibleNodeError` and `CloudCapacityExhaustedError`.
+The system SHALL provide `SchedulingError(DomainError)` with subclasses
+`NoCompatibleNodeError` and `CloudCapacityExhaustedError`. Each SHALL take a
+`TaskId` and render the bare integer in its message.
+
 `CloudCapacityExhaustedError` is a scheduling rule (no capacity to provision)
-raised by the allocator; it deliberately remains under `SchedulingError` and
-SHALL NOT be a subclass of `CloudError`. `NoCompatibleNodeError` and
-`CloudCapacityExhaustedError` SHALL take `task_id: TaskId` (was `int`); the
-`f"... task {task_id} ..."` messages render the bare integer via
-`TaskId.__str__`.
+raised by the allocator; it SHALL remain under `SchedulingError` and SHALL NOT
+be a subclass of `CloudError`.
 
 #### Scenario: NoCompatibleNodeError carries TaskId and platforms
 - **WHEN** `NoCompatibleNodeError(TaskId(42), ["linux", "debian-12"])` is raised
@@ -110,6 +105,10 @@ operational cloud-provider failures, with subclasses `CloudAllocateError` and
 creation, SSH/cloud-init/engine setup). Cloud capacity planning is NOT part of
 this hierarchy — see `CloudCapacityExhaustedError` under `SchedulingError`.
 
+`CloudError` SHALL be exported from `yascheduler.domain` (NOT from
+`yascheduler.infra.cloud`). The leaf classes `CloudAllocateError` and
+`CloudSetupError` remain re-exported from `yascheduler.infra.cloud`.
+
 #### Scenario: CloudError is a DomainError
 
 - **WHEN** the class hierarchy is inspected
@@ -133,17 +132,11 @@ this hierarchy — see `CloudCapacityExhaustedError` under `SchedulingError`.
 
 - **WHEN** `CloudAllocateError("Unknown provider: foo")` is raised
 - **THEN** `str(e)` equals `"Unknown provider: foo"`
-- **AND** the class defines no custom `__init__` beyond `Exception`
 
 #### Scenario: CloudError is not a SchedulingError
 
 - **WHEN** the class hierarchy is inspected
 - **THEN** `issubclass(CloudError, SchedulingError)` is false
-
-### Requirement: CloudError is exported from yascheduler.domain
-
-The system SHALL export `CloudError` from both `yascheduler.domain.exceptions`
-and the `yascheduler.domain` package (`__all__`).
 
 #### Scenario: Import CloudError from domain.exceptions
 
@@ -155,13 +148,6 @@ and the `yascheduler.domain` package (`__all__`).
 - **WHEN** a module imports `from yascheduler.domain import CloudError`
 - **THEN** the class is available and present in `yascheduler.domain.__all__`
 
-### Requirement: CloudError is not re-exported from yascheduler.infra.cloud
-
-The system SHALL NOT export `CloudError` from `yascheduler.infra.cloud`;
-the new root remains accessible only via `yascheduler.domain`. The adapter
-module's existing re-exports (`CloudAllocateError`, `CloudSetupError`) are
-unchanged.
-
 #### Scenario: infra.cloud does not re-export CloudError
 
 - **WHEN** a module attempts `from yascheduler.infra.cloud import CloudError`
@@ -172,11 +158,7 @@ unchanged.
 - **WHEN** a module imports `from yascheduler.infra.cloud import CloudAllocateError, CloudSetupError`
 - **THEN** both classes are available
 
-### Requirement: Domain error classes are in yascheduler.domain.exceptions
-
-The system SHALL expose all domain exception classes from
-`yascheduler.domain.exceptions`.
-
 #### Scenario: Import domain exceptions
+
 - **WHEN** a module imports `from yascheduler.domain.exceptions import DomainError, ValidationError`
 - **THEN** the classes are available

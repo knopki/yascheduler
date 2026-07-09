@@ -2,18 +2,24 @@
 
 ## Purpose
 
-Provide SSH machine infrastructure split across SSHMachineRepository (connected-machine collection lifecycle, queries, state transitions, occupancy-monitor mechanism) and SSHMachineOperations (per-machine command execution, SFTP transfer, process inspection, node setup, task deployment, output download, and occupancy check logic). Both implement the MachineRepository and MachineOperations domain ports respectively using asyncssh for SSH connections and SFTP, with retry logic on idempotent operations. The SSHMachineSession is the per-machine entity handle operated on by SSHMachineOperations and tracked by SSHMachineRepository.
+Provide SSH machine infrastructure split across SSHMachineRepository
+(connected-machine collection lifecycle, queries, state transitions,
+occupancy-monitor mechanism) and SSHMachineSession (per-machine command
+execution, SFTP transfer, process inspection, node setup, task deployment,
+output download, and occupancy check logic). Both implement the
+MachineRepository and MachineSession domain ports respectively using
+asyncssh for SSH connections and SFTP, with retry logic on idempotent
+operations.
 
 ## Requirements
 
 ### Requirement: MachineRepository port
 
 The system SHALL define a `@runtime_checkable` `MachineRepository`
-Protocol in `yascheduler/domain/ports.py` representing the
-connected-machine collection. The Protocol SHALL NOT include operations
-on a single machine (exec, SFTP, deploy, download, occupancy-check
-logic, monitor mechanism) — those are `MachineSession` and
-`MachineOperations`.
+Protocol representing the connected-machine collection. The Protocol
+SHALL NOT include operations on a single machine (exec, SFTP, deploy,
+download, occupancy-check logic, monitor mechanism) — those are
+`MachineSession`.
 
 The collection is keyed by `NodeId`, not by ip. `ip` survives only as
 the transport address read from `node.ip` inside `connect`; it is no
@@ -27,10 +33,10 @@ inside `connect`; they are NOT separate parameters.
 - `disconnect_all() -> None` (async) — unchanged
 
 **Queries:**
-- `list_free(platforms: list[str] | None) -> list[MachineSession]` (sync) — FREE sessions filtered by `session.machine.platform`, oldest-first by `session.machine.free_since` (unchanged shape)
+- `list_free(platforms: list[str] | None) -> list[MachineSession]` (sync) — FREE sessions filtered by `session.machine.platform`, oldest-first by `session.machine.free_since`
 - `list_connected() -> list[MachineSession]` (sync) — unchanged
 - `get_session(node_id: NodeId) -> MachineSession | None` (sync) — the live session for `node_id`, or `None` after disconnect
-- `contains(node_id: NodeId) -> bool` (sync) — explicit form of `__contains__`; preserved for the three production callers (`deallocate_nodes.py`, `orchestrator.py` ×2)
+- `contains(node_id: NodeId) -> bool` (sync) — explicit form of `__contains__`
 - `__len__() -> int` (sync) — unchanged
 - `__contains__(node_id: NodeId) -> bool` (sync) — supports `node_id in repository`
 
@@ -54,48 +60,40 @@ The Protocol SHALL NOT expose `get_machine_state` — callers use
 
 ### Requirement: SSHMachineRepository implements MachineRepository
 
-The system SHALL provide an `SSHMachineRepository` class in
-`yascheduler/infra/ssh/repository.py` that satisfies the
-`MachineRepository` Protocol. The repository SHALL own a single dict
-`_sessions: dict[NodeId, SSHMachineSession]` keyed by `NodeId`.
+The system SHALL provide an `SSHMachineRepository` class that satisfies
+the `MachineRepository` Protocol. The repository SHALL own a single dict
+of sessions keyed by `NodeId`.
 
-`connect(node: Node, ...)` SHALL use a two-method pattern: inner
-`_connect_impl` decorated with `@my_backoff_exc()` retries on
-`SSHRetryExc`; outer `connect` translates exhausted
-`(asyncssh.misc.Error, OSError)` to `MachineConnectionError`. `connect`
-SHALL open the SSH connection via `_open_connection`, detect platform via
-`_detect_platform(conn, ADAPTERS)` from `infra/ssh/platform/`, initialize
-paths via `_init_paths` from `infra/ssh/platform/`, read `ncpus` via
-`adapter.get_cpu_cores(make_run_fn(conn, adapter))`, construct a
-`ConnectedMachine`, construct an `SSHMachineSession`, store it in
-`_sessions[node.node_id]`, and return it.
+`connect(node: Node, ...)` SHALL use a two-method pattern: inner method
+decorated with `@my_backoff_exc()` retries on `SSHRetryExc`; outer
+`connect` translates exhausted `(asyncssh.misc.Error, OSError)` to
+`MachineConnectionError`. `connect` SHALL open the SSH connection, detect
+platform via the platform package, initialize paths via the platform
+package, read `ncpus` via `adapter.get_cpu_cores(...)`, construct a
+`ConnectedMachine`, construct an `SSHMachineSession`, store it keyed by
+`node.node_id`, and return it.
 
-`disconnect(node_id)` SHALL pop `_sessions[node_id]` (early return if
+`disconnect(node_id)` SHALL pop the session for `node_id` (early return if
 absent), then `await session._close()`. The pop-before-await ordering
-SHALL be preserved. `disconnect_all()` SHALL iterate `list(self._sessions)`
+SHALL be preserved. `disconnect_all()` SHALL iterate a snapshot of keys
 and call `disconnect(node_id)` per session; it SHALL be idempotent.
 
 `disconnect(node_id)` SHALL be scoped to the targeted node — it SHALL
 cancel only the monitor registered for `node_id` and SHALL NOT cancel
 monitors for any other machine.
 
-The connection-building bits (`MySSHClient`, `DEFAULT_CONN_OPTS`,
-`_resolve_tunnel`) SHALL live in `infra/ssh/repository.py`.
-
 #### Scenario: Repository owns only the sessions dict keyed by NodeId
 
 - **WHEN** `SSHMachineRepository.__init__` is inspected
-- **THEN** the instance has `_sessions: dict[NodeId, SSHMachineSession]` and does NOT have `_machines` or `_monitors`
+- **THEN** the instance has a dict of sessions keyed by `NodeId` and does NOT have `_machines` or `_monitors`
 
 ### Requirement: MachineSession port
 
-The system SHALL define a `@runtime_checkable` `MachineSession` Protocol
-in `yascheduler/domain/ports.py` representing the connected-machine
-entity handle — the public counterpart to the dissolved private
-`_MachineState`. The session is what `MachineOperations` methods operate
-on; the repository hands sessions out and tracks them by IP. The
-Protocol SHALL NOT include collection lifecycle, queries, or repository
-keying — those are `MachineRepository`.
+The system SHALL define a `@runtime_checkable` `MachineSession`
+Protocol representing the connected-machine entity handle. The session
+is what operations methods operate on; the repository hands sessions out
+and tracks them by IP. The Protocol SHALL NOT include collection
+lifecycle, queries, or repository keying — those are `MachineRepository`.
 
 **Domain face:**
 - `ip: str` (read-only property) — the machine IP, set at connect time
@@ -129,7 +127,7 @@ keying — those are `MachineRepository`.
 - `list_processes() -> AsyncGenerator[ProcessInfo, None]` (async)
 
 **Monitor mechanism (Engine-agnostic; on the session, NOT on the repository):**
-- `install_monitor(*, interval: float, check_factory: Callable[[], Awaitable[bool]], on_free: Callable[[], None]) -> None` (sync) — installs an `asyncio.Task` on the session that sleeps `interval`, calls `check_factory()`, and calls `on_free()` then breaks when the check returns `False`. Re-installing cancels the prior monitor before installing the new one. A done-callback clears `self._monitor_task` only when the slot still points at the same task (re-registration identity check). Idempotent on a closed session: returns immediately without installing if `is_closed` is `True`.
+- `install_monitor(*, interval: float, check_factory: Callable[[], Awaitable[bool]], on_free: Callable[[], None]) -> None` (sync) — installs an `asyncio.Task` on the session that sleeps `interval`, calls `check_factory()`, and calls `on_free()` then breaks when the check returns `False`. Re-installing cancels the prior monitor before installing the new one. Idempotent on a closed session: returns immediately without installing if `is_closed` is `True`.
 - `cancel_monitor() -> None` (sync) — cancels the session's monitor (if any); does NOT await
 
 `MachineSession` is `@runtime_checkable`. The Protocol SHALL NOT
@@ -148,20 +146,19 @@ reference `Engine`; `install_monitor` is generic over
 
 ### Requirement: SSHMachineSession implements MachineSession
 
-The system SHALL provide an `SSHMachineSession` class in
-`yascheduler/infra/ssh/session.py` that satisfies the `MachineSession`
-Protocol. The session SHALL be constructed by `SSHMachineRepository.connect`
-with: `ip`, an open `SSHClientConnection`, `SSHClientConnectionOptions`,
-a `ConnectedMachine` (initial snapshot with `state=FREE`,
-`free_since=time.monotonic()`), `adapter`, `platforms`, `data_dir`,
-`engines_dir`, `tasks_dir`.
+The system SHALL provide an `SSHMachineSession` class that satisfies the
+`MachineSession` Protocol. The session SHALL be constructed by
+`SSHMachineRepository.connect` with: `ip`, an open `SSHClientConnection`,
+`SSHClientConnectionOptions`, a `ConnectedMachine` (initial snapshot with
+`state=FREE`, `free_since=time.monotonic()`), `adapter`, `platforms`,
+`data_dir`, `engines_dir`, `tasks_dir`.
 
 The session SHALL own its own teardown via a `_close()` coroutine,
 invoked only by `SSHMachineRepository.disconnect`. `_close()` SHALL be
 idempotent: if `is_closed` is already `True`, it returns immediately.
 Otherwise it SHALL:
-1. Set `self._closed = True` synchronously (BEFORE any await).
-2. Pop and cancel `self._monitor_task` (if any).
+1. Set the closed flag synchronously (BEFORE any await).
+2. Pop and cancel the monitor task (if any).
 3. Await the cancelled monitor's task (suppressing `asyncio.CancelledError`).
 4. Close the SSH connection and await `wait_closed()`.
 
@@ -169,12 +166,12 @@ Otherwise it SHALL:
 and `adapter` directly — NO IP-keyed lookup, NO call into the repository.
 `run_full` SHALL retry on `SSHRetryExc` via the `@my_backoff_exc()` decorator.
 `setup_node` SHALL accept `engines: EngineRepository` and use the session's
-own `adapter.setup_node(...)` with `make_run_fn(conn, adapter)`.
+own `adapter.setup_node(...)`.
 
 #### Scenario: Session owns its monitor task
 
 - **WHEN** `session.install_monitor(...)` is called
-- **THEN** the resulting `asyncio.Task` is stored on `session._monitor_task` and is NOT registered in any repository-level dict
+- **THEN** the resulting `asyncio.Task` is stored on the session and is NOT registered in any repository-level dict
 
 ### Requirement: Session is returned by repository and resolved per-tick by the orchestrator
 
@@ -212,15 +209,15 @@ returned in `transient_errors`. The method SHALL NOT raise.
 
 The method SHALL open a FRESH SFTP client per file in the per-file loop,
 so a dropped SFTP connection on one file invalidates only that file's
-retries. The per-file retry (`file_get_retry`, fibonacci, max_time=60,
-`SFTPRetryExc`) SHALL wrap each `sftp.get` call individually.
+retries. The per-file retry (fibonacci, max_time=60, `SFTPRetryExc`) SHALL
+wrap each `sftp.get` call individually.
 
 The method SHALL remove the remote directory tree only ONCE, after the
 per-file loop completes, and only when BOTH error lists are empty. When
 either list is non-empty, the remote directory SHALL NOT be removed.
 
 The `local_folder`/`remote_folder` return values are `str(local_dir)` and
-`remote_dir` verbatim. The previous `meta_add` return is REMOVED.
+`remote_dir` verbatim.
 
 #### Scenario: Download task outputs with per-file SFTP isolation and retry
 
@@ -269,7 +266,7 @@ after logging. The propagation is the abort signal for `start_task_on_machine`.
 
 The system SHALL apply `@my_backoff_exc()` (fibonacci, max_time=60,
 `SSHRetryExc`) ONLY to idempotent operations: `get_cpu_cores` (pure read)
-and `_connect_impl` (connection establishment). The system SHALL NOT apply
+and connection establishment. The system SHALL NOT apply
 `@my_backoff_exc()` to `run_bg` and SHALL NOT apply `@my_backoff_sftp()`
 to `upload` or `download` — these are non-idempotent (a successful remote
 side-effect followed by a lost client confirmation would produce a duplicate
@@ -278,7 +275,7 @@ the per-file retry wrapper inside the per-file loop.
 
 SSH connections SHALL be retried on transient failures using the `backoff`
 library with fibonacci backoff and `max_time=60`. The repository SHALL use
-a two-method pattern for `connect()`: inner `_connect_impl` with
+a two-method pattern for `connect()`: inner method with
 `@my_backoff_exc()` (retries on `SSHRetryExc`), outer `connect` translates
 exhausted `(asyncssh.misc.Error, OSError)` to `MachineConnectionError`.
 
@@ -291,15 +288,13 @@ exhausted `(asyncssh.misc.Error, OSError)` to `MachineConnectionError`.
 
 The system SHALL periodically check if an engine process is still
 running on a machine and update the machine state to FREE when the
-process exits. The check logic (`occupancy_check`,
-`_occupancy_by_pgrep`, `_occupancy_by_cmd`) lives in
-`infra/ssh/operations/occupancy.py` on the `OccupancyChecker` class; the
-monitor mechanism (`install_monitor`/`cancel_monitor`) lives on
-`SSHMachineSession` (in `infra/ssh/session.py`).
+process exits. The check logic lives on the `OccupancyChecker` class;
+the monitor mechanism (`install_monitor`/`cancel_monitor`) lives on
+`SSHMachineSession`.
 
 The `OccupancyChecker.start_occupancy_check(session, config)` SHALL
 additionally call `session.occupy()` before installing the monitor
-(so that `_meta_sync` sees BUSY while the task runs). The monitor's
+(so that the system sees BUSY while the task runs). The monitor's
 `on_free` SHALL call `session.release()`.
 
 #### Scenario: Process exits, machine becomes free
@@ -309,14 +304,13 @@ additionally call `session.occupy()` before installing the monitor
 
 ### Requirement: Module layout
 
-Platform-specific modules SHALL live in `infra/ssh/platform/`. `ProcessInfo`
-(frozen dataclass with fields `pid: int`, `name: str`, `command: str`) SHALL
-be defined in `infra/ssh/platform/protocol.py`. `ADAPTERS`, `_detect_platform`,
-`_init_paths`, `MAX_SESSIONS`, and `make_run_fn` SHALL live in the platform
-package (`infra/ssh/platform/`). `make_run_fn(conn, adapter)` SHALL be in
-`infra/ssh/platform/run_fn.py`. Platform modules SHALL import `Engine`,
+Platform-specific modules SHALL live in the SSH platform package.
+`ProcessInfo` (frozen dataclass with fields `pid: int`, `name: str`,
+`command: str`) SHALL be defined in the platform protocol module.
+`ADAPTERS`, platform detection, path init, and `MAX_SESSIONS` SHALL
+live in the platform package. Platform modules SHALL import `Engine`,
 `EngineRepository`, and `Deploy*` types from `yascheduler.domain`.
 
 #### Scenario: ProcessInfo defined in platform protocol module
-- **WHEN** `infra/ssh/platform/protocol.py` is inspected
+- **WHEN** the platform protocol module is inspected
 - **THEN** `ProcessInfo` is a frozen dataclass with fields `pid: int`, `name: str`, `command: str`

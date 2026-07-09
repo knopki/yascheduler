@@ -1,23 +1,23 @@
 ## Purpose
 
-Integration tests for the persistence layer against a real PostgreSQL instance via testcontainers, validating SQL queries, parameter binding, and result mapping end-to-end without mocking pg8000. Tests use `PostgresUnitOfWork` + repository adapters and `yascheduler.domain.TaskStatus` (not the removed `yascheduler.db`).
+Integration tests for the persistence layer against a real PostgreSQL instance
+via testcontainers, validating SQL queries, parameter binding, and result
+mapping end-to-end without mocking pg8000. Tests use `PostgresUnitOfWork` +
+repository adapters and `yascheduler.domain.TaskStatus`.
 
 ## Requirements
 
 ### Requirement: PostgreSQL testcontainer fixture
 The project SHALL provide a session-scoped pytest fixture that starts a
 PostgreSQL container via testcontainers and applies the schema using
-`apply_schema()` from `infra/persistence/postgres_schema.py` once per
-session. The project SHALL provide function-scoped fixtures that yield the
-persistence primitives tests need: a raw `pg8000.native.Connection`
-(`pg_conn`), a single-worker `ThreadPoolExecutor` (`pg_executor`), and a
-`uow_factory` callable returning a `PostgresUnitOfWork` constructed with
-`_db_config` and a bare `MessageBus()`. Tests SHALL NOT receive a `DB`
-instance (the class is removed).
+`apply_schema` once per session. The project SHALL provide function-scoped
+fixtures that yield the persistence primitives tests need: a raw pg8000
+connection (`pg_conn`), a single-worker `ThreadPoolExecutor` (`pg_executor`),
+and a `uow_factory` callable returning a `PostgresUnitOfWork`.
 
 #### Scenario: Fixture provides working persistence primitives
 - **WHEN** an integration test uses the `uow_factory` fixture inside `async with uow_factory() as uow:`
-- **THEN** a `PostgresUnitOfWork` is available with schema applied via `apply_schema()` and `await uow.nodes.list_all()` returns an empty list
+- **THEN** a `PostgresUnitOfWork` is available with schema applied and `await uow.nodes.list_all()` returns an empty list
 
 #### Scenario: Raw connection fixture supports direct repo construction
 - **WHEN** an integration test constructs `PostgresTaskRepository(pg_conn, pg_executor)`
@@ -27,7 +27,7 @@ instance (the class is removed).
 Each integration test SHALL start with empty `yascheduler_tasks` and
 `yascheduler_nodes` tables. A fixture SHALL TRUNCATE both tables between tests
 via the raw `pg_conn` fixture teardown (`TRUNCATE yascheduler_tasks,
-yascheduler_nodes CASCADE`), independent of any `DB.run` method.
+yascheduler_nodes CASCADE`).
 
 #### Scenario: Tests are isolated
 - **WHEN** test A inserts a node and test B runs after test A
@@ -39,8 +39,7 @@ Tests SHALL verify node operations against real PostgreSQL via
 `add` (`Node`), `get`, `list_all`, `list_enabled`, `list_disabled`, `get`
 (for `has_node` semantics), `enable`, `disable`, `remove`, `count_by_cloud`,
 `count_by_status`, `get_by_ips`. Tests SHALL construct domain `Node`
-entities (`yascheduler.domain.Node`) with the appropriate fields rather than
-the deleted `NodeModel`.
+entities (`yascheduler.domain.Node`) with the appropriate fields.
 
 #### Scenario: Add, retrieve, enable/disable filtering
 - **WHEN** two nodes are added (one enabled, one disabled) via `uow.nodes.add(Node(...))`
@@ -50,13 +49,11 @@ the deleted `NodeModel`.
 
 Tests SHALL verify task operations via `PostgresTaskRepository` (through
 `uow.tasks`) using the domain `Task` / `NewTask` entities and
-`yascheduler.domain.TaskStatus` (`TaskContext` is REMOVED — see the
-`domain-entities` delta; it is no longer tested): `insert`, `get`,
-`update_status`, `save` (for set_running / set_done / set_error transitions),
+`yascheduler.domain.TaskStatus`: `insert`, `get`,
+`update_status`, `save` (for lifecycle transitions),
 `list_by_status`, `list_by_jobs`. Lifecycle transitions SHALL be expressed via
-the domain `Task` methods (`allocate_to`, `mark_running`, `complete`, `fail`,
-`reject`, `with_remote_folder`, `with_download_results`) operating on the
-typed fields directly, then persisted via `uow.tasks.save`.
+the domain `Task` methods operating on the typed fields directly, then
+persisted via `uow.tasks.save`.
 
 Tests SHALL construct `Task` / `NewTask` with the typed fields directly (no
 `TaskContext(...)` wrapper, no `context=` kwarg). The `extra` JSONB column
@@ -66,10 +63,10 @@ columns (`engine`, `remote_folder`, `local_folder`, `webhook_url`, `error`,
 `webhook_custom_params`, `extra`) SHALL be asserted to round-trip. `error`
 SHALL be asserted to persist the new format contract values (bare strings for
 `reject`/orchestrator `fail`, `"Download error: ..."` for consume `fail`,
-`NULL` on success — see the `domain-entities` delta).
+`NULL` on success).
 
 #### Scenario: Full task lifecycle
-- **WHEN** `insert` → `save(task.allocate_to(node).mark_running())` → `save` with DONE status and updated typed fields is executed
+- **WHEN** a task transitions through the lifecycle (insert → running → done) via domain `Task` methods and is persisted via `uow.tasks.save`
 - **THEN** each step reflects the correct status and typed fields (`engine`, `remote_folder`, `local_folder`, `error`, `extra`, `allocated_node_id`) in `uow.tasks.get`
 
 #### Scenario: set_task_error embeds error
@@ -95,14 +92,13 @@ public Mapping shape (keys exactly `{task_id, label, status, metadata,
 node}`) and the expected values.
 
 The test SHALL assert `status` by int value, by equality with a
-`yascheduler.domain.TaskStatus` member, or by `.name` — NEVER via
+`yascheduler.domain.TaskStatus` member, or by `.name` — never via
 `isinstance(result["status"], yascheduler.db.TaskStatus)` (the legacy enum
 class is removed). The canonical status type is
 `yascheduler.domain.TaskStatus`.
 
-The test SHALL NOT patch any internal collaborator (`yascheduler.entrypoints.di.make_cli_deps`
-or otherwise). It exercises the full facade path through real Postgres
-(characterization-first golden master).
+The test SHALL NOT patch any internal collaborator. It exercises the full
+facade path through real Postgres.
 
 #### Scenario: Query by jobs against real Postgres
 - **WHEN** a task is submitted via `Yascheduler().queue_submit_task(...)` against the testcontainers Postgres and then `Yascheduler().queue_get_tasks(jobs=[task_id])` is called

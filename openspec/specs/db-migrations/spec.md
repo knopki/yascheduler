@@ -4,39 +4,36 @@
 
 Define the forward-only database migration system: the `apply_migrations()`
 runner, the `Migration` base class for `.py` migrations, the
-`yascheduler_migrations` tracker table, the `sql/migrations/` file format,
-and the migration edit procedure. The runner is called by `yainit` (and the
-test fixtures) immediately after `apply_schema()`, bringing legacy and
-intermediate databases up to the latest snapshot in `schema.sql`.
+`yascheduler_migrations` tracker table, the migrations directory file format,
+and the migration edit procedure. The runner is called by `yainit` (and test
+fixtures) immediately after `apply_schema()`, bringing legacy and intermediate
+databases up to the latest snapshot in `schema.sql`.
 
 ## Requirements
 
 ### Requirement: Migration runner applies pending migrations sequentially
 
 The system SHALL provide a synchronous function
-`apply_migrations(config: PostgresDbConfig)` that opens a pg8000 native
-connection from the config, reads the last applied migration id from
+`apply_migrations(config: PostgresDbConfig)` that opens a pg8000 connection
+from the config, reads the last applied migration id from
 `SELECT MAX(migration_id) FROM yascheduler_migrations` (`NULL` when the
-tracker is empty), scans the `infra/persistence/sql/migrations/` directory
-for `*.sql` and `*.py` files named `{prefix_id}_{rest}.{sql,py}`, filters to
-those whose `prefix_id` is greater than the last applied id (or all files when
-the last applied id is `NULL`), and applies them in string-sorted filename
-order, each in its own transaction. `prefix_id` is the token before the first
-`_` in the filename.
+tracker is empty), scans the migrations directory for `*.sql` and `*.py` files
+named `{prefix_id}_{rest}.{sql,py}`, filters to those whose `prefix_id` is
+greater than the last applied id (or all files when the last applied id is
+`NULL`), and applies them in string-sorted filename order, each in its own
+transaction. `prefix_id` is the token before the first `_` in the filename.
 
 #### Scenario: Fresh tracker applies all migrations
 - **WHEN** `apply_migrations(config)` is called on a database where `yascheduler_migrations` exists and is empty (or `MAX(migration_id)` returns `NULL`)
-- **THEN** every migration file in `migrations/` is applied in string-sorted `prefix_id` order, each recorded in `yascheduler_migrations` after success
+- **THEN** every migration file in the migrations directory is applied in string-sorted `prefix_id` order, each recorded in `yascheduler_migrations` after success
 
 #### Scenario: Non-empty tracker applies only pending migrations
-- **WHEN** `apply_migrations(config)` is called on a database where `MAX(migration_id)` returns a non-NULL val
+- **WHEN** `apply_migrations(config)` is called on a database where `MAX(migration_id)` returns a non-NULL value
 - **THEN** only migration files with `prefix_id > last_applied` are applied, in string-sorted order
 
 ### Requirement: Migration 006 renames label column to title
 
-Migration 006 SHALL rename the label column to title; see
-`yascheduler/infra/persistence/sql/migrations/006_rename_label_to_title.sql`
-for exact SQL.
+Migration 006 SHALL rename the `label` column to `title`.
 
 #### Scenario: Migration 006 renames the column
 - **WHEN** `apply_migrations(config)` runs with a last-applied id of `005`
@@ -44,9 +41,9 @@ for exact SQL.
 
 ### Requirement: Migration 007 adds created_at and updated_at with a trigger
 
-Migration 007 SHALL add created_at and updated_at columns with a trigger; see
-`yascheduler/infra/persistence/sql/migrations/007_add_created_updated_at.sql`
-for exact SQL.
+Migration 007 SHALL add `created_at` and `updated_at` columns with a trigger
+function `yascheduler_touch_updated_at()` and trigger
+`yascheduler_tasks_touch_updated_at`.
 
 #### Scenario: Migration 007 adds columns and trigger
 - **WHEN** `apply_migrations(config)` runs with a last-applied id of `006`
@@ -54,9 +51,8 @@ for exact SQL.
 
 ### Requirement: Migration 008 converts status to a PostgreSQL enum
 
-Migration 008 SHALL convert the status column to a PostgreSQL enum; see
-`yascheduler/infra/persistence/sql/migrations/008_status_to_enum.sql` for
-exact SQL.
+Migration 008 SHALL convert the `status` column to a PostgreSQL enum
+`task_status` with labels `'TO_DO'`, `'RUNNING'`, `'DONE'`.
 
 #### Scenario: Migration 008 creates the enum and converts the column
 - **WHEN** `apply_migrations(config)` runs with a last-applied id of `007`
@@ -64,9 +60,7 @@ exact SQL.
 
 ### Requirement: Migration 009 drops the allocated_ip column
 
-Migration 009 SHALL drop the `allocated_ip` column; see
-`yascheduler/infra/persistence/sql/migrations/009_drop_allocated_ip.sql` for
-exact SQL.
+Migration 009 SHALL drop the `allocated_ip` column from `yascheduler_tasks`.
 
 #### Scenario: Migration 009 drops the column
 - **WHEN** `apply_migrations(config)` runs with a last-applied id of `008`
@@ -74,9 +68,9 @@ exact SQL.
 
 ### Requirement: Migration 010 extracts metadata into typed columns and extra JSONB
 
-Migration 010 SHALL extract metadata into typed columns and extra JSONB; see
-`yascheduler/infra/persistence/sql/migrations/010_extract_metadata_columns.sql`
-for exact SQL.
+Migration 010 SHALL extract metadata into typed columns (`engine`,
+`remote_folder`, `local_folder`, `webhook_url`, `error`,
+`webhook_custom_params`) and `extra` JSONB, dropping the `metadata` column.
 
 #### Scenario: Migration 010 adds and backfills typed columns
 - **WHEN** `apply_migrations(config)` runs with a last-applied id of `009` on a row with `metadata = {"engine": "cp2k", "local_folder": "/l", "webhook_custom_params": {"parent": 42}, "input.in": "ATOMS ..."}`
@@ -85,13 +79,11 @@ for exact SQL.
 ### Requirement: SQL migrations execute as a multi-statement string
 
 For a `*.sql` migration file, the runner SHALL read the file text, open a
-transaction with `BEGIN`, execute the full SQL text in a single
-`conn.run(sql_text)` call (pg8000 native Simple Query, which executes a
-`;`-separated multi-statement string in one round-trip), insert a row into
-`yascheduler_migrations` with the migration's `prefix_id` as `migration_id`,
-and `COMMIT`. On any error during execution, the runner SHALL `ROLLBACK`
-(best-effort) and re-raise; the tracker row is NOT inserted for the failed
-migration.
+transaction with `BEGIN`, execute the full SQL text as a multi-statement string
+in one round-trip, insert a row into `yascheduler_migrations` with the
+migration's `prefix_id` as `migration_id`, and `COMMIT`. On any error during
+execution, the runner SHALL `ROLLBACK` (best-effort) and re-raise; the tracker
+row is NOT inserted for the failed migration.
 
 #### Scenario: SQL migration applies and is recorded
 - **WHEN** a `*.sql` migration file with `prefix_id = "001"` is applied successfully
@@ -103,16 +95,14 @@ migration.
 
 ### Requirement: Python migrations use a Migration base class with injected dependencies
 
-The system SHALL provide a `Migration` base class (in
-`infra/persistence/migration_base.py`, NOT under `migrations/`) with an
-`__init__(self, config: PostgresDbConfig, conn: pg8000.native.Connection, log: logging.Logger)`
-that stores all three as instance attributes (`self.config`, `self.conn`,
-`self.log`), a `migrate(self) -> None` method that raises `NotImplementedError`,
-and `begin()` / `commit()` helper methods that delegate to
-`self.conn.run("BEGIN")` / `self.conn.run("COMMIT")`. A `*.py` migration file
-SHALL define exactly one subclass of `Migration` (excluding `Migration`
-itself) and implement `migrate(self)`. The runner instantiates the subclass
-with `(config, conn, log)` and calls `migrate()`.
+The system SHALL provide a `Migration` base class with an
+`__init__(self, config: PostgresDbConfig, conn, log)` that stores all three as
+instance attributes (`self.config`, `self.conn`, `self.log`), a
+`migrate(self) -> None` method that raises `NotImplementedError`, and
+`begin()` / `commit()` helper methods. A `*.py` migration file SHALL define
+exactly one subclass of `Migration` (excluding `Migration` itself) and
+implement `migrate(self)`. The runner instantiates the subclass with
+`(config, conn, log)` and calls `migrate()`.
 
 The `begin()` / `commit()` helpers exist for migrations needing
 non-transactional operations (`CREATE INDEX CONCURRENTLY`, `VACUUM`): the
@@ -131,11 +121,11 @@ non-transactional command, then `self.begin()` to reopen a transaction.
 - **WHEN** a migration's correctness is considered
 - **THEN** the system does NOT require the migration to be safe to re-apply; the tracker guards against re-application (each `prefix_id` is applied at most once per database)
 
-### Requirement: Python migration class is discovered via importlib
+### Requirement: Python migration class discovery
 
-The runner SHALL discover Python migrations via `importlib` + `inspect`. Each
-`*.py` migration file SHALL define exactly one `Migration` subclass. Zero
-subclasses or more than one SHALL be treated as an error naming the file.
+The runner SHALL discover the `Migration` subclass in each `*.py` migration
+file. Each file SHALL define exactly one `Migration` subclass. Zero subclasses
+or more than one SHALL be treated as an error naming the file.
 
 #### Scenario: Python migration file with one subclass is loaded
 - **WHEN** the runner scans a `*.py` migration file that defines exactly one `Migration` subclass
@@ -155,10 +145,9 @@ case: migrate()'s work and the tracker record commit atomically together).
 
 If `migrate()` closed the runner's transaction by calling `self.commit()`
 (for a non-transactional operation like `CREATE INDEX CONCURRENTLY`) and did
-not reopen one, the tracker `INSERT` still records the migration: pg8000
-native autocommits statements issued outside an open transaction, so the
-`INSERT` autocommits and the trailing `COMMIT` is a no-op warning rather
-than an error.
+not reopen one, the tracker `INSERT` still records the migration: statements
+issued outside an open transaction autocommit, so the `INSERT` autocommits and
+the trailing `COMMIT` is a no-op warning rather than an error.
 
 As a defensive guard, if the tracker `INSERT`/`COMMIT` raises a
 `DatabaseError` for any transient reason, the runner SHALL open a fresh
@@ -175,7 +164,7 @@ for the failed migration.
 
 #### Scenario: Python migration with self.commit() still records tracker
 - **WHEN** `migration.migrate()` calls `self.commit()` (closing the runner's transaction) and does not reopen one
-- **THEN** the tracker `INSERT` autocommits via pg8000, and the trailing `COMMIT` is a no-op warning
+- **THEN** the tracker `INSERT` autocommits, and the trailing `COMMIT` is a no-op warning
 
 #### Scenario: Tracker INSERT retries on transient DatabaseError
 - **WHEN** the tracker `INSERT`/`COMMIT` raises a transient `DatabaseError`
@@ -187,31 +176,31 @@ for the failed migration.
 
 ### Requirement: Migrations directory and file format
 
-The system SHALL load migrations from
-`infra/persistence/sql/migrations/`. Migration filenames SHALL match the
-pattern `{prefix_id}_{rest}.{sql,py}`, where `prefix_id` is the token before
-the first `_`, is unique across all migration files (`.sql` and `.py`
-combined), and determines application order by string sort on the filename.
+The system SHALL load migrations from the migrations directory. Migration
+filenames SHALL match the pattern `{prefix_id}_{rest}.{sql,py}`, where
+`prefix_id` is the token before the first `_`, is unique across all migration
+files (`.sql` and `.py` combined), and determines application order by string
+sort on the filename.
 
 The `prefix_id` format is NOT fixed by this spec (e.g. `001`, `20260701120000`,
 or any other token is acceptable); only the uniqueness, before-first-`_`, and
 string-sortability constraints are required.
 
 Duplicate `prefix_id` detection is the responsibility of a unit test that
-scans `migrations/` and asserts uniqueness, NOT of the runner. The runner
-applies migrations; it does not validate `prefix_id` uniqueness.
+scans the migrations directory and asserts uniqueness, NOT of the runner. The
+runner applies migrations; it does not validate `prefix_id` uniqueness.
 
 #### Scenario: prefix_id is the token before the first underscore
 - **WHEN** a migration file is named `001_add_username_port.sql`
 - **THEN** its `prefix_id` is `"001"`
 
 #### Scenario: String sort determines application order
-- **WHEN** `migrations/` contains `001_....sql`, `010_....sql`, `002_....sql`
+- **WHEN** the migrations directory contains `001_....sql`, `010_....sql`, `002_....sql`
 - **THEN** they are applied in the order `001`, `002`, `010` (string sort on the filename)
 
 #### Scenario: prefix_id uniqueness is enforced by a unit test, not the runner
 - **WHEN** two migration files share the same `prefix_id`
-- **THEN** the runner does NOT detect this at runtime; a unit test that scans `migrations/` and asserts uniqueness SHALL fail
+- **THEN** the runner does NOT detect this at runtime; a unit test that scans the migrations directory and asserts uniqueness SHALL fail
 
 #### Scenario: prefix_id format is not fixed
 - **WHEN** a migration file is named `20260701120000_add_index.sql`
@@ -221,8 +210,8 @@ applies migrations; it does not validate `prefix_id` uniqueness.
 
 When a new migration is added, three edits SHALL be made:
 
-1. Create the migration file under `infra/persistence/sql/migrations/` with
-   name `{prefix_id}_{rest}.sql` or `.py`.
+1. Create the migration file in the migrations directory with name
+   `{prefix_id}_{rest}.sql` or `.py`.
 2. Update the `last_migration` CONSTANT in the `schema.sql` DO block to the
    new `prefix_id`.
 3. If the migration changes the schema (DDL), update the snapshot DDL in
@@ -246,9 +235,8 @@ the latest migration file's `prefix_id` SHOULD exist to catch step 2 drift.
 ### Requirement: Migration 004 adds allocated_node_id with backfill
 
 Migration 004 SHALL add the `allocated_node_id` column to `yascheduler_tasks`
-and backfill it for all existing tasks; see
-`yascheduler/infra/persistence/sql/migrations/004_add_allocated_node_id.sql`
-for exact SQL.
+and backfill it for all existing tasks by joining
+`yascheduler_nodes.ip = yascheduler_tasks.ip`.
 
 #### Scenario: Migration 004 applies on a database with existing tasks
 - **WHEN** `apply_migrations(config)` runs on a database at migration `003` with tasks having non-NULL `ip` values
@@ -273,9 +261,9 @@ NOT delete that tracker row or reverse the migration.
 
 ### Requirement: Migration 011 adds the task_status_field_invariants CHECK constraint
 
-Migration 011 SHALL add a `CHECK` constraint named `task_status_field_invariants` to `yascheduler_tasks` enforcing the exhaustive per-status field contract; see
-`yascheduler/infra/persistence/sql/migrations/011_task_status_field_check.sql`
-for exact SQL. The constraint SHALL be:
+Migration 011 SHALL add a `CHECK` constraint named
+`task_status_field_invariants` to `yascheduler_tasks` enforcing the exhaustive
+per-status field contract. The constraint SHALL be:
 
 ```sql
 ALTER TABLE yascheduler_tasks ADD CONSTRAINT task_status_field_invariants CHECK (
@@ -285,7 +273,11 @@ ALTER TABLE yascheduler_tasks ADD CONSTRAINT task_status_field_invariants CHECK 
 );
 ```
 
-The migration SHALL NOT include a defensive pre-clean `UPDATE` before `ADD CONSTRAINT`: the audit confirmed no production path creates the forbidden states, so `ADD CONSTRAINT` succeeds on existing data; if that assumption breaks the constraint fails fast at migration time, surfacing the offending row rather than masking it.
+The migration SHALL NOT include a defensive pre-clean `UPDATE` before `ADD
+CONSTRAINT`: the audit confirmed no production path creates the forbidden
+states, so `ADD CONSTRAINT` succeeds on existing data; if that assumption
+breaks the constraint fails fast at migration time, surfacing the offending
+row rather than masking it.
 
 #### Scenario: Migration 011 adds the CHECK constraint
 - **WHEN** `apply_migrations(config)` runs with a last-applied id of `"010"`

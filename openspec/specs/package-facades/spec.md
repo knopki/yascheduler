@@ -1,7 +1,9 @@
 ## Purpose
 
 Define the package-facade import discipline for `yascheduler`: clean-architecture layer direction (R3, enforced via `import-linter`), within-package relative imports (R1), cross-package facade imports via the layer's `__init__.py` (R2), the lazy-publication policy, outside-layer-set exemptions, residual-edge documentation, and the extended facade contents required for R2 retroactive compliance across the codebase.
+
 ## Requirements
+
 ### Requirement: Layer direction (R3)
 
 The system SHALL enforce the import direction
@@ -9,11 +11,11 @@ The system SHALL enforce the import direction
 via an `import-linter` `layers` contract configured in `pyproject.toml`.
 
 `yascheduler.entrypoints` (the outermost layer, hosting driving adapters and
-the composition root at `yascheduler.entrypoints.di`) may import from
+the composition root) may import from
 `yascheduler.infra`, `yascheduler.application`, `yascheduler.domain`,
 `yascheduler.shared`, and the outside-layer-set modules
 (`yascheduler.data`, etc.). The composition root
-`yascheduler.entrypoints.di` is a resident of this layer and is subject to
+is a resident of this layer and is subject to
 this R3 contract; its imports flow `entrypoints → infra → application →
 domain`, which is layer-legal. `yascheduler.infra` may import from
 `yascheduler.application`, `yascheduler.domain`, and `yascheduler.shared`.
@@ -59,8 +61,7 @@ layer in the project. Both direct and indirect imports are checked.
 - **THEN** the `layers` contract reports a violation
 
 #### Scenario: Composition root imports from infra — allowed
-
-- **WHEN** `yascheduler.entrypoints.di` imports `PostgresUnitOfWork`, `SSHMachineRepository`, `TaskDeployer`, `OutputDownloader`, `OccupancyChecker`, `CloudProvisionerImpl`, `resolve_adapter`, and `webhook_handler` from `yascheduler.infra`
+- **WHEN** the composition root imports `PostgresUnitOfWork`, `SSHMachineRepository`, `TaskDeployer`, `OutputDownloader`, `OccupancyChecker`, `CloudProvisionerImpl`, `resolve_adapter`, and `webhook_handler` from `yascheduler.infra`
 - **THEN** the `layers` contract reports no violation (composition root is a resident of `yascheduler.entrypoints` and its imports flow in the layer direction)
 
 ### Requirement: Within-package relative imports (R1)
@@ -73,17 +74,16 @@ same package SHALL NOT appear inside that package. This applies to
 intra-package imports in `yascheduler.infra.persistence`,
 `yascheduler.entrypoints.cli`, and all other subpackages.
 
-The `yascheduler/infra/cli/` subpackage is liquidated (both `daemonize.py`
-and `__init__.py` are deleted, and the directory is removed); no
+The `yascheduler.infra.cli` subpackage is liquidated; no
 `yascheduler.infra.cli` package exists, so no within-package relative-import
 scenario applies to it.
 
-#### Scenario: entrypoints/cli/__init__.py uses relative imports
-- **WHEN** `yascheduler/entrypoints/cli/__init__.py` imports its own submodules
-- **THEN** it uses `from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`; `show_nodes` and `submit` are NOT re-exported by the facade (they are invoked by console_script, not imported across layers — same pattern as `init`)
+#### Scenario: entrypoints CLI module uses relative imports
+- **WHEN** the entrypoints CLI module imports its own submodules
+- **THEN** it uses `from .init import init` style, not `from yascheduler.entrypoints.cli.init import init`; `show_nodes` and `submit` are NOT re-exported by the facade
 
 #### Scenario: Domain modules use relative imports
-- **WHEN** `yascheduler/domain/model.py` imports from another module in `yascheduler/domain/`
+- **WHEN** a domain module imports from another module in the domain package
 - **THEN** it uses `from .exceptions import ...` style, not `from yascheduler.domain.exceptions import ...`
 
 #### Scenario: No parent-traversal relative imports anywhere
@@ -91,8 +91,8 @@ scenario applies to it.
 - **THEN** no `from .. import`, `from ... import`, `from .... import` (or deeper) relative imports appear — only `from .` (single-level sibling) relative imports are permitted
 
 #### Scenario: infra/cli/ does not exist
-- **WHEN** the `yascheduler/infra/cli/` directory is inspected
-- **THEN** it does not exist; the `daemonize` module has moved to `yascheduler/entrypoints/cli/daemonize.py` and the empty `infra/cli/` subpackage has been removed
+- **WHEN** the `yascheduler.infra.cli` package is inspected
+- **THEN** it does not exist; the `daemonize` module has moved to the entrypoints layer
 
 ### Requirement: Cross-package facade imports (R2)
 
@@ -100,9 +100,9 @@ The system SHALL import symbols from another package via that package's
 `__init__.py` only. For the three architectural layers, the layer's
 `__init__.py` is the sole public surface for cross-layer consumers:
 
-- `yascheduler.infra/__init__.py` — sole entry point for `application` and composition root to consume adapter symbols (gateway, cloud provisioner, schema initializer, webhook handler, retry exceptions).
-- `yascheduler.application/__init__.py` — sole entry point for `adapters` and composition root to consume application symbols (unit of work, orchestrator, message bus).
-- `yascheduler.domain/__init__.py` — sole entry point for `adapters`, `application`, and composition root to consume domain symbols.
+- `yascheduler.infra` — sole entry point for `application` and composition root to consume adapter symbols (gateway, cloud provisioner, schema initializer, webhook handler, retry exceptions).
+- `yascheduler.application` — sole entry point for `adapters` and composition root to consume application symbols (unit of work, orchestrator, message bus).
+- `yascheduler.domain` — sole entry point for `adapters`, `application`, and composition root to consume domain symbols.
 
 Subpackage facades (`yascheduler.infra.ssh`, `yascheduler.infra.cloud`,
 `yascheduler.infra.persistence`, `yascheduler.infra.notifier`) are
@@ -120,12 +120,12 @@ any import.
 - **THEN** it uses `from yascheduler.infra import SSHMachineRepository, TaskDeployer, OutputDownloader, OccupancyChecker, CloudProvisionerImpl`, not `from yascheduler.infra.ssh import SSHMachineRepository` or `from yascheduler.infra.ssh.repository import SSHMachineRepository`
 
 #### Scenario: Composition root imports use layer facades
-- **WHEN** a module in the composition root (`entrypoints/di.py`, `entrypoints/client.py`) imports a symbol from any layer
+- **WHEN** a module in the composition root imports a symbol from any layer
 - **THEN** the import goes through the layer's `__init__.py` (e.g. `from yascheduler.infra import webhook_handler`), not through a subpackage facade or deep submodule path
 
 #### Scenario: Within-layer cross-subpackage imports also use the layer facade
-- **WHEN** a module in `yascheduler.infra.cli` needs `SSHMachineRepository` (which lives in `yascheduler.infra.ssh`)
-- **THEN** it imports via `from yascheduler.infra import SSHMachineRepository` — the layer facade is the single public surface, even for sibling subpackages within the same layer
+- **WHEN** a module in one subpackage of a layer needs a symbol from another subpackage of the same layer
+- **THEN** it imports via the layer facade — the layer facade is the single public surface, even for sibling subpackages within the same layer
 
 ### Requirement: Package facade as public surface (lazy publication)
 
@@ -142,16 +142,15 @@ an automatic re-export of all non-underscore names.
 
 #### Scenario: Symbol added when consumer needs it
 - **WHEN** an adapter needs `submit_task` from `yascheduler.application`
-- **THEN** `yascheduler/application/__init__.py` is updated to re-export `submit_task` from its defining submodule, and the adapter imports it via `from yascheduler.application import submit_task`
+- **THEN** the application layer facade is updated to re-export `submit_task` from its defining submodule, and the adapter imports it via `from yascheduler.application import submit_task`
 
 ### Requirement: Entrypoints layer facade
 
-The `yascheduler/entrypoints/__init__.py` module SHALL be the layer facade for
+The entrypoints layer facade SHALL be the layer facade for
 the `entrypoints` layer, re-exporting the public wiring symbols (`Yascheduler`,
 `make_daemon`, `make_cli_deps`, `CLIDeps`, `CONFIG_FILE`, `LOG_FILE`, `PID_FILE`).
-See `yascheduler/entrypoints/__init__.py` for the exact re-export list. The
-facade is the sole public surface for cross-layer consumers; direct imports of
-`yascheduler.entrypoints.client` from outside the layer SHALL NOT appear.
+The facade is the sole public surface for cross-layer consumers; direct imports of
+the entrypoints client module from outside the layer SHALL NOT appear.
 
 #### Scenario: Entrypoints facade re-exports the public wiring symbols
 - **WHEN** a consumer imports `from yascheduler.entrypoints import Yascheduler, make_daemon, make_cli_deps, CLIDeps, CONFIG_FILE, LOG_FILE, PID_FILE`
@@ -159,20 +158,19 @@ facade is the sole public surface for cross-layer consumers; direct imports of
 
 ### Requirement: Compat shim for yascheduler.client
 
-The file `yascheduler/client.py` SHALL be retained as a thin compatibility
-shim that re-exports `Yascheduler` from `yascheduler.entrypoints.client`,
+The compat shim SHALL be retained as a thin compatibility
+shim that re-exports `Yascheduler` from the entrypoints client module,
 preserving the deep import path `from yascheduler.client import Yascheduler`.
 The shim SHALL re-export exactly `Yascheduler` (`__all__ = ["Yascheduler"]`),
-carry a GRACE-lite `MODULE_CONTRACT`, and SHALL NOT re-export `Config` or
-contain any business logic.
+and SHALL NOT re-export `Config` or contain any business logic.
 
 #### Scenario: Deep import path resolves for external consumers
 - **WHEN** a downstream consumer imports `from yascheduler.client import Yascheduler`
 - **THEN** the symbol resolves without ImportError
 
 #### Scenario: Shim does not re-export Config
-- **WHEN** a test attempts `patch("yascheduler.client.Config.from_config_parser")`
-- **THEN** the patch raises `AttributeError` (test must target `yascheduler.entrypoints.client.Config`)
+- **WHEN** a consumer attempts to import `Config` from `yascheduler.client`
+- **THEN** `ImportError` is raised
 
 ### Requirement: Outside-layer-set exemptions
 
@@ -210,24 +208,18 @@ entry exists.
 
 ### Requirement: Domain package facade contents
 
-`yascheduler/domain/__init__.py` SHALL re-export events, model, engine types,
-exceptions, and ports as the public surface of the domain layer. See
-`yascheduler/domain/__init__.py` for the exact re-export list.
+The domain layer facade SHALL re-export events, model, engine types,
+exceptions, and ports as the public surface of the domain layer.
 
 #### Scenario: Domain facade exposes all required categories
-
 - **WHEN** a consumer imports `from yascheduler.domain import Task, TaskCreated, DomainError, TaskRepository, NodeRepository, MachineRepository, MachineSession, CloudProvisioner`
 - **THEN** all symbols resolve without ImportError
 
 ### Requirement: Extended facade contents (lazy publication driven by consumers)
 
-The system SHALL re-export symbols from the infra layer facade
-(`yascheduler/infra/__init__.py`), application layer facade
-(`yascheduler/application/__init__.py`), and subpackage facades
-(`yascheduler/infra/notifier/__init__.py`, `yascheduler/infra/cloud/__init__.py`,
-`yascheduler/infra/persistence/__init__.py`) that external consumers already
-import from their deep submodules. See the respective `__init__.py` files for
-the exact re-export lists.
+The system SHALL re-export symbols from the infra layer facade,
+application layer facade, and subpackage facades that external consumers already
+import from their deep submodules.
 
 #### Scenario: Infra layer facade exposes the cross-layer surface
 - **WHEN** a consumer imports `from yascheduler.infra import SSHMachineRepository, TaskDeployer, OutputDownloader, OccupancyChecker, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
@@ -253,7 +245,7 @@ changing return shapes, removing exported symbols) SHALL be treated as a
 new capability requiring explicit spec coverage.
 
 Key stability rules:
-- `yascheduler/__init__.py` exports (`Yascheduler`, `CONFIG_FILE`,
+- The package facade exports (`Yascheduler`, `CONFIG_FILE`,
   `LOG_FILE`, `PID_FILE`, `__version__`) SHALL remain resolvable.
 - The deep import path `from yascheduler.client import Yascheduler` SHALL
   remain resolvable via the compat shim.
@@ -284,14 +276,11 @@ Key stability rules:
 
 The `Yascheduler` facade SHALL expose the query methods (`queue_get_tasks`,
 `queue_get_tasks_async`, `queue_get_task`, `queue_get_task_async`) and the
-submission method (`queue_submit_task`) with the public contract below. This
-delta modifies only the `metadata` field reconstruction source; all other
-clauses (signatures, `task_id` int marshalling, `node` object shape, `status`
-enum, `label` string, `queue_submit_task` return) are unchanged. Each query
-method SHALL return Mappings with EXACTLY the keys
-`{task_id, label, status, metadata, node}`. The `_task_to_dict` helper SHALL be
+submission method (`queue_submit_task`) with the public contract below.
+Each query method SHALL return Mappings with EXACTLY the keys
+`{task_id, label, status, metadata, node}`. A single extraction helper SHALL be
 the sole extraction site and SHALL construct the `metadata` Mapping inline from
-the typed `Task` fields plus `extra` (was `t.context.to_metadata()`).
+the typed `Task` fields plus `extra`.
 
 - `queue_get_tasks(jobs, status)`, `queue_get_tasks_async(jobs, status)`,
   `queue_get_task(task_id)`, and `queue_get_task_async(task_id)` signatures
@@ -303,45 +292,32 @@ the typed `Task` fields plus `extra` (was `t.context.to_metadata()`).
     `queue_get_task_async`) with EXACTLY the keys
     `{task_id, label, status, metadata, node}`. The flat `ip` and `cloud` keys
     are REMOVED and replaced by a nested `node` key. This is a **BREAKING**
-    change to the facade dict shape (was `{task_id, label, ip, status, metadata,
-    cloud}`).
+    change to the facade dict shape.
   - The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
-    `TaskId`). The private `_task_to_dict(t: Task, nodes_by_id: dict[NodeId,
-    Node])` helper is the sole extraction site: it builds the dict with
+    `TaskId`). The extraction helper builds the dict with
     `"task_id": t.task_id.value` so the public dict preserves the `int` shape.
    The `Yascheduler` facade is the **sole** `int`/`TaskId` marshalling boundary,
    in both directions: on input (`queue_get_task(task_id: int)` /
    `queue_get_tasks(jobs: list[int])`) it wraps `TaskId(task_id)` /
    `[TaskId(i) for i in jobs]` before calling the use cases / repository; on
-   output it extracts `.value` via `_task_to_dict`.
+   output it extracts `.value`.
 - `queue_submit_task(...) -> int` SHALL stay `int`; it wraps `submit_task`
-  (which now returns `TaskId`) and returns `(await submit_task(...)).value`.
+  (which returns `TaskId`) and returns `(await submit_task(...)).value`.
 - `status` SHALL be a `domain.TaskStatus` enum member (preserves `.name`
-  access and cross-class IntEnum equality; NOT a plain `int`). Unchanged.
-- `label` SHALL be the raw `task.label` string. Unchanged.
+  access and cross-class IntEnum equality; NOT a plain `int`).
+- `label` SHALL be the raw `task.label` string.
 - `metadata` SHALL be a flat dict reconstructed from the typed `Task` fields
-  plus `extra` — the SAME shape that `TaskContext.to_metadata()` produced
-  before the drop-task-context-entity change. `_task_to_dict` SHALL construct
+  plus `extra`. The extraction helper SHALL construct
   the dict inline: the six typed fields (`engine`, `remote_folder`,
   `local_folder`, `webhook_url`, `webhook_custom_params`, `error`) with `None`
-  values omitted, then `**task.extra` merged. The public dict shape
-  `{task_id, label, status, metadata, node}` is UNCHANGED — only the
-  construction source changes (was `t.context.to_metadata()`, now inline
-  reconstruction from `t.engine` / `t.remote_folder` / `t.local_folder` /
-  `t.webhook_url` / `t.webhook_custom_params` / `t.error` / `t.extra`). This
-  preserves wire compatibility for any caller parsing the `metadata` dict.
+  values omitted, then `**task.extra` merged.
 - `node` SHALL be an object built from `nodes_by_id.get(task.allocated_node_id)`,
   or `null` when the task has no allocated node (`allocated_node_id` is
   `None`). When non-null, the object has exactly `{ip, port, username, cloud}`:
-  - `ip`: the raw `node.ip` string (replaces the flat `ip` key, which was
-    `allocated_ip or ""`).
+  - `ip`: the raw `node.ip` string.
   - `port`: the raw `node.port` int.
   - `username`: the raw `node.username` string.
   - `cloud`: the raw `node.cloud` string, or `null` for static nodes.
-  The `nodes_by_id` dict is obtained from the `query_tasks` use case, which
-  returns `(list[Task], dict[NodeId, Node])` (see the `use-cases`
-  capability). The facade unpacks the tuple and passes `nodes_by_id` to
-  `_task_to_dict`.
 
 The public contract is keyed on the resolvable symbol and applies
 identically whether `Yascheduler` is imported via the package facade
@@ -350,16 +326,12 @@ identically whether `Yascheduler` is imported via the package facade
 (`from yascheduler.client import Yascheduler`).
 
 #### Scenario: metadata dict is reconstructed from typed fields plus extra
-- **WHEN** `_task_to_dict(t, nodes_by_id)` is called on a Task with `engine="cp2k"`, `remote_folder="/r"`, `local_folder=None`, `webhook_url=None`, `webhook_custom_params={"parent": 42}`, `error=None`, `extra={"input.in": "ATOMS"}`
-- **THEN** the returned Mapping's `metadata` value is `{"engine": "cp2k", "remote_folder": "/r", "webhook_custom_params": {"parent": 42}, "input.in": "ATOMS"}` (None-valued `local_folder`/`webhook_url`/`error` omitted; `extra` merged in) — the SAME shape that `TaskContext.to_metadata()` produced before the change
+- **WHEN** the extraction helper is called on a Task with `engine="cp2k"`, `remote_folder="/r"`, `local_folder=None`, `webhook_url=None`, `webhook_custom_params={"parent": 42}`, `error=None`, `extra={"input.in": "ATOMS"}`
+- **THEN** the returned Mapping's `metadata` value is `{"engine": "cp2k", "remote_folder": "/r", "webhook_custom_params": {"parent": 42}, "input.in": "ATOMS"}` (None-valued `local_folder`/`webhook_url`/`error` omitted; `extra` merged in)
 
 #### Scenario: metadata dict omits all None typed fields
-- **WHEN** `_task_to_dict(t, nodes_by_id)` is called on a Task with `remote_folder=None`, `local_folder=None`, `webhook_url=None`, `error=None`, `extra={}`
-- **THEN** the returned Mapping's `metadata` value contains only the non-None typed fields (e.g. `{"engine": "cp2k", "webhook_custom_params": {}}`); the None-valued fields are absent (preserving the `to_metadata()` omission behavior)
-
-#### Scenario: metadata dict shape unchanged from caller perspective
-- **WHEN** a caller inspects `queue_get_tasks_async(jobs=[1])` output before and after the drop-task-context-entity change
-- **THEN** the `metadata` Mapping has the same keys and values for the same task (the reconstruction produces the same flat dict that `to_metadata()` did) — wire compatibility preserved
+- **WHEN** the extraction helper is called on a Task with `remote_folder=None`, `local_folder=None`, `webhook_url=None`, `error=None`, `extra={}`
+- **THEN** the returned Mapping's `metadata` value contains only the non-None typed fields (e.g. `{"engine": "cp2k", "webhook_custom_params": {}}`); the None-valued fields are absent
 
 #### Scenario: Zero-arg construction remains valid
 - **WHEN** `Yascheduler()` is called with no arguments
@@ -375,25 +347,20 @@ identically whether `Yascheduler` is imported via the package facade
 
 #### Scenario: task_id value is bare int not TaskId
 - **WHEN** the `task_id` value in a returned Mapping is inspected
-- **THEN** it is a bare `int` (NOT a `TaskId` instance); the facade extracted `.value` via `_task_to_dict` so the public `int`-typed contract is preserved
+- **THEN** it is a bare `int` (NOT a `TaskId` instance); the facade extracted `.value` so the public `int`-typed contract is preserved
 
 #### Scenario: queue_get_task single-task returns Optional Mapping
 - **WHEN** `queue_get_task(42)` is called and the task exists
 - **THEN** it returns a Mapping with exactly `{task_id, label, status, metadata, node}` (NOT a list); `queue_get_task(99999)` for a missing task returns `None`
 
 #### Scenario: node object shape when allocated
-- **WHEN** `_task_to_dict` is called on a Task with `allocated_node_id=NodeId(7)` and `nodes_by_id={NodeId(7): Node(ip="[IP]", port=22, username="u", cloud="hetzner", ...)}`
+- **WHEN** the extraction helper is called on a Task with `allocated_node_id=NodeId(7)` and `nodes_by_id={NodeId(7): Node(ip="[IP]", port=22, username="u", cloud="hetzner", ...)}`
 - **THEN** the `node` value is `{"ip": "[IP]", "port": 22, "username": "u", "cloud": "hetzner"}`
 
 #### Scenario: node is null when not allocated
-- **WHEN** `_task_to_dict` is called on a Task with `allocated_node_id=None`
+- **WHEN** the extraction helper is called on a Task with `allocated_node_id=None`
 - **THEN** the `node` value is `None` (null)
 
 #### Scenario: queue_submit_task returns bare int
 - **WHEN** `queue_submit_task(...)` is called
 - **THEN** it returns a bare `int` (NOT a `TaskId`); the facade unwraps `.value` from the `submit_task` use case's `TaskId` return
-
-#### Scenario: No TaskContext reference in _task_to_dict
-- **WHEN** `_task_to_dict` is inspected for `TaskContext` or `to_metadata` references
-- **THEN** none are present (the dict is constructed inline from `t.engine`, `t.remote_folder`, `t.local_folder`, `t.webhook_url`, `t.webhook_custom_params`, `t.error`, `t.extra`)
-

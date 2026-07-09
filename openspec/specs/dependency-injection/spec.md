@@ -21,18 +21,14 @@ stateless collaborator instances (`TaskDeployer`, `OutputDownloader`,
 and pass the repository and the three collaborators to the `Orchestrator`.
 
 `CloudProvisionerImpl` is constructed with `machine_repository` only — it
-no longer takes any operations-side parameter; its `_setup_vm` calls
-session pass-through methods (`session.run`/`session.setup_node`/
-`session.get_cpu_cores`) directly on the session returned by
-`machine_repository.connect`.
+no longer takes any operations-side parameter.
 
 The composition root SHALL NOT introduce a DB-facade class. Persistence is
 accessed only via `PostgresUnitOfWork` and the repository ports
 (`TaskRepository`, `NodeRepository`).
 
 The composition root SHALL NOT use `typing.cast` to bridge between the
-domain `CloudConfig` Protocol and the infra `ConfigCloud` Union. The
-`typing.cast` symbol SHALL NOT be imported by `yascheduler.entrypoints.di`.
+domain `CloudConfig` Protocol and the infra `ConfigCloud` Union.
 
 #### Scenario: Config imported from entrypoints
 
@@ -97,9 +93,7 @@ keyword-only `deps_factory: Callable[[Config], CLIDeps]` parameter. When
 `deps_factory is None`, the constructor SHALL lazily default to
 `make_cli_deps` (invoked per query call, not cached). The factory passed
 via `deps_factory` SHALL be invoked as `<factory>(self.config)` exactly
-once per `queue_get_tasks_async` call to obtain a fresh `CLIDeps`,
-mirroring the per-call construction pattern already used by
-`queue_submit_task_async`.
+once per `queue_get_tasks_async` call to obtain a fresh `CLIDeps`.
 
 The factory invocation SHALL be synchronous (not awaited).
 
@@ -128,39 +122,22 @@ The factory invocation SHALL be synchronous (not awaited).
 On the `clouds is None` branch, `make_daemon` SHALL construct exactly one
 `SSHMachineRepository` instance and inject the SAME instance into both
 `CloudProvisionerImpl.machine_repository` and `Orchestrator.repository`.
-This ensures a single `_sessions` registry spans cloud setup (via
-`_setup_vm`) and orchestrator runtime, so that connections opened during
-cloud allocation are visible to the orchestrator and are reaped by
-`Orchestrator.stop()` via `repository.disconnect_all()`.
+This ensures a single connection registry spans cloud setup and orchestrator
+runtime, so that connections opened during cloud allocation are visible to
+the orchestrator and are reaped by `Orchestrator.stop()` via
+`repository.disconnect_all()`.
 
 `CloudProvisionerImpl` SHALL be constructed WITHOUT any operations-side
-parameter — it has no `machine_operations` field. The three stateless
-collaborators (`TaskDeployer`, `OutputDownloader`, `OccupancyChecker`)
-are taken by the orchestrator only; `CloudProvisionerImpl._setup_vm`
-calls `session.run`/`session.setup_node`/`session.get_cpu_cores` directly.
+parameter — it has no `machine_operations` field.
 
 The pre-built-clouds (`clouds is not None`) branch SHALL continue to
 construct a fresh `SSHMachineRepository` for the orchestrator while the
 caller-supplied `clouds` retain whatever repository it was built with.
-This branch is exercised only by unit tests and performs no real
-allocations.
-
-This requirement exists to prevent two correctness defects that arise
-from split registries: (1) every allocated cloud node leaks one SSH
-connection for the process lifetime because the cloud repository is
-never drained, and (2) the orchestrator opens a second connection to
-each cloud VM because its `contains(ip)` filter inspects only its own
-registry.
 
 #### Scenario: clouds is None shares one repository instance
 
 - **WHEN** `make_daemon(config)` is called without a `clouds` argument
 - **THEN** the `SSHMachineRepository` instance passed as `CloudProvisionerImpl.machine_repository` SHALL be the same object (`is`) as the instance passed as `Orchestrator.repository`
-
-#### Scenario: clouds is None constructs exactly one SSHMachineRepository
-
-- **WHEN** `make_daemon(config)` is called without a `clouds` argument
-- **THEN** `SSHMachineRepository(...)` SHALL be invoked exactly once across the construction of `CloudProvisionerImpl` and `Orchestrator`
 
 #### Scenario: CloudProvisionerImpl constructed without operations port
 
@@ -179,10 +156,10 @@ registry.
 
 #### Scenario: cloud-allocation connections are visible to orchestrator
 
-- **WHEN** a cloud node is allocated via `clouds.allocate(provider)` and `_setup_vm` connects it via `machine_repository.connect(node=...)`
-- **THEN** a subsequent `_connect_machine_producer` cycle in the orchestrator SHALL observe `repository.contains(node.node_id) == True` for that node and SHALL NOT call `repository.connect(...)` again for it
+- **WHEN** a cloud node is allocated and connected via the shared repository
+- **THEN** a subsequent orchestrator cycle SHALL observe `repository.contains(node.node_id) == True` for that node and SHALL NOT open a second connection
 
 #### Scenario: cloud-allocation connections are reaped at shutdown
 
 - **WHEN** `Orchestrator.stop()` runs after one or more cloud nodes have been allocated on the `clouds is None` path
-- **THEN** `repository.disconnect_all()` SHALL close every connection opened by `_setup_vm`, leaving no cloud-setup SSH connection open at process exit
+- **THEN** `repository.disconnect_all()` SHALL close every connection opened during cloud allocation, leaving no cloud-setup SSH connection open at process exit

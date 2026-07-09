@@ -7,8 +7,7 @@ Defines the domain entity model for yascheduler: Task lifecycle, Node records, C
 ### Requirement: TaskId value object
 
 The system SHALL provide a `TaskId` value object as an immutable
-`@dataclass(frozen=True)` in `yascheduler/domain/model.py` wrapping a single
-field `value: int`. `TaskId` SHALL:
+`@dataclass(frozen=True)` wrapping a single field `value: int`. `TaskId` SHALL:
 
 - validate in `__post_init__` that `value > 0`, raising `ValueError` otherwise;
 - define `__str__` returning `str(self.value)`;
@@ -38,7 +37,7 @@ The system SHALL provide a `NewTask` domain entity as an immutable
 `webhook_custom_params: dict[str, object] = field(default_factory=dict)`,
 `extra: dict[str, object] = field(default_factory=dict)`.
 
-`NewTask` carries no identity attribute, no `_events` tuple, no
+`NewTask` carries no identity attribute, no `events` tuple, no
 `created_at`/`updated_at` timestamps, no `status`, no `allocated_node_id`, no
 `remote_folder`, and no `error`. The DB supplies `status` (DEFAULT 'TO_DO'),
 `allocated_node_id` (DEFAULT NULL), `created_at`/`updated_at` (DEFAULT NOW()) on
@@ -46,7 +45,7 @@ insert; `remote_folder` is assigned post-insert by `Task.run` (the TO_DO→RUNNI
 `error` is only ever set by `Task.reject` / `Task.fail` / `Task.abandon` on a post-persistence
 `Task`. It is a pure data carrier with **no lifecycle methods**
 (`run`/`reject`/`complete`/`fail`/`abandon` stay on `Task` — `NewTask` is converted to a `Task` only by
-`TaskRepository.insert` (see the `domain-ports` capability)).
+`TaskRepository.insert`).
 
 `allocated_node_id` is bound by `Task.run(node_id, remote_folder)` after insert, not by
 `NewTask` construction. A task that must be pre-bound to a node (e.g. the
@@ -79,25 +78,23 @@ The system SHALL provide a `Task` domain entity as an immutable
 A `Task` SHALL always carry a `task_id: TaskId` (never `None`); it is the only
 task shape that flows out of a repository. Pre-persistence task records use
 `NewTask` (see the "NewTask pre-persistence record" requirement). The conversion
-from `NewTask` to `Task` happens in exactly one place: `TaskRepository.insert`
-(see the `domain-ports` capability), which calls `materialize_task` (see the
-"materialize_task free function" requirement) to attach `TaskCreated` to
-`events`.
+from `NewTask` to `Task` happens in exactly one place: `TaskRepository.insert`,
+which calls `materialize_task` (see the "materialize_task free function"
+requirement) to attach `TaskCreated` to `events`.
 
 `task_id` SHALL be the first field (identity first). Field order is valid for a
 frozen dataclass: `task_id`, `label`, `engine`, `remote_folder`, `local_folder`,
 `webhook_url`, `webhook_custom_params`, `error`, `extra`, `created_at`,
 `updated_at` carry no defaults; the remaining fields (`status`,
-`allocated_node_id`, `_events`) follow with their defaults. Construction at all
+`allocated_node_id`, `events`) follow with their defaults. Construction at all
 in-repo call sites uses keyword arguments, so the reorder is source-compatible.
-The `task_id=0` sentinel is unrepresentable: `Task`'s `task_id: TaskId` field is
-required, and `TaskId(0)` raises `ValueError` in `__post_init__`.
+`TaskId(0)` raises `ValueError` so the `task_id=0` sentinel is unrepresentable.
 
 `allocated_node_id` is `None` for unallocated tasks (TO_DO with no node bound)
 and for tasks whose node was deleted (the DB FK is `ON DELETE SET NULL`). It is
 set only by `run(node_id, remote_folder)` (the `TO_DO→RUNNING` transition).
 `allocated_ip` is removed from `Task`; the node transport address is obtained
-from the resolved `Node.ip` via `nodes_by_id` (see the `cli` capability).
+from the resolved `Node.ip` via `nodes_by_id`.
 
 The lifecycle SHALL be expressed as five atomic transition methods
 (`run`, `reject`, `complete`, `fail`, `abandon`) that each validate the source
@@ -110,8 +107,7 @@ emitted inline by the transitions and read directly off the public `events`
 field by the UoW.
 
 `events` SHALL be a public field (no leading underscore) with `repr=True`. The
-UoW reads it directly in `collect_events` (see the `domain-events-and-dispatch`
-capability); no `pull_events` helper exists.
+UoW reads it directly in `collect_events`; no `pull_events` helper exists.
 
 `remote_folder` is `None` on a freshly-inserted TO_DO task; it is set by `run`
 when the task transitions to RUNNING. `local_folder` is `None` until `complete`
@@ -164,7 +160,7 @@ or `fail` sets it from the download results. `error` is `None` until `reject`,
 
 #### Scenario: events field is public and shown in repr
 - **WHEN** `repr(task)` is evaluated on a Task with one recorded event
-- **THEN** the `events=(...)` field appears in the repr output (was hidden when the field was `_events` with `repr=False`)
+- **THEN** the `events=(...)` field appears in the repr output
 
 ### Requirement: Node persistent record
 
@@ -178,21 +174,20 @@ A `Node` SHALL always carry a `node_id: NodeId` (never `None`); it is the only
 node shape that flows out of a repository. Pre-persistence node records use
 `NewNode` (see the "NewNode pre-persistence record" requirement). The conversion
 from `NewNode` to `Node` happens in exactly one place:
-`NodeRepository.insert` (see the `domain-ports` capability).
+`NodeRepository.insert`.
 
 `node_id` SHALL be the first field (identity first). Field order is valid for a
 frozen dataclass: `node_id`, `ip`, `ncpus` carry no defaults; the remaining
 fields follow with their defaults. Construction at all in-repo call sites uses
 keyword arguments, so the reorder is source-compatible.
 
-After migration 003, `ip` is no longer `UNIQUE` on `yascheduler_nodes`
-(migration 003 dropped the `UNIQUE` constraint; tmp/pending rows now carry
+`ip` is no longer `UNIQUE` on `yascheduler_nodes` (tmp/pending rows carry
 `ip=""` as a sentinel — multiple rows can share `""` after a node is removed).
 `NodeRepository` mutators (`enable`/`disable`/`remove`/`update`) key on
 `node_id`, not `ip`. The ip-keyed lookup methods (`get(ip: str)`,
 `get_by_ips(ips: list[str])`) are REMOVED — all lookups are `node_id`-keyed
-(`get_by_id`, `get_by_ids`) after the `ssh-rekey-node-id` change. `node_id` is
-the primary identity; `ip` is an attribute (the transport address).
+(`get_by_id`, `get_by_ids`). `node_id` is the primary identity; `ip` is an
+attribute (the transport address).
 
 #### Scenario: Node creation with defaults
 - **WHEN** a Node is instantiated with `node_id=NodeId(1)`, `ip="[IP]"`, `ncpus=4`, and `enabled=True`
@@ -209,7 +204,7 @@ The system SHALL provide a `ConnectedMachine` domain entity as an immutable
 this connected machine represents. `occupy()`/`release()`/`replace()` SHALL
 carry `node_id` through automatically (frozen dataclass — `replace(self,
 state=…)` preserves all non-overridden fields, including `node_id`). The
-construction site is `SSHMachineRepository._connect_impl`, which passes
+construction site is the machine-repository connect path, which passes
 `node_id=node.node_id` from the `Node` parameter of `connect`.
 
 `ip` is the transport address (the asyncssh host). It is read at connect
@@ -237,8 +232,8 @@ address is what the operator recognizes).
 ### Requirement: Engine value object
 
 The system SHALL provide an `Engine` value object as an immutable
-`@dataclass(frozen=True)` in `yascheduler/domain/engine.py` (re-exported from
-`yascheduler.domain.model` and `yascheduler.domain`) with fields:
+`@dataclass(frozen=True)` (re-exported from `yascheduler.domain.model` and
+`yascheduler.domain`) with fields:
 `name: str`, `spawn: str`, `input_files: tuple[str, ...] = ()`,
 `output_files: tuple[str, ...] = ()`, `platforms: tuple[str, ...] = ()`,
 `check_cmd: str | None = None`, `check_pname: str | None = None`,
@@ -252,8 +247,7 @@ calls continue to work without modification.
 
 `Engine` SHALL NOT import `ConfigParser` or `SectionProxy` and SHALL NOT carry
 `from_config_parser_section` or `get_valid_config_parser_fields` methods; INI
-parsing is provided by `entrypoints/config_parser.py::parse_engine_section`
-and `parse_engines`.
+parsing is provided by `parse_engine_section` and `parse_engines`.
 
 #### Scenario: Engine constructed with defaults for the 4 merge fields
 - **WHEN** `Engine(name="cp2k", spawn="cp2k", input_files=("inp",))` is constructed without `deployable`, `platform_packages`, `check_cmd_code`, `sleep_interval`
@@ -279,19 +273,17 @@ The system SHALL provide a `MachineState` enum with values `FREE` and `BUSY`.
 ### Requirement: materialize_task free function
 
 The system SHALL provide a `materialize_task(task: Task) -> Task` free function
-in `yascheduler/domain/model.py` that returns a new `Task` with a `TaskCreated`
-event appended to `events`. It SHALL read `task_id`, `webhook_url`,
-`webhook_custom_params`, and `engine` off the freshly-inserted `Task` (produced
-by `_row_to_task`) and construct
+that returns a new `Task` with a `TaskCreated` event appended to `events`. It
+SHALL read `task_id`, `webhook_url`, `webhook_custom_params`, and `engine` off
+the freshly-inserted `Task` and construct
 `TaskCreated(task_id=task.task_id, webhook_url=task.webhook_url,
 webhook_custom_params=task.webhook_custom_params, engine_name=task.engine)`,
 then return `replace(task, events=(event,))`.
 
 `materialize_task` is the sole `TaskCreated` emission site. It is called by
-`PostgresTaskRepository.insert` (see the `postgres-persistence` capability) on
-the `_row_to_task` output. It SHALL NOT be called from use cases or the
-orchestrator. It is a domain-layer function; the infrastructure layer SHALL NOT
-import `TaskCreated` directly.
+`TaskRepository.insert` on the row-mapping output. It SHALL NOT be called from
+use cases or the orchestrator. It is a domain-layer function; the
+infrastructure layer SHALL NOT import `TaskCreated` directly.
 
 `replace` SHALL be used inside `materialize_task` and inside `Task` transition
 methods only — not at use-case or orchestrator call sites.
@@ -307,8 +299,7 @@ methods only — not at use-case or orchestrator call sites.
 ### Requirement: NodeId value object
 
 The system SHALL provide a `NodeId` value object as an immutable
-`@dataclass(frozen=True)` in `yascheduler/domain/model.py` wrapping a single
-field `value: int`. `NodeId` SHALL:
+`@dataclass(frozen=True)` wrapping a single field `value: int`. `NodeId` SHALL:
 
 - validate in `__post_init__` that `value > 0`, raising `ValueError` otherwise;
 - define `__str__` returning `str(self.value)`;
@@ -344,11 +335,11 @@ is the empty-string sentinel; the default `ncpus=0` reflects that a tmp node
 has no CPU information until a real VM is provisioned.
 
 `NewNode` carries no identity attribute; it is converted to a `Node` only by
-`NodeRepository.insert`. The tmp-node row inserted by `_select_and_insert_tmp`
-is reused as the real node's identity: `clouds.allocate(provider, tmp_node_id)`
-returns a `Node` carrying `node_id == tmp_node_id` (the cloud adapter does NOT
-return a `NewNode`; the row already exists). The caller then flips
-`enabled=TRUE` and sets `ip`/`ncpus` via `uow.nodes.update(node)`.
+`NodeRepository.insert`. The tmp-node row is reused as the real node's
+identity: `clouds.allocate(provider, tmp_node_id)` returns a `Node` carrying
+`node_id == tmp_node_id` (the cloud adapter does NOT return a `NewNode`; the
+row already exists). The caller then flips `enabled=TRUE` and sets `ip`/`ncpus`
+via `uow.nodes.update(node)`.
 
 #### Scenario: NewNode has no node_id attribute
 - **WHEN** a NewNode is instantiated with `ip="[IP]"` and `ncpus=4`
@@ -357,11 +348,10 @@ return a `NewNode`; the row already exists). The caller then flips
 ### Requirement: EngineRepository domain collection
 
 The system SHALL provide an `EngineRepository` value object as an immutable
-`@dataclass(frozen=True)` in `yascheduler/domain/engine.py` (re-exported from
-`yascheduler.domain.model` and `yascheduler.domain`) with a single field
-`data: Mapping[str, Engine]` (default empty dict). `EngineRepository` SHALL
-NOT inherit from `UserDict`, SHALL NOT define `__hash__`, and SHALL NOT carry
-an `engines_dir` field.
+`@dataclass(frozen=True)` (re-exported from `yascheduler.domain.model` and
+`yascheduler.domain`) with a single field `data: Mapping[str, Engine]` (default
+empty dict). `EngineRepository` SHALL NOT inherit from `UserDict`, SHALL NOT
+define `__hash__`, and SHALL NOT carry an `engines_dir` field.
 
 `EngineRepository` SHALL provide: `get(name: str) -> Engine | None`,
 `__getitem__(name: str) -> Engine`, `__contains__(name: object) -> bool`,
@@ -385,10 +375,9 @@ instance; the original SHALL NOT be mutated.
 
 The system SHALL provide `parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine`,
 `parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository`,
-and `engine_valid_fields() -> Sequence[str]` as free functions in
-`entrypoints/config_parser.py`. The validators `_check_spawn`, `_check_check_`,
-`_check_at_least_one_elem` SHALL run parser-side (raising `ValueError` on
-invalid INI), not in `Engine.__post_init__`.
+and `engine_valid_fields() -> Sequence[str]` as free functions. The validators
+SHALL run parser-side (raising `ValueError` on invalid INI), not in
+`Engine.__post_init__`.
 
 `engine_valid_fields()` SHALL return the valid INI keys for an `[engine.*]`
 section, including the deploy alias fields (`deploy_local_files`,
@@ -401,11 +390,11 @@ section, including the deploy alias fields (`deploy_local_files`,
 
 #### Scenario: parse_engine_section rejects unknown spawn placeholders
 - **WHEN** `parse_engine_section` is called with a `spawn` value containing `{unknown_placeholder}`
-- **THEN** `ValueError` is raised by the parser-side `_check_spawn` validator
+- **THEN** `ValueError` is raised by the parser-side validator
 
 #### Scenario: parse_engine_section rejects missing check methods
 - **WHEN** `parse_engine_section` is called with neither `check_cmd` nor `check_pname` set
-- **THEN** `ValueError` is raised by the parser-side `_check_check_` validator
+- **THEN** `ValueError` is raised by the parser-side validator
 
 #### Scenario: parse_engines collects all engine sections
 - **WHEN** `parse_engines(cfg, engines_dir)` is called with a `ConfigParser` containing `[engine.fleur]` and `[engine.cp2k]` sections

@@ -11,7 +11,7 @@ submission, allocation, consumption, and node deallocation.
 
 The system SHALL provide a `submit_task` async function that creates a new
 task in the database after validating the engine and inputs. The function SHALL
-return `TaskId` (was `int`).
+return `TaskId`.
 
 The function SHALL construct a `NewTask(label=label, engine=engine_name,
 local_folder=metadata.get("local_folder"), webhook_url=metadata.get("webhook_url"),
@@ -24,15 +24,15 @@ and `error` are NOT on `NewTask`), persist it via
 returned `Task`'s `events`), then `save`, `commit`, and return `task.task_id`
 (a `TaskId`).
 
-The typed fields are extracted from the caller-supplied `metadata` dict
-(produced by `cli/submit.py::_build_metadata`); `engine` is set from the
-`engine_name` argument. The `extra` dict carries the input-file payloads (file
-contents as values, file names as keys) — every key in the caller `metadata`
-that is not one of the six known typed fields (`engine`, `remote_folder`,
-`local_folder`, `webhook_url`, `webhook_custom_params`, `error`) goes into
-`extra`. `remote_folder` and `error` are never set on `NewTask`: `remote_folder`
-is assigned at `run` time; `error` is only ever set by `reject`/`fail`/`abandon`
-on a post-persistence `Task`.
+The typed fields are extracted from the caller-supplied `metadata` dict;
+`engine` is set from the `engine_name` argument. The `extra` dict carries the
+input-file payloads (file contents as values, file names as keys) — every key
+in the caller `metadata` that is not one of the six known typed fields
+(`engine`, `remote_folder`, `local_folder`, `webhook_url`,
+`webhook_custom_params`, `error`) goes into `extra`. `remote_folder` and
+`error` are never set on `NewTask`: `remote_folder` is assigned at `run` time;
+`error` is only ever set by `reject`/`fail`/`abandon` on a post-persistence
+`Task`.
 
 #### Scenario: Successful task submission
 - **WHEN** `submit_task(...)` is called with valid inputs
@@ -55,18 +55,17 @@ on a post-persistence `Task`.
 The system SHALL provide an `allocate_task` async function that matches a
 TO_DO task to a free machine or requests cloud provisioning. The function SHALL
 accept `task_id: TaskId`, `uow_factory`, `repository: MachineRepository`
-(Protocol type), `occupancy_checker: OccupancyChecker` (concrete
-collaborator type, for `start_occupancy_check`), `clouds:`
-`CloudProvisioner` (Protocol type), `tracker: AllocationTracker`, and
-`allocation_lock: asyncio.Lock`. It SHALL NOT import from `yascheduler.infra` at
-runtime. It SHALL NOT accept `adapters` or `configs` parameters — provider
-selection is delegated to the `clouds.select_provider` port method.
+(Protocol type), `occupancy_checker: OccupancyChecker` (concrete collaborator
+type), `clouds: CloudProvisioner` (Protocol type), `tracker: AllocationTracker`,
+and `allocation_lock: asyncio.Lock`. It SHALL NOT import from
+`yascheduler.infra` at runtime. It SHALL NOT accept `adapters` or `configs`
+parameters — provider selection is delegated to the `clouds.select_provider`
+port method.
 
 The orchestrator reads task ids from `list_by_status -> [Task]` (each carrying
 `TaskId`) and feeds `allocate_task(task_id=task.task_id, ...)`, so `TaskId`
-flows end-to-end internally with no conversion. Logging `"task_id=%s"` renders
-the bare integer via `TaskId.__str__`. `tracker.add`/`discard(task_id)` keys
-are `TaskId` (the tracker's internal `set` becomes `set[TaskId]`).
+flows end-to-end internally with no conversion. `tracker.add`/`discard(task_id)`
+keys are `TaskId` (the tracker's internal `set` becomes `set[TaskId]`).
 
 For the cloud-fallback path, the use case SHALL own the full flow:
 tracker dedup, capacity check, provider selection (via
@@ -80,26 +79,18 @@ tmp-node cleanup on failure (`uow.nodes.remove(tmp_node_id)`). The
 sequence so two concurrent `allocate_task` calls for the same engine cannot
 both provision a cloud node when only one slot is free.
 
-The function SHALL read `task.engine` (was `task.context.engine`) when
-matching the task against engines. The `_validate_engine` helper SHALL reject
-an unsupported engine via `task.reject("unsupported engine")` (a single atomic
-transition that emits `TaskFailed` inline — no separate `with_event` call, no
-duplicated reason string). The `_try_start_on_machine` helper SHALL compute
-`remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")` (the same
-formula the prior `submit_task` used) and transition the task via
-`task.run(node.node_id, remote_folder)` (a single atomic transition that sets
-`allocated_node_id` + `remote_folder`, moves to RUNNING, and emits
-`TaskAllocated` inline — no separate `allocate_to`/`mark_running`/`with_event`
-calls). No `TaskContext` indirection.
-
-The prior `task.allocate_to(node).mark_running()` two-step and the separate
-`task.with_event(TaskAllocated, node_id=node.node_id, engine_name=task.engine)`
-call are REMOVED. The `remote_folder` construction moves from `submit_task` to
-`_try_start_on_machine`.
+The function SHALL read `task.engine` when matching the task against engines.
+The use case SHALL reject an unsupported engine via
+`task.reject("unsupported engine")` (a single atomic transition that emits
+`TaskFailed` inline — no separate `with_event` call, no duplicated reason
+string). The use case SHALL compute `remote_folder` from `task.task_id` and
+transition the task via `task.run(node.node_id, remote_folder)` (a single
+atomic transition that sets `allocated_node_id` + `remote_folder`, moves to
+RUNNING, and emits `TaskAllocated` inline). No `TaskContext` indirection.
 
 #### Scenario: Successful allocation to a free machine
 - **WHEN** `allocate_task(...)` is called and a free compatible machine exists
-- **THEN** `_try_start_on_machine` computes `remote_folder` from `task.task_id`, calls `task.run(node.node_id, remote_folder)` (transitioning TO_DO→RUNNING and emitting `TaskAllocated` inline), starts the occupancy check, saves, commits, and the function returns True
+- **THEN** the use case computes `remote_folder` from `task.task_id`, calls `task.run(node.node_id, remote_folder)` (transitioning TO_DO→RUNNING and emitting `TaskAllocated` inline), starts the occupancy check, saves, commits, and the function returns True
 
 #### Scenario: No free machine matches, cloud-fallback attempted
 - **WHEN** `allocate_task(...)` is called and no free machine matches
@@ -111,12 +102,12 @@ call are REMOVED. The `remote_folder` construction moves from `submit_task` to
 
 #### Scenario: Unsupported engine
 - **WHEN** `allocate_task(...)` is called and the task's engine is not in `EngineRepository`
-- **THEN** `_validate_engine` calls `task.reject("unsupported engine")` (emitting `TaskFailed` inline), saves, commits, and the function returns False
+- **THEN** the use case calls `task.reject("unsupported engine")` (emitting `TaskFailed` inline), saves, commits, and the function returns False
 
 #### Scenario: Occupancy check started via occupancy_checker
 
 - **WHEN** `allocate_task(...)` successfully starts a task on a machine
-- **THEN** `occupancy_checker.start_occupancy_check(session, engine)` is called (was `operations.start_occupancy_check`)
+- **THEN** `occupancy_checker.start_occupancy_check(session, engine)` is called
 
 ### Requirement: DeallocateIdleNodes use case
 
@@ -146,16 +137,12 @@ BEFORE the `if node.cloud:` guard, so SSH teardown is owned by
 each node whose `node_id` is in `idle_machines` and whose `node_id` is not
 in `busy_node_ids` (the node_ids of RUNNING tasks' `allocated_node_id`).
 
-`deallocate_nodes` SHALL return `list[Node]` (was `list[str]`). Phase 2
+`deallocate_nodes` SHALL return `list[Node]`. Phase 2
 (collect free disabled cloud nodes) SHALL return the `Node` objects it
-reads from `uow.nodes.list_disabled()`, each carrying `node_id`, instead
-of discarding them to bare `ip` strings. This eliminates the
-`uow.nodes.get(ip)` round-trip lookup previously performed by the
-orchestrator's `_deallocator_consumer` to reconstruct the `Node` from `ip`.
+reads from `uow.nodes.list_disabled()`, each carrying `node_id`.
 
 `deallocate_nodes` phase 2 SHALL filter disabled nodes by
-`node.node_id not in busy_node_ids and node.cloud`. The prior `"." in node.ip`
-post-filter SHALL NOT be present — it was dead code from the fake-ip era.
+`node.node_id not in busy_node_ids and node.cloud`.
 
 Internal log lines in both `deallocate_nodes` and `deallocate_node` SHALL
 include both `node_id` and `ip` for correlation.
@@ -166,7 +153,7 @@ include both `node_id` and `ip` for correlation.
 
 #### Scenario: Returns disabled Node objects carrying node_id
 - **WHEN** `deallocate_nodes(...)` completes
-- **THEN** a `list[Node]` is returned (was `list[str]` of IPs); each `Node` carries its `node_id`, so the orchestrator can call `deallocate_node(node, ...)` directly without a DB round-trip
+- **THEN** a `list[Node]` is returned; each `Node` carries its `node_id`, so the orchestrator can call `deallocate_node(node, ...)` directly without a DB round-trip
 
 #### Scenario: Deallocate node brackets cloud delete with disable+remove
 - **WHEN** `deallocate_node(node, repository, clouds, uow_factory)` is called for a cloud node
@@ -174,10 +161,9 @@ include both `node_id` and `ip` for correlation.
 
 ### Requirement: AbandonNode use case
 
-The system SHALL provide an `abandon_node` async function in
-`yascheduler/application/abandon_node.py` that cleans up a cloud node that
-never established its SSH connection, releasing the originating task to
-re-allocate on the next cycle. The function SHALL accept `node: Node`,
+The system SHALL provide an `abandon_node` async function that cleans up a
+cloud node that never established its SSH connection, releasing the originating
+task to re-allocate on the next cycle. The function SHALL accept `node: Node`,
 `clouds: CloudProvisioner` (Protocol type), `uow_factory: Callable[[],
 AbstractUnitOfWork]`, and `tracker: AllocationTracker`. It SHALL NOT import
 from `yascheduler.infra` at runtime (TYPE_CHECKING only).
@@ -234,10 +220,10 @@ orchestrator via `repository.get_session(task.allocated_node_id)`),
 `SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.infra` at runtime.
 
 The function SHALL return `bool`: `True` when the task is finalised (DONE
-status applied, remote directory cleaned by the operations, in-flight
+status applied, remote directory cleaned, in-flight
 allocation slot released via `tracker.discard(task_id)`); `False` when the
-task is deferred for retry (status unchanged, remote directory preserved by
-the operations, in-flight allocation slot NOT released).
+task is deferred for retry (status unchanged, remote directory preserved,
+in-flight allocation slot NOT released).
 
 The function SHALL receive the `session` directly (resolved by the
 orchestrator from `task.allocated_node_id` via
@@ -247,9 +233,7 @@ error classification to `output_downloader.download_outputs(session, ...)`.
 value for logging and remote folder naming, where `TaskId.__str__` renders
 the bare integer. The function SHALL receive `(local_folder, remote_folder,
 transient_errors, permanent_errors)` from `download_outputs` (a 4-tuple of
-typed values — the legacy `meta_add: list[tuple[str, Any]]` first element
-is REMOVED; the two paths flow directly to `_decide_finalisation` as named
-arguments, no `meta_dict` reconstruction) and branch on them:
+typed values) and branch on them:
 
 - When `permanent_errors` is non-empty OR `transient_errors` is empty (full
   success, permanent-only errors, or both transient and permanent errors),
@@ -260,48 +244,32 @@ arguments, no `meta_dict` reconstruction) and branch on them:
   `task.complete(local_folder=str(store_folder), remote_folder=remote_folder
   or task.remote_folder)` on full success with no permanent errors). Both
   transitions set the folders AND emit the matching event (`TaskFailed` or
-  `TaskCompleted`) inline. The prior `task.with_download_results(...)` call
-  followed by `.complete()`/`.fail()` and a separate `with_event(...)` is
-  REMOVED — the terminal transition absorbs the folder-setting and event
-  emission. Save via `uow.tasks.save()`, commit, call `tracker.discard(task_id)`,
-  and return `True`. When both `permanent_errors` and `transient_errors` are
-  non-empty, permanent takes priority and the function finalises with
-  `task.fail()`.
+  `TaskCompleted`) inline. Save via `uow.tasks.save()`, commit, call
+  `tracker.discard(task_id)`, and return `True`. When both `permanent_errors`
+  and `transient_errors` are non-empty, permanent takes priority and the
+  function finalises with `task.fail()`.
 - When `transient_errors` is non-empty AND `permanent_errors` is empty, the
   function SHALL defer: leave the task in `RUNNING` (no status change, no
   save, no event, no `tracker.discard`), and return `False` so the
   orchestrator re-consumes the task on the next producer cycle.
 
 The `error_details` for the `TaskFailed` path SHALL be formatted via the
-error column format contract (see the `domain-entities` delta): a
-`_format_download_error(combined_errors)` helper produces
-`"Download error: <path>: <msg>, <path>: <msg>"` (combined `permanent_errors
-+ transient_errors`, preserving the legacy mixed-case behavior); entries with
-`path=None` render as bare `"<msg>"`.
+error column format contract: `"Download error: <path>: <msg>, <path>: <msg>"`
+(combined `permanent_errors + transient_errors`); entries with `path=None`
+render as bare `"<msg>"`.
 
-The `_decide_finalisation` helper SHALL call `task.fail(error_msg,
+The function SHALL call `task.fail(error_msg,
 local_folder=local_folder or task.local_folder, remote_folder=remote_folder
 or task.remote_folder)` or `task.complete(local_folder=str(store_folder),
 remote_folder=remote_folder or task.remote_folder)` directly — no prior
-`with_download_results(...)` step. The legacy `extra_updates` merge block
-(building `extra_updates = {k: v for k, v in meta_dict.items() if k not in
-("remote_folder", "local_folder", "error")}` and merging into
-`task.context.extra`) is REMOVED: the terminal transitions do NOT touch
-`extra`. The whole `updated_context = task.context.replace(...)` construction
-and the `task.with_context(...)` calls are deleted. The `meta_add`/`meta_dict`
-indirection itself is also REMOVED as a metadata-blob relic:
-`download_outputs` returns the two paths as the leading elements of its
-4-tuple, and `_decide_finalisation` / `_finalize_task` receive them as named
-`local_folder: str, remote_folder: str` parameters — no intermediate dict is
-constructed.
+`with_download_results(...)` step. The terminal transitions do NOT touch
+`extra`.
 
-`_prepare_store_folder` SHALL read `task.remote_folder` (was
-`task.context.remote_folder`), `task.engine` (was `task.context.engine`), and
-`task.local_folder` (was `task.context.local_folder`) directly from the
-typed fields. The assertion `assert task.remote_folder is not None` SHALL
-guard the `task.remote_folder` read (the task is RUNNING — `run`
-assigned `remote_folder` at allocate time). No
-`TaskContext` indirection.
+The function SHALL read `task.remote_folder`, `task.engine`, and
+`task.local_folder` directly from the typed fields. The assertion
+`assert task.remote_folder is not None` SHALL guard the `task.remote_folder`
+read (the task is RUNNING — `run` assigned `remote_folder` at allocate time).
+No `TaskContext` indirection.
 
 #### Scenario: Successful consumption
 - **WHEN** `consume_task(...)` is called and `download_outputs` returns empty `transient_errors` and empty `permanent_errors`
@@ -316,11 +284,11 @@ assigned `remote_folder` at allocate time). No
 - **THEN** the task is left in `RUNNING`, no `tracker.discard` is called, and the function returns `False`
 
 #### Scenario: consume_task reads typed fields not task.context
-- **WHEN** `consume_task.py` is inspected for `task.context` references
+- **WHEN** `consume_task` is inspected for `task.context` references
 - **THEN** none are present; reads use `task.remote_folder`, `task.engine`, `task.local_folder` directly
 
 #### Scenario: consume_task does not call with_download_results or with_event
-- **WHEN** `consume_task.py` is inspected for `with_download_results` or `with_event` calls
+- **WHEN** `consume_task` is inspected for `with_download_results` or `with_event` calls
 - **THEN** none are present; the terminal transitions `complete`/`fail` set the folders and emit the events inline
 
 ### Requirement: QueryTasks use case
@@ -329,14 +297,13 @@ The system SHALL provide a `query_tasks` async function that returns
 domain `Task` aggregates matching a jobs- or statuses-based read query,
 alongside a `dict[NodeId, Node]` of the nodes allocated to those tasks (for
 the caller to project a nested `node` field). The function SHALL accept
-`jobs: Sequence[TaskId] | None` (was `Sequence[int] | None`), `statuses:
+`jobs: Sequence[TaskId] | None`, `statuses:
 Sequence[TaskStatus] | None`, and `uow_factory: Callable[[], AbstractUnitOfWork]`.
 It SHALL raise `ValueError` if both `jobs` and `statuses` are supplied. It
 SHALL open a single Unit of Work, dispatch to `uow.tasks.list_by_status(set(statuses))`
 when `statuses` is non-empty or `uow.tasks.list_by_jobs(list(jobs))` (a
 `list[TaskId]`) when `jobs` is non-empty, and return `([], {})` when neither
-is non-empty (truthiness semantics, matching `yascheduler.client.queue_get_tasks_async`'s
-existing dispatch). It SHALL NOT call `uow.commit` (read-only). It SHALL NOT
+is non-empty. It SHALL NOT call `uow.commit` (read-only). It SHALL NOT
 import from `yascheduler.infra` at runtime.
 
 Within the same single UoW, after fetching tasks, the use case SHALL
@@ -348,10 +315,9 @@ t.allocated_node_id is not None}))` (a single batch round-trip), building
 and return `(tasks, {})`. The use case SHALL return the tuple
 `(tasks, nodes_by_id)`.
 
-The return type widens from `list[Task]` to `tuple[list[Task], dict[NodeId,
-Node]]`. This is the only signature change. The use case does NOT project
-the nested `node` field into task dicts; that is the facade's responsibility
-(see the `package-facades` capability). It returns raw domain objects.
+The return type is `tuple[list[Task], dict[NodeId, Node]]`. The use case does
+NOT project the nested `node` field into task dicts; that is the facade's
+responsibility. It returns raw domain objects.
 
 The public `Yascheduler.queue_get_tasks_async(jobs: list[int])` facade is the
 sole `int`/`TaskId` boundary on this path: it wraps `[TaskId(i) for i in jobs]`
@@ -374,8 +340,8 @@ before calling `query_tasks(jobs=[TaskId(...)], ...)`.
 - **THEN** `([], {})` is returned without dispatching to either repository method and without opening a UoW
 
 #### Scenario: Query returns nodes_by_id with resolved nodes
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=NodeId("n1")`
-- **THEN** `uow.nodes.get_by_ids([NodeId("n1")])` is called, the returned dict `{NodeId("n1"): node}` is included in the `(tasks, nodes_by_id)` tuple
+- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=NodeId(1)`
+- **THEN** `uow.nodes.get_by_ids([NodeId(1)])` is called, the returned dict `{NodeId(1): node}` is included in the `(tasks, nodes_by_id)` tuple
 
 #### Scenario: Query skips get_by_ids when all tasks unallocated
 - **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=None`
@@ -387,9 +353,8 @@ before calling `query_tasks(jobs=[TaskId(...)], ...)`.
 
 ### Requirement: AllocationTracker tracks in-flight cloud allocations
 
-The system SHALL provide an `AllocationTracker` class in
-`yascheduler.application.allocation_tracker` that maintains an in-memory
-`set[TaskId]` of task_ids with in-flight cloud allocations (was `set[int]`).
+The system SHALL provide an `AllocationTracker` class that maintains an
+in-memory `set[TaskId]` of task_ids with in-flight cloud allocations.
 The class SHALL expose `add(task_id: TaskId) -> bool` (returns True if newly
 added, False if already tracked), `discard(task_id: TaskId) -> None`, and
 `__contains__(task_id: TaskId) -> bool`.
