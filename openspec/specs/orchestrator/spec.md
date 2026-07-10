@@ -223,8 +223,12 @@ For cloud nodes (`cloud is not None`):
   use case with the node, the cloud provisioner, the UoW factory, and the
   allocation tracker, then pop the `node_id` from the failure timer. The
   `abandon_node` use case deletes the cloud VM, removes the
-  `yascheduler_nodes` row, and discards the stuck task's entry from
-  `AllocationTracker` so the task re-allocates on the next cycle.
+  `yascheduler_nodes` row, and discards the tracker entry linked to the node
+  via `tracker.discard_by_node(node.node_id)` so the task re-allocates on the
+  next cycle. The discard is by node, not by a TO_DO task lookup — the
+  cloud-provisioning path never binds the task to the node, so the
+  task-to-node link is held by the tracker (established by `allocate_task`'s
+  `set_node` call), not by `Task.allocated_node_id`.
 
 The failure timer SHALL NOT be persisted across daemon restarts (in-memory
 only). A restart resets the grace window for any node that was mid-failure.
@@ -243,7 +247,7 @@ path.
 
 #### Scenario: Connection failure within grace retries, past grace triggers abandon
 - **WHEN** `repository.connect(node, ...)` raises `MachineConnectionError` for a cloud node
-- **THEN** if elapsed failure age < `connect_grace`, the orchestrator logs and returns (retry next cycle); if age >= `connect_grace`, the orchestrator calls `abandon_node` and pops the `node_id` from the failure timer
+- **THEN** if elapsed failure age < `connect_grace`, the orchestrator logs and returns (retry next cycle); if age >= `connect_grace`, the orchestrator calls `abandon_node` (which discards the tracker entry by node via `discard_by_node`) and pops the `node_id` from the failure timer
 
 #### Scenario: Successful connect resets the failure timer
 - **WHEN** `repository.connect(node, ...)` succeeds for a node that had a prior `MachineConnectionError`

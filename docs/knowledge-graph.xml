@@ -383,20 +383,24 @@
     </M-APPLICATION-DEALLOCATE>
 
     <M-APPLICATION-ABANDON-NODE NAME="Abandon never-connected node use case" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Clean up a cloud node that never established its SSH connection</purpose>
+      <purpose>Clean up a cloud node that never established its SSH connection and discard the tracker entry linked to the node</purpose>
       <path>yascheduler/application/abandon_node.py</path>
       <depends>M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER</depends>
       <annotations>
-        <fn-abandon_node PURPOSE="Clean up never-connected cloud node + release stuck task (best-effort VM delete -&gt; DB remove -&gt; tracker discard)" />
+        <fn-abandon_node PURPOSE="Clean up never-connected cloud node + discard tracker entry by node (best-effort VM delete -&gt; DB remove -&gt; tracker.discard_by_node; warning if count&gt;1)" />
       </annotations>
     </M-APPLICATION-ABANDON-NODE>
 
     <M-APPLICATION-ALLOCATION-TRACKER NAME="Allocation tracker" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>In-memory dedup of in-flight cloud allocations by task_id; owned by orchestrator, injected into allocate/consume use cases.</purpose>
+      <purpose>In-memory dedup of in-flight cloud allocations by task_id with a task-to-node link; owned by orchestrator, injected into allocate/consume/abandon use cases.</purpose>
       <path>yascheduler/application/allocation_tracker.py</path>
       <depends>none</depends>
       <annotations>
-        <class-AllocationTracker PURPOSE="In-memory set tracking task_ids with in-flight cloud allocations" />
+        <class-AllocationTracker PURPOSE="In-memory dict[TaskId, NodeId|None] tracking in-flight cloud allocations with a task-to-node link" />
+        <fn-add PURPOSE="Add a task_id with an optional node_id link; returns True if newly added, False if already tracked" />
+        <fn-set_node PURPOSE="Patch the node link into an existing tracker entry; no-op if untracked" />
+        <fn-discard PURPOSE="Remove a tracker entry by task_id; no-op if not present" />
+        <fn-discard_by_node PURPOSE="Remove all tracker entries linked to a node_id and return the count removed" />
       </annotations>
     </M-APPLICATION-ALLOCATION-TRACKER>
 
@@ -1096,6 +1100,7 @@
     <CrossLink from="M-ENTRYPOINTS-CLI-SUBMIT" to="M-DOMAIN-ENGINE" relation="runtime imports Engine for input file resolution" />
     <CrossLink from="M-APPLICATION-ALLOCATE" to="M-APPLICATION-ALLOCATION-TRACKER" relation="dedupes in-flight cloud allocations" />
     <CrossLink from="M-APPLICATION-CONSUME" to="M-APPLICATION-ALLOCATION-TRACKER" relation="discards completed allocations" />
+    <CrossLink from="M-APPLICATION-ABANDON-NODE" to="M-APPLICATION-ALLOCATION-TRACKER" relation="discards tracker entries by node_id when a never-connected cloud node is abandoned" />
     <CrossLink from="M-DI" to="M-APPLICATION-ALLOCATION-TRACKER" relation="constructs tracker and injects into Orchestrator" />
 
     <!-- SSH adapter cross-links -->

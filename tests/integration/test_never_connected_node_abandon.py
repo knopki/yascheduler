@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_never_connected_node_abandon.py
-# VERSION: 1.2.0
+# VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the never-connected-node abandon path against real PostgreSQL.
@@ -9,13 +9,13 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   test_never_connected_node_abandoned_and_task_reallocated - Real PostgreSQL: dead node + TO_DO task (allocated_node_id=NULL) + tracker entry → consumer abandon → row removed + task still TO_DO (re-allocatable)
+#   test_never_connected_node_abandoned_and_task_reallocated - Real PostgreSQL: dead node + TO_DO task (allocated_node_id=NULL) + tracker entry (linked via set_node) → consumer abandon → row removed + tracker entry released + task still TO_DO (re-allocatable)
 #   test_connect_grace_lookup_uses_cloud_prefix                - Orchestrator wired with the 4 real ConfigCloud DTOs resolves per-cloud connect_grace via prefix match
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - refactor-task-state-transitions: replace allocate_to with replace for test-only fixture construction.
-#   PREVIOUS_CHANGE: v1.3.0 - drop-task-context-entity: NewTask constructed with flat typed fields (engine=...); pre-bound task now insert + allocate_to(node) + save (NewTask no longer carries allocated_node_id/status); TaskContext import removed.
+#   LAST_CHANGE: v1.6.0 - fix-tracker-node-link-leak: seed the tracker with set_node (mirrors the real allocate_task flow); restore the `task_id not in tracker` assertion now that abandon_node discards by node via discard_by_node.
+#   PREVIOUS_CHANGE: v1.5.0 - refactor-task-state-transitions: replace allocate_to with replace for test-only fixture construction.
 # END_CHANGE_SUMMARY
 """Integration tests for the never-connected-node abandon path.
 
@@ -28,16 +28,13 @@ Two tests:
    `_connect_machine_consumer` past `connect_grace` with a mocked gateway
    (raises `MachineConnectionError`) and mocked cloud provisioner. Asserts:
 
-   - the `yascheduler_nodes` row is removed from the DB
-   - the cloud-VM delete stub was called
-   - the task remains in TO_DO and is returned by `list_by_status({TO_DO})`,
-     i.e. it is ready for re-allocation on the next producer cycle
-
-   The tracker-release assertion was dropped: `abandon_node`'s matching path
-   (`t.allocated_node_id == node.node_id` over TO_DO tasks) is empty when the
-   task has `allocated_node_id = NULL`, so `abandon_node` does not discard the
-   tracker. That matching path is the known dead code in `abandon_node.py:76-78`
-   (out of scope for this change; see proposal Non-Goals).
+    - the `yascheduler_nodes` row is removed from the DB
+    - the cloud-VM delete stub was called
+    - the tracker entry for the task is released (discard_by_node closes
+      the leak — the task-to-node link is seeded via set_node, mirroring
+      the real allocate_task flow)
+    - the task remains in TO_DO and is returned by `list_by_status({TO_DO})`,
+      i.e. it is ready for re-allocation on the next producer cycle
 
    The "second-VM-with-working-SSH → RUNNING" portion of the spec scenario is
    exercised end-to-end by the unit tests + the existing e2e `test_full_cycle`;
@@ -181,10 +178,14 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     task_id = inserted_task.task_id
 
     tracker = AllocationTracker()
-    # Pre-seed the tracker with task_id, mirroring what allocate_task does in
-    # production before cloud provisioning binds a node — the tracker is the
-    # sole in-flight binding during cloud allocation.
+    # Pre-seed the tracker mirroring the real production flow: allocate_task
+    # calls tracker.add(task_id) at the dedup gate (before the tmp node
+    # exists), then tracker.set_node(task_id, tmp_node_id) after the tmp
+    # node is inserted. The persisted node here IS the tmp node (enabled=True
+    # for the test so the connect-machine consumer yields it); set_node
+    # links the task to it so abandon_node's discard_by_node can release it.
     assert tracker.add(task_id) is True
+    tracker.set_node(task_id, persisted_node.node_id)
     # END_BLOCK_SEED
 
     orch = _build_orchestrator(
@@ -226,14 +227,11 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     # END_BLOCK_VERIFY_CLOUD_DELETE_CALLED
 
     # START_BLOCK_VERIFY_TRACKER_RELEASED
-    # NOTE: the prior test asserted `task_id not in tracker` here, but that
-    # relied on the fabricated TO_DO + allocated_node_id state. With the real
-    # persisted shape (TO_DO + allocated_node_id = NULL), abandon_node's
-    # matching path (`t.allocated_node_id == node.node_id` over TO_DO tasks)
-    # is empty, so abandon_node does NOT discard the tracker. That matching
-    # path is the known dead code in abandon_node.py:76-78, explicitly out of
-    # scope for this change (see proposal Non-Goals). The tracker-release
-    # assertion is therefore dropped — it tested impossible-state behavior.
+    # The leak is closed: abandon_node calls tracker.discard_by_node(node_id),
+    # which removes the entry linked to the abandoned node. The seed called
+    # tracker.set_node(task_id, persisted_node.node_id), so the entry is
+    # linked and discard_by_node removes it.
+    assert task_id not in tracker
     # END_BLOCK_VERIFY_TRACKER_RELEASED
 
     # START_BLOCK_VERIFY_TASK_REALLOCATABLE

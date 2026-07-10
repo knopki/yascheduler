@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.21.0
+# VERSION: 5.22.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: Task-to-machine allocation with cloud fallback — free machine search, cloud provisioning, tmp-node lifecycle, and persistence.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.21.0 - Adopt atomic Task transitions: _validate_engine calls task.reject("unsupported engine"); _try_start_on_machine computes remote_folder from remote_tasks_dir + task.task_id and calls task.run(node.node_id, remote_folder). allocate_task takes remote_tasks_dir and threads it through _allocate_free_machine -> _try_start_on_machine.
-#   PREVIOUS_CHANGE: v5.20.0 - operations: MachineOperations parameter renamed to occupancy_checker: OccupancyChecker (facade dissolved); _try_start_on_machine calls occupancy_checker.start_occupancy_check directly.
+#   LAST_CHANGE: v5.22.0 - Call tracker.set_node(task.task_id, tmp_node_id) after _select_and_insert_tmp returns, patching the task-to-node link into the tracker entry so abandon_node can discard_by_node when the cloud node never connects.
+#   PREVIOUS_CHANGE: v5.21.0 - Adopt atomic Task transitions: _validate_engine calls task.reject("unsupported engine"); _try_start_on_machine computes remote_folder from remote_tasks_dir + task.task_id and calls task.run(node.node_id, remote_folder). allocate_task takes remote_tasks_dir and threads it through _allocate_free_machine -> _try_start_on_machine.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -431,7 +431,7 @@ async def _persist_node_with_cleanup(
 #     remote_tasks_dir: PurePath - Remote base directory for task folders
 #   }
 #   OUTPUTS: { bool - True if allocated to a machine, False if cloud requested or error }
-#   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), tracker.add/discard, tmp-node insertion, cloud allocation. On failure best-effort cleanup of VM and tmp-node.
+#   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), tracker.add/set_node/discard, tmp-node insertion, cloud allocation. On failure best-effort cleanup of VM and tmp-node.
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: allocate_task
 async def allocate_task(
@@ -513,6 +513,7 @@ async def allocate_task(
         selected_name = selected.name
         tmp_node_id = selected.node.node_id
         tmp_owned_by_provisioner = True
+        tracker.set_node(task.task_id, tmp_node_id)
         node = await _allocate_cloud_node(
             clouds, uow_factory, selected_name, selected.node, task_id
         )

@@ -391,6 +391,8 @@ class TestAllocateTask:
 
         # tracker.add called
         tracker.add.assert_called_once_with(todo_task.task_id)
+        # tracker.set_node patches the task-to-node link after tmp-node insert
+        tracker.set_node.assert_called_once_with(todo_task.task_id, NodeId(2))
 
         # select_provider called with platforms and current counts
         clouds.select_provider.assert_called_once_with(["linux"], {})
