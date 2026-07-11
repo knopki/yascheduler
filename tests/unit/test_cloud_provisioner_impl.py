@@ -138,7 +138,8 @@ def _make_mock_repository(**kwargs: Any) -> MagicMock:
         repo.connect_calls.append(kw)
         machine = MagicMock()
         node = kw.get("node")
-        machine.ip = node.ip if node is not None else "[IP]"
+        # FIXME: IP?!
+        machine.hostname = node.hostname if node is not None else "[IP]"
         # Session methods called directly by CloudProvisionerImpl._setup_vm.
         machine.run = AsyncMock(
             return_value=MagicMock(exit_code=0, stdout="", stderr="")
@@ -161,7 +162,7 @@ def _tmp_node(node_id: int = 999, cloud: str | None = "test") -> Node:
     """
     return Node(
         node_id=NodeId(node_id),
-        ip="",
+        hostname="",
         ncpus=0,
         enabled=False,
         cloud=cloud,
@@ -273,7 +274,7 @@ class TestAllocate:
 
         assert isinstance(node, Node)
         assert node.node_id == NodeId(999)
-        assert node.ip == "10.0.0.1"
+        assert node.hostname == "10.0.0.1"
         assert node.ncpus == 4
         assert node.cloud == "test"
         assert node.enabled is True
@@ -391,7 +392,7 @@ class TestAllocate:
 
         async def _connect(**kw: Any) -> Any:
             machine = MagicMock()
-            machine.ip = kw.get("ip", "[IP]")
+            machine.hostname = kw.get("ip", "[IP]")
             return machine
 
         repo.connect = _connect
@@ -447,7 +448,7 @@ class TestDeallocate:
 
         node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=2,
             cloud="test-cloud",
             username="root",
@@ -473,7 +474,7 @@ class TestDeallocate:
 
         node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=2,
             cloud="unknown-cloud",
             username="root",
@@ -500,7 +501,7 @@ class TestDeallocate:
 
         node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=2,
             cloud="test-cloud",
             username="root",
@@ -527,7 +528,7 @@ class TestDeallocate:
 
         node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=2,
             cloud=None,
             username="root",

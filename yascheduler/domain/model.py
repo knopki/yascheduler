@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/model.py
-# VERSION: 1.23.0
+# VERSION: 1.24.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain entities.
 #   SCOPE: Lifecycle state enums, task/node identity and value types, and the public surface consumed by application/infra layers.
@@ -10,6 +10,7 @@
 # START_MODULE_MAP
 #   TaskStatus - IntEnum: TO_DO=0, RUNNING=1, DONE=2
 #   MachineState - Enum: FREE, BUSY
+#   NodeStatus - StrEnum: OTHER (placeholder)
 #   ProcessResult - Exit code and captured output from remote execution
 #   TaskId - Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
 #   NewTask - Pre-persistence task record
@@ -24,8 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.23.0 - Task lifecycle rewritten as five atomic transition methods that each validate the source state, set all changed fields, and emit the matching event inline. Renamed _events -> events. Added materialize_task free function. complete/fail/abandon now set local_folder/remote_folder; reject/fail emit TaskFailed; abandon emits TaskAbandoned only when node_id is not None.
-#   PREVIOUS_CHANGE: v1.22.0 - TaskContext / TaskContextOverrides folded onto Task / NewTask typed fields; Task.fail/reject simplified; new with_remote_folder and with_download_results methods.
+#   LAST_CHANGE: v1.24.0 - Node-rename-and-fields: add NodeStatus(StrEnum) with OTHER value; rename ip→hostname on Node/NewNode/ConnectedMachine; add jump_* / external_id / status / created_at / updated_at fields to Node and NewNode; add node_id to MachineBusyError in occupy(). ConnectedMachine: node_id is first field; MachineBusyError(self.node_id, self.hostname).
+#   PREVIOUS_CHANGE: v1.23.0 - Task lifecycle rewritten as five atomic transition methods that each validate the source state, set all changed fields, and emit the matching event inline. Renamed _events -> events. Added materialize_task free function. complete/fail/abandon now set local_folder/remote_folder; reject/fail emit TaskFailed; abandon emits TaskAbandoned only when node_id is not None.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum, IntEnum, unique
+
+from yascheduler.shared import StrEnum
 
 from .engine import (
     Deploy,
@@ -83,6 +86,13 @@ class MachineState(Enum):
 
     FREE = 1
     BUSY = 2
+
+
+@unique
+class NodeStatus(StrEnum):
+    """Node lifecycle states: OTHER (placeholder for future states)."""
+
+    OTHER = "OTHER"
 
 
 @dataclass(frozen=True)
@@ -401,7 +411,7 @@ class NodeId:
 
 # START_CONTRACT: NewNode
 #   PURPOSE: Pre-persistence node record — no identity yet; converted to Node only by NodeRepository.insert.
-#   INPUTS: { ip: str = "", ncpus: int = 0, enabled: bool = True, cloud: str | None = None, username: str = "root", port: int = 22 }
+#   INPUTS: { hostname, ncpus, enabled, cloud, username, port, jump_host, jump_port, jump_username, external_id, status }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: NodeRepository.insert
@@ -409,22 +419,25 @@ class NodeId:
 @dataclass(frozen=True)
 class NewNode:
     """Pre-persistence node record — no identity yet. Mirrors :class:`Node`
-    minus ``node_id``. ``ip``/``ncpus`` default so the tmp-reservation call
-    site omits them; converted to :class:`Node` only by
-    :meth:`NodeRepository.insert`.
+    minus ``node_id``.
     """
 
-    ip: str = ""
-    ncpus: int = 0
-    enabled: bool = True  # FIXME: should be False
-    cloud: str | None = None
+    enabled: bool = True
+    status: NodeStatus = NodeStatus.OTHER
+    hostname: str = ""
     username: str = "root"
     port: int = 22
+    jump_host: str | None = None
+    jump_port: int = 22
+    jump_username: str = "root"
+    ncpus: int = 0
+    cloud: str | None = None
+    external_id: str | None = None
 
 
 # START_CONTRACT: Node
 #   PURPOSE: Post-persistence node record — always carries its database-generated node_id (identity-first).
-#   INPUTS: { node_id: NodeId, ip: str, ncpus: int, enabled: bool, cloud: str | None, username: str, port: int }
+#   INPUTS: { node_id: NodeId, hostname: str, ncpus: int, enabled: bool, cloud: str | None, username: str, port: int, jump_host: str | None, jump_port: int, jump_username: str, external_id: str | None, status: NodeStatus, created_at: datetime, updated_at: datetime }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: NodeRepository.insert (the only NewNode→Node conversion site)
@@ -438,34 +451,30 @@ class Node:
     """
 
     node_id: NodeId
-    ip: str
+    hostname: str
     ncpus: int
-    enabled: bool = True
-    cloud: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now())
+    updated_at: datetime = field(default_factory=lambda: datetime.now())
     username: str = "root"
     port: int = 22
+    jump_host: str | None = None
+    jump_port: int = 22
+    jump_username: str = "root"
+    enabled: bool = True
+    status: NodeStatus = NodeStatus.OTHER
+    cloud: str | None = None
+    external_id: str | None = None
 
 
 @dataclass(frozen=True)
 class ConnectedMachine:
     """Runtime connected machine with state and platform info.
 
-    ``node_id`` is the FIRST field (identity first); it identifies which
-    :class:`Node` this connected machine represents. ``occupy``/``release``/
-    ``replace()`` carry ``node_id`` through automatically (frozen dataclass —
-    ``replace(self, state=…)`` preserves all non-overridden fields, including
-    ``node_id``). The construction site is ``SSHMachineRepository._connect_impl``,
-    which passes ``node_id=node.node_id`` from the ``Node`` parameter of
-    ``connect``.
-
-    ``ip`` is the transport address (the asyncssh host), NOT the identity — two
-    instances sharing an ``ip`` but with different ``node_id`` are distinct (the
-    dup-IP configuration behind different jump hosts).
+    ``node_id`` identifies which :class:`Node` this connected machine represents.
     """
 
     node_id: NodeId
-    # FIXME: why ip is here but not port, username, etc? maybe ip is not needed?
-    ip: str
+    hostname: str
     platform: str
     ncpus: int
     state: MachineState = MachineState.FREE
@@ -473,7 +482,7 @@ class ConnectedMachine:
 
     # START_CONTRACT: ConnectedMachine.is_compatible
     #   PURPOSE: Check if machine is FREE and its platform matches one of the given platforms.
-    #   INPUTS: { platforms: tuple[str, ...] - Supported platform identifiers }
+    #   INPUTS: { platforms - Supported platform identifiers }
     #   OUTPUTS: { bool - True if FREE and platform matches, False otherwise }
     #   SIDE_EFFECTS: None
     #   LINKS:
@@ -494,7 +503,7 @@ class ConnectedMachine:
         """Transition machine state to BUSY if currently FREE."""
         # START_BLOCK_VALIDATE_FREE
         if self.state == MachineState.BUSY:
-            raise MachineBusyError(self.ip)
+            raise MachineBusyError(self.node_id, self.hostname)
         # END_BLOCK_VALIDATE_FREE
         # START_BLOCK_SET_BUSY
         return replace(self, state=MachineState.BUSY)

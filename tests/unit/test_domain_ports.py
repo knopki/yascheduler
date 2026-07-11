@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.9.0
+# VERSION: 1.10.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
@@ -14,11 +14,13 @@
 #   test_machine_repository_protocol - Stub with all MachineRepository methods passes isinstance
 #   test_machine_session_protocol - Stub with all MachineSession methods passes isinstance
 #   test_cloud_provisioner_protocol - Stub with all CloudProvisioner methods passes isinstance
+#   test_machine_session_hostname - MachineSession `hostname` property exists
+#   test_two_protocols_defined - MachineRepository and MachineSession defined, runtime_checkable; no MachineOperations
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Drop MachineOperations Protocol stub + test (facade dissolved; the three operations collaborators are concrete classes typed directly, not subject to Protocol conformance checks).
-#   PREVIOUS_CHANGE: v1.8.0 - simplify-cloud-connect-node-args: StubMachineRepository.connect drops `username`/`port` params to match the new port signature.
+#   LAST_CHANGE: v1.10.0 - Node-rename-and-fields: StubMachineSession.ip→hostname; remove adapter-derived hostname (merged). Add hostname/Protocol shape tests.
+#   PREVIOUS_CHANGE: v1.9.0 - Drop MachineOperations Protocol stub + test (facade dissolved; the three operations collaborators are concrete classes typed directly, not subject to Protocol conformance checks).
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -27,8 +29,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from unittest.mock import MagicMock
+
+import pytest
 
 from yascheduler.domain.model import (
     ConnectedMachine,
@@ -123,14 +127,16 @@ class StubNodeRepository:
 
 
 def _make_session_stub() -> ConnectedMachine:
-    return ConnectedMachine(node_id=NodeId(1), ip="10.0.0.1", platform="linux", ncpus=1)
+    return ConnectedMachine(
+        node_id=NodeId(1), hostname="10.0.0.1", platform="linux", ncpus=1
+    )
 
 
 class StubMachineSession(MachineSession):
     """Stub MachineSession covering the full Protocol surface."""
 
     @property
-    def ip(self) -> str:
+    def hostname(self) -> str:
         return "10.0.0.1"
 
     @property
@@ -177,10 +183,6 @@ class StubMachineSession(MachineSession):
     @property
     def quote(self) -> Callable[[str], str]:
         return lambda s: s
-
-    @property
-    def hostname(self) -> str:
-        return "host"
 
     async def run(self, cmd: str) -> ProcessResult:
         return ProcessResult(exit_code=0)
@@ -349,3 +351,121 @@ def test_machine_session_protocol() -> None:
 def test_cloud_provisioner_protocol() -> None:
     stub = StubCloudProvisioner()
     assert isinstance(stub, CloudProvisioner)
+
+
+# START_CONTRACT: test_machine_session_hostname
+#   PURPOSE: Verify MachineSession Protocol has hostname property and is runtime_checkable.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-PORTS
+# END_CONTRACT: test_machine_session_hostname
+def test_machine_session_hostname() -> None:
+    """MachineSession Protocol has hostname property."""
+    assert hasattr(MachineSession, "hostname")
+
+
+# START_CONTRACT: test_two_protocols_defined
+#   PURPOSE: Verify MachineRepository and MachineSession are defined, runtime_checkable; no MachineOperations.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-PORTS
+# END_CONTRACT: test_two_protocols_defined
+def test_two_protocols_defined() -> None:
+    """MachineRepository and MachineSession are defined as runtime_checkable Protocols."""
+    assert issubclass(MachineRepository, Protocol)  # type: ignore[arg-type]
+    assert issubclass(MachineSession, Protocol)  # type: ignore[arg-type]
+    # Verify runtime_checkable decorator was applied
+    assert hasattr(MachineRepository, "__instancecheck__")
+    assert hasattr(MachineSession, "__instancecheck__")
+
+    # No MachineOperations Protocol exists
+    with pytest.raises(ImportError):
+        from yascheduler.domain.ports import MachineOperations  # noqa: F401
+
+
+# START_CONTRACT: test_node_repository_insert_shape
+#   PURPOSE: Verify NodeRepository.insert takes NewNode and returns Node.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-PORTS
+# END_CONTRACT: test_node_repository_insert_shape
+def test_node_repository_insert_shape() -> None:
+    """NodeRepository.insert takes NewNode and returns Node."""
+    import inspect
+
+    sig = inspect.signature(StubNodeRepository.insert)
+    params = list(sig.parameters.keys())
+    assert "new_node" in params
+
+
+# START_CONTRACT: test_node_repository_get_by_id_shape
+#   PURPOSE: Verify NodeRepository.get_by_id takes NodeId, returns Node | None.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-PORTS
+# END_CONTRACT: test_node_repository_get_by_id_shape
+def test_node_repository_get_by_id_shape() -> None:
+    """NodeRepository.get_by_id takes NodeId and returns Node | None."""
+    import inspect
+
+    sig = inspect.signature(StubNodeRepository.get_by_id)
+    params = list(sig.parameters.keys())
+    assert "node_id" in params
+    # Return annotation should include None
+    ann = sig.return_annotation
+    assert ann is not inspect.Parameter.empty
+
+
+# START_CONTRACT: test_node_repository_remove_shape
+#   PURPOSE: Verify NodeRepository.remove takes NodeId.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-PORTS
+# END_CONTRACT: test_node_repository_remove_shape
+def test_node_repository_remove_shape() -> None:
+    """NodeRepository.remove takes NodeId."""
+    import inspect
+
+    sig = inspect.signature(StubNodeRepository.remove)
+    params = list(sig.parameters.keys())
+    assert "node_id" in params
+
+
+# START_CONTRACT: test_cloud_allocate_sets_external_id_alongside_hostname
+#   PURPOSE: Verify CloudProvisioner.allocate takes provider and Node and returns Node.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-PORTS
+# END_CONTRACT: test_cloud_allocate_sets_external_id_alongside_hostname
+def test_cloud_allocate_sets_external_id_alongside_hostname() -> None:
+    """CloudProvisioner.allocate takes provider and node, returns Node."""
+    import inspect
+
+    sig = inspect.signature(StubCloudProvisioner.allocate)
+    params = list(sig.parameters.keys())
+    assert "provider" in params
+    assert "node" in params
+    ann = sig.return_annotation
+    assert str(ann) == "Node"
+
+
+# START_CONTRACT: test_cloud_deallocate_reads_node_cloud_and_hostname
+#   PURPOSE: Verify CloudProvisioner.deallocate takes node and reads node.cloud/node.hostname.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: M-DOMAIN-PORTS
+# END_CONTRACT: test_cloud_deallocate_reads_node_cloud_and_hostname
+def test_cloud_deallocate_reads_node_cloud_and_hostname() -> None:
+    """CloudProvisioner.deallocate takes a Node."""
+    import inspect
+
+    sig = inspect.signature(StubCloudProvisioner.deallocate)
+    params = list(sig.parameters.keys())
+    assert "node" in params

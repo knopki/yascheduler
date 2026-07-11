@@ -178,10 +178,10 @@ class TestAllocateTaskEvents:
 
         free_machine = MagicMock(spec=ConnectedMachine)
         free_machine.node_id = NodeId(1)
-        free_machine.ip = "10.0.0.1"
+        free_machine.hostname = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
-        free_session = SimpleNamespace(machine=free_machine, ip="10.0.0.1")
+        free_session = SimpleNamespace(machine=free_machine, hostname="10.0.0.1")
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[free_session])
@@ -212,7 +212,9 @@ class TestAllocateTaskEvents:
         uow.nodes = AsyncMock()
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="[IP]", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, enabled=True)
+            ]
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])

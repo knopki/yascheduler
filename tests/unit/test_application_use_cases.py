@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.9.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); task.context.X → task.X reads; remove TaskContext import.
+#   LAST_CHANGE: v5.0.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), node.hostname→node.hostname, free_machine.hostname→free_machine.hostname, SimpleNamespace ip→hostname.
+#   PREVIOUS_CHANGE: v4.9.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); task.context.X → task.X reads; remove TaskContext import.
 #   PREVIOUS_CHANGE: v4.8.0 - cloud-port-node-arg: allocate/deallocate asserts + _persist_node_with_cleanup call use Node args (was NodeId/scalars).
 #   PREVIOUS_CHANGE: v4.7.1 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests into tests/unit/test_allocate_task_node_pairing.py (this file exceeded the 1000-line GRACE-lite hard limit after the v4.7.0 additions). The free-machine test still asserts saved_task.allocated_node_id == NodeId(1) here.
 # END_CHANGE_SUMMARY
@@ -252,11 +253,11 @@ class TestAllocateTask:
 
         free_machine = MagicMock(spec=ConnectedMachine)
         free_machine.node_id = NodeId(1)
-        free_machine.ip = "10.0.0.1"
+        free_machine.hostname = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
 
-        free_session = SimpleNamespace(machine=free_machine, ip="10.0.0.1")
+        free_session = SimpleNamespace(machine=free_machine, hostname="10.0.0.1")
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[free_session])
@@ -271,7 +272,9 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="[IP]", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, enabled=True)
+            ]
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -341,7 +344,9 @@ class TestAllocateTask:
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
-        tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+        tmp_node = Node(
+            node_id=NodeId(2), hostname="", ncpus=0, enabled=False, cloud="aws"
+        )
         uow.nodes.insert = AsyncMock(return_value=tmp_node)
         uow.nodes.update = AsyncMock()
         uow.nodes.remove = AsyncMock()
@@ -363,7 +368,7 @@ class TestAllocateTask:
         clouds.select_provider.return_value = "aws"
         cloud_node = Node(
             node_id=NodeId(1),
-            ip="[IP]",
+            hostname="[IP]",
             ncpus=4,
             cloud="aws",
             enabled=True,
@@ -433,7 +438,9 @@ class TestAllocateTask:
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
-        tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+        tmp_node = Node(
+            node_id=NodeId(2), hostname="", ncpus=0, enabled=False, cloud="aws"
+        )
         uow.nodes.insert = AsyncMock(return_value=tmp_node)
         uow.nodes.remove = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -653,7 +660,7 @@ class TestTmpCleanupByNodeId:
         """[9.3] _persist_node_with_cleanup success: update(node) + commit (no get lookup, no remove)."""
         cloud_node = Node(
             node_id=NodeId(7),
-            ip="10.0.0.100",
+            hostname="10.0.0.100",
             ncpus=4,
             cloud="aws",
             enabled=True,
@@ -697,7 +704,7 @@ class TestDeallocateNodes:
     async def test_deallocate_nodes_disables_idle_cloud_nodes(self) -> None:
         """Enabled cloud node idle beyond tolerance -> disable_node called, Node returned."""
         # An enabled Azure node
-        az_node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="az")
+        az_node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="az")
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -733,14 +740,14 @@ class TestDeallocateNodes:
         # Second phase: disabled Node qualifies (has cloud, valid ip) -> returned
         assert isinstance(result, list)
         assert any(
-            isinstance(n, Node) and n.node_id == NodeId(1) and n.ip == "10.0.0.1"
+            isinstance(n, Node) and n.node_id == NodeId(1) and n.hostname == "10.0.0.1"
             for n in result
         )
 
     async def test_deallocate_nodes_skips_non_cloud_nodes(self) -> None:
         """Node with cloud=None -> NOT disabled, NOT in returned list."""
         # An enabled node without cloud
-        local_node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud=None)
+        local_node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud=None)
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -777,7 +784,7 @@ class TestDeallocateNodes:
 
     async def test_deallocate_nodes_returns_node_objects(self) -> None:
         """Return type is list[Node]; each element carries node_id, ip, cloud (proves D1)."""
-        cloud_node = Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=2, cloud="aws")
+        cloud_node = Node(node_id=NodeId(2), hostname="10.0.0.2", ncpus=2, cloud="aws")
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -809,17 +816,17 @@ class TestDeallocateNodes:
         only = result[0]
         assert isinstance(only, Node)
         assert only.node_id == NodeId(2)
-        assert only.ip == "10.0.0.2"
+        assert only.hostname == "10.0.0.2"
         assert only.cloud == "aws"
 
     async def test_deallocate_nodes_no_dot_filter(self) -> None:
-        """Phase 2 filter is `node.ip not in busy_ips and node.cloud` — no `.` guard (proves D4).
+        """Phase 2 filter is `node.hostname not in busy_ips and node.cloud` — no `.` guard (proves D4).
 
         A disabled cloud node with a valid ipv4 ip (dots present) is returned; the
-        old `and "." in node.ip` guard would also have passed it, but this test
+        old `and "." in node.hostname` guard would also have passed it, but this test
         pins the filter shape so a future regression reintroducing the guard fails.
         """
-        cloud_node = Node(node_id=NodeId(3), ip="10.0.0.3", ncpus=2, cloud="aws")
+        cloud_node = Node(node_id=NodeId(3), hostname="10.0.0.3", ncpus=2, cloud="aws")
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -848,7 +855,7 @@ class TestDeallocateNodes:
 
         assert isinstance(result, list)
         assert any(
-            isinstance(n, Node) and n.node_id == NodeId(3) and n.ip == "10.0.0.3"
+            isinstance(n, Node) and n.node_id == NodeId(3) and n.hostname == "10.0.0.3"
             for n in result
         )
 
@@ -863,7 +870,7 @@ class TestDeallocateNodeBracketing:
 
     async def test_bracketing_order_disable_cloud_delete_remove(self) -> None:
         """[12.4] disable+commit -> cloud deallocate -> remove+commit ordering."""
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False  # Skip disconnect
 
@@ -896,7 +903,7 @@ class TestDeallocateNodeBracketing:
 
     async def test_failure_in_cloud_delete_leaves_node_disabled(self) -> None:
         """[12.4] clouds.deallocate raises -> node stays disabled, remove NOT called."""
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False
 
@@ -940,7 +947,7 @@ class TestDeallocateNodeBracketing:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """[review-hardening] remove UoW fails after clouds.deallocate succeeded -> exception swallowed, REMOVE_FAILED logged; cloud VM is gone so worker stays alive for reconciliation."""
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False
 

@@ -18,7 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   LAST_CHANGE: v1.5.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), JSON key "ip"→"hostname", table header IP→HOSTNAME, _NodeView(ip=…)→_NodeView(hostname=…), add new field assertions (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at).
+#   PREVIOUS_CHANGE: v1.4.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
 #   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: remove allocated_ip from make_task helper, drop ip= kwarg from all call sites
 #   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
 # END_CHANGE_SUMMARY
@@ -189,10 +190,12 @@ class TestShowNodesRendering:
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
     ) -> None:
         _config, uow, _deps = stub_config_deps
-        node1 = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22)
+        node1 = Node(
+            node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True, port=22
+        )
         node2 = Node(
             node_id=NodeId(2),
-            ip="10.0.0.2",
+            hostname="10.0.0.2",
             ncpus=0,
             enabled=False,
             port=2222,
@@ -215,7 +218,7 @@ class TestShowNodesRendering:
         lines = out.splitlines()
         # Header
         assert "NODE_ID" in lines[0]
-        assert "IP" in lines[0]
+        assert "HOSTNAME" in lines[0]
         assert "PORT" in lines[0]
         assert "NCPUS" in lines[0]
         assert "ENABLED" in lines[0]
@@ -248,11 +251,16 @@ class TestShowNodesRendering:
 
         _config, uow, _deps = stub_config_deps
         node1 = Node(
-            node_id=NodeId(1), ip="10.0.0.1", ncpus=0, enabled=True, port=22, cloud=None
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=0,
+            enabled=True,
+            port=22,
+            cloud=None,
         )
         node2 = Node(
             node_id=NodeId(2),
-            ip="10.0.0.2",
+            hostname="10.0.0.2",
             ncpus=4,
             enabled=False,
             port=2222,
@@ -275,20 +283,34 @@ class TestShowNodesRendering:
         assert data[0]["node_id"] == 1
         # Busy node: raw port=22 (not "-" or null), ncpus=0 (not "MAX"), enabled bool,
         # cloud null, occupied_by object.
-        assert data[0]["ip"] == "10.0.0.1"
+        assert data[0]["hostname"] == "10.0.0.1"
         assert data[0]["port"] == 22
         assert data[0]["ncpus"] == 0
         assert data[0]["enabled"] is True
         assert data[0]["cloud"] is None
+        assert data[0]["jump_host"] is None
+        assert data[0]["jump_port"] == 22
+        assert data[0]["jump_username"] == "root"
+        assert data[0]["external_id"] is None
+        assert data[0]["status"] == "OTHER"
+        assert data[0]["created_at"] is not None
+        assert data[0]["updated_at"] is not None
         assert data[0]["occupied_by"] == {"task_id": 7, "label": "job7"}
         # Free node: occupied_by null.
         assert list(data[1])[0] == "node_id"
         assert data[1]["node_id"] == 2
-        assert data[1]["ip"] == "10.0.0.2"
+        assert data[1]["hostname"] == "10.0.0.2"
         assert data[1]["port"] == 2222
         assert data[1]["ncpus"] == 4
         assert data[1]["enabled"] is False
         assert data[1]["cloud"] == "hetzner"
+        assert data[1]["jump_host"] is None
+        assert data[1]["jump_port"] == 22
+        assert data[1]["jump_username"] == "root"
+        assert data[1]["external_id"] is None
+        assert data[1]["status"] == "OTHER"
+        assert data[1]["created_at"] is not None
+        assert data[1]["updated_at"] is not None
         assert data[1]["occupied_by"] is None
 
     def test_json_empty_is_empty_list(
@@ -323,7 +345,7 @@ class TestShowNodesRendering:
         # Header only, no data rows.
         assert len(lines) == 1
         assert "NODE_ID" in lines[0]
-        assert "IP" in lines[0]
+        assert "HOSTNAME" in lines[0]
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +358,7 @@ def _three_mixed_nodes() -> list[Node]:
     return [
         Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=4,
             enabled=True,
             port=22,
@@ -344,18 +366,23 @@ def _three_mixed_nodes() -> list[Node]:
         ),
         Node(
             node_id=NodeId(2),
-            ip="10.0.0.2",
+            hostname="10.0.0.2",
             ncpus=4,
             enabled=False,
             port=22,
             cloud="hetzner",
         ),
         Node(
-            node_id=NodeId(3), ip="10.0.0.3", ncpus=4, enabled=True, port=22, cloud=None
+            node_id=NodeId(3),
+            hostname="10.0.0.3",
+            ncpus=4,
+            enabled=True,
+            port=22,
+            cloud=None,
         ),
         Node(
             node_id=NodeId(4),
-            ip="10.0.0.4",
+            hostname="10.0.0.4",
             ncpus=4,
             enabled=False,
             port=22,
@@ -369,15 +396,15 @@ def _wire(uow: AsyncMock, nodes: list[Node], tasks: list[Task] | None = None) ->
     uow.tasks.list_by_status = AsyncMock(return_value=tasks or [])
 
 
-def _ips_from_table(out: str) -> list[str]:
-    """Extract the IP column from a table output (skip header)."""
+def _hostnames_from_table(out: str) -> list[str]:
+    """Extract the HOSTNAME column from a table output (skip header)."""
     lines = out.splitlines()
-    ips: list[str] = []
+    hostnames: list[str] = []
     for line in lines[1:]:
-        # NODE_ID is column 0, IP is column 1; strip and split.
-        ip = line.split()[1]
-        ips.append(ip)
-    return ips
+        # NODE_ID is column 0, HOSTNAME is column 1; strip and split.
+        hostname = line.split()[1]
+        hostnames.append(hostname)
+    return hostnames
 
 
 class TestShowNodesFiltering:
@@ -427,7 +454,7 @@ class TestShowNodesFiltering:
         )
         _run(["--enabled", "--busy", "--cloud", "hetzner"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.1"]
+        assert _hostnames_from_table(out) == ["10.0.0.1"]
 
     def test_enabled_filter(
         self,
@@ -438,7 +465,7 @@ class TestShowNodesFiltering:
         _wire(uow, _three_mixed_nodes())
         _run(["--enabled"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.1", "10.0.0.3"]
+        assert _hostnames_from_table(out) == ["10.0.0.1", "10.0.0.3"]
 
     def test_disabled_filter(
         self,
@@ -449,7 +476,7 @@ class TestShowNodesFiltering:
         _wire(uow, _three_mixed_nodes())
         _run(["--disabled"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.2", "10.0.0.4"]
+        assert _hostnames_from_table(out) == ["10.0.0.2", "10.0.0.4"]
 
     def test_busy_filter(
         self,
@@ -465,7 +492,7 @@ class TestShowNodesFiltering:
         )
         _run(["--busy"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.2"]
+        assert _hostnames_from_table(out) == ["10.0.0.2"]
 
     def test_free_filter(
         self,
@@ -481,7 +508,7 @@ class TestShowNodesFiltering:
         )
         _run(["--free"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.1", "10.0.0.3", "10.0.0.4"]
+        assert _hostnames_from_table(out) == ["10.0.0.1", "10.0.0.3", "10.0.0.4"]
 
     def test_cloud_exact_match(
         self,
@@ -492,7 +519,7 @@ class TestShowNodesFiltering:
         _wire(uow, _three_mixed_nodes())
         _run(["--cloud", "hetzner"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.1", "10.0.0.2"]
+        assert _hostnames_from_table(out) == ["10.0.0.1", "10.0.0.2"]
 
     def test_no_cloud_filter(
         self,
@@ -503,7 +530,7 @@ class TestShowNodesFiltering:
         _wire(uow, _three_mixed_nodes())
         _run(["--no-cloud"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.3"]
+        assert _hostnames_from_table(out) == ["10.0.0.3"]
 
 
 # ---------------------------------------------------------------------------
@@ -521,14 +548,20 @@ class TestShowNodesOrder:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         nodes = [
-            Node(node_id=NodeId(3), ip="10.0.0.3", ncpus=4, enabled=True, port=22),
-            Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22),
-            Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=4, enabled=True, port=22),
+            Node(
+                node_id=NodeId(3), hostname="10.0.0.3", ncpus=4, enabled=True, port=22
+            ),
+            Node(
+                node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True, port=22
+            ),
+            Node(
+                node_id=NodeId(2), hostname="10.0.0.2", ncpus=4, enabled=True, port=22
+            ),
         ]
         _wire(uow, nodes)
         _run([])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.3", "10.0.0.1", "10.0.0.2"]
+        assert _hostnames_from_table(out) == ["10.0.0.3", "10.0.0.1", "10.0.0.2"]
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +628,15 @@ class TestShowNodesStructure:
         _config, uow, _deps = stub_config_deps
         _wire(
             uow,
-            [Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22)],
+            [
+                Node(
+                    node_id=NodeId(1),
+                    hostname="10.0.0.1",
+                    ncpus=4,
+                    enabled=True,
+                    port=22,
+                )
+            ],
             [make_task(task_id=1, label="j1", allocated_node_id=NodeId(1))],
         )
         _run([])

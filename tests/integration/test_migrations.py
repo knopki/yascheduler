@@ -20,13 +20,15 @@
 #   test_migration_002_adds_node_id_on_legacy_db - migration 002 backfills node_id SERIAL PRIMARY KEY on a legacy-style DB
 #   test_migration_005_converts_serial_to_identity - migration 005 converts SERIAL PKs to GENERATED ALWAYS AS IDENTITY and seeds above MAX
 #   test_legacy_db_at_005_applies_006_010 - legacy DB at 005: label→title, created_at/updated_at, trigger advances updated_at, status→task_status enum, ip dropped; migration 010 extracts typed columns from metadata
-#   test_fresh_db_full_shape - fresh DB: task_status enum, trigger, title/status enum/created_at/updated_at columns, typed columns (engine/extra/remote_folder/local_folder/webhook_url/error/webhook_custom_params), no ip, seeds '011'
+#   test_fresh_db_full_shape - fresh DB: task_status enum, trigger, title/status enum/created_at/updated_at columns, typed columns (engine/extra/remote_folder/local_folder/webhook_url/error/webhook_custom_params), no ip, seeds '012'
 #   test_migration_008_fails_on_out_of_range_status - migration 008 rolls back when a row has status=3 (out of enum range)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - task-status-field-invariants: fresh DB seeds to '011' (migration 011 adds task_status_field_invariants CHECK); tracker assertions append '011'; synthetic migrations renumbered 011_*→012_* (collision with real 011); legacy/modern DBs now apply 001-011; test_legacy_db_at_005_applies_006_010 trigger UPDATE uses a real RUNNING row (allocated_node_id + remote_folder set) so the CHECK does not reject the status transition.
-#   PREVIOUS_CHANGE: v1.6.0 - drop-task-context-entity: migration 010 extracts typed columns from metadata; tracker assertions updated to include "010"; synthetic migrations renumbered 010_*→011_* (collision with real 010); fresh DB seeds to "010"; test_fresh_db_full_shape asserts typed columns present + metadata dropped.
+#   LAST_CHANGE: v1.9.0 - Extracted test_migration_012_node_rename_and_fields to test_migration_012_node_rename.py (GRACE-lite 1000-line limit compliance).
+#   PREVIOUS_CHANGE: v1.8.1 - fix: update seed/tracker assertions from '011' to '012' (schema.sql last_migration bumped to '012'); renumber synthetic migration files 012→013 to avoid collision with real migration 012.
+#   PREVIOUS_CHANGE: v1.8.0 - node-rename-and-fields: migration 012 renames ip→hostname, adds audit timestamps + trigger, jump fields, external_id backfill, NODE_STATUS + status, port constraints; fresh DB seeds to '012'; tracker assertions append '012'; schema.sql snapshot updated; test_migration_012_node_rename_and_fields covers all 7 Gherkin scenarios.
+#   PREVIOUS_CHANGE: v1.7.0 - task-status-field-invariants: fresh DB seeds to '011' (migration 011 adds task_status_field_invariants CHECK); tracker assertions append '011'; synthetic migrations renumbered 011_*→012_* (collision with real 011); legacy/modern DBs now apply 001-011; test_legacy_db_at_005_applies_006_010 trigger UPDATE uses a real RUNNING row (allocated_node_id + remote_folder set) so the CHECK does not reject the status transition.
 # END_CHANGE_SUMMARY
 
 """Integration tests for the migration runner against real PostgreSQL.
@@ -126,7 +128,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
         conn = _connect(config)
         try:
             seeded = _tracker_rows(conn)
-            assert seeded == ["011"]
+            assert seeded == ["012"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -137,7 +139,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["011"]
+            assert _tracker_rows(conn) == ["012"]
         finally:
             conn.close()
 
@@ -155,7 +157,9 @@ def test_legacy_db_runs_all_migrations() -> None:
 
         conn = _connect(config)
         try:
-            conn.run("CREATE TABLE yascheduler_nodes (ip VARCHAR(15) UNIQUE)")
+            conn.run(
+                "CREATE TABLE yascheduler_nodes (ip VARCHAR(15) UNIQUE, cloud VARCHAR(32) DEFAULT NULL)"
+            )
             # Pre-create yascheduler_tasks at the pre-004 era schema (no
             # allocated_node_id) so migration 004's ALTER ADD COLUMN is
             # valid (apply_schema's CREATE TABLE IF NOT EXISTS is a no-op
@@ -193,6 +197,7 @@ def test_legacy_db_runs_all_migrations() -> None:
                 "009",
                 "010",
                 "011",
+                "012",
             ]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
@@ -218,7 +223,9 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
             )
-            conn.run("CREATE TABLE yascheduler_nodes (ip VARCHAR(15) UNIQUE)")
+            conn.run(
+                "CREATE TABLE yascheduler_nodes (ip VARCHAR(15) UNIQUE, cloud VARCHAR(32) DEFAULT NULL)"
+            )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('000')")
             # Pre-create yascheduler_tasks at the pre-004 era schema (no
             # allocated_node_id) so migration 004's ALTER ADD COLUMN is valid.
@@ -255,6 +262,7 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
                 "009",
                 "010",
                 "011",
+                "012",
             ]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
@@ -276,7 +284,7 @@ def test_py_migration_best_effort_reopen(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "012_reopen.py").write_text(
+    (migrations_dir / "013_reopen.py").write_text(
         "from yascheduler.infra.persistence.migration_base import Migration\n"
         "class Reopen(Migration):\n"
         "    def migrate(self) -> None:\n"
@@ -295,7 +303,7 @@ def test_py_migration_best_effort_reopen(
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["011", "012"]
+            assert _tracker_rows(conn) == ["012", "013"]
             assert _table_exists(conn, "test_reopen")
         finally:
             conn.close()
@@ -314,7 +322,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "012_fail.sql").write_text(
+    (migrations_dir / "013_fail.sql").write_text(
         "CREATE TABLE fail_tbl (id int); CREATE TABLE fail_tbl (id int);"
     )
     monkeypatch.setattr(
@@ -331,7 +339,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 
         conn = _connect(config)
         try:
-            assert "012" not in _tracker_rows(conn)
+            assert "013" not in _tracker_rows(conn)
             assert not _table_exists(conn, "fail_tbl")
         finally:
             conn.close()
@@ -381,7 +389,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
 
         conn = _connect(config)
         try:
-            # Tracker records 001-011.
+            # Tracker records 001-012.
             assert _tracker_rows(conn) == [
                 "001",
                 "002",
@@ -394,6 +402,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
                 "009",
                 "010",
                 "011",
+                "012",
             ]
             # node_id column now exists.
             cols = _columns(conn, "yascheduler_nodes")
@@ -403,7 +412,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
             conn.run("BEGIN")
             try:
                 rows = conn.run(
-                    "SELECT node_id, ip FROM yascheduler_nodes ORDER BY node_id"
+                    "SELECT node_id, hostname FROM yascheduler_nodes ORDER BY node_id"
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -490,7 +499,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
                 assert is_identity == "YES", (_tbl, _col, is_identity)
                 assert gen == "ALWAYS", (_tbl, _col, gen)
 
-            # The tracker now records 004 (seeded) and 005-011 (applied).
+            # The tracker now records 004 (seeded) and 005-012 (applied).
             assert _tracker_rows(conn) == [
                 "004",
                 "005",
@@ -500,6 +509,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
                 "009",
                 "010",
                 "011",
+                "012",
             ]
 
             # (b) The identity sequence next value > the previously inserted id,
@@ -521,7 +531,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
             conn.run("BEGIN")
             try:
                 inserted = conn.run(
-                    "INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.2') "
+                    "INSERT INTO yascheduler_nodes (hostname) VALUES ('10.0.0.2') "
                     "RETURNING node_id"
                 )
                 node_rows = conn.run(
@@ -686,7 +696,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
             finally:
                 conn.run("ROLLBACK")
 
-            # Tracker records 005 (seeded) + 006, 007, 008, 009, 010, 011
+            # Tracker records 005 (seeded) + 006, 007, 008, 009, 010, 011, 012
             assert _tracker_rows(conn) == [
                 "005",
                 "006",
@@ -695,6 +705,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
                 "009",
                 "010",
                 "011",
+                "012",
             ]
 
             # The legacy row's status was converted via the USING clause.
@@ -726,8 +737,8 @@ def test_fresh_db_full_shape() -> None:
 
         conn = _connect(config)
         try:
-            # Tracker seeds to '011'
-            assert _tracker_rows(conn) == ["011"]
+            # Tracker seeds to '012'
+            assert _tracker_rows(conn) == ["012"]
 
             cols = _columns(conn, "yascheduler_tasks")
             assert "task_id" in cols
@@ -771,12 +782,12 @@ def test_fresh_db_full_shape() -> None:
         finally:
             conn.close()
 
-        # apply_migrations finds MAX='011' and applies nothing.
+        # apply_migrations finds MAX='012' and applies nothing.
         apply_migrations(config)
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["011"]
+            assert _tracker_rows(conn) == ["012"]
         finally:
             conn.close()
 

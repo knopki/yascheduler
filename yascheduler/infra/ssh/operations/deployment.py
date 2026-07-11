@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/deployment.py
-# VERSION: 1.4.1
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: TaskDeployer — upload task inputs and spawn the calculation process on a remote machine via MachineSession. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: TaskDeployer class + _write_remote_file + _safe_b64decode module-private helpers.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.1 - TaskDeployer.start_task_on_machine SIDE_EFFECTS now declares the AssertionError raise on the task.remote_folder precondition (was the line-206 FIXME); checked before session.occupy() so it stays outside the rollback path, uncaught locally, propagates to the orchestrator allocator worker's `except Exception`.
-#   PREVIOUS_CHANGE: v1.4.0 - read task.extra[input_file] and task.remote_folder — typed fields folded onto Task.
+#   LAST_CHANGE: v1.5.0 - Node-rename-and-fields: session.ip→session.hostname in all log lines (3 sites).
+#   PREVIOUS_CHANGE: v1.4.1 - TaskDeployer.start_task_on_machine SIDE_EFFECTS now declares the AssertionError raise on the task.remote_folder precondition (was the line-206 FIXME); checked before session.occupy() so it stays outside the rollback path, uncaught locally, propagates to the orchestrator allocator worker's `except Exception`.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -252,7 +252,7 @@ class TaskDeployer:
                 self._log.warning(
                     "task_id=%s on %s: already disconnected, skipping rollback (%s)",
                     task.task_id,
-                    session.ip,
+                    session.hostname,
                     err,
                 )
                 raise
@@ -261,13 +261,13 @@ class TaskDeployer:
                     "unexpected state %s, expected BUSY (task_id=%s on %s)",
                     session.machine.state,
                     task.task_id,
-                    session.ip,
+                    session.hostname,
                 )
             else:
                 self._log.info(
                     "task_id=%s on %s (%s); rolling back BUSY",
                     task.task_id,
-                    session.ip,
+                    session.hostname,
                     err,
                 )
             session.update(session.machine.release())

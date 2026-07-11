@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_abandon_node.py
-# VERSION: 2.0.0
+# VERSION: 2.0.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup via discard_by_node).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Rewrite for discard_by_node mechanism: drop _todo_task helper + uow.tasks.list_by_status setup (DB read removed); assert tracker.discard_by_node called with node.node_id; add no-entry (count=0) and ambiguous (count>1) scenarios.
-#   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   LAST_CHANGE: v2.0.1 - Node-rename-and-fields: _cloud_node uses hostname= (was ip=), param renamed hostname.
+#   PREVIOUS_CHANGE: v2.0.0 - Rewrite for discard_by_node mechanism: drop _todo_task helper + uow.tasks.list_by_status setup (DB read removed); assert tracker.discard_by_node called with node.node_id; add no-entry (count=0) and ambiguous (count>1) scenarios.
 # END_CHANGE_SUMMARY
 """Unit tests for the abandon_node use case.
 
@@ -46,10 +46,10 @@ if TYPE_CHECKING:
     from yascheduler.application.uow import AbstractUnitOfWork
 
 
-def _cloud_node(ip: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
+def _cloud_node(hostname: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
     return Node(
         node_id=NodeId(1),
-        ip=ip,
+        hostname=hostname,
         ncpus=2,
         cloud=cloud,
         username="root",

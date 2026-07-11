@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/__init__.py
-# VERSION: 2.13.0
+# VERSION: 2.14.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Re-export domain symbols for cross-layer consumption.
 #   SCOPE: Public domain surface: entities, value objects, ports, events, exceptions, and cross-layer settings — re-exported for application/infra consumers.
@@ -17,6 +17,7 @@
 #   Event - Union type alias of all event types
 #   TaskStatus - IntEnum: TO_DO=0, RUNNING=1, DONE=2
 #   MachineState - Enum: FREE, BUSY
+#   NodeStatus - StrEnum: OTHER (placeholder for future node lifecycle states)
 #   ProcessResult - Exit code and captured output from remote execution
 #   Engine - Calculation engine value object (from M-DOMAIN-ENGINE)
 #   EngineRepository - Frozen collection of engines (from M-DOMAIN-ENGINE)
@@ -36,8 +37,8 @@
 #   TaskError - Task lifecycle errors
 #   TaskNotTodoError - Task not in TODO status
 #   TaskNotRunningError - Task not in RUNNING status
-#   MachineBusyError - Operation attempted on a busy machine
-#   MachineConnectionError - SSH connection failure carrying ip and reason
+#   MachineBusyError - Operation attempted on a busy machine (carries node_id, hostname)
+#   MachineConnectionError - SSH connection failure carrying node_id, hostname, and reason
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
 #   CloudCapacityExhaustedError - Cloud provider at capacity
@@ -55,8 +56,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.13.0 - Remove TaskAlreadyAllocatedError / TaskNotAllocatedError re-exports (classes removed from exceptions.py). Add materialize_task re-export (free function attaching TaskCreated to a freshly-inserted Task's events; called by PostgresTaskRepository.insert).
-#   PREVIOUS_CHANGE: v2.12.0 - Drop MachineOperations re-export (SSHMachineOperations facade dissolved; consumers type against the concrete collaborator classes from yascheduler.infra).
+#   LAST_CHANGE: v2.14.0 - Node-rename-and-fields: add NodeStatus re-export; update module map for hostname rename.
+#   PREVIOUS_CHANGE: v2.13.0 - Remove TaskAlreadyAllocatedError / TaskNotAllocatedError re-exports (classes removed from exceptions.py). Add materialize_task re-export (free function attaching TaskCreated to a freshly-inserted Task's events; called by PostgresTaskRepository.insert).
 # END_CHANGE_SUMMARY
 
 __all__ = [
@@ -71,6 +72,7 @@ __all__ = [
     # Model
     "TaskStatus",
     "MachineState",
+    "NodeStatus",
     "ProcessResult",
     "Engine",
     "EngineRepository",
@@ -155,6 +157,7 @@ from .model import (
     NewTask,
     Node,
     NodeId,
+    NodeStatus,
     ProcessResult,
     Task,
     TaskId,

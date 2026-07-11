@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_exceptions.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain exception hierarchy.
@@ -15,8 +15,8 @@
 #   test_missing_input_file_error_fields - engine_name + filename stored, message format
 #   test_task_error_hierarchy - TaskError inherits from DomainError
 #   test_task_error_hierarchy - TaskError inherits from DomainError
-#   test_machine_busy_error - ip stored, message contains it
-#   test_machine_connection_error_fields - ip and reason stored; message contains both
+#   test_machine_busy_error - node_id and hostname stored, message contains both
+#   test_machine_connection_error_fields - node_id, hostname, and reason stored; message contains all
 #   test_machine_connection_error_is_domain_error - catchable as DomainError and Exception
 #   test_scheduling_error_hierarchy - SchedulingError inherits from DomainError
 #   test_no_compatible_node_error - task_id + platforms stored
@@ -38,8 +38,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Add CloudError hierarchy tests (cloud-error-hierarchy).
-#   PREVIOUS_CHANGE: v1.1.0 - Add MachineConnectionError tests (gateway-port-cleanup).
+#   LAST_CHANGE: v1.3.0 - Node-rename-and-fields: MachineBusyError/MachineConnectionError tests use NodeId+hostname signature.
+#   PREVIOUS_CHANGE: v1.2.0 - Add CloudError hierarchy tests (cloud-error-hierarchy).
 # END_CHANGE_SUMMARY
 
 import pytest
@@ -59,7 +59,7 @@ from yascheduler.domain.exceptions import (
     UnsupportedEngineError,
     ValidationError,
 )
-from yascheduler.domain.model import TaskId
+from yascheduler.domain.model import NodeId, TaskId
 
 
 # START_CONTRACT: test_domain_error_is_exception
@@ -140,32 +140,36 @@ def test_task_error_hierarchy() -> None:
 
 
 # START_CONTRACT: test_machine_busy_error
-#   PURPOSE: Verify MachineBusyError stores ip and message contains it.
+#   PURPOSE: Verify MachineBusyError stores node_id and hostname; message contains both.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_machine_busy_error
 def test_machine_busy_error() -> None:
-    exc = MachineBusyError(ip="10.0.0.1")
-    assert exc.ip == "10.0.0.1"
+    exc = MachineBusyError(NodeId(1), "10.0.0.1")
+    assert exc.node_id == NodeId(1)
+    assert exc.hostname == "10.0.0.1"
     assert "busy" in str(exc)
     assert "10.0.0.1" in str(exc)
+    assert "1" in str(exc)
 
 
 # START_CONTRACT: test_machine_connection_error_fields
-#   PURPOSE: Verify MachineConnectionError stores ip and reason; message contains both.
+#   PURPOSE: Verify MachineConnectionError stores node_id, hostname, and reason; message contains all three.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_machine_connection_error_fields
 def test_machine_connection_error_fields() -> None:
-    exc = MachineConnectionError(ip="10.0.0.1", reason="Connection refused")
-    assert exc.ip == "10.0.0.1"
+    exc = MachineConnectionError(NodeId(1), "10.0.0.1", "Connection refused")
+    assert exc.node_id == NodeId(1)
+    assert exc.hostname == "10.0.0.1"
     assert exc.reason == "Connection refused"
     assert "10.0.0.1" in str(exc)
     assert "Connection refused" in str(exc)
+    assert "1" in str(exc)
 
 
 # START_CONTRACT: test_machine_connection_error_is_domain_error
@@ -178,10 +182,11 @@ def test_machine_connection_error_fields() -> None:
 def test_machine_connection_error_is_domain_error() -> None:
     assert issubclass(MachineConnectionError, DomainError)
     try:
-        raise MachineConnectionError("10.0.0.1", "boom")
+        raise MachineConnectionError(NodeId(1), "10.0.0.1", "boom")
     except DomainError as e:
         assert isinstance(e, MachineConnectionError)
-        assert e.ip == "10.0.0.1"
+        assert e.node_id == NodeId(1)
+        assert e.hostname == "10.0.0.1"
 
 
 # START_CONTRACT: test_scheduling_error_hierarchy
@@ -440,8 +445,8 @@ def test_all_exceptions_importable() -> None:
         UnsupportedEngineError(engine_name="x"),
         MissingInputFileError(engine_name="x", filename="f"),
         TaskError(),
-        MachineBusyError(ip="0.0.0.0"),
-        MachineConnectionError(ip="0.0.0.0", reason="x"),
+        MachineBusyError(NodeId(1), "0.0.0.0"),
+        MachineConnectionError(NodeId(1), "0.0.0.0", "x"),
         SchedulingError(),
         NoCompatibleNodeError(task_id=TaskId(3), platforms=["a"]),
         CloudCapacityExhaustedError(task_id=TaskId(4)),

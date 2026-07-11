@@ -57,7 +57,7 @@ def _make_uow(todo_task: Task) -> AsyncMock:
     uow.nodes.list_all = AsyncMock(return_value=[])
     # remove-tmp-node-fake-ip: tmp-node insertion is insert(NewNode(cloud=...,
     # enabled=False)) → Node carrying the generated node_id (the cleanup handle).
-    tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+    tmp_node = Node(node_id=NodeId(2), hostname="", ncpus=0, enabled=False, cloud="aws")
     uow.nodes.insert = AsyncMock(return_value=tmp_node)
     uow.collect_events = AsyncMock(return_value=[])
     uow.publish_events = AsyncMock()
@@ -214,7 +214,7 @@ class TestAllocateTaskFailureModes:
         occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
-        cloud_node = Node(node_id=NodeId(1), ip="[IP]", ncpus=4, cloud="aws")
+        cloud_node = Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, cloud="aws")
         uow.nodes.remove = AsyncMock()
         # First commit (step 1) succeeds; second commit (step 3 persist) fails;
         # subsequent commits (best-effort tmp cleanup) succeed.

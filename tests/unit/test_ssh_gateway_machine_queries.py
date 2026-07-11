@@ -52,7 +52,7 @@ def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
 
 
 def _make_session(
-    ip: str = "10.0.0.1",
+    hostname: str = "10.0.0.1",
     node_id: int = 1,
     platform: str = "linux",
     ncpus: int = 4,
@@ -60,11 +60,11 @@ def _make_session(
 ) -> SSHMachineSession:
     """Create a fully-mocked SSHMachineSession (bypasses connect)."""
     adapter = _make_mock_adapter(platform=platform, ncpus=ncpus)
-    conn, conn_opts = _make_mock_connection(ip=ip)
+    conn, conn_opts = _make_mock_connection(ip=hostname)
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
-        ip=ip,
+        hostname=hostname,
         platform=platform,
         ncpus=ncpus,
         state=state,
@@ -72,7 +72,7 @@ def _make_session(
     )
 
     return SSHMachineSession(
-        ip=ip,
+        hostname=hostname,
         conn=conn,
         conn_opts=conn_opts,
         machine=machine,
@@ -96,7 +96,7 @@ class TestMachineQueries:
         self, repository: SSHMachineRepository
     ) -> None:
         """get_session returns the live MachineSession registered for ip, or None."""
-        session = _make_session(ip="10.0.0.1", node_id=1)
+        session = _make_session(hostname="10.0.0.1", node_id=1)
         repository._sessions[NodeId(1)] = session
         assert repository.get_session(NodeId(1)) is session
         assert repository.get_session(NodeId(2)) is None
@@ -105,15 +105,15 @@ class TestMachineQueries:
         self, repository: SSHMachineRepository
     ) -> None:
         """get_session returns None once the node_id is popped from _sessions."""
-        session = _make_session(ip="10.0.0.1", node_id=1)
+        session = _make_session(hostname="10.0.0.1", node_id=1)
         repository._sessions[NodeId(1)] = session
         repository._sessions.pop(NodeId(1), None)
         assert repository.get_session(NodeId(1)) is None
 
     def test_list_connected(self, repository: SSHMachineRepository) -> None:
         """list_connected returns every registered session."""
-        session_a = _make_session(ip="10.0.0.1", node_id=1)
-        session_b = _make_session(ip="10.0.0.2", node_id=2)
+        session_a = _make_session(hostname="10.0.0.1", node_id=1)
+        session_b = _make_session(hostname="10.0.0.2", node_id=2)
         repository._sessions[NodeId(1)] = session_a
         repository._sessions[NodeId(2)] = session_b
         result = repository.list_connected()

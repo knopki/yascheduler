@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - In-memory join rekeyed from tasks_by_ip to tasks_by_node_id (dict[NodeId, Task] keyed by allocated_node_id). Dup-IP nodes now disambiguated.
-#   PREVIOUS_CHANGE: v1.3.0 - _NodeView.task_id narrows int | None -> TaskId | None; JSON renderer extracts r.task_id.value; table renderer str(row.task_id) unchanged via __str__.
+#   LAST_CHANGE: v1.5.0 - _NodeView.ip→hostname + new node fields (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); table header IP→HOSTNAME; JSON renderer emits hostname key + all new fields.
+#   PREVIOUS_CHANGE: v1.4.0 - In-memory join rekeyed from tasks_by_ip to tasks_by_node_id (dict[NodeId, Task] keyed by allocated_node_id). Dup-IP nodes now disambiguated.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import NodeId, TaskId, TaskStatus
+from yascheduler.domain import NodeId, NodeStatus, TaskId, TaskStatus
 from yascheduler.entrypoints import make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 
@@ -41,6 +41,7 @@ from .args import add_config_arg, add_log_level_arg
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from datetime import datetime
 
     from yascheduler.application import AbstractUnitOfWork
     from yascheduler.domain import Task
@@ -49,11 +50,18 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class _NodeView:
     node_id: NodeId
-    ip: str
+    hostname: str
     port: int
     ncpus: int
     enabled: bool
     cloud: str | None
+    jump_host: str | None
+    jump_port: int
+    jump_username: str
+    external_id: str | None
+    status: NodeStatus
+    created_at: datetime
+    updated_at: datetime
     task_id: TaskId | None
     label: str | None
 
@@ -140,11 +148,18 @@ async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
         rows.append(
             _NodeView(
                 node_id=node.node_id,
-                ip=node.ip,
+                hostname=node.hostname,
                 port=node.port,
                 ncpus=node.ncpus,
                 enabled=node.enabled,
                 cloud=node.cloud,
+                jump_host=node.jump_host,
+                jump_port=node.jump_port,
+                jump_username=node.jump_username,
+                external_id=node.external_id,
+                status=node.status,
+                created_at=node.created_at,
+                updated_at=node.updated_at,
                 task_id=task.task_id if task else None,
                 label=task.label if task else None,
             )
@@ -181,13 +196,22 @@ def _filter_rows(rows: list[_NodeView], args: argparse.Namespace) -> list[_NodeV
 # END_CONTRACT: _render_nodes_table
 def _render_nodes_table(rows: list[_NodeView]) -> str:
     # START_BLOCK_RENDER_TABLE
-    headers = ["NODE_ID", "IP", "PORT", "NCPUS", "ENABLED", "CLOUD", "TASK_ID", "LABEL"]
+    headers = [
+        "NODE_ID",
+        "HOSTNAME",
+        "PORT",
+        "NCPUS",
+        "ENABLED",
+        "CLOUD",
+        "TASK_ID",
+        "LABEL",
+    ]
     sep = "  "
 
     def _cells(row: _NodeView) -> list[str]:
         return [
             str(row.node_id),
-            row.ip,
+            row.hostname,
             "-" if row.port == 22 else str(row.port),
             "MAX" if row.ncpus == 0 else str(row.ncpus),
             "yes" if row.enabled else "no",
@@ -223,11 +247,18 @@ def _render_nodes_json(rows: list[_NodeView]) -> str:
     objects = [
         {
             "node_id": r.node_id.value,
-            "ip": r.ip,
+            "hostname": r.hostname,
             "port": r.port,
             "ncpus": r.ncpus,
             "enabled": r.enabled,
             "cloud": r.cloud,
+            "jump_host": r.jump_host,
+            "jump_port": r.jump_port,
+            "jump_username": r.jump_username,
+            "external_id": r.external_id,
+            "status": r.status.name,
+            "created_at": r.created_at.isoformat(),
+            "updated_at": r.updated_at.isoformat(),
             "occupied_by": (
                 {"task_id": r.task_id.value, "label": r.label}
                 if r.task_id is not None

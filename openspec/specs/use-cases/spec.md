@@ -136,7 +136,7 @@ cloud delete ensures the DB row is only dropped once the VM is gone).
 `deallocate_node` SHALL call `uow.nodes.disable(node.node_id)` and
 `uow.nodes.remove(node.node_id)` (keying on `node_id`, not `ip`).
 `clouds.deallocate(node)` SHALL take the whole `Node` and read `node.cloud`
-(provider) and `node.ip` (cloud host) internally. `deallocate_node` SHALL
+(provider) and `node.hostname` (cloud host) internally. `deallocate_node` SHALL
 call `repository.contains(node.node_id)` and `repository.disconnect(node.node_id)`
 BEFORE the `if node.cloud:` guard, so SSH teardown is owned by
 `deallocate_node` and runs regardless of whether the node is a cloud node.
@@ -154,7 +154,7 @@ reads from `uow.nodes.list_disabled()`, each carrying `node_id`.
 `node.node_id not in busy_node_ids and node.cloud`.
 
 Internal log lines in both `deallocate_nodes` and `deallocate_node` SHALL
-include both `node_id` and `ip` for correlation.
+include both `node_id` and `hostname` for correlation.
 
 #### Scenario: Idle cloud node disabled
 - **WHEN** `deallocate_nodes(...)` is called and an idle cloud node exceeds tolerance
@@ -183,47 +183,39 @@ abandoned). The use case SHALL:
 
 1. If `node.cloud` is non-None, call `clouds.deallocate(node)`
    as a best-effort cloud VM deletion. Failure here SHALL be logged at
-   `error` level with `node_id`, `ip`, `cloud`, and the exception, and SHALL NOT
+   `error` level with `node_id`, `hostname`, `cloud`, and the exception, and SHALL NOT
    suppress the subsequent DB-row removal.
-2. Open a UoW, call `uow.nodes.remove(node.node_id)`, and commit. Failure here
-   SHALL be logged at `error` level with `node_id`, `ip`, and the exception and
+2. Open a UoW, call `uow.tasks.list_by_status({TaskStatus.TO_DO})`, and
+   in-memory filter for the task whose `allocated_node_id == node.node_id`.
+   This read SHALL happen BEFORE the node-row removal in step 3 — the
+   `allocated_node_id` FK is `ON DELETE SET NULL`, so removing the node row
+   first would null `allocated_node_id` and the in-memory filter would no
+   longer match. Hold the matching task(s) in memory.
+3. Open a UoW, call `uow.nodes.remove(node.node_id)`, and commit. Failure here
+   SHALL be logged at `error` level with `node_id`, `hostname`, and the exception and
    re-raised.
-3. Call `tracker.discard_by_node(node.node_id)`. If the returned count is
-   greater than 1, a warning SHALL be logged at `warning` level with
-   `node_id`, `ip`, and the count (signals tracker corruption — under normal
-   operation exactly one tracker entry links to the node). The discard SHALL
-   run even if the count is zero (no-op) or greater than one (all matching
-   entries removed).
-
-The use case SHALL NOT read `uow.tasks` or filter TO_DO tasks by
-`allocated_node_id` — the cloud-provisioning path never binds the task to the
-node (the task stays TO_DO with `allocated_node_id = None` throughout cloud
-provisioning), so such a lookup is structurally empty. The `discard_by_node`
-mechanism uses the tracker's task-to-node link (established by
-`allocate_task`'s `set_node` call) instead.
+4. If exactly one matching task was found in step 2, call
+   `tracker.discard(task.task_id)`. If zero or multiple matched, no `discard`
+   is called.
 
 The use case SHALL NOT mark the task `FAILED` or emit a domain event — the
 task re-enters `allocate_task` on the next cycle. The use case SHALL NOT
 modify `node.enabled` or call `uow.nodes.disable` — the row is removed
 directly.
 
-Internal log lines SHALL include both `node_id` and `ip` for correlation.
+Internal log lines SHALL include both `node_id` and `hostname` for correlation.
 
 #### Scenario: Happy path — VM deleted, DB row removed, tracker released
-- **WHEN** `abandon_node(node, clouds, uow_factory, tracker)` is called for a cloud node whose `node_id` is linked to one tracker entry
-- **THEN** `clouds.deallocate(node)` is called, `uow.nodes.remove(node.node_id)` is called and committed, `tracker.discard_by_node(node.node_id)` is called and returns 1, and the function returns without raising
+- **WHEN** `abandon_node(node, clouds, uow_factory, tracker)` is called for a cloud node with one matching TO_DO task
+- **THEN** `clouds.deallocate(node)` is called, `uow.nodes.remove(node.node_id)` is called and committed, `tracker.discard(task.task_id)` is called, and the function returns without raising
 
 #### Scenario: Cloud deletion failure does not block DB cleanup
 - **WHEN** `clouds.deallocate(node)` raises an exception
-- **THEN** the exception is logged, `uow.nodes.remove(node.node_id)` is still called and committed, and the function continues to `tracker.discard_by_node`
+- **THEN** the exception is logged, `uow.nodes.remove(node.node_id)` is still called and committed, and the function continues to the stuck-task lookup
 
-#### Scenario: No tracker entry for the node is a no-op discard
-- **WHEN** `tracker.discard_by_node(node.node_id)` returns 0 (no tracker entry links to this node)
-- **THEN** no warning is logged, the function returns without raising, and the VM deletion + DB removal still ran
-
-#### Scenario: Multiple tracker entries for one node logs a warning
-- **WHEN** `tracker.discard_by_node(node.node_id)` returns a count greater than 1 (signals tracker corruption)
-- **THEN** a warning is logged with `node_id`, `ip`, and the count, all matching entries are removed, and the function returns without raising
+#### Scenario: No matching TO_DO task skips tracker discard
+- **WHEN** the stuck-task lookup finds zero TO_DO tasks with `allocated_node_id == node.node_id`
+- **THEN** `tracker.discard` is NOT called, the function returns without raising, and the VM deletion + DB removal still ran
 
 ### Requirement: ConsumeTask use case
 

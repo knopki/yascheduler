@@ -28,8 +28,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.7.0 - refactor-task-state-transitions: replace allocate_to/mark_running/with_remote_folder chains with task.run(node_id, remote_folder); replace with_download_results(...).complete() with task.complete(local_folder=, remote_folder=).
-#   PREVIOUS_CHANGE: v2.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields; TaskContext.from_metadata/to_metadata removed; context.X reads → task.X; lifecycle test uses with_download_results; extra preserved through download path.
+#   LAST_CHANGE: v2.8.0 - node-rename-and-fields: update SQL ip→hostname (migration 012) in test_migration_003_backfills_prov_ips_and_drops_unique.
+#   PREVIOUS_CHANGE: v2.7.0 - refactor-task-state-transitions: replace allocate_to/mark_running/with_remote_folder chains with task.run(node_id, remote_folder); replace with_download_results(...).complete() with task.complete(local_folder=, remote_folder=).
 # END_CHANGE_SUMMARY
 
 """Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL."""
@@ -61,9 +61,14 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 async def test_add_and_get_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Insert a node and retrieve it; verify all fields match."""
     new_node = NewNode(
-        ip="10.0.0.1", username="admin", port=2222, ncpus=8, cloud="azure", enabled=True
+        hostname="10.0.0.1",
+        username="admin",
+        port=2222,
+        ncpus=8,
+        cloud="azure",
+        enabled=True,
     )
-    assert new_node.ip == "10.0.0.1"
+    assert new_node.hostname == "10.0.0.1"
     assert new_node.username == "admin"
     assert new_node.port == 2222
     assert new_node.ncpus == 8
@@ -80,7 +85,7 @@ async def test_add_and_get_node(uow_factory: Callable[[], PostgresUnitOfWork]) -
     async with uow_factory() as uow:
         retrieved = await uow.nodes.get_by_id(persisted.node_id)
         assert retrieved is not None
-        assert retrieved.ip == "10.0.0.1"
+        assert retrieved.hostname == "10.0.0.1"
         assert retrieved.username == "admin"
         assert retrieved.port == 2222
         assert retrieved.ncpus == 8
@@ -100,8 +105,8 @@ async def test_get_all_nodes_filtering(
 ) -> None:
     """Add enabled and disabled nodes; verify filtered queries."""
     async with uow_factory() as uow:
-        await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0, enabled=True))
-        await uow.nodes.insert(NewNode(ip="10.0.0.2", ncpus=0, enabled=False))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=0, enabled=True))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.2", ncpus=0, enabled=False))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -110,11 +115,11 @@ async def test_get_all_nodes_filtering(
 
         enabled = await uow.nodes.list_enabled()
         assert len(enabled) == 1
-        assert enabled[0].ip == "10.0.0.1"
+        assert enabled[0].hostname == "10.0.0.1"
 
         disabled = await uow.nodes.list_disabled()
         assert len(disabled) == 1
-        assert disabled[0].ip == "10.0.0.2"
+        assert disabled[0].hostname == "10.0.0.2"
 
 
 # START_CONTRACT: test_has_node
@@ -127,7 +132,7 @@ async def test_get_all_nodes_filtering(
 async def test_has_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Check has_node for existing and non-existing IPs."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0))
+        node = await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=0))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -147,7 +152,9 @@ async def test_enable_disable_node(
 ) -> None:
     """Toggle node enabled status and verify."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0, enabled=False))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.1", ncpus=0, enabled=False)
+        )
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -179,7 +186,7 @@ async def test_enable_disable_node(
 async def test_remove_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Remove a node and verify it is gone."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0))
+        node = await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=0))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -204,13 +211,13 @@ async def test_count_aggregations(
     """Verify cloud and status aggregation queries."""
     async with uow_factory() as uow:
         await uow.nodes.insert(
-            NewNode(ip="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
         )
         await uow.nodes.insert(
-            NewNode(ip="10.0.0.2", ncpus=0, cloud="azure", enabled=False)
+            NewNode(hostname="10.0.0.2", ncpus=0, cloud="azure", enabled=False)
         )
         await uow.nodes.insert(
-            NewNode(ip="10.0.0.3", ncpus=0, cloud="hetzner", enabled=True)
+            NewNode(hostname="10.0.0.3", ncpus=0, cloud="hetzner", enabled=True)
         )
         await uow.commit()
 
@@ -238,7 +245,9 @@ async def test_count_aggregations(
 async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Add a task and retrieve it; verify all fields including typed fields and JSONB extra."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=4, enabled=True))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.1", ncpus=4, enabled=True)
+        )
         task = await uow.tasks.insert(
             NewTask(
                 label="calc",
@@ -287,7 +296,9 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     async with uow_factory() as uow:
         # Insert a node first so allocate_to(node) can bind a real node_id
         # (the DB FK allocated_node_id REFERENCES yascheduler_nodes(node_id)).
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.5", ncpus=4, enabled=True))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.5", ncpus=4, enabled=True)
+        )
         task = await uow.tasks.insert(
             NewTask(
                 label="sim",
@@ -415,7 +426,9 @@ async def test_get_tasks_by_status(
     """Filter tasks by status; multiple statuses supported."""
     async with uow_factory() as uow:
         await uow.tasks.insert(NewTask(label="todo", engine="fleur"))
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.7", ncpus=2, enabled=True))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.7", ncpus=2, enabled=True)
+        )
         t2 = await uow.tasks.insert(NewTask(label="running", engine="fleur"))
         t3 = await uow.tasks.insert(NewTask(label="done", engine="fleur"))
         # CHECK-valid RUNNING via real domain transitions (a bare
@@ -486,10 +499,12 @@ async def test_get_task_ids_by_node_id_and_status(
 ) -> None:
     """Filter task IDs by node_id and status."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="192.168.1.1", ncpus=4, enabled=True))
+        node = await uow.nodes.insert(
+            NewNode(hostname="192.168.1.1", ncpus=4, enabled=True)
+        )
         node_id = node.node_id
         other_node = await uow.nodes.insert(
-            NewNode(ip="10.0.0.1", ncpus=4, enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=4, enabled=True)
         )
 
         t1 = await uow.tasks.insert(NewTask(label="x", engine="fleur"))
@@ -532,7 +547,7 @@ async def test_get_tasks_with_cloud_by_id_status(
     """Compose list_by_jobs + get_by_ids to get cloud attribute."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(ip="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
         )
         node_id = node.node_id
         await uow.commit()
@@ -588,7 +603,7 @@ async def test_tmp_node_lifecycle_via_insert(
         assert isinstance(node, Node)
         assert isinstance(node.node_id, NodeId)
         assert node.node_id.value >= 1
-        assert node.ip == ""
+        assert node.hostname == ""
         assert node.enabled is False
         assert node.cloud == "azure"
         assert node.username == "root"
@@ -597,7 +612,7 @@ async def test_tmp_node_lifecycle_via_insert(
     async with uow_factory() as uow:
         # The tmp row is invisible to list_disabled (ip <> '' SQL filter excludes ip="").
         disabled = await uow.nodes.list_disabled()
-        assert all(n.ip != "" for n in disabled)
+        assert all(n.hostname != "" for n in disabled)
         # But visible to list_all (counts toward capacity).
         all_nodes = await uow.nodes.list_all()
         assert any(n.node_id == node.node_id for n in all_nodes)
@@ -697,7 +712,7 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.run("BEGIN")
             try:
                 rows = conn.run(
-                    "SELECT ip, enabled, cloud FROM yascheduler_nodes "
+                    "SELECT hostname, enabled, cloud FROM yascheduler_nodes "
                     "WHERE cloud = 'aws'"
                 )
             finally:
@@ -711,11 +726,11 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.run("BEGIN")
             try:
                 conn.run(
-                    "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
+                    "INSERT INTO yascheduler_nodes (hostname, enabled, cloud) "
                     "VALUES ('10.0.0.99', TRUE, 'aws')"
                 )
                 conn.run(
-                    "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
+                    "INSERT INTO yascheduler_nodes (hostname, enabled, cloud) "
                     "VALUES ('10.0.0.99', TRUE, 'hetzner')"
                 )
             finally:
@@ -737,11 +752,11 @@ async def test_list_filters_empty_ip_in_sql(
     """list_enabled/list_disabled filtering is in SQL, not python (remove-tmp-node-fake-ip)."""
     async with uow_factory() as uow:
         # A real enabled node (has a real ip).
-        await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=4, enabled=True))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=4, enabled=True))
         # A tmp/pending row (ip="", enabled=False) — excluded by list_disabled SQL.
         await uow.nodes.insert(NewNode(cloud="aws", enabled=False))
         # A real-disabled VM (ip<>"", enabled=False) — included by list_disabled.
-        await uow.nodes.insert(NewNode(ip="10.0.0.2", ncpus=4, enabled=False))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.2", ncpus=4, enabled=False))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -749,13 +764,13 @@ async def test_list_filters_empty_ip_in_sql(
         # Only the enabled real node; no python post-filter needed (invariant:
         # no enabled row has ip="").
         assert len(enabled) == 1
-        assert enabled[0].ip == "10.0.0.1"
+        assert enabled[0].hostname == "10.0.0.1"
 
         disabled = await uow.nodes.list_disabled()
         # Only the real-disabled VM (ip <> '' is filtered in SQL); the tmp row
         # with ip="" is excluded at the SQL layer.
         assert len(disabled) == 1
-        assert disabled[0].ip == "10.0.0.2"
+        assert disabled[0].hostname == "10.0.0.2"
 
         all_nodes = await uow.nodes.list_all()
         # list_all returns everything (including the tmp row with ip="").

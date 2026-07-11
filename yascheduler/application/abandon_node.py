@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/abandon_node.py
-# VERSION: 2.0.0
+# VERSION: 2.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Abandon never-connected cloud node use case — VM delete + DB-row remove + discard tracker entry linked to the node.
 #   SCOPE: Never-connected cloud node cleanup — VM delete, DB row remove, discard tracker entry by node via discard_by_node.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Replace the dead TO_DO + allocated_node_id lookup with tracker.discard_by_node(node.node_id); the task-to-node link now lives in the tracker . Multi-match warning now signals tracker corruption over tracker entries, not TO_DO tasks.
-#   PREVIOUS_CHANGE: v1.4.0 - calls clouds.deallocate(node).
+#   LAST_CHANGE: v2.1.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
+#   PREVIOUS_CHANGE: v2.0.0 - Replace the dead TO_DO + allocated_node_id lookup with tracker.discard_by_node(node.node_id); the task-to-node link now lives in the tracker . Multi-match warning now signals tracker corruption over tracker entries, not TO_DO tasks.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -57,9 +57,9 @@ async def abandon_node(
             await clouds.deallocate(node)
         except Exception as err:
             logger.error(
-                "[abandon_node][CLOUD_DELETE_FAILED] node_id=%s ip=%s cloud=%s err=%s",
+                "[abandon_node][CLOUD_DELETE_FAILED] node_id=%s hostname=%s cloud=%s err=%s",
                 node.node_id,
-                node.ip,
+                node.hostname,
                 node.cloud,
                 err,
             )
@@ -72,9 +72,9 @@ async def abandon_node(
             await uow.commit()
     except Exception as err:
         logger.error(
-            "[abandon_node][REMOVE_FAILED] node_id=%s ip=%s err=%s",
+            "[abandon_node][REMOVE_FAILED] node_id=%s hostname=%s err=%s",
             node.node_id,
-            node.ip,
+            node.hostname,
             err,
         )
         raise
@@ -84,9 +84,9 @@ async def abandon_node(
     removed = tracker.discard_by_node(node.node_id)
     if removed > 1:
         logger.warning(
-            "[abandon_node][AMBIGUOUS_TRACKER] node_id=%s ip=%s count=%d",
+            "[abandon_node][AMBIGUOUS_TRACKER] node_id=%s hostname=%s count=%d",
             node.node_id,
-            node.ip,
+            node.hostname,
             removed,
         )
     # END_BLOCK_DISCARD_BY_NODE

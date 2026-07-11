@@ -461,14 +461,14 @@ followed by one data row per node, in the order returned by
 computed from the data (the maximum of the header width and the widest cell
 width per column) so the table is self-aligning regardless of value lengths.
 
-The columns SHALL be: `NODE_ID`, `IP`, `PORT`, `NCPUS`, `ENABLED`, `CLOUD`,
+The columns SHALL be: `NODE_ID`, `HOSTNAME`, `PORT`, `NCPUS`, `ENABLED`, `CLOUD`,
 `TASK_ID`, `LABEL`. `NODE_ID` is the first column (identity first). Display-only
 transformations SHALL apply to the table cells:
 
 | column   | raw value       | table cell                       |
 | -------- | --------------- | -------------------------------- |
 | NODE_ID  | `node.node_id`    | `str(node.node_id)` (the bare int, via `NodeId.__str__`) |
-| IP       | `node.ip`         | as-is                            |
+| HOSTNAME | `node.hostname`   | as-is                            |
 | PORT     | `node.port`       | `-` when `22`, else the int      |
 | NCPUS    | `node.ncpus`      | `MAX` when `0`, else the int     |
 | ENABLED  | `node.enabled`    | `yes` when True, `no` when False |
@@ -482,11 +482,11 @@ invariant).
 
 #### Scenario: yanodes table has a header row
 - **WHEN** `yanodes` is invoked (with or without filter flags)
-- **THEN** the first line of output is the header row `NODE_ID`, `IP`, `PORT`, `NCPUS`, `ENABLED`, `CLOUD`, `TASK_ID`, `LABEL` (column separators and exact spacing follow the fixed-width computation)
+- **THEN** the first line of output is the header row `NODE_ID`, `HOSTNAME`, `PORT`, `NCPUS`, `ENABLED`, `CLOUD`, `TASK_ID`, `LABEL` (column separators and exact spacing follow the fixed-width computation)
 
 #### Scenario: yanodes table shows a busy node
-- **WHEN** a node with `node_id=1`, `ip="[IP]"`, `port=22`, `ncpus=4`, `enabled=True`, `cloud=None` has a RUNNING task with `task_id=7`, `label="my_job"`
-- **THEN** one row is emitted with NODE_ID=`1`, PORT=`-`, NCPUS=`4`, ENABLED=`yes`, CLOUD=`-`, TASK_ID=`7`, LABEL=`my_job`
+- **WHEN** a node with `node_id=1`, `hostname="[IP]"`, `port=22`, `ncpus=4`, `enabled=True`, `cloud=None` has a RUNNING task with `task_id=7`, `label="my_job"`
+- **THEN** one row is emitted with NODE_ID=`1`, HOSTNAME=`[IP]`, PORT=`-`, NCPUS=`4`, ENABLED=`yes`, CLOUD=`-`, TASK_ID=`7`, LABEL=`my_job`
 
 #### Scenario: yanodes table shows MAX for zero ncpus
 - **WHEN** a node has `ncpus=0`
@@ -503,16 +503,27 @@ each object represents one node with raw domain values (NO display
 transformations — no `-`, no `MAX`, no `yes`/`no`). The object schema SHALL be:
 
 ```
-{"node_id": int, "ip": str, "port": int, "ncpus": int, "enabled": bool,
- "cloud": str | null, "occupied_by": {"task_id": int, "label": str} | null}
+{"node_id": int, "hostname": str, "port": int, "ncpus": int, "enabled": bool,
+ "cloud": str | null, "jump_host": str | null, "jump_port": int,
+ "jump_username": str, "external_id": str | null, "status": str,
+ "created_at": str, "updated_at": str,
+ "occupied_by": {"task_id": int, "label": str} | null}
 ```
 
 - `node_id`: the raw `node.node_id.value` int (serialized via `.value` because
   a `NodeId` dataclass is not JSON-serializable).
+- `hostname`: the raw `node.hostname` string.
 - `port`: the raw `node.port` int (22 stays 22, 2222 stays 2222).
 - `ncpus`: the raw `node.ncpus` int (0 stays 0 — `MAX` is a table-only display
   token and MUST NOT appear in JSON).
 - `cloud`: `null` for static nodes, else the `node.cloud` string.
+- `jump_host`: `null` when `None`, else the `node.jump_host` string.
+- `jump_port`: the raw `node.jump_port` int.
+- `jump_username`: the raw `node.jump_username` string.
+- `external_id`: `null` for static nodes, else the `node.external_id` string.
+- `status`: the raw `node.status.name` string (e.g. `"OTHER"`).
+- `created_at`: `node.created_at.isoformat()` (ISO-8601 string).
+- `updated_at`: `node.updated_at.isoformat()` (ISO-8601 string).
 - `occupied_by`: `null` when the node is free; a single object
   `{"task_id": int, "label": str}` when the node is busy (one RUNNING task).
   The single-object shape encodes the one-RUNNING-task-per-node invariant;
@@ -527,6 +538,14 @@ One object per node, in the order returned by `uow.nodes.list_all()`.
 #### Scenario: yanodes --json includes node_id
 - **WHEN** a node with `node_id=NodeId(5)` is listed
 - **THEN** the JSON object's `node_id` field is `5` (the bare int via `.value`)
+
+#### Scenario: yanodes --json uses hostname key not ip
+- **WHEN** a node with `hostname="10.0.0.1"` is listed via `yanodes --json`
+- **THEN** the JSON object has a `"hostname"` key with value `"10.0.0.1"` and does NOT have an `"ip"` key
+
+#### Scenario: yanodes --json includes new node fields
+- **WHEN** a node with `jump_host=None`, `jump_port=22`, `jump_username="root"`, `external_id=None`, `status=NodeStatus.OTHER`, `created_at=<datetime>`, `updated_at=<datetime>` is listed via `yanodes --json`
+- **THEN** the JSON object includes `jump_host: null`, `jump_port: 22`, `jump_username: "root"`, `external_id: null`, `status: "OTHER"`, `created_at: <isoformat>`, `updated_at: <isoformat>`
 
 #### Scenario: yanodes --json empty result is empty list
 - **WHEN** `yanodes --json` is invoked and no node matches the filters
@@ -666,7 +685,7 @@ stdout, emitted **after** `await uow.commit()` succeeds:
 | remove-soft, has tasks | `A task associated, prevent from assigning the new tasks` / `Prevented from assigning the new tasks: {host}` |
 | remove-soft, no tasks | `No tasks associated, remove node immediately` / `Removed host from yascheduler: {host}` |
 
-`{host}` is the parsed `HostSpec.host` (host spec path) or resolved `node.ip`
+`{host}` is the parsed `HostSpec.host` (host spec path) or resolved `node.hostname`
 (node_id path). On failure, print `Error: <message>` to stderr and exit 1.
 
 #### Scenario: yasetnode add success prints verbatim messages to stdout after commit
@@ -700,11 +719,14 @@ if `node_target.node_id is not None` AND neither `--remove-soft` nor
 
 On the remove path, the validation UoW resolves the `Node` early —
 `uow.nodes.get_by_id(node_target.node_id) -> Node | None` on the node_id path,
-`uow.nodes.get(spec.host) -> Node | None` on the host_spec path. If `None`, the
-existing "NOT in DB" body validation raises (exit `1`). If found, the `Node` is
-passed to the remove helpers, which use `node.node_id` for the
-`nodes.disable(node.node_id)` / `nodes.remove(node.node_id)` mutators and
-`node.ip` for user-facing stdout messages.
+or `uow.nodes.list_all()` + filter by `hostname == target.host_spec.host` on
+the host_spec path (the hostname-keyed `get(ip)` lookup is removed — `node_id`
+is the sole identity; resolving a host_spec to a `Node` requires listing
+because `hostname` is not a unique key). If `None`, the existing "NOT in DB"
+body validation raises (exit `1`). If found, the `Node` is passed to the remove
+helpers, which use `node.node_id` for the `nodes.disable(node.node_id)` /
+`nodes.remove(node.node_id)` mutators and `node.hostname` for user-facing
+stdout messages.
 
 #### Scenario: yasetnode pure-digit positional is a node_id
 - **WHEN** `_parse_node_target("5")` is called
@@ -855,8 +877,20 @@ exactly these fields:
 
 ```
 {"task_id": int, "status": str, "label": str, "engine": str,
- "local_folder": str | null, "remote_folder": str | null}
+ "local_folder": str | null, "remote_folder": str | null,
+ "created_at": str, "updated_at": str,
+ "node": {"hostname": str, "port": int, "username": str,
+          "cloud": str | null, "jump_host": str | null,
+          "jump_port": int, "jump_username": str,
+          "external_id": str | null, "status": str,
+          "created_at": str, "updated_at": str} | null}
 ```
+
+The `node` object is `null` when the task has no allocated node; otherwise it
+carries the resolved `Node` fields with `hostname` (not `ip`), all connection
+parameters (`port`, `username`, `jump_host`, `jump_port`, `jump_username`),
+`cloud`, `external_id`, `status` (the `NodeStatus` name string), and audit
+timestamps (`created_at`/`updated_at` as ISO-8601 strings).
 
 One object per task, in the order returned by the query (`list_by_status` or
 `list_by_jobs`). `--json` SHALL be in the `mutually_exclusive_group` with `-v`
@@ -874,6 +908,10 @@ JSON with ephemeral scientific output is excluded by design).
 #### Scenario: yastatus --json composes with -j
 - **WHEN** `yastatus -j 1 2 --json` is invoked
 - **THEN** `list_by_jobs(job_ids=["1", "2"])` is called and the JSON renderer prints the result (the `-j` filter composes with `--json`)
+
+#### Scenario: yastatus --json node object uses hostname key
+- **WHEN** a task with an allocated node that has `hostname="10.0.0.1"` is rendered via `yastatus --json`
+- **THEN** the `node` object has a `"hostname"` key with value `"10.0.0.1"` and does NOT have an `"ip"` key
 
 ### Requirement: yastatus view mode connects via SSH with correct node params
 

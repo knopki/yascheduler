@@ -194,7 +194,7 @@ class TestSSHGatewayIntegration:
     ) -> None:
         """connect() returns a session with correct ip, platform, and FREE state."""
         session = await self._get_session(repository)
-        assert session.ip == ssh_container["host"]
+        assert session.hostname == ssh_container["host"]
         assert session.machine.platform == "linux"
         assert session.machine.state == MachineState.FREE
         assert session.machine.ncpus > 0
@@ -390,7 +390,7 @@ def _container_node(node_id: int, ssh_container: dict[str, Any]) -> Node:  # typ
     """Build a Node from a testcontainers SSH fixture (node_id-first identity)."""
     return Node(
         node_id=NodeId(node_id),
-        ip=ssh_container["host"],
+        hostname=ssh_container["host"],
         ncpus=4,
         enabled=True,
         cloud=None,

@@ -75,13 +75,13 @@ class FakeMachineSession:
     ``CloudProvisionerImpl._setup_vm`` calls these directly on the session).
     """
 
-    def __init__(self, ip: str, platform: str = "linux") -> None:
-        self._ip = ip
-        # Derive node_id from ip to ensure uniqueness; the allocator pairs
+    def __init__(self, hostname: str, platform: str = "linux") -> None:
+        self._hostname = hostname
+        # Derive node_id from hostname to ensure uniqueness; the allocator pairs
         # sessions with nodes by node_id so this must match the DB-side ID.
-        last_octet = int(ip.rsplit(".", 1)[-1]) if "." in ip else 1
+        last_octet = int(hostname.rsplit(".", 1)[-1]) if "." in hostname else 1
         self._machine = ConnectedMachine(
-            ip=ip,
+            hostname=hostname,
             platform=platform,
             ncpus=4,
             state=MachineState.FREE,
@@ -94,8 +94,8 @@ class FakeMachineSession:
         self.get_cpu_cores: AsyncMock = AsyncMock(return_value=4)
 
     @property
-    def ip(self) -> str:
-        return self._ip
+    def hostname(self) -> str:
+        return self._hostname
 
     @property
     def machine(self) -> ConnectedMachine:
@@ -144,7 +144,7 @@ class FakeMachineRepository:
             raise self._connect_raises
         self.connect_calls.append(node)
         platform = kwargs.get("platform", "linux")
-        session = FakeMachineSession(ip=node.ip, platform=platform)
+        session = FakeMachineSession(hostname=node.hostname, platform=platform)
         if self._session_run_side_effect is not None:
             # A MagicMock configured with exit_code/stdout/stderr attributes is
             # a plain return value — use return_value so `await session.run(cmd)`
@@ -159,8 +159,8 @@ class FakeMachineRepository:
         session.get_cpu_cores = AsyncMock(
             return_value=self._session_get_cpu_cores_return
         )
-        self._sessions[node.ip] = session
-        self._node_id_to_ip[node.node_id] = node.ip
+        self._sessions[node.hostname] = session
+        self._node_id_to_ip[node.node_id] = node.hostname
         return session
 
     async def disconnect(self, node_id: NodeId) -> None:
@@ -225,26 +225,26 @@ class _FakeNodeRepo:
         self._id_counter += 1
         node = Node(
             node_id=NodeId(self._id_counter),
-            ip=new_node.ip,
+            hostname=new_node.hostname,
             ncpus=new_node.ncpus,
             enabled=new_node.enabled,
             cloud=new_node.cloud,
             username=new_node.username,
             port=new_node.port,
         )
-        self._store[node.ip] = node
+        self._store[node.hostname] = node
         return node
 
     async def update(self, node: Node) -> None:
-        self._store[node.ip] = node
+        self._store[node.hostname] = node
 
     async def enable(self, node_id: NodeId) -> None:
         ip = self._ip_for(node_id)
         node = self._store.get(ip) if ip is not None else None
         if node is not None:
-            self._store[node.ip] = Node(
+            self._store[node.hostname] = Node(
                 node_id=node.node_id,
-                ip=node.ip,
+                hostname=node.hostname,
                 ncpus=node.ncpus,
                 enabled=True,
                 cloud=node.cloud,
@@ -256,9 +256,9 @@ class _FakeNodeRepo:
         ip = self._ip_for(node_id)
         node = self._store.get(ip) if ip is not None else None
         if node is not None:
-            self._store[node.ip] = Node(
+            self._store[node.hostname] = Node(
                 node_id=node.node_id,
-                ip=node.ip,
+                hostname=node.hostname,
                 ncpus=node.ncpus,
                 enabled=False,
                 cloud=node.cloud,
@@ -429,7 +429,7 @@ class FakeCloudProvisioner:
         session = await self._repo.connect(
             Node(
                 node_id=node.node_id,
-                ip=self._new_ip,
+                hostname=self._new_ip,
                 ncpus=4,
                 enabled=True,
                 cloud=provider,
@@ -439,11 +439,11 @@ class FakeCloudProvisioner:
             platform=self._new_platform,
         )
         if self._fail:
-            raise CloudSetupError(f"setup failed on {session.ip}")
+            raise CloudSetupError(f"setup failed on {session.hostname}")
         async with self._uow_factory() as uow:
             await uow.nodes.insert(
                 NewNode(
-                    ip=session.ip,
+                    hostname=session.hostname,
                     ncpus=4,
                     enabled=True,
                     cloud=provider,
@@ -452,7 +452,7 @@ class FakeCloudProvisioner:
             await uow.commit()
         return Node(
             node_id=node.node_id,
-            ip=self._new_ip,
+            hostname=self._new_ip,
             ncpus=4,
             enabled=True,
             cloud=provider,
@@ -589,7 +589,7 @@ def _make_todo_task(task_id: int = 1) -> Task:
 def _node(n: int, *, enabled: bool = True) -> Node:
     return Node(
         node_id=NodeId(n),
-        ip=f"10.0.0.{n}",
+        hostname=f"10.0.0.{n}",
         ncpus=4,
         enabled=enabled,
         username="root",
@@ -600,12 +600,12 @@ def _node(n: int, *, enabled: bool = True) -> Node:
 def _tmp_node(n: int, *, cloud: str = "test") -> Node:
     """Build a tmp-node Node as allocate_task inserts it (pre-allocate).
 
-    ``allocate`` receives this and overlays ip/cloud/username via ``replace``
-    after ``create_node`` returns the VM ip.
+    ``allocate`` receives this and overlays hostname/cloud/username via ``replace``
+    after ``create_node`` returns the VM hostname.
     """
     return Node(
         node_id=NodeId(n),
-        ip="",
+        hostname="",
         ncpus=0,
         enabled=False,
         cloud=cloud,
@@ -723,7 +723,7 @@ class TestFixA:
         captured_ip: list[str] = []
 
         async def _start(session: Any, engine: Any, task: Any) -> bool:
-            captured_ip.append(session.ip)
+            captured_ip.append(session.hostname)
             return True
 
         result = await _allocate(TaskId(1), repo, uow, MagicMock(), _start)
@@ -841,7 +841,7 @@ class TestFixB:
         with _patch_ssh_key():
             node = await prov.allocate("test", _tmp_node(1))
 
-        assert node.ip == "[IP]"
+        assert node.hostname == "[IP]"
         assert node.ncpus == 8
         assert repo.disconnect_calls == []
         assert "[IP]" in repo._sessions
@@ -891,8 +891,8 @@ class TestFixC:
         call_log: list[str] = []
 
         async def _start(session: Any, engine: Any, task: Any) -> bool:
-            call_log.append(session.ip)
-            if session.ip == "10.0.0.1":
+            call_log.append(session.hostname)
+            if session.hostname == "10.0.0.1":
                 raise RuntimeError("stale session channel closed")
             return True
 

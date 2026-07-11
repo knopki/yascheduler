@@ -35,7 +35,7 @@ dependencies = [
   "backoff~=2.1.2",
   "pg8000~=1.19",
   "python-daemon~=2.3",
-  "typing-extensions >= 4.2.0; python_version < '3.11'",
+  "typing-extensions >= 4.6.0; python_version < '3.11'",
 ]
 
 [project.urls]

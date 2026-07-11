@@ -63,6 +63,7 @@ from yascheduler.domain.exceptions import MachineConnectionError
 from yascheduler.domain.model import (
     NewNode,
     NewTask,
+    NodeId,
     TaskStatus,
 )
 from yascheduler.infra.cloud.cloud_configs import (
@@ -162,7 +163,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     # by the task_status_field_invariants CHECK on yascheduler_tasks).
     dead_ip = "192.0.2.7"
     node = NewNode(
-        ip=dead_ip,
+        hostname=dead_ip,
         ncpus=2,
         cloud="hetzner",
         username="root",
@@ -193,7 +194,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     )
     # Simulate SSH connect always failing for the dead IP.
     orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-        side_effect=MachineConnectionError(dead_ip, "connection refused")
+        side_effect=MachineConnectionError(NodeId(999), dead_ip, "connection refused")
     )
 
     # START_BLOCK_DRIVE_PAST_GRACE

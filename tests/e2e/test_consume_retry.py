@@ -52,7 +52,7 @@ async def _setup_node_and_submit(
     async with uow_factory() as uow:
         db_node = await uow.nodes.insert(
             NewNode(
-                ip=ssh_container["host"],
+                hostname=ssh_container["host"],
                 username=ssh_container["username"],
                 port=ssh_container["port"],
                 enabled=True,
@@ -289,7 +289,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
         check_repo = SSHMachineRepository(log=log)
         check_node = Node(
             node_id=NodeId(9999),
-            ip=ssh_container["host"],
+            hostname=ssh_container["host"],
             ncpus=0,
             enabled=True,
             cloud=None,
@@ -330,7 +330,7 @@ async def _cleanup_node(
 ) -> None:
     async with uow_factory() as uow:
         all_nodes = await uow.nodes.list_all()
-        matching = [n for n in all_nodes if n.ip == ssh_container["host"]]
+        matching = [n for n in all_nodes if n.hostname == ssh_container["host"]]
         if matching:
             await uow.nodes.remove(matching[0].node_id)
         await uow.commit()

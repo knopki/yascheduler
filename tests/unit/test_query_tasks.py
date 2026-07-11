@@ -207,8 +207,8 @@ class TestQueryTasks:
             _make_task(task_id=4, allocated_node_id=None),
         ]
         nodes_list = [
-            Node(node_id=NodeId(7), ip="10.0.0.7", ncpus=2),
-            Node(node_id=NodeId(8), ip="10.0.0.8", ncpus=4),
+            Node(node_id=NodeId(7), hostname="10.0.0.7", ncpus=2),
+            Node(node_id=NodeId(8), hostname="10.0.0.8", ncpus=4),
         ]
         repo = FakeTaskRepository(tasks=tasks_list)
         nodes_repo = FakeNodeRepository(nodes=nodes_list)
@@ -229,7 +229,7 @@ class TestQueryTasks:
         task = _make_task(
             task_id=1, status=TaskStatus.TO_DO, allocated_node_id=NodeId(7)
         )
-        node = Node(node_id=NodeId(7), ip="10.0.0.1", ncpus=2)
+        node = Node(node_id=NodeId(7), hostname="10.0.0.1", ncpus=2)
         repo = FakeTaskRepository(tasks=[task])
         nodes_repo = FakeNodeRepository(nodes=[node])
         uow = FakeUnitOfWork(repo, nodes=nodes_repo)

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_client_query.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Yascheduler queue-query methods via the deps_factory constructor seam.
@@ -18,7 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   LAST_CHANGE: v1.3.0 - Node-rename-and-fields: Node kwargs ip→hostname; update expected node dict assertions with new fields (hostname, jump_host, jump_port, jump_username, external_id, status, created_at, updated_at).
+#   PREVIOUS_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
 #   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: update EXPECTED_KEYS to 5-key set (task_id, label, status, metadata, node); add FakeNodeRepository; update FakeUnitOfWork with .nodes; _make_task uses allocated_node_id instead of allocated_ip; rename ip/cloud assertions to node assertions; add test_node_object_for_allocated_task, test_node_is_null_for_unallocated_task, test_flat_ip_and_cloud_keys_absent.
 #   PREVIOUS_CHANGE: v1.0.2 - Migrate import/patch paths from yascheduler.client to yascheduler.entrypoints.client.
 # END_CHANGE_SUMMARY
@@ -180,10 +181,10 @@ class TestClientQueryDispatch:
         assert repo.list_by_jobs_calls == []
 
     async def test_node_object_for_allocated_task(self) -> None:
-        """Task with allocated_node_id returns nested node object with ip, port, username, cloud."""
+        """Task with allocated_node_id returns nested node object with hostname, port, username, cloud, and new fields."""
         node = Node(
             node_id=NodeId(7),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=2,
             port=22,
             username="root",
@@ -200,12 +201,18 @@ class TestClientQueryDispatch:
 
         assert len(result) == 1
         mapping = result[0]
-        assert mapping["node"] == {
-            "ip": "10.0.0.1",
-            "port": 22,
-            "username": "root",
-            "cloud": "hetzner",
-        }
+        node_dict = mapping["node"]
+        assert node_dict["hostname"] == "10.0.0.1"
+        assert node_dict["port"] == 22
+        assert node_dict["username"] == "root"
+        assert node_dict["cloud"] == "hetzner"
+        assert node_dict["jump_host"] is None
+        assert node_dict["jump_port"] == 22
+        assert node_dict["jump_username"] == "root"
+        assert node_dict["external_id"] is None
+        assert node_dict["status"] == "OTHER"
+        assert "created_at" in node_dict
+        assert "updated_at" in node_dict
 
     async def test_node_is_null_for_unallocated_task(self) -> None:
         """Task with allocated_node_id=None has node is None."""

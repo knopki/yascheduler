@@ -20,7 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: rename list_ids_by_ip_and_status→list_ids_by_node_id_and_status in mock setup
+#   LAST_CHANGE: v1.4.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), added_node.hostname→added_node.hostname, make_mock_uow Node(hostname=…)→Node(hostname=…).
+#   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: rename list_ids_by_ip_and_status→list_ids_by_node_id_and_status in mock setup
 #   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: deleted test_manage_node_is_to_sync_decorated (manage_node is no longer @to_sync; it's a sync def that calls asyncio.run); added --config/--log-level scenarios.
 # END_CHANGE_SUMMARY
 
@@ -72,7 +73,7 @@ def make_mock_uow() -> AsyncMock:
     uow.nodes.insert = AsyncMock(
         return_value=Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=0,
             enabled=False,
             cloud=None,
@@ -406,7 +407,7 @@ class TestManageNodeAddPath:
     ) -> None:
         _config, uow, _deps, repo = stub_env
         uow.nodes.list_all = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="IP", ncpus=4, enabled=True)]
+            return_value=[Node(node_id=NodeId(1), hostname="IP", ncpus=4, enabled=True)]
         )
 
         with pytest.raises(SystemExit) as exc:
@@ -444,7 +445,7 @@ class TestManageNodeAddPath:
 
         added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.ncpus == 0
-        assert added_node.ip == "10.0.0.1"
+        assert added_node.hostname == "10.0.0.1"
         assert added_node.port == 22
         assert (
             added_node.enabled is False
@@ -494,7 +495,9 @@ class TestManageNodeRemovePath:
     ) -> None:
         _config, uow, _deps, repo = stub_env
         uow.nodes.list_all = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
+            ]
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1, 2])
 
@@ -519,7 +522,9 @@ class TestManageNodeRemovePath:
     ) -> None:
         _config, uow, _deps, _repo = stub_env
         uow.nodes.list_all = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
+            ]
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1])
 
@@ -539,7 +544,9 @@ class TestManageNodeRemovePath:
     ) -> None:
         _config, uow, _deps, _repo = stub_env
         uow.nodes.list_all = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
+            ]
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[])
 
@@ -575,7 +582,9 @@ class TestManageNodeRemovePath:
     ) -> None:
         _config, uow, _deps, _repo = stub_env
         uow.nodes.list_all = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
+            ]
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1])
         # Failing commit proves the success prints live AFTER commit, not before.
@@ -598,7 +607,7 @@ class TestManageNodeRemovePath:
     ) -> None:
         """[9.4] remove-by-host: list_all() resolves Node by ip; helper receives Node, not str."""
         _config, uow, _deps, _repo = stub_env
-        resolved = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)
+        resolved = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
         uow.nodes.list_all = AsyncMock(return_value=[resolved])
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[])
 
@@ -869,7 +878,9 @@ class TestManageNodeIdPath:
     ) -> None:
         _config, uow, _deps, _repo = stub_env
         uow.nodes.get_by_id = AsyncMock(
-            return_value=Node(node_id=NodeId(5), ip="10.0.0.5", ncpus=4, enabled=True)
+            return_value=Node(
+                node_id=NodeId(5), hostname="10.0.0.5", ncpus=4, enabled=True
+            )
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[])
 

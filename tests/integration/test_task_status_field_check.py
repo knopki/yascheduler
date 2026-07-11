@@ -1,5 +1,5 @@
 # FILE: tests/integration/test_task_status_field_check.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Integration tests for the task_status_field_invariants CHECK constraint on yascheduler_tasks against real PostgreSQL.
@@ -18,7 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - task-status-field-invariants: initial CHECK-rejection integration tests (forbidden INSERT/UPDATE, TO_DO+error, RUNNING+NULL remote_folder, bare node DELETE rejected, hard-remove path succeeds).
+#   LAST_CHANGE: v1.1.0 - node-rename-and-fields: _insert_node uses hostname column (migration 012 renamed ip→hostname).
+#   PREVIOUS_CHANGE: v1.0.0 - task-status-field-invariants: initial CHECK-rejection integration tests (forbidden INSERT/UPDATE, TO_DO+error, RUNNING+NULL remote_folder, bare node DELETE rejected, hard-remove path succeeds).
 # END_CHANGE_SUMMARY
 
 """Integration tests for the task_status_field_invariants CHECK constraint.
@@ -60,13 +61,16 @@ pytestmark = pytest.mark.integration
 _CONSTRAINT = "task_status_field_invariants"
 
 
-def _insert_node(conn: pg8000.native.Connection, ip: str = "10.0.0.1") -> int:
+def _insert_node(conn: pg8000.native.Connection, hostname: str = "10.0.0.1") -> int:
     """Insert a node and return its node_id (committed)."""
     conn.run(
-        "INSERT INTO yascheduler_nodes (ip, enabled) VALUES (:ip, TRUE)",
-        ip=ip,
+        "INSERT INTO yascheduler_nodes (hostname, enabled) VALUES (:hostname, TRUE)",
+        hostname=hostname,
     )
-    rows = conn.run("SELECT node_id FROM yascheduler_nodes WHERE ip = :ip", ip=ip)
+    rows = conn.run(
+        "SELECT node_id FROM yascheduler_nodes WHERE hostname = :hostname",
+        hostname=hostname,
+    )
     return int(rows[0][0])
 
 
@@ -211,7 +215,9 @@ async def test_hard_remove_path_succeeds_with_running_task(
     """Hard-remove (update_status DONE then nodes.remove) succeeds with a RUNNING task."""
     # Seed a node + a CHECK-valid RUNNING task referencing it.
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.1", ncpus=2, enabled=True)
+        )
         task = await uow.tasks.insert(NewTask(label="job", engine="fleur"))
         task = task.run(node.node_id, "/r")
         await uow.tasks.save(task)

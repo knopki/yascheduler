@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/ports.py
-# VERSION: 2.21.0
+# VERSION: 2.22.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions, and cloud provisioning.
 #   SCOPE: Protocol-based port interfaces for persistence (TaskRepository, NodeRepository), machine collection/sessions (MachineRepository, MachineSession), and cloud provisioning (CloudConfig, CloudProvisioner).
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.21.0 - Remove MachineOperations Protocol (SSHMachineOperations facade dissolved). Operations-side collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) are concrete classes typed directly by consumers; session pass-throughs are called on MachineSession.
-#   PREVIOUS_CHANGE: v2.20.0 - MachineOperations.download_outputs return type is the new 4-tuple (local_folder, remote_folder, transient_errors, permanent_errors) — meta_add list-of-pairs removed.
+#   LAST_CHANGE: v2.22.0 - Node-rename-and-fields: MachineSession.ip property → hostname. CloudProvisioner docstring node.ip→node.hostname.
+#   PREVIOUS_CHANGE: v2.21.0 - Remove MachineOperations Protocol (SSHMachineOperations facade dissolved). Operations-side collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) are concrete classes typed directly by consumers; session pass-throughs are called on MachineSession.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ class MachineSession(Protocol):
 
     # ---- Domain face ----
     @property
-    def ip(self) -> str: ...
+    def hostname(self) -> str: ...
 
     @property
     def machine(self) -> ConnectedMachine: ...
@@ -188,9 +188,6 @@ class MachineSession(Protocol):
 
     @property
     def quote(self) -> Callable[[str], str]: ...
-
-    @property
-    def hostname(self) -> str: ...
 
     # ---- Base primitives ----
     async def run(self, cmd: str) -> ProcessResult: ...
@@ -265,7 +262,7 @@ class MachineRepository(Protocol):
 class CloudProvisioner(Protocol):
     """Cloud VM provisioning port. ``allocate``/``deallocate`` are async;
     ``select_provider`` is sync (returns ``None`` when no capacity or throttled).
-    ``deallocate`` reads ``node.cloud``/``node.ip`` and no-ops on ``cloud is None``.
+    ``deallocate`` reads ``node.cloud``/``node.hostname`` and no-ops on ``cloud is None``.
     """
 
     async def allocate(self, provider: str, node: Node) -> Node: ...

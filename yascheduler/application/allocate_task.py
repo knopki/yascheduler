@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.22.0
+# VERSION: 5.23.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
 #   SCOPE: Task-to-machine allocation with cloud fallback — free machine search, cloud provisioning, tmp-node lifecycle, and persistence.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.22.0 - Call tracker.set_node(task.task_id, tmp_node_id) after _select_and_insert_tmp returns, patching the task-to-node link into the tracker entry so abandon_node can discard_by_node when the cloud node never connects.
-#   PREVIOUS_CHANGE: v5.21.0 - Adopt atomic Task transitions: _validate_engine calls task.reject("unsupported engine"); _try_start_on_machine computes remote_folder from remote_tasks_dir + task.task_id and calls task.run(node.node_id, remote_folder). allocate_task takes remote_tasks_dir and threads it through _allocate_free_machine -> _try_start_on_machine.
+#   LAST_CHANGE: v5.23.0 - session.ip→session.hostname; node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
+#   PREVIOUS_CHANGE: v5.22.0 - Call tracker.set_node(task.task_id, tmp_node_id) after _select_and_insert_tmp returns, patching the task-to-node link into the tracker entry so abandon_node can discard_by_node when the cloud node never connects.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -129,18 +129,18 @@ async def _try_start_on_machine(
     remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")
     task = task.run(node.node_id, remote_folder)
     logger.debug(
-        "[AllocateTask][_try_allocate_to_machine] task_id=%s ip=%s node_id=%s",
+        "[AllocateTask][_try_allocate_to_machine] task_id=%s hostname=%s node_id=%s",
         task.task_id,
-        session.ip,
+        session.hostname,
         node.node_id,
     )
     if not await start_task_on_machine(session, engine, task):
         return False
     logger.debug(
         "[AllocateTask][_try_allocate_to_machine][ALLOCATED] "
-        "task_id=%s ip=%s node_id=%s",
+        "task_id=%s hostname=%s node_id=%s",
         task.task_id,
-        session.ip,
+        session.hostname,
         node.node_id,
     )
     occupancy_checker.start_occupancy_check(session, engine)
@@ -227,9 +227,9 @@ async def _allocate_free_machine(
         except Exception as err:
             logger.debug(
                 "[AllocateTask][_allocate_free_machine][SESSION_FAILED] "
-                "task_id=%s ip=%s err=%s",
+                "task_id=%s hostname=%s err=%s",
                 task.task_id,
-                session.ip,
+                session.hostname,
                 err,
             )
             continue
@@ -384,9 +384,9 @@ async def _persist_node_with_cleanup(
             await uow.commit()
     except Exception as persist_err:
         logger.error(
-            "[AllocateTask][allocate_task][PERSIST_FAILED] task_id=%s ip=%s err=%s",
+            "[AllocateTask][allocate_task][PERSIST_FAILED] task_id=%s hostname=%s err=%s",
             task_id,
-            node.ip,
+            node.hostname,
             persist_err,
         )
         # VM is up and billing but the DB row was not flipped; best-effort
@@ -398,9 +398,9 @@ async def _persist_node_with_cleanup(
             await clouds.deallocate(node)
         except Exception as dealloc_err:
             logger.error(
-                "[AllocateTask][allocate_task][DEALLOC_FAILED] task_id=%s ip=%s err=%s",
+                "[AllocateTask][allocate_task][DEALLOC_FAILED] task_id=%s hostname=%s err=%s",
                 task_id,
-                node.ip,
+                node.hostname,
                 dealloc_err,
             )
         await _cleanup_tmp_node_best_effort(
@@ -410,9 +410,9 @@ async def _persist_node_with_cleanup(
     # END_BLOCK_FINAL_PERSIST
 
     logger.debug(
-        "[AllocateTask][allocate_task][CLOUD_DONE] task_id=%s ip=%s cloud=%s",
+        "[AllocateTask][allocate_task][CLOUD_DONE] task_id=%s hostname=%s cloud=%s",
         task_id,
-        node.ip,
+        node.hostname,
         node.cloud,
     )
 

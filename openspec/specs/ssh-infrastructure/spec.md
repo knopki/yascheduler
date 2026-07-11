@@ -73,6 +73,11 @@ package, read `ncpus` via `adapter.get_cpu_cores(...)`, construct a
 `ConnectedMachine`, construct an `SSHMachineSession`, store it keyed by
 `node.node_id`, and return it.
 
+`connect` SHALL read `node.hostname` as the asyncssh host address,
+`node.username` as the login user, and `node.port` as the port. On
+connection failure, `MachineConnectionError(node.node_id, node.hostname,
+str(err))` SHALL be raised (carrying both identity and address).
+
 `disconnect(node_id)` SHALL pop the session for `node_id` (early return if
 absent), then `await session._close()`. The pop-before-await ordering
 SHALL be preserved. `disconnect_all()` SHALL iterate a snapshot of keys
@@ -96,7 +101,7 @@ and tracks them by IP. The Protocol SHALL NOT include collection
 lifecycle, queries, or repository keying — those are `MachineRepository`.
 
 **Domain face:**
-- `ip: str` (read-only property) — the machine IP, set at connect time
+- `hostname: str` (read-only property) — the machine hostname (the asyncssh transport host). This property replaces the former `ip` property; the `ip` property is removed.
 - `machine: ConnectedMachine` (read-only property) — the current snapshot; mutate via `occupy`/`release`/`update`
 - `is_closed: bool` (read-only property) — `True` after `_close()` has been invoked (rollback paths check this to detect mid-deploy disconnect)
 - `occupy() -> None` (sync) — read-modify-write transitioning the snapshot to BUSY
@@ -113,7 +118,6 @@ lifecycle, queries, or repository keying — those are `MachineRepository`.
 **Adapter-derived accessors (read-only properties):**
 - `path: type[PurePath]` — `adapter.path`
 - `quote: QuoteCallable` — `adapter.quote`
-- `hostname: str` — `conn_opts.host`
 
 **Base primitives (async, on the session directly):**
 - `run(cmd: str) -> ProcessResult` (async)
@@ -148,7 +152,7 @@ reference `Engine`; `install_monitor` is generic over
 
 The system SHALL provide an `SSHMachineSession` class that satisfies the
 `MachineSession` Protocol. The session SHALL be constructed by
-`SSHMachineRepository.connect` with: `ip`, an open `SSHClientConnection`,
+`SSHMachineRepository.connect` with: `hostname`, an open `SSHClientConnection`,
 `SSHClientConnectionOptions`, a `ConnectedMachine` (initial snapshot with
 `state=FREE`, `free_since=time.monotonic()`), `adapter`, `platforms`,
 `data_dir`, `engines_dir`, `tasks_dir`.
@@ -163,7 +167,7 @@ Otherwise it SHALL:
 4. Close the SSH connection and await `wait_closed()`.
 
 `SSHMachineSession`'s base primitives SHALL use the session's own `conn`
-and `adapter` directly — NO IP-keyed lookup, NO call into the repository.
+and `adapter` directly — NO hostname-keyed lookup, NO call into the repository.
 `run_full` SHALL retry on `SSHRetryExc` via the `@my_backoff_exc()` decorator.
 `setup_node` SHALL accept `engines: EngineRepository` and use the session's
 own `adapter.setup_node(...)`.
@@ -195,7 +199,7 @@ method; they SHALL NOT cache sessions.
 #### Scenario: connect returns a session
 
 - **WHEN** `await repository.connect(node, ...)` returns
-- **THEN** the return value is a `MachineSession` whose `ip == node.ip`, `machine.node_id == node.node_id`, `machine.state == FREE`, `machine.platform`, and `machine.ncpus` match the connection
+- **THEN** the return value is a `MachineSession` whose `hostname == node.hostname`, `machine.node_id == node.node_id`, `machine.state == FREE`, `machine.platform`, and `machine.ncpus` match the connection
 
 ### Requirement: download_outputs per-file SFTP isolation and retry
 

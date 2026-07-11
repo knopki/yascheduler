@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 4.8.0
+# VERSION: 4.9.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion.
 #   SCOPE: Idle cloud node deallocation — disable idle nodes, return Node objects for VM deletion.
@@ -8,13 +8,13 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   deallocate_node - Disconnect (by node_id) and cloud-deallocate a single node (clouds.deallocate(node) reads node.cloud/node.ip internally); logs+flags stale row if DB remove fails after successful cloud delete
+#   deallocate_node - Disconnect (by node_id) and cloud-deallocate a single node (clouds.deallocate(node) reads node.cloud/node.hostname internally); logs+flags stale row if DB remove fails after successful cloud delete
 #   deallocate_nodes - Disable idle cloud nodes and return Node objects for VM deletion (idle_machines dict[NodeId, float]; busy_node_ids matching)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.8.0 - deallocate_node calls clouds.deallocate(node).
-#   PREVIOUS_CHANGE: v4.7.0 - idle_machines keyed by NodeId; busy matching rekeyed to busy_node_ids; deallocate_node uses node.node_id for disconnect.
+#   LAST_CHANGE: v4.9.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
+#   PREVIOUS_CHANGE: v4.8.0 - deallocate_node calls clouds.deallocate(node).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -56,16 +56,16 @@ async def deallocate_node(
     if repository.contains(node.node_id):
         await repository.disconnect(node.node_id)
         logger.debug(
-            "[deallocate_node][DISCONNECT] node_id=%s ip=%s gateway disconnected",
+            "[deallocate_node][DISCONNECT] node_id=%s hostname=%s gateway disconnected",
             node.node_id,
-            node.ip,
+            node.hostname,
         )
     if node.cloud:
         # START_BLOCK_DISABLE
         logger.debug(
-            "[deallocate_node][DISABLE] node_id=%s ip=%s cloud=%s",
+            "[deallocate_node][DISABLE] node_id=%s hostname=%s cloud=%s",
             node.node_id,
-            node.ip,
+            node.hostname,
             node.cloud,
         )
         async with uow_factory() as uow:
@@ -75,9 +75,9 @@ async def deallocate_node(
 
         # START_BLOCK_CLOUD_DELETE
         logger.debug(
-            "[deallocate_node][CLOUD_DELETE] node_id=%s ip=%s cloud=%s",
+            "[deallocate_node][CLOUD_DELETE] node_id=%s hostname=%s cloud=%s",
             node.node_id,
-            node.ip,
+            node.hostname,
             node.cloud,
         )
         await clouds.deallocate(node)
@@ -85,9 +85,9 @@ async def deallocate_node(
 
         # START_BLOCK_REMOVE
         logger.debug(
-            "[deallocate_node][REMOVE] node_id=%s ip=%s cloud=%s",
+            "[deallocate_node][REMOVE] node_id=%s hostname=%s cloud=%s",
             node.node_id,
-            node.ip,
+            node.hostname,
             node.cloud,
         )
         try:
@@ -101,11 +101,11 @@ async def deallocate_node(
             # will re-attempt (cloud-SDK delete-idempotency dependent) plus
             # this remove.
             logger.error(
-                "[deallocate_node][REMOVE_FAILED] node_id=%s ip=%s cloud=%s err=%s "
+                "[deallocate_node][REMOVE_FAILED] node_id=%s hostname=%s cloud=%s err=%s "
                 "— VM is deleted but DB row left disabled; "
                 "manual reconciliation needed",
                 node.node_id,
-                node.ip,
+                node.hostname,
                 node.cloud,
                 remove_err,
             )
@@ -154,9 +154,9 @@ async def deallocate_nodes(
                 await uow.nodes.disable(node.node_id)
                 await uow.commit()
                 logger.debug(
-                    "[deallocate_nodes][DISABLE] node_id=%s ip=%s cloud=%s",
+                    "[deallocate_nodes][DISABLE] node_id=%s hostname=%s cloud=%s",
                     node.node_id,
-                    node.ip,
+                    node.hostname,
                     node.cloud,
                 )
     # END_BLOCK_DISABLE_IDLE

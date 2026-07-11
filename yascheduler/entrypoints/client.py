@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.10.0 - _task_to_dict reconstructs flat metadata dict inline from six typed Task fields plus t.extra. Public dict shape {task_id, label, status, metadata, node} unchanged.
-#   PREVIOUS_CHANGE: v2.9.0 - queue_get_tasks_async unpacks (tasks, nodes_by_id) from query_tasks; _task_to_dict adds nested "node" object. BREAKING facade dict shape change.
+#   LAST_CHANGE: v2.11.0 - _task_to_dict node object: ip→hostname + all new node fields (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at).
+#   PREVIOUS_CHANGE: v2.10.0 - _task_to_dict reconstructs flat metadata dict inline from six typed Task fields plus t.extra. Public dict shape {task_id, label, status, metadata, node} unchanged.
 # END_CHANGE_SUMMARY
 
 """Yascheduler client"""
@@ -102,10 +102,17 @@ def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]
         "metadata": metadata,
         "node": (
             {
-                "ip": node.ip,
+                "hostname": node.hostname,
                 "port": node.port,
                 "username": node.username,
                 "cloud": node.cloud,
+                "jump_host": node.jump_host,
+                "jump_port": node.jump_port,
+                "jump_username": node.jump_username,
+                "external_id": node.external_id,
+                "status": node.status.name,
+                "created_at": node.created_at.isoformat(),
+                "updated_at": node.updated_at.isoformat(),
             }
             if node is not None
             else None

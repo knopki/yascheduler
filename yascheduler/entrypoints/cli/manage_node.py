@@ -15,14 +15,14 @@
 #   _parse_host_spec - argparse type: parse [user@]host[:port][~ncpus] grammar (UNCHANGED)
 #   _parse_node_target - argparse type: digit → NodeTarget(node_id=NodeId(n)); else delegate to _parse_host_spec
 #   _parse_node_args - argparse → Namespace (prog="yasetnode", flags, mutex group); add-by-id rejected via parser.error
-#   _remove_node_hard - Hard-remove: own UoW, mark RUNNING tasks DONE, remove node (by node_id), commit, print (takes Node; node.node_id keys the task lookup, node.ip for print)
-#   _remove_node_soft - Soft-remove: own UoW, disable (if tasks) or remove node (by node_id), commit, print (takes Node; node.node_id keys the task lookup, node.ip for print)
+#   _remove_node_hard - Hard-remove: own UoW, mark RUNNING tasks DONE, remove node (by node_id), commit, print (takes Node; node.node_id keys the task lookup, node.hostname for print)
+#   _remove_node_soft - Soft-remove: own UoW, disable (if tasks) or remove node (by node_id), commit, print (takes Node; node.node_id keys the task lookup, node.hostname for print)
 #   _add_node - Add node: own UoW, connect, optional setup, insert NewNode, commit, print; try/finally disconnect
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - manage_node no longer constructs SSHMachineOperations (facade dissolved); _add_node takes repository only and calls session.setup_node directly on the session returned by repository.connect.
-#   PREVIOUS_CHANGE: v1.9.0 - _remove_node_hard/_remove_node_soft call list_ids_by_node_id_and_status(node.node_id, ...); filter key changes from ip to node_id.
+#   LAST_CHANGE: v1.11.0 - All node.ip→node.hostname in print/assign/comments; NewNode(ip=)→NewNode(hostname=); n.ip→n.hostname in host_spec resolution; docstring + inline comment ip→hostname updates.
+#   PREVIOUS_CHANGE: v1.10.0 - manage_node no longer constructs SSHMachineOperations (facade dissolved); _add_node takes repository only and calls session.setup_node directly on the session returned by repository.connect.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -64,9 +64,9 @@ class NodeTarget:
     Produced by :func:`_parse_node_target`. On the node_id path
     (``node_id is not None``), ``host_spec`` is ``None`` and the node is
     resolved via :meth:`NodeRepository.get_by_id` to obtain the ``Node``
-    (carrying both ``node_id`` and ``ip``) for the node_id-keyed mutators.
+    (carrying both ``node_id`` and ``hostname``) for the node_id-keyed mutators.
     On the host_spec path, ``node_id`` is ``None`` and the node is resolved
-    via :meth:`NodeRepository.get(ip)`.
+    via :meth:`NodeRepository.list_all` + filter by hostname.
     """
 
     node_id: NodeId | None
@@ -237,8 +237,8 @@ async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
     # END_BLOCK_MARK_AND_REMOVE
     # START_BLOCK_ANNOUNCE
     for task_id in task_ids:
-        print(f"An associated task {task_id} at {node.ip} is now marked done!")
-    print(f"Removed host from yascheduler: {node.ip}")
+        print(f"An associated task {task_id} at {node.hostname} is now marked done!")
+    print(f"Removed host from yascheduler: {node.hostname}")
     # END_BLOCK_ANNOUNCE
 
 
@@ -259,12 +259,12 @@ async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
             await uow.nodes.disable(node.node_id)
             await uow.commit()
             print("A task associated, prevent from assigning the new tasks")
-            print(f"Prevented from assigning the new tasks: {node.ip}")
+            print(f"Prevented from assigning the new tasks: {node.hostname}")
         else:
             await uow.nodes.remove(node.node_id)
             await uow.commit()
             print("No tasks associated, remove node immediately")
-            print(f"Removed host from yascheduler: {node.ip}")
+            print(f"Removed host from yascheduler: {node.hostname}")
     # END_BLOCK_DISABLE_OR_REMOVE
 
 
@@ -298,7 +298,7 @@ async def _add_node(
     async with deps.uow_factory() as uow:
         tmp = await uow.nodes.insert(
             NewNode(
-                ip=spec.host,
+                hostname=spec.host,
                 port=spec.port,
                 username=username,
                 ncpus=(spec.ncpus if spec.ncpus is not None else 0),
@@ -371,12 +371,12 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         # A TOCTOU window exists between this close and the helper's own UoW open;
         # accepted for a single-operator CLI (design D18).
         # Resolve the Node early on both paths: get_by_id on the node_id path,
-        # list_all + filter by ip on the host_spec path (the ip-keyed get(ip)
-        # lookup is removed — node_id is the sole identity; resolving a host_spec
-        # to a Node requires listing because ip is no longer a unique key). The
-        # resolved Node (carrying node_id) is passed to the remove helpers —
-        # node.node_id keys the node_id-keyed mutators; node.ip keys the
-        # ip-keyed task lookup + print.
+        # list_all + filter by hostname on the host_spec path (the hostname-keyed
+        # get(hostname) lookup is removed — node_id is the sole identity; resolving
+        # a host_spec to a Node requires listing because hostname is no longer
+        # a unique key). The resolved Node (carrying node_id) is passed to the
+        # remove helpers — node.node_id keys the node_id-keyed mutators;
+        # node.hostname keys the hostname-keyed user-facing stdout.
         resolved_node: Node | None = None
         if target.node_id is not None:
             async with deps.uow_factory() as uow:
@@ -387,7 +387,7 @@ async def _manage_node_async(argv: list[str] | None) -> None:
             async with deps.uow_factory() as uow:
                 all_nodes = await uow.nodes.list_all()
             resolved_node = next(
-                (n for n in all_nodes if n.ip == target.host_spec.host), None
+                (n for n in all_nodes if n.hostname == target.host_spec.host), None
             )
             already_there = resolved_node is not None
         # On the node_id path the "already in DB" check is meaningless (add-by-id
@@ -411,9 +411,9 @@ async def _manage_node_async(argv: list[str] | None) -> None:
 
         # START_BLOCK_DISPATCH
         # Exactly one helper runs; each opens its own UoW, commits, and prints.
-        # The remove helpers take the resolved Node (carrying both node_id and ip):
-        # node.node_id keys the node_id-keyed mutators; node.ip keys the
-        # ip-keyed task lookup (Surface C) and user-facing stdout.
+        # The remove helpers take the resolved Node (carrying both node_id and
+        # hostname): node.node_id keys the node_id-keyed mutators;
+        # node.hostname keys the hostname-keyed user-facing stdout.
         if args.remove_hard:
             assert resolved_node is not None  # validated present before dispatch
             await _remove_node_hard(deps, resolved_node)

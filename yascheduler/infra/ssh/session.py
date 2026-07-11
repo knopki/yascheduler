@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/session.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Connected-machine entity handle owning SSH connection, machine state, and per-session monitor lifecycle.
 #   SCOPE: SSHMachineSession class (owns _conn, _adapter, _machine, _closed, _monitor_task) + my_backoff_exc canonical partial.
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial module. SSHMachineSession owns the connection, machine snapshot, connect-time config, adapter-derived accessors, base SSH primitives, and the per-session monitor lifecycle.
-#   PREVIOUS_CHANGE: none
+#   LAST_CHANGE: v1.1.0 - Node-rename-and-fields: SSHMachineSession.__init__ param ip→hostname, _ip→_hostname, ip property→hostname. Merged with adapter-derived hostname property (both carried same value — the asyncssh host passed at connect time).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial module. SSHMachineSession owns the connection, machine snapshot, connect-time config, adapter-derived accessors, base SSH primitives, and the per-session monitor lifecycle.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ my_backoff_exc = partial(
 
 # START_CONTRACT: SSHMachineSession
 #   PURPOSE: Concrete MachineSession — connected-machine entity handle owning connection, adapter, mutable machine snapshot, and per-session monitor task. Implements the MachineSession Protocol.
-#   INPUTS: { ip: str, conn: SSHClientConnection, conn_opts: SSHClientConnectionOptions, machine: ConnectedMachine, adapter: RemoteMachineAdapter, platforms: Sequence[str], data_dir: PurePath, engines_dir: PurePath, tasks_dir: PurePath, log: logging.Logger | None }
+#   INPUTS: { hostname: str, conn: SSHClientConnection, conn_opts: SSHClientConnectionOptions, machine: ConnectedMachine, adapter: RemoteMachineAdapter, platforms: Sequence[str], data_dir: PurePath, engines_dir: PurePath, tasks_dir: PurePath, log: logging.Logger | None }
 #   OUTPUTS: { None - instance methods return operation results }
 #   SIDE_EFFECTS: Owns an open SSH connection and at most one asyncio.Task (the monitor). _close() cancels the monitor, awaits its cancellation, and closes the connection. Idempotent on _closed.
 #   LINKS: M-SSH-SESSION, M-DOMAIN-PORTS, M-PLATFORM
@@ -78,13 +78,13 @@ class SSHMachineSession:
     session monitor task. Constructed by SSHMachineRepository.connect at
     connect time; torn down by SSHMachineRepository.disconnect via _close().
 
-    Base primitives read self._conn and self._adapter directly — NO IP-keyed
+    Base primitives read self._conn and self._adapter directly — NO hostname-keyed
     lookup, NO call into the repository, NO private state reach-through.
     """
 
     def __init__(
         self,
-        ip: str,
+        hostname: str,
         conn: SSHClientConnection,
         conn_opts: SSHClientConnectionOptions,
         machine: ConnectedMachine,
@@ -95,7 +95,7 @@ class SSHMachineSession:
         tasks_dir: PurePath,
         log: logging.Logger | None = None,
     ) -> None:
-        self._ip = ip
+        self._hostname = hostname
         self._conn = conn
         self._conn_opts = conn_opts
         self._machine = machine
@@ -111,8 +111,8 @@ class SSHMachineSession:
     # ---- Domain face ----
 
     @property
-    def ip(self) -> str:
-        return self._ip
+    def hostname(self) -> str:
+        return self._hostname
 
     @property
     def machine(self) -> ConnectedMachine:
@@ -183,10 +183,6 @@ class SSHMachineSession:
     @property
     def quote(self) -> QuoteCallable:
         return self._adapter.quote
-
-    @property
-    def hostname(self) -> str:
-        return self._conn_opts.host
 
     # ---- Base primitives ----
 
@@ -365,7 +361,9 @@ class SSHMachineSession:
         task = self._monitor_task
         if task is not None:
             self._monitor_task = None
-            self._log.debug("[SSHSession][_close][CANCEL_MONITOR] ip=%s", self._ip)
+            self._log.debug(
+                "[SSHSession][_close][CANCEL_MONITOR] hostname=%s", self._hostname
+            )
             task.cancel()
             try:
                 await task
@@ -374,7 +372,7 @@ class SSHMachineSession:
         # END_BLOCK_CANCEL_MONITOR
         # START_BLOCK_CLOSE_CONN
         if self._conn._transport:
-            self._log.debug("[SSHSession][_close] ip=%s", self._ip)
+            self._log.debug("[SSHSession][_close] hostname=%s", self._hostname)
             self._conn.close()
             await self._conn.wait_closed()
         # END_BLOCK_CLOSE_CONN

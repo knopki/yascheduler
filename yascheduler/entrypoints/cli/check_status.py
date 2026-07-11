@@ -24,8 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - _render_json and _render_view read task.engine/task.local_folder/task.remote_folder directly.
-#   PREVIOUS_CHANGE: v1.6.0 - _render_info emits node_id=; _render_json drops flat allocated_ip/port/cloud fields, adds nested node object {ip, port, username, cloud} (or null) + created_at/updated_at (ISO-8601); _render_view reads node.ip from the resolved Node.
+#   LAST_CHANGE: v1.8.0 - _render_json node object: ip→hostname + all new node fields (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); _render_view: node.ip→node.hostname; _display_remote_output: "NO ALLOCATED IP"→"NO ALLOCATED HOSTNAME".
+#   PREVIOUS_CHANGE: v1.7.0 - _render_json and _render_view read task.engine/task.local_folder/task.remote_folder directly.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -176,10 +176,17 @@ def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
                 "updated_at": task.updated_at.isoformat(),
                 "node": (
                     {
-                        "ip": node.ip,
+                        "hostname": node.hostname,
                         "port": node.port,
                         "username": node.username,
                         "cloud": node.cloud,
+                        "jump_host": node.jump_host,
+                        "jump_port": node.jump_port,
+                        "jump_username": node.jump_username,
+                        "external_id": node.external_id,
+                        "status": node.status.name,
+                        "created_at": node.created_at.isoformat(),
+                        "updated_at": node.updated_at.isoformat(),
                     }
                     if node is not None
                     else None
@@ -295,7 +302,7 @@ async def _display_remote_output(
 ) -> tuple[MachineSession, str, SSHMachineRepository] | None:
     """Connect to machine via repository (under node.node_id), display tail of remote OUTPUT."""
     if node is None:
-        print("NO ALLOCATED IP")
+        print("NO ALLOCATED HOSTNAME")
         return None
     repository = SSHMachineRepository()
     try:
@@ -374,7 +381,7 @@ async def _render_view(
                     task.task_id,
                     task.label,
                     conn_params.username,
-                    node.ip if node else "",
+                    node.hostname if node else "",
                     cloud_str,
                     task.remote_folder or "",
                 )

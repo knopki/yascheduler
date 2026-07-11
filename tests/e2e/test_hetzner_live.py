@@ -15,15 +15,15 @@
 #   _cleanup_observed  - best-effort hetzner_delete_node per observed IP, then strong _assert_vm_deleted per IP
 #   _submit_two_jobs   - submit 2 tasks via _submit_async in per-job temp CWDs with distinct payloads
 #   _poll_for_hetzner_node - poll uow.nodes.list_all() until a cloud=="hetzner" node appears; record its IP
-#   _wait_both_done    - poll until both tasks DONE, capturing RUNNING node.ip snapshots
-#   _assert_outputs    - assert each task DONE, error None, local_folder set, 1.input.out matches payload, resolved node.ip is an observed hetzner IP, created_at/updated_at present
-#   _assert_cloud_logs - assert CLOUD_DONE (provider=hetzner) and CLOUD_DELETE (cloud=hetzner) log records captured
+#   _wait_both_done    - poll until both tasks DONE, capturing RUNNING node.hostname snapshots
+#   _assert_outputs    - assert each task DONE, error None, local_folder set, 1.input.out matches payload, resolved node.hostname is an observed hetzner IP, created_at/updated_at present
+#   _assert_cloud_logs - assert CLOUD_DONE (cloud=hetzner) and CLOUD_DELETE (cloud=hetzner) log records captured
 #   _poll_node_gone    - poll uow.nodes.list_all() until no cloud=="hetzner" row remains
 #   test_hetzner_live  - full live e2e scenario
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.ip via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
+#   LAST_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.hostname via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
 #   PREVIOUS_CHANGE: v1.0.0 - add-hetzner-live-e2e: new opt-in env-gated real-Hetzner e2e exercising the cold-start autoscale -> allocate -> download -> idle-deallocate happy path through the real entrypoints (make_daemon, _submit_async) and asserting via uow_factory. Hetzner hcloud SDK is imported lazily inside helpers so module collection succeeds without the optional extra; the env gate (YASCHEDULER_TEST_HETZNER=1 + YASCHEDULER_CLOUDS_HETZNER_TOKEN) skips by default. Cleanup is observed-IP based with a loud-fail-on-leak finally; a strong find_srv deletion assertion complements DB-row removal. Refined via a live run: _poll_for_hetzner_node requires n.enabled (the tmp node inserted by _select_and_insert_tmp has cloud=hetzner/enabled=False with a placeholder IP); CLOUD_DELETE is asserted after _poll_node_gone (it is emitted by the idle-deallocate loop, not at completion); timeouts sized to the observed ~83s cold-start.
 # END_CHANGE_SUMMARY
 
@@ -328,7 +328,7 @@ async def _poll_for_hetzner_node(
         # atomically removes the tmp row in the same commit).
         hetzner_nodes = [n for n in nodes if n.cloud == "hetzner" and n.enabled]
         if hetzner_nodes:
-            ip = hetzner_nodes[0].ip
+            ip = hetzner_nodes[0].hostname
             if ip not in observed_ips:
                 observed_ips.append(ip)
             return ip
@@ -337,9 +337,9 @@ async def _poll_for_hetzner_node(
 
 
 # START_CONTRACT: _wait_both_done
-#   PURPOSE: Poll until both tasks reach DONE; capture each task's RUNNING node.ip snapshot into observed_ips en route; pytest.fail on timeout.
+#   PURPOSE: Poll until both tasks reach DONE; capture each task's RUNNING node.hostname snapshot into observed_ips en route; pytest.fail on timeout.
 #   INPUTS: { uow_factory, task_ids: list[int], observed_ips: list[str] - appended in place, timeout_s: float }
-#   OUTPUTS: { dict[int, str] - task_id -> node.ip for every task observed RUNNING }
+#   OUTPUTS: { dict[int, str] - task_id -> node.hostname for every task observed RUNNING }
 #   SIDE_EFFECTS: None — read-only UoW polls.
 #   LINKS: M-PERSISTENCE-UOW
 # END_CONTRACT: _wait_both_done
@@ -360,9 +360,9 @@ async def _wait_both_done(
                 statuses.append(t.status if t else None)
                 if t and t.status == DomainTaskStatus.RUNNING and t.allocated_node_id:
                     node = await uow.nodes.get_by_id(t.allocated_node_id)
-                    seen_running[tid] = node.ip if node else ""
-                    if node and node.ip not in observed_ips:
-                        observed_ips.append(node.ip)
+                    seen_running[tid] = node.hostname if node else ""
+                    if node and node.hostname not in observed_ips:
+                        observed_ips.append(node.hostname)
         if all(s == DomainTaskStatus.DONE for s in statuses):
             return seen_running
         await asyncio.sleep(_POLL_INTERVAL_S)
@@ -373,7 +373,7 @@ async def _wait_both_done(
 
 
 # START_CONTRACT: _assert_outputs
-#   PURPOSE: For each task assert status==DONE, context.error is None, local_folder set, <local_folder>/1.input.out matches its payload; assert each task's resolved node.ip is an observed hetzner node IP; assert created_at/updated_at on DONE tasks. Does NOT require both tasks on the same IP (idle-deallocate race may provision a 2nd VM).
+#   PURPOSE: For each task assert status==DONE, context.error is None, local_folder set, <local_folder>/1.input.out matches its payload; assert each task's resolved node.hostname is an observed hetzner node IP; assert created_at/updated_at on DONE tasks. Does NOT require both tasks on the same IP (idle-deallocate race may provision a 2nd VM).
 #   INPUTS: { uow_factory, task_ids: list[int], observed_ips: list[str], payloads: list[str] - per-job expected 1.input content }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — read-only UoW + filesystem reads.
@@ -405,12 +405,12 @@ async def _assert_outputs(
             f"task {tid} output={actual!r}, expected {expected!r}"
         )
         task_ip = (
-            nodes_by_id[task.allocated_node_id].ip
+            nodes_by_id[task.allocated_node_id].hostname
             if task.allocated_node_id and task.allocated_node_id in nodes_by_id
             else ""
         )
         assert task_ip in observed_ips, (
-            f"task {tid} node.ip={task_ip} "
+            f"task {tid} node.hostname={task_ip} "
             f"not among observed hetzner IPs={observed_ips}"
         )
         assert isinstance(task.created_at, datetime), (
@@ -422,8 +422,8 @@ async def _assert_outputs(
 
 
 # START_CONTRACT: _assert_cloud_done_log
-#   PURPOSE: Assert captured log_records contain a CLOUD_DONE record with ip=<node_ip> provider=hetzner. Emitted by _persist_node_with_cleanup at provision time, so it is present once both tasks have reached DONE. Does NOT assert on CREATED or [CloudProvisionerImpl] (those are on the Orchestrator logger, invisible to log_records).
-#   INPUTS: { records: list[LogRecord], node_ips: list[str] - provisioned hetzner IPs to match against ip= }
+#   PURPOSE: Assert captured log_records contain a CLOUD_DONE record with hostname=<node_ip> cloud=hetzner. Emitted by _persist_node_with_cleanup at provision time, so it is present once both tasks have reached DONE. Does NOT assert on CREATED or [CloudProvisionerImpl] (those are on the Orchestrator logger, invisible to log_records).
+#   INPUTS: { records: list[LogRecord], node_ips: list[str] - provisioned hetzner IPs to match against hostname= }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — pure assertion over captured records.
 #   LINKS: M-APPLICATION-ALLOCATE
@@ -435,12 +435,12 @@ def _assert_cloud_done_log(
         r.getMessage() for r in records if _CLOUD_DONE_MARKER in r.getMessage()
     ]
     done_match = any(
-        "provider=hetzner" in msg
-        and any(re.search(rf"ip={re.escape(ip)}\b", msg) for ip in node_ips)
+        "cloud=hetzner" in msg
+        and any(re.search(rf"hostname={re.escape(ip)}\b", msg) for ip in node_ips)
         for msg in cloud_done_msgs
     )
     assert done_match, (
-        f"no [CLOUD_DONE] record with provider=hetzner and ip in {node_ips}; "
+        f"no [CLOUD_DONE] record with cloud=hetzner and hostname in {node_ips}; "
         f"captured CLOUD_DONE msgs={cloud_done_msgs}"
     )
 

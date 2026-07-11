@@ -16,7 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - simplify-cloud-connect-node-args: the three `gw.connect(node, "root", None)` calls drop the `"root"` username arg; client_keys (`None`) shifts to the 2nd positional slot.
+#   LAST_CHANGE: v1.3.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), exc.ip→exc.hostname, _make_state(ip=…)→_make_state(hostname=…), result.hostname→result.hostname.
+#   PREVIOUS_CHANGE: v1.2.0 - simplify-cloud-connect-node-args: the three `gw.connect(node, "root", None)` calls drop the `"root"` username arg; client_keys (`None`) shifts to the 2nd positional slot.
 #   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: connect returns MachineSession (was ConnectedMachine).
 # END_CHANGE_SUMMARY
 
@@ -43,10 +44,12 @@ async def test_connect_translates_asyncssh_error() -> None:
     gw = SSHMachineRepository()
     err = asyncssh.misc.PermissionDenied("denied")
     gw._connect_impl = AsyncMock(side_effect=err)  # type: ignore[method-assign]
-    node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
+    node = Node(
+        node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, username="root", port=22
+    )
     with pytest.raises(MachineConnectionError) as exc_info:
         await gw.connect(node, None)
-    assert exc_info.value.ip == "10.0.0.1"
+    assert exc_info.value.hostname == "10.0.0.1"
     assert "denied" in exc_info.value.reason
     assert isinstance(exc_info.value.__cause__, asyncssh.misc.Error)
 
@@ -62,10 +65,12 @@ async def test_connect_translates_asyncssh_error() -> None:
 async def test_connect_translates_oserror() -> None:
     gw = SSHMachineRepository()
     gw._connect_impl = AsyncMock(side_effect=OSError("refused"))  # type: ignore[method-assign]
-    node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
+    node = Node(
+        node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, username="root", port=22
+    )
     with pytest.raises(MachineConnectionError) as exc_info:
         await gw.connect(node, None)
-    assert exc_info.value.ip == "10.0.0.1"
+    assert exc_info.value.hostname == "10.0.0.1"
     assert "refused" in exc_info.value.reason
 
 
@@ -79,10 +84,12 @@ async def test_connect_translates_oserror() -> None:
 @pytest.mark.asyncio
 async def test_connect_returns_session_on_success() -> None:
     gw = SSHMachineRepository()
-    session = _make_state(ip="10.0.0.1")
+    session = _make_state(hostname="10.0.0.1")
     gw._connect_impl = AsyncMock(return_value=session)  # type: ignore[method-assign]
-    node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, username="root", port=22)
+    node = Node(
+        node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, username="root", port=22
+    )
     result = await gw.connect(node, None)
     assert result is session
-    assert result.ip == "10.0.0.1"
+    assert result.hostname == "10.0.0.1"
     assert isinstance(result, type(session))

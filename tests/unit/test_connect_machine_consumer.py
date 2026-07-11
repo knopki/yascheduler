@@ -59,10 +59,10 @@ if TYPE_CHECKING:
     from yascheduler.application.uow import AbstractUnitOfWork
 
 
-def _make_node(ip: str = "10.0.0.5", cloud: str | None = "hetzner") -> Node:
+def _make_node(hostname: str = "10.0.0.5", cloud: str | None = "hetzner") -> Node:
     return Node(
         node_id=NodeId(1),
-        ip=ip,
+        hostname=hostname,
         ncpus=2,
         cloud=cloud,
         username="root",
@@ -157,7 +157,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError("10.0.0.5", "refused")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "refused")
         )
 
         # Constant return_value (never exhausts): on first failure line 309
@@ -193,7 +193,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError("10.0.0.5", "refused")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "refused")
         )
 
         # Pre-seed first_seen so age = 165 - 100 = 65s >= 60s grace → abandon.
@@ -229,7 +229,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError("10.0.0.5", "x")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "x")
         )
 
         # First call: failure within grace → IP recorded (constant monotonic →
@@ -257,7 +257,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError("10.0.0.5", "x")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "x")
         )
 
         # Pre-seed first_seen so age = 200 - 100 = 100s >= 60s → abandon path
@@ -353,7 +353,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
 
         static_node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.9",
+            hostname="10.0.0.9",
             ncpus=2,
             cloud=None,
             username="root",
@@ -362,7 +362,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         )
         cloud_node = Node(
             node_id=NodeId(2),
-            ip="10.0.0.10",
+            hostname="10.0.0.10",
             ncpus=2,
             cloud="hetzner",
             username="root",
@@ -392,7 +392,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
 
         static_node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.9",
+            hostname="10.0.0.9",
             ncpus=2,
             cloud=None,
             username="root",
@@ -429,7 +429,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
 
         static_node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.9",
+            hostname="10.0.0.9",
             ncpus=2,
             cloud=None,
             username="root",
@@ -442,7 +442,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         # warning emitted by the consumer-side guard.
         orch._log = logging.getLogger("orch.test_static_retry")  # type: ignore[method-assign]
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError("10.0.0.9", "refused")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.9", "refused")
         )
 
         with (
@@ -481,7 +481,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
 
         static_node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.9",
+            hostname="10.0.0.9",
             ncpus=2,
             cloud=None,
             username="root",
@@ -491,7 +491,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
 
         orch = make_orchestrator(config_clouds=[])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError("10.0.0.9", "refused")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.9", "refused")
         )
 
         with (

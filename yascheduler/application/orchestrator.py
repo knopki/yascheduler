@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 7.5.0
+# VERSION: 7.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Daemon orchestrator: producer-consumer loops driving submit/allocate/consume/deallocate use cases with SSH/cloud collaborators.
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.5.0 - _task_consumer_consumer calls task.abandon(node_id) (single atomic transition; abandon handles the node_id is None double-abandon edge — emits TaskAbandoned only when node_id is not None). Removed TaskAbandoned import (no longer constructed directly). _allocator_consumer passes remote_defaults.tasks_dir to allocate_task (remote_folder is now computed in _try_start_on_machine at run time, not at submit time).
-#   PREVIOUS_CHANGE: v7.4.0 - Orchestrator.__init__ takes three concrete collaborators (task_deployer/output_downloader/occupancy_checker) instead of operations: MachineOperations; _start_task_on_machine calls self._task_deployer and session.get_cpu_cores directly; consumer loop passes occupancy_checker to allocate_task, output_downloader to consume_task, and calls self._occupancy_checker.start_occupancy_check directly.
+#   LAST_CHANGE: v7.6.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
+#   PREVIOUS_CHANGE: v7.5.0 - _task_consumer_consumer calls task.abandon(node_id) (single atomic transition; abandon handles the node_id is None double-abandon edge — emits TaskAbandoned only when node_id is not None). Removed TaskAbandoned import (no longer constructed directly). _allocator_consumer passes remote_defaults.tasks_dir to allocate_task (remote_folder is now computed in _try_start_on_machine at run time, not at submit time).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -304,9 +304,9 @@ class Orchestrator:
             if node.cloud is None:
                 self._log.warning(
                     "[Orchestrator][_connect_machine_consumer][CONNECT_RETRY_STATIC] "
-                    "node_id=%s ip=%s err=%s",
+                    "node_id=%s hostname=%s err=%s",
                     node.node_id,
-                    node.ip,
+                    node.hostname,
                     err,
                 )
                 return
@@ -320,9 +320,9 @@ class Orchestrator:
             if age < grace:
                 self._log.warning(
                     "[Orchestrator][_connect_machine_consumer][CONNECT_RETRY] "
-                    "node_id=%s ip=%s age=%.1fs grace=%ds err=%s",
+                    "node_id=%s hostname=%s age=%.1fs grace=%ds err=%s",
                     node.node_id,
-                    node.ip,
+                    node.hostname,
                     age,
                     grace,
                     err,
@@ -333,9 +333,9 @@ class Orchestrator:
             # START_BLOCK_CONNECT_ABANDON
             self._log.error(
                 "[Orchestrator][_connect_machine_consumer][CONNECT_ABANDON] "
-                "node_id=%s ip=%s age=%.1fs grace=%ds — abandoning node",
+                "node_id=%s hostname=%s age=%.1fs grace=%ds — abandoning node",
                 node.node_id,
-                node.ip,
+                node.hostname,
                 age,
                 grace,
             )
@@ -349,9 +349,9 @@ class Orchestrator:
             except Exception as abandon_err:
                 self._log.error(
                     "[Orchestrator][_connect_machine_consumer][ABANDON_FAILED] "
-                    "node_id=%s ip=%s err=%s",
+                    "node_id=%s hostname=%s err=%s",
                     node.node_id,
-                    node.ip,
+                    node.hostname,
                     abandon_err,
                 )
             self._connect_failures.pop(node.node_id, None)
@@ -571,9 +571,9 @@ class Orchestrator:
             )
         except Exception as err:
             self._log.error(
-                "Deallocator error for node_id=%s ip=%s: %s",
+                "Deallocator error for node_id=%s hostname=%s: %s",
                 node.node_id,
-                node.ip,
+                node.hostname,
                 err,
             )
 

@@ -23,7 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   LAST_CHANGE: v2.4.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), node.hostname→node.hostname, session.hostname→session.hostname, JSON "ip"→"hostname" key.
+#   PREVIOUS_CHANGE: v2.3.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
 #   PREVIOUS_CHANGE: v2.2.0 - task-schema-and-entity-cleanup: make_task drops allocated_ip (uses allocated_node_id); test_json_emits_list_with_nine_fields asserts new 9-key shape (nested node + created_at/updated_at, flat allocated_ip/port/cloud absent); test_json_todo_task_has_null_placement asserts node is null; test_info_tab_separated asserts node_id= (was ip=); default/info node-fetch assertions use get_by_ids (was get_by_ips).
 #   PREVIOUS_CHANGE: v2.1.0 - simplify-cloud-connect-node-args: test_view_connects_with_resolved_params_and_disconnects asserts connect is called with node=... and no username/port kwargs.
 # END_CHANGE_SUMMARY
@@ -162,7 +163,7 @@ def make_mock_repository(
     session.run_full = AsyncMock(
         return_value=MagicMock(returncode=returncode, stdout=stdout)
     )
-    session.ip = "10.0.0.1"
+    session.hostname = "10.0.0.1"
     session.machine = MagicMock(node_id=NodeId(1))
     session.open_sftp = AsyncMock()
 
@@ -395,7 +396,7 @@ class TestCheckStatusJson:
         _config, uow, _deps = stub_config_deps
         node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=4,
             enabled=True,
             port=22,
@@ -430,14 +431,19 @@ class TestCheckStatusJson:
             "updated_at",
             "node",
         }
-        # Raw values: status name not int, node carries ip/port/username/cloud.
+        # Raw values: status name not int, node carries all fields.
         assert obj["status"] == "RUNNING"
-        assert obj["node"] == {
-            "ip": "10.0.0.1",
-            "port": 22,
-            "username": "root",
-            "cloud": "hetzner",
-        }
+        assert obj["node"]["hostname"] == "10.0.0.1"
+        assert obj["node"]["port"] == 22
+        assert obj["node"]["username"] == "root"
+        assert obj["node"]["cloud"] == "hetzner"
+        assert obj["node"]["jump_host"] is None
+        assert obj["node"]["jump_port"] == 22
+        assert obj["node"]["jump_username"] == "root"
+        assert obj["node"]["external_id"] is None
+        assert obj["node"]["status"] == "OTHER"
+        assert isinstance(obj["node"]["created_at"], str)
+        assert isinstance(obj["node"]["updated_at"], str)
         assert obj["engine"] == "g09"
         assert obj["local_folder"] == "/tmp/local"
         assert obj["remote_folder"] == "/tmp/remote"
@@ -465,7 +471,9 @@ class TestCheckStatusJson:
         )
         uow.nodes.get_by_ids = AsyncMock(
             return_value={
-                NodeId(1): Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=22)
+                NodeId(1): Node(
+                    node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, port=22
+                )
             }
         )
 
@@ -527,7 +535,9 @@ class TestCheckStatusJson:
         )
         uow.nodes.get_by_ids = AsyncMock(
             return_value={
-                NodeId(1): Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=22)
+                NodeId(1): Node(
+                    node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, port=22
+                )
             }
         )
 
@@ -648,7 +658,7 @@ class TestResolveConnParams:
         )
         node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=4,
             cloud="hetzner",
             username="yascheduler",
@@ -670,7 +680,7 @@ class TestResolveConnParams:
             remote_jump_host="fallback.example.com",
             remote_jump_username="fallback",
         )
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud=None)
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud=None)
 
         params = check_status_mod._resolve_conn_params(node, config)
 
@@ -683,7 +693,7 @@ class TestResolveConnParams:
         )
         node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=4,
             cloud="hetzner",
             username="yascheduler",
@@ -696,7 +706,7 @@ class TestResolveConnParams:
 
     def test_returns_node_port(self) -> None:
         config = make_mock_config()
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, port=2222)
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, port=2222)
 
         params = check_status_mod._resolve_conn_params(node, config)
 
@@ -723,7 +733,7 @@ class TestCheckStatusViewHappyPath:
         ]
         node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=4,
             cloud="hetzner",
             username="yascheduler",
@@ -752,7 +762,7 @@ class TestCheckStatusViewHappyPath:
 
         # _resolve_conn_params called with the task's node.
         resolve_spy.assert_called_once()
-        assert resolve_spy.call_args.args[0].ip == "10.0.0.1"
+        assert resolve_spy.call_args.args[0].hostname == "10.0.0.1"
         # repo.connect called with node (carrying username/port) + cloud jump host;
         # connect takes no username/port kwargs (reads node.username/node.port).
         repo.connect.assert_called_once()
@@ -787,7 +797,9 @@ class TestCheckStatusViewHappyPath:
             ]
         )
         uow.nodes.get_by_ids = AsyncMock(
-            return_value={NodeId(1): Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)}
+            return_value={
+                NodeId(1): Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4)
+            }
         )
         monkeypatch.setattr(
             check_status_mod,
@@ -861,7 +873,9 @@ class TestCheckStatusQueryRenderSeparation:
             ]
         )
         uow.nodes.get_by_ids = AsyncMock(
-            return_value={NodeId(1): Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)}
+            return_value={
+                NodeId(1): Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4)
+            }
         )
 
         repo = make_mock_repository()

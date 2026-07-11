@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.18.0
+# VERSION: 2.19.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.18.0 - CloudProvisionerImpl drops machine_operations field (SSHMachineOperations facade dissolved); _setup_vm calls session.run/session.setup_node/session.get_cpu_cores directly on the session returned by machine_repository.connect.
-#   PREVIOUS_CHANGE: v2.17.0 - allocate/deallocate take node: Node; allocate derives identity via replace(node, ...) (no fresh Node); deallocate reads node.cloud/node.ip, no-ops on cloud is None.
+#   LAST_CHANGE: v2.19.0 - rename node.ip→node.hostname in all log/error/delete_node sites; allocate replace sets hostname+external_id per D3; format strings updated to hostname=%s.
+#   PREVIOUS_CHANGE: v2.18.0 - CloudProvisionerImpl drops machine_operations field (SSHMachineOperations facade dissolved); _setup_vm calls session.run/session.setup_node/session.get_cpu_cores directly on the session returned by machine_repository.connect.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -183,13 +183,19 @@ class CloudProvisionerImpl:
         # transport), and such a failure MUST NOT skip delete_node or a
         # billable VM would be orphaned — so disconnect failures are logged
         # and swallowed, then delete_node always runs.
-        node = replace(node, ip=ip_addr, cloud=adapter.name, username=config.username)
+        node = replace(
+            node,
+            hostname=ip_addr,
+            external_id=ip_addr,
+            cloud=adapter.name,
+            username=config.username,
+        )
         try:
             node = await self._setup_vm(node, adapter, config)
         except CloudSetupError:
             self.log.warning(
-                "[CloudProvisionerImpl][allocate][SETUP_FAILED] ip=%s node_id=%s - removing VM",
-                node.ip,
+                "[CloudProvisionerImpl][allocate][SETUP_FAILED] hostname=%s node_id=%s - removing VM",
+                node.hostname,
                 node.node_id,
             )
             try:
@@ -200,12 +206,12 @@ class CloudProvisionerImpl:
                     node.node_id,
                     disc_err,
                 )
-            await adapter.delete_node(log=self.log, cfg=config, host=node.ip)
+            await adapter.delete_node(log=self.log, cfg=config, host=node.hostname)
             raise
         except Exception as err:
             self.log.warning(
-                "[CloudProvisionerImpl][allocate][SETUP_FAILED] ip=%s node_id=%s - removing VM",
-                node.ip,
+                "[CloudProvisionerImpl][allocate][SETUP_FAILED] hostname=%s node_id=%s - removing VM",
+                node.hostname,
                 node.node_id,
             )
             try:
@@ -216,13 +222,13 @@ class CloudProvisionerImpl:
                     node.node_id,
                     disc_err,
                 )
-            await adapter.delete_node(log=self.log, cfg=config, host=node.ip)
+            await adapter.delete_node(log=self.log, cfg=config, host=node.hostname)
             raise CloudSetupError(f"Setup node error: {err}") from err
         # END_BLOCK_SETUP_VM
 
         self.log.debug(
-            "[CloudProvisionerImpl][allocate][DONE] ip=%s node_id=%s provider=%s ncpus=%d",
-            node.ip,
+            "[CloudProvisionerImpl][allocate][DONE] hostname=%s node_id=%s provider=%s ncpus=%d",
+            node.hostname,
             node.node_id,
             node.cloud,
             node.ncpus,
@@ -231,7 +237,7 @@ class CloudProvisionerImpl:
 
     # START_CONTRACT: CloudProvisionerImpl.deallocate
     #   PURPOSE: Delete VM via named provider's SDK (no DB access).
-    #   INPUTS: { node: Node - provider and host read from node.cloud/node.ip }
+    #   INPUTS: { node: Node - provider and host read from node.cloud/node.hostname }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Deletes cloud VM. No-ops (warn+return) when node.cloud is None, provider has no adapter, or provider has no config.
     #   LINKS: M-CLOUD-PROVISIONER
@@ -247,26 +253,26 @@ class CloudProvisionerImpl:
         adapter = self.adapters.get(node.cloud)
         if adapter is None:
             self.log.warning(
-                "[CloudProvisionerImpl][deallocate][UNSUPPORTED] ip=%s cloud=%s",
-                node.ip,
+                "[CloudProvisionerImpl][deallocate][UNSUPPORTED] hostname=%s cloud=%s",
+                node.hostname,
                 node.cloud,
             )
             return
         config = self.configs.get(node.cloud)
         if config is None:
             self.log.warning(
-                "[CloudProvisionerImpl][deallocate][NO_CONFIG] ip=%s cloud=%s",
-                node.ip,
+                "[CloudProvisionerImpl][deallocate][NO_CONFIG] hostname=%s cloud=%s",
+                node.hostname,
                 node.cloud,
             )
             return
         # END_BLOCK_RESOLVE_DEALLOCATE_PROVIDER
 
         # START_BLOCK_DELETE_VM
-        await adapter.delete_node(log=self.log, cfg=config, host=node.ip)
+        await adapter.delete_node(log=self.log, cfg=config, host=node.hostname)
         self.log.debug(
-            "[CloudProvisionerImpl][deallocate][DONE] ip=%s cloud=%s node_id=%s",
-            node.ip,
+            "[CloudProvisionerImpl][deallocate][DONE] hostname=%s cloud=%s node_id=%s",
+            node.hostname,
             node.cloud,
             node.node_id,
         )
@@ -352,7 +358,9 @@ class CloudProvisionerImpl:
         # pin an allocator worker forever. The failure message includes both
         # stdout and stderr — cloud-init writes its status line to stdout, so
         # omitting stdout (the previous behavior) gave no clue why it failed.
-        self.log.debug("[CloudProvisionerImpl][setup_vm][CLOUD_INIT] ip=%s", node.ip)
+        self.log.debug(
+            "[CloudProvisionerImpl][setup_vm][CLOUD_INIT] hostname=%s", node.hostname
+        )
         try:
             result = await asyncio.wait_for(
                 session.run("cloud-init status --wait"),
@@ -360,40 +368,44 @@ class CloudProvisionerImpl:
             )
             if result.exit_code != 0:
                 raise CloudSetupError(
-                    f"cloud-init failed on {node.ip}: exit={result.exit_code} "
+                    f"cloud-init failed on {node.hostname}: exit={result.exit_code} "
                     f"stdout={result.stdout} stderr={result.stderr}"
                 )
         except asyncio.TimeoutError as err:
             raise CloudSetupError(
-                f"cloud-init status --wait timed out on {node.ip} "
+                f"cloud-init status --wait timed out on {node.hostname} "
                 f"after {adapter.create_node_timeout}s"
             ) from err
         except CloudSetupError:
             raise
         except Exception as err:
             raise CloudSetupError(
-                f"cloud-init status --wait failed on {node.ip}: {err}"
+                f"cloud-init status --wait failed on {node.hostname}: {err}"
             ) from err
         # END_BLOCK_CLOUD_INIT
 
         # START_BLOCK_SETUP_NODE
-        self.log.debug("[CloudProvisionerImpl][setup_vm][SETUP_NODE] ip=%s", node.ip)
+        self.log.debug(
+            "[CloudProvisionerImpl][setup_vm][SETUP_NODE] hostname=%s", node.hostname
+        )
         try:
             await session.setup_node(self.engines)
         except Exception as err:
-            raise CloudSetupError(f"Setup node {node.ip} failed: {err}") from err
+            raise CloudSetupError(f"Setup node {node.hostname} failed: {err}") from err
         # END_BLOCK_SETUP_NODE
 
         # START_BLOCK_GET_CPUS
         try:
             ncpus = await session.get_cpu_cores()
         except Exception as err:
-            raise CloudSetupError(f"Get CPU cores for {node.ip} failed: {err}") from err
+            raise CloudSetupError(
+                f"Get CPU cores for {node.hostname} failed: {err}"
+            ) from err
         # END_BLOCK_GET_CPUS
 
         self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][READY] ip=%s node_id=%s ncpus=%d",
-            node.ip,
+            "[CloudProvisionerImpl][setup_vm][READY] hostname=%s node_id=%s ncpus=%d",
+            node.hostname,
             node.node_id,
             ncpus,
         )
@@ -402,7 +414,7 @@ class CloudProvisionerImpl:
     # START_CONTRACT: CloudProvisionerImpl._connect_to_vm
     #   PURPOSE: Connect to VM via SSH gateway (registering the session under node.node_id) with retry-friendly error wrapping.
     #   INPUTS: {
-    #     node: Node - the identity object allocate constructed after create_node (carries node_id, ip, username, port, cloud); session registers under node.node_id,
+    #     node: Node - the identity object allocate constructed after create_node (carries node_id, hostname, username, port, cloud); session registers under node.node_id,
     #     adapter: CloudAdapter - provider adapter (for timeout settings),
     #     config: ConfigCloud - provider config (for jump host)
     #   }
@@ -426,8 +438,8 @@ class CloudProvisionerImpl:
 
         # START_BLOCK_SSH_CONNECT_VM
         self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][CONNECT] ip=%s node_id=%s username=%s",
-            node.ip,
+            "[CloudProvisionerImpl][setup_vm][CONNECT] hostname=%s node_id=%s username=%s",
+            node.hostname,
             node.node_id,
             node.username,
         )
@@ -443,6 +455,8 @@ class CloudProvisionerImpl:
                 jump_username=config.jump_username or None,
             )
         except Exception as err:
-            raise CloudSetupError(f"SSH connect to {node.ip} failed: {err}") from err
+            raise CloudSetupError(
+                f"SSH connect to {node.hostname} failed: {err}"
+            ) from err
         # END_BLOCK_SSH_CONNECT_VM
         return session

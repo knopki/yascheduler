@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/occupancy.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: OccupancyChecker — pgrep/cmd-based occupancy check logic + monitor installer composing the session's generic monitor mechanism. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OccupancyChecker: occupancy probing via pgrep or shell command on a remote session.
@@ -12,8 +12,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - drop asyncio.wait_for wrapper from _check_factory. On Python <3.12 wait_for swallowed the outer monitor Task's cancellation, so SSHMachineSession._close()'s task.cancel()+await task hung forever (manifested as test_ssh_gateway_bg_tasks.py infinite hang on <=3.11). occupancy_check's underlying SSH primitives already self-bound via my_backoff_exc; failed checks still fall back to busy. Removed now-unused asyncio import.
-#   PREVIOUS_CHANGE: v1.2.0 - All four method bodies rewritten to operate via MachineSession parameter. _occupancy_by_pgrep uses session.pgrep(), _occupancy_by_cmd uses session.run_full(), occupancy_check/start_occupancy_check dispatch on session. install_monitor/occupy/release called on session instead of repository.
+#   LAST_CHANGE: v1.4.0 - Node-rename-and-fields: session.ip→session.hostname in all log lines (7 sites); hostname=%s→hostname=%s format labels.
+#   PREVIOUS_CHANGE: v1.3.0 - drop asyncio.wait_for wrapper from _check_factory. On Python <3.12 wait_for swallowed the outer monitor Task's cancellation, so SSHMachineSession._close()'s task.cancel()+await task hung forever (manifested as test_ssh_gateway_bg_tasks.py infinite hang on <=3.11). occupancy_check's underlying SSH primitives already self-bound via my_backoff_exc; failed checks still fall back to busy. Removed now-unused asyncio import.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -60,22 +60,22 @@ class OccupancyChecker:
         try:
             async for proc in session.pgrep(pattern):
                 self._log.debug(
-                    "[OccupancyChecker][occupancy_check][PGREP] ip=%s pid=%s name=%s cmd=%s",
-                    session.ip,
+                    "[OccupancyChecker][occupancy_check][PGREP] hostname=%s pid=%s name=%s cmd=%s",
+                    session.hostname,
                     proc.pid,
                     proc.name,
                     proc.command,
                 )
                 return True
             self._log.debug(
-                "[OccupancyChecker][occupancy_check][PGREP_FREE] ip=%s pattern=%s",
-                session.ip,
+                "[OccupancyChecker][occupancy_check][PGREP_FREE] hostname=%s pattern=%s",
+                session.hostname,
                 pattern,
             )
             return False
         except SSHRetryExc as exc:
             self._log.warning(
-                "Machine %s pgrep failed, assuming busy: %s", session.ip, exc
+                "Machine %s pgrep failed, assuming busy: %s", session.hostname, exc
             )
             return True
         # END_BLOCK_OCCUPANCY_PGREP
@@ -94,8 +94,8 @@ class OccupancyChecker:
         try:
             proc = await session.run_full(cmd)
             self._log.debug(
-                "[OccupancyChecker][occupancy_check][CHECK_CMD] ip=%s cmd=%s exit=%d expected=%d",
-                session.ip,
+                "[OccupancyChecker][occupancy_check][CHECK_CMD] hostname=%s cmd=%s exit=%d expected=%d",
+                session.hostname,
                 cmd,
                 proc.returncode,
                 expected_code,
@@ -103,7 +103,7 @@ class OccupancyChecker:
             return proc.returncode == expected_code
         except SSHRetryExc as exc:
             self._log.warning(
-                "Machine %s check_cmd failed, assuming busy: %s", session.ip, exc
+                "Machine %s check_cmd failed, assuming busy: %s", session.hostname, exc
             )
             return True
         # END_BLOCK_OCCUPANCY_CMD
@@ -132,7 +132,8 @@ class OccupancyChecker:
                 session, config.check_cmd, config.check_cmd_code
             )
         self._log.debug(
-            "[OccupancyChecker][occupancy_check][NO_CHECK] ip=%s", session.ip
+            "[OccupancyChecker][occupancy_check][NO_CHECK] hostname=%s",
+            session.hostname,
         )
         return False
         # END_BLOCK_OCCUPANCY_DISPATCH
@@ -167,7 +168,7 @@ class OccupancyChecker:
                 self._log.exception(
                     "Occupancy check failed for %s on %s",
                     config.name,
-                    session.ip,
+                    session.hostname,
                 )
                 return True
 

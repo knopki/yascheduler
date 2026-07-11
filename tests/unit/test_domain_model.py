@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_domain_model.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, Engine, Task, Node, ConnectedMachine.
@@ -29,11 +29,15 @@
 #   test_new_task_defaults - NewTask typed-field defaults, no task_id, no remote_folder, no error
 #   TestTaskErrorFormat - Task.error column format contract (bare on reject/fail, None on success)
 #   TestMaterializeTask - materialize_task adds TaskCreated event
+#   TestNodeStatus - NodeStatus is StrEnum with OTHER value, supports name lookup
+#   TestNode - Node defaults and full construction (hostname, jump_*, external_id, status, timestamps)
+#   TestNewNode - NewNode defaults, full construction, tmp-reservation defaults, no node_id
+#   TestConnectedMachine - Machine compatibility, occupy/release state transitions
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: remove TestTaskContext, TestTaskContextReplace, TestTaskWithContext; add TestTaskWithRemoteFolder, TestTaskWithDownloadResults, TestTaskErrorFormat; update Task/NewTask construction to typed fields; Engine.validate_inputs takes extra dict (was TaskContext).
-#   PREVIOUS_CHANGE: v1.6.0 - task-schema-and-entity-cleanup: drop allocated_ip from Task/NewTask.
+#   LAST_CHANGE: v1.8.0 - Node-rename-and-fields: rename ip→hostname in Node/NewNode/ConnectedMachine tests; add new fields assertions (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); add TestNodeStatus for NodeStatus enum; MachineBusyError updated to node_id+hostname.
+#   PREVIOUS_CHANGE: v1.7.0 - drop-task-context-entity: remove TestTaskContext, TestTaskContextReplace, TestTaskWithContext; add TestTaskWithRemoteFolder, TestTaskWithDownloadResults, TestTaskErrorFormat; update Task/NewTask construction to typed fields; Engine.validate_inputs takes extra dict (was TaskContext).
 # END_CHANGE_SUMMARY
 
 import time
@@ -63,6 +67,7 @@ from yascheduler.domain.model import (
     NewTask,
     Node,
     NodeId,
+    NodeStatus,
     ProcessResult,
     Task,
     TaskId,
@@ -73,9 +78,9 @@ from yascheduler.domain.model import (
 _DT = datetime(2025, 1, 1)
 
 
-def _node(node_id: int = 7, ip: str = "10.0.0.1") -> Node:
+def _node(node_id: int = 7, hostname: str = "10.0.0.1") -> Node:
     """Construct a minimal Node for allocate_to tests."""
-    return Node(node_id=NodeId(node_id), ip=ip, ncpus=4)
+    return Node(node_id=NodeId(node_id), hostname=hostname, ncpus=4)
 
 
 def _make_task(**overrides: object) -> Task:
@@ -303,6 +308,28 @@ class TestTask:
         assert "1" in str(exc_info.value)
 
 
+# START_CONTRACT: test_node_status
+#   PURPOSE: Verify NodeStatus enum is StrEnum, has OTHER value, supports name lookup.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertions }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-MODEL: NodeStatus]
+# END_CONTRACT: test_node_status
+class TestNodeStatus:
+    def test_other_value(self) -> None:
+        """NodeStatus.OTHER is defined with value 'OTHER'."""
+        assert NodeStatus.OTHER == "OTHER"
+        assert NodeStatus.OTHER.value == "OTHER"
+
+    def test_is_strenum(self) -> None:
+        """NodeStatus members are str instances (StrEnum)."""
+        assert isinstance(NodeStatus.OTHER, str)
+
+    def test_name_lookup(self) -> None:
+        """NodeStatus['OTHER'] returns NodeStatus.OTHER (name-based lookup)."""
+        assert NodeStatus["OTHER"] is NodeStatus.OTHER
+
+
 # START_CONTRACT: test_node
 #   PURPOSE: Verify Node dataclass defaults and full construction
 #   INPUTS: { None }
@@ -312,32 +339,49 @@ class TestTask:
 # END_CONTRACT: test_node
 class TestNode:
     def test_defaults(self) -> None:
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4)
         assert node.node_id == NodeId(1)
-        assert node.ip == "10.0.0.1"
+        assert node.hostname == "10.0.0.1"
         assert node.ncpus == 4
         assert node.enabled is True
         assert node.cloud is None
         assert node.username == "root"
         assert node.port == 22
+        assert node.jump_host is None
+        assert node.jump_port == 22
+        assert node.jump_username == "root"
+        assert node.external_id is None
+        assert node.status == NodeStatus.OTHER
+        assert isinstance(node.created_at, datetime)
+        assert isinstance(node.updated_at, datetime)
 
     def test_full_construction(self) -> None:
         node = Node(
             node_id=NodeId(7),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=8,
             enabled=False,
             cloud="hetzner",
             username="admin",
             port=2222,
+            jump_host="jump.example.com",
+            jump_port=2222,
+            jump_username="jumpuser",
+            external_id="ext-123",
+            status=NodeStatus.OTHER,
         )
         assert node.node_id == NodeId(7)
-        assert node.ip == "10.0.0.1"
+        assert node.hostname == "10.0.0.1"
         assert node.ncpus == 8
         assert node.enabled is False
         assert node.cloud == "hetzner"
         assert node.username == "admin"
         assert node.port == 2222
+        assert node.jump_host == "jump.example.com"
+        assert node.jump_port == 2222
+        assert node.jump_username == "jumpuser"
+        assert node.external_id == "ext-123"
+        assert node.status == NodeStatus.OTHER
 
 
 # START_CONTRACT: test_node_id
@@ -384,43 +428,64 @@ class TestNodeId:
 # END_CONTRACT: test_new_node
 class TestNewNode:
     def test_has_no_node_id_attribute(self) -> None:
-        NewNode()
+        n = NewNode()
+        assert not hasattr(n, "node_id")
 
     def test_defaults(self) -> None:
-        n = NewNode(ip="x", ncpus=4)
+        n = NewNode(hostname="x", ncpus=4)
         assert n.enabled is True
         assert n.cloud is None
         assert n.username == "root"
         assert n.port == 22
+        assert n.jump_host is None
+        assert n.jump_port == 22
+        assert n.jump_username == "root"
+        assert n.external_id is None
+        assert n.status == NodeStatus.OTHER
 
     def test_full_construction(self) -> None:
         n = NewNode(
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=8,
             enabled=False,
             cloud="aws",
             username="admin",
             port=2222,
+            jump_host="jump.example.com",
+            jump_port=2222,
+            jump_username="jumpuser",
+            external_id="ext-123",
+            status=NodeStatus.OTHER,
         )
-        assert n.ip == "10.0.0.1"
+        assert n.hostname == "10.0.0.1"
         assert n.ncpus == 8
         assert n.enabled is False
         assert n.cloud == "aws"
         assert n.username == "admin"
         assert n.port == 2222
+        assert n.jump_host == "jump.example.com"
+        assert n.jump_port == 2222
+        assert n.jump_username == "jumpuser"
+        assert n.external_id == "ext-123"
+        assert n.status == NodeStatus.OTHER
 
     def test_tmp_reservation_defaults(self) -> None:
         n = NewNode(cloud="aws", enabled=False)
-        assert n.ip == ""
+        assert n.hostname == ""
         assert n.ncpus == 0
         assert n.username == "root"
         assert n.port == 22
+        assert n.jump_host is None
+        assert n.jump_port == 22
+        assert n.jump_username == "root"
+        assert n.external_id is None
+        assert n.status == NodeStatus.OTHER
         assert n.enabled is False
         assert n.cloud == "aws"
 
-    def test_explicit_ip_ncpus_override_defaults(self) -> None:
-        n = NewNode(ip="10.0.0.1", ncpus=4)
-        assert n.ip == "10.0.0.1"
+    def test_explicit_hostname_ncpus_override_defaults(self) -> None:
+        n = NewNode(hostname="10.0.0.1", ncpus=4)
+        assert n.hostname == "10.0.0.1"
         assert n.ncpus == 4
 
 
@@ -434,7 +499,7 @@ class TestNewNode:
 class TestConnectedMachine:
     def make_machine(self, **overrides: object) -> ConnectedMachine:
         defaults: dict[str, object] = dict(
-            node_id=NodeId(1), ip="10.0.0.1", platform="linux", ncpus=4
+            node_id=NodeId(1), hostname="10.0.0.1", platform="linux", ncpus=4
         )
         defaults.update(overrides)
         return ConnectedMachine(**defaults)  # type: ignore[arg-type]
@@ -466,6 +531,7 @@ class TestConnectedMachine:
         with pytest.raises(MachineBusyError) as exc_info:
             m.occupy()
         assert "10.0.0.1" in str(exc_info.value)
+        assert str(NodeId(1)) in str(exc_info.value)
 
     def test_release_sets_free_and_timestamp(self) -> None:
         before = time.monotonic()

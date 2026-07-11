@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.11.0
+# VERSION: 1.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Domain exception hierarchy for business-level error handling.
 #   SCOPE: Domain error hierarchy: DomainError base class and sub-hierarchies for validation, task lifecycle, machine state, scheduling, and cloud provider errors.
@@ -16,7 +16,7 @@
 #   TaskNotTodoError - Task not in TODO status
 #   TaskNotRunningError - Task not in RUNNING status
 #   MachineBusyError - Operation attempted on a busy machine
-#   MachineConnectionError - SSH connection failure carrying ip and reason
+#   MachineConnectionError - SSH connection failure carrying node_id, hostname, and reason
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
 #   CloudCapacityExhaustedError - Cloud provider at capacity
@@ -26,8 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.11.0 - Remove TaskAlreadyAllocatedError and TaskNotAllocatedError (guarded the TO_DO + allocated intermediate state produced by the prior allocate_to + mark_running two-step; run collapses allocation and the TO_DO->RUNNING transition into one atomic method, so neither guard arises). The remaining TaskNotTodoError (raised by run and reject) and TaskNotRunningError (raised by complete, fail, abandon) cover all five transition guards.
-#   PREVIOUS_CHANGE: v1.10.0 - The 6 task-keyed exceptions take task_id: TaskId; f-string messages render the bare integer via TaskId.__str__. Added `from __future__ import annotations` and import TaskId under TYPE_CHECKING to break the model↔exceptions runtime import cycle.
+#   LAST_CHANGE: v1.12.0 - MachineBusyError/MachineConnectionError gain node_id first arg, hostname replaces ip. MachineBusyError(node_id, hostname), MachineConnectionError(node_id, hostname, reason). Node-rename-and-fields change.
+#   PREVIOUS_CHANGE: v1.11.0 - Remove TaskAlreadyAllocatedError and TaskNotAllocatedError (guarded the TO_DO + allocated intermediate state produced by the prior allocate_to + mark_running two-step; run collapses allocation and the TO_DO->RUNNING transition into one atomic method, so neither guard arises). The remaining TaskNotTodoError (raised by run and reject) and TaskNotRunningError (raised by complete, fail, abandon) cover all five transition guards.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from yascheduler.domain.model import TaskId
+    from yascheduler.domain.model import NodeId, TaskId
 
 
 class DomainError(Exception):
@@ -86,18 +86,22 @@ class TaskNotRunningError(TaskError):
 class MachineBusyError(DomainError):
     """Operation attempted on a busy machine."""
 
-    def __init__(self, ip: str) -> None:
-        self.ip = ip
-        super().__init__(f"machine at {ip} is busy")
+    def __init__(self, node_id: NodeId, hostname: str) -> None:
+        self.node_id = node_id
+        self.hostname = hostname
+        super().__init__(f"machine ({node_id}) at {hostname} is busy")
 
 
 class MachineConnectionError(DomainError):
     """SSH connection failure when establishing a connection to a remote machine."""
 
-    def __init__(self, ip: str, reason: str) -> None:
-        self.ip = ip
+    def __init__(self, node_id: NodeId, hostname: str, reason: str) -> None:
+        self.node_id = node_id
+        self.hostname = hostname
         self.reason = reason
-        super().__init__(f"cannot connect to {ip}: {reason}")
+        super().__init__(
+            f"cannot connect to machine ({node_id}) at {hostname}: {reason}"
+        )
 
 
 class SchedulingError(DomainError):

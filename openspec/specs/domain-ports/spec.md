@@ -46,7 +46,7 @@ The system SHALL define a `NodeRepository` Protocol with async methods:
 `disable(node_id: NodeId) -> None`, `remove(node_id: NodeId) -> None`,
 `count_by_status() -> Mapping[bool, int]`.
 
-The ip-keyed lookup methods `get(ip: str)` and `get_by_ips(ips: list[str])` are
+The hostname-keyed lookup methods `get(ip: str)` and `get_by_ips(ips: list[str])` are
 not part of the Protocol. All lookups key on `NodeId`.
 
 `insert(new_node: NewNode) -> Node` is the sole node-insertion path. It takes
@@ -54,7 +54,7 @@ a pre-persistence `NewNode` and returns the persisted `Node` carrying the
 database-generated `node_id`. This mirrors `TaskRepository.insert(task) ->
 Task`. The tmp-reservation flow SHALL use `insert` for tmp nodes too —
 constructing `NewNode(cloud=selected_name, enabled=False)` (relying on
-`NewNode`'s `ip=""` and `ncpus=0` defaults) and persisting it to reserve
+`NewNode`'s `hostname=""` and `ncpus=0` defaults) and persisting it to reserve
 capacity; the returned `Node.node_id` is the tmp-node handle for cleanup AND
 for reuse as the real node's identity.
 
@@ -79,7 +79,7 @@ by `node_id` ascending is preserved on `list_all`).
 
 #### Scenario: Insert takes NewNode returns Node
 
-- **WHEN** `insert(NewNode(ip="[IP]", ncpus=4))` is called
+- **WHEN** `insert(NewNode(hostname="[IP]", ncpus=4))` is called
 - **THEN** a `Node` is returned whose `node_id` is the database-generated `NodeId` and whose other fields match the `NewNode`
 
 #### Scenario: Get node by id
@@ -90,7 +90,7 @@ by `node_id` ascending is preserved on `list_all`).
 #### Scenario: Remove takes NodeId
 
 - **WHEN** `remove(NodeId(7))` is called
-- **THEN** the node row with `node_id=7` is deleted; the key is `NodeId`, not `ip`
+- **THEN** the node row with `node_id=7` is deleted; the key is `NodeId`, not `hostname`
 
 ### Requirement: MachineRepository, MachineSession, and MachineOperations ports
 
@@ -102,7 +102,7 @@ The system SHALL define `@runtime_checkable` Protocols for the SSH-side ports:
   Returns `MachineSession` from `connect`/`list_free`/`list_connected`/
   `get_session`.
 - `MachineSession` — the connected-machine entity handle: identity
-  (`ip`, `machine`), state transitions (`occupy`/`release`/`update`),
+  (`hostname`, `machine`), state transitions (`occupy`/`release`/`update`),
   connect-time config, adapter-derived accessors, base primitives
   (`run`/`run_full`/`run_bg`/`upload`/`open_sftp`/`get_cpu_cores`/
   `setup_node`/`pgrep`/`list_processes`), monitor mechanism, and lifecycle.
@@ -153,11 +153,13 @@ row per cloud allocation lifecycle, not two.
 `select_provider` first, gets a `str | None` (the selected provider name or
 `None`), then calls `allocate(selection, node)`.
 
-`deallocate` takes the `Node` and reads `node.cloud` (the provider name) and
-`node.ip` (the cloud SDK host identifier) internally — the caller no longer
-unpacks them. When `node.cloud` is `None` the adapter SHALL log and return
-without deleting a VM. `deallocate` stays ip-keyed for the actual VM lookup —
-`ip` is the cloud SDK host identifier (migrating VM identification to a
+`allocate` SHALL set `external_id` alongside `hostname` in the returned
+`Node` (both set to the cloud-provisioned address). `deallocate` takes the
+`Node` and reads `node.cloud` (the provider name) and `node.hostname` (the
+cloud SDK host identifier) internally — the caller no longer unpacks them.
+When `node.cloud` is `None` the adapter SHALL log and return without deleting
+a VM. `deallocate` stays hostname-keyed for the actual VM lookup —
+`hostname` is the cloud SDK host identifier (migrating VM identification to a
 `node_id`-derived tag is a future cloud-adapter change).
 
 `select_provider` is sync — it does no I/O. It returns `None` when no
@@ -179,6 +181,14 @@ and passes it back to `allocate`/`deallocate` unchanged.
 
 - **WHEN** `allocate("aws", node)` is called with a valid provider name and a tmp-node `Node` carrying `node_id == NodeId(7)`
 - **THEN** returns a `Node` with `node_id == NodeId(7)`, a real `ip` (the provisioned VM's address), `enabled=True`, and `ncpus` populated from the VM; no DB write inside the adapter; the caller persists via `NodeRepository.update(node)`
+
+#### Scenario: allocate sets external_id alongside hostname
+- **WHEN** `allocate(provider, node)` returns a `Node` with a cloud-provisioned address `ip_addr`
+- **THEN** the returned `Node` has `hostname == ip_addr` AND `external_id == ip_addr`
+
+#### Scenario: deallocate reads node.cloud and node.hostname
+- **WHEN** `deallocate(node)` is called and `node.cloud` is not None
+- **THEN** the adapter reads `node.cloud` (provider) and `node.hostname` (cloud host) to identify and delete the VM
 
 #### Scenario: Select provider returns provider name string or None
 

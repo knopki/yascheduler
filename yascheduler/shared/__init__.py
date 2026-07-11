@@ -18,6 +18,6 @@
 #   PREVIOUS_CHANGE: v1.7.0 - Re-export Unpack from .compat.
 # END_CHANGE_SUMMARY
 
-from .compat import Self, Unpack
+from .compat import Self, StrEnum, Unpack
 
-__all__ = ["Self", "Unpack"]
+__all__ = ["Self", "Unpack", "StrEnum"]

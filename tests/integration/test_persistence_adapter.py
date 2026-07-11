@@ -141,7 +141,7 @@ async def test_repo_task_save_updates(
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
     node_repo = PostgresNodeRepository(pg_conn, pg_executor)
     task = await task_repo.insert(NewTask(label="initial", engine="fleur"))
-    node = await node_repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
+    node = await node_repo.insert(NewNode(hostname="10.0.0.1", ncpus=2, enabled=True))
 
     # Build a CHECK-valid RUNNING task via task.run.
     # A bare Task(status=RUNNING) with NULL allocated_node_id/remote_folder is
@@ -170,7 +170,7 @@ async def test_repo_task_list_by_status(
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
     node_repo = PostgresNodeRepository(pg_conn, pg_executor)
     t1 = await task_repo.insert(NewTask(label="todo", engine="fleur"))
-    node = await node_repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
+    node = await node_repo.insert(NewNode(hostname="10.0.0.1", ncpus=2, enabled=True))
     t2 = await task_repo.insert(NewTask(label="running", engine="fleur"))
     # CHECK-valid RUNNING via task.run.
     t2 = t2.run(node.node_id, "/r")
@@ -221,7 +221,7 @@ async def test_repo_task_update_status_atomic(
     """update_status only changes the status field."""
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
     node_repo = PostgresNodeRepository(pg_conn, pg_executor)
-    node = await node_repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
+    node = await node_repo.insert(NewNode(hostname="10.0.0.1", ncpus=2, enabled=True))
     task = await task_repo.insert(NewTask(label="keep-label", engine="fleur"))
     # Seed a CHECK-valid RUNNING row (allocated_node_id + remote_folder set)
     # so the subsequent update_status to DONE is CHECK-valid (DONE is
@@ -345,8 +345,8 @@ async def test_repo_task_list_ids_by_node_id_and_status(
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
     node_repo = PostgresNodeRepository(pg_conn, pg_executor)
 
-    node = await node_repo.insert(NewNode(ip="10.0.0.99", ncpus=2, enabled=True))
-    other = await node_repo.insert(NewNode(ip="10.0.0.98", ncpus=2, enabled=True))
+    node = await node_repo.insert(NewNode(hostname="10.0.0.99", ncpus=2, enabled=True))
+    other = await node_repo.insert(NewNode(hostname="10.0.0.98", ncpus=2, enabled=True))
 
     # t1: a RUNNING task on `node` (CHECK-valid: allocated_node_id +
     # remote_folder set). The query is exercised against RUNNING, which is
@@ -393,7 +393,12 @@ async def test_repo_node_crud(
     repo = PostgresNodeRepository(pg_conn, pg_executor)
 
     new_node = NewNode(
-        ip="10.0.0.10", ncpus=4, enabled=True, cloud="aws", username="admin", port=2222
+        hostname="10.0.0.10",
+        ncpus=4,
+        enabled=True,
+        cloud="aws",
+        username="admin",
+        port=2222,
     )
     persisted = await repo.insert(new_node)
     assert isinstance(persisted, Node)
@@ -436,15 +441,15 @@ async def test_repo_node_list_filters(
 ) -> None:
     """list_enabled/disabled return correct subsets."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    await repo.insert(NewNode(ip="10.0.0.1", ncpus=2, enabled=True))
-    await repo.insert(NewNode(ip="10.0.0.2", ncpus=2, enabled=False))
+    await repo.insert(NewNode(hostname="10.0.0.1", ncpus=2, enabled=True))
+    await repo.insert(NewNode(hostname="10.0.0.2", ncpus=2, enabled=False))
 
     enabled = await repo.list_enabled()
     disabled = await repo.list_disabled()
     all_nodes = await repo.list_all()
 
-    assert len(enabled) == 1 and enabled[0].ip == "10.0.0.1"
-    assert len(disabled) == 1 and disabled[0].ip == "10.0.0.2"
+    assert len(enabled) == 1 and enabled[0].hostname == "10.0.0.1"
+    assert len(disabled) == 1 and disabled[0].hostname == "10.0.0.2"
     assert len(all_nodes) == 2
 
 
@@ -461,13 +466,15 @@ async def test_repo_node_update(
     """update persists all mutable fields (including ip — V1 cloud lifecycle relies on this)."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
     # Insert with ip="" mirroring the tmp-reservation row (NewNode cloud defaults).
-    persisted = await repo.insert(NewNode(ip="", ncpus=0, enabled=False, cloud="aws"))
+    persisted = await repo.insert(
+        NewNode(hostname="", ncpus=0, enabled=False, cloud="aws")
+    )
 
-    # Flip to enabled=True + real ip/ncpus via update (the V1 single-row lifecycle).
+    # Flip to enabled=True + real hostname/ncpus via update (the V1 single-row lifecycle).
     await repo.update(
         Node(
             node_id=NodeId(persisted.node_id.value),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=8,
             enabled=True,
             cloud="azure",
@@ -477,7 +484,7 @@ async def test_repo_node_update(
     )
     n = await repo.get_by_id(persisted.node_id)
     assert n is not None
-    assert n.ip == "10.0.0.1", (
+    assert n.hostname == "10.0.0.1", (
         "update must persist ip (V1 cloud lifecycle sets real ip via update)"
     )
     assert n.ncpus == 8
@@ -503,7 +510,7 @@ async def test_repo_node_tmp_via_insert(
     assert isinstance(node, Node)
     assert isinstance(node.node_id, NodeId)
     assert node.node_id.value >= 1
-    assert node.ip == ""
+    assert node.hostname == ""
     assert node.enabled is False
     assert node.cloud == "aws"
     assert node.username == "root"
@@ -522,9 +529,11 @@ async def test_repo_node_count(
 ) -> None:
     """Count aggregations work correctly."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    await repo.insert(NewNode(ip="10.0.0.1", ncpus=2, cloud="aws", enabled=True))
-    await repo.insert(NewNode(ip="10.0.0.2", ncpus=2, cloud="aws", enabled=False))
-    await repo.insert(NewNode(ip="10.0.0.3", ncpus=2, cloud="azure", enabled=True))
+    await repo.insert(NewNode(hostname="10.0.0.1", ncpus=2, cloud="aws", enabled=True))
+    await repo.insert(NewNode(hostname="10.0.0.2", ncpus=2, cloud="aws", enabled=False))
+    await repo.insert(
+        NewNode(hostname="10.0.0.3", ncpus=2, cloud="azure", enabled=True)
+    )
 
     clouds = await repo.count_by_cloud()
     assert clouds["aws"] == 2
@@ -547,9 +556,9 @@ async def test_repo_node_get_by_ids(
 ) -> None:
     """Batch get_by_ids returns only matching nodes keyed by NodeId."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    n1 = await repo.insert(NewNode(ip="10.0.0.1", ncpus=2, cloud="aws"))
-    await repo.insert(NewNode(ip="10.0.0.2", ncpus=2, cloud="gcp"))
-    n3 = await repo.insert(NewNode(ip="10.0.0.3", ncpus=2, cloud="azure"))
+    n1 = await repo.insert(NewNode(hostname="10.0.0.1", ncpus=2, cloud="aws"))
+    await repo.insert(NewNode(hostname="10.0.0.2", ncpus=2, cloud="gcp"))
+    n3 = await repo.insert(NewNode(hostname="10.0.0.3", ncpus=2, cloud="azure"))
 
     nodes = await repo.get_by_ids([n1.node_id, n3.node_id, NodeId(99999)])
     assert len(nodes) == 2
@@ -571,13 +580,13 @@ async def test_repo_node_get_by_id(
     """get_by_id returns node by primary key, None for missing id."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
     persisted = await repo.insert(
-        NewNode(ip="10.0.0.20", ncpus=4, enabled=True, cloud="aws")
+        NewNode(hostname="10.0.0.20", ncpus=4, enabled=True, cloud="aws")
     )
 
     fetched = await repo.get_by_id(persisted.node_id)
     assert fetched is not None
     assert fetched.node_id == persisted.node_id
-    assert fetched.ip == "10.0.0.20"
+    assert fetched.hostname == "10.0.0.20"
     assert fetched.ncpus == 4
     assert fetched.cloud == "aws"
 
@@ -605,9 +614,9 @@ async def test_repo_node_list_all_ordered_by_node_id(
 ) -> None:
     """list_all returns nodes ordered by node_id ascending."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
-    await repo.insert(NewNode(ip="10.0.0.1", ncpus=2))
-    await repo.insert(NewNode(ip="10.0.0.2", ncpus=2))
-    await repo.insert(NewNode(ip="10.0.0.3", ncpus=2))
+    await repo.insert(NewNode(hostname="10.0.0.1", ncpus=2))
+    await repo.insert(NewNode(hostname="10.0.0.2", ncpus=2))
+    await repo.insert(NewNode(hostname="10.0.0.3", ncpus=2))
 
     all_nodes = await repo.list_all()
     node_ids = [n.node_id.value for n in all_nodes]
@@ -638,7 +647,7 @@ async def test_uow_integration(
         assert uow.nodes is not None
 
         # Insert through repo
-        new_node = NewNode(ip="10.0.0.50", ncpus=2, enabled=True)
+        new_node = NewNode(hostname="10.0.0.50", ncpus=2, enabled=True)
         persisted = await uow.nodes.insert(new_node)
         await uow.commit()
         assert isinstance(persisted, Node)
@@ -648,7 +657,7 @@ async def test_uow_integration(
         # Verify persisted
         retrieved = await uow.nodes.get_by_id(persisted.node_id)
         assert retrieved is not None
-        assert retrieved.ip == "10.0.0.50"
+        assert retrieved.hostname == "10.0.0.50"
 
 
 # START_CONTRACT: test_uow_rollback_integration
@@ -668,7 +677,7 @@ async def test_uow_rollback_integration(
     with pytest.raises(ValueError):
         async with PostgresUnitOfWork(config, MessageBus()) as uow:
             persisted = await uow.nodes.insert(
-                NewNode(ip="10.0.0.99", ncpus=2, enabled=True)
+                NewNode(hostname="10.0.0.99", ncpus=2, enabled=True)
             )
             raise ValueError("simulated error")
 

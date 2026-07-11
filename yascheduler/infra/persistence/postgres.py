@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres.py
-# VERSION: 1.13.0
+# VERSION: 1.14.0
 # START_MODULE_CONTRACT
 #   PURPOSE: PostgreSQL repository implementations for tasks and nodes.
 #   SCOPE: Async task and node CRUD over pg8000 via ThreadPoolExecutor.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.13.0 - insert calls materialize_task(self._row_to_task(rows[0])) to attach TaskCreated to the returned Task's events (the domain layer owns event construction; infra does not import TaskCreated). _row_to_task still sets events=().
-#   PREVIOUS_CHANGE: v1.12.0 - _row_to_task reads the seven typed columns directly from the row; webhook_custom_params/extra use json.loads str-fallback; save/insert bind the typed columns directly; insert binds remote_folder=None and error=None.
+#   LAST_CHANGE: v1.14.0 - Node rename (ip→hostname) + new columns: PostgresNodeRepository.insert/update bind hostname+jump_host+jump_port+jump_username+external_id+status; _row_to_node reads hostname+new columns with NodeStatus enum mapping; SQL files updated ip→hostname + new columns.
+#   PREVIOUS_CHANGE: v1.13.0 - insert calls materialize_task(self._row_to_task(rows[0])) to attach TaskCreated to the returned Task's events (the domain layer owns event construction; infra does not import TaskCreated). _row_to_task still sets events=().
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from yascheduler.domain import (
     NewTask,
     Node,
     NodeId,
+    NodeStatus,
     Task,
     TaskId,
     TaskStatus,
@@ -292,9 +293,9 @@ class PostgresNodeRepository(_PgRepository):
     (``add_tmp`` is removed); the tmp-reservation flow calls
     ``insert(NewNode(cloud=..., enabled=False))``. ``list_enabled`` and
     ``list_disabled`` have no python post-filter — by the invariant
-    (``ip == ''`` IFF ``enabled = FALSE`` AND the node is tmp/pending), no
-    enabled row has ``ip == ""`` (so the prior ``"." in r["ip"]`` filter was
-    dead in ``list_enabled``); ``list_disabled`` filters ``ip <> ''`` in SQL
+    (``hostname == ''`` IFF ``enabled = FALSE`` AND the node is tmp/pending), no
+    enabled row has ``hostname == ""`` (so the prior ``"." in r["hostname"]`` filter was
+    dead in ``list_enabled``); ``list_disabled`` filters ``hostname <> ''`` in SQL
     (``node/list_disabled.sql``) so tmp rows are excluded at the DB layer.
     """
 
@@ -311,7 +312,7 @@ class PostgresNodeRepository(_PgRepository):
         return [self._row_to_node(r) for r in rows]
 
     # START_CONTRACT: list_enabled
-    #   PURPOSE: Return enabled nodes (WHERE enabled = TRUE; no python post-filter — by the invariant enabled=TRUE ⇒ ip<>'').
+    #   PURPOSE: Return enabled nodes (WHERE enabled = TRUE; no python post-filter — by the invariant enabled=TRUE ⇒ hostname<>'').
     #   INPUTS: { None }
     #   OUTPUTS: { list[Node] }
     #   SIDE_EFFECTS: None
@@ -323,14 +324,14 @@ class PostgresNodeRepository(_PgRepository):
         return [self._row_to_node(r) for r in rows]
 
     # START_CONTRACT: list_disabled
-    #   PURPOSE: Return disabled nodes with a real IP (WHERE enabled = FALSE AND ip <> ''; the ip <> '' presence check excludes tmp rows at the SQL layer — no python post-filter).
+    #   PURPOSE: Return disabled nodes with a real hostname (WHERE enabled = FALSE AND hostname <> ''; the hostname <> '' presence check excludes tmp rows at the SQL layer — no python post-filter).
     #   INPUTS: { None }
     #   OUTPUTS: { list[Node] }
     #   SIDE_EFFECTS: None
     #   LINKS: node/list_disabled.sql, _row_to_node
     # END_CONTRACT: list_disabled
     async def list_disabled(self) -> list[Node]:
-        """Return disabled nodes with a real IP (filter is in SQL, not python)."""
+        """Return disabled nodes with a real hostname (filter is in SQL, not python)."""
         rows = await self._run(load_query("node/list_disabled"))
         return [self._row_to_node(r) for r in rows]
 
@@ -338,32 +339,40 @@ class PostgresNodeRepository(_PgRepository):
     #   PURPOSE: Persist a NewNode and return the persisted Node with the DB-generated NodeId (sole node-insertion path — add_tmp removed).
     #   INPUTS: { new_node: NewNode - pre-persistence node record (no node_id); serves the tmp-reservation path when called as NewNode(cloud=..., enabled=False) }
     #   OUTPUTS: { Node - the persisted node carrying the generated NodeId and matching the NewNode's other fields }
-    #   SIDE_EFFECTS: Inserts row into yascheduler_nodes; assigns node_id via RETURNING node_id.
-    #   LINKS: node/insert.sql RETURNING node_id, _row_to_node
+    #   SIDE_EFFECTS: Inserts row into yascheduler_nodes; assigns node_id via RETURNING node_id, created_at, updated_at.
+    #   LINKS: None
     # END_CONTRACT: insert
     async def insert(self, new_node: NewNode) -> Node:
         """Insert a NewNode, return the persisted Node with the generated NodeId."""
         rows = await self._run(
             load_query("node/insert"),
-            ip=new_node.ip,
+            hostname=new_node.hostname,
             ncpus=new_node.ncpus,
             enabled=new_node.enabled,
             cloud=new_node.cloud,
             username=new_node.username,
             port=new_node.port,
+            jump_host=new_node.jump_host,
+            jump_port=new_node.jump_port,
+            jump_username=new_node.jump_username,
+            external_id=new_node.external_id,
+            status=new_node.status.value,
         )
-        # RETURNING node_id yields a single row; _row_to_node reads node_id and
-        # rebuilds the full Node from it + the input fields (the only columns
-        # the RETURNING clause emits is node_id, so fall back to new_node values
-        # for the non-returned fields).
+        # RETURNING yields node_id, created_at, updated_at; merge with input
+        # values so _row_to_node has the full row.
         row = {
             **rows[0],
-            "ip": new_node.ip,
+            "hostname": new_node.hostname,
             "ncpus": new_node.ncpus,
             "enabled": new_node.enabled,
             "cloud": new_node.cloud,
             "username": new_node.username,
             "port": new_node.port,
+            "jump_host": new_node.jump_host,
+            "jump_port": new_node.jump_port,
+            "jump_username": new_node.jump_username,
+            "external_id": new_node.external_id,
+            "status": new_node.status.value,
         }
         return self._row_to_node(row)
 
@@ -418,12 +427,17 @@ class PostgresNodeRepository(_PgRepository):
         await self._run(
             load_query("node/update"),
             node_id=node.node_id.value,
-            ip=node.ip,
+            hostname=node.hostname,
             ncpus=node.ncpus,
             enabled=node.enabled,
             cloud=node.cloud,
             username=node.username,
             port=node.port,
+            jump_host=node.jump_host,
+            jump_port=node.jump_port,
+            jump_username=node.jump_username,
+            external_id=node.external_id,
+            status=node.status.value,
         )
 
     # START_CONTRACT: enable
@@ -484,21 +498,28 @@ class PostgresNodeRepository(_PgRepository):
         return {bool(row["enabled"]): row["count"] for row in rows}
 
     # START_CONTRACT: _row_to_node
-    #   PURPOSE: Map a DB row dict to a domain Node, wrapping NodeId from the node_id column.
-    #   INPUTS: { row: dict[str, Any] - row with keys node_id, ip, ncpus, enabled, cloud, username, port }
+    #   PURPOSE: Map a DB row dict to a domain Node, wrapping NodeId from the node_id column and converting status via NodeStatus enum lookup.
+    #   INPUTS: { row: dict[str, Any] - row with keys node_id, hostname, ncpus, enabled, cloud, username, port, jump_host, jump_port, jump_username, external_id, status, created_at, updated_at }
     #   OUTPUTS: { Node - carries node_id: NodeId }
     #   SIDE_EFFECTS: None
-    #   LINKS: Node, NodeId
+    #   LINKS: None
     # END_CONTRACT: _row_to_node
     @staticmethod
     def _row_to_node(row: dict[str, Any]) -> Node:
         """Convert a DB row dict to a domain Node."""
         return Node(
             node_id=NodeId(int(row["node_id"])),
-            ip=row["ip"],
+            hostname=row.get("hostname", ""),
             ncpus=row.get("ncpus") or 0,
             enabled=bool(row.get("enabled", False)),
             cloud=row.get("cloud"),
             username=row.get("username", "root"),
             port=row.get("port", 22),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            jump_host=row.get("jump_host"),
+            jump_port=row.get("jump_port", 22),
+            jump_username=row.get("jump_username", "root"),
+            external_id=row.get("external_id"),
+            status=NodeStatus[row["status"]],
         )

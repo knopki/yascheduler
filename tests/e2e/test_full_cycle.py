@@ -13,7 +13,7 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.ip via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
+#   LAST_CHANGE: v2.1.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.hostname via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
 #   PREVIOUS_CHANGE: v1.4.0 - fix-static-node-connect-exclusion: drop the `cloud="e2e"` workaround.
 #   PREVIOUS_CHANGE: v1.3.0 - session-based-machine-handle section 7.x: Migrate from get_machine_state to get_session.
 # END_CHANGE_SUMMARY
@@ -142,7 +142,7 @@ async def test_full_cycle(
             ]
             nodes_by_id = await uow.nodes.get_by_ids(node_ids) if node_ids else {}
         ips = {
-            nodes_by_id[t.allocated_node_id].ip
+            nodes_by_id[t.allocated_node_id].hostname
             for t in tasks
             if t is not None
             and t.allocated_node_id
@@ -159,7 +159,7 @@ async def test_full_cycle(
                 if t is not None
                 and t.allocated_node_id
                 and t.allocated_node_id in nodes_by_id
-                and nodes_by_id[t.allocated_node_id].ip == ip
+                and nodes_by_id[t.allocated_node_id].hostname == ip
             )
             assert count < len(task_ids), (
                 f"node {ip} received all {len(task_ids)} tasks — monopoly rejected"
@@ -297,14 +297,14 @@ async def _assert_nodes_present(
 ) -> None:
     async with uow_factory() as uow:
         nodes = await uow.nodes.list_all()
-    actual = {n.ip for n in nodes}
+    actual = {n.hostname for n in nodes}
     assert actual == expected_ips, f"node IPs={actual}, expected={expected_ips}"
 
 
 # START_CONTRACT: _wait_all_done
 #   PURPOSE: Poll the DB until all task_ids reach DONE or the timeout elapses; collect RUNNING snapshots; fail the test on timeout.
 #   INPUTS: { uow_factory, task_ids: list[int] }
-#   OUTPUTS: { dict[int, str] - task_id -> node.ip for every task observed RUNNING }
+#   OUTPUTS: { dict[int, str] - task_id -> node.hostname for every task observed RUNNING }
 #   SIDE_EFFECTS: None — read-only polls.
 #   LINKS: M-PERSISTENCE-UOW
 # END_CONTRACT: _wait_all_done
@@ -323,7 +323,7 @@ async def _wait_all_done(
                 statuses.append(t.status if t else None)
                 if t and t.status == DomainTaskStatus.RUNNING and t.allocated_node_id:
                     node = await uow.nodes.get_by_id(t.allocated_node_id)
-                    seen_running[tid] = node.ip if node else ""
+                    seen_running[tid] = node.hostname if node else ""
         if all(s == DomainTaskStatus.DONE for s in statuses):
             return seen_running
         await asyncio.sleep(_POLL_INTERVAL_S)

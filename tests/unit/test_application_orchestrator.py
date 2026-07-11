@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.11.0
+# VERSION: 1.12.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
@@ -24,7 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.11.0 - extract _make_task helper to collapse repeated Task(...) constructions (GRACE-lite 1000-line limit compliance).
+#   LAST_CHANGE: v1.12.0 - Node-rename-and-fields: Node kwargs ip→hostname; ConnectedMachine kwargs ip→hostname.
+#   PREVIOUS_CHANGE: v1.11.0 - extract _make_task helper to collapse repeated Task(...) constructions (GRACE-lite 1000-line limit compliance).
 #   PREVIOUS_CHANGE: v1.10.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); task.context.error → task.error; remove TaskContext import.
 #   PREVIOUS_CHANGE: v1.8.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
 #   PREVIOUS_CHANGE: v1.6.1 - add-node-id-identity test update: prepend node_id=NodeId(<n>) to all Node(...) constructions and add NodeId to 3 local imports.
@@ -526,9 +527,9 @@ class TestCloudsGetCapacity:
         from yascheduler.domain.model import Node, NodeId
 
         nodes = [
-            Node(node_id=NodeId(1), ip="1", ncpus=2, cloud="aws"),
-            Node(node_id=NodeId(2), ip="2", ncpus=2, cloud="aws"),
-            Node(node_id=NodeId(3), ip="3", ncpus=2, cloud="gcp"),
+            Node(node_id=NodeId(1), hostname="1", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(2), hostname="2", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(3), hostname="3", ncpus=2, cloud="gcp"),
         ]
         mock_uow = AsyncMock()
         mock_uow.nodes.list_all = AsyncMock(return_value=nodes)
@@ -550,7 +551,7 @@ class TestCloudsGetCapacity:
         from yascheduler.domain.model import Node, NodeId
 
         nodes = [
-            Node(node_id=NodeId(i + 1), ip=str(i), ncpus=2, cloud="aws")
+            Node(node_id=NodeId(i + 1), hostname=str(i), ncpus=2, cloud="aws")
             for i in range(10)
         ]
         mock_uow = AsyncMock()
@@ -573,9 +574,9 @@ class TestCloudsGetCapacity:
         from yascheduler.domain.model import Node, NodeId
 
         nodes = [
-            Node(node_id=NodeId(1), ip="1", ncpus=2, cloud="gcp"),
-            Node(node_id=NodeId(2), ip="2", ncpus=2, cloud="azure"),
-            Node(node_id=NodeId(3), ip="3", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(1), hostname="1", ncpus=2, cloud="gcp"),
+            Node(node_id=NodeId(2), hostname="2", ncpus=2, cloud="azure"),
+            Node(node_id=NodeId(3), hostname="3", ncpus=2, cloud="aws"),
         ]
         mock_uow = AsyncMock()
         mock_uow.nodes.list_all = AsyncMock(return_value=nodes)
@@ -630,7 +631,7 @@ class TestDeallocatorConsumer:
 
         orch = make_orchestrator()
 
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         msg = UMessage(NodeId(1), node)
 
         with patch(
@@ -653,7 +654,7 @@ class TestDeallocatorConsumer:
         orch._repository.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
         orch._repository.disconnect = AsyncMock()  # type: ignore[method-assign]
 
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         msg = UMessage(NodeId(1), node)
 
         with patch(
@@ -673,7 +674,7 @@ class TestDeallocatorConsumer:
 
         orch = make_orchestrator()
 
-        node = Node(node_id=NodeId(7), ip="10.0.0.7", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(7), hostname="10.0.0.7", ncpus=4, cloud="aws")
         msg = UMessage(NodeId(7), node)
 
         with patch(
@@ -686,10 +687,10 @@ class TestDeallocatorConsumer:
         orch._log.error.assert_called_once()  # type: ignore[attr-defined]
         args, _ = orch._log.error.call_args  # type: ignore[attr-defined]
         fmt = args[0]
-        # The format string carries both node_id and ip fields.
+        # The format string carries both node_id and hostname fields.
         assert "node_id=%s" in fmt
-        assert "ip=%s" in fmt
-        # The rendered args supply node_id and ip in order.
+        assert "hostname=%s" in fmt
+        # The rendered args supply node_id and hostname in order.
         assert args[1] == NodeId(7)
         assert args[2] == "10.0.0.7"
 
@@ -780,7 +781,7 @@ class TestConsumeConditionalDiscard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             platform="linux",
             ncpus=2,
             state=MachineState.FREE,
@@ -816,7 +817,7 @@ class TestConsumeConditionalDiscard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             platform="linux",
             ncpus=2,
             state=MachineState.FREE,
@@ -886,7 +887,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             platform="linux",
             ncpus=2,
             state=MachineState.FREE,
@@ -922,7 +923,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             platform="linux",
             ncpus=2,
             state=MachineState.FREE,
@@ -960,7 +961,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             platform="linux",
             ncpus=2,
             state=MachineState.FREE,

@@ -254,8 +254,8 @@ async def test_dedup_on_node_id_not_ip() -> None:
 
     q: UniqueQueue[NodeId, Node] = UniqueQueue("deallocate_test", maxsize=10)
 
-    node_a = Node(node_id=NodeId(1), ip="10.0.0.9", ncpus=2, cloud="aws")
-    node_b = Node(node_id=NodeId(2), ip="10.0.0.9", ncpus=2, cloud="aws")
+    node_a = Node(node_id=NodeId(1), hostname="10.0.0.9", ncpus=2, cloud="aws")
+    node_b = Node(node_id=NodeId(2), hostname="10.0.0.9", ncpus=2, cloud="aws")
 
     await q.put(UMessage(node_a.node_id, node_a))
     await q.put(UMessage(node_b.node_id, node_b))
