@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.0.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), node.hostname→node.hostname, free_machine.hostname→free_machine.hostname, SimpleNamespace ip→hostname.
+#   LAST_CHANGE: v5.1.0 - ConnectedMachine-runtime-only: drop free_machine.hostname from mock (ConnectedMachine no longer carries hostname).
+#   PREVIOUS_CHANGE: v5.0.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), node.hostname→node.hostname, free_machine.hostname→free_machine.hostname, SimpleNamespace ip→hostname.
 #   PREVIOUS_CHANGE: v4.9.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); task.context.X → task.X reads; remove TaskContext import.
 #   PREVIOUS_CHANGE: v4.8.0 - cloud-port-node-arg: allocate/deallocate asserts + _persist_node_with_cleanup call use Node args (was NodeId/scalars).
 #   PREVIOUS_CHANGE: v4.7.1 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests into tests/unit/test_allocate_task_node_pairing.py (this file exceeded the 1000-line GRACE-lite hard limit after the v4.7.0 additions). The free-machine test still asserts saved_task.allocated_node_id == NodeId(1) here.
@@ -253,7 +254,6 @@ class TestAllocateTask:
 
         free_machine = MagicMock(spec=ConnectedMachine)
         free_machine.node_id = NodeId(1)
-        free_machine.hostname = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
 

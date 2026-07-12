@@ -20,12 +20,13 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - node-owns-connection-identity: add TestBuildTunnelOptions (4 tests), TestConnectJumpIdentity (3 acceptance tests), test_init_owns_sessions_dict. code-quality: replace test_forward_empty_client_keys with mock-based client_keys propagation tests; add test_tunnel_leg_forwards_client_keys acceptance test to lock client_keys forwarding invariant.
-#   PREVIOUS_CHANGE: v1.2.0 - simplify-cloud-connect-node-args: test_connect_returns_session drops the `username="root"` kwarg from connect; added test_connect_reads_username_and_port_from_node.
+#   LAST_CHANGE: v1.4.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_state and list_free ConnectedMachine constructions; add test_connect_logs_cpu_count_at_discovery_site caplog test for CPU-count log at discovery site (not in setup_node).
+#   PREVIOUS_CHANGE: v1.3.0 - node-owns-connection-identity: add TestBuildTunnelOptions (4 tests), TestConnectJumpIdentity (3 acceptance tests), test_init_owns_sessions_dict. code-quality: replace test_forward_empty_client_keys with mock-based client_keys propagation tests; add test_tunnel_leg_forwards_client_keys acceptance test to lock client_keys forwarding invariant.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
@@ -167,9 +168,7 @@ def _make_state(
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
-        hostname=hostname,
         platform=platform,
-        ncpus=ncpus,
         state=state,
         free_since=time.monotonic(),
     )
@@ -649,6 +648,58 @@ class TestConnectionLifecycle:
         assert call_kwargs["port"] == 2222
 
     @pytest.mark.asyncio
+    async def test_connect_logs_cpu_count_at_discovery_site(
+        self,
+        repository: SSHMachineRepository,
+        mock_conn: MagicMock,
+        mock_adapter: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """CPU-count log emitted from SSHMachineRepository.connect, NOT from setup_node."""
+        with (
+            patch(
+                "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
+                AsyncMock(return_value=mock_conn),
+            ),
+            patch(
+                "yascheduler.infra.ssh.repository._detect_platform",
+                AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
+            ),
+            patch(
+                "yascheduler.infra.ssh.repository._init_paths",
+                return_value=(
+                    PurePosixPath("./data"),
+                    PurePosixPath("./data/engines"),
+                    PurePosixPath("./data/tasks"),
+                ),
+            ),
+        ):
+            node = Node(
+                node_id=NodeId(1),
+                hostname="10.0.0.1",
+                ncpus=4,
+                username="root",
+                port=22,
+            )
+            with caplog.at_level(logging.INFO, logger="SSHMachineRepository"):
+                await repository.connect(node=node, client_keys=[])
+
+        # (a) CPU-count log emitted from connect path
+        cpu_logs = [
+            r
+            for r in caplog.records
+            if "[SSHRepository][connect][CPUs]" in r.getMessage()
+        ]
+        assert len(cpu_logs) == 1
+        assert "hostname=10.0.0.1" in cpu_logs[0].getMessage()
+        assert "ncpus=4" in cpu_logs[0].getMessage()
+
+        # (b) setup_node does NOT emit a CPU-count log (the old "CPUs count:" format is absent)
+        assert not any("CPUs count" in r.getMessage() for r in caplog.records), (
+            "setup_node should not emit CPU-count log"
+        )
+
+    @pytest.mark.asyncio
     async def test_disconnect_removes_session(
         self, repository: SSHMachineRepository
     ) -> None:
@@ -708,7 +759,7 @@ class TestListFree:
 
         result = repository.list_free(platforms=None)
         assert len(result) == 1
-        assert result[0].machine.hostname == "10.0.0.1"
+        assert result[0].hostname == "10.0.0.1"
 
     def test_list_free_filters_by_platform(
         self, repository: SSHMachineRepository
@@ -725,7 +776,7 @@ class TestListFree:
 
         result = repository.list_free(platforms=["linux"])
         assert len(result) == 1
-        assert result[0].machine.hostname == "10.0.0.1"
+        assert result[0].hostname == "10.0.0.1"
 
     def test_list_free_empty_when_no_match(
         self, repository: SSHMachineRepository
@@ -762,9 +813,7 @@ class TestListFree:
         s1.update(
             ConnectedMachine(
                 node_id=NodeId(1),
-                hostname="10.0.0.1",
                 platform="linux",
-                ncpus=4,
                 state=MachineState.FREE,
                 free_since=older,
             )
@@ -772,9 +821,7 @@ class TestListFree:
         s2.update(
             ConnectedMachine(
                 node_id=NodeId(2),
-                hostname="10.0.0.2",
                 platform="linux",
-                ncpus=4,
                 state=MachineState.FREE,
                 free_since=newer,
             )
@@ -783,7 +830,7 @@ class TestListFree:
         repository._sessions[NodeId(2)] = s2
 
         result = repository.list_free(platforms=None)
-        assert result[0].machine.hostname == "10.0.0.1"  # older free_since first
+        assert result[0].hostname == "10.0.0.1"  # older free_since first
 
 
 # =============================================================================

@@ -25,8 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.24.0 - Node-rename-and-fields: add NodeStatus(StrEnum) with OTHER value; rename ip→hostname on Node/NewNode/ConnectedMachine; add jump_* / external_id / status / created_at / updated_at fields to Node and NewNode; add node_id to MachineBusyError in occupy(). ConnectedMachine: node_id is first field; MachineBusyError(self.node_id, self.hostname).
-#   PREVIOUS_CHANGE: v1.23.0 - Task lifecycle rewritten as five atomic transition methods that each validate the source state, set all changed fields, and emit the matching event inline. Renamed _events -> events. Added materialize_task free function. complete/fail/abandon now set local_folder/remote_folder; reject/fail emit TaskFailed; abandon emits TaskAbandoned only when node_id is not None.
+#   LAST_CHANGE: v1.25.0 - ConnectedMachine-runtime-only: drop hostname and ncpus fields from ConnectedMachine; MachineBusyError signature drops hostname.
+#   PREVIOUS_CHANGE: v1.24.0 - Node-rename-and-fields: add NodeStatus(StrEnum) with OTHER value; rename ip→hostname on Node/NewNode/ConnectedMachine; add jump_* / external_id / status / created_at / updated_at fields to Node and NewNode; add node_id to MachineBusyError in occupy(). ConnectedMachine: node_id is first field; MachineBusyError(self.node_id, self.hostname).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -468,15 +468,13 @@ class Node:
 
 @dataclass(frozen=True)
 class ConnectedMachine:
-    """Runtime connected machine with state and platform info.
+    """Runtime connected machine.
 
     ``node_id`` identifies which :class:`Node` this connected machine represents.
     """
 
     node_id: NodeId
-    hostname: str
     platform: str
-    ncpus: int
     state: MachineState = MachineState.FREE
     free_since: float | None = None
 
@@ -503,7 +501,7 @@ class ConnectedMachine:
         """Transition machine state to BUSY if currently FREE."""
         # START_BLOCK_VALIDATE_FREE
         if self.state == MachineState.BUSY:
-            raise MachineBusyError(self.node_id, self.hostname)
+            raise MachineBusyError(self.node_id)
         # END_BLOCK_VALIDATE_FREE
         # START_BLOCK_SET_BUSY
         return replace(self, state=MachineState.BUSY)

@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - session-based-machine-handle: rename _get_machine_state → get_session; build SSHMachineSession instead of _MachineState; repository._machines → repository._sessions; assertions read session.machine.
-#   PREVIOUS_CHANGE: v1.0.0 - Extract machine-query tests from test_ssh_gateway.py to keep file under hard limit (gateway-port-cleanup).
+#   LAST_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_session's ConnectedMachine construction.
+#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: rename _get_machine_state → get_session; build SSHMachineSession instead of _MachineState; repository._machines → repository._sessions; assertions read session.machine.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -64,9 +64,7 @@ def _make_session(
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
-        hostname=hostname,
         platform=platform,
-        ncpus=ncpus,
         state=state,
         free_since=time.monotonic(),
     )

@@ -26,8 +26,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - MachineBusyError/MachineConnectionError gain node_id first arg, hostname replaces ip. MachineBusyError(node_id, hostname), MachineConnectionError(node_id, hostname, reason). Node-rename-and-fields change.
-#   PREVIOUS_CHANGE: v1.11.0 - Remove TaskAlreadyAllocatedError and TaskNotAllocatedError (guarded the TO_DO + allocated intermediate state produced by the prior allocate_to + mark_running two-step; run collapses allocation and the TO_DO->RUNNING transition into one atomic method, so neither guard arises). The remaining TaskNotTodoError (raised by run and reject) and TaskNotRunningError (raised by complete, fail, abandon) cover all five transition guards.
+#   LAST_CHANGE: v1.13.0 - ConnectedMachine-runtime-only: MachineBusyError(node_id) — drop hostname param. MachineConnectionError UNCHANGED.
+#   PREVIOUS_CHANGE: v1.12.0 - MachineBusyError/MachineConnectionError gain node_id first arg, hostname replaces ip. MachineBusyError(node_id, hostname), MachineConnectionError(node_id, hostname, reason). Node-rename-and-fields change.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -86,10 +86,9 @@ class TaskNotRunningError(TaskError):
 class MachineBusyError(DomainError):
     """Operation attempted on a busy machine."""
 
-    def __init__(self, node_id: NodeId, hostname: str) -> None:
+    def __init__(self, node_id: NodeId) -> None:
         self.node_id = node_id
-        self.hostname = hostname
-        super().__init__(f"machine ({node_id}) at {hostname} is busy")
+        super().__init__(f"machine ({node_id}) is busy")
 
 
 class MachineConnectionError(DomainError):

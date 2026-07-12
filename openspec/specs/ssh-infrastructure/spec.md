@@ -77,19 +77,16 @@ decorated with `@my_backoff_exc()` retries on `SSHRetryExc`; outer
 `connect` translates exhausted `(asyncssh.misc.Error, OSError)` to
 `MachineConnectionError`. `connect` SHALL open the SSH connection, detect
 platform via the platform package, initialize paths via the platform
-package, read `ncpus` via `adapter.get_cpu_cores(...)`, construct a
-`ConnectedMachine`, construct an `SSHMachineSession`, store it keyed by
-`node.node_id`, and return it.
+package, read `ncpus` via `adapter.get_cpu_cores(...)`, log the discovered
+CPU count at the discovery site, construct a `ConnectedMachine` (carrying
+`node_id`, `platform` only — NOT `hostname` or `ncpus`), construct an
+`SSHMachineSession`, store it keyed by `node.node_id`, and return it.
 
 `connect` SHALL read `node.hostname` as the asyncssh host address,
-`node.username` as the login user, and `node.port` as the port. The
-tunnel leg SHALL be built from `node.jump_host` / `node.jump_port` /
-`node.jump_username` via an `SSHClientConnectionOptions` object that
-inherits `client_keys` / `known_hosts` / `connect_timeout` from the
-destination leg. When `node.jump_host` is `None`, no tunnel is built
-(`tunnel=None`). On connection failure, `MachineConnectionError(node.node_id,
-node.hostname, str(err))` SHALL be raised (carrying both identity and
-address).
+`node.username` as the login user, and `node.port` as the port. On
+connection failure, `MachineConnectionError(node.node_id, node.hostname,
+str(err))` SHALL be raised (carrying both identity and address — the
+`MachineConnectionError` shape is unchanged by this change).
 
 `disconnect(node_id)` SHALL pop the session for `node_id` (early return if
 absent), then `await session._close()`. The pop-before-await ordering
@@ -105,10 +102,10 @@ monitors for any other machine.
 - **WHEN** `SSHMachineRepository.__init__` is inspected
 - **THEN** the instance has a dict of sessions keyed by `NodeId` and does NOT have `_machines` or `_monitors`
 
-#### Scenario: Tunnel leg reuses destination-leg options
+#### Scenario: connect logs CPU count at discovery site, not in setup_node
 
-- **WHEN** `connect` is called with `client_keys=[Path("/etc/yascheduler/keys/id_rsa")]` and `connect_timeout=10` on a node with `jump_host="bastion.example.com"`
-- **THEN** the `SSHClientConnectionOptions` passed as asyncssh `tunnel=` carries the same `client_keys`, `known_hosts=None`, and `connect_timeout=10` as the destination leg
+- **WHEN** `await repository.connect(node, client_keys, ...)` succeeds and `adapter.get_cpu_cores(...)` returns `8`
+- **THEN** an info log line with the CPU count is emitted from the repository's connect path (in or immediately after the `START_BLOCK_CREATE_MACHINE` block), and `SSHMachineSession.setup_node` SHALL NOT emit a separate CPU-count log
 
 ### Requirement: MachineSession port
 
@@ -172,7 +169,8 @@ The system SHALL provide an `SSHMachineSession` class that satisfies the
 `MachineSession` Protocol. The session SHALL be constructed by
 `SSHMachineRepository.connect` with: `hostname`, an open `SSHClientConnection`,
 `SSHClientConnectionOptions`, a `ConnectedMachine` (initial snapshot with
-`state=FREE`, `free_since=time.monotonic()`), `adapter`, `platforms`,
+`state=FREE`, `free_since=time.monotonic()` — the snapshot carries `node_id`
+and `platform` only, NOT `hostname` or `ncpus`), `adapter`, `platforms`,
 `data_dir`, `engines_dir`, `tasks_dir`.
 
 The session SHALL own its own teardown via a `_close()` coroutine,
@@ -188,12 +186,19 @@ Otherwise it SHALL:
 and `adapter` directly — NO hostname-keyed lookup, NO call into the repository.
 `run_full` SHALL retry on `SSHRetryExc` via the `@my_backoff_exc()` decorator.
 `setup_node` SHALL accept `engines: EngineRepository` and use the session's
-own `adapter.setup_node(...)`.
+own `adapter.setup_node(...)`. `setup_node` SHALL NOT log the CPU count —
+the CPU-count log is owned by `SSHMachineRepository.connect` at the discovery
+site.
 
 #### Scenario: Session owns its monitor task
 
 - **WHEN** `session.install_monitor(...)` is called
 - **THEN** the resulting `asyncio.Task` is stored on the session and is NOT registered in any repository-level dict
+
+#### Scenario: Session.hostname stays sourced from node.hostname
+
+- **WHEN** `SSHMachineSession` is constructed by `SSHMachineRepository.connect`
+- **THEN** `session.hostname == node.hostname` (the session's transport-echo field is sourced from the Node parameter, NOT from `ConnectedMachine.hostname` — `ConnectedMachine` no longer carries `hostname`)
 
 ### Requirement: Session is returned by repository and resolved per-tick by the orchestrator
 

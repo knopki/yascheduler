@@ -24,7 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - Node-rename-and-fields: Node kwargs ip→hostname; ConnectedMachine kwargs ip→hostname.
+#   LAST_CHANGE: v1.13.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from all 5 ConnectedMachine constructions in consume-guard tests.
+#   PREVIOUS_CHANGE: v1.12.0 - Node-rename-and-fields: Node kwargs ip→hostname; ConnectedMachine kwargs ip→hostname.
 #   PREVIOUS_CHANGE: v1.11.0 - extract _make_task helper to collapse repeated Task(...) constructions (GRACE-lite 1000-line limit compliance).
 #   PREVIOUS_CHANGE: v1.10.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); task.context.error → task.error; remove TaskContext import.
 #   PREVIOUS_CHANGE: v1.8.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
@@ -781,9 +782,7 @@ class TestConsumeConditionalDiscard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            hostname="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -817,9 +816,7 @@ class TestConsumeConditionalDiscard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            hostname="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -887,9 +884,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            hostname="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -923,9 +918,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            hostname="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -961,9 +954,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            hostname="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )

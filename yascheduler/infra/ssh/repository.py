@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.4.0 - node-owns-connection-identity: drop jump_host/jump_username from connect/_connect_impl/_open_connection; _resolve_tunnel → _build_tunnel_options (returns SSHClientConnectionOptions|None); jump identity read from Node. Update MODULE_MAP, contracts, log markers.
-#   PREVIOUS_CHANGE: v2.3.0 - Node-rename-and-fields: _open_connection param ip→hostname; connect/_connect_impl node.ip→node.hostname (4 sites), ConnectedMachine(ip=…)→ConnectedMachine(hostname=…), SSHMachineSession(ip=…)→SSHMachineSession(hostname=…), MachineConnectionError(node.ip, …)→MachineConnectionError(node.node_id, node.hostname, str(err)).
+#   LAST_CHANGE: v2.5.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from ConnectedMachine construction; add info log for CPU count at discovery site.
+#   PREVIOUS_CHANGE: v2.4.0 - node-owns-connection-identity: drop jump_host/jump_username from connect/_connect_impl/_open_connection; _resolve_tunnel → _build_tunnel_options (returns SSHClientConnectionOptions|None); jump identity read from Node. Update MODULE_MAP, contracts, log markers.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -239,11 +239,14 @@ class SSHMachineRepository:
         # END_BLOCK_PATHS
         # START_BLOCK_CREATE_MACHINE
         ncpus = await adapter.get_cpu_cores(make_run_fn(conn, adapter))
+        self._log.info(
+            "[SSHRepository][connect][CPUs] hostname=%s ncpus=%d",
+            node.hostname,
+            ncpus,
+        )
         machine = ConnectedMachine(
             node_id=node.node_id,
-            hostname=node.hostname,
             platform=adapter.platform,
-            ncpus=ncpus,
             state=MachineState.FREE,
             free_since=time.monotonic(),
         )

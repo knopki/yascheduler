@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - session-based-machine-handle section 7.4: _machines → _sessions, _MachineState → SSHMachineSession, _monitors dict → per-session _monitor_task, start_occupancy_check(ip,…) → start_occupancy_check(session,…), disconnect pops _sessions before _close (pop-before-await). dataclasses.replace → session.release().
-#   PREVIOUS_CHANGE: v1.0.0 - Extract bg-task regression tests from test_ssh_gateway.py for fix-disconnect-bg-task-leak: disconnect scope isolation across machines, prior-monitor replacement on re-register, unknown-IP disconnect no-op.
+#   LAST_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_session's ConnectedMachine construction.
+#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle section 7.4: _machines → _sessions, _MachineState → SSHMachineSession, _monitors dict → per-session _monitor_task, start_occupancy_check(ip,…) → start_occupancy_check(session,…), disconnect pops _sessions before _close (pop-before-await). dataclasses.replace → session.release().
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -89,9 +89,7 @@ def _make_state(
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
-        hostname=hostname,
         platform=platform,
-        ncpus=ncpus,
         state=state,
         free_since=time.monotonic(),
     )

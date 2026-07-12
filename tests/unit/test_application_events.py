@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - drop-task-context-entity follow-up: download_outputs AsyncMock return_values updated to the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors).
-#   PREVIOUS_CHANGE: v1.2.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
+#   LAST_CHANGE: v1.4.0 - ConnectedMachine-runtime-only: drop free_machine.hostname from mock spec (ConnectedMachine no longer carries hostname).
+#   PREVIOUS_CHANGE: v1.3.0 - drop-task-context-entity follow-up: download_outputs AsyncMock return_values updated to the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors).
 # END_CHANGE_SUMMARY
 #
 """Unit tests for domain event recording from application use cases.
@@ -178,7 +178,6 @@ class TestAllocateTaskEvents:
 
         free_machine = MagicMock(spec=ConnectedMachine)
         free_machine.node_id = NodeId(1)
-        free_machine.hostname = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
         free_session = SimpleNamespace(machine=free_machine, hostname="10.0.0.1")

@@ -15,7 +15,7 @@
 #   test_missing_input_file_error_fields - engine_name + filename stored, message format
 #   test_task_error_hierarchy - TaskError inherits from DomainError
 #   test_task_error_hierarchy - TaskError inherits from DomainError
-#   test_machine_busy_error - node_id and hostname stored, message contains both
+#   test_machine_busy_error - node_id stored only, message is "machine (1) is busy", no hostname attribute
 #   test_machine_connection_error_fields - node_id, hostname, and reason stored; message contains all
 #   test_machine_connection_error_is_domain_error - catchable as DomainError and Exception
 #   test_scheduling_error_hierarchy - SchedulingError inherits from DomainError
@@ -38,8 +38,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Node-rename-and-fields: MachineBusyError/MachineConnectionError tests use NodeId+hostname signature.
-#   PREVIOUS_CHANGE: v1.2.0 - Add CloudError hierarchy tests (cloud-error-hierarchy).
+#   LAST_CHANGE: v1.4.0 - ConnectedMachine-runtime-only: MachineBusyError tests use single-arg NodeId signature; drop hostname assertions; message is "machine (1) is busy".
+#   PREVIOUS_CHANGE: v1.3.0 - Node-rename-and-fields: MachineBusyError/MachineConnectionError tests use NodeId+hostname signature.
 # END_CHANGE_SUMMARY
 
 import pytest
@@ -140,19 +140,17 @@ def test_task_error_hierarchy() -> None:
 
 
 # START_CONTRACT: test_machine_busy_error
-#   PURPOSE: Verify MachineBusyError stores node_id and hostname; message contains both.
+#   PURPOSE: Verify MachineBusyError stores node_id only; message is "machine (1) is busy" (bare int); no hostname attribute.
 #   INPUTS: { None }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None
 #   LINKS:
 # END_CONTRACT: test_machine_busy_error
 def test_machine_busy_error() -> None:
-    exc = MachineBusyError(NodeId(1), "10.0.0.1")
+    exc = MachineBusyError(NodeId(1))
     assert exc.node_id == NodeId(1)
-    assert exc.hostname == "10.0.0.1"
-    assert "busy" in str(exc)
-    assert "10.0.0.1" in str(exc)
-    assert "1" in str(exc)
+    assert not hasattr(exc, "hostname")
+    assert str(exc) == "machine (1) is busy"
 
 
 # START_CONTRACT: test_machine_connection_error_fields
@@ -445,7 +443,7 @@ def test_all_exceptions_importable() -> None:
         UnsupportedEngineError(engine_name="x"),
         MissingInputFileError(engine_name="x", filename="f"),
         TaskError(),
-        MachineBusyError(NodeId(1), "0.0.0.0"),
+        MachineBusyError(NodeId(1)),
         MachineConnectionError(NodeId(1), "0.0.0.0", "x"),
         SchedulingError(),
         NoCompatibleNodeError(task_id=TaskId(3), platforms=["a"]),

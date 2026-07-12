@@ -197,7 +197,10 @@ class TestSSHGatewayIntegration:
         assert session.hostname == ssh_container["host"]
         assert session.machine.platform == "linux"
         assert session.machine.state == MachineState.FREE
-        assert session.machine.ncpus > 0
+        # ncpus was dropped from ConnectedMachine in connected-machine-runtime-only.
+        # A caplog assertion for [SSHRepository][connect][CPUS] is not feasible here
+        # because connect() runs in the repository fixture before this test body starts,
+        # so caplog would not have captured it regardless of set_level timing.
 
     async def test_run_echo(self, repository: SSHMachineRepository) -> None:
         """session.run() executes command and returns output."""

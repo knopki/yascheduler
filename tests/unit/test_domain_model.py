@@ -36,8 +36,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Node-rename-and-fields: rename ip→hostname in Node/NewNode/ConnectedMachine tests; add new fields assertions (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); add TestNodeStatus for NodeStatus enum; MachineBusyError updated to node_id+hostname.
-#   PREVIOUS_CHANGE: v1.7.0 - drop-task-context-entity: remove TestTaskContext, TestTaskContextReplace, TestTaskWithContext; add TestTaskWithRemoteFolder, TestTaskWithDownloadResults, TestTaskErrorFormat; update Task/NewTask construction to typed fields; Engine.validate_inputs takes extra dict (was TaskContext).
+#   LAST_CHANGE: v1.9.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from ConnectedMachine construction; occupy() raises MachineBusyError(node_id); assert no hostname attribute on exception.
+#   PREVIOUS_CHANGE: v1.8.0 - Node-rename-and-fields: rename ip→hostname in Node/NewNode/ConnectedMachine tests; add new fields assertions (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); add TestNodeStatus for NodeStatus enum; MachineBusyError updated to node_id+hostname.
 # END_CHANGE_SUMMARY
 
 import time
@@ -498,9 +498,7 @@ class TestNewNode:
 # END_CONTRACT: test_connected_machine
 class TestConnectedMachine:
     def make_machine(self, **overrides: object) -> ConnectedMachine:
-        defaults: dict[str, object] = dict(
-            node_id=NodeId(1), hostname="10.0.0.1", platform="linux", ncpus=4
-        )
+        defaults: dict[str, object] = dict(node_id=NodeId(1), platform="linux")
         defaults.update(overrides)
         return ConnectedMachine(**defaults)  # type: ignore[arg-type]
 
@@ -530,8 +528,8 @@ class TestConnectedMachine:
         m = self.make_machine(state=MachineState.BUSY)
         with pytest.raises(MachineBusyError) as exc_info:
             m.occupy()
-        assert "10.0.0.1" in str(exc_info.value)
-        assert str(NodeId(1)) in str(exc_info.value)
+        assert exc_info.value.node_id == NodeId(1)
+        assert not hasattr(exc_info.value, "hostname")
 
     def test_release_sets_free_and_timestamp(self) -> None:
         before = time.monotonic()

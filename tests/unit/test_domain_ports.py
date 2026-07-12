@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.11.0 - node-owns-connection-identity: drop jump_host/jump_username from StubMachineRepository.connect; add test_machine_repository_connect_signature_no_jump_kwargs.
-#   PREVIOUS_CHANGE: v1.10.0 - Node-rename-and-fields: StubMachineSession.ip→hostname; remove adapter-derived hostname (merged). Add hostname/Protocol shape tests.
+#   LAST_CHANGE: v1.12.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_session_stub ConnectedMachine construction.
+#   PREVIOUS_CHANGE: v1.11.0 - node-owns-connection-identity: drop jump_host/jump_username from StubMachineRepository.connect; add test_machine_repository_connect_signature_no_jump_kwargs.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -127,9 +127,7 @@ class StubNodeRepository:
 
 
 def _make_session_stub() -> ConnectedMachine:
-    return ConnectedMachine(
-        node_id=NodeId(1), hostname="10.0.0.1", platform="linux", ncpus=1
-    )
+    return ConnectedMachine(node_id=NodeId(1), platform="linux")
 
 
 class StubMachineSession(MachineSession):

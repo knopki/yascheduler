@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Node-rename-and-fields: SSHMachineSession.__init__ param ip→hostname, _ip→_hostname, ip property→hostname. Merged with adapter-derived hostname property (both carried same value — the asyncssh host passed at connect time).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial module. SSHMachineSession owns the connection, machine snapshot, connect-time config, adapter-derived accessors, base SSH primitives, and the per-session monitor lifecycle.
+#   LAST_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: remove CPU-count log from setup_node (moved to repository connect discovery site). ConnectedMachine no longer carries ncpus.
+#   PREVIOUS_CHANGE: v1.1.0 - Node-rename-and-fields: SSHMachineSession.__init__ param ip→hostname, _ip→_hostname, ip property→hostname. Merged with adapter-derived hostname property (both carried same value — the asyncssh host passed at connect time).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -240,7 +240,6 @@ class SSHMachineSession:
     # END_CONTRACT: SSHMachineSession.setup_node
     async def setup_node(self, engines: EngineRepository) -> None:
         """Install engine dependencies on remote node."""
-        self._log.info("CPUs count: %s", self._machine.ncpus)
         retry = my_backoff_exc(exception=AllSSHRetryExc)
         await retry(self._adapter.setup_node)(
             conn=self._conn,

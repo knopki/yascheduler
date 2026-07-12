@@ -37,7 +37,7 @@
 #   TaskError - Task lifecycle errors
 #   TaskNotTodoError - Task not in TODO status
 #   TaskNotRunningError - Task not in RUNNING status
-#   MachineBusyError - Operation attempted on a busy machine (carries node_id, hostname)
+#   MachineBusyError - Operation attempted on a busy machine
 #   MachineConnectionError - SSH connection failure carrying node_id, hostname, and reason
 #   SchedulingError - Scheduling/allocation errors
 #   NoCompatibleNodeError - No matching node found for task
@@ -56,8 +56,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.14.0 - Node-rename-and-fields: add NodeStatus re-export; update module map for hostname rename.
-#   PREVIOUS_CHANGE: v2.13.0 - Remove TaskAlreadyAllocatedError / TaskNotAllocatedError re-exports (classes removed from exceptions.py). Add materialize_task re-export (free function attaching TaskCreated to a freshly-inserted Task's events; called by PostgresTaskRepository.insert).
+#   LAST_CHANGE: v2.15.0 - ConnectedMachine-runtime-only: update module map — MachineBusyError carries node_id only (hostname dropped).
+#   PREVIOUS_CHANGE: v2.14.0 - Node-rename-and-fields: add NodeStatus re-export; update module map for hostname rename.
 # END_CHANGE_SUMMARY
 
 __all__ = [

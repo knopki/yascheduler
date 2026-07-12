@@ -25,9 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.4.0 - cloud-port-node-arg: FakeCloudProvisioner + real CloudProvisionerImpl allocate call sites take node: Node; added _tmp_node helper.
-#   PREVIOUS_CHANGE: v1.3.0 - simplify-cloud-connect-node-args: FakeMachineRepository.connect drops the `username` param (keeps `**kwargs`).
+#   LAST_CHANGE: v1.6.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from FakeMachineSession.__init__ ConnectedMachine construction.
+#   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -81,9 +80,7 @@ class FakeMachineSession:
         # sessions with nodes by node_id so this must match the DB-side ID.
         last_octet = int(hostname.rsplit(".", 1)[-1]) if "." in hostname else 1
         self._machine = ConnectedMachine(
-            hostname=hostname,
             platform=platform,
-            ncpus=4,
             state=MachineState.FREE,
             free_since=0.0,
             node_id=NodeId(last_octet),
