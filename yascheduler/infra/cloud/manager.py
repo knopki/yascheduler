@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.19.0 - rename node.ip→node.hostname in all log/error/delete_node sites; allocate replace sets hostname+external_id per D3; format strings updated to hostname=%s.
-#   PREVIOUS_CHANGE: v2.18.0 - CloudProvisionerImpl drops machine_operations field (SSHMachineOperations facade dissolved); _setup_vm calls session.run/session.setup_node/session.get_cpu_cores directly on the session returned by machine_repository.connect.
+#   LAST_CHANGE: v2.20.0 - _setup_vm stamps Node.jump_host/jump_username/jump_port from CloudConfig (or remote fallback) BEFORE _connect_to_vm opens the setup SSH session (RESOLVE_JUMP block); _connect_to_vm drops jump_host/jump_username kwargs from machine_repository.connect call — repository reads jump from Node per D2/D5 of design.md. Site (a) chosen per D5 recommendation (stamp in _setup_vm, not allocate).
+#   PREVIOUS_CHANGE: v2.19.0 - rename node.ip→node.hostname in all log/error/delete_node sites; allocate replace sets hostname+external_id per D3; format strings updated to hostname=%s.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -334,10 +334,10 @@ class CloudProvisionerImpl:
     #   INPUTS: {
     #     node: Node - session registers under node.node_id,
     #     adapter: CloudAdapter - provider adapter (for timeout settings),
-    #     config: ConfigCloud - provider config (for jump host)
+    #     config: ConfigCloud - provider config
     #   }
-    #   OUTPUTS: { Node - enabled=True, ncpus populated (via dataclasses.replace); the caller persists via uow.nodes.update }
-    #   SIDE_EFFECTS: Connects to VM (session registers under node.node_id), runs cloud-init, installs engines.
+    #   OUTPUTS: { Node }
+    #   SIDE_EFFECTS: Stamps jump-leg identity on Node via replace before SSH connect; connects to VM (session registers under node.node_id), runs cloud-init, installs engines.
     #   RAISES: CloudSetupError - on any SSH/cloud-init/setup failure
     #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
     # END_CONTRACT: CloudProvisionerImpl._setup_vm
@@ -348,6 +348,23 @@ class CloudProvisionerImpl:
         config: ConfigCloud,
     ) -> Node:
         """Connect to VM, wait for cloud-init, install engines, return enabled Node via replace."""
+        # START_BLOCK_RESOLVE_JUMP
+        # Resolve jump from the matching CloudConfig (prefix == node.cloud)
+        # before opening the setup SSH session. Fall back to remote defaults.
+        jump_host = self.remote_config.jump_host
+        jump_username = self.remote_config.jump_username or "root"
+        jump_port = 22
+        if config.prefix == node.cloud and config.jump_host and config.jump_username:
+            jump_host = config.jump_host
+            jump_username = config.jump_username
+        node = replace(
+            node,
+            jump_host=jump_host,
+            jump_username=jump_username,
+            jump_port=jump_port,
+        )
+        # END_BLOCK_RESOLVE_JUMP
+
         # START_BLOCK_SSH_CONNECT_SETUP
         session = await self._connect_to_vm(node, adapter, config)
         # END_BLOCK_SSH_CONNECT_SETUP
@@ -412,11 +429,11 @@ class CloudProvisionerImpl:
         return replace(node, enabled=True, ncpus=ncpus)
 
     # START_CONTRACT: CloudProvisionerImpl._connect_to_vm
-    #   PURPOSE: Connect to VM via SSH gateway (registering the session under node.node_id) with retry-friendly error wrapping.
+    #   PURPOSE: Connect to VM via SSH gateway with retry-friendly error wrapping.
     #   INPUTS: {
-    #     node: Node - the identity object allocate constructed after create_node (carries node_id, hostname, username, port, cloud); session registers under node.node_id,
+    #     node: Node,
     #     adapter: CloudAdapter - provider adapter (for timeout settings),
-    #     config: ConfigCloud - provider config (for jump host)
+    #     config: ConfigCloud - provider config
     #   }
     #   OUTPUTS: { MachineSession - connected machine session instance }
     #   SIDE_EFFECTS: Opens SSH connection to VM (session registered under node.node_id).
@@ -451,8 +468,6 @@ class CloudProvisionerImpl:
                 data_dir=self.remote_config.data_dir,
                 engines_dir=self.remote_config.engines_dir,
                 tasks_dir=self.remote_config.tasks_dir,
-                jump_host=config.jump_host or None,
-                jump_username=config.jump_username or None,
             )
         except Exception as err:
             raise CloudSetupError(

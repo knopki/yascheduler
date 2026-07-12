@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.6.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
-#   PREVIOUS_CHANGE: v7.5.0 - _task_consumer_consumer calls task.abandon(node_id) (single atomic transition; abandon handles the node_id is None double-abandon edge — emits TaskAbandoned only when node_id is not None). Removed TaskAbandoned import (no longer constructed directly). _allocator_consumer passes remote_defaults.tasks_dir to allocate_task (remote_folder is now computed in _try_start_on_machine at run time, not at submit time).
+#   LAST_CHANGE: v7.7.0 - node-owns-connection-identity slice 2: removed inline jump-host resolution block (design.md D6) and jump_host/jump_username kwargs from repository.connect call. Node owns jump identity; repository reads node.jump_* directly.
+#   PREVIOUS_CHANGE: v7.6.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -272,13 +272,6 @@ class Orchestrator:
         keys = await asyncio.get_running_loop().run_in_executor(
             None, self._list_private_keys_fn, self._local_settings.keys_dir
         )
-        jump_host = self._remote_defaults.jump_host
-        jump_username = self._remote_defaults.jump_username
-        for cloud in self._config_clouds:
-            if cloud.prefix == node.cloud:
-                if cloud.jump_host and cloud.jump_username:
-                    jump_host, jump_username = cloud.jump_host, cloud.jump_username
-
         try:
             await self._repository.connect(
                 node=node,
@@ -287,8 +280,6 @@ class Orchestrator:
                 data_dir=self._remote_defaults.data_dir,
                 engines_dir=self._remote_defaults.engines_dir,
                 tasks_dir=self._remote_defaults.tasks_dir,
-                jump_username=jump_username,
-                jump_host=jump_host,
             )
             # START_BLOCK_CONNECT_RESET_FAILURE_TIMER
             self._connect_failures.pop(node.node_id, None)

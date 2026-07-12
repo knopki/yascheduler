@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.11.0 - All node.ip→node.hostname in print/assign/comments; NewNode(ip=)→NewNode(hostname=); n.ip→n.hostname in host_spec resolution; docstring + inline comment ip→hostname updates.
-#   PREVIOUS_CHANGE: v1.10.0 - manage_node no longer constructs SSHMachineOperations (facade dissolved); _add_node takes repository only and calls session.setup_node directly on the session returned by repository.connect.
+#   LAST_CHANGE: v1.12.0 - _add_node stamps jump_host/jump_username/jump_port from config.remote onto NewNode at construction. connect(node=tmp, …) receives no jump kwargs — the tmp row carries them.
+#   PREVIOUS_CHANGE: v1.11.0 - All node.ip→node.hostname in print/assign/comments; NewNode(ip=)→NewNode(hostname=); n.ip→n.hostname in host_spec resolution; docstring + inline comment ip→hostname updates.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -269,7 +269,7 @@ async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
 
 
 # START_CONTRACT: _add_node
-#   PURPOSE: Add a node — V1 single-row lifecycle: insert enabled=False tmp row (UoW#1) to obtain node_id, connect+setup under that node_id, flip to enabled=True via update (UoW#2); always disconnect(T.node_id) in finally; on connect-failure best-effort remove(T.node_id) then re-raise.
+#   PURPOSE: Add a node — single-row lifecycle: insert enabled=False tmp row (UoW#1) to obtain node_id, connect+setup under that node_id, flip to enabled=True via update (UoW#2); always disconnect(T.node_id) in finally; on connect-failure best-effort remove(T.node_id) then re-raise.
 #   INPUTS: {
 #     deps: CLIDeps - DI holder providing uow_factory,
 #     repository: SSHMachineRepository - gateway constructed by manage_node (mockable),
@@ -303,6 +303,9 @@ async def _add_node(
                 username=username,
                 ncpus=(spec.ncpus if spec.ncpus is not None else 0),
                 enabled=False,
+                jump_host=config.remote.jump_host,
+                jump_username=config.remote.jump_username or "root",
+                jump_port=22,
             )
         )
         await uow.commit()

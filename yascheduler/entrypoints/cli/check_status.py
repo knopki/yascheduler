@@ -16,16 +16,14 @@
 #   _render_info - Tab-separated one-line-per-task renderer
 #   _render_json - Raw-domain-values JSON renderer
 #   _render_view - Verbose renderer: SSH tail of OUTPUT, optional convergence
-#   _resolve_conn_params - Resolve SSH connection params
 #   _display_remote_output - Connect via SSH, tail OUTPUT file
 #   _download_convergence_snippet - Download OUTPUT file via SFTP
 #   _parse_convergence - Parse CRYSTAL output for convergence info
-#   _ConnParams - Frozen SSH connection params DTO
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - _render_json node object: ip→hostname + all new node fields (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); _render_view: node.ip→node.hostname; _display_remote_output: "NO ALLOCATED IP"→"NO ALLOCATED HOSTNAME".
-#   PREVIOUS_CHANGE: v1.7.0 - _render_json and _render_view read task.engine/task.local_folder/task.remote_folder directly.
+#   LAST_CHANGE: v1.9.0 - node-owns-connection-identity: _resolve_conn_params / _ConnParams deleted; _display_remote_output drops conn_params; _render_view reads username from node/config directly, not from resolved params. connect passes no jump kwargs — repository reads jump from node.
+#   PREVIOUS_CHANGE: v1.8.0 - _render_json node object: ip→hostname + all new node fields (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); _render_view: node.ip→node.hostname; _display_remote_output: "NO ALLOCATED IP"→"NO ALLOCATED HOSTNAME".
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -37,7 +35,6 @@ import logging
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -197,44 +194,6 @@ def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
     # END_BLOCK_RENDER_JSON
 
 
-@dataclass(frozen=True)
-class _ConnParams:
-    username: str
-    port: int
-    jump_host: str | None
-    jump_username: str | None
-
-
-# START_CONTRACT: _resolve_conn_params
-#   PURPOSE: Resolve the four SSH connection parameters for a node — username/port from the node, jump host
-#          from the matching cloud (prefix == node.cloud) or the config.remote fallback.
-#   INPUTS: { node: Node, config: Config }
-#   OUTPUTS: { _ConnParams - (username, port, jump_host, jump_username) }
-#   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-ENTRYPOINTS-CONFIG
-#   NOTE: Mirrors orchestrator._connect_machine_consumer:209-214; duplicated (not shared) because the shape
-#         differs (orchestrator connects inline; check_status returns a params object for the gateway call).
-#         Promotion to a shared helper awaits a third consumer. The `break` below stops at the first matching
-#         cloud; the orchestrator lacks it but the prefix match is unique so behavior is equivalent.
-# END_CONTRACT: _resolve_conn_params
-def _resolve_conn_params(node: Node, config: Config) -> _ConnParams:
-    # START_BLOCK_RESOLVE_JUMP
-    jump_host = config.remote.jump_host
-    jump_username = config.remote.jump_username
-    for cloud in config.clouds:
-        if cloud.prefix == node.cloud:
-            if cloud.jump_host and cloud.jump_username:
-                jump_host, jump_username = cloud.jump_host, cloud.jump_username
-            break
-    # END_BLOCK_RESOLVE_JUMP
-    return _ConnParams(
-        username=node.username,
-        port=node.port,
-        jump_host=jump_host,
-        jump_username=jump_username,
-    )
-
-
 async def _download_convergence_snippet(
     session: MachineSession,
     remote_folder: str,
@@ -292,13 +251,13 @@ def _parse_convergence(filepath: Path) -> str:
 
 # START_CONTRACT: _display_remote_output
 #   PURPOSE: Connect to the remote machine via repository, tail the OUTPUT file, return (session, remote_folder) or None.
-#   INPUTS: { task: Task - for remote_folder, node: Node | None - resolved node (carries node_id + ip; None skips connect), conn_params: _ConnParams, config: Config }
+#   INPUTS: { task - for remote_folder, node - resolved node (None skips connect), config - for keys_dir }
 #   OUTPUTS: { tuple[MachineSession, str, SSHMachineRepository] | None - (session, remote_folder, repository) or None if skipped }
 #   SIDE_EFFECTS: Connects via SSH (session registers under node.node_id), reads remote file, prints to stdout.
 #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
 # END_CONTRACT: _display_remote_output
 async def _display_remote_output(
-    task: Task, node: Node | None, conn_params: _ConnParams, config: Config
+    task: Task, node: Node | None, config: Config
 ) -> tuple[MachineSession, str, SSHMachineRepository] | None:
     """Connect to machine via repository (under node.node_id), display tail of remote OUTPUT."""
     if node is None:
@@ -309,8 +268,6 @@ async def _display_remote_output(
         session = await repository.connect(
             node=node,
             client_keys=list_private_keys(config.local.keys_dir),
-            jump_host=conn_params.jump_host,
-            jump_username=conn_params.jump_username,
         )
     except Exception:
         print("CAN'T CONNECT")
@@ -335,9 +292,8 @@ async def _display_remote_output(
 
 
 # START_CONTRACT: _render_view
-#   PURPOSE: Verbose renderer — for each RUNNING task with an allocated IP, resolve conn params, print a
-#          header, tail remote OUTPUT, optionally download+parse a convergence snippet into a tempfile.
-#   INPUTS: { tasks: list[Task], nodes_by_ip: dict[str, Node], config: Config, fetch_convergence: bool, deps: CLIDeps }
+#   PURPOSE: Verbose renderer — for each RUNNING task with an allocated node, print a header, tail remote OUTPUT, optionally download+parse a convergence snippet into a tempfile. Connection identity (username, jump) is read from Node (not resolved from CloudConfig).
+#   INPUTS: { tasks: list[Task], nodes_by_id: dict[NodeId, Node], config, fetch_convergence, deps: CLIDeps }
 #   OUTPUTS: { Path | None - path to the convergence snippet tempfile (cleaned by the caller), or None }
 #   SIDE_EFFECTS: Connects to remote machines via SSH, writes a tempfile, prints to stdout.
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-ENTRYPOINTS-CONFIG
@@ -365,28 +321,20 @@ async def _render_view(
                 if task.allocated_node_id
                 else None
             )
-            if node is not None:
-                conn_params = _resolve_conn_params(node, config)
-            else:
-                conn_params = _ConnParams(
-                    username=config.remote.username,
-                    port=22,
-                    jump_host=config.remote.jump_host,
-                    jump_username=config.remote.jump_username,
-                )
+            username = node.username if node is not None else config.remote.username
             cloud_str = node.cloud if node and node.cloud else ""
             print(
                 "." * 50
                 + "ID{} {} at {}@{}:{}:{}".format(
                     task.task_id,
                     task.label,
-                    conn_params.username,
+                    username,
                     node.hostname if node else "",
                     cloud_str,
                     task.remote_folder or "",
                 )
             )
-            conn = await _display_remote_output(task, node, conn_params, config)
+            conn = await _display_remote_output(task, node, config)
             if conn is None:
                 continue
             session, remote_folder, repository = conn

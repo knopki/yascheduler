@@ -812,9 +812,10 @@
       <path>yascheduler/infra/ssh/repository.py</path>
       <depends>M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION</depends>
       <annotations>
-        <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _sessions" />
+        <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _sessions; connect reads jump-leg identity (jump_host/jump_port/jump_username) from node — no jump kwargs in signature" />
         <class-MySSHClient PURPOSE="Insecure SSH client trusting all host keys (connection-building bit; stays)" />
         <const-DEFAULT_CONN_OPTS PURPOSE="Default SSH connection options (connection-building bit; stays)" />
+        <fn-connect PURPOSE="Open SSH connection and register MachineSession under node.node_id; jump-leg identity read from node.* fields (not passed as kwargs)" />
       </annotations>
     </M-SSH-REPOSITORY>
 

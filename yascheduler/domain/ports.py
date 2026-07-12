@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.22.0 - Node-rename-and-fields: MachineSession.ip property → hostname. CloudProvisioner docstring node.ip→node.hostname.
-#   PREVIOUS_CHANGE: v2.21.0 - Remove MachineOperations Protocol (SSHMachineOperations facade dissolved). Operations-side collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) are concrete classes typed directly by consumers; session pass-throughs are called on MachineSession.
+#   LAST_CHANGE: v2.23.0 - node-owns-connection-identity: drop jump_host/jump_username from MachineRepository.connect signature.
+#   PREVIOUS_CHANGE: v2.22.0 - Node-rename-and-fields: MachineSession.ip property → hostname. CloudProvisioner docstring node.ip→node.hostname.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -236,9 +236,9 @@ class MachineRepository(Protocol):
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,
         tasks_dir: PurePath | None = None,
-        jump_host: str | None = None,
-        jump_username: str | None = None,
-    ) -> MachineSession: ...
+    ) -> MachineSession:
+        """Open a session to ``node``."""
+        ...
 
     async def disconnect(self, node_id: NodeId) -> None: ...
 

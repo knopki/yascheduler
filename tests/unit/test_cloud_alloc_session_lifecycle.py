@@ -503,6 +503,7 @@ def _make_real_adapter_config(
     config.username = "root"
     config.jump_host = None
     config.jump_username = None
+    config.prefix = name
     return adapter, config
 
 
@@ -517,6 +518,8 @@ def _make_real_local_config() -> MagicMock:
 
 def _make_real_remote_config() -> MagicMock:
     cfg = MagicMock()
+    cfg.jump_host = None
+    cfg.jump_username = None
     cfg.data_dir = PurePath("./data")
     cfg.engines_dir = PurePath("./data/engines")
     cfg.tasks_dir = PurePath("./data/tasks")

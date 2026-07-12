@@ -247,7 +247,12 @@ Connection to a PostgreSQL database.
 
 - `jump_host`
 
-  Host of default SSH _jump host_ (if used).
+  Host of default SSH _jump host_ (if used). These defaults are stamped onto
+  the node row once when a node is added (`yasetnode`) and read from the row
+  at connect time — they are not re-resolved from INI on each connection.
+  Changing `jump_user` / `jump_host` therefore does not affect
+  already-registered nodes; re-add the node or `UPDATE yascheduler_nodes`
+  to change its jump leg.
 
 ### Providers `[clouds]`
 
@@ -289,7 +294,8 @@ These settings are common to all the providers:
 
 - `*_jump_host`
 
-  Host of this cloud SSH jump host (if used).
+  Host of this cloud SSH jump host (if used). Read once at allocation and
+  persisted on the node row — not re-read from INI on each connection.
 
 #### Hetzner
 

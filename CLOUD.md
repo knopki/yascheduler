@@ -101,7 +101,9 @@ az vm create \
 ```
 
 Save the `publicIpAddress` as `az_jump_host`, and `az_jump_user` will be
-`yascheduler`.
+`yascheduler`. These values are read once at allocation and persisted on the
+node row — changing `az_jump_host` / `az_jump_user` in INI does not affect
+already-allocated cloud nodes (re-add or `UPDATE yascheduler_nodes` instead).
 
 [az_cli_install]: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli
 [az_manage_rg]: https://docs.microsoft.com/en-us/cli/azure/manage-azure-groups-azure-cli

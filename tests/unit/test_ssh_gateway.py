@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - simplify-cloud-connect-node-args: test_connect_returns_session drops the `username="root"` kwarg from connect; added test_connect_reads_username_and_port_from_node.
-#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: _make_state builds an SSHMachineSession; repository._machines → _sessions.
+#   LAST_CHANGE: v1.3.0 - node-owns-connection-identity: add TestBuildTunnelOptions (4 tests), TestConnectJumpIdentity (3 acceptance tests), test_init_owns_sessions_dict. code-quality: replace test_forward_empty_client_keys with mock-based client_keys propagation tests; add test_tunnel_leg_forwards_client_keys acceptance test to lock client_keys forwarding invariant.
+#   PREVIOUS_CHANGE: v1.2.0 - simplify-cloud-connect-node-args: test_connect_returns_session drops the `username="root"` kwarg from connect; added test_connect_reads_username_and_port_from_node.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -42,7 +42,11 @@ from yascheduler.domain.model import (
     NodeId,
 )
 from yascheduler.infra.ssh.platform.protocol import ProcessInfo
-from yascheduler.infra.ssh.repository import SSHMachineRepository
+from yascheduler.infra.ssh.repository import (
+    DEFAULT_CONN_OPTS,
+    SSHMachineRepository,
+    _build_tunnel_options,
+)
 from yascheduler.infra.ssh.session import SSHMachineSession
 
 if TYPE_CHECKING:
@@ -241,6 +245,305 @@ def mock_pengine() -> MagicMock:
     engine.check_cmd_code = 0
     engine.sleep_interval = 0.01
     return engine
+
+
+# =============================================================================
+# _build_tunnel_options
+# =============================================================================
+
+
+class TestBuildTunnelOptions:
+    """_build_tunnel_options — builds SSHClientConnectionOptions or None."""
+
+    def test_returns_none_when_no_jump_host(self) -> None:
+        """Returns None when node.jump_host is None."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            jump_host=None,
+        )
+        result = _build_tunnel_options(node, client_keys=None, connect_timeout=None)
+        assert result is None
+
+    def test_returns_options_with_jump_host(self) -> None:
+        """Returns SSHClientConnectionOptions with jump fields from node."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            jump_host="bastion.example.com",
+            jump_port=2222,
+            jump_username="jumper",
+        )
+        result = _build_tunnel_options(node, client_keys=None, connect_timeout=30)
+        assert result is not None
+        assert result.host == "bastion.example.com"
+        assert result.port == 2222
+        assert result.username == "jumper"
+        assert result.known_hosts is None
+        assert result.connect_timeout == 30
+
+    def test_tunnel_options_inherits_destination_defaults(self) -> None:
+        """Tunnel options inherit DEFAULT_CONN_OPTS (keepalive/compression)."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            jump_host="bastion.example.com",
+        )
+        result = _build_tunnel_options(node, client_keys=None, connect_timeout=None)
+        assert result is not None
+        assert result.keepalive_interval == DEFAULT_CONN_OPTS.keepalive_interval
+        assert result.compression_algs == DEFAULT_CONN_OPTS.compression_algs
+        assert result.known_hosts is None
+
+    def test_tunnel_options_forwards_client_keys(self) -> None:
+        """Tunnel leg receives the same client_keys passed to _build_tunnel_options."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            jump_host="bastion.example.com",
+        )
+        test_keys = [Path("/etc/yascheduler/keys/id_rsa")]
+        with patch(
+            "yascheduler.infra.ssh.repository.SSHClientConnectionOptions",
+        ) as mock_cls:
+            mock_cls.side_effect = lambda *args, **kwargs: MagicMock()
+            _build_tunnel_options(node, client_keys=test_keys, connect_timeout=10)
+
+        mock_cls.assert_called_once()
+        _, call_kwargs = mock_cls.call_args
+        assert call_kwargs.get("client_keys") == test_keys
+
+    def test_tunnel_options_forwards_empty_client_keys(self) -> None:
+        """Tunnel leg receives () when client_keys is empty list."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            jump_host="bastion.example.com",
+        )
+        with patch(
+            "yascheduler.infra.ssh.repository.SSHClientConnectionOptions",
+        ) as mock_cls:
+            mock_cls.side_effect = lambda *args, **kwargs: MagicMock()
+            _build_tunnel_options(node, client_keys=[], connect_timeout=None)
+
+        mock_cls.assert_called_once()
+        _, call_kwargs = mock_cls.call_args
+        assert call_kwargs.get("client_keys") == ()
+
+    def test_tunnel_options_forwards_none_client_keys(self) -> None:
+        """Tunnel leg receives () when client_keys is None."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            jump_host="bastion.example.com",
+        )
+        with patch(
+            "yascheduler.infra.ssh.repository.SSHClientConnectionOptions",
+        ) as mock_cls:
+            mock_cls.side_effect = lambda *args, **kwargs: MagicMock()
+            _build_tunnel_options(node, client_keys=None, connect_timeout=None)
+
+        mock_cls.assert_called_once()
+        _, call_kwargs = mock_cls.call_args
+        assert call_kwargs.get("client_keys") == ()
+
+
+# =============================================================================
+# Acceptance: connect reads jump identity from Node
+# =============================================================================
+
+
+class TestConnectJumpIdentity:
+    """connect reads jump_host/jump_port/jump_username from Node."""
+
+    @pytest.mark.asyncio
+    async def test_connect_omits_tunnel_when_no_jump_host(
+        self,
+        repository: SSHMachineRepository,
+        mock_conn: MagicMock,
+        mock_adapter: MagicMock,
+    ) -> None:
+        """connect passes tunnel=None when node.jump_host is None."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            username="root",
+            port=22,
+            jump_host=None,
+        )
+        with (
+            patch(
+                "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
+                AsyncMock(return_value=mock_conn),
+            ) as mock_connect,
+            patch(
+                "yascheduler.infra.ssh.repository._detect_platform",
+                AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
+            ),
+            patch(
+                "yascheduler.infra.ssh.repository._init_paths",
+                return_value=(
+                    PurePosixPath("./data"),
+                    PurePosixPath("./data/engines"),
+                    PurePosixPath("./data/tasks"),
+                ),
+            ),
+        ):
+            await repository.connect(node=node, client_keys=[])
+
+        mock_connect.assert_awaited_once()
+        _call_args, call_kwargs = mock_connect.call_args
+        assert call_kwargs.get("tunnel") is None
+
+    @pytest.mark.asyncio
+    async def test_connect_reads_jump_identity_from_node(
+        self,
+        repository: SSHMachineRepository,
+        mock_conn: MagicMock,
+        mock_adapter: MagicMock,
+    ) -> None:
+        """connect builds tunnel from node.jump_host/jump_port/jump_username."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            username="root",
+            port=22,
+            jump_host="bastion.example.com",
+            jump_port=2222,
+            jump_username="jumper",
+        )
+        with (
+            patch(
+                "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
+                AsyncMock(return_value=mock_conn),
+            ) as mock_connect,
+            patch(
+                "yascheduler.infra.ssh.repository._detect_platform",
+                AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
+            ),
+            patch(
+                "yascheduler.infra.ssh.repository._init_paths",
+                return_value=(
+                    PurePosixPath("./data"),
+                    PurePosixPath("./data/engines"),
+                    PurePosixPath("./data/tasks"),
+                ),
+            ),
+        ):
+            await repository.connect(node=node, client_keys=[])
+
+        mock_connect.assert_awaited_once()
+        _call_args, call_kwargs = mock_connect.call_args
+        tunnel = call_kwargs.get("tunnel")
+        assert tunnel is not None
+        assert tunnel.host == "bastion.example.com"
+        assert tunnel.port == 2222
+        assert tunnel.username == "jumper"
+
+    @pytest.mark.asyncio
+    async def test_tunnel_leg_reuses_destination_options(
+        self,
+        repository: SSHMachineRepository,
+        mock_conn: MagicMock,
+        mock_adapter: MagicMock,
+    ) -> None:
+        """Tunnel leg inherits known_hosts=None and connect_timeout from destination."""
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            username="root",
+            port=22,
+            jump_host="bastion.example.com",
+            jump_port=2222,
+            jump_username="jumper",
+        )
+        with (
+            patch(
+                "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
+                AsyncMock(return_value=mock_conn),
+            ) as mock_connect,
+            patch(
+                "yascheduler.infra.ssh.repository._detect_platform",
+                AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
+            ),
+            patch(
+                "yascheduler.infra.ssh.repository._init_paths",
+                return_value=(
+                    PurePosixPath("./data"),
+                    PurePosixPath("./data/engines"),
+                    PurePosixPath("./data/tasks"),
+                ),
+            ),
+        ):
+            await repository.connect(node=node, client_keys=[], connect_timeout=10)
+
+        mock_connect.assert_awaited_once()
+        _call_args, call_kwargs = mock_connect.call_args
+        tunnel = call_kwargs.get("tunnel")
+        assert tunnel is not None
+        assert tunnel.known_hosts is None
+        assert tunnel.connect_timeout == 10
+
+    @pytest.mark.asyncio
+    async def test_tunnel_leg_forwards_client_keys(
+        self,
+        repository: SSHMachineRepository,
+        mock_conn: MagicMock,
+        mock_adapter: MagicMock,
+    ) -> None:
+        """Tunnel leg SSHClientConnectionOptions receives same client_keys as destination leg."""
+        test_keys = [Path("/etc/yascheduler/keys/id_rsa")]
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            username="root",
+            port=22,
+            jump_host="bastion.example.com",
+            jump_port=2222,
+            jump_username="jumper",
+        )
+        with (
+            patch(
+                "yascheduler.infra.ssh.repository.SSHClientConnectionOptions",
+            ) as mock_opts_cls,
+            patch(
+                "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
+                AsyncMock(return_value=mock_conn),
+            ),
+            patch(
+                "yascheduler.infra.ssh.repository._detect_platform",
+                AsyncMock(return_value=(mock_adapter, ["linux", "debian-like"])),
+            ),
+            patch(
+                "yascheduler.infra.ssh.repository._init_paths",
+                return_value=(
+                    PurePosixPath("./data"),
+                    PurePosixPath("./data/engines"),
+                    PurePosixPath("./data/tasks"),
+                ),
+            ),
+        ):
+            mock_opts_cls.side_effect = lambda *args, **kwargs: MagicMock()
+            await repository.connect(
+                node=node, client_keys=test_keys, connect_timeout=10
+            )
+
+        # Call 0: tunnel (_build_tunnel_options), Call 1: destination (_open_connection)
+        assert mock_opts_cls.call_count == 2
+        tunnel_kwargs = mock_opts_cls.call_args_list[0].kwargs
+        dest_kwargs = mock_opts_cls.call_args_list[1].kwargs
+        assert tunnel_kwargs.get("client_keys") == test_keys
+        assert tunnel_kwargs.get("client_keys") == dest_kwargs.get("client_keys")
 
 
 # =============================================================================
@@ -521,7 +824,14 @@ class TestSessionFileTransfer:
 
 
 class TestRepositoryCollection:
-    """contains, len, get_session."""
+    """contains, len, get_session, init."""
+
+    def test_init_owns_sessions_dict(self) -> None:
+        """Repository init creates only _sessions dict (no _machines or _monitors)."""
+        repo = SSHMachineRepository()
+        assert hasattr(repo, "_sessions")
+        assert not hasattr(repo, "_machines")
+        assert not hasattr(repo, "_monitors")
 
     def test_contains(self, repository: SSHMachineRepository) -> None:
         """__contains__ checks by NodeId."""

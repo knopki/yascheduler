@@ -198,6 +198,8 @@ def mock_local_config() -> MagicMock:
 def mock_remote_config() -> MagicMock:
     """Create mock RemoteDefaults."""
     cfg = MagicMock()
+    cfg.jump_host = None
+    cfg.jump_username = None
     cfg.data_dir = PurePath("./data")
     cfg.engines_dir = PurePath("./data/engines")
     cfg.tasks_dir = PurePath("./data/tasks")
@@ -213,6 +215,17 @@ def mock_logger() -> MagicMock:
 # =============================================================================
 # Factory helper
 # =============================================================================
+
+
+def _default_remote_config() -> MagicMock:
+    """RemoteDefaults mock with type-correct jump defaults for RESOLVE_JUMP."""
+    cfg = MagicMock()
+    cfg.jump_host = None
+    cfg.jump_username = None
+    cfg.data_dir = PurePath("./data")
+    cfg.engines_dir = PurePath("./data/engines")
+    cfg.tasks_dir = PurePath("./data/tasks")
+    return cfg
 
 
 def make_provisioner(
@@ -236,7 +249,7 @@ def make_provisioner(
         configs=configs or {},
         machine_repository=machine_repository or _make_mock_repository(),
         local_config=local_config or MagicMock(),
-        remote_config=remote_config or MagicMock(),
+        remote_config=remote_config or _default_remote_config(),
         engines=engines or MagicMock(),
         log=logger or MagicMock(),
     )
@@ -279,6 +292,8 @@ class TestAllocate:
         assert node.cloud == "test"
         assert node.enabled is True
         assert node.port == 22
+        assert node.jump_host is None  # type-correct fallback, not MagicMock
+        assert node.jump_username == "root"  # type-correct fallback, not MagicMock
         # allocate constructs one Node (after create_node) and threads it to
         # connect; connect is called with node=... and NO username/port kwargs
         # (they come from node.username/node.port). The returned node is the
@@ -288,10 +303,153 @@ class TestAllocate:
         assert "node" in connect_kw
         assert "username" not in connect_kw
         assert "port" not in connect_kw
+        assert "jump_host" not in connect_kw
+        assert "jump_username" not in connect_kw
         assert connect_kw["node"].node_id == NodeId(999)
         assert node.username == connect_kw["node"].username
         assert node.port == connect_kw["node"].port
         assert node.cloud == connect_kw["node"].cloud
+
+    @pytest.mark.asyncio
+    async def test_setup_vm_stamps_jump_from_cloud_config(
+        self, mock_engines: MagicMock, mock_local_config: MagicMock
+    ) -> None:
+        """When CloudConfig sets jump_host/jump_username, the returned Node carries them and connect has no jump kwargs."""
+        adapter, config = _make_mock_adapter(name="hetzner", priority=10)
+        config.jump_host = "jump.example.com"
+        config.jump_username = "jumper"
+        config.prefix = "hetzner"
+        repo = _make_mock_repository()
+
+        prov = make_provisioner(
+            adapters={"hetzner": adapter},
+            configs={"hetzner": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            node = await prov.allocate("hetzner", _tmp_node(999, cloud="hetzner"))
+
+        # Node carries jump values from CloudConfig
+        assert node.jump_host == "jump.example.com"
+        assert node.jump_username == "jumper"
+        assert node.jump_port == 22
+        # connect call has no jump kwargs
+        assert len(repo.connect_calls) == 1
+        connect_kw = repo.connect_calls[0]
+        assert "jump_host" not in connect_kw
+        assert "jump_username" not in connect_kw
+        # The node passed to connect already carries the jump fields
+        connect_node = connect_kw["node"]
+        assert connect_node.jump_host == "jump.example.com"
+        assert connect_node.jump_username == "jumper"
+
+    @pytest.mark.asyncio
+    async def test_setup_vm_falls_back_to_remote_defaults(
+        self, mock_engines: MagicMock, mock_local_config: MagicMock
+    ) -> None:
+        """When CloudConfig lacks jump, node jump values come from remote defaults."""
+        adapter, config = _make_mock_adapter(name="hetzner", priority=10)
+        # CloudConfig explicitly does NOT set jump
+        config.jump_host = None
+        config.jump_username = None
+        config.prefix = "hetzner"
+        repo = _make_mock_repository()
+
+        remote_cfg = MagicMock()
+        remote_cfg.jump_host = "remote.jump.com"
+        remote_cfg.jump_username = "remoteuser"
+        remote_cfg.data_dir = PurePath("./data")
+        remote_cfg.engines_dir = PurePath("./data/engines")
+        remote_cfg.tasks_dir = PurePath("./data/tasks")
+
+        prov = make_provisioner(
+            adapters={"hetzner": adapter},
+            configs={"hetzner": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+            remote_config=remote_cfg,
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            node = await prov.allocate("hetzner", _tmp_node(999, cloud="hetzner"))
+
+        assert node.jump_host == "remote.jump.com"
+        assert node.jump_username == "remoteuser"
+        assert node.jump_port == 22
+        # connect call has no jump kwargs
+        assert "jump_host" not in repo.connect_calls[0]
+        assert "jump_username" not in repo.connect_calls[0]
+        # The node passed to connect carries the remote fallback
+        connect_node = repo.connect_calls[0]["node"]
+        assert connect_node.jump_host == "remote.jump.com"
+        assert connect_node.jump_username == "remoteuser"
+
+    @pytest.mark.asyncio
+    async def test_setup_vm_stamps_jump_before_connect_to_vm(
+        self, mock_engines: MagicMock, mock_local_config: MagicMock
+    ) -> None:
+        """Regression: jump is stamped on node BEFORE _connect_to_vm opens the setup SSH session.
+
+        Construct a node with jump_host=None, call _setup_vm, and capture the node
+        that reaches _connect_to_vm — assert jump is already set.
+        """
+        adapter, config = _make_mock_adapter(name="hetzner", priority=10)
+        config.jump_host = "jump.example.com"
+        config.jump_username = "jumper"
+        config.prefix = "hetzner"
+
+        # Capture the node that _setup_vm passes to _connect_to_vm
+        captured_node: list[Node] = []
+
+        async def _fake_connect_to_vm(
+            _self: Any, node: Node, _adapter: Any, _config: Any
+        ) -> MagicMock:
+            captured_node.append(node)
+            session = MagicMock()
+            session.run = AsyncMock(
+                return_value=MagicMock(exit_code=0, stdout="", stderr="")
+            )
+            session.setup_node = AsyncMock()
+            session.get_cpu_cores = AsyncMock(return_value=4)
+            return session
+
+        prov = make_provisioner(
+            adapters={"hetzner": adapter},
+            configs={"hetzner": config},
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        # Patch _connect_to_vm so we intercept the node BEFORE the SSH connect
+        with patch.object(
+            CloudProvisionerImpl,
+            "_connect_to_vm",
+            new=_fake_connect_to_vm,
+        ):
+            node_obj = await prov._setup_vm(
+                _tmp_node(999, cloud="hetzner"), adapter, config
+            )
+
+        # The captured node already has jump fields stamped
+        assert len(captured_node) == 1
+        stamped_node = captured_node[0]
+        assert stamped_node.jump_host == "jump.example.com"
+        assert stamped_node.jump_username == "jumper"
+        assert stamped_node.jump_port == 22
+        # The returned node also carries the jump fields
+        assert node_obj.jump_host == "jump.example.com"
+        assert node_obj.jump_username == "jumper"
+        assert node_obj.jump_port == 22
 
     @pytest.mark.asyncio
     async def test_allocate_no_provider(self) -> None:

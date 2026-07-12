@@ -2,31 +2,26 @@
 # VERSION: 2.3.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yastatus check_status() flag parsing, renderers, exit codes, and connection-params resolver.
-#   SCOPE: check_status() and private helpers (_parse_status_args, _query_tasks, _render_default, _render_info,
-#          _render_json, _resolve_conn_params, _render_view) with mocked Config/CLIDeps/UoW/SSHMachineGateway.
+#   PURPOSE: Unit tests for yastatus check_status() — parsing, renderers, exit codes, view-mode SSH.
+#   SCOPE: check_status() and private helpers with mocked Config/CLIDeps/UoW/SSHMachineGateway.
 #   DEPENDS: M-ENTRYPOINTS-CLI-CHECK-STATUS
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestCheckStatusParsing - --help, --bogus, -v/-i/--json mutex, -o requires -v
-#   TestCheckStatusAiiDAContract - golden regression: default output parses via the AiiDA plugin's exact logic
-#   TestCheckStatusDefault - default listing (RUNNING+TO_DO, DONE excluded) and -j filter
+#   TestCheckStatusParsing - flag parsing and mutex
+#   TestCheckStatusAiiDAContract - golden AiiDA-compat regression
+#   TestCheckStatusDefault - default listing and -j filter
 #   TestCheckStatusInfo - -i tab-separated renderer
-#   TestCheckStatusJson - --json 9 raw-value fields, null placement for TO_DO, empty list, -j composition
-#   TestCheckStatusExitCodes - exit 0 success, exit 1 on DB/config/unexpected errors
-#   TestCheckStatusArgvInjection - argv parameter threads through to argparse (no sys.argv patch)
-#   TestResolveConnParams - matching cloud jump host, static node fallback, node username/port passthrough
-#   TestCheckStatusViewHappyPath - -v SSH tail path + lazy nodes lookup invariant for default/-i
-#   TestCheckStatusQueryRenderSeparation - UoW closed before any SSH operation
+#   TestCheckStatusJson - --json raw values, null placement, composition
+#   TestCheckStatusExitCodes - exit 0/1/2
+#   TestCheckStatusArgvInjection - argv threading
+#   TestCheckStatusViewAcceptance - 3 Gherkin scenarios (node-owns-connection-identity)
+#   TestCheckStatusViewHappyPath - -v SSH + lazy nodes lookup
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.4.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), node.hostname→node.hostname, session.hostname→session.hostname, JSON "ip"→"hostname" key.
-#   PREVIOUS_CHANGE: v2.3.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v2.2.0 - task-schema-and-entity-cleanup: make_task drops allocated_ip (uses allocated_node_id); test_json_emits_list_with_nine_fields asserts new 9-key shape (nested node + created_at/updated_at, flat allocated_ip/port/cloud absent); test_json_todo_task_has_null_placement asserts node is null; test_info_tab_separated asserts node_id= (was ip=); default/info node-fetch assertions use get_by_ids (was get_by_ips).
-#   PREVIOUS_CHANGE: v2.1.0 - simplify-cloud-connect-node-args: test_view_connects_with_resolved_params_and_disconnects asserts connect is called with node=... and no username/port kwargs.
+#   LAST_CHANGE: v2.5.0 - node-owns-connection-identity: _resolve_conn_params / _ConnParams deleted; connect drops jump kwargs.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -35,6 +30,7 @@ import importlib
 import json as _json
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
+from typing import Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -48,9 +44,7 @@ check_status_mod = importlib.import_module("yascheduler.entrypoints.cli.check_st
 pytestmark = pytest.mark.unit
 
 
-# ---------------------------------------------------------------------------
 # Mock helpers (mirror tests/unit/test_cli_behavioral.py / test_cli_show_nodes.py)
-# ---------------------------------------------------------------------------
 
 
 def make_cloud(
@@ -196,9 +190,7 @@ def _run(argv: list[str]) -> None:
     check_status_mod.check_status(argv)
 
 
-# ---------------------------------------------------------------------------
 # Parsing / exit codes (task 9.4)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusParsing:
@@ -244,15 +236,12 @@ class TestCheckStatusParsing:
         assert exc.value.code == 2
 
     def test_convergence_with_view_is_valid(self) -> None:
-        # Does NOT raise; returns a Namespace with both flags set.
         args = check_status_mod._parse_status_args(["-o", "-v"])
         assert args.view is True
         assert args.convergence is True
 
 
-# ---------------------------------------------------------------------------
 # AiiDA-contract golden regression (task 9.5, design D9)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusAiiDAContract:
@@ -268,20 +257,15 @@ class TestCheckStatusAiiDAContract:
         ]
         check_status_mod._render_default(tasks)
         out, _ = capsys.readouterr()
-
-        # The AiiDA plugin's exact parse logic:
         job_list = [job.split() for job in out.split("\n") if job]
         parsed: dict[str, str] = {}
-        for job_id, status in job_list:  # exactly 2 elements per line
+        for job_id, status in job_list:
             parsed[job_id] = status
-
         assert set(parsed.values()) <= {"TO_DO", "RUNNING", "DONE"}
         assert parsed == {"1": "TO_DO", "2": "RUNNING", "3": "DONE"}
 
 
-# ---------------------------------------------------------------------------
 # Default renderer + -j filter (task 9.6)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusDefault:
@@ -299,9 +283,7 @@ class TestCheckStatusDefault:
                 make_task(task_id=2, status=TaskStatus.TO_DO, label="job_b"),
             ]
         )
-
-        _run([])  # no SystemExit on success
-
+        _run([])
         uow.tasks.list_by_status.assert_called_once_with(
             statuses={TaskStatus.RUNNING, TaskStatus.TO_DO}
         )
@@ -318,9 +300,7 @@ class TestCheckStatusDefault:
         uow.tasks.list_by_status = AsyncMock(
             return_value=[make_task(task_id=1, status=TaskStatus.RUNNING)]
         )
-
         _run([])
-
         out, _ = capsys.readouterr()
         assert "DONE" not in out
 
@@ -334,20 +314,13 @@ class TestCheckStatusDefault:
         uow.tasks.list_by_jobs = AsyncMock(
             return_value=[make_task(task_id=1, status=TaskStatus.RUNNING, label="x")]
         )
-
-        # argparse --jobs has type=int, so args.jobs are ints; _query_tasks
-        # wraps them to TaskId before calling list_by_jobs.
-
         _run(["-j", "1", "2"])
-
         uow.tasks.list_by_jobs.assert_called_once_with(job_ids=[TaskId(1), TaskId(2)])
         out, _ = capsys.readouterr()
         assert "1   RUNNING" in out
 
 
-# ---------------------------------------------------------------------------
 # Info renderer (task 9.7)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusInfo:
@@ -369,9 +342,7 @@ class TestCheckStatusInfo:
                 ),
             ]
         )
-
         _run(["-i"])
-
         out, _ = capsys.readouterr()
         assert "task_id=1" in out
         assert "status=RUNNING" in out
@@ -380,9 +351,7 @@ class TestCheckStatusInfo:
         assert "\t" in out
 
 
-# ---------------------------------------------------------------------------
 # JSON renderer (task 9.8)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusJson:
@@ -412,9 +381,7 @@ class TestCheckStatusJson:
             ]
         )
         uow.nodes.get_by_ids = AsyncMock(return_value={NodeId(1): node})
-
         _run(["--json"])
-
         out, _ = capsys.readouterr()
         data = _json.loads(out)
         assert isinstance(data, list)
@@ -431,7 +398,6 @@ class TestCheckStatusJson:
             "updated_at",
             "node",
         }
-        # Raw values: status name not int, node carries all fields.
         assert obj["status"] == "RUNNING"
         assert obj["node"]["hostname"] == "10.0.0.1"
         assert obj["node"]["port"] == 22
@@ -447,11 +413,9 @@ class TestCheckStatusJson:
         assert obj["engine"] == "g09"
         assert obj["local_folder"] == "/tmp/local"
         assert obj["remote_folder"] == "/tmp/remote"
-        # Flat allocated_ip/port/cloud keys are ABSENT (replaced by nested node).
         assert "allocated_ip" not in obj
         assert "port" not in obj
         assert "cloud" not in obj
-        # --json triggers the conditional nodes lookup (lazy-lookup invariant).
         uow.nodes.get_by_ids.assert_called_once()
 
     def test_json_fetches_nodes_by_id(
@@ -476,9 +440,7 @@ class TestCheckStatusJson:
                 )
             }
         )
-
         _run(["--json"])
-
         uow.nodes.get_by_ids.assert_called_once()
 
     def test_json_todo_task_has_null_placement(
@@ -490,18 +452,14 @@ class TestCheckStatusJson:
         uow.tasks.list_by_status = AsyncMock(
             return_value=[make_task(task_id=5, status=TaskStatus.TO_DO)]
         )
-
         _run(["--json"])
-
         out, _ = capsys.readouterr()
         data = _json.loads(out)
         obj = data[0]
         assert obj["node"] is None
-        # Flat allocated_ip/port/cloud keys are ABSENT (replaced by nested node).
         assert "allocated_ip" not in obj
         assert "port" not in obj
         assert "cloud" not in obj
-        # engine is always present (required field).
         assert obj["engine"] == "g09"
 
     def test_json_empty_result_is_empty_list(
@@ -511,9 +469,7 @@ class TestCheckStatusJson:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(return_value=[])
-
         _run(["--json"])
-
         out, _ = capsys.readouterr()
         assert _json.loads(out) == []
 
@@ -540,20 +496,13 @@ class TestCheckStatusJson:
                 )
             }
         )
-
-        # argparse --jobs has type=int, so args.jobs are ints; _query_tasks
-        # wraps them to TaskId before calling list_by_jobs.
-
         _run(["--json", "-j", "1"])
-
         uow.tasks.list_by_jobs.assert_called_once_with(job_ids=[TaskId(1)])
         out, _ = capsys.readouterr()
-        assert _json.loads(out)  # non-empty JSON list
+        assert _json.loads(out)
 
 
-# ---------------------------------------------------------------------------
 # Exit codes (task 9.9)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusExitCodes:
@@ -566,7 +515,6 @@ class TestCheckStatusExitCodes:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(return_value=[])
-        # No SystemExit raised on success.
         _run([])
 
     def test_exit_one_on_db_error(
@@ -613,9 +561,7 @@ class TestCheckStatusExitCodes:
         assert "Error:" in err
 
 
-# ---------------------------------------------------------------------------
 # argv injection (task 9.10)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusArgvInjection:
@@ -628,94 +574,90 @@ class TestCheckStatusArgvInjection:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(return_value=[])
-
-        # sys.argv is NOT patched; the runner's sys.argv would not parse as valid
-        # yastatus flags. Passing ["--json"] explicitly yields JSON output, proving
-        # argv injection (otherwise argparse would read sys.argv and likely error).
         _run(["--json"])
-
         out, _ = capsys.readouterr()
         assert _json.loads(out) == []
 
 
-# ---------------------------------------------------------------------------
-# _resolve_conn_params (task 9.11)
-# ---------------------------------------------------------------------------
-
-
-class TestResolveConnParams:
-    """Connection-params resolution mirrors orchestrator._connect_machine_consumer."""
-
-    def test_matching_cloud_uses_cloud_jump_host(self) -> None:
-        config = make_mock_config(
-            clouds=[
-                make_cloud(
-                    "hetzner", jump_host="jump.example.com", jump_username="jumper"
-                ),
-            ],
-            remote_jump_host="fallback.example.com",
-            remote_jump_username="fallback",
-        )
-        node = Node(
-            node_id=NodeId(1),
-            hostname="10.0.0.1",
-            ncpus=4,
-            cloud="hetzner",
-            username="yascheduler",
-            port=2222,
-        )
-
-        params = check_status_mod._resolve_conn_params(node, config)
-
-        assert params.jump_host == "jump.example.com"
-        assert params.jump_username == "jumper"
-
-    def test_static_node_falls_back_to_config_remote(self) -> None:
-        config = make_mock_config(
-            clouds=[
-                make_cloud(
-                    "hetzner", jump_host="jump.example.com", jump_username="jumper"
-                )
-            ],
-            remote_jump_host="fallback.example.com",
-            remote_jump_username="fallback",
-        )
-        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud=None)
-
-        params = check_status_mod._resolve_conn_params(node, config)
-
-        assert params.jump_host == "fallback.example.com"
-        assert params.jump_username == "fallback"
-
-    def test_returns_node_username_not_cloud_username(self) -> None:
-        config = make_mock_config(
-            clouds=[make_cloud("hetzner", username="hcloud-user")],
-        )
-        node = Node(
-            node_id=NodeId(1),
-            hostname="10.0.0.1",
-            ncpus=4,
-            cloud="hetzner",
-            username="yascheduler",
-            port=22,
-        )
-
-        params = check_status_mod._resolve_conn_params(node, config)
-
-        assert params.username == "yascheduler"
-
-    def test_returns_node_port(self) -> None:
-        config = make_mock_config()
-        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, port=2222)
-
-        params = check_status_mod._resolve_conn_params(node, config)
-
-        assert params.port == 2222
-
-
-# ---------------------------------------------------------------------------
 # View mode happy path + lazy nodes lookup (task 9.12)
-# ---------------------------------------------------------------------------
+
+
+class TestCheckStatusViewAcceptance:
+    """3 Gherkin scenarios for node-owns-connection-identity."""
+
+    @pytest.mark.parametrize(
+        "node_kwargs,cloud_kwargs_list,connect_asserts",
+        [
+            (
+                dict(cloud="hetzner", username="yascheduler", port=22),
+                [dict(username="hcloud-user")],
+                lambda k: "username" not in k and k["node"].username == "yascheduler",
+            ),
+            (
+                dict(
+                    cloud="hetzner",
+                    username="yascheduler",
+                    port=22,
+                    jump_host="jump.example.com",
+                    jump_username="jumper",
+                ),
+                [dict(jump_host="jump.example.com", jump_username="jumper")],
+                lambda k: (
+                    "jump_host" not in k
+                    and "jump_username" not in k
+                    and k["node"].jump_host == "jump.example.com"
+                    and k["node"].jump_username == "jumper"
+                ),
+            ),
+            (
+                dict(
+                    cloud="hetzner",
+                    username="yascheduler",
+                    port=22,
+                    jump_host="old-bastion.example.com",
+                    jump_username="old-jumper",
+                ),
+                [dict(jump_host="new-bastion.example.com", jump_username="new-jumper")],
+                lambda k: (
+                    "jump_host" not in k
+                    and "jump_username" not in k
+                    and k["node"].jump_host == "old-bastion.example.com"
+                    and k["node"].jump_username == "old-jumper"
+                ),
+            ),
+        ],
+        ids=[
+            "uses_node_username_not_cloud_username",
+            "reads_jump_from_node_not_cloud",
+            "follows_node_jump_when_cloud_changed",
+        ],
+    )
+    def test_scenarios(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
+        monkeypatch: pytest.MonkeyPatch,
+        node_kwargs: dict,
+        cloud_kwargs_list: list[dict],
+        connect_asserts: Callable[[dict], bool],
+    ) -> None:
+        config, uow, _deps = stub_config_deps
+        config.clouds = [make_cloud("hetzner", **ck) for ck in cloud_kwargs_list]
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, **node_kwargs)
+        uow.tasks.list_by_status = AsyncMock(
+            return_value=[
+                make_task(
+                    task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(1)
+                )
+            ]
+        )
+        uow.nodes.get_by_ids = AsyncMock(return_value={NodeId(1): node})
+        repo = make_mock_repository()
+        monkeypatch.setattr(
+            check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
+        )
+        _run(["-v"])
+        assert connect_asserts(repo.connect.call_args.kwargs)
 
 
 class TestCheckStatusViewHappyPath:
@@ -728,9 +670,7 @@ class TestCheckStatusViewHappyPath:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config, uow, _deps = stub_config_deps
-        config.clouds = [
-            make_cloud("hetzner", jump_host="jump.example.com", jump_username="jumper")
-        ]
+        config.clouds = [make_cloud("hetzner")]
         node = Node(
             node_id=NodeId(1),
             hostname="10.0.0.1",
@@ -738,44 +678,34 @@ class TestCheckStatusViewHappyPath:
             cloud="hetzner",
             username="yascheduler",
             port=2222,
+            jump_host="jump.example.com",
+            jump_username="jumper",
         )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
                 make_task(
-                    task_id=1,
-                    status=TaskStatus.RUNNING,
-                    allocated_node_id=NodeId(1),
+                    task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(1)
                 )
             ]
         )
         uow.nodes.get_by_ids = AsyncMock(return_value={NodeId(1): node})
-
         repo = make_mock_repository(stdout="OUTPUT TAIL")
         session = repo.connect.return_value
         monkeypatch.setattr(
             check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
         )
-        resolve_spy = MagicMock(wraps=check_status_mod._resolve_conn_params)
-        monkeypatch.setattr(check_status_mod, "_resolve_conn_params", resolve_spy)
-
         _run(["-v"])
-
-        # _resolve_conn_params called with the task's node.
-        resolve_spy.assert_called_once()
-        assert resolve_spy.call_args.args[0].hostname == "10.0.0.1"
-        # repo.connect called with node (carrying username/port) + cloud jump host;
-        # connect takes no username/port kwargs (reads node.username/node.port).
         repo.connect.assert_called_once()
         kwargs = repo.connect.call_args.kwargs
         assert "username" not in kwargs
         assert "port" not in kwargs
+        assert "jump_host" not in kwargs
+        assert "jump_username" not in kwargs
         assert kwargs["node"].username == "yascheduler"
         assert kwargs["node"].port == 2222
-        assert kwargs["jump_host"] == "jump.example.com"
-        assert kwargs["jump_username"] == "jumper"
-        # tails OUTPUT (session.run_full invoked) and disconnects.
+        assert kwargs["node"].jump_host == "jump.example.com"
+        assert kwargs["node"].jump_username == "jumper"
         assert session.run_full.await_count == 1
-        # disconnect called with node_id (session machine handle)
         repo.disconnect.assert_awaited_with(session.machine.node_id)
         out, _ = capsys.readouterr()
         assert "OUTPUT TAIL" in out
@@ -806,9 +736,7 @@ class TestCheckStatusViewHappyPath:
             "SSHMachineRepository",
             MagicMock(return_value=make_mock_repository()),
         )
-
         _run(["-v"])
-
         uow.nodes.get_by_ids.assert_called_once()
 
     def test_default_does_not_fetch_nodes(
@@ -824,9 +752,7 @@ class TestCheckStatusViewHappyPath:
                 )
             ]
         )
-
         _run([])
-
         uow.nodes.get_by_ids.assert_not_called()
 
     def test_info_does_not_fetch_nodes(
@@ -842,15 +768,11 @@ class TestCheckStatusViewHappyPath:
                 )
             ]
         )
-
         _run(["-i"])
-
         uow.nodes.get_by_ids.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # Query/render separation (task 9.13)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusQueryRenderSeparation:
@@ -877,30 +799,21 @@ class TestCheckStatusQueryRenderSeparation:
                 NodeId(1): Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4)
             }
         )
-
         repo = make_mock_repository()
         monkeypatch.setattr(
             check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
         )
-
-        # Attach both mocks to a single manager BEFORE running so their call order
-        # is recorded in one unified list.
         manager = MagicMock()
         manager.attach_mock(uow.__aexit__, "uow_aexit")
         manager.attach_mock(repo.connect, "repo_connect")
-
         _run(["-v"])
-
         names = [call[0] for call in manager.mock_calls]
-        # Both must have been called, and the UoW exit must precede the SSH connect.
         assert "uow_aexit" in names
         assert "repo_connect" in names
         assert names.index("uow_aexit") < names.index("repo_connect")
 
 
-# ---------------------------------------------------------------------------
 # --config / --log-level scenarios (consolidate-daemon-entrypoints)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStatusConfigLogLevel:

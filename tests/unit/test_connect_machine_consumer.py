@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - add-node-id-identity: import NodeId, add node_id=NodeId(...) to _make_node helper and all inline Node(...) constructions.
-#   PREVIOUS_CHANGE: v1.2.0 - Rewrite TestConnectMachineProducerExcludesStaticNodes → TestConnectMachineProducerYieldsStaticNodes for fix-static-node-connect-exclusion: the producer filter no longer excludes cloud=None nodes (over-broad v6.2.1 FILTER_CLOUD_ONLY filter broke the yasetnode → daemon handoff, leaving tasks stuck in TO_DO). New contract: static nodes ARE yielded; a consumer-side guard before the grace-check retries them indefinitely without ever calling abandon_node. Added test_static_node_past_grace_does_not_abandon temporal guard.
+#   LAST_CHANGE: v1.4.0 - node-owns-connection-identity slice 2: removed cloud-prefix-resolution setup (cfg_cloud.jump_host/jump_username) from all tests; added TestConnectNewNode class with acceptance tests verifying connect call shape without jump kwargs and no inline resolution loop.
+#   PREVIOUS_CHANGE: v1.3.0 - add-node-id-identity: import NodeId, add node_id=NodeId(...) to _make_node helper and all inline Node(...) constructions.
 # END_CHANGE_SUMMARY
 """Unit tests for Orchestrator._connect_machine_consumer grace timer + abandon dispatch.
 
@@ -153,8 +153,6 @@ class TestConnectMachineConsumerGraceTimer:
     ) -> None:
         """Within grace: gateway.connect raises, age < grace → no abandon, IP stays in timer."""
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
-        cfg_cloud.jump_host = None
-        cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "refused")
@@ -189,8 +187,6 @@ class TestConnectMachineConsumerGraceTimer:
     async def test_connect_failure_past_grace_triggers_abandon(self) -> None:
         """Past grace: gateway.connect raises, age >= grace → abandon_node called, IP popped."""
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
-        cfg_cloud.jump_host = None
-        cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "refused")
@@ -225,8 +221,6 @@ class TestConnectMachineConsumerGraceTimer:
     async def test_successful_connect_resets_failure_timer(self) -> None:
         """First call records first_seen; second call (success) pops the IP."""
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
-        cfg_cloud.jump_host = None
-        cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "x")
@@ -253,8 +247,6 @@ class TestConnectMachineConsumerGraceTimer:
     async def test_abandon_failed_does_not_kill_worker(self) -> None:
         """When abandon_node raises, the consumer catches it and returns without propagating."""
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
-        cfg_cloud.jump_host = None
-        cfg_cloud.jump_username = None
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "x")
@@ -512,6 +504,56 @@ class TestConnectMachineProducerYieldsStaticNodes:
         # static nodes — the consumer-side guard returns before the
         # grace-check / abandon block.
         assert NodeId(1) not in orch._connect_failures
+
+
+class TestConnectNewNode:
+    """Gherkin: New node connected — connect call shape without jump kwargs."""
+
+    @pytest.mark.asyncio
+    async def test_connect_new_node_no_jump_kwargs(self) -> None:
+        """WHEN new enabled node appears, THEN repository.connect(node, client_keys, ...)
+        called with NO jump_host / jump_username arguments."""
+        orch = make_orchestrator(config_clouds=[])
+        connect_mock = AsyncMock(return_value=MagicMock())
+        orch._repository.connect = connect_mock  # type: ignore[method-assign]
+
+        node = _make_node()
+        await orch._connect_machine_consumer(UMessage(node.node_id, node))
+
+        connect_mock.assert_called_once_with(
+            node=node,
+            client_keys=[],
+            connect_timeout=10,
+            data_dir=orch._remote_defaults.data_dir,
+            engines_dir=orch._remote_defaults.engines_dir,
+            tasks_dir=orch._remote_defaults.tasks_dir,
+        )
+
+    @pytest.mark.asyncio
+    async def test_connect_reads_jump_identity_from_node_no_inline_resolution(
+        self,
+    ) -> None:
+        """WHEN orchestrator calls repository.connect for a node with
+        jump_host set, THEN no inline resolution loop runs (no iteration over
+        config.clouds, no read of config.remote.jump_host)."""
+        cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
+        orch = make_orchestrator(config_clouds=[cfg_cloud])
+        connect_mock = AsyncMock(return_value=MagicMock())
+        orch._repository.connect = connect_mock  # type: ignore[method-assign]
+
+        node = _make_node(cloud="hetzner")
+        await orch._connect_machine_consumer(UMessage(node.node_id, node))
+
+        # The connect call has no jump_host/jump_username kwargs — proves
+        # no resolution loop ran to produce them.
+        connect_mock.assert_called_once_with(
+            node=node,
+            client_keys=[],
+            connect_timeout=10,
+            data_dir=orch._remote_defaults.data_dir,
+            engines_dir=orch._remote_defaults.engines_dir,
+            tasks_dir=orch._remote_defaults.tasks_dir,
+        )
 
 
 def _uow_with_nodes(nodes: list) -> AsyncMock:

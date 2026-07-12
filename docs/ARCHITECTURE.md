@@ -219,7 +219,7 @@ list[MachineSession]`, `list_connected() → list[MachineSession]`,
   `disconnect(ip)` pops `_sessions[ip]` and delegates teardown to
   `session._close()`; it SHALL NOT touch any other session's monitor.
   Connection-building bits (`MySSHClient`, `DEFAULT_CONN_OPTS`,
-  `_resolve_tunnel`) live here.
+  `_build_tunnel_options`) live here.
 - **`session.py`** — `SSHMachineSession` implements `MachineSession`, the
   connected-machine entity handle. Carries domain identity (`ip`, mutable
   `machine` snapshot, `occupy`/`release`/`update` transitions), read-only

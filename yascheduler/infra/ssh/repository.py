@@ -10,13 +10,13 @@
 # START_MODULE_MAP
 #   MySSHClient - Insecure SSH client that trusts all host keys (connection-building bit; stays)
 #   DEFAULT_CONN_OPTS - Default SSH connection options (connection-building bit; stays)
-#   _resolve_tunnel - Build SSH tunnel string from jump host/username (connection-building bit; stays)
+#   _build_tunnel_options - Build SSHClientConnectionOptions from node.jump_* , or None when node.jump_host is None
 #   SSHMachineRepository - Concrete MachineRepository port implementation owning _sessions: dict[NodeId, SSHMachineSession] keyed by NodeId; connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id); delegates teardown to session._close()
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - Node-rename-and-fields: _open_connection param ip→hostname; connect/_connect_impl node.ip→node.hostname (4 sites), ConnectedMachine(ip=…)→ConnectedMachine(hostname=…), SSHMachineSession(ip=…)→SSHMachineSession(hostname=…), MachineConnectionError(node.ip, …)→MachineConnectionError(node.node_id, node.hostname, str(err)).
-#   PREVIOUS_CHANGE: v2.2.0 - connect/_connect_impl drop the redundant `username`/`port` params; both are read from `node.username`/`node.port` internally and forwarded into `_open_connection`. Removed four `# FIXME` comments.
+#   LAST_CHANGE: v2.4.0 - node-owns-connection-identity: drop jump_host/jump_username from connect/_connect_impl/_open_connection; _resolve_tunnel → _build_tunnel_options (returns SSHClientConnectionOptions|None); jump identity read from Node. Update MODULE_MAP, contracts, log markers.
+#   PREVIOUS_CHANGE: v2.3.0 - Node-rename-and-fields: _open_connection param ip→hostname; connect/_connect_impl node.ip→node.hostname (4 sites), ConnectedMachine(ip=…)→ConnectedMachine(hostname=…), SSHMachineSession(ip=…)→SSHMachineSession(hostname=…), MachineConnectionError(node.ip, …)→MachineConnectionError(node.node_id, node.hostname, str(err)).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -71,8 +71,22 @@ DEFAULT_CONN_OPTS = SSHClientConnectionOptions(
 )
 
 
-def _resolve_tunnel(jump_host: str | None, jump_username: str | None) -> str | None:
-    return jump_host and jump_username and f"{jump_username}@{jump_host}"
+def _build_tunnel_options(
+    node: Node,
+    client_keys: Sequence[PurePath] | None,
+    connect_timeout: int | None,
+) -> SSHClientConnectionOptions | None:
+    if not node.jump_host:
+        return None
+    return SSHClientConnectionOptions(
+        options=DEFAULT_CONN_OPTS,
+        host=node.jump_host,
+        port=node.jump_port,
+        username=node.jump_username,
+        client_keys=client_keys or (),
+        known_hosts=None,
+        connect_timeout=connect_timeout,
+    )
 
 
 # START_CONTRACT: SSHMachineRepository
@@ -99,7 +113,8 @@ class SSHMachineRepository:
     # ---- Connection lifecycle ----
 
     # START_CONTRACT: SSHMachineRepository._open_connection
-    #   PURPOSE: Build SSH options and open connection.
+    #   PURPOSE: Build SSH options and open connection..
+    #   INPUTS: { hostname, username, client_keys, *, port, connect_timeout, tunnel_opts: SSHClientConnectionOptions | None - pre-built tunnel options from _build_tunnel_options }
     #   SIDE_EFFECTS: Opens SSH connection.
     #   LINKS: M-SSH-REPOSITORY
     # END_CONTRACT: SSHMachineRepository._open_connection
@@ -111,8 +126,7 @@ class SSHMachineRepository:
         *,
         port: int = 22,
         connect_timeout: int | None = None,
-        jump_host: str | None = None,
-        jump_username: str | None = None,
+        tunnel_opts: SSHClientConnectionOptions | None = None,
     ) -> tuple[SSHClientConnection, SSHClientConnectionOptions]:
         # START_BLOCK_BUILD_OPTS
         conn_opts = SSHClientConnectionOptions(
@@ -120,7 +134,7 @@ class SSHMachineRepository:
             host=hostname,
             port=port,
             username=username,
-            tunnel=_resolve_tunnel(jump_host, jump_username),
+            tunnel=tunnel_opts,
             client_keys=client_keys or (),
             ignore_encrypted=True,
             connect_timeout=connect_timeout,
@@ -128,7 +142,9 @@ class SSHMachineRepository:
         # END_BLOCK_BUILD_OPTS
         # START_BLOCK_CONNECT
         self._log.debug(
-            "[SSHRepository][_open_connection][CONNECT] hostname=%s", hostname
+            "[SSHRepository][_open_connection][CONNECT] hostname=%s tunnel=%s",
+            hostname,
+            tunnel_opts.host if tunnel_opts else None,
         )
         conn = await asyncssh.connection.connect(
             options=conn_opts,
@@ -143,7 +159,7 @@ class SSHMachineRepository:
 
     # START_CONTRACT: SSHMachineRepository.connect
     #   PURPOSE: Open an SSH connection and register a MachineSession under node.node_id; translates transport errors into MachineConnectionError.
-    #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir, jump_host, jump_username }
+    #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir }
     #   OUTPUTS: { MachineSession - the newly constructed and registered session }
     #   SIDE_EFFECTS: Opens an SSH connection to node.hostname; registers a MachineSession in _sessions[node.node_id].
     #   LINKS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS, M-SSH-SESSION
@@ -157,8 +173,6 @@ class SSHMachineRepository:
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,
         tasks_dir: PurePath | None = None,
-        jump_host: str | None = None,
-        jump_username: str | None = None,
     ) -> MachineSession:
         """Open SSH connection, detect platform, construct and register a session.
 
@@ -166,9 +180,7 @@ class SSHMachineRepository:
         after _connect_impl's backoff exhausts retries. ``hostname`` is read
         from ``node.hostname`` (the asyncssh host) and threaded into
         ``MachineConnectionError`` at the raise site (transport-level error —
-        the address is what the operator recognizes). The login user and port
-        are read from ``node.username`` / ``node.port`` (this method takes no
-        ``username``/``port`` arguments).
+        the address is what the operator recognizes).
         """
         try:
             return await self._connect_impl(
@@ -178,8 +190,6 @@ class SSHMachineRepository:
                 data_dir=data_dir,
                 engines_dir=engines_dir,
                 tasks_dir=tasks_dir,
-                jump_host=jump_host,
-                jump_username=jump_username,
             )
         except (asyncssh.misc.Error, OSError) as err:
             from yascheduler.domain.exceptions import MachineConnectionError
@@ -188,7 +198,7 @@ class SSHMachineRepository:
 
     # START_CONTRACT: SSHMachineRepository._connect_impl
     #   PURPOSE: Inner connection implementation with backoff retry on SSHRetryExc; constructs and registers the MachineSession.
-    #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir, jump_host, jump_username }
+    #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir }
     #   OUTPUTS: { SSHMachineSession - the newly constructed and registered session }
     #   SIDE_EFFECTS: Opens an SSH connection to node.hostname (login user node.username, port node.port); registers a MachineSession in _sessions[node.node_id].
     #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
@@ -203,18 +213,18 @@ class SSHMachineRepository:
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,
         tasks_dir: PurePath | None = None,
-        jump_host: str | None = None,
-        jump_username: str | None = None,
     ) -> MachineSession:
         """Open SSH connection, detect platform, construct SSHMachineSession (inner impl with backoff)."""
+        # START_BLOCK_BUILD_TUNNEL
+        tunnel_opts = _build_tunnel_options(node, client_keys, connect_timeout)
+        # END_BLOCK_BUILD_TUNNEL
         conn, conn_opts = await self._open_connection(
             node.hostname,
             node.username,
             client_keys,
             port=node.port,
             connect_timeout=connect_timeout,
-            jump_host=jump_host,
-            jump_username=jump_username,
+            tunnel_opts=tunnel_opts,
         )
         # START_BLOCK_DETECT
         adapter, platforms = await _detect_platform(conn, ADAPTERS)

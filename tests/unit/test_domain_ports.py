@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - Node-rename-and-fields: StubMachineSession.ip→hostname; remove adapter-derived hostname (merged). Add hostname/Protocol shape tests.
-#   PREVIOUS_CHANGE: v1.9.0 - Drop MachineOperations Protocol stub + test (facade dissolved; the three operations collaborators are concrete classes typed directly, not subject to Protocol conformance checks).
+#   LAST_CHANGE: v1.11.0 - node-owns-connection-identity: drop jump_host/jump_username from StubMachineRepository.connect; add test_machine_repository_connect_signature_no_jump_kwargs.
+#   PREVIOUS_CHANGE: v1.10.0 - Node-rename-and-fields: StubMachineSession.ip→hostname; remove adapter-derived hostname (merged). Add hostname/Protocol shape tests.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -247,8 +247,6 @@ class StubMachineRepository(MachineRepository):
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,
         tasks_dir: PurePath | None = None,
-        jump_host: str | None = None,
-        jump_username: str | None = None,
     ) -> MachineSession:
         return StubMachineSession()
 
@@ -327,6 +325,23 @@ def test_node_repository_protocol() -> None:
 def test_machine_repository_protocol() -> None:
     stub = StubMachineRepository()
     assert isinstance(stub, MachineRepository)
+
+
+# START_CONTRACT: test_machine_repository_connect_signature
+#   PURPOSE: Verify MachineRepository.connect takes no jump_host/jump_username params — locks the Protocol contract that jump identity is read from Node.
+#   LINKS: M-DOMAIN-PORTS
+# END_CONTRACT: test_machine_repository_connect_signature
+def test_machine_repository_connect_signature_no_jump_kwargs() -> None:
+    """MachineRepository.connect has no jump_host or jump_username parameters."""
+    import inspect
+
+    sig = inspect.signature(MachineRepository.connect)
+    params = sig.parameters
+    assert "jump_host" not in params
+    assert "jump_username" not in params
+    # Verify jump is read from node — node param is present
+    assert "node" in params
+    assert "client_keys" in params
 
 
 # START_CONTRACT: test_machine_session_protocol

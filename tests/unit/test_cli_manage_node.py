@@ -59,6 +59,8 @@ def make_mock_config() -> MagicMock:
     config.clouds = []
     config.remote.username = "root"
     config.remote.engines_dir = PurePosixPath("/opt/engines")
+    config.remote.jump_host = None
+    config.remote.jump_username = None
     config.db = MagicMock()
     return config
 
@@ -478,6 +480,81 @@ class TestManageNodeAddPath:
         assert added_node.port == 2222
         out, _ = capsys.readouterr()
         assert "Added host to yascheduler: 10.0.0.1:2222" in out
+
+    def test_add_stamps_jump_from_config_remote(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Gherkin: yasetnode add-path stamps jump from config.remote before insert.
+        Domain: Static node stamps jump from remote defaults at creation."""
+        config, uow, _deps, repo = stub_env
+        config.remote.jump_host = "bastion.example.com"
+        config.remote.jump_username = "jumper"
+        uow.nodes.get = AsyncMock(return_value=None)
+
+        _run(["[IP]"])
+
+        added_node = uow.nodes.insert.call_args[0][0]
+        assert added_node.jump_host == "bastion.example.com"
+        assert added_node.jump_username == "jumper"
+        assert added_node.jump_port == 22
+        # connect receives no jump_host/jump_username kwargs
+        repo.connect.assert_called_once()
+        connect_kwargs = repo.connect.call_args.kwargs
+        assert "jump_host" not in connect_kwargs
+        assert "jump_username" not in connect_kwargs
+
+    def test_add_jump_host_none_when_not_configured(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Task 6.7: when config.remote.jump_host is None, NewNode.jump_host is None."""
+        config, uow, _deps, _repo = stub_env
+        config.remote.jump_host = None
+        config.remote.jump_username = None
+        uow.nodes.get = AsyncMock(return_value=None)
+
+        _run(["[IP]"])
+
+        added_node = uow.nodes.insert.call_args[0][0]
+        assert added_node.jump_host is None
+
+    def test_add_constructs_repository_once(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Gherkin: yasetnode constructs repository once and passes to add helper."""
+        _config, uow, _deps, _repo = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+
+        _run(["[IP]"])
+
+        manage_node_mod.SSHMachineRepository.assert_called_once_with()
+
+    def test_add_removes_tmp_row_on_connect_failure(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Gherkin: yasetnode add-path rolls back tmp row on connect failure."""
+        _config, uow, _deps, repo = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+        repo.connect = AsyncMock(side_effect=RuntimeError("connection refused"))
+
+        with pytest.raises(SystemExit) as exc:
+            _run(["10.0.0.1"])
+
+        assert exc.value.code == 1
+        # tmp row was removed best-effort after connect failure
+        uow.nodes.remove.assert_called_once_with(NodeId(1))
+        # two commits: one for the insert UoW, one for the remove UoW
+        assert uow.commit.call_count == 2
+        uow.nodes.insert.assert_called_once()
+        _, err = capsys.readouterr()
+        assert "connection refused" in err
 
 
 # ---------------------------------------------------------------------------

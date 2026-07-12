@@ -199,11 +199,16 @@ SSH connections via `MachineRepository`. Connection failures SHALL be caught as
 The orchestrator SHALL maintain a per-node connect-failure timer
 (`dict[NodeId, float]` mapping `node_id` to the monotonic timestamp of the
 first consecutive failure) in memory. On a successful
-`repository.connect(node, ...)` for a node, the orchestrator SHALL pop that
-node's `node_id` from the failure timer. For cloud-provisioned nodes, on
-`MachineConnectionError`, the orchestrator SHALL compare the elapsed monotonic
+`repository.connect(node, client_keys, ...)` for a node, the orchestrator SHALL
+pop that node's `node_id` from the failure timer. For cloud-provisioned nodes,
+on `MachineConnectionError`, the orchestrator SHALL compare the elapsed monotonic
 age against the node's cloud `connect_grace` (looked up from
 `active_clouds` by `prefix == node.cloud`).
+
+The orchestrator SHALL NOT resolve jump-leg parameters (no `config.remote`
+lookup, no `CloudConfig` prefix-match loop for jump). All connection identity
+comes from the `Node` itself; `repository.connect` reads `node.jump_host` /
+`node.jump_port` / `node.jump_username` directly.
 
 The connect-machine producer SHALL yield all enabled nodes that are not
 currently registered in the repository, regardless of `cloud`. Static
@@ -242,16 +247,24 @@ nodes), which are handled before the grace-check and never reach the abandon
 path.
 
 #### Scenario: New node connected
+
 - **WHEN** a new enabled node appears in the database
-- **THEN** an SSH connection is established via `repository.connect(node, ...)`
+- **THEN** an SSH connection is established via `repository.connect(node, client_keys, ...)` with no `jump_host` / `jump_username` arguments (the repository reads them from `node`)
 
 #### Scenario: Connection failure within grace retries, past grace triggers abandon
-- **WHEN** `repository.connect(node, ...)` raises `MachineConnectionError` for a cloud node
+
+- **WHEN** `repository.connect(node, client_keys, ...)` raises `MachineConnectionError` for a cloud node
 - **THEN** if elapsed failure age < `connect_grace`, the orchestrator logs and returns (retry next cycle); if age >= `connect_grace`, the orchestrator calls `abandon_node` (which discards the tracker entry by node via `discard_by_node`) and pops the `node_id` from the failure timer
 
 #### Scenario: Successful connect resets the failure timer
-- **WHEN** `repository.connect(node, ...)` succeeds for a node that had a prior `MachineConnectionError`
+
+- **WHEN** `repository.connect(node, client_keys, ...)` succeeds for a node that had a prior `MachineConnectionError`
 - **THEN** the orchestrator pops the `node_id` from the failure timer
+
+#### Scenario: Connect reads jump identity from Node
+
+- **WHEN** the orchestrator calls `repository.connect(node, client_keys, connect_timeout=10, data_dir=..., engines_dir=..., tasks_dir=...)` for a node with `jump_host="bastion.example.com"`
+- **THEN** no inline resolution loop runs (no iteration over `config.clouds`, no read of `config.remote.jump_host`), and the tunnel leg is built from `node.jump_host` / `node.jump_username` / `node.jump_port` inside the repository
 
 ### Requirement: Stats logging
 
