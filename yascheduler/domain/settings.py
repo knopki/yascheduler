@@ -1,5 +1,5 @@
 # FILE: yascheduler/domain/settings.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Cross-layer application settings as frozen stdlib dataclasses — local daemon config and remote SSH defaults.
 #   SCOPE: Local and remote typed config DTOs: LocalSettings (daemon paths, webhook, concurrency limits) and RemoteDefaults (SSH paths, username, jump host); no INI parsing on the DTOs.
@@ -9,12 +9,12 @@
 #
 # START_MODULE_MAP
 #   LocalSettings - Frozen dataclass: daemon data paths, webhook, concurrency limits; __post_init__ validates ge(1)/ge(0)
-#   RemoteDefaults - Frozen dataclass: remote SSH paths, username, jump host
+#   RemoteDefaults - Frozen dataclass: remote SSH paths, username, jump host, jump_port
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Remove cloud_package_upgrade field from LocalSettings; the cloud-init package_upgrade knob is a cloud-only concern relocated to per-provider ConfigCloud* DTOs.
-#   PREVIOUS_CHANGE: v1.2.0 - Add cloud_package_upgrade: bool = True field to LocalSettings; controls cloud-init package_upgrade on freshly-provisioned VMs.
+#   LAST_CHANGE: v1.4.0 - Add jump_port: int = 22 field to RemoteDefaults; configurable via [remote] jump_port INI key.
+#   PREVIOUS_CHANGE: v1.3.0 - Remove cloud_package_upgrade field from LocalSettings; the cloud-init package_upgrade knob is a cloud-only concern relocated to per-provider ConfigCloud* DTOs.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -106,6 +106,7 @@ class RemoteDefaults:
     username: str = "root"
     jump_username: str | None = None
     jump_host: str | None = None
+    jump_port: int = 22
 
 
 # Derived from LocalSettings field defaults so there is a single source of truth:

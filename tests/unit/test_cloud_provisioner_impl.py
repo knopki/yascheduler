@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.12.0
+# VERSION: 2.14.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
@@ -10,7 +10,7 @@
 #
 # START_MODULE_MAP
 #   TestBool - __bool__ reflects adapter presence
-#   TestAllocate - allocate happy path, no provider, create_node failure, setup failure
+#   TestAllocate - allocate happy path, no provider, create_node failure, setup failure, jump-leg resolution (cloud-wins, fallback, no-mixing)
 #   TestDeallocate - happy path, unsupported cloud, no config, no-cloud no-op
 #   TestStop - stop drains machine_gateway via disconnect_all (happy path + idempotency)
 #   TestIsPlatformSupported - _is_platform_supported edge cases
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.13.0 - node-ncpus-as-config: extract ncpus-related allocate tests to test_cloud_provisioner_ncpus.py (file over 1000-line hard limit); _tmp_node ncpus=0→None; happy-path asserts ncpus is None.
-#   PREVIOUS_CHANGE: v2.12.0 - cloud-port-node-arg: allocate/deallocate call sites pass a tmp Node (was NodeId/cloud+ip); added _tmp_node helper + test_deallocate_no_cloud_logs_and_returns.
+#   LAST_CHANGE: v2.14.0 - Add jump_port test coverage: test_setup_vm_does_not_mix_cloud_jump_host_with_remote_jump_port (no-mixing); 3 existing tests (cloud-wins, fallback, regression) extended with jump_port assertions.
+#   PREVIOUS_CHANGE: v2.13.0 - node-ncpus-as-config: extract ncpus-related allocate tests to test_cloud_provisioner_ncpus.py (file over 1000-line hard limit); _tmp_node ncpus=0→None; happy-path asserts ncpus is None.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -117,6 +117,7 @@ def _make_mock_adapter(
     config.username = "root"
     config.jump_host = None
     config.jump_username = None
+    config.jump_port = 22
 
     return adapter, config
 
@@ -200,6 +201,7 @@ def mock_remote_config() -> MagicMock:
     cfg = MagicMock()
     cfg.jump_host = None
     cfg.jump_username = None
+    cfg.jump_port = 22
     cfg.data_dir = PurePath("./data")
     cfg.engines_dir = PurePath("./data/engines")
     cfg.tasks_dir = PurePath("./data/tasks")
@@ -222,6 +224,7 @@ def _default_remote_config() -> MagicMock:
     cfg = MagicMock()
     cfg.jump_host = None
     cfg.jump_username = None
+    cfg.jump_port = 22
     cfg.data_dir = PurePath("./data")
     cfg.engines_dir = PurePath("./data/engines")
     cfg.tasks_dir = PurePath("./data/tasks")
@@ -314,10 +317,11 @@ class TestAllocate:
     async def test_setup_vm_stamps_jump_from_cloud_config(
         self, mock_engines: MagicMock, mock_local_config: MagicMock
     ) -> None:
-        """When CloudConfig sets jump_host/jump_username, the returned Node carries them and connect has no jump kwargs."""
+        """When CloudConfig sets jump_host/jump_username/jump_port, the returned Node carries them and connect has no jump kwargs."""
         adapter, config = _make_mock_adapter(name="hetzner", priority=10)
         config.jump_host = "jump.example.com"
         config.jump_username = "jumper"
+        config.jump_port = 2222
         config.prefix = "hetzner"
         repo = _make_mock_repository()
 
@@ -338,7 +342,7 @@ class TestAllocate:
         # Node carries jump values from CloudConfig
         assert node.jump_host == "jump.example.com"
         assert node.jump_username == "jumper"
-        assert node.jump_port == 22
+        assert node.jump_port == 2222
         # connect call has no jump kwargs
         assert len(repo.connect_calls) == 1
         connect_kw = repo.connect_calls[0]
@@ -348,6 +352,7 @@ class TestAllocate:
         connect_node = connect_kw["node"]
         assert connect_node.jump_host == "jump.example.com"
         assert connect_node.jump_username == "jumper"
+        assert connect_node.jump_port == 2222
 
     @pytest.mark.asyncio
     async def test_setup_vm_falls_back_to_remote_defaults(
@@ -364,6 +369,7 @@ class TestAllocate:
         remote_cfg = MagicMock()
         remote_cfg.jump_host = "remote.jump.com"
         remote_cfg.jump_username = "remoteuser"
+        remote_cfg.jump_port = 2222
         remote_cfg.data_dir = PurePath("./data")
         remote_cfg.engines_dir = PurePath("./data/engines")
         remote_cfg.tasks_dir = PurePath("./data/tasks")
@@ -385,7 +391,7 @@ class TestAllocate:
 
         assert node.jump_host == "remote.jump.com"
         assert node.jump_username == "remoteuser"
-        assert node.jump_port == 22
+        assert node.jump_port == 2222
         # connect call has no jump kwargs
         assert "jump_host" not in repo.connect_calls[0]
         assert "jump_username" not in repo.connect_calls[0]
@@ -393,6 +399,48 @@ class TestAllocate:
         connect_node = repo.connect_calls[0]["node"]
         assert connect_node.jump_host == "remote.jump.com"
         assert connect_node.jump_username == "remoteuser"
+        assert connect_node.jump_port == 2222
+
+    @pytest.mark.asyncio
+    async def test_setup_vm_does_not_mix_cloud_jump_host_with_remote_jump_port(
+        self, mock_engines: MagicMock, mock_local_config: MagicMock
+    ) -> None:
+        """When CloudConfig sets jump_host but NOT jump_username, ALL three jump fields come from remote (no mixing)."""
+        adapter, config = _make_mock_adapter(name="hetzner", priority=10)
+        # CloudConfig sets jump_host but NOT jump_username — not authoritative
+        config.jump_host = "cloud.jump.com"
+        config.jump_username = None
+        config.jump_port = 9999
+        config.prefix = "hetzner"
+        repo = _make_mock_repository()
+
+        remote_cfg = MagicMock()
+        remote_cfg.jump_host = "remote.jump.com"
+        remote_cfg.jump_username = "remoteuser"
+        remote_cfg.jump_port = 2222
+        remote_cfg.data_dir = PurePath("./data")
+        remote_cfg.engines_dir = PurePath("./data/engines")
+        remote_cfg.tasks_dir = PurePath("./data/tasks")
+
+        prov = make_provisioner(
+            adapters={"hetzner": adapter},
+            configs={"hetzner": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+            remote_config=remote_cfg,
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            node = await prov.allocate("hetzner", _tmp_node(999, cloud="hetzner"))
+
+        # ALL three jump fields come from remote (no mixing)
+        assert node.jump_host == "remote.jump.com"
+        assert node.jump_username == "remoteuser"
+        assert node.jump_port == 2222
 
     @pytest.mark.asyncio
     async def test_setup_vm_stamps_jump_before_connect_to_vm(
@@ -406,6 +454,7 @@ class TestAllocate:
         adapter, config = _make_mock_adapter(name="hetzner", priority=10)
         config.jump_host = "jump.example.com"
         config.jump_username = "jumper"
+        config.jump_port = 2222
         config.prefix = "hetzner"
 
         # Capture the node that _setup_vm passes to _connect_to_vm
@@ -445,11 +494,11 @@ class TestAllocate:
         stamped_node = captured_node[0]
         assert stamped_node.jump_host == "jump.example.com"
         assert stamped_node.jump_username == "jumper"
-        assert stamped_node.jump_port == 22
+        assert stamped_node.jump_port == 2222
         # The returned node also carries the jump fields
         assert node_obj.jump_host == "jump.example.com"
         assert node_obj.jump_username == "jumper"
-        assert node_obj.jump_port == 22
+        assert node_obj.jump_port == 2222
 
     @pytest.mark.asyncio
     async def test_allocate_no_provider(self) -> None:

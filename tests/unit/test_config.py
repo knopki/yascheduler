@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_config.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for INI → config parsing across all yascheduler config sub-modules.
@@ -13,6 +13,20 @@
 #   test_config_db_defaults - applies defaults when section empty
 #   test_config_local_custom_data_dir - resolves derived paths under custom data_dir
 #   test_config_local_defaults - applies numeric defaults for empty section
+#   test_remote_defaults_jump_port_default - RemoteDefaults.jump_port defaults to 22
+#   test_remote_defaults_importable_from_domain - RemoteDefaults importable from domain facade
+#   test_remote_defaults_frozen - RemoteDefaults raises FrozenInstanceError on field assignment
+#   test_config_remote_jump_port_defaults_to_22_when_absent - jump_port defaults to 22 when [remote] key absent
+#   test_config_remote_jump_port_read_from_section - jump_port read from [remote] section
+#   test_config_remote_jump_port_rejects_below_1 - parser rejects jump_port below 1
+#   test_config_remote_jump_port_rejects_65536 - parser rejects jump_port at or above 65536
+#   test_config_remote_jump_port_rejects_non_integer - parser rejects non-integer jump_port
+#   test_config_cloud_dtos_jump_port_default - each ConfigCloud* DTO has jump_port == 22 by default
+#   test_config_cloud_hetzner_jump_port_defaults_to_22_when_absent - [clouds] hetzner_jump_port defaults to 22 when key absent
+#   test_config_cloud_hetzner_jump_port_read_from_section - [clouds] hetzner_jump_port=2222 → ConfigCloudHetzner.jump_port == 2222
+#   test_config_cloud_az_jump_port_rejects_below_1 - [clouds] az_jump_port=0 raises ValueError
+#   test_config_cloud_upcloud_jump_port_rejects_65536 - [clouds] upcloud_jump_port=70000 raises ValueError
+#   test_config_cloud_hetzner_jump_port_rejects_non_integer - [clouds] hetzner_jump_port=ssh raises ValueError
 #   test_config_remote_with_jump_host - parses jump host fields
 #   test_config_remote_without_jump_host - jump host defaults to None
 #   test_config_cloud_hetzner_parsing - parses hetzner token/username via parse_cloud_section
@@ -40,8 +54,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - move-cloud-package-upgrade: add [clouds] {prefix}_package_upgrade parser coverage — hetzner_package_upgrade=false parses to False without a ConfigWarning (auto-registered), absent key defaults to True, package_upgrade is NOT on the CloudConfig domain Protocol, and a leftover [local] cloud_package_upgrade=false now emits a ConfigWarning (LocalSettings no longer carries the field).
-#   PREVIOUS_CHANGE: v1.4.0 - Migrate config DTO imports to new homes per config-aggregate-to-entrypoints (P4): ConfigDb→PostgresDbConfig (yascheduler.infra.persistence), ConfigLocal→LocalSettings (yascheduler.domain), ConfigRemote→RemoteDefaults (yascheduler.domain), Config→yascheduler.entrypoints, ConfigWarning/warn_unknown_fields→yascheduler.entrypoints._config_utils; X.from_config_parser_section calls → _parse_*_section free functions; Config.from_config_parser → parse_config; GRACE LINKS updated.
+#   LAST_CHANGE: v1.6.0 - Add jump_port test coverage: 14 new test functions — 8 for RemoteDefaults.jump_port (default, parsing, validation, frozen, importability) + 6 for [clouds.*]/ConfigCloud* jump_port (DTO default, hetzner absent/read, az/upcloud/hetzner validation).
+#   PREVIOUS_CHANGE: v1.5.0 - move-cloud-package-upgrade: add [clouds] {prefix}_package_upgrade parser coverage — hetzner_package_upgrade=false parses to False without a ConfigWarning (auto-registered), absent key defaults to True, package_upgrade is NOT on the CloudConfig domain Protocol, and a leftover [local] cloud_package_upgrade=false now emits a ConfigWarning (LocalSettings no longer carries the field).
 # END_CHANGE_SUMMARY
 
 from configparser import ConfigParser
@@ -153,6 +167,122 @@ def test_config_local_defaults() -> None:
     assert local.webhook_url is None
 
 
+# START_CONTRACT: test_remote_defaults_jump_port_default
+#   PURPOSE: Verify RemoteDefaults.jump_port defaults to 22
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS]
+# END_CONTRACT: test_remote_defaults_jump_port_default
+def test_remote_defaults_jump_port_default() -> None:
+    """RemoteDefaults.jump_port defaults to 22"""
+    remote = RemoteDefaults()
+    assert remote.jump_port == 22
+
+
+# START_CONTRACT: test_remote_defaults_importable_from_domain
+#   PURPOSE: Verify RemoteDefaults is importable from yascheduler.domain
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS]
+# END_CONTRACT: test_remote_defaults_importable_from_domain
+def test_remote_defaults_importable_from_domain() -> None:
+    """RemoteDefaults importable from domain facade"""
+    from yascheduler.domain import RemoteDefaults as RemoteDefaultsFromDomain
+
+    assert RemoteDefaultsFromDomain is RemoteDefaults
+
+
+# START_CONTRACT: test_remote_defaults_frozen
+#   PURPOSE: Verify RemoteDefaults raises FrozenInstanceError on field assignment
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS]
+# END_CONTRACT: test_remote_defaults_frozen
+def test_remote_defaults_frozen() -> None:
+    """RemoteDefaults raises FrozenInstanceError on field assignment"""
+    remote = RemoteDefaults()
+    with pytest.raises(FrozenInstanceError):
+        remote.username = "ops"  # type: ignore[misc,assignment]
+
+
+# START_CONTRACT: test_config_remote_jump_port_defaults_to_22_when_absent
+#   PURPOSE: Verify [remote] jump_port defaults to 22 when key absent
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER]
+# END_CONTRACT: test_config_remote_jump_port_defaults_to_22_when_absent
+def test_config_remote_jump_port_defaults_to_22_when_absent() -> None:
+    """jump_port defaults to 22 when [remote] key absent"""
+    cfg = ConfigParser()
+    cfg.read_string("[remote]\nuser=root\n")
+    remote = _parse_remote_section(cfg["remote"])
+    assert remote.jump_port == 22
+
+
+# START_CONTRACT: test_config_remote_jump_port_read_from_section
+#   PURPOSE: Verify [remote] jump_port=2222 parses to RemoteDefaults.jump_port == 2222
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER]
+# END_CONTRACT: test_config_remote_jump_port_read_from_section
+def test_config_remote_jump_port_read_from_section() -> None:
+    """jump_port read from [remote] section"""
+    cfg = ConfigParser()
+    cfg.read_string("[remote]\nuser=root\njump_port=2222\n")
+    remote = _parse_remote_section(cfg["remote"])
+    assert remote.jump_port == 2222
+
+
+# START_CONTRACT: test_config_remote_jump_port_rejects_below_1
+#   PURPOSE: Verify [remote] parser rejects jump_port=0 with ValueError
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER]
+# END_CONTRACT: test_config_remote_jump_port_rejects_below_1
+def test_config_remote_jump_port_rejects_below_1() -> None:
+    """[remote] parser rejects jump_port below 1"""
+    cfg = ConfigParser()
+    cfg.read_string("[remote]\nuser=root\njump_port=0\n")
+    with pytest.raises(ValueError, match="jump_port must be between 1 and 65535"):
+        _parse_remote_section(cfg["remote"])
+
+
+# START_CONTRACT: test_config_remote_jump_port_rejects_65536
+#   PURPOSE: Verify [remote] parser rejects jump_port=65536 with ValueError
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER]
+# END_CONTRACT: test_config_remote_jump_port_rejects_65536
+def test_config_remote_jump_port_rejects_65536() -> None:
+    """[remote] parser rejects jump_port at or above 65536"""
+    cfg = ConfigParser()
+    cfg.read_string("[remote]\nuser=root\njump_port=65536\n")
+    with pytest.raises(ValueError, match="jump_port must be between 1 and 65535"):
+        _parse_remote_section(cfg["remote"])
+
+
+# START_CONTRACT: test_config_remote_jump_port_rejects_non_integer
+#   PURPOSE: Verify [remote] parser rejects non-integer jump_port with ValueError
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: [M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER]
+# END_CONTRACT: test_config_remote_jump_port_rejects_non_integer
+def test_config_remote_jump_port_rejects_non_integer() -> None:
+    """[remote] parser rejects non-integer jump_port"""
+    cfg = ConfigParser()
+    cfg.read_string("[remote]\nuser=root\njump_port=ssh\n")
+    with pytest.raises(ValueError):
+        _parse_remote_section(cfg["remote"])
+
+
 # START_CONTRACT: test_config_remote_with_jump_host
 #   PURPOSE: Verify RemoteDefaults parses jump host fields from INI section
 #   INPUTS: { None }
@@ -196,6 +326,85 @@ def test_config_remote_without_jump_host() -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: test_config_cloud_hetzner_parsing
+# START_CONTRACT: test_config_cloud_hetzner_jump_port_defaults_to_22_when_absent
+#   PURPOSE: Verify [clouds] hetzner_jump_port defaults to 22 when key absent
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
+# END_CONTRACT: test_config_cloud_hetzner_jump_port_defaults_to_22_when_absent
+def test_config_cloud_hetzner_jump_port_defaults_to_22_when_absent() -> None:
+    """[clouds] hetzner_jump_port defaults to 22 when key absent"""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nhetzner_token=tk\n")
+    clouds = parse_clouds(cfg, RemoteDefaults())
+    hetzner = next(c for c in clouds if isinstance(c, ConfigCloudHetzner))
+    assert hetzner.jump_port == 22
+
+
+# START_CONTRACT: test_config_cloud_hetzner_jump_port_read_from_section
+#   PURPOSE: Verify [clouds] hetzner_jump_port=2222 parses to ConfigCloudHetzner.jump_port == 2222
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
+# END_CONTRACT: test_config_cloud_hetzner_jump_port_read_from_section
+def test_config_cloud_hetzner_jump_port_read_from_section() -> None:
+    """[clouds] hetzner_jump_port=2222 → ConfigCloudHetzner.jump_port == 2222"""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nhetzner_token=tk\nhetzner_jump_port=2222\n")
+    clouds = parse_clouds(cfg, RemoteDefaults())
+    hetzner = next(c for c in clouds if isinstance(c, ConfigCloudHetzner))
+    assert hetzner.jump_port == 2222
+
+
+# START_CONTRACT: test_config_cloud_az_jump_port_rejects_below_1
+#   PURPOSE: Verify [clouds] az_jump_port=0 raises ValueError
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
+# END_CONTRACT: test_config_cloud_az_jump_port_rejects_below_1
+def test_config_cloud_az_jump_port_rejects_below_1() -> None:
+    """[clouds] az_jump_port=0 raises ValueError"""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\naz_tenant_id=tid\naz_user=admin\naz_jump_port=0\n")
+    with pytest.raises(ValueError, match="az jump_port must be between 1 and 65535"):
+        parse_clouds(cfg, RemoteDefaults())
+
+
+# START_CONTRACT: test_config_cloud_upcloud_jump_port_rejects_65536
+#   PURPOSE: Verify [clouds] upcloud_jump_port=70000 raises ValueError
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
+# END_CONTRACT: test_config_cloud_upcloud_jump_port_rejects_65536
+def test_config_cloud_upcloud_jump_port_rejects_65536() -> None:
+    """[clouds] upcloud_jump_port=70000 raises ValueError"""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nupcloud_login=user\nupcloud_jump_port=70000\n")
+    with pytest.raises(
+        ValueError, match="upcloud jump_port must be between 1 and 65535"
+    ):
+        parse_clouds(cfg, RemoteDefaults())
+
+
+# START_CONTRACT: test_config_cloud_hetzner_jump_port_rejects_non_integer
+#   PURPOSE: Verify [clouds] hetzner_jump_port=ssh raises ValueError (non-integer)
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
+# END_CONTRACT: test_config_cloud_hetzner_jump_port_rejects_non_integer
+def test_config_cloud_hetzner_jump_port_rejects_non_integer() -> None:
+    """[clouds] hetzner_jump_port=ssh raises ValueError"""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nhetzner_token=tk\nhetzner_jump_port=ssh\n")
+    with pytest.raises(ValueError):
+        parse_clouds(cfg, RemoteDefaults())
+
+
 def test_config_cloud_hetzner_parsing() -> None:
     """parses hetzner token and username via parse_cloud_section"""
     cfg = ConfigParser()
@@ -532,7 +741,9 @@ def test_warn_unknown_fields() -> None:
 def test_config_remote_no_warnings_known_keys() -> None:
     """no warnings for known INI keys user and jump_user"""
     cfg = ConfigParser()
-    cfg.read_string("[remote]\nuser=admin\njump_user=jumper\njump_host=bastion\n")
+    cfg.read_string(
+        "[remote]\nuser=admin\njump_user=jumper\njump_host=bastion\njump_port=22\n"
+    )
     remote = _parse_remote_section(cfg["remote"])
     assert remote.username == "admin"
     assert remote.jump_username == "jumper"
@@ -642,6 +853,27 @@ def test_config_local_is_frozen_dataclass_without_get_private_keys() -> None:
 #   SIDE_EFFECTS: None
 #   LINKS: [M-CLOUD-CONFIGS]
 # END_CONTRACT: test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods
+# START_CONTRACT: test_config_cloud_dtos_jump_port_default
+#   PURPOSE: Verify each ConfigCloud* DTO has jump_port == 22 when constructed without explicit jump_port
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: None
+#   LINKS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
+# END_CONTRACT: test_config_cloud_dtos_jump_port_default
+def test_config_cloud_dtos_jump_port_default() -> None:
+    """each ConfigCloud* DTO has jump_port == 22 by default"""
+    for dto_cls in (
+        ConfigCloudAzure,
+        ConfigCloudHetzner,
+        ConfigCloudUpcloud,
+        ConfigCloudVastAI,
+    ):
+        instance = dto_cls()
+        assert instance.jump_port == 22, (
+            f"{dto_cls.__name__}.jump_port should be 22, got {instance.jump_port}"
+        )
+
+
 def test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods() -> None:
     """ConfigCloud* DTOs are stdlib frozen dataclasses with no parser methods (relocated to infra.cloud)"""
     for dto_cls in (

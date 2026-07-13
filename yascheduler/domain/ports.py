@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.23.0 - node-owns-connection-identity: drop jump_host/jump_username from MachineRepository.connect signature.
-#   PREVIOUS_CHANGE: v2.22.0 - Node-rename-and-fields: MachineSession.ip property → hostname. CloudProvisioner docstring node.ip→node.hostname.
+#   LAST_CHANGE: v2.24.0 - Add jump_port: int as 8th field on CloudConfig Protocol (alongside jump_host/jump_username).
+#   PREVIOUS_CHANGE: v2.23.0 - node-owns-connection-identity: drop jump_host/jump_username from MachineRepository.connect signature.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -100,7 +100,7 @@ class NodeRepository(Protocol):
 
 
 # START_CONTRACT: CloudConfig
-#   PURPOSE: Structural contract for cloud provider config — the 7-field surface application consumers read.
+#   PURPOSE: Structural contract for cloud provider config.
 #   LINKS: M-DOMAIN-PORTS, M-CLOUD-CONFIGS, M-APPLICATION-DEALLOCATE, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
 # END_CONTRACT: CloudConfig
 @runtime_checkable
@@ -109,12 +109,7 @@ class CloudConfig(Protocol):
 
     Satisfied by every `ConfigCloud*` DTO in `infra/cloud/cloud_configs.py` —
     the DTOs inherit this Protocol explicitly (typing aid); a DTO outside the
-    inheritance tree still satisfies it structurally (PEP 544). Captures exactly
-    the fields `deallocate_nodes` (prefix, idle_tolerance), `orchestrator`
-    (prefix, max_nodes, jump_host, jump_username), and the never-connected-node
-    cleanup path (prefix, connect_grace) read; provider-specific fields
-    (`tenant_id`, `token`, `login`, `api_key`, `vm_size`, etc.) stay on
-    the concrete DTOs and are accessed only by infra-layer consumers.
+    inheritance tree still satisfies it structurally (PEP 544).
     """
 
     prefix: str
@@ -124,6 +119,7 @@ class CloudConfig(Protocol):
     username: str
     jump_username: str | None
     jump_host: str | None
+    jump_port: int
 
 
 # START_CONTRACT: MachineSession

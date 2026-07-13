@@ -279,7 +279,7 @@
         <class-NodeRepository PURPOSE="Async port for node persistence" />
         <class-MachineRepository PURPOSE="Async port for the connected-machine collection " />
         <class-MachineSession PURPOSE="Connected-machine entity handle Protocol " />
-        <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config " />
+        <class-CloudConfig PURPOSE="Structural Protocol for cloud provider config (8-field surface: prefix, max_nodes, idle_tolerance, connect_grace, username, jump_username, jump_host, jump_port)" />
         <class-CloudProvisioner PURPOSE="Port for cloud node provisioning:" />
         <type-connect_grace PURPOSE="Per-cloud SSH connect-failure deadline in seconds (declared on CloudConfig Protocol + each ConfigCloud* DTO with provider-specific default)" />
       </annotations>
@@ -544,7 +544,7 @@
       <depends>none</depends>
       <annotations>
         <class-LocalSettings PURPOSE="Frozen dataclass: daemon data paths, webhook, concurrency limits; __post_init__ validates ge(1)/ge(0)" />
-        <class-RemoteDefaults PURPOSE="Frozen dataclass: remote SSH paths, username, jump host" />
+        <class-RemoteDefaults PURPOSE="Frozen dataclass: remote SSH paths, username, jump host, jump_port" />
       </annotations>
     </M-DOMAIN-SETTINGS>
 
@@ -578,6 +578,7 @@
         <class-AzureImageReference PURPOSE="Azure VM image URN with from_urn pure parser" />
         <type-ConfigCloud PURPOSE="Union of all cloud config DTO types" />
         <type-package_upgrade PURPOSE="cloud-init package_upgrade flag, default True; declared on all 4 ConfigCloud* DTOs (infra-only, NOT on the CloudConfig Protocol), sources CloudInitConfig.package_upgrade via CloudProvisionerImpl._get_cloud_config_data(config).package_upgrade" />
+        <type-jump_port PURPOSE="SSH port of the provider's bastion/jump host leg, default 22; declared on all 4 ConfigCloud* DTOs AND on the CloudConfig Protocol (8th field) because the cloud allocator stamps it onto Node.jump_port alongside jump_host/jump_username" />
       </annotations>
     </M-CLOUD-CONFIGS>
 

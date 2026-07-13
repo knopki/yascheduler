@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.21.0 - Remove ncpus write-back from _setup_vm: drop START_BLOCK_GET_CPUS block (standalone get_cpu_cores call + CloudSetupError wrapper); final replace becomes replace(node, enabled=True) with no ncpus= kwarg; allocate DONE log switches %d→%s for None-safety.
-#   PREVIOUS_CHANGE: v2.20.0 - _setup_vm stamps Node.jump_host/jump_username/jump_port from CloudConfig (or remote fallback) BEFORE _connect_to_vm opens the setup SSH session (RESOLVE_JUMP block); _connect_to_vm drops jump_host/jump_username kwargs from machine_repository.connect call — repository reads jump from Node per D2/D5 of design.md. Site (a) chosen per D5 recommendation (stamp in _setup_vm, not allocate).
+#   LAST_CHANGE: v2.22.0 - Replace hardcoded jump_port=22 in _setup_vm RESOLVE_JUMP block with atomic-leg resolution: CloudConfig.jump_port when cloud leg is authoritative (both jump_host AND jump_username set), otherwise config.remote.jump_port. All three jump fields resolved from the same source per D1.
+#   PREVIOUS_CHANGE: v2.21.0 - Remove ncpus write-back from _setup_vm: drop START_BLOCK_GET_CPUS block (standalone get_cpu_cores call + CloudSetupError wrapper); final replace becomes replace(node, enabled=True) with no ncpus= kwarg; allocate DONE log switches %d→%s for None-safety.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -351,12 +351,14 @@ class CloudProvisionerImpl:
         # START_BLOCK_RESOLVE_JUMP
         # Resolve jump from the matching CloudConfig (prefix == node.cloud)
         # before opening the setup SSH session. Fall back to remote defaults.
+        # All three jump fields come from the SAME source (atomic leg rule).
         jump_host = self.remote_config.jump_host
         jump_username = self.remote_config.jump_username or "root"
-        jump_port = 22
+        jump_port = self.remote_config.jump_port
         if config.prefix == node.cloud and config.jump_host and config.jump_username:
             jump_host = config.jump_host
             jump_username = config.jump_username
+            jump_port = config.jump_port
         node = replace(
             node,
             jump_host=jump_host,

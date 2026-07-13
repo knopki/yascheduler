@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.10.0
+# VERSION: 1.14.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
 #   SCOPE: manage_node command — add, soft-remove, or hard-remove nodes.
@@ -21,7 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.13.0 - _add_node encodes absent ~ncpus as None (not 0): ncpus=spec.ncpus passes HostSpec.ncpus (int | None) directly to NewNode. HostSpec docstring updated.
+#   LAST_CHANGE: v1.14.0 - _add_node sources jump_port from config.remote.jump_port (was hardcoded 22).
+#   PREVIOUS_CHANGE: v1.13.0 - _add_node encodes absent ~ncpus as None (not 0): ncpus=spec.ncpus passes HostSpec.ncpus (int | None) directly to NewNode. HostSpec docstring updated.
 #   PREVIOUS_CHANGE: v1.12.0 - _add_node stamps jump_host/jump_username/jump_port from config.remote onto NewNode at construction. connect(node=tmp, …) receives no jump kwargs — the tmp row carries them.
 # END_CHANGE_SUMMARY
 
@@ -300,7 +301,7 @@ async def _add_node(
                 enabled=False,
                 jump_host=config.remote.jump_host,
                 jump_username=config.remote.jump_username or "root",
-                jump_port=22,
+                jump_port=config.remote.jump_port,
             )
         )
         await uow.commit()

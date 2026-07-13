@@ -222,8 +222,8 @@ placeholder for future node lifecycle states).
 connection-identity fields. They SHALL be populated exactly once at node
 creation and SHALL NOT be re-resolved at connect time:
 
-- Static nodes (`yasetnode` add-path): stamped from `config.remote.jump_host` / `config.remote.jump_username` at `NewNode` construction.
-- Cloud nodes (cloud allocator): stamped from the matching `CloudConfig` (`prefix == node.cloud`) if it sets both `jump_host` and `jump_username`, otherwise from `config.remote.*` fallback, applied in the same `replace(node, enabled=True, ...)` call that flips `enabled`.
+- Static nodes (`yasetnode` add-path): stamped from `config.remote.jump_host` / `config.remote.jump_username` / `config.remote.jump_port` at `NewNode` construction.
+- Cloud nodes (cloud allocator): stamped atomically from one source — the matching `CloudConfig` (`prefix == node.cloud`) if it sets BOTH `jump_host` and `jump_username` (then `CloudConfig.jump_port` supplies `jump_port`), otherwise from `config.remote.jump_host` / `config.remote.jump_username` / `config.remote.jump_port` fallback — applied in the same `replace(node, enabled=True, ...)` call that flips `enabled` and writes `ncpus`. The three jump fields SHALL all come from the same source; a node SHALL NOT mix cloud `jump_host` with remote `jump_port`.
 
 `jump_host = None` means "no tunnel" (direct connection). `MachineRepository.connect` SHALL read these fields directly and SHALL NOT accept `jump_host` / `jump_username` parameters.
 
@@ -234,18 +234,23 @@ creation and SHALL NOT be re-resolved at connect time:
 
 #### Scenario: Static node stamps jump from remote defaults at creation
 
-- **WHEN** `yasetnode` constructs a `NewNode` for a static node while `config.remote.jump_host="bastion.example.com"` and `config.remote.jump_username="jumper"`
-- **THEN** the resulting `NewNode.jump_host == "bastion.example.com"` and `NewNode.jump_username == "jumper"` are persisted by `insert`, and the tmp row used for the connect-setup verification already carries them
+- **WHEN** `yasetnode` constructs a `NewNode` for a static node while `config.remote.jump_host="bastion.example.com"`, `config.remote.jump_username="jumper"`, `config.remote.jump_port=2222`
+- **THEN** the resulting `NewNode.jump_host == "bastion.example.com"`, `NewNode.jump_username == "jumper"`, and `NewNode.jump_port == 2222` are persisted by `insert`, and the tmp row used for the connect-setup verification already carries them
 
 #### Scenario: Cloud node stamps jump from matching CloudConfig at creation
 
-- **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node with `cloud="hetzner"`, and the `hetzner` `CloudConfig` has `jump_host="jump.example.com"` and `jump_username="jumper"`
-- **THEN** the persisted `Node.jump_host == "jump.example.com"` and `Node.jump_username == "jumper"`
+- **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node with `cloud="hetzner"`, and the `hetzner` `CloudConfig` has `jump_host="jump.example.com"`, `jump_username="jumper"`, `jump_port=2222`
+- **THEN** the persisted `Node.jump_host == "jump.example.com"`, `Node.jump_username == "jumper"`, and `Node.jump_port == 2222`
 
 #### Scenario: Cloud node falls back to remote defaults when CloudConfig has no jump
 
-- **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node whose matching `CloudConfig` does NOT set both `jump_host` and `jump_username`, and `config.remote.jump_host` is set
-- **THEN** the persisted `Node.jump_host` / `jump_username` come from `config.remote.*`
+- **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node whose matching `CloudConfig` does NOT set both `jump_host` and `jump_username`, and `config.remote.jump_host` is set with `config.remote.jump_port=2222`
+- **THEN** the persisted `Node.jump_host` / `jump_username` / `jump_port` come from `config.remote.*`
+
+#### Scenario: Cloud node does not mix cloud jump_host with remote jump_port
+
+- **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node whose matching `CloudConfig` sets `jump_host` but NOT `jump_username`, and `config.remote.jump_port=2222`
+- **THEN** the persisted `Node.jump_host`, `Node.jump_username`, AND `Node.jump_port` ALL come from `config.remote.*` (the cloud leg is not half-authoritative)
 
 #### Scenario: Node ncpus None means discover at spawn
 

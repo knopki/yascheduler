@@ -1,15 +1,4 @@
-# Cloud
-
-## Purpose
-
-The cloud subsystem: the `CloudConfig` domain Protocol and the frozen
-`ConfigCloud*` DTOs, the per-prefix parser registry, the provider-specific VM
-lifecycle modules, the `CloudProvisioner` port, and the `CloudProvisionerImpl`
-adapter managing cloud provider selection, VM provisioning (allocate/deallocate),
-cloud-init rendering, SSH key management, node setup after provisioning, and
-concurrent-allocation throttling.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: CloudConfig structural Protocol
 
@@ -75,6 +64,7 @@ SHALL be on the `CloudConfig` Protocol because the cloud allocator stamps it
 onto `Node.jump_port` alongside `jump_host` / `jump_username`.
 
 #### Scenario: AzureImageReference.from_urn retained
+
 - **WHEN** `AzureImageReference.from_urn("Debian:debian-11-daily:11-backports-gen2:latest")` is called
 - **THEN** an `AzureImageReference(publisher="Debian", offer="debian-11-daily", sku="11-backports-gen2", version="latest")` is returned
 
@@ -111,6 +101,7 @@ that range or on a non-integer value. The `{prefix}_jump_port` key SHALL
 auto-register via the DTO field set so unknown-field warnings do NOT fire on it.
 
 #### Scenario: parse_clouds inherits remote username
+
 - **WHEN** `parse_clouds(cfg, remote)` is called and `[clouds]` lacks `hetzner_user` but `remote.username == "root"`
 - **THEN** the parser reads `hetzner_user = "root"` when constructing `ConfigCloudHetzner`
 
@@ -137,24 +128,6 @@ auto-register via the DTO field set so unknown-field warnings do NOT fire on it.
 - **GIVEN** an INI with `[clouds] upcloud_jump_port = 70000`
 - **WHEN** `parse_config(path)` is called
 - **THEN** `ValueError` is raised
-
-### Requirement: Provider VM lifecycle modules
-
-The system SHALL provide provider-specific VM lifecycle modules. Provider
-modules SHALL import their config DTOs (`ConfigCloudAzure`, etc.,
-`AzureImageReference`) from `yascheduler.infra.cloud` (the subpackage facade),
-NOT via deep paths.
-
-Optional provider SDKs SHALL be handled gracefully: the system SHALL skip
-providers whose SDK is not installed, logging a warning instead of raising
-`ImportError`.
-
-`CloudInitConfig.render()` SHALL output a `"#cloud-config\n"`-prefixed JSON
-serialization of all fields.
-
-#### Scenario: CloudInitConfig render output
-- **WHEN** `CloudInitConfig(bootcmd=..., packages=...).render()` is called
-- **THEN** the output is `"#cloud-config\n"`-prefixed JSON serialization of all fields
 
 ### Requirement: CloudProvisionerImpl implements CloudProvisioner
 
@@ -241,67 +214,3 @@ freshly constructed `Node` and NOT a `NewNode`).
 
 - **WHEN** `_setup_vm` opens the setup SSH session via `machine_repository.connect`
 - **THEN** the call is `connect(node=node, client_keys=keys, connect_timeout=adapter.create_node_conn_timeout, data_dir=..., engines_dir=..., tasks_dir=...)` — no `jump_host` / `jump_username` keyword arguments
-
-#### Scenario: setup_vm does not write ncpus onto the Node
-
-- **WHEN** `allocate` runs `_setup_vm` and reaches the final `replace(node, enabled=True, ...)`
-- **THEN** the resulting `Node.ncpus is None` (no `ncpus=` kwarg is passed); the standalone `get_cpu_cores()` call is NOT made inside `_setup_vm`
-
-#### Scenario: allocate DONE log is None-safe for ncpus
-
-- **WHEN** `allocate` emits its DONE log line for a cloud node whose `ncpus is None`
-- **THEN** the log line formats `node.ncpus` with a `None`-safe specifier (e.g. `%s`) and does NOT raise `TypeError`
-
-### Requirement: Cloud-init rendering and SSH key management
-
-SSH key generation, loading, and name extraction SHALL live in the cloud
-subsystem. The cloud-init user-data renderer SHALL be a single concrete frozen
-dataclass `CloudInitConfig`. There SHALL be no `PCloudConfig` Protocol. Provider
-`*_create_node` callables SHALL type their `cloud_config` parameter as
-`CloudInitConfig | None` (the concrete class). The `az_create_node` public entry
-point SHALL NOT carry a runtime `isinstance` boundary guard narrowing
-`cloud_config`.
-
-#### Scenario: SSH keys module location
-- **WHEN** SSH key generation or loading is needed
-- **THEN** the code lives in the cloud subsystem
-
-### Requirement: Cloud-init package_upgrade sourced from per-cloud config
-
-The system SHALL build the `CloudInitConfig` with `package_upgrade` sourced from
-`config.package_upgrade` (default `True`), NOT from a global setting and NOT
-hardcoded. The `packages` list continues to derive from platform-matched engines'
-`platform_packages`.
-
-#### Scenario: package_upgrade sourced from per-cloud config
-- **WHEN** `CloudInitConfig` is built during cloud provisioning
-- **THEN** `package_upgrade` is sourced from `config.package_upgrade` (default `True`), not from a global setting or hardcoded value
-
-### Requirement: CloudProvisionerImpl.stop closes machine_repository connections
-
-`CloudProvisionerImpl.stop` SHALL close every SSH connection held by its
-`machine_repository` by awaiting `machine_repository.disconnect_all()`.
-`allocate` opens connections during cloud allocation and does not disconnect them
-on success. Without `stop()` draining the repository, those connections leak.
-`disconnect_all` on `SSHMachineRepository` is idempotent, so calling it from
-both `clouds.stop()` and `Orchestrator.stop()` (shared instance) is safe.
-
-#### Scenario: stop drains all machine connections
-- **WHEN** `CloudProvisionerImpl.stop()` is called
-- **THEN** `machine_repository.disconnect_all()` is awaited, closing every SSH connection held by the repository
-
-### Requirement: Setup-failure disconnects machine_repository session
-
-`CloudProvisionerImpl.allocate` SHALL disconnect the `machine_repository`
-session for the failed node identity before deleting the VM on the
-setup-failure path. Both `except` blocks following setup (the `CloudSetupError`
-handler and the generic `Exception` handler) SHALL disconnect BEFORE deleting
-the VM. Without this, a failed allocation would leak a stale `FREE` session
-pointing at a deleted VM. Disconnect is a safe no-op when the `node_id` is
-absent from sessions, so calling it when setup itself failed (no session
-registered) is harmless. The success path is unchanged: on a successful setup,
-the session stays registered for orchestrator reuse.
-
-#### Scenario: Setup failure disconnects before VM deletion
-- **WHEN** setup raises `CloudSetupError` or a generic `Exception`
-- **THEN** `machine_repository.disconnect(node.node_id)` is awaited BEFORE `adapter.delete_node(...)`

@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/config_parser.py
-# VERSION: 1.5.0
+# VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: INI config parsing — adapter between ConfigParser and domain/infra types.
 #   SCOPE: Per-section INI parsers and the parse_config assembly.
@@ -34,8 +34,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Move cloud-init package_upgrade knob to per-provider cloud config: remove from _parse_local_section, add to _parse_azure_section/_parse_hetzner_section/_parse_upcloud_section/_parse_vastai_section. cloud_valid_fields auto-introspects dataclass fields so {prefix}_package_upgrade is auto-registered.
-#   PREVIOUS_CHANGE: v1.4.0 - _parse_local_section reads optional [local] cloud_package_upgrade key; LocalSettings field defaults to True preserving pre-change behavior.
+#   LAST_CHANGE: v1.7.0 - Add {prefix}_jump_port parsing with range validation (1–65535) to all four per-prefix cloud parsers (_parse_azure_section, _parse_hetzner_section, _parse_upcloud_section, _parse_vastai_section). jump_port auto-registers via DTO field introspection (no _CLOUD_FIELD_RULES change needed).
+#   PREVIOUS_CHANGE: v1.6.0 - _parse_remote_section reads optional [remote] jump_port key (getint, fallback 22) with range validation 1–65535.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -243,7 +243,7 @@ def cloud_valid_fields(prefix: str) -> Sequence[str]:
 #   INPUTS: { sec: SectionProxy - [clouds] config parser section with az_* prefixed keys }
 #   OUTPUTS: { ConfigCloudAzure - frozen Azure cloud configuration }
 #   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys across all 4 providers' valid fields.
-#   RAISES: ValueError - if username == "root" (parser-side _check_az_user) or AzureImageReference.from_urn fails on a malformed az_image URN
+#   RAISES: ValueError - if username == "root" (parser-side _check_az_user) or AzureImageReference.from_urn fails on a malformed az_image URN or jump_port < 1 or > 65535
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: _parse_azure_section
 def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
@@ -265,6 +265,10 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
     if idle_tolerance < 1:
         raise ValueError(f"az idle_tolerance must be >= 1, got {idle_tolerance}")
 
+    jump_port = sec.getint(fmt("jump_port"), fallback=22)
+    if jump_port < 1 or jump_port > 65535:
+        raise ValueError(f"az jump_port must be between 1 and 65535, got {jump_port}")
+
     return ConfigCloudAzure(
         tenant_id=sec.get(fmt("tenant_id"), ""),
         client_id=sec.get(fmt("client_id"), ""),
@@ -284,6 +288,7 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
         package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
+        jump_port=jump_port,
     )
 
 
@@ -292,7 +297,7 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
 #   INPUTS: { sec: SectionProxy - [clouds] config parser section with hetzner_* prefixed keys }
 #   OUTPUTS: { ConfigCloudHetzner - frozen Hetzner cloud configuration }
 #   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys across all 4 providers' valid fields.
-#   RAISES: ValueError - if max_nodes < 0 or idle_tolerance < 1
+#   RAISES: ValueError - if max_nodes < 0 or idle_tolerance < 1 or jump_port < 1 or > 65535
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: _parse_hetzner_section
 def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
@@ -308,6 +313,12 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
     if idle_tolerance < 1:
         raise ValueError(f"hetzner idle_tolerance must be >= 1, got {idle_tolerance}")
 
+    jump_port = sec.getint(fmt("jump_port"), fallback=22)
+    if jump_port < 1 or jump_port > 65535:
+        raise ValueError(
+            f"hetzner jump_port must be between 1 and 65535, got {jump_port}"
+        )
+
     return ConfigCloudHetzner(
         token=sec.get(fmt("token"), ""),
         max_nodes=max_nodes,
@@ -320,6 +331,7 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
         package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
+        jump_port=jump_port,
     )
 
 
@@ -328,7 +340,7 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
 #   INPUTS: { sec: SectionProxy - [clouds] config parser section with upcloud_* prefixed keys }
 #   OUTPUTS: { ConfigCloudUpcloud - frozen Upcloud cloud configuration }
 #   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys across all 4 providers' valid fields.
-#   RAISES: ValueError - if max_nodes < 0 or idle_tolerance < 1
+#   RAISES: ValueError - if max_nodes < 0 or idle_tolerance < 1 or jump_port < 1 or > 65535
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: _parse_upcloud_section
 def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
@@ -344,6 +356,12 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
     if idle_tolerance < 1:
         raise ValueError(f"upcloud idle_tolerance must be >= 1, got {idle_tolerance}")
 
+    jump_port = sec.getint(fmt("jump_port"), fallback=22)
+    if jump_port < 1 or jump_port > 65535:
+        raise ValueError(
+            f"upcloud jump_port must be between 1 and 65535, got {jump_port}"
+        )
+
     return ConfigCloudUpcloud(
         login=sec.get(fmt("login"), ""),
         password=sec.get(fmt("password"), ""),
@@ -354,6 +372,7 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
         package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
+        jump_port=jump_port,
     )
 
 
@@ -362,7 +381,7 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
 #   INPUTS: { sec: SectionProxy - [clouds] config parser section with vastai_* prefixed keys }
 #   OUTPUTS: { ConfigCloudVastAI - frozen VastAI cloud configuration }
 #   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys across all 4 providers' valid fields.
-#   RAISES: ValueError - if disk_gb/min_vram_mb/num_gpus < 1, max_price_per_hr/max_nodes < 0, or idle_tolerance < 1
+#   RAISES: ValueError - if disk_gb/min_vram_mb/num_gpus < 1, max_price_per_hr/max_nodes < 0, or idle_tolerance < 1 or jump_port < 1 or > 65535
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: _parse_vastai_section
 def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
@@ -392,6 +411,12 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
     if idle_tolerance < 1:
         raise ValueError(f"vastai idle_tolerance must be >= 1, got {idle_tolerance}")
 
+    jump_port = sec.getint(fmt("jump_port"), fallback=22)
+    if jump_port < 1 or jump_port > 65535:
+        raise ValueError(
+            f"vastai jump_port must be between 1 and 65535, got {jump_port}"
+        )
+
     return ConfigCloudVastAI(
         api_key=sec.get(fmt("api_key"), ""),
         image=sec.get(fmt("image"), "pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel"),
@@ -409,6 +434,7 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
         env={},
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
+        jump_port=jump_port,
     )
 
 
@@ -586,11 +612,17 @@ def _remote_valid_fields() -> Sequence[str]:
 #   INPUTS: { sec: SectionProxy - config parser section with remote config keys }
 #   OUTPUTS: { RemoteDefaults - frozen remote machine defaults }
 #   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys.
+#   RAISES: ValueError - if jump_port < 1 or > 65535
 #   LINKS: M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: _parse_remote_section
 def _parse_remote_section(sec: SectionProxy) -> RemoteDefaults:
     warn_unknown_fields(_remote_valid_fields(), sec)
     data_dir = PurePath(sec.get("data_dir", "./data"))
+
+    jump_port = sec.getint("jump_port", fallback=22)
+    if jump_port < 1 or jump_port > 65535:
+        raise ValueError(f"jump_port must be between 1 and 65535, got {jump_port}")
+
     return RemoteDefaults(
         data_dir=data_dir,
         engines_dir=PurePath(sec.get("engines_dir", str(data_dir / "engines"))),
@@ -598,6 +630,7 @@ def _parse_remote_section(sec: SectionProxy) -> RemoteDefaults:
         username=sec.get("user", "root"),
         jump_username=sec.get("jump_user", None),
         jump_host=sec.get("jump_host", None),
+        jump_port=jump_port,
     )
 
 

@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Add package_upgrade: bool = True field to all 4 ConfigCloud* DTOs; controls the cloud-init package_upgrade flag on freshly-provisioned VMs and is read by CloudProvisionerImpl._get_cloud_config_data. Default True. Not added to the CloudConfig Protocol (infra-only consumer) nor to AzureImageReference.
-#   PREVIOUS_CHANGE: v1.2.0 - Add connect_grace field (next to idle_tolerance) on all 4 ConfigCloud* DTOs: Hetzner/Upcloud=60, Azure/VastAI=120. INI parsing is intentionally not added in this change — DTO defaults are the sole source.
+#   LAST_CHANGE: v1.4.0 - Add jump_port: int = 22 field to all 4 ConfigCloud* DTOs; configurable via {prefix}_jump_port INI key. On the CloudConfig Protocol (8th field) because the cloud allocator stamps it onto Node.jump_port alongside jump_host/jump_username.
+#   PREVIOUS_CHANGE: v1.3.0 - Add package_upgrade: bool = True field to all 4 ConfigCloud* DTOs; controls the cloud-init package_upgrade flag on freshly-provisioned VMs and is read by CloudProvisionerImpl._get_cloud_config_data. Default True. Not added to the CloudConfig Protocol (infra-only consumer) nor to AzureImageReference.
 # END_CHANGE_SUMMARY
 #
 """Cloud provider config DTOs."""
@@ -84,6 +84,7 @@ class ConfigCloudAzure(CloudConfig):
     package_upgrade: bool = True
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
+    jump_port: int = 22
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,7 @@ class ConfigCloudHetzner(CloudConfig):
     package_upgrade: bool = True
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
+    jump_port: int = 22
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,7 @@ class ConfigCloudUpcloud(CloudConfig):
     package_upgrade: bool = True
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
+    jump_port: int = 22
 
 
 @dataclass(frozen=True)
@@ -147,6 +150,7 @@ class ConfigCloudVastAI(CloudConfig):
     env: dict = field(default_factory=dict)
     jump_username: Optional[str] = None
     jump_host: Optional[str] = None
+    jump_port: int = 22
 
 
 ConfigCloud = Union[

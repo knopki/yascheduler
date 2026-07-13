@@ -20,9 +20,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), added_node.hostname→added_node.hostname, make_mock_uow Node(hostname=…)→Node(hostname=…).
+#   LAST_CHANGE: v1.5.0 - Add jump_port test coverage: test_add_uses_default_jump_port_when_key_absent, test_add_stamps_jump_from_config_remote extended.
+#   PREVIOUS_CHANGE: v1.4.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), added_node.hostname→added_node.hostname, make_mock_uow Node(hostname=…)→Node(hostname=…).
 #   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: rename list_ids_by_ip_and_status→list_ids_by_node_id_and_status in mock setup
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: deleted test_manage_node_is_to_sync_decorated (manage_node is no longer @to_sync; it's a sync def that calls asyncio.run); added --config/--log-level scenarios.
 # END_CHANGE_SUMMARY
 
 import argparse
@@ -40,7 +40,6 @@ from yascheduler.entrypoints.di import CLIDeps
 manage_node_mod = importlib.import_module("yascheduler.entrypoints.cli.manage_node")
 
 pytestmark = pytest.mark.unit
-
 
 # ---------------------------------------------------------------------------
 # Mock helpers (mirror tests/unit/test_cli_submit.py and test_cli_behavioral.py)
@@ -61,6 +60,7 @@ def make_mock_config() -> MagicMock:
     config.remote.engines_dir = PurePosixPath("/opt/engines")
     config.remote.jump_host = None
     config.remote.jump_username = None
+    config.remote.jump_port = 22
     config.db = MagicMock()
     return config
 
@@ -491,6 +491,7 @@ class TestManageNodeAddPath:
         config, uow, _deps, repo = stub_env
         config.remote.jump_host = "bastion.example.com"
         config.remote.jump_username = "jumper"
+        config.remote.jump_port = 2222
         uow.nodes.get = AsyncMock(return_value=None)
 
         _run(["[IP]"])
@@ -498,7 +499,7 @@ class TestManageNodeAddPath:
         added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.jump_host == "bastion.example.com"
         assert added_node.jump_username == "jumper"
-        assert added_node.jump_port == 22
+        assert added_node.jump_port == 2222
         # connect receives no jump_host/jump_username kwargs
         repo.connect.assert_called_once()
         connect_kwargs = repo.connect.call_args.kwargs
@@ -520,6 +521,21 @@ class TestManageNodeAddPath:
 
         added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.jump_host is None
+
+    def test_add_uses_default_jump_port_when_key_absent(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Gherkin: yasetnode add-path uses default jump_port when [remote] key absent."""
+        config, uow, _deps, _repo = stub_env
+        config.remote.jump_port = 22
+        uow.nodes.get = AsyncMock(return_value=None)
+
+        _run(["[IP]"])
+
+        added_node = uow.nodes.insert.call_args[0][0]
+        assert added_node.jump_port == 22
 
     def test_add_constructs_repository_once(
         self,
