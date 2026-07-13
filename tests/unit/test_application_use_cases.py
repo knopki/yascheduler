@@ -345,7 +345,7 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
         tmp_node = Node(
-            node_id=NodeId(2), hostname="", ncpus=0, enabled=False, cloud="aws"
+            node_id=NodeId(2), hostname="", ncpus=None, enabled=False, cloud="aws"
         )
         uow.nodes.insert = AsyncMock(return_value=tmp_node)
         uow.nodes.update = AsyncMock()
@@ -439,7 +439,7 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
         tmp_node = Node(
-            node_id=NodeId(2), hostname="", ncpus=0, enabled=False, cloud="aws"
+            node_id=NodeId(2), hostname="", ncpus=None, enabled=False, cloud="aws"
         )
         uow.nodes.insert = AsyncMock(return_value=tmp_node)
         uow.nodes.remove = AsyncMock()

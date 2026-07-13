@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.12.0 - cloud-port-node-arg: allocate/deallocate call sites pass a tmp Node (was NodeId/cloud+ip); added _tmp_node helper + test_deallocate_no_cloud_logs_and_returns.
-#   PREVIOUS_CHANGE: v2.11.0 - simplify-cloud-connect-node-args: _make_mock_repository records connect calls; happy-path test asserts connect(node=..., no username/port kwargs, same-identity return); setup-failure test asserts disconnect before delete_node.
+#   LAST_CHANGE: v2.13.0 - node-ncpus-as-config: extract ncpus-related allocate tests to test_cloud_provisioner_ncpus.py (file over 1000-line hard limit); _tmp_node ncpus=0→None; happy-path asserts ncpus is None.
+#   PREVIOUS_CHANGE: v2.12.0 - cloud-port-node-arg: allocate/deallocate call sites pass a tmp Node (was NodeId/cloud+ip); added _tmp_node helper + test_deallocate_no_cloud_logs_and_returns.
 # END_CHANGE_SUMMARY
 
 # ruff: noqa: ANN401
@@ -156,14 +156,14 @@ def _make_mock_repository(**kwargs: Any) -> MagicMock:
 def _tmp_node(node_id: int = 999, cloud: str | None = "test") -> Node:
     """Build a tmp-node Node as the caller (allocate_task) would insert it.
 
-    ``allocate`` receives this Node and overlays ip/cloud/username via
-    ``replace`` after ``create_node`` returns the VM ip. The tmp node carries
-    the default port=22 and the caller's cloud (== provider name).
+    ``allocate`` receives this and overlays ip/cloud/username via ``replace``
+    after ``create_node`` returns the VM ip. ``ncpus`` is ``None`` (cloud nodes
+    discover at spawn via the session cache).
     """
     return Node(
         node_id=NodeId(node_id),
         hostname="",
-        ncpus=0,
+        ncpus=None,
         enabled=False,
         cloud=cloud,
         username="root",
@@ -288,7 +288,7 @@ class TestAllocate:
         assert isinstance(node, Node)
         assert node.node_id == NodeId(999)
         assert node.hostname == "10.0.0.1"
-        assert node.ncpus == 4
+        assert node.ncpus is None  # No ncpus write-back — cloud nodes discover at spawn
         assert node.cloud == "test"
         assert node.enabled is True
         assert node.port == 22
@@ -297,7 +297,7 @@ class TestAllocate:
         # allocate constructs one Node (after create_node) and threads it to
         # connect; connect is called with node=... and NO username/port kwargs
         # (they come from node.username/node.port). The returned node is the
-        # same identity (replace(node, enabled=True, ncpus)) — node_id == tmp_node_id.
+        # same identity (replace(node, enabled=True)) — node_id == tmp_node_id.
         assert len(repo.connect_calls) == 1
         connect_kw = repo.connect_calls[0]
         assert "node" in connect_kw

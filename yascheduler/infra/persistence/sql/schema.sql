@@ -5,7 +5,7 @@
 -- last_migration is the single manual edit point when a migration is added.
 DO $$
 DECLARE
-  last_migration CONSTANT TEXT := '012';
+  last_migration CONSTANT TEXT := '013';
 BEGIN
   IF to_regclass('yascheduler_migrations') IS NULL THEN
     EXECUTE 'CREATE TABLE yascheduler_migrations (
@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS yascheduler_nodes (
     cloud VARCHAR(32) DEFAULT NULL,
     external_id VARCHAR(255),
     CONSTRAINT node_port_range CHECK (port > 0 AND port < 65536),
-    CONSTRAINT node_jump_port_range CHECK (jump_port > 0 AND jump_port < 65536)
+    CONSTRAINT node_jump_port_range CHECK (jump_port > 0 AND jump_port < 65536),
+    CONSTRAINT node_ncpus_positive CHECK (ncpus IS NULL OR ncpus > 0)
 );
 
 -- task_status enum: created idempotently (CREATE TYPE has no IF NOT EXISTS).
@@ -83,7 +84,8 @@ CREATE TABLE IF NOT EXISTS yascheduler_tasks (
 );
 
 -- Shared trigger function: sets NEW.updated_at = NOW() on every row update.
--- Called by yascheduler_tasks_touch_updated_at and yascheduler_nodes_touch_updated_at.
+-- Called by yascheduler_tasks_touch_updated_at and
+-- yascheduler_nodes_touch_updated_at.
 CREATE OR REPLACE FUNCTION YASCHEDULER_TOUCH_UPDATED_AT() RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$ BEGIN NEW.updated_at = NOW(); RETURN NEW; END; $$;

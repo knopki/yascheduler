@@ -122,3 +122,65 @@ def test_apply_schema_raises_on_existing(
 
         captured = capsys.readouterr()
         assert "Database already initialized!" in captured.out
+
+
+# START_CONTRACT: test_apply_schema_has_node_ncpus_positive_check
+#   PURPOSE: Verify that a fresh-database bootstrap includes the node_ncpus_positive CHECK
+#            and ncpus is declared as nullable SMALLINT DEFAULT NULL.
+#   INPUTS: { None }
+#   OUTPUTS: { None - assertion-based test }
+#   SIDE_EFFECTS: Creates tables in testcontainers PostgreSQL
+#   LINKS: M-PERSISTENCE-SCHEMA
+# END_CONTRACT: test_apply_schema_has_node_ncpus_positive_check
+def test_apply_schema_has_node_ncpus_positive_check() -> None:
+    from pg8000.native import Connection
+
+    with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
+        config = _make_config(pg)
+        apply_schema(config)
+
+        conn = Connection(
+            user=config.user,
+            host=config.host,
+            database=config.database,
+            port=config.port,
+            password=config.password,
+        )
+        try:
+            # Assert node_ncpus_positive CHECK exists
+            conn.run("BEGIN")
+            try:
+                rows = conn.run(
+                    "SELECT constraint_name FROM information_schema.table_constraints "
+                    "WHERE table_name = 'yascheduler_nodes' "
+                    "AND constraint_type = 'CHECK' "
+                    "AND constraint_name = 'node_ncpus_positive'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert len(rows) == 1, (
+                "fresh DB must have node_ncpus_positive CHECK constraint"
+            )
+
+            # Assert ncpus column is nullable SMALLINT DEFAULT NULL
+            conn.run("BEGIN")
+            try:
+                rows = conn.run(
+                    "SELECT is_nullable, column_default, data_type "
+                    "FROM information_schema.columns "
+                    "WHERE table_name = 'yascheduler_nodes' "
+                    "AND column_name = 'ncpus'"
+                )
+            finally:
+                conn.run("ROLLBACK")
+            assert len(rows) == 1, "ncpus column must exist"
+            assert rows[0][0] == "YES", (
+                f"ncpus should be nullable, got is_nullable={rows[0][0]}"
+            )
+            # column_default should contain 'NULL' (PostgreSQL default default)
+            # or be None (no explicit default means nullable).
+            assert rows[0][2] == "smallint", (
+                f"ncpus should be smallint, got {rows[0][2]}"
+            )
+        finally:
+            conn.close()

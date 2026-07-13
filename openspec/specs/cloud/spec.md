@@ -125,8 +125,7 @@ the private helpers SHALL NOT reconstruct one. `port` is carried through
 unchanged (the tmp node's `port` default is preserved).
 
 `allocate` SHALL stamp the jump-leg identity on the node exactly once, in the
-same `replace(node, enabled=True, ncpus=..., ...)` call that flips `enabled`
-and writes `ncpus`. The jump values SHALL be resolved from the matching
+`replace(node, enabled=True, ...)` call that flips `enabled`. The jump values SHALL be resolved from the matching
 `CloudConfig` (`prefix == node.cloud`) if it sets BOTH `jump_host` and
 `jump_username`; otherwise from `config.remote.jump_host` /
 `config.remote.jump_username` (fallback). `jump_port` SHALL be `22` (the
@@ -151,11 +150,27 @@ or config, `deallocate` SHALL log a warning and return.
 selection function and returns the selected adapter's name (or `None` on no
 capacity OR when the selected provider's op semaphore is locked — throttle).
 
+`allocate` SHALL NOT write a runtime-discovered CPU count into the `Node`.
+The final `replace(node, enabled=True, ...)` SHALL NOT pass an `ncpus=` kwarg;
+`Node.ncpus` stays `None` for cloud nodes (the orchestrator discovers at spawn
+via the session cache). The standalone `get_cpu_cores()` call previously
+performed inside `_setup_vm` is REMOVED — CPU discovery happens exactly once,
+in `SSHMachineRepository.connect` (inside `_connect_to_vm`'s call to
+`machine_repository.connect`), and that single discovery primes the session
+cache (see the ssh-infrastructure spec). A future cloud config option
+(`cloud.ncpus`) that supplies a static value is forward-compatible with this
+shape but out of scope here.
+
 `allocate` connects the node via the machine repository and registers the
-session under `node.node_id`. After cloud-init, engine setup, and CPU detection,
-the node identity is returned with `enabled` flipped, `ncpus` populated, and
-`jump_host` / `jump_username` stamped (the same identity, NOT a freshly
-constructed `Node` and NOT a `NewNode`).
+session under `node.node_id`. After cloud-init and engine setup, the node
+identity is returned with `enabled` flipped and `jump_host` /
+`jump_username` stamped (the same identity, NOT a freshly constructed `Node`
+and NOT a `NewNode`). `Node.ncpus` remains `None`.
+
+The `allocate` DONE log line that formats `node.ncpus` SHALL use a `None`-safe
+format specifier (e.g. `ncpus=%s`), NOT `%d` — `node.ncpus` is `None` for cloud
+nodes until/unless a future cloud config supplies a static value, and `%d`
+would raise `TypeError`.
 
 #### Scenario: Allocate raises on VM creation failure
 
@@ -181,6 +196,16 @@ constructed `Node` and NOT a `NewNode`).
 
 - **WHEN** `_setup_vm` opens the setup SSH session via `machine_repository.connect`
 - **THEN** the call is `connect(node=node, client_keys=keys, connect_timeout=adapter.create_node_conn_timeout, data_dir=..., engines_dir=..., tasks_dir=...)` — no `jump_host` / `jump_username` keyword arguments
+
+#### Scenario: setup_vm does not write ncpus onto the Node
+
+- **WHEN** `allocate` runs `_setup_vm` and reaches the final `replace(node, enabled=True, ...)`
+- **THEN** the resulting `Node.ncpus is None` (no `ncpus=` kwarg is passed); the standalone `get_cpu_cores()` call is NOT made inside `_setup_vm`
+
+#### Scenario: allocate DONE log is None-safe for ncpus
+
+- **WHEN** `allocate` emits its DONE log line for a cloud node whose `ncpus is None`
+- **THEN** the log line formats `node.ncpus` with a `None`-safe specifier (e.g. `%s`) and does NOT raise `TypeError`
 
 ### Requirement: Cloud-init rendering and SSH key management
 

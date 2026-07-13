@@ -56,7 +56,7 @@ async def _setup_node_and_submit(
                 username=ssh_container["username"],
                 port=ssh_container["port"],
                 enabled=True,
-                ncpus=0,
+                ncpus=None,
             )
         )
         await uow.commit()
@@ -290,7 +290,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
         check_node = Node(
             node_id=NodeId(9999),
             hostname=ssh_container["host"],
-            ncpus=0,
+            ncpus=None,
             enabled=True,
             cloud=None,
             username=ssh_container["username"],
@@ -332,5 +332,14 @@ async def _cleanup_node(
         all_nodes = await uow.nodes.list_all()
         matching = [n for n in all_nodes if n.hostname == ssh_container["host"]]
         if matching:
-            await uow.nodes.remove(matching[0].node_id)
+            node_id = matching[0].node_id
+            # Abandon any RUNNING tasks on this node before removing it.
+            # task_status_field_invariants CHECK forbids RUNNING with NULL
+            # allocated_node_id, so the FK ON DELETE SET NULL would violate it.
+            running = await uow.tasks.list_by_status({DomainTaskStatus.RUNNING})
+            for t in running:
+                if t.allocated_node_id == node_id:
+                    abandoned = t.abandon(node_id, error="test cleanup")
+                    await uow.tasks.save(abandoned)
+            await uow.nodes.remove(node_id)
         await uow.commit()

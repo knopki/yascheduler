@@ -397,9 +397,6 @@ def test_migration_012_node_rename_and_fields() -> None:
                 / "schema.sql"
             )
             schema_sql = schema_path.read_text()
-            assert "last_migration CONSTANT TEXT := '012'" in schema_sql, (
-                "schema.sql last_migration must be '012'"
-            )
             assert "hostname VARCHAR(255)" in schema_sql
             assert "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()" in schema_sql
             assert "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()" in schema_sql

@@ -427,7 +427,7 @@ class FakeCloudProvisioner:
             Node(
                 node_id=node.node_id,
                 hostname=self._new_ip,
-                ncpus=4,
+                ncpus=None,
                 enabled=True,
                 cloud=provider,
                 username="root",
@@ -441,7 +441,7 @@ class FakeCloudProvisioner:
             await uow.nodes.insert(
                 NewNode(
                     hostname=session.hostname,
-                    ncpus=4,
+                    ncpus=None,
                     enabled=True,
                     cloud=provider,
                 )
@@ -450,7 +450,7 @@ class FakeCloudProvisioner:
         return Node(
             node_id=node.node_id,
             hostname=self._new_ip,
-            ncpus=4,
+            ncpus=None,
             enabled=True,
             cloud=provider,
             username="root",
@@ -590,7 +590,7 @@ def _node(n: int, *, enabled: bool = True) -> Node:
     return Node(
         node_id=NodeId(n),
         hostname=f"10.0.0.{n}",
-        ncpus=4,
+        ncpus=None,
         enabled=enabled,
         username="root",
         port=22,
@@ -601,12 +601,13 @@ def _tmp_node(n: int, *, cloud: str = "test") -> Node:
     """Build a tmp-node Node as allocate_task inserts it (pre-allocate).
 
     ``allocate`` receives this and overlays hostname/cloud/username via ``replace``
-    after ``create_node`` returns the VM hostname.
+    after ``create_node`` returns the VM hostname. ``ncpus`` is ``None`` (cloud
+    nodes discover at spawn via the session cache).
     """
     return Node(
         node_id=NodeId(n),
         hostname="",
-        ncpus=0,
+        ncpus=None,
         enabled=False,
         cloud=cloud,
         username="root",
@@ -842,7 +843,7 @@ class TestFixB:
             node = await prov.allocate("test", _tmp_node(1))
 
         assert node.hostname == "[IP]"
-        assert node.ncpus == 8
+        assert node.ncpus is None  # No ncpus write-back — cloud nodes discover at spawn
         assert repo.disconnect_calls == []
         assert "[IP]" in repo._sessions
         adapter.delete_node.assert_not_awaited()

@@ -470,7 +470,7 @@ transformations SHALL apply to the table cells:
 | NODE_ID  | `node.node_id`    | `str(node.node_id)` (the bare int, via `NodeId.__str__`) |
 | HOSTNAME | `node.hostname`   | as-is                            |
 | PORT     | `node.port`       | `-` when `22`, else the int      |
-| NCPUS    | `node.ncpus`      | `MAX` when `0`, else the int     |
+| NCPUS    | `node.ncpus`      | `MAX` when `None` (or legacy `0`), else the int |
 | ENABLED  | `node.enabled`    | `yes` when True, `no` when False |
 | CLOUD    | `node.cloud`      | `-` when None, else the string   |
 | TASK_ID  | `task.task_id`     | `-` when free, else the int      |
@@ -488,9 +488,13 @@ invariant).
 - **WHEN** a node with `node_id=1`, `hostname="[IP]"`, `port=22`, `ncpus=4`, `enabled=True`, `cloud=None` has a RUNNING task with `task_id=7`, `label="my_job"`
 - **THEN** one row is emitted with NODE_ID=`1`, HOSTNAME=`[IP]`, PORT=`-`, NCPUS=`4`, ENABLED=`yes`, CLOUD=`-`, TASK_ID=`7`, LABEL=`my_job`
 
-#### Scenario: yanodes table shows MAX for zero ncpus
-- **WHEN** a node has `ncpus=0`
+#### Scenario: yanodes table shows MAX for None ncpus
+- **WHEN** a node has `ncpus=None`
 - **THEN** the NCPUS cell is `MAX`
+
+#### Scenario: yanodes table shows MAX for legacy zero ncpus
+- **WHEN** a node has `ncpus=0` (a pre-migration row viewed before migration 013 runs)
+- **THEN** the NCPUS cell is `MAX` (backward-compatible with the legacy sentinel)
 
 #### Scenario: yanodes table no external deps
 - **WHEN** the implementation of the table renderer is inspected
@@ -503,7 +507,7 @@ each object represents one node with raw domain values (NO display
 transformations — no `-`, no `MAX`, no `yes`/`no`). The object schema SHALL be:
 
 ```
-{"node_id": int, "hostname": str, "port": int, "ncpus": int, "enabled": bool,
+{"node_id": int, "hostname": str, "port": int, "ncpus": int | null, "enabled": bool,
  "cloud": str | null, "jump_host": str | null, "jump_port": int,
  "jump_username": str, "external_id": str | null, "status": str,
  "created_at": str, "updated_at": str,
@@ -514,8 +518,9 @@ transformations — no `-`, no `MAX`, no `yes`/`no`). The object schema SHALL be
   a `NodeId` dataclass is not JSON-serializable).
 - `hostname`: the raw `node.hostname` string.
 - `port`: the raw `node.port` int (22 stays 22, 2222 stays 2222).
-- `ncpus`: the raw `node.ncpus` int (0 stays 0 — `MAX` is a table-only display
-  token and MUST NOT appear in JSON).
+- `ncpus`: the raw `node.ncpus` value — `null` when `None` (no operator limit),
+  else the positive int (`MAX` is a table-only display token and MUST NOT appear
+  in JSON).
 - `cloud`: `null` for static nodes, else the `node.cloud` string.
 - `jump_host`: `null` when `None`, else the `node.jump_host` string.
 - `jump_port`: the raw `node.jump_port` int.
@@ -542,6 +547,14 @@ One object per node, in the order returned by `uow.nodes.list_all()`.
 #### Scenario: yanodes --json uses hostname key not ip
 - **WHEN** a node with `hostname="10.0.0.1"` is listed via `yanodes --json`
 - **THEN** the JSON object has a `"hostname"` key with value `"10.0.0.1"` and does NOT have an `"ip"` key
+
+#### Scenario: yanodes --json emits null ncpus for None
+- **WHEN** a node with `ncpus=None` is listed via `yanodes --json`
+- **THEN** its object's `"ncpus"` is JSON `null`
+
+#### Scenario: yanodes --json emits positive int ncpus
+- **WHEN** a node with `ncpus=8` is listed via `yanodes --json`
+- **THEN** its object's `"ncpus"` is the int `8`
 
 #### Scenario: yanodes --json includes new node fields
 - **WHEN** a node with `jump_host=None`, `jump_port=22`, `jump_username="root"`, `external_id=None`, `status=NodeStatus.OTHER`, `created_at=<datetime>`, `updated_at=<datetime>` is listed via `yanodes --json`
@@ -764,6 +777,16 @@ the tmp node already carries them.
 
 - **WHEN** the add helper is called with a valid host spec and `config.remote.jump_host="bastion.example.com"` and `config.remote.jump_username="jumper"`
 - **THEN** the `NewNode` passed to `insert` carries `jump_host="bastion.example.com"`, `jump_username="jumper"`, `jump_port=22` (the schema default); the subsequent `repository.connect(node=T, client_keys=...)` call passes no `jump_host` / `jump_username` arguments, and the tunnel leg is built from `T.jump_*`
+
+#### Scenario: yasetnode add-path encodes absent ncpus as None
+
+- **WHEN** the add helper is called with a host spec whose `~ncpus` clause is absent (so `HostSpec.ncpus is None`)
+- **THEN** the `NewNode` passed to `insert` carries `ncpus=None` (the value is NOT coerced to `0`); the persisted tmp row stores SQL `NULL`
+
+#### Scenario: yasetnode add-path encodes explicit ncpus
+
+- **WHEN** the add helper is called with a host spec `host~8` (so `HostSpec.ncpus == 8`)
+- **THEN** the `NewNode` passed to `insert` carries `ncpus=8`; the persisted tmp row stores `8`
 
 #### Scenario: yasetnode add-path inserts enabled=False before connect, flips to TRUE after setup
 

@@ -91,6 +91,12 @@ The `username` and `port` columns of `yascheduler_nodes` SHALL be present in
 the `CREATE TABLE yascheduler_nodes` statement (they are part of the latest
 snapshot).
 
+The `yascheduler_nodes.ncpus` column SHALL be declared `SMALLINT DEFAULT NULL`
+and the `CREATE TABLE yascheduler_nodes` statement SHALL include a table-level
+`CHECK` constraint named `node_ncpus_positive` enforcing
+`(ncpus IS NULL OR ncpus > 0)`. The magic `0` sentinel is no longer a valid
+stored value in the latest snapshot; `NULL` represents "no operator limit".
+
 #### Scenario: schema.sql has no inline ALTER TABLE ADD COLUMN
 - **WHEN** `schema.sql` is inspected for `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements
 - **THEN** none are present (schema evolution is expressed via migration files, not inline ALTERs)
@@ -98,3 +104,11 @@ snapshot).
 #### Scenario: Fresh database has the task_status_field_invariants CHECK
 - **WHEN** `apply_schema(config)` runs on an empty database
 - **THEN** the `task_status_field_invariants` `CHECK` constraint exists on `yascheduler_tasks` (visible in `information_schema.table_constraints` / `pg_constraint`) and enforces the exhaustive per-status field contract
+
+#### Scenario: Fresh database has the node_ncpus_positive CHECK
+- **WHEN** `apply_schema(config)` runs on a fresh database (neither `yascheduler_migrations` nor `yascheduler_nodes` exist) and the bootstrap seeds to the latest migration
+- **THEN** the `node_ncpus_positive` `CHECK` constraint is present on `yascheduler_nodes`, enforcing `(ncpus IS NULL OR ncpus > 0)`
+
+#### Scenario: Fresh database ncpus column is nullable
+- **WHEN** the `CREATE TABLE yascheduler_nodes` statement in `schema.sql` is inspected after the latest migration
+- **THEN** `ncpus` is declared `SMALLINT DEFAULT NULL` (the column accepts `NULL`; `0` is rejected by the CHECK)

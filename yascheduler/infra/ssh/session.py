@@ -9,12 +9,13 @@
 #
 # START_MODULE_MAP
 #   my_backoff_exc - Partial backoff decorator for SSHRetryExc (canonical copy)
-#   SSHMachineSession - Concrete MachineSession implementation owning connection, adapter, machine snapshot, monitor task, and teardown
+#   SSHMachineSession - Concrete MachineSession implementation owning connection, adapter, machine snapshot, monitor task, per-session CPU cache, and teardown
+#   _prime_ncpus_cache - Private method to seed the per-session CPU cache (called by SSHMachineRepository.connect)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: remove CPU-count log from setup_node (moved to repository connect discovery site). ConnectedMachine no longer carries ncpus.
-#   PREVIOUS_CHANGE: v1.1.0 - Node-rename-and-fields: SSHMachineSession.__init__ param ip→hostname, _ip→_hostname, ip property→hostname. Merged with adapter-derived hostname property (both carried same value — the asyncssh host passed at connect time).
+#   LAST_CHANGE: v1.3.0 - add _cached_ncpus field, memoize get_cpu_cores per session, add _prime_ncpus_cache for repository priming.
+#   PREVIOUS_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: remove CPU-count log from setup_node (moved to repository connect discovery site). ConnectedMachine no longer carries ncpus.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -107,6 +108,7 @@ class SSHMachineSession:
         self._log = log or logging.getLogger("SSHMachineSession")
         self._closed = False
         self._monitor_task: asyncio.Task[None] | None = None
+        self._cached_ncpus: int | None = None
 
     # ---- Domain face ----
 
@@ -174,6 +176,12 @@ class SSHMachineSession:
     def tasks_dir(self) -> PurePath:
         return self._tasks_dir
 
+    # ---- Cache priming (repository only) ----
+
+    def _prime_ncpus_cache(self, ncpus: int) -> None:
+        """Prime the CPU-core cache with an already-discovered value (called by SSHMachineRepository.connect)."""
+        self._cached_ncpus = ncpus
+
     # ---- Adapter-derived accessors (read-only) ----
 
     @property
@@ -226,10 +234,27 @@ class SSHMachineSession:
         async with self._conn.start_sftp_client() as sftp:
             yield sftp
 
+    # START_CONTRACT: SSHMachineSession.get_cpu_cores
+    #   PURPOSE: Return CPU core count, memoized per session.
+    #   INPUTS: { None }
+    #   OUTPUTS: { int - positive CPU core count }
+    #   SIDE_EFFECTS: On cache miss, runs remote command via SSH; stores result in per-session cache so subsequent calls return without SSH exec.
+    #   LINKS: M-PLATFORM-ADAPTERS, M-PLATFORM-RUN-FN
+    # END_CONTRACT: SSHMachineSession.get_cpu_cores
     @my_backoff_exc()
     async def get_cpu_cores(self) -> int:
-        """Return CPU core count (idempotent read — retried)."""
-        return await self._adapter.get_cpu_cores(make_run_fn(self._conn, self._adapter))
+        """Return CPU core count, memoized per session (cache miss invokes adapter with retry; cache hit returns without adapter invocation)."""
+        # START_BLOCK_CHECK_CACHE
+        if self._cached_ncpus is not None:
+            return self._cached_ncpus
+        # END_BLOCK_CHECK_CACHE
+        # START_BLOCK_DISCOVER
+        ncpus = await self._adapter.get_cpu_cores(
+            make_run_fn(self._conn, self._adapter)
+        )
+        self._cached_ncpus = ncpus
+        # END_BLOCK_DISCOVER
+        return ncpus
 
     # START_CONTRACT: SSHMachineSession.setup_node
     #   PURPOSE: Install engine dependencies on the remote node via self._adapter.setup_node with make_run_fn(conn, adapter).

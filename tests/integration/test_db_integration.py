@@ -105,8 +105,8 @@ async def test_get_all_nodes_filtering(
 ) -> None:
     """Add enabled and disabled nodes; verify filtered queries."""
     async with uow_factory() as uow:
-        await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=0, enabled=True))
-        await uow.nodes.insert(NewNode(hostname="10.0.0.2", ncpus=0, enabled=False))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=None, enabled=True))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.2", ncpus=None, enabled=False))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -132,7 +132,7 @@ async def test_get_all_nodes_filtering(
 async def test_has_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Check has_node for existing and non-existing IPs."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=0))
+        node = await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=None))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -153,7 +153,7 @@ async def test_enable_disable_node(
     """Toggle node enabled status and verify."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=0, enabled=False)
+            NewNode(hostname="10.0.0.1", ncpus=None, enabled=False)
         )
         await uow.commit()
 
@@ -186,7 +186,7 @@ async def test_enable_disable_node(
 async def test_remove_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Remove a node and verify it is gone."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=0))
+        node = await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=None))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -211,13 +211,13 @@ async def test_count_aggregations(
     """Verify cloud and status aggregation queries."""
     async with uow_factory() as uow:
         await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=None, cloud="azure", enabled=True)
         )
         await uow.nodes.insert(
-            NewNode(hostname="10.0.0.2", ncpus=0, cloud="azure", enabled=False)
+            NewNode(hostname="10.0.0.2", ncpus=None, cloud="azure", enabled=False)
         )
         await uow.nodes.insert(
-            NewNode(hostname="10.0.0.3", ncpus=0, cloud="hetzner", enabled=True)
+            NewNode(hostname="10.0.0.3", ncpus=None, cloud="hetzner", enabled=True)
         )
         await uow.commit()
 
@@ -547,7 +547,7 @@ async def test_get_tasks_with_cloud_by_id_status(
     """Compose list_by_jobs + get_by_ids to get cloud attribute."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=None, cloud="azure", enabled=True)
         )
         node_id = node.node_id
         await uow.commit()

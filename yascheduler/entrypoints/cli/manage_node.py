@@ -21,8 +21,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - _add_node stamps jump_host/jump_username/jump_port from config.remote onto NewNode at construction. connect(node=tmp, …) receives no jump kwargs — the tmp row carries them.
-#   PREVIOUS_CHANGE: v1.11.0 - All node.ip→node.hostname in print/assign/comments; NewNode(ip=)→NewNode(hostname=); n.ip→n.hostname in host_spec resolution; docstring + inline comment ip→hostname updates.
+#   LAST_CHANGE: v1.13.0 - _add_node encodes absent ~ncpus as None (not 0): ncpus=spec.ncpus passes HostSpec.ncpus (int | None) directly to NewNode. HostSpec docstring updated.
+#   PREVIOUS_CHANGE: v1.12.0 - _add_node stamps jump_host/jump_username/jump_port from config.remote onto NewNode at construction. connect(node=tmp, …) receives no jump kwargs — the tmp row carries them.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -44,12 +44,7 @@ from .args import add_config_arg, add_log_level_arg
 
 @dataclass(frozen=True)
 class HostSpec:
-    """Parsed host spec from the yasetnode positional argument.
-
-    ``username`` and ``ncpus`` use ``None`` as the "unset / unlimited" sentinel;
-    the caller resolves ``username`` from config and encodes ``ncpus`` as ``0``
-    in the ``Node`` record when ``None``.
-    """
+    """Parsed host spec from the yasetnode positional argument."""
 
     host: str
     username: str | None
@@ -301,7 +296,7 @@ async def _add_node(
                 hostname=spec.host,
                 port=spec.port,
                 username=username,
-                ncpus=(spec.ncpus if spec.ncpus is not None else 0),
+                ncpus=spec.ncpus,
                 enabled=False,
                 jump_host=config.remote.jump_host,
                 jump_username=config.remote.jump_username or "root",

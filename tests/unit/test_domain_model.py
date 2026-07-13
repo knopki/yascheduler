@@ -355,6 +355,11 @@ class TestNode:
         assert isinstance(node.created_at, datetime)
         assert isinstance(node.updated_at, datetime)
 
+    def test_ncpus_none_means_discover_at_spawn(self) -> None:
+        """Node with ncpus=None: orchestrator discovers at spawn via session cache."""
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=None)
+        assert node.ncpus is None
+
     def test_full_construction(self) -> None:
         node = Node(
             node_id=NodeId(7),
@@ -469,10 +474,15 @@ class TestNewNode:
         assert n.external_id == "ext-123"
         assert n.status == NodeStatus.OTHER
 
+    def test_defaults_ncpus_to_none(self) -> None:
+        """NewNode instantiated with only cloud and enabled defaults ncpus to None."""
+        n = NewNode(cloud="aws", enabled=False)
+        assert n.ncpus is None
+
     def test_tmp_reservation_defaults(self) -> None:
         n = NewNode(cloud="aws", enabled=False)
         assert n.hostname == ""
-        assert n.ncpus == 0
+        assert n.ncpus is None
         assert n.username == "root"
         assert n.port == 22
         assert n.jump_host is None

@@ -95,10 +95,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
     adapter.run_bg = _run_bg
 
-    async def _get_cpu_cores(run_fn: object) -> int:
-        return ncpus
-
-    adapter.get_cpu_cores = _get_cpu_cores
+    adapter.get_cpu_cores = AsyncMock(return_value=ncpus)
 
     def _pgrep(*args: object, **kwargs: Any) -> _AsyncIter:  # noqa: ANN401
         proc = MagicMock(spec=ProcessInfo)
@@ -939,3 +936,53 @@ class TestSessionStateTransitions:
         busy = session.machine.occupy()
         session.update(busy)
         assert session.machine.state == MachineState.BUSY
+
+
+# =============================================================================
+# Session CPU cache
+# =============================================================================
+
+
+class TestSessionCpuCache:
+    """SSHMachineSession.get_cpu_cores memoizes per session."""
+
+    @pytest.mark.asyncio
+    async def test_first_call_invokes_adapter_and_second_call_returns_cache(
+        self,
+    ) -> None:
+        """First call invokes adapter; second call returns cached value."""
+        session = _make_state()
+        adapter_mock = session._adapter.get_cpu_cores  # type: ignore[attr-defined]
+        assert await session.get_cpu_cores() == 4
+        adapter_mock.assert_awaited_once()  # type: ignore[attr-defined]
+        assert await session.get_cpu_cores() == 4
+        adapter_mock.assert_awaited_once()  # still once  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_retries_and_cache_hit_skips_retry(self) -> None:
+        """Cache miss retries on adapter failure; cache hit returns without retry."""
+        # Cache hit — adapter would fail but is not called
+        session = _make_state()
+        session._cached_ncpus = 4  # prime the cache
+        adapter_mock = session._adapter.get_cpu_cores  # type: ignore[attr-defined]
+        adapter_mock.side_effect = OSError("should not be called")  # type: ignore[attr-defined]
+        assert await session.get_cpu_cores() == 4
+        adapter_mock.assert_not_awaited()  # type: ignore[attr-defined]
+        # Cache miss — retries on SSH failure
+        fresh = _make_state()
+        fresh._cached_ncpus = None
+        fresh_mock = fresh._adapter.get_cpu_cores  # type: ignore[attr-defined]
+        fresh_mock.side_effect = [OSError("ssh failed"), 4]  # type: ignore[attr-defined]
+        result = await fresh.get_cpu_cores()
+        assert result == 4
+        assert fresh_mock.await_count == 2  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_reconnected_session_rediscovers(self) -> None:
+        """Reconnected session starts with empty cache and re-discovers."""
+        session = _make_state()
+        session._prime_ncpus_cache(4)
+        fresh_session = _make_state()  # Simulates reconnect — fresh cache
+        adapter_mock = fresh_session._adapter.get_cpu_cores  # type: ignore[attr-defined]
+        assert await fresh_session.get_cpu_cores() == 4
+        adapter_mock.assert_awaited_once()  # type: ignore[attr-defined]

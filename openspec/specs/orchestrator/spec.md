@@ -29,9 +29,11 @@ adapter.
 The `Orchestrator` SHALL type `repository` as `MachineRepository`
 (Protocol). The orchestrator's
 `_start_task_on_machine` SHALL be a thin wrapper that resolves `ncpus` via
-`uow.nodes.get_by_id(task.allocated_node_id)` (falling back to
-`session.get_cpu_cores()` when the node is absent) and delegates
-the actual upload + spawn to
+`uow.nodes.get_by_id(task.allocated_node_id)`: if the resolved `Node` exists
+AND its `ncpus` is not `None`, the stored value is used directly (operator-set
+static config); otherwise (node absent OR `node.ncpus is None`) the orchestrator
+falls back to `session.get_cpu_cores()` (memoized per session — see the
+ssh-infrastructure spec) and delegates the actual upload + spawn to
 `task_deployer.start_task_on_machine(session, ...)`.
 The orchestrator SHALL NOT contain any reference to adapter-specific methods
 (`get_sftp`, `get_path`, `get_quote`, `run_full`).
@@ -67,7 +69,17 @@ orchestrator SHALL NOT hold a `config` reference.
 #### Scenario: Task deployment delegated to TaskDeployer resolves session by allocated_node_id
 
 - **WHEN** the orchestrator allocates a task to a machine
-- **THEN** the orchestrator resolves a `session` via `repository.get_session(task.allocated_node_id)`, resolves `ncpus` via `uow.nodes.get_by_id(task.allocated_node_id)` (falling back to `session.get_cpu_cores()` when the node is absent), and calls `task_deployer.start_task_on_machine(session, engine, task, ncpus, remote_defaults.engines_dir)` — never touches `get_sftp`, `get_path`, or `get_quote` directly, never keys a session lookup by `ip`
+- **THEN** the orchestrator resolves a `session` via `repository.get_session(task.allocated_node_id)`, resolves `ncpus` via `uow.nodes.get_by_id(task.allocated_node_id)` — using the stored value when `node.ncpus is not None`, falling back to `session.get_cpu_cores()` when the node is absent OR `node.ncpus is None` — and calls `task_deployer.start_task_on_machine(session, engine, task, ncpus, remote_defaults.engines_dir)` — never touches `get_sftp`, `get_path`, or `get_quote` directly, never keys a session lookup by `ip`
+
+#### Scenario: Orchestrator uses static ncpus when node carries a positive value
+
+- **WHEN** the orchestrator deploys a task whose allocated `Node.ncpus == 8`
+- **THEN** `session.get_cpu_cores()` is NOT called and `8` is passed to `task_deployer.start_task_on_machine`
+
+#### Scenario: Orchestrator discovers ncpus when node carries None
+
+- **WHEN** the orchestrator deploys a task whose allocated `Node.ncpus is None`
+- **THEN** `session.get_cpu_cores()` is called (returning the session-cached value on cache hits) and its result is passed to `task_deployer.start_task_on_machine`
 
 #### Scenario: Orchestrator does not import Config
 

@@ -467,7 +467,7 @@ async def test_repo_node_update(
     repo = PostgresNodeRepository(pg_conn, pg_executor)
     # Insert with ip="" mirroring the tmp-reservation row (NewNode cloud defaults).
     persisted = await repo.insert(
-        NewNode(hostname="", ncpus=0, enabled=False, cloud="aws")
+        NewNode(hostname="", ncpus=None, enabled=False, cloud="aws")
     )
 
     # Flip to enabled=True + real hostname/ncpus via update (the V1 single-row lifecycle).

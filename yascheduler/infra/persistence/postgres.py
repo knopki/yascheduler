@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.14.0 - Node rename (ip→hostname) + new columns: PostgresNodeRepository.insert/update bind hostname+jump_host+jump_port+jump_username+external_id+status; _row_to_node reads hostname+new columns with NodeStatus enum mapping; SQL files updated ip→hostname + new columns.
-#   PREVIOUS_CHANGE: v1.13.0 - insert calls materialize_task(self._row_to_task(rows[0])) to attach TaskCreated to the returned Task's events (the domain layer owns event construction; infra does not import TaskCreated). _row_to_task still sets events=().
+#   LAST_CHANGE: v1.15.0 - Node-ncpus-as-config: _row_to_node drops `or 0` coalescence — SQL NULL round-trips as Python None; insert/update bind None directly (valid "no operator limit" value).
+#   PREVIOUS_CHANGE: v1.14.0 - Node rename (ip→hostname) + new columns: PostgresNodeRepository.insert/update bind hostname+jump_host+jump_port+jump_username+external_id+status; _row_to_node reads hostname+new columns with NodeStatus enum mapping; SQL files updated ip→hostname + new columns.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -510,7 +510,7 @@ class PostgresNodeRepository(_PgRepository):
         return Node(
             node_id=NodeId(int(row["node_id"])),
             hostname=row.get("hostname", ""),
-            ncpus=row.get("ncpus") or 0,
+            ncpus=row.get("ncpus"),
             enabled=bool(row.get("enabled", False)),
             cloud=row.get("cloud"),
             username=row.get("username", "root"),

@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - _NodeView.ip→hostname + new node fields (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); table header IP→HOSTNAME; JSON renderer emits hostname key + all new fields.
-#   PREVIOUS_CHANGE: v1.4.0 - In-memory join rekeyed from tasks_by_ip to tasks_by_node_id (dict[NodeId, Task] keyed by allocated_node_id). Dup-IP nodes now disambiguated.
+#   LAST_CHANGE: v1.6.0 - _NodeView.ncpus widens to int | None; table renderer maps None (and legacy 0) to "MAX"; JSON schema docstring updated to int | null.
+#   PREVIOUS_CHANGE: v1.5.0 - _NodeView.ip→hostname + new node fields (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); table header IP→HOSTNAME; JSON renderer emits hostname key + all new fields.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class _NodeView:
     node_id: NodeId
     hostname: str
     port: int
-    ncpus: int
+    ncpus: int | None
     enabled: bool
     cloud: str | None
     jump_host: str | None
@@ -213,7 +213,7 @@ def _render_nodes_table(rows: list[_NodeView]) -> str:
             str(row.node_id),
             row.hostname,
             "-" if row.port == 22 else str(row.port),
-            "MAX" if row.ncpus == 0 else str(row.ncpus),
+            "MAX" if row.ncpus is None else str(row.ncpus),
             "yes" if row.enabled else "no",
             "-" if row.cloud is None else row.cloud,
             "-" if row.task_id is None else str(row.task_id),

@@ -167,7 +167,7 @@ or `fail` sets it from the download results. `error` is `None` until `reject`,
 The system SHALL provide a `Node` domain entity as an immutable
 `@dataclass(frozen=True)` object representing a **post-persistence** node record
 (one that has been assigned a database `node_id`). Fields: `node_id: NodeId`,
-`hostname: str`, `ncpus: int`, `enabled: bool`, `cloud: str | None`,
+`hostname: str`, `ncpus: int | None`, `enabled: bool`, `cloud: str | None`,
 `username: str`, `port: int`, `jump_host: str | None`, `jump_port: int`,
 `jump_username: str`, `external_id: str | None`, `status: NodeStatus`,
 `created_at: datetime`, `updated_at: datetime`.
@@ -182,6 +182,21 @@ from `NewNode` to `Node` happens in exactly one place:
 frozen dataclass: `node_id`, `hostname`, `ncpus` carry no defaults; the remaining
 fields follow with their defaults. Construction at all in-repo call sites uses
 keyword arguments, so the reorder is source-compatible.
+
+`ncpus: int | None` SHALL be interpreted as **operator-set static config**, not a
+discovery cache:
+
+- `None` means "no operator limit — the orchestrator discovers the CPU count at
+  spawn via `session.get_cpu_cores()` (memoized per session)".
+- `N > 0` means "operator-set static value — used directly at spawn, no remote
+  discovery".
+
+The magic `0` sentinel is REMOVED. `0` is no longer a valid stored value — the
+DB enforces `(ncpus IS NULL OR ncpus > 0)` and the persistence adapter
+round-trips SQL `NULL` as Python `None` without coalescence. The cloud allocator
+no longer writes a runtime-discovered `ncpus` into the `Node` (see the cloud
+spec); both add paths (static via `yasetnode`, cloud via `allocate`) produce
+`Node.ncpus is None` unless an operator sets a static value.
 
 `hostname` is no longer `UNIQUE` on `yascheduler_nodes` (tmp/pending rows carry
 `hostname=""` as a sentinel — multiple rows can share `""` after a node is
@@ -208,7 +223,7 @@ connection-identity fields. They SHALL be populated exactly once at node
 creation and SHALL NOT be re-resolved at connect time:
 
 - Static nodes (`yasetnode` add-path): stamped from `config.remote.jump_host` / `config.remote.jump_username` at `NewNode` construction.
-- Cloud nodes (cloud allocator): stamped from the matching `CloudConfig` (`prefix == node.cloud`) if it sets both `jump_host` and `jump_username`, otherwise from `config.remote.*` fallback, applied in the same `replace(node, enabled=True, ...)` call that flips `enabled` and writes `ncpus`.
+- Cloud nodes (cloud allocator): stamped from the matching `CloudConfig` (`prefix == node.cloud`) if it sets both `jump_host` and `jump_username`, otherwise from `config.remote.*` fallback, applied in the same `replace(node, enabled=True, ...)` call that flips `enabled`.
 
 `jump_host = None` means "no tunnel" (direct connection). `MachineRepository.connect` SHALL read these fields directly and SHALL NOT accept `jump_host` / `jump_username` parameters.
 
@@ -231,6 +246,16 @@ creation and SHALL NOT be re-resolved at connect time:
 
 - **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node whose matching `CloudConfig` does NOT set both `jump_host` and `jump_username`, and `config.remote.jump_host` is set
 - **THEN** the persisted `Node.jump_host` / `jump_username` come from `config.remote.*`
+
+#### Scenario: Node ncpus None means discover at spawn
+
+- **WHEN** a Node is instantiated with `ncpus=None`
+- **THEN** the orchestrator resolves the CPU count at spawn via `session.get_cpu_cores()` (memoized per session) rather than using a stored value
+
+#### Scenario: Node ncpus positive means operator-set static config
+
+- **WHEN** a Node is instantiated with `ncpus=8`
+- **THEN** the orchestrator uses `8` directly at spawn and does NOT call `session.get_cpu_cores()`
 
 ### Requirement: ConnectedMachine runtime entity
 
@@ -374,30 +399,34 @@ discriminator check; DB-read mapping wraps `NodeId(int(row["node_id"]))`.
 The system SHALL provide a `NewNode` domain entity as an immutable
 `@dataclass(frozen=True)` object representing a **pre-persistence** node record
 (one that has not yet been assigned a database `node_id`). Fields:
-`hostname: str = ""`, `ncpus: int = 0`, `enabled: bool = True`,
+`hostname: str = ""`, `ncpus: int | None = None`, `enabled: bool = True`,
 `cloud: str | None = None`, `username: str = "root"`, `port: int = 22`,
 `jump_host: str | None = None`, `jump_port: int = 22`,
 `jump_username: str = "root"`, `external_id: str | None = None`,
 `status: NodeStatus = NodeStatus.OTHER`.
 
 `NewNode` mirrors the non-`node_id` fields of `Node` with identical defaults,
-**except** that `hostname` and `ncpus` carry defaults (`""` and `0`) so the
+**except** that `hostname` and `ncpus` carry defaults (`""` and `None`) so the
 tmp-reservation call site can construct a tmp node without naming them:
-`NewNode(cloud=selected_name, enabled=False)`. Field types are unchanged
-(`hostname: str`, `ncpus: int`) — no `Optional` is introduced. The default
-`hostname=""` is the empty-string sentinel; the default `ncpus=0` reflects
-that a tmp node has no CPU information until a real VM is provisioned.
+`NewNode(cloud=selected_name, enabled=False)`. The default `hostname=""` is the
+empty-string sentinel; the default `ncpus=None` reflects that a tmp node has no
+operator-set CPU limit — the count is discovered at spawn via the session cache.
 
 `NewNode` carries no identity attribute; it is converted to a `Node` only by
 `NodeRepository.insert`. The tmp-node row is reused as the real node's
 identity: `clouds.allocate(provider, tmp_node_id)` returns a `Node` carrying
 `node_id == tmp_node_id` (the cloud adapter does NOT return a `NewNode`; the
-row already exists). The caller then flips `enabled=TRUE` and sets
-`hostname`/`ncpus` via `uow.nodes.update(node)`.
+row already exists). The caller then flips `enabled=TRUE` via
+`uow.nodes.update(node)` — it no longer sets `ncpus` (the cloud allocator no
+longer writes a discovered value into the `Node`).
 
 #### Scenario: NewNode has no node_id attribute
 - **WHEN** a NewNode is instantiated with `hostname="[IP]"` and `ncpus=4`
 - **THEN** it has no `node_id` field; `enabled` defaults to True, `username` to "root", `port` to 22, `cloud` to None, `jump_host` to None, `jump_port` to 22, `jump_username` to "root", `external_id` to None, `status` to `NodeStatus.OTHER`
+
+#### Scenario: NewNode defaults ncpus to None
+- **WHEN** a NewNode is instantiated with only `cloud="aws"` and `enabled=False`
+- **THEN** `ncpus` defaults to `None` (no operator-set limit; discovered at spawn)
 
 ### Requirement: NodeStatus enum
 

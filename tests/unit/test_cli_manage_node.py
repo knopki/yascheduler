@@ -76,7 +76,7 @@ def make_mock_uow() -> AsyncMock:
         return_value=Node(
             node_id=NodeId(1),
             hostname="10.0.0.1",
-            ncpus=0,
+            ncpus=None,
             enabled=False,
             cloud=None,
             username="root",
@@ -435,7 +435,7 @@ class TestManageNodeAddPath:
         added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.username == "deploy"
 
-    def test_node_default_ncpus_zero_when_absent(
+    def test_node_default_ncpus_none_when_absent(
         self,
         capsys: pytest.CaptureFixture[str],
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
@@ -446,7 +446,7 @@ class TestManageNodeAddPath:
         _run(["10.0.0.1"])
 
         added_node = uow.nodes.insert.call_args[0][0]
-        assert added_node.ncpus == 0
+        assert added_node.ncpus is None
         assert added_node.hostname == "10.0.0.1"
         assert added_node.port == 22
         assert (

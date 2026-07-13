@@ -26,7 +26,7 @@ login user, port, and jump-leg parameters survive ONLY as fields on
 `node` read inside `connect`; they are NOT separate parameters.
 
 **Collection lifecycle:**
-- `connect(node: Node, client_keys: Sequence[PurePath] | None, *, connect_timeout: int | None = None, data_dir: PurePath | None = None, engines_dir: PurePath | None = None, tasks_dir: PurePath | None = None) -> MachineSession` (async) — constructs and registers an `SSHMachineSession` keyed by `node.node_id`, returns it. The asyncssh transport uses `node.hostname` as the host address, `node.username` as the login user, `node.port` as the port, and `node.jump_host` / `node.jump_port` / `node.jump_username` to build the tunnel leg. `connect` SHALL NOT take `username`, `port`, `jump_host`, or `jump_username` parameters — they are read from `node`.
+- `connect(node: Node, client_keys: Sequence[PurePath] | None, *, connect_timeout: int | None = None, data_dir: PurePath | None = None, engines_dir: PurePath | None = None, tasks_dir: PurePath | None = None) -> MachineSession` (async) — constructs and registers an `SSHMachineSession` keyed by `node.node_id`, returns it. The asyncssh transport uses `node.hostname` as the host address, `node.username` as the login user, `node.port` as the port, and `node.jump_host` / `node.jump_port` / `node.jump_username` to build the tunnel leg. `connect` SHALL NOT take `username`, `port`, `jump_host`, or `jump_username` parameters — they are read from `node`. `connect` SHALL prime the session's CPU-core cache with the value read via `adapter.get_cpu_cores(...)`.
 - `disconnect(node_id: NodeId) -> None` (async) — pops the session keyed by `node_id` and delegates teardown to `session._close()`
 - `disconnect_all() -> None` (async) — unchanged
 
@@ -78,7 +78,8 @@ decorated with `@my_backoff_exc()` retries on `SSHRetryExc`; outer
 `MachineConnectionError`. `connect` SHALL open the SSH connection, detect
 platform via the platform package, initialize paths via the platform
 package, read `ncpus` via `adapter.get_cpu_cores(...)`, log the discovered
-CPU count at the discovery site, construct a `ConnectedMachine` (carrying
+CPU count at the discovery site, seed the session cache with the discovered
+value, construct a `ConnectedMachine` (carrying
 `node_id`, `platform` only — NOT `hostname` or `ncpus`), construct an
 `SSHMachineSession`, store it keyed by `node.node_id`, and return it.
 
@@ -292,8 +293,8 @@ after logging. The propagation is the abort signal for `start_task_on_machine`.
 ### Requirement: Retry and backoff policy
 
 The system SHALL apply `@my_backoff_exc()` (fibonacci, max_time=60,
-`SSHRetryExc`) ONLY to idempotent operations: `get_cpu_cores` (pure read)
-and connection establishment. The system SHALL NOT apply
+`SSHRetryExc`) ONLY to idempotent operations: `get_cpu_cores` (pure read, cache
+miss path) and connection establishment. The system SHALL NOT apply
 `@my_backoff_exc()` to `run_bg` and SHALL NOT apply `@my_backoff_sftp()`
 to `upload` or `download` — these are non-idempotent (a successful remote
 side-effect followed by a lost client confirmation would produce a duplicate
@@ -306,10 +307,63 @@ a two-method pattern for `connect()`: inner method with
 `@my_backoff_exc()` (retries on `SSHRetryExc`), outer `connect` translates
 exhausted `(asyncssh.misc.Error, OSError)` to `MachineConnectionError`.
 
-#### Scenario: get_cpu_cores retries on SSH failure
+The retry on `get_cpu_cores` applies only on a cache miss (the first call in a
+session lifetime, or the priming call from `SSHMachineRepository.connect`); once
+the session has cached a value, subsequent calls return without invoking the
+adapter and therefore without retry.
 
-- **WHEN** `session.get_cpu_cores()` fails with a retryable SSH exception
-- **THEN** the operation is retried with fibonacci backoff up to 60 seconds (idempotent read — retry is safe)
+#### Scenario: get_cpu_cores retries on SSH failure (cache miss)
+
+- **WHEN** `session.get_cpu_cores()` is called on a session whose cache is empty (miss) and the underlying adapter call fails with a retryable SSH exception
+- **THEN** the operation is retried with fibonacci backoff up to 60 seconds (idempotent read — retry is safe); the successful result is stored in the session cache
+
+#### Scenario: get_cpu_cores returns cached value without retry
+
+- **WHEN** `session.get_cpu_cores()` is called on a session that has already cached a CPU count (cache hit) and the underlying adapter would fail
+- **THEN** the cached value is returned immediately; the adapter is NOT invoked and no retry is attempted
+
+### Requirement: SSHMachineSession memoizes CPU core discovery
+
+`SSHMachineSession` SHALL memoize the result of CPU-core discovery per session
+instance. CPU count is invariant for the lifetime of one SSH connection, so
+repeated `get_cpu_cores()` calls within the same session SHALL return the cached
+value without re-executing the remote command (`getconf _NPROCESSORS_ONLN` on
+Linux, the PowerShell equivalent on Windows).
+
+The cache SHALL be primed by the discovery already performed in
+`SSHMachineRepository.connect`: after `connect` constructs the
+`SSHMachineSession`, the CPU count it read via `adapter.get_cpu_cores(...)`
+SHALL seed the session cache so the relocated `"CPUs count: %s"` log line (per
+the `connected-machine-runtime-only` change) and the cache fill happen in one
+step. The first `get_cpu_cores()` call on the session (e.g. from the
+orchestrator's `_start_task_on_machine` fallback for a `Node.ncpus is None`
+node) then returns the primed cached value with no SSH exec.
+
+The cache lives for the session's lifetime only — there is no cross-session
+cache. A reconnected session (new `SSHMachineSession` instance) starts with an
+empty cache and re-discovers once. CPU hot-add during a live scheduler session
+goes unobserved until reconnect; an operator who needs the scheduler to see
+added CPUs without reconnecting SHALL set `ncpus` explicitly via `yasetnode ~N`.
+
+#### Scenario: First get_cpu_cores call in a session invokes the adapter
+
+- **WHEN** `session.get_cpu_cores()` is called on a session whose cache is empty (miss)
+- **THEN** the underlying `adapter.get_cpu_cores(...)` is invoked exactly once and the result is stored in the session cache
+
+#### Scenario: Second get_cpu_cores call in a session returns the cache
+
+- **WHEN** `session.get_cpu_cores()` is called twice on the same session instance
+- **THEN** the underlying `adapter.get_cpu_cores(...)` is invoked exactly once (on the first call); the second call returns the cached value without invoking the adapter
+
+#### Scenario: connect primes the session cache
+
+- **WHEN** `SSHMachineRepository.connect(node, ...)` constructs an `SSHMachineSession` and reads `ncpus` via `adapter.get_cpu_cores(...)`
+- **THEN** the session cache is seeded with that value, and the first `session.get_cpu_cores()` call returns the primed value without a further adapter invocation
+
+#### Scenario: Reconnected session re-discovers
+
+- **WHEN** a session is closed and a new `SSHMachineSession` is constructed for the same `node_id` (reconnect)
+- **THEN** the new session's cache is empty and the first `get_cpu_cores()` call re-invokes the adapter
 
 ### Requirement: Occupancy monitoring
 

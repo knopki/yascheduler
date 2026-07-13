@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.20.0 - _setup_vm stamps Node.jump_host/jump_username/jump_port from CloudConfig (or remote fallback) BEFORE _connect_to_vm opens the setup SSH session (RESOLVE_JUMP block); _connect_to_vm drops jump_host/jump_username kwargs from machine_repository.connect call — repository reads jump from Node per D2/D5 of design.md. Site (a) chosen per D5 recommendation (stamp in _setup_vm, not allocate).
-#   PREVIOUS_CHANGE: v2.19.0 - rename node.ip→node.hostname in all log/error/delete_node sites; allocate replace sets hostname+external_id per D3; format strings updated to hostname=%s.
+#   LAST_CHANGE: v2.21.0 - Remove ncpus write-back from _setup_vm: drop START_BLOCK_GET_CPUS block (standalone get_cpu_cores call + CloudSetupError wrapper); final replace becomes replace(node, enabled=True) with no ncpus= kwarg; allocate DONE log switches %d→%s for None-safety.
+#   PREVIOUS_CHANGE: v2.20.0 - _setup_vm stamps Node.jump_host/jump_username/jump_port from CloudConfig (or remote fallback) BEFORE _connect_to_vm opens the setup SSH session (RESOLVE_JUMP block); _connect_to_vm drops jump_host/jump_username kwargs from machine_repository.connect call — repository reads jump from Node per D2/D5 of design.md. Site (a) chosen per D5 recommendation (stamp in _setup_vm, not allocate).
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -227,7 +227,7 @@ class CloudProvisionerImpl:
         # END_BLOCK_SETUP_VM
 
         self.log.debug(
-            "[CloudProvisionerImpl][allocate][DONE] hostname=%s node_id=%s provider=%s ncpus=%d",
+            "[CloudProvisionerImpl][allocate][DONE] hostname=%s node_id=%s provider=%s ncpus=%s",
             node.hostname,
             node.node_id,
             node.cloud,
@@ -330,7 +330,7 @@ class CloudProvisionerImpl:
         )
 
     # START_CONTRACT: CloudProvisionerImpl._setup_vm
-    #   PURPOSE: Bring a freshly-created VM to a usable state (cloud-init done, engines installed) and return the enabled Node with ncpus populated.
+    #   PURPOSE: Bring a freshly-created VM to a usable state (cloud-init done, engines installed) and return the enabled Node.
     #   INPUTS: {
     #     node: Node - session registers under node.node_id,
     #     adapter: CloudAdapter - provider adapter (for timeout settings),
@@ -411,22 +411,12 @@ class CloudProvisionerImpl:
             raise CloudSetupError(f"Setup node {node.hostname} failed: {err}") from err
         # END_BLOCK_SETUP_NODE
 
-        # START_BLOCK_GET_CPUS
-        try:
-            ncpus = await session.get_cpu_cores()
-        except Exception as err:
-            raise CloudSetupError(
-                f"Get CPU cores for {node.hostname} failed: {err}"
-            ) from err
-        # END_BLOCK_GET_CPUS
-
         self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][READY] hostname=%s node_id=%s ncpus=%d",
+            "[CloudProvisionerImpl][setup_vm][READY] hostname=%s node_id=%s",
             node.hostname,
             node.node_id,
-            ncpus,
         )
-        return replace(node, enabled=True, ncpus=ncpus)
+        return replace(node, enabled=True)
 
     # START_CONTRACT: CloudProvisionerImpl._connect_to_vm
     #   PURPOSE: Connect to VM via SSH gateway with retry-friendly error wrapping.

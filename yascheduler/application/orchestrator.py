@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.7.0 - node-owns-connection-identity slice 2: removed inline jump-host resolution block (design.md D6) and jump_host/jump_username kwargs from repository.connect call. Node owns jump identity; repository reads node.jump_* directly.
-#   PREVIOUS_CHANGE: v7.6.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
+#   LAST_CHANGE: v7.8.0 - falsy short-circuit ncpus resolution with explicit None-check.
+#   PREVIOUS_CHANGE: v7.7.0 - node-owns-connection-identity slice 2: removed inline jump-host resolution block (design.md D6) and jump_host/jump_username kwargs from repository.connect call. Node owns jump identity; repository reads node.jump_* directly.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -171,7 +171,7 @@ class Orchestrator:
     #   PURPOSE: Thin wrapper — resolve ncpus via UoW, delegate to task_deployer.start_task_on_machine.
     #   INPUTS: { session: MachineSession, engine: Engine, task: Task }
     #   OUTPUTS: { bool - True on successful spawn }
-    #   SIDE_EFFECTS: Reads node from DB, calls task_deployer.start_task_on_machine; falls back to session.get_cpu_cores when the node is absent.
+    #   SIDE_EFFECTS: Reads node from DB, calls task_deployer.start_task_on_machine.
     #   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS, M-SSH-OPS-DEPLOY, M-SSH-SESSION
     # END_CONTRACT: Orchestrator._start_task_on_machine
     async def _start_task_on_machine(
@@ -187,7 +187,11 @@ class Orchestrator:
                 if task.allocated_node_id is not None
                 else None
             )
-        ncpus = (node and node.ncpus) or await session.get_cpu_cores()
+        ncpus = (
+            node.ncpus
+            if node is not None and node.ncpus is not None
+            else await session.get_cpu_cores()
+        )
         # END_BLOCK_RESOLVE_NCPUS
         return await self._task_deployer.start_task_on_machine(
             session, engine, task, ncpus, self._remote_defaults.engines_dir

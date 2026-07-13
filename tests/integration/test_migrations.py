@@ -128,7 +128,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
         conn = _connect(config)
         try:
             seeded = _tracker_rows(conn)
-            assert seeded == ["012"]
+            assert seeded == ["013"]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
             )
@@ -139,7 +139,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["012"]
+            assert _tracker_rows(conn) == ["013"]
         finally:
             conn.close()
 
@@ -158,7 +158,9 @@ def test_legacy_db_runs_all_migrations() -> None:
         conn = _connect(config)
         try:
             conn.run(
-                "CREATE TABLE yascheduler_nodes (ip VARCHAR(15) UNIQUE, cloud VARCHAR(32) DEFAULT NULL)"
+                "CREATE TABLE yascheduler_nodes ("
+                "ip VARCHAR(15) UNIQUE, cloud VARCHAR(32) DEFAULT NULL, "
+                "ncpus SMALLINT DEFAULT NULL)"
             )
             # Pre-create yascheduler_tasks at the pre-004 era schema (no
             # allocated_node_id) so migration 004's ALTER ADD COLUMN is
@@ -198,6 +200,7 @@ def test_legacy_db_runs_all_migrations() -> None:
                 "010",
                 "011",
                 "012",
+                "013",
             ]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
@@ -224,7 +227,9 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
                 "(migration_id TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
             )
             conn.run(
-                "CREATE TABLE yascheduler_nodes (ip VARCHAR(15) UNIQUE, cloud VARCHAR(32) DEFAULT NULL)"
+                "CREATE TABLE yascheduler_nodes ("
+                "ip VARCHAR(15) UNIQUE, cloud VARCHAR(32) DEFAULT NULL, "
+                "ncpus SMALLINT DEFAULT NULL)"
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('000')")
             # Pre-create yascheduler_tasks at the pre-004 era schema (no
@@ -263,6 +268,7 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
                 "010",
                 "011",
                 "012",
+                "013",
             ]
             assert {"username", "port", "node_id"} <= set(
                 _columns(conn, "yascheduler_nodes")
@@ -284,7 +290,7 @@ def test_py_migration_best_effort_reopen(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "013_reopen.py").write_text(
+    (migrations_dir / "014_reopen.py").write_text(
         "from yascheduler.infra.persistence.migration_base import Migration\n"
         "class Reopen(Migration):\n"
         "    def migrate(self) -> None:\n"
@@ -303,7 +309,7 @@ def test_py_migration_best_effort_reopen(
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["012", "013"]
+            assert _tracker_rows(conn) == ["013", "014"]
             assert _table_exists(conn, "test_reopen")
         finally:
             conn.close()
@@ -322,7 +328,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-    (migrations_dir / "013_fail.sql").write_text(
+    (migrations_dir / "014_fail.sql").write_text(
         "CREATE TABLE fail_tbl (id int); CREATE TABLE fail_tbl (id int);"
     )
     monkeypatch.setattr(
@@ -339,7 +345,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
 
         conn = _connect(config)
         try:
-            assert "013" not in _tracker_rows(conn)
+            assert "014" not in _tracker_rows(conn)
             assert not _table_exists(conn, "fail_tbl")
         finally:
             conn.close()
@@ -403,6 +409,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
                 "010",
                 "011",
                 "012",
+                "013",
             ]
             # node_id column now exists.
             cols = _columns(conn, "yascheduler_nodes")
@@ -499,7 +506,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
                 assert is_identity == "YES", (_tbl, _col, is_identity)
                 assert gen == "ALWAYS", (_tbl, _col, gen)
 
-            # The tracker now records 004 (seeded) and 005-012 (applied).
+            # The tracker now records 004 (seeded) and 005-013 (applied).
             assert _tracker_rows(conn) == [
                 "004",
                 "005",
@@ -510,6 +517,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
                 "010",
                 "011",
                 "012",
+                "013",
             ]
 
             # (b) The identity sequence next value > the previously inserted id,
@@ -696,7 +704,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
             finally:
                 conn.run("ROLLBACK")
 
-            # Tracker records 005 (seeded) + 006, 007, 008, 009, 010, 011, 012
+            # Tracker records 005 (seeded) + 006, 007, 008, 009, 010, 011, 012, 013
             assert _tracker_rows(conn) == [
                 "005",
                 "006",
@@ -706,6 +714,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
                 "010",
                 "011",
                 "012",
+                "013",
             ]
 
             # The legacy row's status was converted via the USING clause.
@@ -737,8 +746,8 @@ def test_fresh_db_full_shape() -> None:
 
         conn = _connect(config)
         try:
-            # Tracker seeds to '012'
-            assert _tracker_rows(conn) == ["012"]
+            # Tracker seeds to '013'
+            assert _tracker_rows(conn) == ["013"]
 
             cols = _columns(conn, "yascheduler_tasks")
             assert "task_id" in cols
@@ -782,12 +791,12 @@ def test_fresh_db_full_shape() -> None:
         finally:
             conn.close()
 
-        # apply_migrations finds MAX='012' and applies nothing.
+        # apply_migrations finds MAX='013' and applies nothing.
         apply_migrations(config)
 
         conn = _connect(config)
         try:
-            assert _tracker_rows(conn) == ["012"]
+            assert _tracker_rows(conn) == ["013"]
         finally:
             conn.close()
 

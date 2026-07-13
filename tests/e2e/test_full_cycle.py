@@ -350,7 +350,7 @@ async def _read_tasks(
 
 
 # START_CONTRACT: _assert_allocation_logs
-#   PURPOSE: Assert one [ALLOCATED] log record per task_id and that both node IPs appear among the logged ip= values.
+#   PURPOSE: Assert one [ALLOCATED] log record per task_id and that both node hostnames appear among the logged hostname= values.
 #   INPUTS: { records: list[LogRecord], task_ids: set[int] (coerced from list), expected_ips: set[str] }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — pure assertion over captured records.
@@ -365,11 +365,11 @@ def _assert_allocation_logs(
         r.getMessage() for r in records if _ALLOCATED_MARKER in r.getMessage()
     ]
     # One ALLOCATED record per task_id. The message format is
-    # "[AllocateTask][_try_allocate_to_machine][ALLOCATED] task_id=%s ip=%s".
+    # "[AllocateTask][_try_allocate_to_machine][ALLOCATED] task_id=%s hostname=%s node_id=%s".
     seen_task_ids: set[int] = set()
     seen_ips: set[str] = set()
     # Word-boundary matching: `task_id=3\b` avoids matching inside `task_id=30`;
-    # `ip=10.88.0.1\b` avoids matching inside `ip=10.88.0.165`. Task IDs
+    # `hostname=10.88.0.1\b` avoids matching inside `hostname=10.88.0.165`. Task IDs
     # accumulate across sessions (TRUNCATE without RESTART IDENTITY), so naive
     # substring matching would eventually false-positive.
     for msg in allocated_msgs:
@@ -377,7 +377,7 @@ def _assert_allocation_logs(
             if re.search(rf"task_id={tid}\b", msg):
                 seen_task_ids.add(tid)
         for ip in expected_ips:
-            if re.search(rf"ip={re.escape(ip)}\b", msg):
+            if re.search(rf"hostname={re.escape(ip)}\b", msg):
                 seen_ips.add(ip)
     missing_task_ids = set(task_ids) - seen_task_ids
     assert not missing_task_ids, (
@@ -386,7 +386,7 @@ def _assert_allocation_logs(
     )
     missing_ips = expected_ips - seen_ips
     assert not missing_ips, (
-        f"[ALLOCATED] logs never mention ip={missing_ips}; "
+        f"[ALLOCATED] logs never mention hostname={missing_ips}; "
         f"captured ALLOCATED msgs={allocated_msgs}"
     )
 

@@ -25,8 +25,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.25.0 - ConnectedMachine-runtime-only: drop hostname and ncpus fields from ConnectedMachine; MachineBusyError signature drops hostname.
-#   PREVIOUS_CHANGE: v1.24.0 - Node-rename-and-fields: add NodeStatus(StrEnum) with OTHER value; rename ip→hostname on Node/NewNode/ConnectedMachine; add jump_* / external_id / status / created_at / updated_at fields to Node and NewNode; add node_id to MachineBusyError in occupy(). ConnectedMachine: node_id is first field; MachineBusyError(self.node_id, self.hostname).
+#   LAST_CHANGE: v1.26.0 - NewNode.ncpus defaults to None (was 0); Node.ncpus widens to int | None; magic 0 sentinel removed.
+#   PREVIOUS_CHANGE: v1.25.0 - ConnectedMachine-runtime-only: drop hostname and ncpus fields from ConnectedMachine; MachineBusyError signature drops hostname.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -430,14 +430,14 @@ class NewNode:
     jump_host: str | None = None
     jump_port: int = 22
     jump_username: str = "root"
-    ncpus: int = 0
+    ncpus: int | None = None
     cloud: str | None = None
     external_id: str | None = None
 
 
 # START_CONTRACT: Node
 #   PURPOSE: Post-persistence node record — always carries its database-generated node_id (identity-first).
-#   INPUTS: { node_id: NodeId, hostname: str, ncpus: int, enabled: bool, cloud: str | None, username: str, port: int, jump_host: str | None, jump_port: int, jump_username: str, external_id: str | None, status: NodeStatus, created_at: datetime, updated_at: datetime }
+#   INPUTS: { node_id: NodeId, hostname: str, ncpus: int | None, enabled: bool, cloud: str | None, username: str, port: int, jump_host: str | None, jump_port: int, jump_username: str, external_id: str | None, status: NodeStatus, created_at: datetime, updated_at: datetime }
 #   OUTPUTS: { None - dataclass }
 #   SIDE_EFFECTS: None
 #   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: NodeRepository.insert (the only NewNode→Node conversion site)
@@ -452,7 +452,7 @@ class Node:
 
     node_id: NodeId
     hostname: str
-    ncpus: int
+    ncpus: int | None
     created_at: datetime = field(default_factory=lambda: datetime.now())
     updated_at: datetime = field(default_factory=lambda: datetime.now())
     username: str = "root"

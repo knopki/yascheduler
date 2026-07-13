@@ -10,11 +10,12 @@
 #
 # START_MODULE_MAP
 #   _make_node_row - build a fake _run row dict for a Node with sensible defaults
-#   TestPostgresNodeRepository - node CRUD via mocked _run
+#   TestPostgresNodeRepository - node CRUD via mocked _run; includes ncpus-None round-trip tests
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from test_persistence_adapter.py (GRACE-lite 1000-line limit compliance).
+#   LAST_CHANGE: v1.1.0 - Node-ncpus-as-config: rename test_get_with_zero_ncpus→test_get_handles_null_ncpus (asserts is None); add test_get_handles_positive_ncpus_unchanged, test_insert_with_none_ncpus_returns_none.
+#   PREVIOUS_CHANGE: v1.0.0 - Extracted from test_persistence_adapter.py (GRACE-lite 1000-line limit compliance).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -111,8 +112,8 @@ class TestPostgresNodeRepository:
 
         assert node is None
 
-    async def test_get_with_zero_ncpus(self, mocker: MockerFixture) -> None:
-        """get handles null/zero ncpus correctly (defaults to 0)."""
+    async def test_get_handles_null_ncpus(self, mocker: MockerFixture) -> None:
+        """get handles null ncpus correctly (round-trips as None)."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             _make_node_row(
@@ -132,10 +133,32 @@ class TestPostgresNodeRepository:
         assert node is not None
         assert node.node_id == NodeId(2)
         assert node.hostname == "10.0.0.2"
-        assert node.ncpus == 0
+        assert node.ncpus is None
         assert node.enabled is False
         assert node.cloud is None
         assert node.port == 2222
+
+    async def test_get_handles_positive_ncpus_unchanged(
+        self, mocker: MockerFixture
+    ) -> None:
+        """get round-trips a positive int ncpus unchanged."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = [  # type: ignore[attr-defined]
+            _make_node_row(
+                node_id=3,
+                hostname="10.0.0.3",
+                ncpus=16,
+                enabled=True,
+                cloud="aws",
+                username="root",
+                port=22,
+            )
+        ]
+
+        node = await repo.get_by_id(NodeId(3))
+
+        assert node is not None
+        assert node.ncpus == 16
 
     # -- get_by_id -------------------------------------------------------------
 
@@ -417,6 +440,26 @@ class TestPostgresNodeRepository:
         _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
         assert kwargs["cloud"] == "upcloud"
         assert kwargs["enabled"] is False
+
+    async def test_insert_with_none_ncpus_returns_none(
+        self, mocker: MockerFixture
+    ) -> None:
+        """insert(NewNode(ncpus=None)) produces a row whose ncpus is None."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = [_make_node_row(node_id=8, ncpus=None)]  # type: ignore[attr-defined]
+        new_node = NewNode(
+            hostname="10.0.0.6",
+            ncpus=None,
+            enabled=False,
+            cloud="aws",
+            username="root",
+            port=22,
+        )
+
+        result = await repo.insert(new_node)
+
+        assert isinstance(result, Node)
+        assert result.ncpus is None
 
     async def test_update_binds_all_fields_including_ip(
         self, mocker: MockerFixture

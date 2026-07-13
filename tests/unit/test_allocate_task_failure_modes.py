@@ -57,7 +57,9 @@ def _make_uow(todo_task: Task) -> AsyncMock:
     uow.nodes.list_all = AsyncMock(return_value=[])
     # remove-tmp-node-fake-ip: tmp-node insertion is insert(NewNode(cloud=...,
     # enabled=False)) → Node carrying the generated node_id (the cleanup handle).
-    tmp_node = Node(node_id=NodeId(2), hostname="", ncpus=0, enabled=False, cloud="aws")
+    tmp_node = Node(
+        node_id=NodeId(2), hostname="", ncpus=None, enabled=False, cloud="aws"
+    )
     uow.nodes.insert = AsyncMock(return_value=tmp_node)
     uow.collect_events = AsyncMock(return_value=[])
     uow.publish_events = AsyncMock()

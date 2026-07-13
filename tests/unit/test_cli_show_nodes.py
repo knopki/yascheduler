@@ -196,7 +196,7 @@ class TestShowNodesRendering:
         node2 = Node(
             node_id=NodeId(2),
             hostname="10.0.0.2",
-            ncpus=0,
+            ncpus=None,
             enabled=False,
             port=2222,
             cloud="hetzner",
@@ -234,13 +234,37 @@ class TestShowNodesRendering:
         assert "-" in lines[1]  # port rendered as '-'
         assert "yes" in lines[1]
         assert "my_job" in lines[1]
-        # Row 2: free node, port 2222, ncpus=0 -> MAX, enabled no, cloud hetzner,
+        # Row 2: free node, port 2222, ncpus=None -> MAX, enabled no, cloud hetzner,
         # task_id/label -> '-'
         assert "10.0.0.2" in lines[2]
         assert "2222" in lines[2]
         assert "MAX" in lines[2]
         assert "no" in lines[2]
         assert "hetzner" in lines[2]
+
+    def test_table_shows_max_for_none_ncpus(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
+    ) -> None:
+        """Gherkin: yanodes table shows MAX for None ncpus."""
+        _config, uow, _deps = stub_config_deps
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=None,
+            enabled=True,
+            port=22,
+        )
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.nodes.list_all = AsyncMock(return_value=[node])
+
+        _run([])
+
+        out, _ = capsys.readouterr()
+        lines = out.splitlines()
+        assert len(lines) == 2  # header + one data row
+        assert "MAX" in lines[1]
 
     def test_json_output_raw_values(
         self,
@@ -253,7 +277,7 @@ class TestShowNodesRendering:
         node1 = Node(
             node_id=NodeId(1),
             hostname="10.0.0.1",
-            ncpus=0,
+            ncpus=None,
             enabled=True,
             port=22,
             cloud=None,
@@ -281,11 +305,11 @@ class TestShowNodesRendering:
         assert len(data) == 2
         assert list(data[0])[0] == "node_id"
         assert data[0]["node_id"] == 1
-        # Busy node: raw port=22 (not "-" or null), ncpus=0 (not "MAX"), enabled bool,
+        # Busy node: raw port=22 (not "-" or null), ncpus=None (null in JSON), enabled bool,
         # cloud null, occupied_by object.
         assert data[0]["hostname"] == "10.0.0.1"
         assert data[0]["port"] == 22
-        assert data[0]["ncpus"] == 0
+        assert data[0]["ncpus"] is None
         assert data[0]["enabled"] is True
         assert data[0]["cloud"] is None
         assert data[0]["jump_host"] is None
@@ -312,6 +336,32 @@ class TestShowNodesRendering:
         assert data[1]["created_at"] is not None
         assert data[1]["updated_at"] is not None
         assert data[1]["occupied_by"] is None
+
+    def test_json_emits_null_ncpus_for_none(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
+    ) -> None:
+        """Gherkin: yanodes --json emits null ncpus for None."""
+        import json as _json
+
+        _config, uow, _deps = stub_config_deps
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=None,
+            enabled=True,
+            port=22,
+        )
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.nodes.list_all = AsyncMock(return_value=[node])
+
+        _run(["--json"])
+
+        out, _ = capsys.readouterr()
+        data = _json.loads(out)
+        assert len(data) == 1
+        assert data[0]["ncpus"] is None
 
     def test_json_empty_is_empty_list(
         self,

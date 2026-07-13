@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.5.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from ConnectedMachine construction; add info log for CPU count at discovery site.
-#   PREVIOUS_CHANGE: v2.4.0 - node-owns-connection-identity: drop jump_host/jump_username from connect/_connect_impl/_open_connection; _resolve_tunnel → _build_tunnel_options (returns SSHClientConnectionOptions|None); jump identity read from Node. Update MODULE_MAP, contracts, log markers.
+#   LAST_CHANGE: v2.6.0 - node-ncpus-as-config slice 4: prime session CPU cache from connect discovery with _prime_ncpus_cache.
+#   PREVIOUS_CHANGE: v2.5.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from ConnectedMachine construction; add info log for CPU count at discovery site.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -200,7 +200,7 @@ class SSHMachineRepository:
     #   PURPOSE: Inner connection implementation with backoff retry on SSHRetryExc; constructs and registers the MachineSession.
     #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir }
     #   OUTPUTS: { SSHMachineSession - the newly constructed and registered session }
-    #   SIDE_EFFECTS: Opens an SSH connection to node.hostname (login user node.username, port node.port); registers a MachineSession in _sessions[node.node_id].
+    #   SIDE_EFFECTS: Opens an SSH connection to node.hostname (login user node.username, port node.port); reads ncpus via adapter.get_cpu_cores and logs it; primes session._cached_ncpus with the discovered value; registers a MachineSession in _sessions[node.node_id].
     #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
     # END_CONTRACT: SSHMachineRepository._connect_impl
     @my_backoff_exc()
@@ -264,6 +264,7 @@ class SSHMachineRepository:
             tasks_dir=rt,
             log=self._log,
         )
+        session._prime_ncpus_cache(ncpus)
         self._sessions[node.node_id] = session
         # END_BLOCK_CREATE_SESSION
         return session
