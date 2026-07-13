@@ -116,13 +116,14 @@ Create an API key in the [Vultr customer portal][vultr_api_key] and set
 `vultr_api_key` in the `[clouds]` section of the config.
 
 The default plan is `vbm-24c-256gb-amd` (AMD EPYC 7443P, 24C/48T, 256 GB RAM,
-2x 480 GB SSD + 2x 1.92 TB NVMe) in the `ams` region on Ubuntu 24.04 LTS
-(`os_id=2284`). Bare-metal provisioning is slow (up to ~20 minutes), so
-`create_node_timeout` is set to 1200 s and `op_limit` to 2.
+2x 480 GB SSD + 2x 1.92 TB NVMe) in the `ams` location on Ubuntu 24.04 LTS
+(`vultr_image_name=2284`, the Vultr OS id). Bare-metal provisioning is slow
+(up to ~20 minutes), so `create_node_timeout` is set to 1200 s and `op_limit`
+to 2.
 
-> **Note:** `os_id=2284` is Ubuntu 24.04 LTS x64, not Debian 12.
-> Debian 12 (bookworm) is `os_id=2136`. The cloud-init setup works on both,
-> but Ubuntu 24.04 is recommended (newer packages).
+> **Note:** `vultr_image_name=2284` is Ubuntu 24.04 LTS x64, not Debian 12.
+> Debian 12 (bookworm) is `2136`. The cloud-init setup works on both, but
+> Ubuntu 24.04 is recommended (newer packages).
 
 ### RAID0 and disk setup (`vultr_need_raid`)
 
@@ -168,7 +169,7 @@ scheduler after the instance becomes active.
 ### Cost control
 
 The default plan costs **$0.993/hour**. Nodes are deleted automatically after
-`vultr_idle_tolerance` seconds of idleness (default 3600 s = 1 hour) by the
+`vultr_idle_tolerance` seconds of idleness (default 1800 s = 30 min) by the
 existing `deallocator_producer`. Setting `vultr_idle_tolerance` too low may
 cause frequent provisioning cycles; too high wastes money. Tune per your
 workload pattern.
@@ -178,12 +179,12 @@ workload pattern.
 ```ini
 [clouds]
 vultr_api_key = YOUR_VULTR_API_KEY
-vultr_region = ams
-vultr_plan = vbm-24c-256gb-amd
-vultr_os_id = 2284
+vultr_location = ams
+vultr_server_type = vbm-24c-256gb-amd
+vultr_image_name = 2284
 vultr_need_raid = True
 vultr_max_nodes = 2
-vultr_idle_tolerance = 3600
+vultr_idle_tolerance = 1800
 ```
 
 ### Standalone test script

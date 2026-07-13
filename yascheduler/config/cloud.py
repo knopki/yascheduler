@@ -84,7 +84,7 @@ class ConfigCloudAzure:
 
         warn_unknown_fields(
             [
-                *ConfigCloudAzure.get_valid_config_parser_fields(),
+                *cls.get_valid_config_parser_fields(),
                 *ConfigCloudHetzner.get_valid_config_parser_fields(),
                 *ConfigCloudVultr.get_valid_config_parser_fields(),
                 *ConfigCloudUpcloud.get_valid_config_parser_fields(),
@@ -180,9 +180,9 @@ class ConfigCloudVultr:
 
     Key fields:
       api_key       — Vultr API key (required)
-      region        — datacenter region, e.g. 'ams'
-      plan          — bare-metal plan id, e.g. 'vbm-24c-256gb-amd'
-      os_id         — Vultr OS id (2284 = Ubuntu 24.04)
+      location      — datacenter region, e.g. 'ams'
+      server_type   — bare-metal plan id, e.g. 'vbm-24c-256gb-amd'
+      image_name    — Vultr OS id (int, 2284 = Ubuntu 24.04)
       need_raid     — whether to set up RAID0 NVMe + /dev/shm during
                       cloud-init (True for vbm-24c-256gb-amd, False for
                       plans where NVMe is already the main disk)
@@ -191,14 +191,14 @@ class ConfigCloudVultr:
 
     prefix = "vultr"
     api_key: str = field(validator=validators.instance_of(str))
-    region: str = make_default_field("ams")
-    plan: str = make_default_field("vbm-24c-256gb-amd")
-    os_id: int = make_default_field(2284, extra_validators=[validators.ge(1)])
+    location: str = make_default_field("ams")
+    server_type: str = make_default_field("vbm-24c-256gb-amd")
+    image_name: int = make_default_field(2284, extra_validators=[validators.ge(1)])
     need_raid: bool = make_default_field(True)
     max_nodes: int = make_default_field(10, extra_validators=[validators.ge(0)])
     username: str = make_default_field("root")
     priority: int = make_default_field(0)
-    idle_tolerance: int = make_default_field(3600, extra_validators=[validators.ge(1)])
+    idle_tolerance: int = make_default_field(1800, extra_validators=[validators.ge(1)])
     jump_username: Optional[str] = field(default=None, validator=opt_str_val)
     jump_host: Optional[str] = field(default=None, validator=opt_str_val)
 
@@ -230,9 +230,9 @@ class ConfigCloudVultr:
 
         return cls(
             api_key=sec.get(fmt("api_key")),  # type: ignore
-            region=sec.get(fmt("region")),  # type: ignore
-            plan=sec.get(fmt("plan")),  # type: ignore
-            os_id=sec.getint(fmt("os_id")),  # type: ignore
+            location=sec.get(fmt("location")),  # type: ignore
+            server_type=sec.get(fmt("server_type")),  # type: ignore
+            image_name=sec.getint(fmt("image_name")),  # type: ignore
             need_raid=sec.getboolean(fmt("need_raid"), fallback=True),
             max_nodes=sec.getint(fmt("max_nodes")),  # type: ignore
             username=sec.get(fmt("user")),  # type: ignore

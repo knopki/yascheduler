@@ -27,6 +27,10 @@ POLL_TIMEOUT = 1200
 executor = ThreadPoolExecutor(max_workers=5)
 
 
+class APIError(Exception):
+    """Vultr API error"""
+
+
 class VultrClient:
     """Thin Vultr REST API client"""
 
@@ -55,10 +59,6 @@ class VultrClient:
             raise APIError(f"HTTP {err.code}: {raw}") from err
 
 
-class APIError(Exception):
-    """Vultr API error"""
-
-
 @cache
 def get_client(cfg: ConfigCloudVultr) -> VultrClient:
     """Get Vultr client (cached per api key)"""
@@ -66,7 +66,11 @@ def get_client(cfg: ConfigCloudVultr) -> VultrClient:
 
 
 def ssh_key_fingerprint_md5(pubkey: str) -> str:
-    """Compute MD5 fingerprint of an OpenSSH public key string"""
+    """Compute MD5 fingerprint of an OpenSSH public key string.
+
+    NOTE: MD5 is required here to match the Vultr API fingerprint format,
+    not for cryptographic security.
+    """
     parts = pubkey.split()
     if len(parts) < 2:
         return ""
@@ -130,6 +134,12 @@ def build_baremetal_user_data(
 
     packages = list(dict.fromkeys(base_packages + engine_packages))
 
+    # /data is an absolute path: on bare metal it is either a RAID0 NVMe
+    # mount (need_raid=True) or the root disk (need_raid=False). This is not
+    # ~/data (the default remote.data_dir), because bare-metal instances
+    # require a dedicated mount point for engines (/data/engines) and tasks
+    # (/data/tasks). cloud-init guarantees /data exists before the scheduler
+    # connects.
     runcmd = ["mkdir -p /data"]
 
     if need_raid:
@@ -232,9 +242,9 @@ def vultr_create_node_sync(
     user_data_b64 = base64.b64encode(user_data.encode()).decode()
 
     body = {
-        "region": cfg.region,
-        "plan": cfg.plan,
-        "os_id": cfg.os_id,
+        "region": cfg.location,
+        "plan": cfg.server_type,
+        "os_id": cfg.image_name,
         "label": label,
         "hostname": label,
         "sshkey_id": [ssh_key_id],

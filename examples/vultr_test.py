@@ -7,7 +7,7 @@ optionally checks SSH connectivity, then deletes it.
 Usage:
     export VULTR_API_KEY='your_api_key_here'
     python examples/vultr_test.py test
-    python examples/vultr_test.py create --plan vbm-24c-256gb-amd
+    python examples/vultr_test.py create --server-type vbm-24c-256gb-amd
     python examples/vultr_test.py list
     python examples/vultr_test.py delete --id <instance_id>
 """
@@ -26,9 +26,9 @@ from typing import Optional
 
 API_BASE = "https://api.vultr.com/v2"
 
-DEFAULT_REGION = "ams"
-DEFAULT_PLAN = "vbm-24c-256gb-amd"
-DEFAULT_OS_ID = 2284
+DEFAULT_LOCATION = "ams"
+DEFAULT_SERVER_TYPE = "vbm-24c-256gb-amd"
+DEFAULT_IMAGE_NAME = 2284
 DEFAULT_SSH_KEY_PATH = os.path.expanduser("~/.ssh/id_rsa.pub")
 POLL_INTERVAL = 20
 POLL_TIMEOUT = 1200
@@ -92,6 +92,8 @@ def read_ssh_pubkey(path: str) -> str:
 
 
 def ssh_key_fingerprint_md5(pubkey: str) -> str:
+    # NOTE: MD5 is required here to match the Vultr API fingerprint format,
+    # not for cryptographic security.
     parts = pubkey.split()
     if len(parts) < 2:
         return ""
@@ -162,18 +164,18 @@ def build_cloud_init() -> str:
 
 
 def create_baremetal(
-    region: str,
-    plan: str,
-    os_id: int,
+    location: str,
+    server_type: str,
+    image_name: int,
     label: str,
     hostname: str,
     sshkey_id: Optional[str] = None,
     user_data: Optional[str] = None,
 ) -> dict:
     body: dict = {
-        "region": region,
-        "plan": plan,
-        "os_id": os_id,
+        "region": location,
+        "plan": server_type,
+        "os_id": image_name,
         "label": label,
         "hostname": hostname,
         "enable_ipv6": True,
@@ -255,9 +257,9 @@ def cmd_create(args) -> None:
     label = args.label or f"ya-test-{os.urandom(4).hex()}"
     user_data = build_cloud_init()
     data = create_baremetal(
-        region=args.region,
-        plan=args.plan,
-        os_id=args.os_id,
+        location=args.location,
+        server_type=args.server_type,
+        image_name=args.image_name,
         label=label,
         hostname=args.hostname or label,
         sshkey_id=sshkey_id,
@@ -290,9 +292,9 @@ def cmd_test(args) -> None:
     label = f"ya-test-{os.urandom(4).hex()}"
     user_data = build_cloud_init()
     data = create_baremetal(
-        region=args.region,
-        plan=args.plan,
-        os_id=args.os_id,
+        location=args.location,
+        server_type=args.server_type,
+        image_name=args.image_name,
         label=label,
         hostname=label,
         sshkey_id=sshkey_id,
@@ -327,9 +329,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("create", help="Create a bare-metal instance")
-    p.add_argument("--region", default=DEFAULT_REGION)
-    p.add_argument("--plan", default=DEFAULT_PLAN)
-    p.add_argument("--os-id", type=int, default=DEFAULT_OS_ID)
+    p.add_argument("--location", default=DEFAULT_LOCATION)
+    p.add_argument("--server-type", default=DEFAULT_SERVER_TYPE)
+    p.add_argument("--image-name", type=int, default=DEFAULT_IMAGE_NAME)
     p.add_argument("--label", default=None)
     p.add_argument("--hostname", default=None)
     p.add_argument("--ssh-key", default=DEFAULT_SSH_KEY_PATH)
@@ -342,9 +344,9 @@ def main() -> None:
     p.set_defaults(func=cmd_delete)
 
     p = sub.add_parser("test", help="Create, wait, check SSH, then delete")
-    p.add_argument("--region", default=DEFAULT_REGION)
-    p.add_argument("--plan", default=DEFAULT_PLAN)
-    p.add_argument("--os-id", type=int, default=DEFAULT_OS_ID)
+    p.add_argument("--location", default=DEFAULT_LOCATION)
+    p.add_argument("--server-type", default=DEFAULT_SERVER_TYPE)
+    p.add_argument("--image-name", type=int, default=DEFAULT_IMAGE_NAME)
     p.add_argument("--ssh-key", default=DEFAULT_SSH_KEY_PATH)
     p.add_argument("--ssh-timeout", type=int, default=300)
     p.add_argument("--keep", action="store_true", help="Keep instance after test")
