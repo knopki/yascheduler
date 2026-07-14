@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/provider_selection.py
-# VERSION: 1.1.1
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Pure function for selecting best cloud provider by priority, capacity, and platform support.
 #   SCOPE: select_provider_pure function — adapter-internal, called only from CloudProvisionerImpl.select_provider.
@@ -13,19 +13,21 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
-#   PREVIOUS_CHANGE: v1.1.0 - Extract _adapter_supports_any_platform helper from nested any(any(...)) for readability and early-break short-circuit.
+#   LAST_CHANGE: v1.2.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-PROVIDER-SELECTION") at module top
+#   PREVIOUS_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import logging
+from yascheduler.shared import get_logger
 
+if TYPE_CHECKING:
     from .adapters import CloudAdapter
     from .cloud_configs import ConfigCloud
+
+logger = get_logger("M-CLOUD-PROVIDER-SELECTION")
 
 
 # START_CONTRACT: select_provider_pure
@@ -34,8 +36,7 @@ if TYPE_CHECKING:
 #     adapters: dict[str, CloudAdapter] - provider name -> adapter,
 #     configs: dict[str, ConfigCloud] - provider name -> config,
 #     platforms: list[str] - required platform identifiers,
-#     current_counts: dict[str, int] - provider name -> current node count (from uow.nodes.list_all),
-#     log: logging.Logger
+#     current_counts: dict[str, int] - provider name -> current node count (from uow.nodes.list_all)
 #   }
 #   OUTPUTS: { CloudAdapter | None - best matching provider or None }
 #   SIDE_EFFECTS: None — pure function (caller owns all I/O and DB).
@@ -67,7 +68,6 @@ def select_provider_pure(
     configs: dict[str, ConfigCloud],
     platforms: list[str],
     current_counts: dict[str, int],
-    log: logging.Logger,
 ) -> CloudAdapter | None:
     """Select best provider by priority, capacity, and platform support."""
     # START_BLOCK_FILTER_SUITABLE
@@ -78,30 +78,21 @@ def select_provider_pure(
             continue
         current = current_counts.get(name, 0)
         if current >= config.max_nodes:
-            log.debug(
-                "[provider_selection][select_provider_pure][MAXED] %s (%d/%d)",
-                name,
-                current,
-                config.max_nodes,
+            logger.trace(
+                "MAXED", provider=name, current=current, max_nodes=config.max_nodes
             )
             continue
         # Inline platform-support check (was _is_platform_supported on CloudProvisionerImpl).
         # Early-break loop is clearer than nested any(any(...)) and short-circuits
         # on the first supported platform.
         if not _adapter_supports_any_platform(adapter, platforms):
-            log.debug(
-                "[provider_selection][select_provider_pure][NO_PLATFORM] %s for %s",
-                name,
-                platforms,
-            )
+            logger.trace("NO_PLATFORM", provider=name, platforms=platforms)
             continue
         suitable.append(adapter)
     # END_BLOCK_FILTER_SUITABLE
 
     if not suitable:
-        log.debug(
-            "[provider_selection][select_provider_pure][NONE] no suitable providers"
-        )
+        logger.trace("NONE")
         return None
 
     # START_BLOCK_SORT_BY_PRIORITY
@@ -110,10 +101,6 @@ def select_provider_pure(
         reverse=True,
     )
     chosen = suitable[0]
-    log.debug(
-        "[provider_selection][select_provider_pure][CHOSEN] %s (priority=%d)",
-        chosen.name,
-        configs[chosen.name].priority,
-    )
+    logger.trace("CHOSEN", provider=chosen.name, priority=configs[chosen.name].priority)
     # END_BLOCK_SORT_BY_PRIORITY
     return chosen

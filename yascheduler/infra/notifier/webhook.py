@@ -14,13 +14,12 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - webhook_handler extracts .value when building WebhookPayload: task_id=event.task_id.value. event.task_id is now a TaskId; dataclasses.asdict recurses into nested dataclasses, so passing the TaskId directly would produce {"task_id": {"value": 42}, ...} (a wire-shape break). WebhookPayload.task_id stays int; the .value extraction is the domain→transport boundary unwrap.
-#   PREVIOUS_CHANGE: v1.1.0 - Absorb WebhookPayload from yascheduler/webhook.py; root module deleted, M-WEBHOOK graph record removed.
+#   LAST_CHANGE: v1.4.0 - Rewrite GIVEUP exception to pure narrative (no grace marker) per reform-grace-logging slice 7.
+#   PREVIOUS_CHANGE: v1.3.0 - Split test-targeted RETRY warning into log.trace("RETRY", url=url) + log.warning("webhook retry to %s", url) per reform-grace-logging slice 6.1.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
-import logging
 from asyncio.locks import Semaphore
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -34,11 +33,12 @@ from yascheduler.domain import (
     TaskCreated,
     TaskStatus,
 )
+from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-NOTIFIER-WEBHOOK")
 
 _webhook_sem: Semaphore | None = None
 
@@ -83,9 +83,7 @@ async def webhook_handler(event: DomainEvent, http: aiohttp.ClientSession) -> No
     try:
         await _send_webhook(event.webhook_url, payload, http)
     except aiohttp.ClientError:
-        logger.exception(
-            "[NotifierWebhook][webhook_handler][GIVEUP] %s", event.webhook_url
-        )
+        logger.exception("webhook giveup: %s", event.webhook_url)
 
 
 # START_CONTRACT: _send_webhook
@@ -107,5 +105,6 @@ async def _send_webhook(
                     return
                 raise aiohttp.ClientError(f"HTTP {resp.status}: {await resp.text()}")
         except aiohttp.ClientError:
-            logger.warning("[NotifierWebhook][_send_webhook][RETRY] %s", url)
+            logger.trace("RETRY", url=url)
+            logger.warning("webhook retry to %s", url)
             raise

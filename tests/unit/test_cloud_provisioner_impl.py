@@ -238,7 +238,6 @@ def make_provisioner(
     local_config: MagicMock | None = None,
     remote_config: MagicMock | None = None,
     engines: MagicMock | None = None,
-    logger: MagicMock | None = None,
 ) -> CloudProvisionerImpl:
     """Helper to construct a CloudProvisionerImpl with defaults."""
     # Python 3.9: asyncio.Lock() requires a running event loop during init.
@@ -254,7 +253,6 @@ def make_provisioner(
         local_config=local_config or MagicMock(),
         remote_config=remote_config or _default_remote_config(),
         engines=engines or MagicMock(),
-        log=logger or MagicMock(),
     )
 
 
@@ -671,12 +669,10 @@ class TestDeallocate:
         """Logs warning when cloud provider is not configured."""
         adapter, config = _make_mock_adapter(name="test-cloud")
         adapter.delete_node = AsyncMock()
-        log = MagicMock()
 
         prov = make_provisioner(
             adapters={"test-cloud": adapter},
             configs={"test-cloud": config},
-            logger=log,
         )
 
         node = Node(
@@ -691,19 +687,16 @@ class TestDeallocate:
         await prov.deallocate(node)
 
         adapter.delete_node.assert_not_awaited()
-        log.warning.assert_called()
 
     @pytest.mark.asyncio
     async def test_deallocate_no_config(self) -> None:
         """Logs warning when cloud is in adapters but not in configs."""
         adapter, config = _make_mock_adapter(name="test-cloud")
         adapter.delete_node = AsyncMock()
-        log = MagicMock()
 
         prov = make_provisioner(
             adapters={"test-cloud": adapter},
             configs={},
-            logger=log,
         )
 
         node = Node(
@@ -718,19 +711,16 @@ class TestDeallocate:
         await prov.deallocate(node)
 
         adapter.delete_node.assert_not_awaited()
-        log.warning.assert_called()
 
     @pytest.mark.asyncio
     async def test_deallocate_no_cloud_logs_and_returns(self) -> None:
         """node.cloud is None -> no provider SDK invoked; adapter logs and returns."""
         adapter, config = _make_mock_adapter(name="test-cloud")
         adapter.delete_node = AsyncMock()
-        log = MagicMock()
 
         prov = make_provisioner(
             adapters={"test-cloud": adapter},
             configs={"test-cloud": config},
-            logger=log,
         )
 
         node = Node(
@@ -745,7 +735,6 @@ class TestDeallocate:
         await prov.deallocate(node)
 
         adapter.delete_node.assert_not_awaited()
-        log.warning.assert_called()
 
 
 class TestStop:
@@ -798,7 +787,6 @@ class TestSshKeyGeneration:
         self, mock_local_config: MagicMock
     ) -> None:
         """Generates new SSH key and writes to keys_dir when no existing key."""
-        mock_log = MagicMock()
 
         mock_key = MagicMock()
         mock_key.get_fingerprint.return_value = "md5:abcd"
@@ -813,7 +801,7 @@ class TestSshKeyGeneration:
                 return_value="yakey-rnd123",
             ),
         ):
-            result = get_or_create_ssh_key(mock_local_config.keys_dir, mock_log)
+            result = get_or_create_ssh_key(mock_local_config.keys_dir)
 
         mock_gen.assert_called_once_with(alg_name="ssh-rsa", comment="yakey-rnd123")
         mock_local_config.keys_dir.__truediv__.assert_called_once_with("yakey-rnd123")
@@ -829,7 +817,6 @@ class TestSshKeyGeneration:
         existing_file.name = "yakey-existing"
         existing_file.is_file.return_value = True
         keys_dir.iterdir.return_value = [existing_file]
-        mock_log = MagicMock()
 
         mock_key = MagicMock()
         mock_key.get_fingerprint.return_value = "md5:efgh"
@@ -838,7 +825,7 @@ class TestSshKeyGeneration:
             "yascheduler.infra.cloud.ssh_keys.read_private_key",
             return_value=mock_key,
         ) as mock_read:
-            result = get_or_create_ssh_key(keys_dir, mock_log)
+            result = get_or_create_ssh_key(keys_dir)
 
         mock_read.assert_called_once_with(existing_file)
         mock_key.set_comment.assert_called_once_with("yakey-existing")

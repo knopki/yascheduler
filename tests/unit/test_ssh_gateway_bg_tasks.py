@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
@@ -114,7 +113,7 @@ def repository() -> SSHMachineRepository:
 
 @pytest.fixture
 def occupancy_checker() -> OccupancyChecker:
-    return OccupancyChecker(log=logging.getLogger(__name__))
+    return OccupancyChecker()
 
 
 @pytest.fixture

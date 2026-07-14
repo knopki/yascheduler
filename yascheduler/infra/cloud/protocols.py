@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/protocols.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Protocol definitions for node creation and deletion callables.
@@ -18,13 +18,12 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Delete PCloudConfig Protocol (single-implementer, zero runtime dispatch; collapsed into concrete CloudInitConfig) and CloudCapacity dataclass (dead code; last consumer removed); retype CreateNodeCallable.__call__ cloud_config param Optional[PCloudConfig] → Optional[CloudInitConfig].
-#   PREVIOUS_CHANGE: v1.2.0 - Import ConfigCloud from .cloud_configs (intra-package) instead of yascheduler.config; removes the only runtime `infra -> yascheduler.config` edge in the cloud subpackage, shrinking the outside-layer-set exemption surface by one edge.
+#   LAST_CHANGE: v1.4.0 - remove log parameter from Protocol signatures; bind module-local logger = get_logger("M-CLOUD-PROTOCOLS") at module top
+#   PREVIOUS_CHANGE: v1.3.0 - Delete PCloudConfig Protocol (single-implementer, zero runtime dispatch; collapsed into concrete CloudInitConfig) and CloudCapacity dataclass (dead code; last consumer removed); retype CreateNodeCallable.__call__ cloud_config param Optional[PCloudConfig] → Optional[CloudInitConfig].
 # END_CHANGE_SUMMARY
 
 """Cloud protocols"""
 
-import logging
 from abc import abstractmethod
 from collections.abc import Callable
 from typing import Optional, Protocol, TypeVar
@@ -49,7 +48,6 @@ class CreateNodeCallable(Protocol[TConfigCloud_contra]):
     @abstractmethod
     async def __call__(
         self,
-        log: logging.Logger,
         cfg: TConfigCloud_contra,
         key: SSHKey,
         cloud_config: Optional[CloudInitConfig] = None,
@@ -63,7 +61,6 @@ class DeleteNodeCallable(Protocol[TConfigCloud_contra]):
     @abstractmethod
     async def __call__(
         self,
-        log: logging.Logger,
         cfg: TConfigCloud_contra,
         host: str,
     ) -> None:

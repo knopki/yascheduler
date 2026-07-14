@@ -159,58 +159,31 @@ serialization of all fields.
 ### Requirement: CloudProvisionerImpl implements CloudProvisioner
 
 `CloudProvisionerImpl` SHALL satisfy the `CloudProvisioner` Protocol (`allocate`
-async, `deallocate` async, `select_provider` sync). It SHALL be a pure cloud-API
-adapter — it SHALL NOT access the database, SHALL NOT hold a `NodeRepository`,
-and SHALL NOT open any Unit of Work. Node persistence is owned by use cases.
+async, `deallocate` async, `select_provider` sync). It SHALL NOT access the
+database, hold a `NodeRepository`, or open a Unit of Work.
 
-`allocate(provider: str, node: Node) -> Node` receives the tmp-node `Node`
-(post-persistence identity — the row already exists with the tmp `node_id`).
-This reuses the tmp-node row as the real node's identity: the cloud setup SSH
-session registers under `node.node_id`, and the caller's persist step is a
-single `update(node)` rather than `insert(NewNode) + remove(tmp_node_id)`.
+`allocate(provider: str, node: Node) -> Node` SHALL receive a tmp-node `Node`
+(the row already exists) and mutate it — SHALL NOT construct a fresh `Node`.
+After VM creation, `allocate` SHALL resolve jump fields atomically from one
+source: the matching `CloudConfig` when it sets both `jump_host` and
+`jump_username`, otherwise from `config.remote.*` (fallback). Jump_host,
+jump_port, and jump_username SHALL all come from the same source. Jump stamping
+SHALL happen before the node is persisted as enabled.
 
-After the VM is created, `allocate` SHALL derive the node identity exactly once
-(flipping `hostname`, `cloud`, `username` on the passed Node) and thread that
-single `Node` object down. `allocate` SHALL NOT construct a fresh `Node`, and
-the private helpers SHALL NOT reconstruct one. `port` is carried through
-unchanged (the tmp node's `port` default is preserved).
+`allocate` SHALL connect the node via `machine_repository.connect(...)` with no
+`jump_host` / `jump_username` arguments. After cloud-init, engine setup, and
+CPU detection, the returned `Node` carries `enabled=True`, `ncpus`, and the
+stamped jump fields. On VM creation or setup failure, `allocate` SHALL raise
+`CloudAllocateError` or `CloudSetupError`.
 
-`allocate` SHALL stamp the jump-leg identity on the node exactly once, in the
-same `replace(node, enabled=True, ncpus=..., ...)` call that flips `enabled`
-and writes `ncpus`. The jump values SHALL be resolved atomically from one
-source: from the matching `CloudConfig` (`prefix == node.cloud`) if it sets
-BOTH `jump_host` and `jump_username`, otherwise from `config.remote.jump_host`
-/ `config.remote.jump_username` (fallback). The `jump_port` SHALL be resolved
-from the SAME source as `jump_host` / `jump_username`: the matching
-`CloudConfig.jump_port` when the cloud leg is authoritative (both `jump_host`
-and `jump_username` set), otherwise `config.remote.jump_port` (fallback). This
-preserves the "atomic jump leg from one source" rule — a node's jump_host,
-jump_port, and jump_username SHALL all come from the same config source, never
-mixed. This stamping SHALL happen BEFORE the node is persisted as enabled,
-so the orchestrator's connect-machine loop (which only yields `enabled=True`
-nodes) always sees a fully-stamped row.
+`deallocate(node: Node)` deletes the VM via the provider named by `node.cloud`,
+using `node.hostname` as the cloud SDK host identifier. When `node.cloud` is
+`None`, or when the named provider has no registered adapter or config,
+`deallocate` SHALL log a warning and return without deleting.
 
-`_setup_vm` SHALL call `machine_repository.connect(node=node,
-client_keys=keys, connect_timeout=..., data_dir=..., engines_dir=...,
-tasks_dir=...)` with NO `jump_host` / `jump_username` arguments — the
-repository reads them from the node (whose jump fields were stamped at
-creation, BEFORE the connect-setup SSH session is opened).
-
-On VM creation/setup failure `allocate` SHALL raise `CloudAllocateError` or
-`CloudSetupError` (domain exceptions). `deallocate(node: Node)` deletes the VM
-via the provider named by `node.cloud`, using `node.hostname` as the cloud SDK
-host identifier. When `node.cloud` is `None`, `deallocate` SHALL log a warning
-and return without deleting. When the named provider has no registered adapter
-or config, `deallocate` SHALL log a warning and return.
 `select_provider(platforms, current_counts) -> str | None` delegates to a pure
 selection function and returns the selected adapter's name (or `None` on no
-capacity OR when the selected provider's op semaphore is locked — throttle).
-
-`allocate` connects the node via the machine repository and registers the
-session under `node.node_id`. After cloud-init, engine setup, and CPU detection,
-the node identity is returned with `enabled` flipped, `ncpus` populated, and
-`jump_host` / `jump_username` / `jump_port` stamped (the same identity, NOT a
-freshly constructed `Node` and NOT a `NewNode`).
+capacity or when the selected provider's op semaphore is locked).
 
 #### Scenario: Allocate raises on VM creation failure
 
@@ -222,30 +195,30 @@ freshly constructed `Node` and NOT a `NewNode`).
 - **WHEN** any method on `CloudProvisionerImpl` is invoked
 - **THEN** no `NodeRepository`, `PostgresUnitOfWork`, or persistence import is touched
 
-#### Scenario: setup_vm stamps jump from CloudConfig when leg is authoritative
+#### Scenario: allocate stamps jump from CloudConfig when leg is authoritative
 
-- **WHEN** `allocate` runs `_setup_vm` for a node with `cloud="hetzner"` and the `hetzner` `CloudConfig` has `jump_host="jump.example.com"`, `jump_username="jumper"`, `jump_port=2222`
+- **WHEN** `allocate` runs for a node with `cloud="hetzner"` and the `hetzner` `CloudConfig` has `jump_host="jump.example.com"`, `jump_username="jumper"`, `jump_port=2222`
 - **THEN** the `replace(node, enabled=True, ...)` call produces a `Node` with `jump_host="jump.example.com"`, `jump_username="jumper"`, and `jump_port=2222`, and the subsequent `repository.connect(node=node, ...)` call passes no `jump_host` / `jump_username` arguments
 
-#### Scenario: setup_vm falls back to remote defaults when CloudConfig lacks jump
+#### Scenario: allocate falls back to remote defaults when CloudConfig lacks jump
 
-- **WHEN** `allocate` runs `_setup_vm` for a node whose matching `CloudConfig` does NOT set both `jump_host` and `jump_username`, and `config.remote.jump_host` is set with `config.remote.jump_port=2222`
+- **WHEN** `allocate` runs for a node whose matching `CloudConfig` does NOT set both `jump_host` and `jump_username`, and `config.remote.jump_host` is set with `config.remote.jump_port=2222`
 - **THEN** the `replace(node, enabled=True, ...)` call produces a `Node` whose `jump_host` / `jump_username` / `jump_port` come from `config.remote.*`
 
-#### Scenario: setup_vm does not mix cloud jump_host with remote jump_port
+#### Scenario: allocate does not mix cloud jump_host with remote jump_port
 
-- **WHEN** `allocate` runs `_setup_vm` for a node whose matching `CloudConfig` sets `jump_host` but NOT `jump_username`, and `config.remote.jump_port=2222`
+- **WHEN** `allocate` runs for a node whose matching `CloudConfig` sets `jump_host` but NOT `jump_username`, and `config.remote.jump_port=2222`
 - **THEN** the `replace(node, enabled=True, ...)` call produces a `Node` whose `jump_host`, `jump_username`, AND `jump_port` ALL come from `config.remote.*` (the cloud leg is not half-authoritative — fallback is all-or-nothing)
 
-#### Scenario: setup_vm connect call has no jump kwargs
+#### Scenario: allocate connects without jump kwargs
 
-- **WHEN** `_setup_vm` opens the setup SSH session via `machine_repository.connect`
+- **WHEN** `allocate` opens the setup SSH session via `machine_repository.connect`
 - **THEN** the call is `connect(node=node, client_keys=keys, connect_timeout=adapter.create_node_conn_timeout, data_dir=..., engines_dir=..., tasks_dir=...)` — no `jump_host` / `jump_username` keyword arguments
 
-#### Scenario: setup_vm does not write ncpus onto the Node
+#### Scenario: allocate setup does not write ncpus onto the Node
 
-- **WHEN** `allocate` runs `_setup_vm` and reaches the final `replace(node, enabled=True, ...)`
-- **THEN** the resulting `Node.ncpus is None` (no `ncpus=` kwarg is passed); the standalone `get_cpu_cores()` call is NOT made inside `_setup_vm`
+- **WHEN** `allocate` reaches the final `replace(node, enabled=True, ...)` after setup
+- **THEN** the resulting `Node.ncpus is None` (no `ncpus=` kwarg is passed); the standalone `get_cpu_cores()` call is NOT made inside the setup path
 
 #### Scenario: allocate DONE log is None-safe for ncpus
 
@@ -256,11 +229,8 @@ freshly constructed `Node` and NOT a `NewNode`).
 
 SSH key generation, loading, and name extraction SHALL live in the cloud
 subsystem. The cloud-init user-data renderer SHALL be a single concrete frozen
-dataclass `CloudInitConfig`. There SHALL be no `PCloudConfig` Protocol. Provider
-`*_create_node` callables SHALL type their `cloud_config` parameter as
-`CloudInitConfig | None` (the concrete class). The `az_create_node` public entry
-point SHALL NOT carry a runtime `isinstance` boundary guard narrowing
-`cloud_config`.
+dataclass `CloudInitConfig`. Provider `*_create_node` callables SHALL type their
+`cloud_config` parameter as `CloudInitConfig | None` (the concrete class).
 
 #### Scenario: SSH keys module location
 - **WHEN** SSH key generation or loading is needed
@@ -281,10 +251,8 @@ hardcoded. The `packages` list continues to derive from platform-matched engines
 
 `CloudProvisionerImpl.stop` SHALL close every SSH connection held by its
 `machine_repository` by awaiting `machine_repository.disconnect_all()`.
-`allocate` opens connections during cloud allocation and does not disconnect them
-on success. Without `stop()` draining the repository, those connections leak.
-`disconnect_all` on `SSHMachineRepository` is idempotent, so calling it from
-both `clouds.stop()` and `Orchestrator.stop()` (shared instance) is safe.
+`disconnect_all` is idempotent, so calling it from both `clouds.stop()` and
+`Orchestrator.stop()` (shared instance) is safe.
 
 #### Scenario: stop drains all machine connections
 - **WHEN** `CloudProvisionerImpl.stop()` is called
@@ -294,12 +262,9 @@ both `clouds.stop()` and `Orchestrator.stop()` (shared instance) is safe.
 
 `CloudProvisionerImpl.allocate` SHALL disconnect the `machine_repository`
 session for the failed node identity before deleting the VM on the
-setup-failure path. Both `except` blocks following setup (the `CloudSetupError`
-handler and the generic `Exception` handler) SHALL disconnect BEFORE deleting
-the VM. Without this, a failed allocation would leak a stale `FREE` session
-pointing at a deleted VM. Disconnect is a safe no-op when the `node_id` is
-absent from sessions, so calling it when setup itself failed (no session
-registered) is harmless. The success path is unchanged: on a successful setup,
+setup-failure path. Both `except` blocks following setup SHALL disconnect
+BEFORE deleting the VM. Disconnect is a safe no-op when the `node_id` is
+absent from sessions. The success path is unchanged: on a successful setup,
 the session stays registered for orchestrator reuse.
 
 #### Scenario: Setup failure disconnects before VM deletion

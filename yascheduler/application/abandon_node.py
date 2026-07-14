@@ -12,14 +12,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
-#   PREVIOUS_CHANGE: v2.0.0 - Replace the dead TO_DO + allocated_node_id lookup with tracker.discard_by_node(node.node_id); the task-to-node link now lives in the tracker . Multi-match warning now signals tracker corruption over tracker entries, not TO_DO tasks.
+#   LAST_CHANGE: v2.2.0 - Split test-targeted CLOUD_DELETE_FAILED and AMBIGUOUS_TRACKER emits into log.trace + log.error/log.warning per reform-grace-logging slices 6.2-6.3.
+#   PREVIOUS_CHANGE: v2.1.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
+
+from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-APPLICATION-ABANDON-NODE")
 
 
 # START_CONTRACT: abandon_node
@@ -56,13 +57,14 @@ async def abandon_node(
         try:
             await clouds.deallocate(node)
         except Exception as err:
-            logger.error(
-                "[abandon_node][CLOUD_DELETE_FAILED] node_id=%s hostname=%s cloud=%s err=%s",
-                node.node_id,
-                node.hostname,
-                node.cloud,
-                err,
+            logger.trace(
+                "CLOUD_DELETE_FAILED",
+                node_id=node.node_id,
+                hostname=node.hostname,
+                cloud=node.cloud,
+                err=err,
             )
+            logger.error("cloud delete failed for node %s: %s", node.hostname, err)
     # END_BLOCK_CLOUD_DELETE
 
     # START_BLOCK_REMOVE_ROW
@@ -71,8 +73,11 @@ async def abandon_node(
             await uow.nodes.remove(node.node_id)
             await uow.commit()
     except Exception as err:
+        logger.trace(
+            "REMOVE_FAILED", node_id=node.node_id, hostname=node.hostname, err=err
+        )
         logger.error(
-            "[abandon_node][REMOVE_FAILED] node_id=%s hostname=%s err=%s",
+            "abandon_node remove failed: node_id=%s hostname=%s err=%s",
             node.node_id,
             node.hostname,
             err,
@@ -83,10 +88,13 @@ async def abandon_node(
     # START_BLOCK_DISCARD_BY_NODE
     removed = tracker.discard_by_node(node.node_id)
     if removed > 1:
+        logger.trace(
+            "AMBIGUOUS_TRACKER",
+            node_id=node.node_id,
+            hostname=node.hostname,
+            count=removed,
+        )
         logger.warning(
-            "[abandon_node][AMBIGUOUS_TRACKER] node_id=%s hostname=%s count=%d",
-            node.node_id,
-            node.hostname,
-            removed,
+            "ambiguous tracker: node %s has %d entries", node.hostname, removed
         )
     # END_BLOCK_DISCARD_BY_NODE

@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/orchestrator.py
-# VERSION: 7.6.0
+# VERSION: 7.12.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Daemon orchestrator — manages producer-consumer loops calling use cases.
 #   SCOPE: Daemon orchestrator: producer-consumer loops driving submit/allocate/consume/deallocate use cases with SSH/cloud collaborators.
@@ -13,14 +13,13 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v7.8.0 - falsy short-circuit ncpus resolution with explicit None-check.
-#   PREVIOUS_CHANGE: v7.7.0 - node-owns-connection-identity slice 2: removed inline jump-host resolution block (design.md D6) and jump_host/jump_username kwargs from repository.connect call. Node owns jump identity; repository reads node.jump_* directly.
+#   LAST_CHANGE: v7.12.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-APPLICATION-ORCHESTRATOR") at module top
+#   PREVIOUS_CHANGE: v7.11.0 - Rewrite cleanup-path warnings (CLOUDS_STOP_FAILED/DISCONNECT_ALL_FAILED/HTTP_CLOSE_FAILED/MACHINE_GONE) to pure narrative (no grace markers) per reform-grace-logging slice 7.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
-import logging  # noqa: TC003 — used at runtime for log calls
 import time
 from asyncio.locks import Event
 from collections import Counter
@@ -40,12 +39,15 @@ from yascheduler.domain import (
     TaskId,
     TaskStatus,
 )
+from yascheduler.shared import get_logger
 
 from .abandon_node import abandon_node
 from .allocate_task import _count_nodes_by_cloud, allocate_task
 from .consume_task import consume_task
 from .deallocate_nodes import deallocate_node, deallocate_nodes
 from .queue import UMessage, UniqueQueue
+
+logger = get_logger("M-APPLICATION-ORCHESTRATOR")
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Sequence
@@ -80,7 +82,7 @@ async def _asleep_until(end: datetime) -> None:
 
 # START_CONTRACT: Orchestrator
 #   PURPOSE: Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases.
-#   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, gateway, task_deployer, output_downloader, occupancy_checker, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock }
+#   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, gateway, task_deployer, output_downloader, occupancy_checker, engines, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock }
 #   OUTPUTS: { Orchestrator instance }
 #   SIDE_EFFECTS: Creates queues, cancellation event.
 #   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
@@ -88,7 +90,7 @@ async def _asleep_until(end: datetime) -> None:
 class Orchestrator:
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
-    #   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, repository, task_deployer, output_downloader, occupancy_checker, engines, log, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock, list_private_keys_fn, http_session }
+    #   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, repository, task_deployer, output_downloader, occupancy_checker, engines, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock, list_private_keys_fn, http_session }
     #   OUTPUTS: { None }
     #   SIDE_EFFECTS: Creates UniqueQueues.
     #   LINKS: M-APPLICATION-UOW, M-QUEUE, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY, M-SSH-KEYS
@@ -104,7 +106,6 @@ class Orchestrator:
         output_downloader: OutputDownloader,
         occupancy_checker: OccupancyChecker,
         engines: EngineRepository,
-        log: logging.Logger,
         config_clouds: Sequence[CloudConfig],
         local_tasks_dir: Path,
         allocation_tracker: AllocationTracker,
@@ -122,7 +123,6 @@ class Orchestrator:
         self._output_downloader = output_downloader
         self._occupancy_checker = occupancy_checker
         self._engines = engines
-        self._log = log
         self._config_clouds = config_clouds
         self._local_tasks_dir = local_tasks_dir
         self._http_session = http_session
@@ -233,7 +233,7 @@ class Orchestrator:
                     t_todo=tcounters.get(TaskStatus.TO_DO, 0),
                     t_done=tcounters.get(TaskStatus.DONE, 0),
                 )
-                self._log.info(msg)
+                logger.info(msg)
 
                 queues = [
                     self._conn_machine_q,
@@ -242,11 +242,12 @@ class Orchestrator:
                     self._consume_q,
                 ]
                 qmsgs = [f"{q.name}: {q.psize()}/{q.qsize()}" for q in queues]
-                self._log.info("QUEUES: {}".format(" ".join(qmsgs)))
+                logger.info("QUEUES: {}".format(" ".join(qmsgs)))
             # CancelledError is a BaseException — do NOT broaden to
             # `except BaseException` or shutdown will be swallowed.
             except Exception as err:
-                self._log.error("[Orchestrator][_print_stats][ERROR] err=%s", err)
+                logger.trace("ERROR", context="stats", err=err)
+                logger.error("stats print failed: %s", err)
             finally:
                 await _asleep_until(end_time)
             # END_BLOCK_STATS_RESILIENCE
@@ -297,13 +298,13 @@ class Orchestrator:
             # _connect_failures is never populated and _connect_grace_for
             # is never called on the production path for static nodes.
             if node.cloud is None:
-                self._log.warning(
-                    "[Orchestrator][_connect_machine_consumer][CONNECT_RETRY_STATIC] "
-                    "node_id=%s hostname=%s err=%s",
-                    node.node_id,
-                    node.hostname,
-                    err,
+                logger.trace(
+                    "CONNECT_RETRY_STATIC",
+                    node_id=node.node_id,
+                    hostname=node.hostname,
+                    err=err,
                 )
+                logger.warning("static node %s connect failed: %s", node.hostname, err)
                 return
             # END_BLOCK_STATIC_NODE_RETRY
             # START_BLOCK_CONNECT_GRACE_CHECK
@@ -313,27 +314,27 @@ class Orchestrator:
             age = time.monotonic() - first_seen
             grace = self._connect_grace_for(node.cloud)
             if age < grace:
-                self._log.warning(
-                    "[Orchestrator][_connect_machine_consumer][CONNECT_RETRY] "
-                    "node_id=%s hostname=%s age=%.1fs grace=%ds err=%s",
-                    node.node_id,
-                    node.hostname,
-                    age,
-                    grace,
-                    err,
+                logger.trace(
+                    "CONNECT_RETRY",
+                    node_id=node.node_id,
+                    hostname=node.hostname,
+                    age=age,
+                    grace=grace,
+                    err=err,
                 )
+                logger.warning("cloud node %s connect failed: %s", node.hostname, err)
                 return
             # END_BLOCK_CONNECT_GRACE_CHECK
 
             # START_BLOCK_CONNECT_ABANDON
-            self._log.error(
-                "[Orchestrator][_connect_machine_consumer][CONNECT_ABANDON] "
-                "node_id=%s hostname=%s age=%.1fs grace=%ds — abandoning node",
-                node.node_id,
-                node.hostname,
-                age,
-                grace,
+            logger.trace(
+                "CONNECT_ABANDON",
+                node_id=node.node_id,
+                hostname=node.hostname,
+                age=age,
+                grace=grace,
             )
+            logger.error("abandoning cloud node %s after grace exceeded", node.hostname)
             try:
                 await abandon_node(
                     node,
@@ -342,17 +343,19 @@ class Orchestrator:
                     self._tracker,
                 )
             except Exception as abandon_err:
-                self._log.error(
-                    "[Orchestrator][_connect_machine_consumer][ABANDON_FAILED] "
-                    "node_id=%s hostname=%s err=%s",
-                    node.node_id,
-                    node.hostname,
-                    abandon_err,
+                logger.trace(
+                    "ABANDON_FAILED",
+                    node_id=node.node_id,
+                    hostname=node.hostname,
+                    err=abandon_err,
+                )
+                logger.error(
+                    "abandon_node failed for node %s: %s", node.hostname, abandon_err
                 )
             self._connect_failures.pop(node.node_id, None)
             # END_BLOCK_CONNECT_ABANDON
         except Exception as err:
-            self._log.error("An error occuried on remote machine creation: %s", err)
+            logger.error("An error occuried on remote machine creation: %s", err)
 
     def _connect_grace_for(self, cloud: str | None) -> int:
         if cloud is None:
@@ -371,9 +374,7 @@ class Orchestrator:
             tasks = await uow.tasks.list_by_status({TaskStatus.TO_DO}, limit=tlim)
         if tasks:
             ids = [str(t.task_id) for t in tasks]
-            self._log.debug(
-                "[Orchestrator][_allocator_producer] task_ids=%s", ", ".join(ids)
-            )
+            logger.trace("ALLOCATOR_PRODUCER", task_ids=", ".join(ids))
         for task in tasks:
             yield UMessage(task.task_id, task)
 
@@ -386,10 +387,7 @@ class Orchestrator:
     # END_CONTRACT: Orchestrator._allocator_consumer
     async def _allocator_consumer(self, msg: UMessage[TaskId, Task]) -> None:
         # START_BLOCK_ALLOCATE
-        self._log.debug(
-            "[Orchestrator][_allocator_consumer][ALLOCATE] task_id=%s",
-            msg.id,
-        )
+        logger.trace("ALLOCATE", task_id=msg.id)
         try:
             await allocate_task(
                 task_id=msg.id,
@@ -404,7 +402,7 @@ class Orchestrator:
                 remote_tasks_dir=self._remote_defaults.tasks_dir,
             )
         except Exception as err:
-            self._log.error("Allocator error for task %s: %s", msg.id, err)
+            logger.error("Allocator error for task %s: %s", msg.id, err)
         # END_BLOCK_ALLOCATE
 
     async def _task_consumer_producer(
@@ -440,11 +438,7 @@ class Orchestrator:
         session = self._repository.get_session(node_id) if node_id is not None else None
         if session is None:
             # START_BLOCK_MACHINE_GONE
-            self._log.warning(
-                "[Orchestrator][_task_consumer_consumer][MACHINE_GONE] task_id=%s node_id=%s",
-                task_id,
-                node_id,
-            )
+            logger.warning("machine gone for task_id=%s node_id=%s", task_id, node_id)
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:
                 # Single atomic transition: RUNNING→DONE with error; emits
@@ -488,11 +482,7 @@ class Orchestrator:
 
         # START_BLOCK_CONSUME
         if machine.state == MachineState.FREE and key in self._occupancy_started:
-            self._log.debug(
-                "[Orchestrator][_task_consumer][CONSUME] node_id=%s task_id=%s",
-                key,
-                task_id,
-            )
+            logger.trace("CONSUME", node_id=key, task_id=task_id)
             # Guard the task id so the next producer cycle does not re-yield it
             # to another worker while this consume is in flight.
             self._consuming.add(task_id)
@@ -565,7 +555,7 @@ class Orchestrator:
                 node, self._repository, self._clouds, self._uow_factory
             )
         except Exception as err:
-            self._log.error(
+            logger.error(
                 "Deallocator error for node_id=%s hostname=%s: %s",
                 node.node_id,
                 node.hostname,
@@ -627,12 +617,8 @@ class Orchestrator:
                 try:
                     await consumer(msg)
                 except Exception as err:
-                    self._log.error(
-                        "[Orchestrator][_create_producer_consumers][CONSUMER_ERROR] "
-                        "queue=%s err=%s",
-                        queue.name,
-                        err,
-                    )
+                    logger.trace("CONSUMER_ERROR", queue=queue.name, err=err)
+                    logger.error("consumer error on queue %s: %s", queue.name, err)
                 finally:
                     queue.item_done(msg)
                 # END_BLOCK_CONSUMER_RESILIENCE
@@ -661,18 +647,14 @@ class Orchestrator:
                 # 3.8 — do NOT broaden this to `except BaseException` or graceful
                 # shutdown will be swallowed and the drain below bypassed.
                 except Exception as err:
-                    self._log.error(
-                        "[Orchestrator][_create_producer_consumers][PRODUCER_ERROR] "
-                        "queue=%s err=%s",
-                        queue.name,
-                        err,
-                    )
+                    logger.trace("PRODUCER_ERROR", queue=queue.name, err=err)
+                    logger.error("producer error on queue %s: %s", queue.name, err)
                 finally:
                     await _asleep_until(end_time)
                 # END_BLOCK_PRODUCER_RESILIENCE
         except asyncio.CancelledError:
             if not queue.empty():
-                self._log.info(
+                logger.info(
                     "Queue %s has %s items - waiting", queue.name, queue.qsize()
                 )
                 await queue.join()
@@ -722,9 +704,9 @@ class Orchestrator:
     #   LINKS: M-QUEUE, M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator.start
     async def start(self) -> None:
-        self._log.debug(
-            "[Orchestrator][start] engines=%s",
-            ", ".join(e.name for e in self._engines.values()),
+        logger.trace(
+            "START",
+            engines=", ".join(e.name for e in self._engines.values()),
         )
 
         self._bg_jobs.add(asyncio.create_task(self._print_stats()))
@@ -782,7 +764,7 @@ class Orchestrator:
             return
         self._stopped = True
         # END_BLOCK_STOP_GUARD
-        self._log.info("Stopping...")
+        logger.info("Stopping...")
         self._cancellation_event.set()
 
         # START_BLOCK_STOP_AWAIT_JOBS
@@ -797,21 +779,21 @@ class Orchestrator:
             # a bg job that already died with a non-CancelledError before
             # shutdown so the pre-existing exception does not abort cleanup.
             except Exception as e:
-                self._log.debug("[Orchestrator][stop][BG_JOB_ENDED] %s", e)
+                logger.trace("BG_JOB_ENDED", err=e)
         # END_BLOCK_STOP_AWAIT_JOBS
 
         # START_BLOCK_STOP_CLOUDS
         try:
             await self._clouds.stop()
         except Exception as e:
-            self._log.warning("[Orchestrator][stop][CLOUDS_STOP_FAILED] %s", e)
+            logger.warning("clouds stop failed: %s", e)
         # END_BLOCK_STOP_CLOUDS
 
         # START_BLOCK_STOP_GATEWAY
         try:
             await self._repository.disconnect_all()
         except Exception as e:
-            self._log.warning("[Orchestrator][stop][DISCONNECT_ALL_FAILED] %s", e)
+            logger.warning("disconnect all failed: %s", e)
         # END_BLOCK_STOP_GATEWAY
 
         # START_BLOCK_STOP_HTTP
@@ -819,6 +801,6 @@ class Orchestrator:
             try:
                 await self._http_session.close()
             except Exception as e:
-                self._log.warning("[Orchestrator][stop][HTTP_CLOSE_FAILED] %s", e)
+                logger.warning("http close failed: %s", e)
         self._http_session = None
         # END_BLOCK_STOP_HTTP

@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import NodeId, NodeStatus, TaskId, TaskStatus
 from yascheduler.entrypoints import make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.shared import get_logger
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -45,6 +46,9 @@ if TYPE_CHECKING:
 
     from yascheduler.application import AbstractUnitOfWork
     from yascheduler.domain import Task
+
+
+logger = get_logger("M-ENTRYPOINTS-CLI-SHOW-NODES")
 
 
 @dataclass(frozen=True)
@@ -128,9 +132,7 @@ def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
 # END_CONTRACT: _fetch_nodes_view
 async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
     # START_BLOCK_READ_NODES
-    logging.debug(
-        "[ShowNodes][_fetch_nodes_view][READ] reading nodes and running tasks"
-    )
+    logger.trace("READ", detail="nodes and running tasks")
     tasks = await uow.tasks.list_by_status(statuses={TaskStatus.RUNNING})
     nodes = await uow.nodes.list_all()
     # END_BLOCK_READ_NODES

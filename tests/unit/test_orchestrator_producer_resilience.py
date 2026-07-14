@@ -90,8 +90,6 @@ def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
     output_downloader = MagicMock()
     occupancy_checker = MagicMock()
 
-    log = MagicMock(spec=logging.Logger)
-
     return Orchestrator(
         local_settings=local,
         remote_defaults=remote,
@@ -102,7 +100,6 @@ def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
         output_downloader=output_downloader,
         occupancy_checker=occupancy_checker,
         engines=engines,
-        log=log,
         config_clouds=[],
         local_tasks_dir=Path("/tmp"),
         allocation_tracker=AllocationTracker(),
@@ -193,11 +190,6 @@ class TestProducerResilience:
         orch = _make_orchestrator(sleep_interval=0)
         q: UniqueQueue = UniqueQueue("test", maxsize=10)
 
-        log_name = "test_producer_resilience"
-        logger = logging.getLogger(log_name)
-        logger.setLevel(logging.DEBUG)
-        orch._log = logger  # type: ignore[method-assign]
-
         call_count = {"n": 0}
         success = {"n": 0}
 
@@ -215,7 +207,7 @@ class TestProducerResilience:
 
         consumer = AsyncMock()
 
-        with caplog.at_level(logging.ERROR, logger=log_name):
+        with caplog.at_level(logging.DEBUG, logger="yascheduler"):
             await orch._create_producer_consumers(q, producer, consumer, workers_num=1)
 
         # The loop exits via the while-condition (cancellation_event set), NOT
@@ -229,9 +221,9 @@ class TestProducerResilience:
 
         assert call_count["n"] >= 2, "producer was not retried after raising"
         assert success["n"] >= 1, "second producer cycle did not complete"
-        assert any("PRODUCER_ERROR" in r.getMessage() for r in caplog.records), (
-            "producer Exception was not logged"
-        )
+        assert any(
+            getattr(r, "block", None) == "PRODUCER_ERROR" for r in caplog.records
+        ), "producer Exception was not logged as PRODUCER_ERROR trace"
 
 
 # =============================================================================
@@ -285,19 +277,18 @@ class TestCancelledErrorDrain:
 
         consumer = AsyncMock()
         handler = _ListHandler()
-        log = logging.getLogger("test_no_swallow")
-        log.addHandler(handler)
-        log.setLevel(logging.DEBUG)
-        orch._log = log  # type: ignore[method-assign]
+        parent = logging.getLogger("yascheduler")
+        parent.addHandler(handler)
+        parent.setLevel(logging.DEBUG)
 
         try:
             await orch._create_producer_consumers(q, producer, consumer, workers_num=1)
         finally:
-            log.removeHandler(handler)
+            parent.removeHandler(handler)
 
-        assert not any("PRODUCER_ERROR" in r.getMessage() for r in handler.records), (
-            "CancelledError was swallowed by except Exception"
-        )
+        assert not any(
+            getattr(r, "block", None) == "PRODUCER_ERROR" for r in handler.records
+        ), "CancelledError was swallowed by except Exception"
 
 
 # =============================================================================
@@ -506,10 +497,6 @@ class TestStatsResilience:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         orch = _make_orchestrator(sleep_interval=0)
-        log_name = "test_stats_resilience"
-        logger = logging.getLogger(log_name)
-        logger.setLevel(logging.DEBUG)
-        orch._log = logger  # type: ignore[method-assign]
         orch._repository.list_connected = MagicMock(return_value=[])  # type: ignore[method-assign]
 
         boom = _BoomUow()
@@ -521,7 +508,7 @@ class TestStatsResilience:
         async def _noop_sleep(_end: object) -> None:
             await asyncio.sleep(0)
 
-        with caplog.at_level(logging.ERROR, logger=log_name):
+        with caplog.at_level(logging.DEBUG, logger="yascheduler"):
             with patch(
                 "yascheduler.application.orchestrator._asleep_until",
                 new=_noop_sleep,
@@ -541,9 +528,10 @@ class TestStatsResilience:
 
         assert boom.calls >= 2, "stats loop did not continue after the first error"
         assert any(
-            "_print_stats" in r.getMessage() and "ERROR" in r.getMessage()
+            getattr(r, "block", None) == "ERROR"
+            and getattr(r, "fields", {}).get("context") == "stats"
             for r in caplog.records
-        ), "stats Exception was not logged with the _print_stats ERROR marker"
+        ), "stats Exception was not logged with the ERROR trace and context=stats"
 
     @pytest.mark.asyncio
     async def test_print_stats_cancellederror_still_propagates(self) -> None:
@@ -598,17 +586,13 @@ class TestStatsEmptyDbRegression:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         orch = _make_orchestrator(sleep_interval=0)
-        log_name = "test_stats_empty_db"
-        logger = logging.getLogger(log_name)
-        logger.setLevel(logging.DEBUG)
-        orch._log = logger  # type: ignore[method-assign]
         orch._repository.list_connected = MagicMock(return_value=[])  # type: ignore[method-assign]
         orch._uow_factory = _uow_factory(_EmptyMappingsUow())  # type: ignore[method-assign]
 
         async def _noop_sleep(_end: object) -> None:
             await asyncio.sleep(0)
 
-        with caplog.at_level(logging.INFO, logger=log_name):
+        with caplog.at_level(logging.INFO, logger="yascheduler"):
             with patch(
                 "yascheduler.application.orchestrator._asleep_until",
                 new=_noop_sleep,
@@ -633,5 +617,7 @@ class TestStatsEmptyDbRegression:
             for r in caplog.records
         ), "stats did not log successfully on empty nodes table"
         assert not any(
-            "[_print_stats][ERROR]" in r.getMessage() for r in caplog.records
+            getattr(r, "block", None) == "ERROR"
+            and getattr(r, "fields", {}).get("context") == "stats"
+            for r in caplog.records
         ), "stats raised on empty nodes table (KeyError regression)"

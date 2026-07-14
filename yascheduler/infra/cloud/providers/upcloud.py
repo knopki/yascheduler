@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/upcloud.py
-# VERSION: 1.8.0
+# VERSION: 1.9.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: UpCloud server creation and deletion via API.
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Retype upcloud_create_node_sync and upcloud_create_node cloud_config params PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
-#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudUpcloud from yascheduler.infra.cloud facade.
+#   LAST_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-UPCLOUD") at module top
+#   PREVIOUS_CHANGE: v1.8.0 - Retype upcloud_create_node_sync and upcloud_create_node cloud_config params PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
 # END_CHANGE_SUMMARY
 #
 """Upcloud cloud methods"""
@@ -39,10 +39,11 @@ except ImportError:
     _UPCLOUD_AVAILABLE = False
 
 from yascheduler.infra.cloud import get_rnd_name
+from yascheduler.shared import get_logger
+
+logger = get_logger("M-CLOUD-PROVIDER-UPCLOUD")
 
 if TYPE_CHECKING:
-    import logging
-
     from asyncssh.public_key import SSHKey
 
     from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudUpcloud
@@ -67,13 +68,12 @@ def get_client(cfg: ConfigCloudUpcloud) -> CloudManager:
 
 # START_CONTRACT: upcloud_create_node_sync
 #   PURPOSE: Create UpCloud server synchronously with SSH key and cloud-config
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
+#   INPUTS: { cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
 #   OUTPUTS: { str - public IP address of created server }
 #   SIDE_EFFECTS: Creates UpCloud server and storage resources
 #   LINKS: M-CLOUD-UPCLOUD
 # END_CONTRACT: upcloud_create_node_sync
 def upcloud_create_node_sync(
-    log: logging.Logger,
     cfg: ConfigCloudUpcloud,
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
@@ -101,19 +101,18 @@ def upcloud_create_node_sync(
     )
     ip_addr = cast("str | None", server.get_public_ip())
     assert ip_addr is not None
-    log.info("CREATED %s", ip_addr)
+    logger.info("CREATED %s", ip_addr)
     return ip_addr
 
 
 # START_CONTRACT: upcloud_create_node
 #   PURPOSE: Create UpCloud server asynchronously via thread pool executor
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
+#   INPUTS: { cfg: ConfigCloudUpcloud - UpCloud config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
 #   OUTPUTS: { str - public IP address of created server }
 #   SIDE_EFFECTS: Creates UpCloud server via synchronous call in executor
 #   LINKS: M-CLOUD-UPCLOUD, upcloud_create_node_sync
 # END_CONTRACT: upcloud_create_node
 async def upcloud_create_node(
-    log: logging.Logger,
     cfg: ConfigCloudUpcloud,
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
@@ -122,19 +121,18 @@ async def upcloud_create_node(
     if not _UPCLOUD_AVAILABLE:
         raise ImportError("UpCloud SDK not installed. Install upcloud-api package.")
     return await asyncio.get_running_loop().run_in_executor(
-        executor, upcloud_create_node_sync, log, cfg, key, cloud_config
+        executor, upcloud_create_node_sync, cfg, key, cloud_config
     )
 
 
 # START_CONTRACT: upcload_delete_node_sync
 #   PURPOSE: Delete UpCloud server synchronously by host IP, waiting for stop and cleanup
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, host: str - IP address of server to delete }
+#   INPUTS: { cfg: ConfigCloudUpcloud - UpCloud config, host: str - IP address of server to delete }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Stops and destroys UpCloud server and associated storage devices
 #   LINKS: M-CLOUD-UPCLOUD
 # END_CONTRACT: upcload_delete_node_sync
 def upcload_delete_node_sync(
-    log: logging.Logger,
     cfg: ConfigCloudUpcloud,
     host: str,
 ) -> None:
@@ -145,7 +143,7 @@ def upcload_delete_node_sync(
     for server in client.get_servers():
         if server.get_public_ip() == host:
             server.stop()
-            log.info("WAITING FOR STOP...")
+            logger.info("WAITING FOR STOP...")
             time.sleep(20)
             while True:
                 try:
@@ -156,21 +154,20 @@ def upcload_delete_node_sync(
                     break
             for storage in server.storage_devices:  # type: ignore[attr-defined]
                 storage.destroy()
-            log.info("DELETED %s", host)
+            logger.info("DELETED %s", host)
             break
     else:
-        log.info("NODE %s NOT DELETED AS UNKNOWN", host)
+        logger.info("NODE %s NOT DELETED AS UNKNOWN", host)
 
 
 # START_CONTRACT: upcload_delete_node
 #   PURPOSE: Delete UpCloud server asynchronously via thread pool executor
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudUpcloud - UpCloud config, host: str - IP address of server to delete }
+#   INPUTS: { cfg: ConfigCloudUpcloud - UpCloud config, host: str - IP address of server to delete }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Deletes UpCloud server via synchronous call in executor
 #   LINKS: M-CLOUD-UPCLOUD, upcload_delete_node_sync
 # END_CONTRACT: upcload_delete_node
 async def upcload_delete_node(
-    log: logging.Logger,
     cfg: ConfigCloudUpcloud,
     host: str,
 ) -> None:
@@ -178,5 +175,5 @@ async def upcload_delete_node(
     if not _UPCLOUD_AVAILABLE:
         raise ImportError("UpCloud SDK not installed. Install upcloud-api package.")
     return await asyncio.get_running_loop().run_in_executor(
-        executor, upcload_delete_node_sync, log, cfg, host
+        executor, upcload_delete_node_sync, cfg, host
     )

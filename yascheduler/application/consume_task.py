@@ -23,9 +23,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
+
+from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-APPLICATION-CONSUME")
 
 
 # START_CONTRACT: _prepare_store_folder

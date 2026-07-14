@@ -31,7 +31,6 @@
 # END_CHANGE_SUMMARY
 
 import asyncio
-import logging
 from abc import abstractmethod
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from dataclasses import dataclass
@@ -67,6 +66,7 @@ from asyncssh.sftp import (
 
 if TYPE_CHECKING:
     from yascheduler.domain import EngineRepository
+    from yascheduler.shared import YaLogger
 
 SFTPRetryExc = (
     asyncio.TimeoutError,
@@ -179,6 +179,6 @@ class SetupNodeCallable(Protocol):
         quote: QuoteCallable,
         engines: "EngineRepository",
         engines_dir: PurePath,
-        log: Optional[logging.Logger] = None,
+        log: "YaLogger | None" = None,
     ) -> Coroutine[Any, Any, None]:
         pass

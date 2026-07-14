@@ -28,12 +28,7 @@ command entry points and the three daemon launchers:
   `short="-l"` (it registers `-l`/`--log-file`). Resolves via
   `logging.getLevelName(args.log_level)`.
 - `add_log_file_arg(parser, *, default=None)` — adds `--log-file PATH` (path
-  string, no existence check; `FileHandler` fails loudly if unwritable). Used
-  only by the three daemon entry points.
-
-Each helper SHALL be a function mutating the passed parser (composing with the
-caller's bespoke parser), NOT a base `ArgumentParser` subclass and NOT a single
-shared dispatcher.
+  string, no existence check; `FileHandler` fails loudly if unwritable).
 
 #### Scenario: existing_path returns Path for an existing file
 - **WHEN** `existing_path("/etc/yascheduler/yascheduler.conf")` is called and the file exists
@@ -62,16 +57,18 @@ entry points:
 
 - `configure_logger(log_file: str | Path | None, level: int) -> logging.Logger`
   — configures the ROOT logger: always adds a `StreamHandler(sys.stderr)`, adds
-  a `FileHandler(log_file)` only when `log_file is not None`, sets `backoff` and
-  `asyncssh` loggers to `ERROR`, and calls `logging.captureWarnings(True)`.
-  SHALL NOT call `logging.basicConfig`.
+  a `FileHandler(log_file)` only when `log_file is not None`, wires a `LogFormatter`
+  onto both handlers so trace records and user-facing records render with their
+  distinct layouts, sets `backoff` and `asyncssh` loggers to `ERROR`, and calls
+  `logging.captureWarnings(True)`. SHALL NOT call `logging.basicConfig`.
 - `async def run_daemon(config: Config, logger: logging.Logger) -> None` — the
-  async daemon core: awaits `make_daemon(config, logger)` to build the
+  async daemon core: awaits `make_daemon(config)` to build the
   `Orchestrator`, registers SIGTERM/SIGINT handlers on the running event loop
   (cancel outstanding tasks, sleep 250ms for SSL close, log "Done"), then
   awaits `orch.start()` wrapped in a `try/finally` whose `finally` clause awaits
-  `orch.stop()`. Signal-handler registration lives in `run_daemon` (not the
-  entry points) because `loop.add_signal_handler` requires a running loop.
+  `orch.stop()`. The
+  `logger` parameter is used ONLY for signal-handler messages inside
+  `run_daemon`; it SHALL NOT be forwarded to `make_daemon`.
 
 Each daemon entry point SHALL be a synchronous `def` that builds its own
 argparse parser via the shared helpers, calls `configure_logger`, loads
@@ -82,10 +79,16 @@ signal handlers themselves.
 #### Scenario: configure_logger writes to stderr when log_file is None
 - **WHEN** `configure_logger(log_file=None, level=logging.INFO)` is called
 - **THEN** the root logger has a `StreamHandler(sys.stderr)` and no `FileHandler`
+- **AND** the `StreamHandler` is configured with a `LogFormatter`
 
 #### Scenario: configure_logger writes to file and stderr when log_file is set
 - **WHEN** `configure_logger(log_file="/tmp/y.log", level=logging.INFO)` is called
 - **THEN** the root logger has both a `StreamHandler(sys.stderr)` and a `FileHandler` pointed at `/tmp/y.log`
+- **AND** both handlers are configured with a `LogFormatter` (single formatter, no per-handler format variants)
+
+#### Scenario: configure_logger does not call basicConfig
+- **WHEN** `configure_logger(...)` is invoked
+- **THEN** `logging.basicConfig` is NOT called (handlers and level are set explicitly)
 
 #### Scenario: run_daemon is async
 - **WHEN** `run_daemon` is inspected
@@ -93,7 +96,7 @@ signal handlers themselves.
 
 #### Scenario: run_daemon awaits make_daemon and orch.start
 - **WHEN** `run_daemon(config, logger)` is awaited
-- **THEN** `make_daemon(config, logger)` is awaited, SIGTERM/SIGINT handlers are registered on the running event loop, `orch.start()` is awaited, and the `finally` block awaits `orch.stop()`
+- **THEN** `make_daemon(config)` is awaited (without forwarding `logger`), SIGTERM/SIGINT handlers are registered on the running event loop, `orch.start()` is awaited, and the `finally` block awaits `orch.stop()`
 
 #### Scenario: start() exception propagates after cleanup
 - **WHEN** `orch.start()` raises an exception
@@ -195,13 +198,13 @@ obtain `Config` via `Config.from_config_parser`, build `CLIDeps` via
 `submit()` SHALL parse `argv` with `argparse.ArgumentParser(prog="yasubmit",
 description="Submit task to yascheduler via AiiDA script")` exposing one
 positional argument:
-- `script` (positional, `type=_existing_path`): the path to the AiiDA script
-  file. `_existing_path(s)` SHALL return `Path(s)` if `s` is an existing file or
-  raise `argparse.ArgumentTypeError(f"not a file: {s}")`, so a missing file is
-  an argparse error (exit `2`), not a runtime error (exit `1`). This places
-  argument-*shape* validation (the file exists) at the argparse layer, while
-  argument-*content* validation (the `ENGINE` key is present; the engine name is
-  known to config) remains in the body (exit `1`).
+- `script` (positional, type validator that returns `Path(s)` if `s` is an
+  existing file or raises `argparse.ArgumentTypeError`): the path to the AiiDA
+  script file. A missing file is an argparse error (exit `2`), not a runtime
+  error (exit `1`). This places argument-*shape* validation (the file exists)
+  at the argparse layer, while argument-*content* validation (the `ENGINE` key
+  is present; the engine name is known to config) remains in the body (exit
+  `1`).
 
 `submit()` SHALL NOT add `--json`, `--table`, or any output-mode flag. The
 AiiDA scheduler plugin parses `int(stdout.strip())` on the success path, so
@@ -279,9 +282,7 @@ flag `-l`/`--log-level` for backward compatibility. Because `daemonize` register
 `--log-level` with no collision.
 
 `daemon_sysv` SHALL additionally accept `-p`/`--pid-file` (default `PID_FILE`)
-and SHALL keep the short flag `-l`/`--log-file` for backward compatibility with
-the installed `yascheduler.sh` init script, which invokes
-`$yascheduler -p "$pidfile" -l "$logfile" "$OPTIONS"`. `--config` and
+and SHALL keep the short flag `-l`/`--log-file`. `--config` and
 `--log-level` SHALL be long-only in `daemon_sysv` (no short flag collision with
 `-l`: `-l` is `--log-file` in `daemon_sysv`).
 
@@ -289,17 +290,13 @@ the installed `yascheduler.sh` init script, which invokes
 historical `-l` short flag and no `yascheduler.sh`-style external caller.
 
 `daemon_sysv` SHALL wrap the daemon execution in a `python-daemon`
-`DaemonContext` with `working_directory="/"`, `umask=0o002`, and
-`pidfile=pidfile.TimeoutPIDLockFile(args.pid_file)`. The `configure_logger` call
-SHALL happen INSIDE the `DaemonContext` so the `FileHandler`'s file descriptor
-is the daemon's.
+`DaemonContext`. The `configure_logger` call
+SHALL happen INSIDE the `DaemonContext`.
 
-`daemon_systemd` SHALL NOT use `python-daemon`; it runs in the foreground under
-systemd's supervision (logs to stderr → journald). Its `--log-file` default is
+`daemon_systemd` SHALL NOT use `python-daemon`. Its `--log-file` default is
 `None`.
 
-The `daemonize` console_script (`yascheduler`) SHALL NOT use `python-daemon`; it
-is intended for manual foreground execution (e.g. debugging, containers). Its
+The `daemonize` console_script (`yascheduler`) SHALL NOT use `python-daemon`. Its
 `--log-file` default is `None` (stderr).
 
 #### Scenario: daemonize accepts -l as --log-level alias
@@ -359,7 +356,7 @@ print(f"Error: {e}", file=sys.stderr); sys.exit(1)`. A bare traceback without
 an `Error:` message is a defect.
 
 #### Scenario: daemon runtime error exits 1 with Error message
-- **WHEN** `make_daemon(config, logger)` raises `Exception("db connection refused")`
+- **WHEN** `make_daemon(config)` raises `Exception("db connection refused")`
 - **THEN** the daemon entry point prints `Error: db connection refused` to stderr and exits `1` (NOT a bare traceback)
 
 #### Scenario: daemon argparse error exits 2
@@ -392,12 +389,10 @@ active filters, and print the result via the selected renderer. Output row order
 SHALL preserve the order returned by `uow.nodes.list_all()` (no sorting). Each
 node SHALL produce exactly one output row (table) or one output object (JSON).
 
-The in-memory join SHALL build `tasks_by_node_id: dict[NodeId, Task] =
-{t.allocated_node_id: t for t in tasks if t.allocated_node_id is not None}`.
-Each node is matched to its running task via
-`tasks_by_node_id.get(node.node_id)`. The one-RUNNING-task-per-node invariant
-means a later task on the same `node_id` would overwrite, but the invariant
-forbids that.
+The in-memory join SHALL use `node_id` as the join key (the task's
+`allocated_node_id` matches the node's `node_id`). The one-RUNNING-task-per-node
+invariant means a later task on the same `node_id` would overwrite, but the
+invariant forbids that.
 
 #### Scenario: yanodes entry point uses asyncio.run
 - **WHEN** the `show_nodes` callable is inspected
@@ -405,7 +400,7 @@ forbids that.
 
 #### Scenario: yanodes joins nodes to tasks by node_id
 - **WHEN** the in-memory join runs
-- **THEN** it builds `tasks_by_node_id = {t.allocated_node_id: t for t in tasks if t.allocated_node_id is not None}` and matches each node to its task via `tasks_by_node_id.get(node.node_id)` (the join key is `node_id`, not `ip`)
+- **THEN** each node is matched to its running task by matching `allocated_node_id` to `node.node_id` (the join key is `node_id`, not `ip`)
 
 ### Requirement: yanodes parses flags via argparse
 
@@ -569,10 +564,9 @@ One object per node, in the order returned by `uow.nodes.list_all()`.
 `show_nodes()` SHALL perform the node-to-running-task join in memory within a
 single UoW: it SHALL read `uow.nodes.list_all()` and
 `uow.tasks.list_by_status({TaskStatus.RUNNING})` (two reads within one UoW),
-build a `tasks_by_node_id` dict mapping `allocated_node_id` to the single
-running task on that node (O(n+m) single pass over tasks), and look up each
-node's task via `tasks_by_node_id.get(node.node_id)`. It SHALL NOT perform an
-O(n*m) nested scan.
+  build a `tasks_by_node_id` dict mapping `allocated_node_id` to the single
+  running task on that node, and look up each node's task via
+  `tasks_by_node_id.get(node.node_id)`.
 
 The join key is `node_id` (the task's `allocated_node_id` matches the node's
 `node_id`), NOT `ip`. The `allocated_ip` field is removed from `Task`; the join
@@ -616,26 +610,26 @@ commands that lack a machine consumer.
 ### Requirement: yasetnode parses host grammar via argparse type
 
 The `yasetnode` command SHALL accept a single positional `host` argument whose
-argparse `type=` is `_parse_node_target(s) -> NodeTarget`. The grammar is
+argparse type validator parses the grammar
 `[user@]host[:port][~ncpus]` where host is IPv4 or bracketed IPv6, port is
 1..65535 (default 22), ncpus is non-negative (absent or ~0 → None). Malformed
 input raises `argparse.ArgumentTypeError` (exit 2).
 
 #### Scenario: yasetnode full spec user@host:port~ncpus
-- **WHEN** `_parse_node_target("deploy@[IP]:2222~4")` is called
-- **THEN** it returns a `NodeTarget` whose `host_spec == HostSpec(host="[IP]", username="deploy", port=2222, ncpus=4)`
+- **WHEN** a positional argument `"deploy@[IP]:2222~4"` is parsed
+- **THEN** the result carries `host_spec` with host `[IP]`, username `deploy`, port `2222`, ncpus `4`
 
 #### Scenario: yasetnode bracketed IPv6 with port
-- **WHEN** `_parse_node_target("[fe80::1]:2222")` is called
-- **THEN** it returns a `NodeTarget` whose `host_spec == HostSpec(host="fe80::1", username=None, port=2222, ncpus=None)`
+- **WHEN** a positional argument `"[fe80::1]:2222"` is parsed
+- **THEN** the result carries `host_spec` with host `"fe80::1"`, username `None`, port `2222`, ncpus `None`
 
 #### Scenario: yasetnode tilde-zero maps to None ncpus
-- **WHEN** `_parse_node_target("[IP]~0")` is called
-- **THEN** it returns a `NodeTarget` whose `host_spec == HostSpec(host="[IP]", username=None, port=22, ncpus=None)` (the `0` is normalized to `None`, the unlimited sentinel)
+- **WHEN** a positional argument `"[IP]~0"` is parsed
+- **THEN** the result carries `host_spec` with host `[IP]`, username `None`, port `22`, ncpus `None` (the `0` is normalized to unlimited sentinel)
 
 #### Scenario: yasetnode malformed host exits 2
 - **WHEN** `yasetnode ::1` is invoked (unbracketed IPv6)
-- **THEN** the positional `type=_parse_node_target` raises `argparse.ArgumentTypeError`, argparse prints a usage error to stderr, and the process exits `2`
+- **THEN** the positional type validator raises `argparse.ArgumentTypeError`, argparse prints a usage error to stderr, and the process exits `2`
 
 #### Scenario: yasetnode prog is yasetnode in help and errors
 - **WHEN** `yasetnode --help` or any argparse error is shown
@@ -645,8 +639,7 @@ input raises `argparse.ArgumentTypeError` (exit 2).
 
 `manage_node()` SHALL parse `argv` with `argparse.ArgumentParser(prog="yasetnode")`
 exposing:
-- `host` (positional, `type=_parse_node_target`): node target — node_id or host
-  spec.
+- `host` (positional, host-grammar type): node target — node_id or host spec.
 - `--skip-setup` (`store_true`): skip remote setup. Valid ONLY on add path.
 - `--remove-soft` / `--remove-hard` (`store_true`, mutually exclusive): soft or
   hard remove.
@@ -711,39 +704,27 @@ stdout, emitted **after** `await uow.commit()` succeeds:
 
 ### Requirement: yasetnode positional discriminates node_id from host
 
-The positional `type=_parse_node_target(s) -> NodeTarget` SHALL discriminate:
+The positional argument parser SHALL discriminate:
+- if the input is pure-digit, it is a `node_id`;
+- otherwise it is a host spec matching the grammar `[user@]host[:port][~ncpus]`.
+The `s.isdigit()` discriminator is safe because IPv4 literals contain `.`, IPv6
+must be bracketed (`[...]`), and FQDNs contain `.`/letters — none are
+pure-digit.
 
-- if `s.isdigit()` is True, the result is
-  `NodeTarget(node_id=NodeId(int(s)), host_spec=None)`;
-- otherwise the result is
-  `NodeTarget(node_id=None, host_spec=_parse_host_spec(s))`.
-
-`NodeTarget` is a frozen dataclass with `node_id: NodeId | None` and
-`host_spec: HostSpec | None`; exactly one of the two is set. The discriminator
-`s.isdigit()` is safe because IPv4 literals contain `.`, IPv6 must be bracketed
-(`[...]`), and FQDNs contain `.`/letters — none are pure-digit.
-
-A node cannot be added by id (adding requires a real host). After `parse_args`,
-if `node_target.node_id is not None` AND neither `--remove-soft` nor
-`--remove-hard` is set (i.e. the add path), `manage_node` SHALL call
-`parser.error("a node cannot be added by id; provide a host like user@host[:port][~ncpus]")`
-(exit `2` — an argument-combination error, consistent with the existing
-`--skip-setup × remove` `parser.error`).
+A node cannot be added by id (adding requires a real host). On the add path,
+a pure-digit positional with no remove flag SHALL call
+`parser.error(...)` (exit `2`).
 
 On the remove path, the validation UoW resolves the `Node` early —
-`uow.nodes.get_by_id(node_target.node_id) -> Node | None` on the node_id path,
-or `uow.nodes.list_all()` + filter by `hostname == target.host_spec.host` on
-the host_spec path (the hostname-keyed `get(ip)` lookup is removed — `node_id`
-is the sole identity; resolving a host_spec to a `Node` requires listing
-because `hostname` is not a unique key). If `None`, the existing "NOT in DB"
-body validation raises (exit `1`). If found, the `Node` is passed to the remove
-helpers, which use `node.node_id` for the `nodes.disable(node.node_id)` /
-`nodes.remove(node.node_id)` mutators and `node.hostname` for user-facing
-stdout messages.
+`uow.nodes.get_by_id(node_id)` on the node_id path, or listing all nodes and
+filtering by `hostname` on the host spec path (hostname is not a unique key).
+If the node is not found, a "not in DB" error exits `1`. If found, the `Node`
+is passed to the remove helpers, which use `node.node_id` for mutators and
+`node.hostname` for stdout messages.
 
 #### Scenario: yasetnode pure-digit positional is a node_id
-- **WHEN** `_parse_node_target("5")` is called
-- **THEN** it returns `NodeTarget(node_id=NodeId(5), host_spec=None)`
+- **WHEN** a positional `"5"` is parsed
+- **THEN** the result identifies `node_id=5`
 
 #### Scenario: yasetnode add-by-id is rejected
 - **WHEN** `yasetnode 5` is invoked (no `--remove-soft`/`--remove-hard`)
@@ -755,24 +736,17 @@ stdout messages.
 
 ### Requirement: yasetnode gateway lifecycle and resource safety
 
-On the add path, `manage_node()` SHALL construct a single `SSHMachineRepository`
-at the top and pass it to the add helper. The add helper SHALL: (1) construct a
-`NewNode` with jump-leg fields resolved from `config.remote` (`jump_host`,
-`jump_username`, `jump_port`), (2) insert the row with `enabled=False` before
-connecting, (3) connect via `repository.connect(node=T, client_keys=..., ...)`,
-(4) optionally call `session.setup_node(engines)` on the session returned by
-`connect`, (5) open second UoW to update `enabled=True`, (6) print success, (7)
-`finally: repository.disconnect(T.node_id)`. On connect failure, best-effort
-remove the tmp row and re-raise.
+On the add path, `manage_node()` SHALL create a node in the DB, connect to it
+via SSH, perform optional remote setup, and mark the node enabled. The jump
+host, jump username, and jump port are read from `config.remote` (with
+sensible defaults) and stored on the `Node` — they become the source of truth
+for all subsequent connections. The SSH repository SHALL NOT receive
+`jump_host` / `jump_username` arguments at connect time; the node carries them.
 
-The `jump_host`, `jump_username`, and `jump_port` SHALL be read from
-`config.remote.jump_host`, `config.remote.jump_username` (defaulting to `"root"`
-when `None`), and `config.remote.jump_port` respectively — NOT hardcoded. The
-`jump_port` SHALL reflect the parsed `[remote] jump_port` value (default `22`
-when the key is absent).
-
-`repository.connect` SHALL NOT receive `jump_host` / `jump_username` arguments;
-the tmp node already carries them.
+On connect failure, the partially-created row SHALL be removed (no residual
+`enabled=FALSE` row). Gateway/jump resources SHALL be released when the add
+path completes or fails (no leak). On the update path (setting `enabled=True`),
+a second commit SHALL confirm the final state.
 
 #### Scenario: yasetnode constructs repository once and passes to add helper
 
@@ -799,15 +773,15 @@ the tmp node already carries them.
 - **WHEN** the add helper is called with a host spec `host~8` (so `HostSpec.ncpus == 8`)
 - **THEN** the `NewNode` passed to `insert` carries `ncpus=8`; the persisted tmp row stores `8`
 
-#### Scenario: yasetnode add-path inserts enabled=False before connect, flips to TRUE after setup
+#### Scenario: yasetnode add-path insert-create-connect lifecycle
 
 - **WHEN** the add helper is called with a valid host spec
-- **THEN** it inserts `NewNode(hostname=spec.host, enabled=False, jump_host=config.remote.jump_host, jump_username=config.remote.jump_username, jump_port=config.remote.jump_port, …) -> Node(T)` FIRST (before any SSH work), connects via `repository.connect(node=T, client_keys=..., ...)`, optionally calls `session.setup_node(config.engines)` on the returned session, then opens a second UoW to update `enabled=True` and commit; the `finally` block calls `repository.disconnect(T.node_id)`
+- **THEN** the row is inserted FIRST (before any SSH work) with `enabled=False`; after successful connect and optionally `session.setup_node(config.engines)`, the node's `enabled` is updated to `True`
 
 #### Scenario: yasetnode add-path rolls back tmp row on connect failure
 
 - **WHEN** `repository.connect(node=T, client_keys=...)` raises `MachineConnectionError` (or any `Exception`) during the add helper
-- **THEN** the helper best-effort removes the tmp row via `uow.nodes.remove(T.node_id)` + commit (logged not raised), then re-raises; no `enabled=TRUE` row remains; the orchestrator never saw the row (it was `enabled=FALSE`)
+- **THEN** the tmp row is best-effort removed; no `enabled=TRUE` row remains; the orchestrator never saw the row (it was `enabled=FALSE`)
 
 ### Requirement: yasetnode dispatches add and remove paths
 
@@ -966,20 +940,12 @@ an allocated node, connect to the remote machine via `SSHMachineRepository`
 (resolving a `MachineSession` via `repository.get_session` / a fresh
 `repository.connect`), display a tail of the remote `OUTPUT` file, optionally
 download and parse a CRYSTAL convergence snippet (when `-o` is also given), and
-disconnect. The connection SHALL pass the resolved `node` to
-`repository.connect(node=node, client_keys=..., ...)`; the login user, port,
-and jump-leg parameters come from `node.username` / `node.port` /
-`node.jump_host` / `node.jump_port` / `node.jump_username` (NOT from separate
-arguments — `connect` reads them from the node).
-
-- The login user is `node.username`.
-- The port is `node.port`.
-- The jump leg is built from `node.jump_host` / `node.jump_port` / `node.jump_username`. There is no per-call resolution from `CloudConfig` or `config.remote` — `yastatus` trusts the values stamped on `Node` at creation.
+disconnect. The connection SHALL use the `Node` values for login user, port,
+and jump-leg parameters — `connect` reads them from the node. The convergence
+snippet SHALL be cleaned up after display (no leaked temp files).
 
 `yastatus` SHALL NOT pass `jump_host` / `jump_username` parameters to
-`repository.connect(...)`. The convergence snippet SHALL be stored in a
-`tempfile`-based file and cleaned up in a `try/finally` block so it is removed
-even when the view renderer raises.
+`repository.connect(...)`.
 
 #### Scenario: yastatus -v uses node.username not cloud username
 

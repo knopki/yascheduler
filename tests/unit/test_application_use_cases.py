@@ -965,9 +965,7 @@ class TestDeallocateNodeBracketing:
         clouds = MagicMock(spec=CloudProvisioner)
         clouds.deallocate = AsyncMock()
 
-        with caplog.at_level(
-            "ERROR", logger="yascheduler.application.deallocate_nodes"
-        ):
+        with caplog.at_level("ERROR", logger="yascheduler.M-APPLICATION-DEALLOCATE"):
             # Must not raise — the cloud VM is already gone.
             await deallocate_node(
                 node=node,
@@ -980,8 +978,8 @@ class TestDeallocateNodeBracketing:
         clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.disable.assert_awaited_once_with(NodeId(1))
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
-        # Reconciliation marker logged.
+        # Reconciliation narrative logged (plain narrative, no grace marker).
         assert any(
-            "REMOVE_FAILED" in r.message and "10.0.0.1" in r.message
+            "node remove failed" in r.message and "10.0.0.1" in r.message
             for r in caplog.records
         )

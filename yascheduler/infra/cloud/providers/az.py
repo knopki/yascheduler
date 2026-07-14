@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/az.py
-# VERSION: 1.10.0
+# VERSION: 1.12.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Azure VM creation and deletion using Azure SDK.
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - Retype _render_custom_data, create_vm_params, create_node, az_create_node cloud_config params to CloudInitConfig | None; drop isinstance boundary guard in az_create_node (redundant: both sides of the call chain are now the same concrete CloudInitConfig class); import CloudInitConfig from yascheduler.infra.cloud facade.
-#   PREVIOUS_CHANGE: v1.9.0 - Retype _render_custom_data, create_vm_params, create_node cloud_config params from PCloudConfig | None to CloudConfig | None (concrete infra/cloud/cloud_config.CloudConfig); add isinstance boundary guard in az_create_node (public signature stays PCloudConfig | None for CreateNodeCallable assignability); drop # type: ignore[misc] on render_base64() (replace now returns CloudConfig with concrete render_base64); fix bootcmd list→tuple literal.
+#   LAST_CHANGE: v1.12.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-AZ") at module top
+#   PREVIOUS_CHANGE: v1.11.0 - Migrate from logging.Logger to YaLogger type annotations in function signatures; move CloudInitConfig import to TYPE_CHECKING.
 # END_CHANGE_SUMMARY
 #
 """Azure cloud methods"""
@@ -75,7 +75,10 @@ try:
 except ImportError:
     _AZURE_AVAILABLE = False
 
-from yascheduler.infra.cloud import CloudInitConfig, get_rnd_name
+from yascheduler.infra.cloud import get_rnd_name
+from yascheduler.shared import get_logger
+
+logger = get_logger("M-CLOUD-PROVIDER-AZ")
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
@@ -83,6 +86,7 @@ if TYPE_CHECKING:
 
     from yascheduler.infra.cloud import (
         AzureImageReference,
+        CloudInitConfig,
         ConfigCloudAzure,
     )
 
@@ -112,13 +116,12 @@ else:
 
 # START_CONTRACT: _fetch_network_resources
 #   PURPOSE: Fetch subnet and NSG for NIC creation
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client }
+#   INPUTS: { cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client }
 #   OUTPUTS: { tuple - subnet and NSG }
 #   SIDE_EFFECTS: Fetches Azure network resources via API.
 #   LINKS: M-CLOUD-AZ
 # END_CONTRACT: _fetch_network_resources
 async def _fetch_network_resources(
-    log: logging.Logger,
     cfg: ConfigCloudAzure,
     client: NetworkManagementClient,
 ) -> tuple:
@@ -129,22 +132,21 @@ async def _fetch_network_resources(
         virtual_network_name=cfg.vnet,
         subnet_name=cfg.subnet,
     )
-    log.debug("[Azure][_fetch_network_resources] subnet=%s", subnet.name)
+    logger.trace("FETCH_SUBNET", subnet=subnet.name)
     nsg = await client.network_security_groups.get(cfg.resource_group, cfg.nsg)
-    log.debug("[Azure][_fetch_network_resources] nsg=%s", nsg.name)
+    logger.trace("FETCH_NSG", nsg=nsg.name)
     # END_BLOCK_FETCH_RESOURCES
     return subnet, nsg
 
 
 # START_CONTRACT: create_nic
 #   PURPOSE: Create network interface for VM and tag with IP address
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client, vm_name: str - VM name }
+#   INPUTS: { cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client, vm_name: str - VM name }
 #   OUTPUTS: { tuple[NetworkInterface, str] - NIC and assigned IP address }
 #   SIDE_EFFECTS: Creates Azure NIC resource and tags it
 #   LINKS: M-CLOUD-AZ
 # END_CONTRACT: create_nic
 async def create_nic(
-    log: logging.Logger,
     cfg: ConfigCloudAzure,
     client: NetworkManagementClient,
     vm_name: str,
@@ -152,7 +154,7 @@ async def create_nic(
     "Create network interface"
     nic_name = f"{vm_name}-nic"
     ip_config_name = f"{nic_name}-ip-config"
-    subnet, nsg = await _fetch_network_resources(log, cfg, client)
+    subnet, nsg = await _fetch_network_resources(cfg, client)
     nic_ip_config_params = NetworkInterfaceIPConfiguration(
         name=ip_config_name,
         subnet=subnet,
@@ -171,7 +173,7 @@ async def create_nic(
     )
     await poller.wait()
     nic = await poller.result()
-    log.debug("[Azure][create_nic] nic=%s", nic.name)
+    logger.trace("CREATE_NIC", nic=nic.name)
     ip_addr = None
     if nic.ip_configurations:
         for ip_conf in nic.ip_configurations:
@@ -268,7 +270,7 @@ def create_vm_params(
 
 # START_CONTRACT: create_node
 #   PURPOSE: Create Azure VM with NIC, private IP, and SSH key (internal)
-#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer (concrete infra/cloud/cloud_init.CloudInitConfig) }
+#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer (concrete infra/cloud/cloud_init.CloudInitConfig) }
 #   OUTPUTS: { str - private IP address of created VM }
 #   SIDE_EFFECTS: Creates Azure VM and NIC resources
 #   LINKS: M-CLOUD-AZ, create_nic, create_vm_params
@@ -276,14 +278,13 @@ def create_vm_params(
 async def create_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
-    log: logging.Logger,
     cfg: ConfigCloudAzure,
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
 ) -> str:
     """Create virtual machine with nic"""
     vm_name = get_rnd_name("yascheduler-vm")
-    nic, ip_addr = await create_nic(log=log, cfg=cfg, client=nmc, vm_name=vm_name)
+    nic, ip_addr = await create_nic(cfg=cfg, client=nmc, vm_name=vm_name)
     vm_params = create_vm_params(
         location=cfg.location,
         vm_name=vm_name,
@@ -303,19 +304,18 @@ async def create_node(
     )
     await poller.wait()
     vm_res = await poller.result()
-    log.debug("[Azure][az_create_node] vm=%s", vm_res.name)
+    logger.trace("CREATE_VM", vm=vm_res.name)
     return ip_addr
 
 
 # START_CONTRACT: az_create_node
 #   PURPOSE: Create Azure VM with NIC (public entry point for adapter)
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer (concrete class; same type as create_node/_render_custom_data, so no boundary narrowing is needed) }
+#   INPUTS: { cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer (concrete class; same type as create_node/_render_custom_data, so no boundary narrowing is needed) }
 #   OUTPUTS: { str - IP address of created VM }
 #   SIDE_EFFECTS: Creates Azure VM, NIC, and credentials; acquires cloud resources
 #   LINKS: M-CLOUD-AZ, create_node
 # END_CONTRACT: az_create_node
 async def az_create_node(
-    log: logging.Logger,
     cfg: ConfigCloudAzure,
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
@@ -331,12 +331,12 @@ async def az_create_node(
         cred = cast("AsyncTokenCredential", cred)  # fix library type errors
         async with NetworkManagementClient(cred, cfg.subscription_id) as nmc:
             async with ComputeManagementClient(cred, cfg.subscription_id) as cmc:
-                return await create_node(nmc, cmc, log, cfg, key, cloud_config)
+                return await create_node(nmc, cmc, cfg, key, cloud_config)
 
 
 # START_CONTRACT: delete_node
 #   PURPOSE: Delete Azure VM and NIC by host IP address (internal)
-#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, host: str - IP address of VM to delete }
+#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, cfg: ConfigCloudAzure - Azure config, host: str - IP address of VM to delete }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Deletes Azure VM and NIC resources
 #   LINKS: M-CLOUD-AZ
@@ -344,7 +344,6 @@ async def az_create_node(
 async def delete_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
-    log: logging.Logger,
     cfg: ConfigCloudAzure,
     host: str,
 ) -> None:
@@ -362,7 +361,7 @@ async def delete_node(
                 cfg.resource_group, cast("str", vm_res.name)
             )
             await poller.wait()
-            log.debug("[Azure][az_delete_node] vm=%s deleted", vm_res.name)
+            logger.trace("DELETE_VM", vm=vm_res.name)
             break
 
     nic = None
@@ -374,19 +373,18 @@ async def delete_node(
                 cfg.resource_group, cast("str", nic.name)
             )
             await poller.wait()
-            log.debug("[Azure][az_delete_node] nic=%s deleted", nic.name)
+            logger.trace("DELETE_NIC", nic=nic.name)
             break
 
 
 # START_CONTRACT: az_delete_node
 #   PURPOSE: Delete Azure VM and NIC by host IP (public entry point for adapter)
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudAzure - Azure config, host: str - IP address of VM to delete }
+#   INPUTS: { cfg: ConfigCloudAzure - Azure config, host: str - IP address of VM to delete }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates Azure credentials, deletes VM and NIC resources
 #   LINKS: M-CLOUD-AZ, delete_node
 # END_CONTRACT: az_delete_node
 async def az_delete_node(
-    log: logging.Logger,
     cfg: ConfigCloudAzure,
     host: str,
 ) -> None:
@@ -401,4 +399,4 @@ async def az_delete_node(
         cred = cast("AsyncTokenCredential", cred)  # fix library type errors
         async with NetworkManagementClient(cred, cfg.subscription_id) as nmc:
             async with ComputeManagementClient(cred, cfg.subscription_id) as cmc:
-                return await delete_node(nmc, cmc, log, cfg, host)
+                return await delete_node(nmc, cmc, cfg, host)

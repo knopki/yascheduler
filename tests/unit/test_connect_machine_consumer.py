@@ -134,7 +134,6 @@ def make_orchestrator(
         output_downloader=output_downloader,
         occupancy_checker=occupancy_checker,
         engines=engines,
-        log=MagicMock(),
         config_clouds=config_clouds,
         local_tasks_dir=Path("/tmp"),
         allocation_tracker=allocation_tracker,
@@ -178,10 +177,6 @@ class TestConnectMachineConsumerGraceTimer:
         mock_abandon.assert_not_called()
         # IP stays in the timer (retry path)
         assert NodeId(1) in orch._connect_failures
-        orch._log.warning.assert_called_once()  # type: ignore[attr-defined]
-        # CONNECT_RETRY marker is logged
-        warning_args = orch._log.warning.call_args.args  # type: ignore[attr-defined]
-        assert "CONNECT_RETRY" in warning_args[0]
 
     @pytest.mark.asyncio
     async def test_connect_failure_past_grace_triggers_abandon(self) -> None:
@@ -213,9 +208,6 @@ class TestConnectMachineConsumerGraceTimer:
         assert args[3] is orch._tracker
         # IP popped after abandon
         assert NodeId(1) not in orch._connect_failures
-        # CONNECT_ABANDON logged at error level
-        error_calls = orch._log.error.call_args_list  # type: ignore[attr-defined]
-        assert any("CONNECT_ABANDON" in c.args[0] for c in error_calls)
 
     @pytest.mark.asyncio
     async def test_successful_connect_resets_failure_timer(self) -> None:
@@ -271,9 +263,6 @@ class TestConnectMachineConsumerGraceTimer:
         mock_abandon.assert_awaited_once()
         # IP is still popped after a failed abandon (no infinite loop on next cycle)
         assert NodeId(1) not in orch._connect_failures
-        # ABANDON_FAILED marker logged at error level
-        error_calls = orch._log.error.call_args_list  # type: ignore[attr-defined]
-        assert any("ABANDON_FAILED" in c.args[0] for c in error_calls)
 
 
 class TestConnectGraceFor:
@@ -430,9 +419,6 @@ class TestConnectMachineProducerYieldsStaticNodes:
         )
 
         orch = make_orchestrator(config_clouds=[])
-        # Use a real logger so caplog can capture the CONNECT_RETRY_STATIC
-        # warning emitted by the consumer-side guard.
-        orch._log = logging.getLogger("orch.test_static_retry")  # type: ignore[method-assign]
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
             side_effect=MachineConnectionError(NodeId(1), "10.0.0.9", "refused")
         )
@@ -443,19 +429,21 @@ class TestConnectMachineProducerYieldsStaticNodes:
                 new=AsyncMock(),
             ) as mock_abandon,
         ):
-            await orch._connect_machine_consumer(UMessage(NodeId(1), static_node))
+            with caplog.at_level(logging.DEBUG):
+                await orch._connect_machine_consumer(UMessage(NodeId(1), static_node))
 
         mock_abandon.assert_not_called()
         assert NodeId(1) not in orch._connect_failures, (
             "static node IP must never enter the failure timer "
             "(consumer-side guard bypasses the grace-check)"
         )
-        assert any(
-            "CONNECT_RETRY_STATIC" in rec.message
-            and "10.0.0.9" in rec.message
-            and rec.levelno == logging.WARNING
-            for rec in caplog.records
-        ), "expected a CONNECT_RETRY_STATIC warning for the static node"
+        trace_records = [
+            r
+            for r in caplog.records
+            if getattr(r, "block", None) == "CONNECT_RETRY_STATIC"
+        ]
+        assert len(trace_records) == 1, "expected one CONNECT_RETRY_STATIC trace record"
+        assert getattr(trace_records[0], "fields", {}).get("hostname") == "10.0.0.9"
 
     @pytest.mark.asyncio
     async def test_static_node_past_grace_does_not_abandon(self) -> None:

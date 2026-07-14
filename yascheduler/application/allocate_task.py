@@ -22,13 +22,12 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.23.0 - session.ip→session.hostname; node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
-#   PREVIOUS_CHANGE: v5.22.0 - Call tracker.set_node(task.task_id, tmp_node_id) after _select_and_insert_tmp returns, patching the task-to-node link into the tracker entry so abandon_node can discard_by_node when the cloud node never connects.
+#   LAST_CHANGE: v5.24.0 - Rewrite TMP_CLEANUP_FAILED/CLOUD_FAILED/PERSIST_FAILED/DEALLOC_FAILED/NO_PLATFORM to pure narrative (no grace markers) per reform-grace-logging slice 7.
+#   PREVIOUS_CHANGE: v5.23.0 - session.ip→session.hostname; node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, NamedTuple
 
 from yascheduler.domain import (
@@ -40,6 +39,7 @@ from yascheduler.domain import (
     TaskId,
     TaskStatus,
 )
+from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     import asyncio
@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-APPLICATION-ALLOCATE")
 
 
 class _TmpSelection(NamedTuple):
@@ -128,20 +128,19 @@ async def _try_start_on_machine(
     dt_str = task.created_at.strftime("%Y%m%d_%H%M%S")
     remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")
     task = task.run(node.node_id, remote_folder)
-    logger.debug(
-        "[AllocateTask][_try_allocate_to_machine] task_id=%s hostname=%s node_id=%s",
-        task.task_id,
-        session.hostname,
-        node.node_id,
+    logger.trace(
+        "TRY_ALLOCATE",
+        task_id=task.task_id,
+        hostname=session.hostname,
+        node_id=node.node_id,
     )
     if not await start_task_on_machine(session, engine, task):
         return False
-    logger.debug(
-        "[AllocateTask][_try_allocate_to_machine][ALLOCATED] "
-        "task_id=%s hostname=%s node_id=%s",
-        task.task_id,
-        session.hostname,
-        node.node_id,
+    logger.trace(
+        "ALLOCATED",
+        task_id=task.task_id,
+        hostname=session.hostname,
+        node_id=node.node_id,
     )
     occupancy_checker.start_occupancy_check(session, engine)
     async with uow_factory() as uow:
@@ -225,12 +224,11 @@ async def _allocate_free_machine(
             ):
                 return True
         except Exception as err:
-            logger.debug(
-                "[AllocateTask][_allocate_free_machine][SESSION_FAILED] "
-                "task_id=%s hostname=%s err=%s",
-                task.task_id,
-                session.hostname,
-                err,
+            logger.trace(
+                "SESSION_FAILED",
+                task_id=task.task_id,
+                hostname=session.hostname,
+                err=err,
             )
             continue
         # END_BLOCK_TRY_START_ISOLATED
@@ -306,8 +304,7 @@ async def _cleanup_tmp_node_best_effort(
             await uow.commit()
     except Exception as cleanup_err:
         logger.error(
-            "[AllocateTask][allocate_task][TMP_CLEANUP_FAILED] "
-            "task_id=%s ctx=%s tmp_node_id=%s err=%s",
+            "tmp-node cleanup failed: task_id=%s ctx=%s tmp_node_id=%s err=%s",
             task_id,
             context,
             tmp_node_id,
@@ -341,11 +338,7 @@ async def _allocate_cloud_node(
     try:
         node = await clouds.allocate(selected_name, tmp_node)
     except Exception as err:
-        logger.error(
-            "[AllocateTask][allocate_task][CLOUD_FAILED] task_id=%s err=%s",
-            task_id,
-            err,
-        )
+        logger.error("cloud allocation failed: task_id=%s err=%s", task_id, err)
         # Best-effort tmp-node cleanup; failure here is logged but does
         # not mask the original cloud-allocation exception.
         await _cleanup_tmp_node_best_effort(
@@ -384,7 +377,7 @@ async def _persist_node_with_cleanup(
             await uow.commit()
     except Exception as persist_err:
         logger.error(
-            "[AllocateTask][allocate_task][PERSIST_FAILED] task_id=%s hostname=%s err=%s",
+            "persist node failed: task_id=%s hostname=%s err=%s",
             task_id,
             node.hostname,
             persist_err,
@@ -398,7 +391,7 @@ async def _persist_node_with_cleanup(
             await clouds.deallocate(node)
         except Exception as dealloc_err:
             logger.error(
-                "[AllocateTask][allocate_task][DEALLOC_FAILED] task_id=%s hostname=%s err=%s",
+                "deallocate node failed: task_id=%s hostname=%s err=%s",
                 task_id,
                 node.hostname,
                 dealloc_err,
@@ -409,11 +402,8 @@ async def _persist_node_with_cleanup(
         raise
     # END_BLOCK_FINAL_PERSIST
 
-    logger.debug(
-        "[AllocateTask][allocate_task][CLOUD_DONE] task_id=%s hostname=%s cloud=%s",
-        task_id,
-        node.hostname,
-        node.cloud,
+    logger.trace(
+        "CLOUD_DONE", task_id=task_id, hostname=node.hostname, cloud=node.cloud
     )
 
 
@@ -451,7 +441,7 @@ async def allocate_task(
     if task is None:
         return False
 
-    logger.debug("[AllocateTask][allocate_task] task_id=%s", task.task_id)
+    logger.trace("ALLOCATE_TASK", task_id=task.task_id)
 
     engine = await _validate_engine(task, engines, uow_factory)
     if engine is None:
@@ -475,22 +465,18 @@ async def allocate_task(
     # before entering the cloud critical section.
     if not engine.platforms:
         logger.warning(
-            "[AllocateTask][allocate_task][NO_PLATFORM] task_id=%s engine=%s "
-            "has no platforms; cannot cloud-provision",
-            task.task_id,
+            "engine %s has no platforms; cannot cloud-provision: task_id=%s",
             engine.name,
+            task.task_id,
         )
         return False
 
     # START_BLOCK_ALLOCATE_CLOUD_CRITICAL_SECTION
-    logger.debug("[AllocateTask][allocate_task][CLOUD] task_id=%s", task.task_id)
+    logger.trace("CLOUD", task_id=task.task_id)
 
     # Step 0: tracker dedup
     if not tracker.add(task.task_id):
-        logger.debug(
-            "[AllocateTask][allocate_task][DEDUP] task_id=%s already in-flight",
-            task.task_id,
-        )
+        logger.trace("DEDUP", task_id=task.task_id)
         return False
 
     # success-flag guarantees tracker.discard on any exception escaping the
@@ -505,10 +491,7 @@ async def allocate_task(
             clouds, engine, uow_factory, allocation_lock
         )
         if selected is None:
-            logger.debug(
-                "[AllocateTask][allocate_task][NO_PROVIDER] task_id=%s",
-                task.task_id,
-            )
+            logger.trace("NO_PROVIDER", task_id=task.task_id)
             return False
         selected_name = selected.name
         tmp_node_id = selected.node.node_id

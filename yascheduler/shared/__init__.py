@@ -11,13 +11,16 @@
 # START_MODULE_MAP
 #   Self - Self type alias (re-exported from .compat)
 #   Unpack - Unpack type alias (re-exported from .compat)
+#   YaLogger - Logger subclass with trace() (re-exported from .log)
+#   get_logger - Factory returning YaLogger with yascheduler. namespace prefix (re-exported from .log)
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Prune to honest shared kernel: drop re-exports of to_sync/asleep_until/CONFIG_FILE/LOG_FILE/PID_FILE/ParamSpec (relocated or inlined); keep Self/Unpack.
-#   PREVIOUS_CHANGE: v1.7.0 - Re-export Unpack from .compat.
+#   LAST_CHANGE: v1.9.0 - Re-export get_logger from .log for cross-layer consumers.
+#   PREVIOUS_CHANGE: v1.8.0 - Prune to honest shared kernel: drop re-exports of to_sync/asleep_until/CONFIG_FILE/LOG_FILE/PID_FILE/ParamSpec (relocated or inlined); keep Self/Unpack.
 # END_CHANGE_SUMMARY
 
 from .compat import Self, StrEnum, Unpack
+from .log import LogFormatter, YaLogger, get_logger
 
-__all__ = ["Self", "Unpack", "StrEnum"]
+__all__ = ["Self", "Unpack", "StrEnum", "YaLogger", "get_logger", "LogFormatter"]

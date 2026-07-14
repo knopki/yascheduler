@@ -115,8 +115,6 @@ def make_orchestrator() -> Orchestrator:
     engines = MagicMock(spec=EngineRepository)
     engines.values.return_value = [engine]
 
-    log = MagicMock()
-
     orch = Orchestrator(
         local_settings=config.local,
         remote_defaults=config.remote,
@@ -127,7 +125,6 @@ def make_orchestrator() -> Orchestrator:
         output_downloader=output_downloader,
         occupancy_checker=occupancy_checker,
         engines=engines,
-        log=log,
         config_clouds=[],
         local_tasks_dir=Path("/tmp"),
         allocation_tracker=AllocationTracker(),

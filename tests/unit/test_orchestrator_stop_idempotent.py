@@ -28,7 +28,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -93,8 +92,6 @@ def _make_orchestrator(
     output_downloader = MagicMock()
     occupancy_checker = MagicMock()
 
-    log = MagicMock(spec=logging.Logger)
-
     return Orchestrator(
         local_settings=local,
         remote_defaults=remote,
@@ -105,7 +102,6 @@ def _make_orchestrator(
         output_downloader=output_downloader,
         occupancy_checker=occupancy_checker,
         engines=engines,
-        log=log,
         config_clouds=[],
         local_tasks_dir=MagicMock(),  # type: ignore[arg-type]
         allocation_tracker=AllocationTracker(),

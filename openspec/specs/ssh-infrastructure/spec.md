@@ -27,7 +27,7 @@ login user, port, and jump-leg parameters survive ONLY as fields on
 
 **Collection lifecycle:**
 - `connect(node: Node, client_keys: Sequence[PurePath] | None, *, connect_timeout: int | None = None, data_dir: PurePath | None = None, engines_dir: PurePath | None = None, tasks_dir: PurePath | None = None) -> MachineSession` (async) — constructs and registers an `SSHMachineSession` keyed by `node.node_id`, returns it. The asyncssh transport uses `node.hostname` as the host address, `node.username` as the login user, `node.port` as the port, and `node.jump_host` / `node.jump_port` / `node.jump_username` to build the tunnel leg. `connect` SHALL NOT take `username`, `port`, `jump_host`, or `jump_username` parameters — they are read from `node`. `connect` SHALL prime the session's CPU-core cache with the value read via `adapter.get_cpu_cores(...)`.
-- `disconnect(node_id: NodeId) -> None` (async) — pops the session keyed by `node_id` and delegates teardown to `session._close()`
+- `disconnect(node_id: NodeId) -> None` (async) — removes the session keyed by `node_id` and closes it
 - `disconnect_all() -> None` (async) — unchanged
 
 **Queries:**
@@ -72,31 +72,23 @@ The system SHALL provide an `SSHMachineRepository` class that satisfies
 the `MachineRepository` Protocol. The repository SHALL own a single dict
 of sessions keyed by `NodeId`.
 
-`connect(node: Node, ...)` SHALL use a two-method pattern: inner method
-decorated with `@my_backoff_exc()` retries on `SSHRetryExc`; outer
-`connect` translates exhausted `(asyncssh.misc.Error, OSError)` to
-`MachineConnectionError`. `connect` SHALL open the SSH connection, detect
-platform via the platform package, initialize paths via the platform
-package, read `ncpus` via `adapter.get_cpu_cores(...)`, log the discovered
-CPU count at the discovery site, seed the session cache with the discovered
-value, construct a `ConnectedMachine` (carrying
-`node_id`, `platform` only — NOT `hostname` or `ncpus`), construct an
-`SSHMachineSession`, store it keyed by `node.node_id`, and return it.
+`connect(node: Node, ...)` SHALL establish an SSH session, detect the
+platform, read `ncpus` via `adapter.get_cpu_cores(...)`, log the discovered
+CPU count, seed the session cache with the discovered value, construct a
+`ConnectedMachine` (carrying `node_id`, `platform` only — NOT `hostname` or
+`ncpus`), construct an `SSHMachineSession`, store it keyed by
+`node.node_id`, and return it. `connect` SHALL read `node.hostname` as the
+asyncssh host address, `node.username` as the login user, and `node.port`
+as the port. On connection failure,
+`MachineConnectionError(node.node_id, node.hostname, str(err))` SHALL be
+raised.
 
-`connect` SHALL read `node.hostname` as the asyncssh host address,
-`node.username` as the login user, and `node.port` as the port. On
-connection failure, `MachineConnectionError(node.node_id, node.hostname,
-str(err))` SHALL be raised (carrying both identity and address — the
-`MachineConnectionError` shape is unchanged by this change).
-
-`disconnect(node_id)` SHALL pop the session for `node_id` (early return if
-absent), then `await session._close()`. The pop-before-await ordering
-SHALL be preserved. `disconnect_all()` SHALL iterate a snapshot of keys
-and call `disconnect(node_id)` per session; it SHALL be idempotent.
+`disconnect(node_id)` SHALL remove the session for `node_id` (early return
+if absent) and close it. `disconnect_all()` SHALL iterate a snapshot of
+keys and call `disconnect(node_id)` per session; it SHALL be idempotent.
 
 `disconnect(node_id)` SHALL be scoped to the targeted node — it SHALL
-cancel only the monitor registered for `node_id` and SHALL NOT cancel
-monitors for any other machine.
+not affect monitors for any other machine.
 
 #### Scenario: Repository owns only the sessions dict keyed by NodeId
 
@@ -106,7 +98,7 @@ monitors for any other machine.
 #### Scenario: connect logs CPU count at discovery site, not in setup_node
 
 - **WHEN** `await repository.connect(node, client_keys, ...)` succeeds and `adapter.get_cpu_cores(...)` returns `8`
-- **THEN** an info log line with the CPU count is emitted from the repository's connect path (in or immediately after the `START_BLOCK_CREATE_MACHINE` block), and `SSHMachineSession.setup_node` SHALL NOT emit a separate CPU-count log
+- **THEN** an info log line with the CPU count is emitted from the repository's connect path, and `SSHMachineSession.setup_node` SHALL NOT emit a separate CPU-count log
 
 ### Requirement: MachineSession port
 
@@ -119,12 +111,12 @@ lifecycle, queries, or repository keying — those are `MachineRepository`.
 **Domain face:**
 - `hostname: str` (read-only property) — the machine hostname (the asyncssh transport host). This property replaces the former `ip` property; the `ip` property is removed.
 - `machine: ConnectedMachine` (read-only property) — the current snapshot; mutate via `occupy`/`release`/`update`
-- `is_closed: bool` (read-only property) — `True` after `_close()` has been invoked (rollback paths check this to detect mid-deploy disconnect)
+- `is_closed: bool` (read-only property) — `True` after the session has been closed (rollback paths check this to detect mid-deploy disconnect)
 - `occupy() -> None` (sync) — read-modify-write transitioning the snapshot to BUSY
 - `release() -> None` (sync) — read-modify-write transitioning the snapshot to FREE with `free_since = time.monotonic()`
 - `update(machine: ConnectedMachine) -> None` (sync) — replace the internal snapshot (used by rollback paths)
 
-**Connect-time config (read-only properties, set at `connect`):**
+**Connect-time config (read-only properties):**
 - `adapter: RemoteMachineAdapter`
 - `platforms: Sequence[str]`
 - `data_dir: PurePath`
@@ -141,13 +133,13 @@ lifecycle, queries, or repository keying — those are `MachineRepository`.
 - `run_bg(cmd: str, *, cwd: str | None = None) -> None` (async)
 - `upload(local: Path, remote: str) -> None` (async)
 - `open_sftp() -> AsyncContextManager[SFTPClient]` (async) — async context manager yielding an SFTP client
-- `get_cpu_cores() -> int` (async) — retries on `SSHRetryExc` (idempotent read)
+- `get_cpu_cores() -> int` (async) — retries on retryable SSH errors (idempotent read)
 - `setup_node(engines: EngineRepository) -> None` (async)
 - `pgrep(pattern: str | Pattern[str], full: bool = True) -> AsyncGenerator[ProcessInfo, None]` (async)
 - `list_processes() -> AsyncGenerator[ProcessInfo, None]` (async)
 
 **Monitor mechanism (Engine-agnostic; on the session, NOT on the repository):**
-- `install_monitor(*, interval: float, check_factory: Callable[[], Awaitable[bool]], on_free: Callable[[], None]) -> None` (sync) — installs an `asyncio.Task` on the session that sleeps `interval`, calls `check_factory()`, and calls `on_free()` then breaks when the check returns `False`. Re-installing cancels the prior monitor before installing the new one. Idempotent on a closed session: returns immediately without installing if `is_closed` is `True`.
+- `install_monitor(*, interval: float, check_factory: Callable[[], Awaitable[bool]], on_free: Callable[[], None]) -> None` (sync) — periodically calls `check_factory()` and calls `on_free()` when the check returns `False`. Re-installing cancels the prior monitor before installing the new one. Idempotent on a closed session.
 - `cancel_monitor() -> None` (sync) — cancels the session's monitor (if any); does NOT await
 
 `MachineSession` is `@runtime_checkable`. The Protocol SHALL NOT
@@ -174,22 +166,18 @@ The system SHALL provide an `SSHMachineSession` class that satisfies the
 and `platform` only, NOT `hostname` or `ncpus`), `adapter`, `platforms`,
 `data_dir`, `engines_dir`, `tasks_dir`.
 
-The session SHALL own its own teardown via a `_close()` coroutine,
-invoked only by `SSHMachineRepository.disconnect`. `_close()` SHALL be
-idempotent: if `is_closed` is already `True`, it returns immediately.
-Otherwise it SHALL:
-1. Set the closed flag synchronously (BEFORE any await).
-2. Pop and cancel the monitor task (if any).
-3. Await the cancelled monitor's task (suppressing `asyncio.CancelledError`).
-4. Close the SSH connection and await `wait_closed()`.
+The session SHALL own its own teardown, invoked only by
+`SSHMachineRepository.disconnect`. Close is idempotent: if `is_closed` is
+already `True`, it returns immediately. Otherwise it SHALL release the SSH
+connection and cancel the monitor task.
 
 `SSHMachineSession`'s base primitives SHALL use the session's own `conn`
 and `adapter` directly — NO hostname-keyed lookup, NO call into the repository.
-`run_full` SHALL retry on `SSHRetryExc` via the `@my_backoff_exc()` decorator.
-`setup_node` SHALL accept `engines: EngineRepository` and use the session's
-own `adapter.setup_node(...)`. `setup_node` SHALL NOT log the CPU count —
-the CPU-count log is owned by `SSHMachineRepository.connect` at the discovery
-site.
+`run_full` SHALL retry on retryable SSH errors with fibonacci backoff up to
+max_time=60. `setup_node` SHALL accept `engines: EngineRepository` and use
+the session's own `adapter.setup_node(...)`. `setup_node` SHALL NOT log the
+CPU count — the CPU-count log is owned by `SSHMachineRepository.connect` at
+the discovery site.
 
 #### Scenario: Session owns its monitor task
 
@@ -212,13 +200,11 @@ MachineSession | None` SHALL return the live session for `node_id` or
 The orchestrator SHALL resolve a session via
 `repository.get_session(task.allocated_node_id)` at each consumer tick
 where it needs to operate on a machine. The orchestrator SHALL NOT
-cache session references across await boundaries: a cached reference
-survives `disconnect` and silently mutates an orphaned session.
+cache session references across await boundaries (a stale reference
+survives `disconnect` and silently mutates an orphaned session).
 
-Use cases (`allocate_task`, `consume_task`) SHALL receive sessions as
-parameters (resolved by the orchestrator) or resolve them via
-`repository.get_session(node_id)` when they need to call an operations
-method; they SHALL NOT cache sessions.
+Use cases SHALL receive sessions as parameters or resolve them via
+`repository.get_session(node_id)`; they SHALL NOT cache sessions.
 
 #### Scenario: connect returns a session
 
@@ -231,14 +217,12 @@ The system SHALL provide `OutputDownloader.download_outputs(session,
 remote_dir, local_dir, files, task_id)` returning
 `(local_folder: str, remote_folder: str, transient_errors, permanent_errors)`.
 The method SHALL catch all per-file exceptions and classify each into
-`transient_errors` (instances of `SFTPRetryExc`) or `permanent_errors`
-(all other caught exceptions). Session-level failures SHALL be caught and
-returned in `transient_errors`. The method SHALL NOT raise.
+`transient_errors` (retryable SFTP errors and session-level failures) or
+`permanent_errors` (all other caught exceptions). The method SHALL NOT raise.
 
-The method SHALL open a FRESH SFTP client per file in the per-file loop,
-so a dropped SFTP connection on one file invalidates only that file's
-retries. The per-file retry (fibonacci, max_time=60, `SFTPRetryExc`) SHALL
-wrap each `sftp.get` call individually.
+The method SHALL open a FRESH SFTP client per file in the per-file loop.
+Each file's `sftp.get` SHALL be wrapped individually with per-file retry
+(fibonacci, max_time=60).
 
 The method SHALL remove the remote directory tree only ONCE, after the
 per-file loop completes, and only when BOTH error lists are empty. When
@@ -267,7 +251,7 @@ The rollback SHALL be defensive against concurrent state changes:
 - If the session is open but not `BUSY`, log a warning, still call `session.release()`, and re-raise.
 - Otherwise log an info line and re-raise.
 
-This requirement governs the session-level occupancy marker only; the
+This requirement SHALL govern the session-level occupancy marker only; the
 DB task status and orchestrator's in-memory `mark_running()` are owned
 by the caller and unaffected by this rollback.
 
@@ -277,40 +261,41 @@ by the caller and unaffected by this rollback.
 - **THEN** the `except BaseException` handler calls `session.release()`, logs an info line, and re-raises the original exception
 - **AND** the session's `machine.state` is `FREE` after the call returns
 
-### Requirement: `_write_remote_file` re-raises non-SFTP exceptions
+### Requirement: File-upload non-SFTP errors propagate
 
-The `_write_remote_file` helper SHALL re-raise any exception that occurs
-during the SFTP file write. It SHALL NOT swallow non-SFTP exceptions
-(e.g. `binascii.Error`, `TypeError`, `UnicodeEncodeError`, `KeyError`).
-The helper MAY catch `asyncssh.misc.Error` specifically to log the
-structured SFTP `code` and `reason` fields and SHALL re-raise immediately
-after logging. The propagation is the abort signal for `start_task_on_machine`.
+Non-SFTP exceptions SHALL propagate immediately during remote file upload;
+they SHALL NOT be swallowed. SFTP errors (`asyncssh.misc.Error`) MAY be
+logged with structured `code` and `reason` fields but SHALL also re-raise
+immediately after logging. The propagated exception SHALL be the abort
+signal for `start_task_on_machine`.
 
-#### Scenario: Non-SFTP exception re-raised by _write_remote_file
-- **WHEN** `_write_remote_file` encounters a `TypeError` during SFTP write
+Examples include `binascii.Error`, `TypeError`, `UnicodeEncodeError`,
+`KeyError`.
+
+#### Scenario: Non-SFTP exception re-raised during file upload
+- **WHEN** a `TypeError` occurs during SFTP file write
 - **THEN** the exception is re-raised immediately (not swallowed)
 
 ### Requirement: Retry and backoff policy
 
-The system SHALL apply `@my_backoff_exc()` (fibonacci, max_time=60,
-`SSHRetryExc`) ONLY to idempotent operations: `get_cpu_cores` (pure read, cache
-miss path) and connection establishment. The system SHALL NOT apply
-`@my_backoff_exc()` to `run_bg` and SHALL NOT apply `@my_backoff_sftp()`
-to `upload` or `download` — these are non-idempotent (a successful remote
-side-effect followed by a lost client confirmation would produce a duplicate
-on retry). `download_outputs` SHALL continue to use `my_backoff_sftp()` as
-the per-file retry wrapper inside the per-file loop.
+The system SHALL apply retry with fibonacci backoff, max_time=60, ONLY to
+idempotent operations: `get_cpu_cores` (pure read, cache miss path) and
+connection establishment. The system SHALL NOT apply retry to `run_bg` and
+SHALL NOT apply SFTP retry to `upload` or `download` — these are
+non-idempotent (a successful remote side-effect followed by a lost client
+confirmation would produce a duplicate on retry). `download_outputs` SHALL
+continue to use per-file SFTP retry (fibonacci, max_time=60) inside the
+per-file loop.
 
-SSH connections SHALL be retried on transient failures using the `backoff`
-library with fibonacci backoff and `max_time=60`. The repository SHALL use
-a two-method pattern for `connect()`: inner method with
-`@my_backoff_exc()` (retries on `SSHRetryExc`), outer `connect` translates
-exhausted `(asyncssh.misc.Error, OSError)` to `MachineConnectionError`.
+SSH connections SHALL be retried on transient failures using fibonacci
+backoff with `max_time=60`. Exhausted failures SHALL surface as
+`MachineConnectionError`.
 
-The retry on `get_cpu_cores` applies only on a cache miss (the first call in a
-session lifetime, or the priming call from `SSHMachineRepository.connect`); once
-the session has cached a value, subsequent calls return without invoking the
-adapter and therefore without retry.
+The retry on `get_cpu_cores` applies only on a cache miss (the first call
+in a session lifetime, or the priming call from
+`SSHMachineRepository.connect`); once the session has cached a value,
+subsequent calls return without invoking the adapter and therefore without
+retry.
 
 #### Scenario: get_cpu_cores retries on SSH failure (cache miss)
 
@@ -327,23 +312,18 @@ adapter and therefore without retry.
 `SSHMachineSession` SHALL memoize the result of CPU-core discovery per session
 instance. CPU count is invariant for the lifetime of one SSH connection, so
 repeated `get_cpu_cores()` calls within the same session SHALL return the cached
-value without re-executing the remote command (`getconf _NPROCESSORS_ONLN` on
-Linux, the PowerShell equivalent on Windows).
+value without re-executing the remote command.
 
-The cache SHALL be primed by the discovery already performed in
-`SSHMachineRepository.connect`: after `connect` constructs the
-`SSHMachineSession`, the CPU count it read via `adapter.get_cpu_cores(...)`
-SHALL seed the session cache so the relocated `"CPUs count: %s"` log line (per
-the `connected-machine-runtime-only` change) and the cache fill happen in one
-step. The first `get_cpu_cores()` call on the session (e.g. from the
-orchestrator's `_start_task_on_machine` fallback for a `Node.ncpus is None`
-node) then returns the primed cached value with no SSH exec.
+The cache SHALL be primed by `SSHMachineRepository.connect` after constructing
+the session, seeding it with the CPU count already read via
+`adapter.get_cpu_cores(...)`. The first `get_cpu_cores()` call on a primed
+session returns the cached value with no SSH exec.
 
-The cache lives for the session's lifetime only — there is no cross-session
-cache. A reconnected session (new `SSHMachineSession` instance) starts with an
-empty cache and re-discovers once. CPU hot-add during a live scheduler session
+The cache lives for the session's lifetime only — a reconnected session starts
+with an empty cache and re-discovers once. CPU hot-add during a live session
 goes unobserved until reconnect; an operator who needs the scheduler to see
-added CPUs without reconnecting SHALL set `ncpus` explicitly via `yasetnode ~N`.
+added CPUs without reconnecting SHALL set `ncpus` explicitly via
+`yasetnode ~N`.
 
 #### Scenario: First get_cpu_cores call in a session invokes the adapter
 

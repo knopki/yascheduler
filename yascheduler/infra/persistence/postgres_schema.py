@@ -16,15 +16,16 @@
 #   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 # END_CHANGE_SUMMARY
 
-import logging
 
 from pg8000 import DatabaseError
 from pg8000.native import Connection
 
+from yascheduler.shared import get_logger
+
 from .db_config import PostgresDbConfig
 from .sql_loader import load_query
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-PERSISTENCE-SCHEMA")
 
 
 # START_CONTRACT: apply_schema
@@ -45,7 +46,7 @@ def apply_schema(config: PostgresDbConfig) -> None:
             port=config.port,
             password=config.password,
         )
-        logger.debug("[postgres_schema][apply_schema][OPEN_CONNECTION] connected")
+        logger.trace("OPEN_CONNECTION")
         # END_BLOCK_OPEN_CONNECTION
 
         # START_BLOCK_APPLY_SCHEMA
@@ -53,14 +54,12 @@ def apply_schema(config: PostgresDbConfig) -> None:
         conn.run("BEGIN")
         conn.run(schema_sql)
         conn.run("COMMIT")
-        logger.debug("[postgres_schema][apply_schema][APPLY_SCHEMA] schema applied")
+        logger.trace("APPLY_SCHEMA")
         # END_BLOCK_APPLY_SCHEMA
 
     except DatabaseError as e:
         # START_BLOCK_HANDLE_EXISTING
-        logger.debug(
-            "[postgres_schema][apply_schema][HANDLE_EXISTING] DatabaseError caught"
-        )
+        logger.trace("HANDLE_EXISTING")
         if conn is not None:
             try:
                 conn.run("ROLLBACK")
@@ -73,7 +72,7 @@ def apply_schema(config: PostgresDbConfig) -> None:
 
     except BaseException:
         # START_BLOCK_ROLLBACK
-        logger.debug("[postgres_schema][apply_schema][ROLLBACK] Rolling back on error")
+        logger.trace("ROLLBACK")
         if conn is not None:
             try:
                 conn.run("ROLLBACK")
@@ -86,5 +85,5 @@ def apply_schema(config: PostgresDbConfig) -> None:
         # START_BLOCK_CLOSE
         if conn is not None:
             conn.close()
-            logger.debug("[postgres_schema][apply_schema][CLOSE] connection closed")
+            logger.trace("CLOSE")
         # END_BLOCK_CLOSE

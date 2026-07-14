@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # FILE: yascheduler/infra/ssh/platform/windows.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Windows-specific remote commands: engine deployment, process listing.
@@ -23,18 +23,17 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Import ProcessInfo from .protocol (not .common); list_processes/pgrep return AsyncGenerator[ProcessInfo, None].
-#   PREVIOUS_CHANGE: v1.1.0 - Switch Deploy* import from yascheduler.config to yascheduler.domain; replace PEngineRepository type hints with EngineRepository from yascheduler.domain.
+#   LAST_CHANGE: v1.3.0 - Migrate from logging.Logger to YaLogger type annotations; remove # type: ignore[attr-defined].
+#   PREVIOUS_CHANGE: v1.2.0 - Import ProcessInfo from .protocol (not .common); list_processes/pgrep return AsyncGenerator[ProcessInfo, None].
 # END_CHANGE_SUMMARY
 
 import asyncio
 import json
-import logging
 import re
 from collections.abc import AsyncGenerator, Sequence
 from pathlib import PurePath, PureWindowsPath
 from re import Pattern
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from asyncssh.connection import SSHClientConnection
 from asyncssh.sftp import SFTPClient
@@ -47,6 +46,9 @@ from yascheduler.domain import (
 )
 
 from .protocol import OuterRunCallable, ProcessInfo, QuoteCallable
+
+if TYPE_CHECKING:
+    from yascheduler.shared import YaLogger
 
 
 class MyPureWindowsPath(PureWindowsPath):
@@ -172,7 +174,7 @@ async def windows_pgrep(
 
 # START_CONTRACT: deploy_local_files
 #   PURPOSE: Upload local binary files to remote Windows via SFTP
-#   INPUTS: { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { files: Sequence[PurePath] - local file paths } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { files: Sequence[PurePath] - local file paths } | { log: Optional[ "YaLogger"] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Uploads files to remote machine in parallel
 #   LINKS: M-REMOTE-WINDOWS
@@ -181,17 +183,13 @@ async def deploy_local_files(
     sftp: SFTPClient,
     engine_dir: PurePath,
     files: Sequence[PurePath],
-    log: Optional[logging.Logger] = None,
+    log: "YaLogger | None" = None,
 ) -> None:
     "Uploading binary from local; requires broadband connection"
 
     async def upload(src: PurePath, dst: PurePath) -> None:
         if log:
-            log.debug(
-                "[Windows][deploy_local_files][UPLOAD] src=%s dst=%s",
-                str(src),
-                str(dst),
-            )
+            log.trace("UPLOAD", src=str(src), dst=str(dst))
         await sftp.put([str(src)], str(dst))
 
     await asyncio.gather(*map(lambda x: upload(x, engine_dir / x.name), files))
@@ -199,7 +197,7 @@ async def deploy_local_files(
 
 # START_CONTRACT: deploy_local_archive
 #   PURPOSE: Upload local archive via SFTP and extract via Expand-Archive on remote Windows
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { archive: PurePath - local archive path } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { archive: PurePath - local archive path } | { log: Optional[ "YaLogger"] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Uploads archive, extracts it, removes archive file on remote
 #   LINKS: M-REMOTE-WINDOWS
@@ -210,7 +208,7 @@ async def deploy_local_archive(
     sftp: SFTPClient,
     engine_dir: PurePath,
     archive: PurePath,
-    log: Optional[logging.Logger] = None,
+    log: "YaLogger | None" = None,
 ) -> None:
     """
     Upload local archive.
@@ -218,14 +216,10 @@ async def deploy_local_archive(
     """
     rpath = engine_dir / archive.name
     if log:
-        log.debug(
-            "[Windows][deploy_local_archive][UPLOAD] name=%s path=%s",
-            archive.name,
-            str(rpath),
-        )
+        log.trace("UPLOAD", name=archive.name, path=str(rpath))
     await sftp.put([str(archive)], engine_dir)
     if log:
-        log.debug("[Windows][deploy_local_archive][EXTRACT] name=%s", archive.name)
+        log.trace("EXTRACT", name=archive.name)
     await run(
         f"""Expand-Archive {quote(str(rpath))} `
             -DestinationPath {quote(str(engine_dir))} `
@@ -237,7 +231,7 @@ async def deploy_local_archive(
 
 # START_CONTRACT: deploy_remote_archive
 #   PURPOSE: Download remote archive via Invoke-WebRequest and extract via Expand-Archive on remote Windows
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { url: str - download URL } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { url: str - download URL } | { log: Optional[ "YaLogger"] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Downloads archive from URL, extracts it, removes archive file on remote
 #   LINKS: M-REMOTE-WINDOWS
@@ -248,7 +242,7 @@ async def deploy_remote_archive(
     sftp: SFTPClient,
     engine_dir: PurePath,
     url: str,
-    log: Optional[logging.Logger] = None,
+    log: "YaLogger | None" = None,
 ) -> None:
     """
     Downloading binary from a trusted non-public address.
@@ -257,16 +251,14 @@ async def deploy_remote_archive(
     name = "archive.zip"
     rpath = engine_dir / name
     if log:
-        log.debug(
-            "[Windows][deploy_remote_archive][DOWNLOAD] url=%s path=%s", url, str(rpath)
-        )
+        log.trace("DOWNLOAD", url=url, path=str(rpath))
     await run(
         f"""Invoke-WebRequest -Uri {quote(url)} `
             -OutFile {quote(str(rpath))} -Force""",
         check=True,
     )
     if log:
-        log.debug("[Windows][deploy_remote_archive][EXTRACT] name=%s", name)
+        log.trace("EXTRACT", name=name)
     await run(
         f"""Expand-Archive {quote(str(rpath))} `
             -DestinationPath {quote(str(engine_dir))} `
@@ -278,7 +270,7 @@ async def deploy_remote_archive(
 
 # START_CONTRACT: windows_deploy_engines
 #   PURPOSE: Deploy all engines for a Windows node by iterating engine repository and dispatching deploy strategies
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[ "YaLogger"] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates engine directories, uploads files/archives, downloads remote archives
 #   LINKS: M-REMOTE-WINDOWS
@@ -289,7 +281,7 @@ async def windows_deploy_engines(
     sftp: SFTPClient,
     engines: EngineRepository,
     engines_dir: PurePath,
-    log: Optional[logging.Logger] = None,
+    log: "YaLogger | None" = None,
 ) -> None:
     """
     Setup node for target engines.
@@ -321,7 +313,7 @@ async def windows_deploy_engines(
 
 # START_CONTRACT: windows_setup_node
 #   PURPOSE: Setup Windows node by deploying engines via SFTP
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
+#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[ "YaLogger"] - logger }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates SFTP client, deploys all engines on Windows
 #   LINKS: M-REMOTE-WINDOWS
@@ -332,7 +324,7 @@ async def windows_setup_node(
     quote: QuoteCallable,
     engines: EngineRepository,
     engines_dir: PurePath,
-    log: Optional[logging.Logger] = None,
+    log: "YaLogger | None" = None,
 ) -> None:
     "Setup Windows node"
     async with conn.start_sftp_client() as sftp:

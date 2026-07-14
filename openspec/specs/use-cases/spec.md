@@ -19,10 +19,8 @@ webhook_custom_params=metadata.get("webhook_custom_params", {}),
 extra=extra_dict)` (the pre-persistence shape — no `task_id`; `status` defaults
 to `TaskStatus.TO_DO`, `allocated_node_id` defaults to `None`; `remote_folder`
 and `error` are NOT on `NewTask`), persist it via
-`uow.tasks.insert(new_task) -> Task` (the sole `NewTask → Task` conversion;
-`insert` calls `materialize_task` internally to attach `TaskCreated` to the
-returned `Task`'s `events`), then `save`, `commit`, and return `task.task_id`
-(a `TaskId`).
+`uow.tasks.insert(new_task) -> Task`, then `save`, `commit`, and return
+`task.task_id` (a `TaskId`).
 
 The typed fields are extracted from the caller-supplied `metadata` dict;
 `engine` is set from the `engine_name` argument. The `extra` dict carries the
@@ -36,7 +34,7 @@ in the caller `metadata` that is not one of the six known typed fields
 
 #### Scenario: Successful task submission
 - **WHEN** `submit_task(...)` is called with valid inputs
-- **THEN** a `NewTask` is constructed, persisted via `uow.tasks.insert` → `Task` (with `TaskCreated` in `events` via `materialize_task`), saved, committed, and the `TaskId` is returned; `remote_folder` is `None` on the persisted TO_DO task
+- **THEN** a `NewTask` is constructed, persisted via `uow.tasks.insert` → `Task` (with `TaskCreated` emitted via materialization inside `insert`), saved, committed, and the `TaskId` is returned; `remote_folder` is `None` on the persisted TO_DO task
 
 #### Scenario: Unsupported engine
 - **WHEN** `submit_task(...)` is called with an engine_name not in the EngineRepository
@@ -48,7 +46,7 @@ in the caller `metadata` that is not one of the six known typed fields
 
 #### Scenario: submit_task does not construct events
 - **WHEN** `submit_task(...)` is inspected for `TaskCreated` construction or `with_event`/`record_event` calls
-- **THEN** none are present; `TaskCreated` is attached by `materialize_task` inside `insert`
+- **THEN** none are present; `TaskCreated` is attached by `insert` internally
 
 ### Requirement: AllocateTask use case
 
@@ -62,40 +60,22 @@ and `allocation_lock: asyncio.Lock`. It SHALL NOT import from
 parameters — provider selection is delegated to the `clouds.select_provider`
 port method.
 
-The orchestrator reads task ids from `list_by_status -> [Task]` (each carrying
-`TaskId`) and feeds `allocate_task(task_id=task.task_id, ...)`, so `TaskId`
-flows end-to-end internally with no conversion. `tracker.add`/`discard(task_id)`
-keys are `TaskId` (the tracker's internal `dict` becomes
-`dict[TaskId, NodeId | None]`).
-
-For the cloud-fallback path, the use case SHALL own the full flow:
-tracker dedup (via `tracker.add(task_id)` with `node_id=None`, before any DB
-write so the dedup gate precedes tmp-node insertion), capacity check, provider
-selection (via `clouds.select_provider` port method returning `str | None`),
-tmp-node insertion via `uow.nodes.insert` (NOT `add_tmp`), node-link patching
-(via `tracker.set_node(task_id, tmp_node.node_id)` after the tmp node is
-inserted), cloud allocation (via `clouds.allocate(selection, node)` returning a
-`Node` reusing the tmp node's `node_id`), final node persistence via
-`uow.nodes.update(node)` (a single UPDATE flipping `enabled=TRUE` and setting
-`ip`/`ncpus`), and tmp-node cleanup on failure (`uow.nodes.remove(tmp_node_id)`).
-The `allocation_lock` SHALL serialize the capacity-read + select + tmp-insert
-sequence so two concurrent `allocate_task` calls for the same engine cannot
-both provision a cloud node when only one slot is free. The `tracker.add` dedup
-gate SHALL run outside the lock and before any DB write; `tracker.set_node`
-SHALL run after `_select_and_insert_tmp` returns (outside the lock, since the
-lock is released inside `_select_and_insert_tmp` before its caller receives the
-result) — there is no `await` between `set_node` and the surrounding code, so
-the `None` window for the entry's node link is a single synchronous step with
-no concurrency surface.
+For the cloud-fallback path, the use case SHALL own the full flow: tracker
+dedup (via `tracker.add(task_id)`), capacity check, provider selection via
+`clouds.select_provider`, tmp-node insertion, cloud allocation via
+`clouds.allocate(selection, node)`, and final node persistence. On failure,
+the tmp-node SHALL be cleaned up via `uow.nodes.remove`. The `allocation_lock`
+SHALL serialize the capacity-read through tmp-insert sequence so concurrent
+`allocate_task` calls for overlapping capacity do not over-provision.
 
 The function SHALL read `task.engine` when matching the task against engines.
 The use case SHALL reject an unsupported engine via
 `task.reject("unsupported engine")` (a single atomic transition that emits
-`TaskFailed` inline — no separate `with_event` call, no duplicated reason
-string). The use case SHALL compute `remote_folder` from `task.task_id` and
-transition the task via `task.run(node.node_id, remote_folder)` (a single
-atomic transition that sets `allocated_node_id` + `remote_folder`, moves to
-RUNNING, and emits `TaskAllocated` inline). No `TaskContext` indirection.
+`TaskFailed` inline). The use case SHALL compute `remote_folder` from
+`task.task_id` and transition the task via
+`task.run(node.node_id, remote_folder)` (a single atomic transition that sets
+`allocated_node_id` + `remote_folder`, moves to RUNNING, and emits
+`TaskAllocated` inline).
 
 #### Scenario: Successful allocation to a free machine
 - **WHEN** `allocate_task(...)` is called and a free compatible machine exists
@@ -124,22 +104,14 @@ The system SHALL provide a `deallocate_nodes` async function that disables
 idle cloud nodes exceeding tolerance. The function SHALL accept `uow_factory`,
 `config_clouds: Sequence[CloudConfig]`, and `idle_machines: dict[NodeId, float]`
 (`NodeId` -> free_since monotonic timestamp). It SHALL NOT accept `repository`
-or `operations` (the per-node SSH/cloud teardown lives in `deallocate_node`).
+or `operations` (the per-node teardown lives in a separate helper).
 
-The per-node wrapper `deallocate_node(node, repository, clouds, uow_factory)`
-SHALL own the disable + remove bracketing around the pure
-`clouds.deallocate(node)` call. Ordering SHALL be preserved: `disable`
-→ `delete_node` → `remove` across two short UoWs (disable before cloud
-delete protects against allocator re-selection on failure; remove after
-cloud delete ensures the DB row is only dropped once the VM is gone).
-
-`deallocate_node` SHALL call `uow.nodes.disable(node.node_id)` and
-`uow.nodes.remove(node.node_id)` (keying on `node_id`, not `ip`).
-`clouds.deallocate(node)` SHALL take the whole `Node` and read `node.cloud`
-(provider) and `node.hostname` (cloud host) internally. `deallocate_node` SHALL
-call `repository.contains(node.node_id)` and `repository.disconnect(node.node_id)`
-BEFORE the `if node.cloud:` guard, so SSH teardown is owned by
-`deallocate_node` and runs regardless of whether the node is a cloud node.
+Ordering for each node SHALL be preserved: SSH disconnect first, then
+`uow.nodes.disable`, then `clouds.deallocate(node)`, then `uow.nodes.remove`.
+Disable-before-delete protects against allocator re-selection on failure;
+remove-after-delete ensures the DB row is only dropped once the VM is gone.
+SSH disconnect runs before the cloud guard so it executes regardless of whether
+the node is a cloud node.
 
 `deallocate_nodes` SHALL iterate the enabled nodes returned by
 `uow.nodes.list_enabled()` and call `uow.nodes.disable(node.node_id)` for
@@ -153,7 +125,7 @@ reads from `uow.nodes.list_disabled()`, each carrying `node_id`.
 `deallocate_nodes` phase 2 SHALL filter disabled nodes by
 `node.node_id not in busy_node_ids and node.cloud`.
 
-Internal log lines in both `deallocate_nodes` and `deallocate_node` SHALL
+Internal log lines in both `deallocate_nodes` and the per-node helper SHALL
 include both `node_id` and `hostname` for correlation.
 
 #### Scenario: Idle cloud node disabled
@@ -226,7 +198,7 @@ orchestrator via `repository.get_session(task.allocated_node_id)`),
 `output_downloader: OutputDownloader` (concrete collaborator type, for
 `download_outputs`), `engines: EngineRepository`, `uow_factory: Callable[[], AbstractUnitOfWork]`,
 `local_tasks_dir: Path`, and `tracker: AllocationTracker`. It SHALL NOT import
-`SFTPRetryExc`, `SFTPError`, or `backoff` from `yascheduler.infra` at runtime.
+SFTP retry or backoff infrastructure from `yascheduler.infra` at runtime.
 
 The function SHALL return `bool`: `True` when the task is finalised (DONE
 status applied, remote directory cleaned, in-flight
@@ -267,18 +239,8 @@ error column format contract: `"Download error: <path>: <msg>, <path>: <msg>"`
 (combined `permanent_errors + transient_errors`); entries with `path=None`
 render as bare `"<msg>"`.
 
-The function SHALL call `task.fail(error_msg,
-local_folder=local_folder or task.local_folder, remote_folder=remote_folder
-or task.remote_folder)` or `task.complete(local_folder=str(store_folder),
-remote_folder=remote_folder or task.remote_folder)` directly — no prior
-`with_download_results(...)` step. The terminal transitions do NOT touch
-`extra`.
-
 The function SHALL read `task.remote_folder`, `task.engine`, and
-`task.local_folder` directly from the typed fields. The assertion
-`assert task.remote_folder is not None` SHALL guard the `task.remote_folder`
-read (the task is RUNNING — `run` assigned `remote_folder` at allocate time).
-No `TaskContext` indirection.
+`task.local_folder` directly from the typed fields.
 
 #### Scenario: Successful consumption
 - **WHEN** `consume_task(...)` is called and `download_outputs` returns empty `transient_errors` and empty `permanent_errors`
@@ -291,14 +253,6 @@ No `TaskContext` indirection.
 #### Scenario: Transient-only download error defers for retry
 - **WHEN** `download_outputs` returns non-empty `transient_errors` and empty `permanent_errors`
 - **THEN** the task is left in `RUNNING`, no `tracker.discard` is called, and the function returns `False`
-
-#### Scenario: consume_task reads typed fields not task.context
-- **WHEN** `consume_task` is inspected for `task.context` references
-- **THEN** none are present; reads use `task.remote_folder`, `task.engine`, `task.local_folder` directly
-
-#### Scenario: consume_task does not call with_download_results or with_event
-- **WHEN** `consume_task` is inspected for `with_download_results` or `with_event` calls
-- **THEN** none are present; the terminal transitions `complete`/`fail` set the folders and emit the events inline
 
 ### Requirement: QueryTasks use case
 
@@ -362,20 +316,15 @@ before calling `query_tasks(jobs=[TaskId(...)], ...)`.
 
 ### Requirement: AllocationTracker tracks in-flight cloud allocations
 
-The system SHALL provide an `AllocationTracker` class that maintains an
-in-memory `dict[TaskId, NodeId | None]` of task_ids with in-flight cloud
-allocations, mapping each tracked task to its provisioning tmp node (or
-`None` between the dedup gate and the tmp-node insert).
-The class SHALL expose:
+The system SHALL provide an `AllocationTracker` class that tracks task_ids
+with in-flight cloud allocations. The class SHALL expose:
 
 - `add(task_id: TaskId, node_id: NodeId | None = None) -> bool` — returns
   True if newly added, False if already tracked. The optional `node_id`
   parameter defaults to `None` so the dedup gate can call `add(task_id)`
   before the tmp node exists.
-- `set_node(task_id: TaskId, node_id: NodeId) -> None` — patches the node
-  link into an existing entry. If the `task_id` is not tracked, the call
-  SHALL be a no-op (defensive — the entry is added by `add` and removed by
-  `discard`; `set_node` only runs on the success path between them).
+- `set_node(task_id: TaskId, node_id: NodeId) -> None` — links a node to the
+  tracked task. If the `task_id` is not tracked, the call SHALL be a no-op.
 - `discard(task_id: TaskId) -> None` — removes the entry by `task_id`
   (unchanged semantics; the `NodeId | None` value is discarded with it).
 - `discard_by_node(node_id: NodeId) -> int` — removes ALL entries whose

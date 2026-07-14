@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/ssh_keys.py
-# VERSION: 1.0.1
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH key generation, loading, and name extraction for cloud provisioning.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial version.
+#   LAST_CHANGE: v1.1.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-SSH-KEYS") at module top
+#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
 # END_CHANGE_SUMMARY
 
 """SSH key management for cloud provisioning"""
@@ -23,25 +23,24 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING
 
 from asyncssh.public_key import SSHKey, generate_private_key, read_private_key
 
+from yascheduler.shared import get_logger
+
 from .utils import get_rnd_name
 
-if TYPE_CHECKING:
-    import logging
+logger = get_logger("M-CLOUD-SSH-KEYS")
 
 
 # START_CONTRACT: get_or_create_ssh_key
 #   PURPOSE: Load existing SSH key from keys_dir or generate a new one if none found.
 #   INPUTS: { keys_dir: Path - directory to scan for existing keys / write new key }
-#            { log: logging.Logger - logger for debug/info messages }
 #   OUTPUTS: { SSHKey - loaded or freshly generated SSH key }
 #   SIDE_EFFECTS: May write a new private key file to keys_dir if no existing key found.
 #   LINKS: M-CLOUD-PROVISIONER
 # END_CONTRACT: get_or_create_ssh_key
-def get_or_create_ssh_key(keys_dir: Path, log: logging.Logger) -> SSHKey:
+def get_or_create_ssh_key(keys_dir: Path) -> SSHKey:
     """Load existing SSH key or generate a new one."""
     prefix = "yakey"
     # START_BLOCK_LOAD_EXISTING
@@ -50,10 +49,10 @@ def get_or_create_ssh_key(keys_dir: Path, log: logging.Logger) -> SSHKey:
             continue
         ssh_key = read_private_key(filepath)
         ssh_key.set_comment(filepath.name)
-        log.debug(
-            "[ssh_keys][get_or_create] loaded key=%s fingerprint=%s",
-            filepath.name,
-            ssh_key.get_fingerprint("md5"),
+        logger.trace(
+            "LOADED_KEY",
+            key_name=filepath.name,
+            fingerprint=ssh_key.get_fingerprint("md5"),
         )
         return ssh_key
     # END_BLOCK_LOAD_EXISTING
@@ -65,10 +64,8 @@ def get_or_create_ssh_key(keys_dir: Path, log: logging.Logger) -> SSHKey:
     ssh_key.write_private_key(filepath)
     filepath.chmod(0o600)
     ssh_key.set_comment(key_name)
-    log.info(
-        "[ssh_keys][get_or_create] generated key=%s fingerprint=%s",
-        key_name,
-        ssh_key.get_fingerprint("md5"),
+    logger.info(
+        "generated ssh key=%s fingerprint=%s", key_name, ssh_key.get_fingerprint("md5")
     )
     # END_BLOCK_GENERATE_NEW
     return ssh_key

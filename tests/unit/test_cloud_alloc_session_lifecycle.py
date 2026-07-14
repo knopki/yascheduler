@@ -548,7 +548,6 @@ def _make_real_provisioner(
         local_config=_make_real_local_config(),
         remote_config=_make_real_remote_config(),
         engines=engines,
-        log=MagicMock(),
     )
     return prov, adapter
 

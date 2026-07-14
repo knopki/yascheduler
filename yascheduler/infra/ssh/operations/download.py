@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/download.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OutputDownloader class + my_backoff_sftp partial (canonical location — its first user is download_outputs).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - download_outputs drops the legacy meta_add list-of-pairs (a metadata-blob relic); returns typed fields directly as (local_folder: str, remote_folder: str, transient_errors, permanent_errors). consume_task receives them as named values, not via a meta_dict.
-#   PREVIOUS_CHANGE: v1.2.1 - download_outputs takes task_id: TaskId | None (was int | None); used only for logging (task_id=%s renders the bare integer via TaskId.__str__).
+#   LAST_CHANGE: v1.4.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-OPS-DOWNLOAD") at module top
+#   PREVIOUS_CHANGE: v1.3.0 - download_outputs drops the legacy meta_add list-of-pairs (a metadata-blob relic); returns typed fields directly as (local_folder: str, remote_folder: str, transient_errors, permanent_errors). consume_task receives them as named values, not via a meta_dict.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -25,13 +25,16 @@ from typing import TYPE_CHECKING
 import backoff
 from asyncssh.sftp import SFTPError
 
+from yascheduler.shared import get_logger
+
 from ..exceptions import SFTPRetryExc
 
 if TYPE_CHECKING:
-    import logging
     from pathlib import Path
 
     from yascheduler.domain import MachineSession, TaskId
+
+logger = get_logger("M-SSH-OPS-DOWNLOAD")
 
 my_backoff_sftp = partial(
     backoff.on_exception,
@@ -56,11 +59,8 @@ class OutputDownloader:
     (local_folder, remote_folder, transient_errors, permanent_errors).
     """
 
-    def __init__(
-        self,
-        log: logging.Logger,
-    ) -> None:
-        self._log = log
+    def __init__(self) -> None:
+        pass
 
     # START_CONTRACT: OutputDownloader.download_outputs
     #   PURPOSE: Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.
@@ -108,7 +108,7 @@ class OutputDownloader:
                         else:
                             permanent_errors.append((out_file, err))
                         # END_BLOCK_CLASSIFY
-                        self._log.warning(
+                        logger.warning(
                             "Cannot download file for task_id=%s from %s: %s",
                             task_id,
                             out_file,
@@ -126,7 +126,7 @@ class OutputDownloader:
         except Exception as err:
             # Catch-all: whole-session failure (open_sftp raising, or a non-(OSError|SFTPError)
             # escape) is transient — the remote dir is preserved.
-            self._log.warning("Cannot scp from %s: %s", remote_dir, err)
+            logger.warning("Cannot scp from %s: %s", remote_dir, err)
             transient_errors.append((remote_dir, err))
         # END_BLOCK_DOWNLOAD_OUTPUTS
         return local_folder, remote_folder, transient_errors, permanent_errors

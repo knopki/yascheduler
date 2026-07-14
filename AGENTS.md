@@ -61,6 +61,9 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 - `openspec/specs/domain-exceptions`
 - `openspec/specs/domain-ports`
 - `openspec/specs/e2e-testing`
+- `openspec/specs/logging` — the `YaLogger`/`LogFormatter`/`get_logger`
+  contract and the trace-vs-narrative discipline (guard tests live in
+  `testing-unit`)
 - `openspec/specs/orchestrator`
 - `openspec/specs/package-facades`
 - `openspec/specs/postgres-persistence` — `PostgresUnitOfWork`,
@@ -202,11 +205,46 @@ implementation details.
 Structured logs = primary observability. Block boundary log entries declare
 what code assumes at that point. Runtime behavior traceable back to contract.
 
-Governed functions emit `logging.debug("[Module][function][BLOCK] msg", extra={...})`
-at block boundaries. Prefer structured fields; redact secrets. Missing anchors
+**Trace method.** Governed functions emit `log.trace("BLOCK", **fields)` at
+block boundaries. `trace()` is defined on `YaLogger` (subclass of
+`logging.Logger`) and emits a DEBUG-level record carrying the block marker and
+structured fields. Structured fields preferred; redact secrets. Missing anchors
 on critical branches = verification defect.
 
-Tests: deterministic assertions first. Trace/log assertions when trajectory
+**Logger binding.** Modules bind loggers via:
+
+```python
+from yascheduler.shared import get_logger
+log = get_logger("M-...")
+```
+
+The factory prepends the `yascheduler.` namespace prefix and reclasses the
+instance to `YaLogger`. Do NOT use `logging.getLogger(...)` directly for
+module-level logger binding, and do NOT use `logging.setLoggerClass(...)` at
+all.
+
+**M-ID namespaced logger names.** Logger names are `yascheduler.M-...` where
+`M-...` is a real `<M-*>` tag from `docs/knowledge-graph.xml`. The
+`yascheduler.` prefix ensures propagation to the parent `"yascheduler"` logger
+(for the e2e `log_records` capture fixture).
+
+**Record contract for tests.** Trace records expose three programmatic
+attributes: `record.block` (the block marker string passed to `trace()`),
+`record.fields` (the kwargs dict), and `record.funcName` (auto-captured via
+`stacklevel=2` — no hand-written `[function]` string). Tests assert on these
+attributes directly, NOT on `getMessage()` substrings.
+
+**LogFormatter rendering contract.** `LogFormatter` renders two layouts from a
+single instance:
+
+- *Trace records* (those carrying `record.fields`): render as
+  `[shortname][funcName][block] key=value` where `shortname` is the M-ID
+  portion of the logger name (e.g. `M-APPLICATION-ALLOCATE`), `funcName` is
+  auto-captured, and fields are alphabetically sorted for deterministic output.
+- *User-facing records* (INFO/WARN/ERROR via inherited methods): render as
+  plain `LEVEL name: message` with NO markers and NO structured fields.
+
+**Tests:** deterministic assertions first. Trace/log assertions when trajectory
 matters. Module-local tests stay close to module. Test files may carry
 MODULE_CONTRACT, MODULE_MAP, semantic blocks, CHANGE_SUMMARY when substantial.
 Update tests when log markers change intentionally.

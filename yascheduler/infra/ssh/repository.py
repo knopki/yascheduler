@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/repository.py
-# VERSION: 2.3.0
+# VERSION: 2.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. True collection only — no state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession).
 #   SCOPE: SSHMachineRepository: connected-machine collection lifecycle, keyed by NodeId; connection-building helpers.
@@ -15,13 +15,12 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.6.0 - node-ncpus-as-config slice 4: prime session CPU cache from connect discovery with _prime_ncpus_cache.
-#   PREVIOUS_CHANGE: v2.5.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from ConnectedMachine construction; add info log for CPU count at discovery site.
+#   LAST_CHANGE: v2.4.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-REPOSITORY") at module top
+#   PREVIOUS_CHANGE: v2.7.0 - Split test-targeted CPUs info into log.trace("CPUS", ...) + log.info("connected to ...") per reform-grace-logging slice 6.11.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -36,9 +35,12 @@ from yascheduler.domain import (
     Node,
     NodeId,
 )
+from yascheduler.shared import get_logger
 
 from .platform import ADAPTERS, _detect_platform, _init_paths, make_run_fn
 from .session import SSHMachineSession, my_backoff_exc
+
+logger = get_logger("M-SSH-REPOSITORY")
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -106,9 +108,8 @@ class SSHMachineRepository:
     monitors.
     """
 
-    def __init__(self, log: logging.Logger | None = None) -> None:
+    def __init__(self) -> None:
         self._sessions: dict[NodeId, SSHMachineSession] = {}
-        self._log = log or logging.getLogger("SSHMachineRepository")
 
     # ---- Connection lifecycle ----
 
@@ -141,10 +142,10 @@ class SSHMachineRepository:
         )
         # END_BLOCK_BUILD_OPTS
         # START_BLOCK_CONNECT
-        self._log.debug(
-            "[SSHRepository][_open_connection][CONNECT] hostname=%s tunnel=%s",
-            hostname,
-            tunnel_opts.host if tunnel_opts else None,
+        logger.trace(
+            "CONNECT",
+            hostname=hostname,
+            tunnel=tunnel_opts.host if tunnel_opts else None,
         )
         conn = await asyncssh.connection.connect(
             options=conn_opts,
@@ -228,22 +229,15 @@ class SSHMachineRepository:
         )
         # START_BLOCK_DETECT
         adapter, platforms = await _detect_platform(conn, ADAPTERS)
-        self._log.debug(
-            "[SSHRepository][connect][DETECT] platform=%s hostname=%s",
-            adapter.platform,
-            node.hostname,
-        )
+        logger.trace("DETECT", platform=adapter.platform, hostname=node.hostname)
         # END_BLOCK_DETECT
         # START_BLOCK_PATHS
         rd, re, rt = _init_paths(adapter, data_dir, engines_dir, tasks_dir)
         # END_BLOCK_PATHS
         # START_BLOCK_CREATE_MACHINE
         ncpus = await adapter.get_cpu_cores(make_run_fn(conn, adapter))
-        self._log.info(
-            "[SSHRepository][connect][CPUs] hostname=%s ncpus=%d",
-            node.hostname,
-            ncpus,
-        )
+        logger.trace("CPUS", hostname=node.hostname, ncpus=ncpus)
+        logger.info("connected to %s (%d CPUs)", node.hostname, ncpus)
         machine = ConnectedMachine(
             node_id=node.node_id,
             platform=adapter.platform,
@@ -262,7 +256,6 @@ class SSHMachineRepository:
             data_dir=rd,
             engines_dir=re,
             tasks_dir=rt,
-            log=self._log,
         )
         session._prime_ncpus_cache(ncpus)
         self._sessions[node.node_id] = session

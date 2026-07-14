@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_daemon_common.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_common.py — configure_logger and run_daemon with mocked DI (no real DB/SSH).
@@ -9,12 +9,13 @@
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   TestConfigureLogger - stderr-only when log_file=None; +FileHandler when set; backoff/asyncssh ERROR; captureWarnings(True); no basicConfig
+#   TestConfigureLogger - stderr-only when log_file=None; +FileHandler when set; backoff/asyncssh ERROR; captureWarnings(True); no basicConfig; LogFormatter on both handlers
 #   TestRunDaemonShape - run_daemon is async; awaits make_daemon + orch.start with mocked DI
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for daemon_common.py (consolidate-daemon-entrypoints).
+#   LAST_CHANGE: v1.1.0 - Assert LogFormatter wired on both StreamHandler and FileHandler in configure_logger (reform-grace-logging).
+#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for daemon_common.py (consolidate-daemon-entrypoints).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.entrypoints.cli import daemon_common
+from yascheduler.shared.log import LogFormatter
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -65,6 +67,8 @@ class TestConfigureLogger:
         # The StreamHandler streams to stderr.
         sh = [h for h in root.handlers if isinstance(h, logging.StreamHandler)]
         assert any(h.stream is sys.stderr for h in sh)
+        # The StreamHandler carries a LogFormatter per the reform-grace-logging spec.
+        assert any(isinstance(h.formatter, LogFormatter) for h in sh)
 
     def test_file_and_stderr_when_log_file_set(self, tmp_path: Path) -> None:
         log_path = tmp_path / "y.log"
@@ -81,6 +85,16 @@ class TestConfigureLogger:
             and getattr(h, "baseFilename", None) == str(log_path)
         ]
         assert len(fh) == 1
+        # The StreamHandler streams to stderr.
+        sh = [
+            h
+            for h in root.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
+        # Both handlers carry a LogFormatter per the reform-grace-logging spec.
+        assert any(isinstance(h.formatter, LogFormatter) for h in sh)
+        assert any(isinstance(h.formatter, LogFormatter) for h in fh)
 
     def test_backoff_level_error(self) -> None:
         daemon_common.configure_logger(None, logging.INFO)
@@ -129,7 +143,7 @@ class TestRunDaemonShape:
 
         asyncio.run(daemon_common.run_daemon(config, logger))
 
-        make_daemon_mock.assert_awaited_once_with(config, logger)
+        make_daemon_mock.assert_awaited_once_with(config)
         orch.start.assert_awaited_once()
 
     def test_run_daemon_owns_signal_handlers(

@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/adapters.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Mapping of cloud config types to create/delete callables.
 #   SCOPE: Adapter registry mapping provider config classes to their operations.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Migrate CloudAdapter from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); drop 4× bare field(); remove stale FIXME marker.
-#   PREVIOUS_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
+#   LAST_CHANGE: v1.3.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-ADAPTERS") at module top
+#   PREVIOUS_CHANGE: v1.2.0 - Migrate CloudAdapter from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); drop 4× bare field(); remove stale FIXME marker.
 # END_CHANGE_SUMMARY
 """Cloud adapters"""
 
@@ -35,9 +35,9 @@ from functools import cache
 from typing import TYPE_CHECKING, Generic
 
 if TYPE_CHECKING:
-    import logging
-
     from .cloud_configs import ConfigCloud
+
+from yascheduler.shared import get_logger
 
 from .protocols import (
     CreateNodeCallable,
@@ -45,6 +45,8 @@ from .protocols import (
     SupportedPlatformChecker,
     TConfigCloud_co,
 )
+
+logger = get_logger("M-CLOUD-ADAPTERS-NEW")
 
 
 def can_debian_buster(platform: str) -> bool:
@@ -212,19 +214,19 @@ CLOUD_ADAPTER_GETTERS = {
 
 # START_CONTRACT: resolve_adapter
 #   PURPOSE: Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry
-#   INPUTS: { cfg: ConfigCloud - cloud provider config with prefix, log: logging.Logger - logger instance }
+#   INPUTS: { cfg: ConfigCloud - cloud provider config with prefix }
 #   OUTPUTS: { Optional[CloudAdapter] - resolved adapter or None if prefix unknown or deps missing }
 #   SIDE_EFFECTS: Logs error on ImportError
 #   LINKS: M-CLOUD-ADAPTERS
 # END_CONTRACT: resolve_adapter
-def resolve_adapter(cfg: ConfigCloud, log: logging.Logger) -> CloudAdapter | None:
+def resolve_adapter(cfg: ConfigCloud) -> CloudAdapter | None:
     try:
         getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]
         return getter(cfg.prefix)
     except KeyError:
         return None
     except ImportError:
-        log.error(
+        logger.error(
             "The cloud %s is skipped because the dependencies are not installed",
             cfg.prefix,
         )

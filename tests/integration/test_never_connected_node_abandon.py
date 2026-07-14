@@ -130,7 +130,6 @@ def _build_orchestrator(
         output_downloader=output_downloader,
         occupancy_checker=occupancy_checker,
         engines=engines,
-        log=MagicMock(),
         config_clouds=config_clouds,
         local_tasks_dir=Path("/tmp"),
         allocation_tracker=tracker,

@@ -23,7 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.hostname via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
+#   LAST_CHANGE: v1.3.0 - reform-grace-logging slice 8: migrate _assert_cloud_done_log / _assert_cloud_delete_log from getMessage() substring matching to record.block/record.fields structured fields; remove _CLOUD_DONE_MARKER and _CLOUD_DELETE_MARKER constants; remove import re.
+#   PREVIOUS_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.hostname via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
 #   PREVIOUS_CHANGE: v1.0.0 - add-hetzner-live-e2e: new opt-in env-gated real-Hetzner e2e exercising the cold-start autoscale -> allocate -> download -> idle-deallocate happy path through the real entrypoints (make_daemon, _submit_async) and asserting via uow_factory. Hetzner hcloud SDK is imported lazily inside helpers so module collection succeeds without the optional extra; the env gate (YASCHEDULER_TEST_HETZNER=1 + YASCHEDULER_CLOUDS_HETZNER_TOKEN) skips by default. Cleanup is observed-IP based with a loud-fail-on-leak finally; a strong find_srv deletion assertion complements DB-row removal. Refined via a live run: _poll_for_hetzner_node requires n.enabled (the tmp node inserted by _select_and_insert_tmp has cloud=hetzner/enabled=False with a placeholder IP); CLOUD_DELETE is asserted after _poll_node_gone (it is emitted by the idle-deallocate loop, not at completion); timeouts sized to the observed ~83s cold-start.
 # END_CHANGE_SUMMARY
 
@@ -32,7 +33,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import stat
 from datetime import datetime
 from pathlib import Path
@@ -66,9 +66,6 @@ _COMPLETION_TIMEOUT_S = 60.0
 _DEALLOC_TIMEOUT_S = 60.0
 _VM_DELETE_TIMEOUT_S = 30.0
 _POLL_INTERVAL_S = 1.0
-
-_CLOUD_DONE_MARKER = "[AllocateTask][allocate_task][CLOUD_DONE]"
-_CLOUD_DELETE_MARKER = "[deallocate_node][CLOUD_DELETE]"
 
 
 # START_CONTRACT: _cloud_env_or_skip
@@ -249,7 +246,7 @@ async def _cleanup_observed(
     # START_BLOCK_BEST_EFFORT_DELETE
     for ip in observed_ips:
         try:
-            await hetzner_delete_node(log, cfg, ip)
+            await hetzner_delete_node(cfg, ip)
         except Exception as err:  # noqa: BLE001
             log.error(
                 "[hetzner_live][CLEANUP] hetzner_delete_node raised for ip=%s err=%s "
@@ -422,7 +419,7 @@ async def _assert_outputs(
 
 
 # START_CONTRACT: _assert_cloud_done_log
-#   PURPOSE: Assert captured log_records contain a CLOUD_DONE record with hostname=<node_ip> cloud=hetzner. Emitted by _persist_node_with_cleanup at provision time, so it is present once both tasks have reached DONE. Does NOT assert on CREATED or [CloudProvisionerImpl] (those are on the Orchestrator logger, invisible to log_records).
+#   PURPOSE: Assert captured log_records contain a CLOUD_DONE trace record with hostname=<node_ip> cloud=hetzner. Uses structured fields (record.block/record.fields), not getMessage() substrings. Emitted by _persist_node_with_cleanup at provision time, so it is present once both tasks have reached DONE.
 #   INPUTS: { records: list[LogRecord], node_ips: list[str] - provisioned hetzner IPs to match against hostname= }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — pure assertion over captured records.
@@ -431,35 +428,38 @@ async def _assert_outputs(
 def _assert_cloud_done_log(
     records: list[logging.LogRecord], node_ips: list[str]
 ) -> None:
-    cloud_done_msgs = [
-        r.getMessage() for r in records if _CLOUD_DONE_MARKER in r.getMessage()
+    cloud_done_records = [
+        r for r in records if getattr(r, "block", None) == "CLOUD_DONE"
     ]
     done_match = any(
-        "cloud=hetzner" in msg
-        and any(re.search(rf"hostname={re.escape(ip)}\b", msg) for ip in node_ips)
-        for msg in cloud_done_msgs
+        rec.fields.get("cloud") == "hetzner"  # type: ignore[attr-defined]
+        and rec.fields.get("hostname") in node_ips  # type: ignore[attr-defined]
+        for rec in cloud_done_records
     )
     assert done_match, (
-        f"no [CLOUD_DONE] record with cloud=hetzner and hostname in {node_ips}; "
-        f"captured CLOUD_DONE msgs={cloud_done_msgs}"
+        f"no [CLOUD_DONE] trace record with cloud=hetzner and hostname in {node_ips}; "
+        f"captured CLOUD_DONE records={cloud_done_records}"
     )
 
 
 # START_CONTRACT: _assert_cloud_delete_log
-#   PURPOSE: Assert captured log_records contain a CLOUD_DELETE record with cloud=hetzner. Emitted by deallocate_node during idle-deallocation, so it is only present AFTER the node row has been removed — must be called after _poll_node_gone, not at completion time.
+#   PURPOSE: Assert captured log_records contain a CLOUD_DELETE trace record with cloud=hetzner. Uses structured fields (record.block/record.fields), not getMessage() substrings. Emitted by deallocate_node during idle-deallocation, so it is only present AFTER the node row has been removed — must be called after _poll_node_gone, not at completion time.
 #   INPUTS: { records: list[LogRecord] }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — pure assertion over captured records.
 #   LINKS: M-APPLICATION-DEALLOCATE
 # END_CONTRACT: _assert_cloud_delete_log
 def _assert_cloud_delete_log(records: list[logging.LogRecord]) -> None:
-    cloud_delete_msgs = [
-        r.getMessage() for r in records if _CLOUD_DELETE_MARKER in r.getMessage()
+    cloud_delete_records = [
+        r for r in records if getattr(r, "block", None) == "CLOUD_DELETE"
     ]
-    delete_match = any("cloud=hetzner" in msg for msg in cloud_delete_msgs)
+    delete_match = any(
+        rec.fields.get("cloud") == "hetzner"  # type: ignore[attr-defined]
+        for rec in cloud_delete_records
+    )
     assert delete_match, (
-        f"no [CLOUD_DELETE] record with cloud=hetzner; "
-        f"captured CLOUD_DELETE msgs={cloud_delete_msgs}"
+        f"no [CLOUD_DELETE] trace record with cloud=hetzner; "
+        f"captured CLOUD_DELETE records={cloud_delete_records}"
     )
 
 

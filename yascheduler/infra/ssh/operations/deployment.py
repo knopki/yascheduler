@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/deployment.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: TaskDeployer — upload task inputs and spawn the calculation process on a remote machine via MachineSession. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: TaskDeployer class + _write_remote_file + _safe_b64decode module-private helpers.
@@ -14,8 +14,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Node-rename-and-fields: session.ip→session.hostname in all log lines (3 sites).
-#   PREVIOUS_CHANGE: v1.4.1 - TaskDeployer.start_task_on_machine SIDE_EFFECTS now declares the AssertionError raise on the task.remote_folder precondition (was the line-206 FIXME); checked before session.occupy() so it stays outside the rollback path, uncaught locally, propagates to the orchestrator allocator worker's `except Exception`.
+#   LAST_CHANGE: v1.6.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-OPS-DEPLOY") at module top
+#   PREVIOUS_CHANGE: v1.5.0 - Node-rename-and-fields: session.ip→session.hostname in all log lines (3 sites).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -25,8 +25,11 @@ from typing import TYPE_CHECKING
 
 import asyncssh
 
+from yascheduler.shared import get_logger
+
+logger = get_logger("M-SSH-OPS-DEPLOY")
+
 if TYPE_CHECKING:
-    import logging
     from collections.abc import Sequence
     from pathlib import PurePath
 
@@ -54,7 +57,7 @@ def _safe_b64decode(b64_data: str | bytes) -> bytes:
 
 # START_CONTRACT: _write_remote_file
 #   PURPOSE: Write data to a remote file via SFTP with error handling.
-#   INPUTS: { sftp: SFTPClient, path: str, data: bytes | str, log: Logger, mode: str }
+#   INPUTS: { sftp: SFTPClient, path: str, data: bytes | str, mode: str }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Writes file on remote machine.
 #   LINKS: M-SSH-OPS-DEPLOY
@@ -63,7 +66,6 @@ async def _write_remote_file(
     sftp: SFTPClient,
     path: str,
     data: bytes | str,
-    log: logging.Logger,
     mode: str = "wb",
 ) -> None:
     # START_BLOCK_WRITE_FILE
@@ -71,7 +73,7 @@ async def _write_remote_file(
         async with sftp.open(path, mode) as f:
             await f.write(data)  # type: ignore[type-var]
     except asyncssh.misc.Error as err:
-        log.error(
+        logger.error(
             "Write %s - SFTPError: %s (%s)",
             path,
             err.reason,
@@ -93,11 +95,8 @@ class TaskDeployer:
     failure.
     """
 
-    def __init__(
-        self,
-        log: logging.Logger,
-    ) -> None:
-        self._log = log
+    def __init__(self) -> None:
+        pass
 
     # START_CONTRACT: TaskDeployer._upload_task_data
     #   PURPOSE: Upload task input files to remote machine via SFTP.
@@ -120,7 +119,7 @@ class TaskDeployer:
             try:
                 await sftp.makedirs(PurePosixPath(remote_dir), exist_ok=True)
             except asyncssh.misc.Error as err:
-                self._log.error(
+                logger.error(
                     "Create %s - SFTPError: %s (%s) (task_id=%s)",
                     remote_dir,
                     err.reason,
@@ -137,14 +136,12 @@ class TaskDeployer:
                         sftp,
                         r_input_file.as_posix(),
                         _safe_b64decode(str(file_data)),
-                        self._log,
                     )
                 else:
                     await _write_remote_file(
                         sftp,
                         r_input_file.as_posix(),
                         str(file_data),
-                        self._log,
                         mode="w",
                     )
         return True
@@ -175,7 +172,7 @@ class TaskDeployer:
             )
             await session.run_bg(run_cmd, cwd=str(task_dir))
         except Exception as err:
-            self._log.error("SSH spawn cmd error: %s", err)
+            logger.error("SSH spawn cmd error: %s", err)
             raise err
         # END_BLOCK_SPAWN
 
@@ -206,7 +203,7 @@ class TaskDeployer:
         assert task.remote_folder is not None
         session.occupy()
 
-        self._log.info(
+        logger.info(
             "Submitting task_id=%s %s with %s to %s",
             task.task_id,
             task.label,
@@ -235,9 +232,7 @@ class TaskDeployer:
                         session, task, task_dir, engine.input_files
                     )
                 except Exception as err:
-                    self._log.error(
-                        "Can't upload task_id=%s files: %s", task.task_id, err
-                    )
+                    logger.error("Can't upload task_id=%s files: %s", task.task_id, err)
                     raise err
             # END_BLOCK_DEPLOY
 
@@ -249,7 +244,7 @@ class TaskDeployer:
             # Roll back the session BUSY marking on any deploy/spawn failure (incl.
             # CancelledError during daemon shutdown) so the machine is not left stuck.
             if session.is_closed:
-                self._log.warning(
+                logger.warning(
                     "task_id=%s on %s: already disconnected, skipping rollback (%s)",
                     task.task_id,
                     session.hostname,
@@ -257,14 +252,14 @@ class TaskDeployer:
                 )
                 raise
             if session.machine.state != MachineState.BUSY:
-                self._log.warning(
+                logger.warning(
                     "unexpected state %s, expected BUSY (task_id=%s on %s)",
                     session.machine.state,
                     task.task_id,
                     session.hostname,
                 )
             else:
-                self._log.info(
+                logger.info(
                     "task_id=%s on %s (%s); rolling back BUSY",
                     task.task_id,
                     session.hostname,

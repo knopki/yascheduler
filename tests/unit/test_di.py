@@ -198,7 +198,6 @@ class TestMakeDaemon:
                 "yascheduler.entrypoints.di.Orchestrator",
                 return_value=mock_orch_instance,
             ) as mock_orch,
-            patch("logging.getLogger") as mock_get_logger,
         ):
             mock_repo = MagicMock()
             mock_repo_ctor.return_value = mock_repo
@@ -208,14 +207,11 @@ class TestMakeDaemon:
             mock_dl_ctor.return_value = mock_dl
             mock_occ = MagicMock()
             mock_occ_ctor.return_value = mock_occ
-            resolved_log = MagicMock()
-            mock_get_logger.return_value = resolved_log
 
             result = await make_daemon(config)
 
         assert result is mock_orch_instance
 
-        mock_get_logger.assert_called_once_with("Orchestrator")
         mock_resolve.assert_not_called()
         # share-ssh-gateway: exactly one SSHMachineRepository + one of each
         # collaborator (TaskDeployer/OutputDownloader/OccupancyChecker).
@@ -239,8 +235,9 @@ class TestMakeDaemon:
         assert orch_kwargs["local_settings"] is config.local
         assert orch_kwargs["remote_defaults"] is config.remote
         assert "uow_factory" in orch_kwargs
+        assert "log" not in orch_kwargs
+        assert "log" not in clouds_kwargs
         assert callable(orch_kwargs["uow_factory"])
-        assert orch_kwargs["log"] is resolved_log
         # New: allocation_tracker, allocation_lock, active_clouds
         assert "allocation_tracker" in orch_kwargs
         assert isinstance(orch_kwargs["allocation_tracker"], AllocationTracker)
@@ -265,7 +262,6 @@ class TestMakeDaemon:
             patch("yascheduler.entrypoints.di.OutputDownloader") as mock_dl_ctor,
             patch("yascheduler.entrypoints.di.OccupancyChecker") as mock_occ_ctor,
             patch("yascheduler.entrypoints.di.Orchestrator") as mock_orch,
-            patch("logging.getLogger"),
         ):
             mock_repo = MagicMock()
             mock_repo_ctor.return_value = mock_repo
@@ -306,7 +302,6 @@ class TestMakeDaemon:
         with (
             patch("yascheduler.entrypoints.di.resolve_adapter") as mock_resolve,
             patch("yascheduler.entrypoints.di.Orchestrator") as mock_orch,
-            patch("logging.getLogger"),
         ):
             await make_daemon(config, clouds=custom_clouds)
 
@@ -317,35 +312,6 @@ class TestMakeDaemon:
         orch_kwargs = mock_orch.call_args.kwargs
         active = orch_kwargs["active_clouds"]
         assert [c.prefix for c in active] == ["hetzner"]
-
-    @pytest.mark.asyncio
-    async def test_default_logger(self) -> None:
-        """When log=None, logging.getLogger('Orchestrator') is called."""
-        config = create_mock_config()
-
-        with (
-            patch("yascheduler.entrypoints.di.resolve_adapter", return_value=None),
-            patch("yascheduler.entrypoints.di.Orchestrator"),
-            patch("logging.getLogger") as mock_get_logger,
-        ):
-            await make_daemon(config)
-
-        mock_get_logger.assert_called_once_with("Orchestrator")
-
-    @pytest.mark.asyncio
-    async def test_custom_logger_skips_get_logger(self) -> None:
-        """When log= is passed, logging.getLogger is not called and the custom logger is used."""
-        config = create_mock_config()
-        custom_log = MagicMock()
-
-        with (
-            patch("yascheduler.entrypoints.di.resolve_adapter", return_value=None),
-            patch("yascheduler.entrypoints.di.Orchestrator"),
-            patch("logging.getLogger") as mock_get_logger,
-        ):
-            await make_daemon(config, log=custom_log)
-
-        mock_get_logger.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_make_daemon_does_not_import_db(self) -> None:

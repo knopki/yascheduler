@@ -177,9 +177,13 @@ async def test_send_error_logged_not_raised(caplog: pytest.LogCaptureFixture) ->
     http = MagicMock()
     http.post.return_value = cm
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         await webhook_handler(event, http)
-    assert any("RETRY" in record.message for record in caplog.records)
+    assert any(
+        getattr(r, "block", None) == "RETRY"
+        and getattr(r, "fields", {}).get("url") == URL
+        for r in caplog.records
+    )
 
 
 async def test_send_webhook_retries_on_client_error(

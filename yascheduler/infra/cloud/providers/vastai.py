@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/vastai.py
-# VERSION: 1.8.0
+# VERSION: 1.9.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: VastAI GPU marketplace instance creation and deletion via REST API.
@@ -22,8 +22,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Retype vastai_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
-#   PREVIOUS_CHANGE: v1.7.0 - TYPE_CHECKING import ConfigCloudVastAI from yascheduler.infra.cloud facade.
+#   LAST_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-VASTAI") at module top
+#   PREVIOUS_CHANGE: v1.8.0 - Retype vastai_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
 # END_CHANGE_SUMMARY
 
 """VastAI cloud methods"""
@@ -40,9 +40,11 @@ try:
 except ImportError:
     _AIOHTTP_AVAILABLE = False
 
-if TYPE_CHECKING:
-    import logging
+from yascheduler.shared import get_logger
 
+logger = get_logger("M-CLOUD-PROVIDER-VASTAI")
+
+if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
 
     from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudVastAI
@@ -190,19 +192,18 @@ async def _delete_instance(
 
 # START_CONTRACT: vastai_create_node
 #   PURPOSE: Create VastAI instance from cheapest matching offer and wait for readiness
-#   INPUTS: { log: logging.Logger, cfg: ConfigCloudVastAI, key: SSHKey, cloud_config: Optional[CloudInitConfig] }
+#   INPUTS: { cfg: ConfigCloudVastAI, key: SSHKey, cloud_config: Optional[CloudInitConfig] }
 #   OUTPUTS: { str - IP address of the running instance }
 #   SIDE_EFFECTS: Creates cloud instance; polls until running or timeout
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
 # END_CONTRACT: vastai_create_node
 async def vastai_create_node(
-    log: logging.Logger,
     cfg: ConfigCloudVastAI,
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
 ) -> str:
     async with aiohttp.ClientSession() as session:
-        log.info("Searching VastAI offers...")
+        logger.info("Searching VastAI offers...")
         offers = await _search_offers(
             session, cfg.api_key, cfg.min_vram_mb, cfg.num_gpus, cfg.max_price_per_hr
         )
@@ -213,7 +214,7 @@ async def vastai_create_node(
         offer_id = offer.get("id")
         if not isinstance(offer_id, int):
             raise RuntimeError("Offer missing required 'id' field")
-        log.info(f"Creating instance from offer {offer_id}")
+        logger.info(f"Creating instance from offer {offer_id}")
 
         result = await _create_instance(
             session,
@@ -237,14 +238,14 @@ async def vastai_create_node(
 
             info = await _get_instance_info(session, cfg.api_key, instance_id)
             status = info.get("actual_status") or info.get("status")
-            log.info(f"Instance {instance_id} status: {status}")
+            logger.info(f"Instance {instance_id} status: {status}")
 
             if status == "running":
                 ip_addr = info.get("public_ipaddr")
                 if ip_addr:
-                    log.info(f"Instance running at {ip_addr}")
+                    logger.info(f"Instance running at {ip_addr}")
                     return ip_addr
-                log.warning("Instance running but no public IP address yet")
+                logger.warning("Instance running but no public IP address yet")
 
         raise TimeoutError(
             f"Instance {instance_id} did not become ready within {max_wait} seconds"
@@ -253,13 +254,12 @@ async def vastai_create_node(
 
 # START_CONTRACT: vastai_delete_node
 #   PURPOSE: Delete VastAI instance by its IP address
-#   INPUTS: { log: logging.Logger, cfg: ConfigCloudVastAI, host: str }
+#   INPUTS: { cfg: ConfigCloudVastAI, host: str }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Deletes cloud instance
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
 # END_CONTRACT: vastai_delete_node
 async def vastai_delete_node(
-    log: logging.Logger,
     cfg: ConfigCloudVastAI,
     host: str,
 ) -> None:
@@ -270,6 +270,6 @@ async def vastai_delete_node(
             if not isinstance(instance_id, int):
                 raise RuntimeError(f"Instance for {host} has invalid ID")
             await _delete_instance(session, cfg.api_key, cast("int", instance_id))
-            log.info(f"Deleted VastAI instance {instance_id}")
+            logger.info(f"Deleted VastAI instance {instance_id}")
         else:
-            log.warning(f"No VastAI instance found with IP {host}")
+            logger.warning(f"No VastAI instance found with IP {host}")

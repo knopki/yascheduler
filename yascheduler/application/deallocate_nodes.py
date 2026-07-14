@@ -13,17 +13,17 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.9.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
-#   PREVIOUS_CHANGE: v4.8.0 - deallocate_node calls clouds.deallocate(node).
+#   LAST_CHANGE: v4.10.0 - Rewrite REMOVE_FAILED error to pure narrative (no grace marker) per reform-grace-logging slice 7.
+#   PREVIOUS_CHANGE: v4.9.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import TYPE_CHECKING
 
 from yascheduler.domain import Node, NodeId, TaskStatus
+from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     from .uow import AbstractUnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-APPLICATION-DEALLOCATE")
 
 
 # START_CONTRACT: deallocate_node
@@ -55,18 +55,11 @@ async def deallocate_node(
 ) -> None:
     if repository.contains(node.node_id):
         await repository.disconnect(node.node_id)
-        logger.debug(
-            "[deallocate_node][DISCONNECT] node_id=%s hostname=%s gateway disconnected",
-            node.node_id,
-            node.hostname,
-        )
+        logger.trace("DISCONNECT", node_id=node.node_id, hostname=node.hostname)
     if node.cloud:
         # START_BLOCK_DISABLE
-        logger.debug(
-            "[deallocate_node][DISABLE] node_id=%s hostname=%s cloud=%s",
-            node.node_id,
-            node.hostname,
-            node.cloud,
+        logger.trace(
+            "DISABLE", node_id=node.node_id, hostname=node.hostname, cloud=node.cloud
         )
         async with uow_factory() as uow:
             await uow.nodes.disable(node.node_id)
@@ -74,21 +67,18 @@ async def deallocate_node(
         # END_BLOCK_DISABLE
 
         # START_BLOCK_CLOUD_DELETE
-        logger.debug(
-            "[deallocate_node][CLOUD_DELETE] node_id=%s hostname=%s cloud=%s",
-            node.node_id,
-            node.hostname,
-            node.cloud,
+        logger.trace(
+            "CLOUD_DELETE",
+            node_id=node.node_id,
+            hostname=node.hostname,
+            cloud=node.cloud,
         )
         await clouds.deallocate(node)
         # END_BLOCK_CLOUD_DELETE
 
         # START_BLOCK_REMOVE
-        logger.debug(
-            "[deallocate_node][REMOVE] node_id=%s hostname=%s cloud=%s",
-            node.node_id,
-            node.hostname,
-            node.cloud,
+        logger.trace(
+            "REMOVE", node_id=node.node_id, hostname=node.hostname, cloud=node.cloud
         )
         try:
             async with uow_factory() as uow:
@@ -101,7 +91,7 @@ async def deallocate_node(
             # will re-attempt (cloud-SDK delete-idempotency dependent) plus
             # this remove.
             logger.error(
-                "[deallocate_node][REMOVE_FAILED] node_id=%s hostname=%s cloud=%s err=%s "
+                "node remove failed: node_id=%s hostname=%s cloud=%s err=%s "
                 "— VM is deleted but DB row left disabled; "
                 "manual reconciliation needed",
                 node.node_id,
@@ -153,11 +143,11 @@ async def deallocate_nodes(
             async with uow_factory() as uow:
                 await uow.nodes.disable(node.node_id)
                 await uow.commit()
-                logger.debug(
-                    "[deallocate_nodes][DISABLE] node_id=%s hostname=%s cloud=%s",
-                    node.node_id,
-                    node.hostname,
-                    node.cloud,
+                logger.trace(
+                    "DISABLE",
+                    node_id=node.node_id,
+                    hostname=node.hostname,
+                    cloud=node.cloud,
                 )
     # END_BLOCK_DISABLE_IDLE
 

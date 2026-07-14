@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/daemon_common.py
-# VERSION: 1.1.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Shared daemon core — configure_logger and run_daemon, consumed by all three daemon entry points (daemonize, daemon_systemd, daemon_sysv).
 #   SCOPE: Root-logger configuration and async daemon runtime (make_daemon + signal handlers + try/finally cleanup).
@@ -13,8 +13,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - run_daemon wraps await orch.start() in try/finally so cleanup runs on every exit path (normal start return, start exception, signal). The signal handler's stop() is the first execution; the finally's stop() is an idempotent no-op per the Orchestrator contract.
-#   PREVIOUS_CHANGE: v1.0.1 - Signal-handler closure binds sig by value via a factory (B023-safe).
+#   LAST_CHANGE: v1.3.0 - Wire LogFormatter onto both stderr StreamHandler and FileHandler in configure_logger (reform-grace-logging).
+#   PREVIOUS_CHANGE: v1.2.0 - Remove logger arg from make_daemon call (make_daemon creates its own YaLogger internally).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from yascheduler.entrypoints import make_daemon
+from yascheduler.shared import LogFormatter
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
 #   PURPOSE: Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers).
 #   INPUTS: { log_file: str | Path | None - log file path or None (stderr only), level: int - root logger level (e.g. logging.INFO) }
 #   OUTPUTS: { logging.Logger - the configured root logger }
-#   SIDE_EFFECTS: Adds StreamHandler(sys.stderr) to root logger (always); adds FileHandler(log_file) when log_file is not None; sets backoff/asyncssh to ERROR; calls logging.captureWarnings(True).
+#   SIDE_EFFECTS: Adds StreamHandler(sys.stderr) to root logger (always); adds FileHandler(log_file) when log_file is not None; wires a single LogFormatter onto both handlers (trace records render [M-ID][funcName][BLOCK] kv; user-facing records render plain narrative); sets backoff/asyncssh to ERROR; calls logging.captureWarnings(True).
 #   LINKS: M-DAEMON-COMMON
 # END_CONTRACT: configure_logger
 def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
@@ -47,9 +48,14 @@ def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
     root = logging.getLogger()
     root.setLevel(level)
     # Always log to stderr; systemd captures it into journald, sysv uses the file below.
-    root.addHandler(logging.StreamHandler(sys.stderr))
+    formatter = LogFormatter()
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setFormatter(formatter)
+    root.addHandler(sh)
     if log_file is not None:
-        root.addHandler(logging.FileHandler(log_file))
+        fh = logging.FileHandler(log_file)
+        fh.setFormatter(formatter)
+        root.addHandler(fh)
     # END_BLOCK_ROOT_HANDLERS
 
     # START_BLOCK_SUPPRESS_NOISY_THIRD_PARTY
@@ -75,7 +81,7 @@ def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
 # END_CONTRACT: run_daemon
 async def run_daemon(config: Config, logger: logging.Logger) -> None:
     # START_BUILD_ORCHESTRATOR
-    orch = await make_daemon(config, logger)
+    orch = await make_daemon(config)
     # END_BUILD_ORCHESTRATOR
 
     # START_BLOCK_REGISTER_SIGNAL_HANDLERS

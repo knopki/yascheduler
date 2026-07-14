@@ -156,15 +156,13 @@ class TestWriteRemoteFilePropagation:
         The asyncssh.misc.Error-branch structured log line ("Write <path> -
         SFTPError: ...") MUST NOT be emitted for a non-SFTP exception.
         """
-        log = logging.getLogger("test_write_remote_file_non_sftp")
-        log.setLevel(logging.DEBUG)
         file = _FakeSFTPFile(write_side_effect=ValueError("bad data"))
         sftp = _FakeSFTPClient(file)
 
-        with caplog.at_level(logging.ERROR, logger=log.name):
+        with caplog.at_level(logging.ERROR):
             with pytest.raises(ValueError, match="bad data"):
                 await _write_remote_file(
-                    cast("SFTPClient", sftp), "/r/input.txt", b"data", log, mode="wb"
+                    cast("SFTPClient", sftp), "/r/input.txt", b"data", mode="wb"
                 )
 
         # The structured SFTPError log line is reserved for asyncssh.misc.Error.
@@ -177,13 +175,12 @@ class TestWriteRemoteFilePropagation:
         """A binascii.Error (the real malformed-fort.9 failure class) propagates."""
         import binascii
 
-        log = logging.getLogger("test_write_remote_file_binascii")
         file = _FakeSFTPFile(write_side_effect=binascii.Error("Invalid base64"))
         sftp = _FakeSFTPClient(file)
 
         with pytest.raises(binascii.Error):
             await _write_remote_file(
-                cast("SFTPClient", sftp), "/r/fort.9", b"x", log, mode="wb"
+                cast("SFTPClient", sftp), "/r/fort.9", b"x", mode="wb"
             )
 
     @pytest.mark.asyncio
@@ -193,13 +190,12 @@ class TestWriteRemoteFilePropagation:
         The try block wraps `async with sftp.open(...) as f:` — an exception
         from `open` takes the same propagation path as one from `f.write`.
         """
-        log = logging.getLogger("test_write_remote_file_open_fail")
         file = _FakeSFTPFile()
         sftp = _FakeSFTPClient(file, open_side_effect=OSError("open boom"))
 
         with pytest.raises(OSError, match="open boom"):
             await _write_remote_file(
-                cast("SFTPClient", sftp), "/r/input.txt", b"data", log, mode="wb"
+                cast("SFTPClient", sftp), "/r/input.txt", b"data", mode="wb"
             )
 
         # write was never reached (open failed first).
@@ -210,16 +206,14 @@ class TestWriteRemoteFilePropagation:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """An asyncssh.misc.Error is logged with structured code/reason and re-raised."""
-        log = logging.getLogger("test_write_remote_file_sftp")
-        log.setLevel(logging.DEBUG)
         err = asyncssh.misc.Error(2, "No such file")
         file = _FakeSFTPFile(write_side_effect=err)
         sftp = _FakeSFTPClient(file)
 
-        with caplog.at_level(logging.ERROR, logger=log.name):
+        with caplog.at_level(logging.ERROR):
             with pytest.raises(asyncssh.misc.Error) as exc_info:
                 await _write_remote_file(
-                    cast("SFTPClient", sftp), "/r/input.txt", b"data", log, mode="wb"
+                    cast("SFTPClient", sftp), "/r/input.txt", b"data", mode="wb"
                 )
 
         # The same exception instance is re-raised (no swallow, no rewrap).
@@ -239,16 +233,14 @@ class TestWriteRemoteFilePropagation:
         """SFTPError (asyncssh.misc.Error subclass from sftp.open/f.write) is logged and re-raised."""
         from asyncssh.sftp import SFTPError
 
-        log = logging.getLogger("test_write_remote_file_sftperror")
-        log.setLevel(logging.DEBUG)
         err = SFTPError(3, "Permission denied")
         file = _FakeSFTPFile(write_side_effect=err)
         sftp = _FakeSFTPClient(file)
 
-        with caplog.at_level(logging.ERROR, logger=log.name):
+        with caplog.at_level(logging.ERROR):
             with pytest.raises(SFTPError) as exc_info:
                 await _write_remote_file(
-                    cast("SFTPClient", sftp), "/r/fort.9", b"x", log, mode="wb"
+                    cast("SFTPClient", sftp), "/r/fort.9", b"x", mode="wb"
                 )
 
         assert exc_info.value is err
@@ -274,7 +266,7 @@ class TestStartTaskAbortOnUploadFailure:
         _exec_spawn_command is NOT called; the exception propagates to the caller;
         the upstream handler logs "Can't upload task_id=N files: <err>" with the task_id.
         """
-        deployer = TaskDeployer(log=logging.getLogger(__name__))
+        deployer = TaskDeployer()
         session, _sftp = _make_sftp_state(write_side_effect=ValueError("bad input"))
 
         spawn_calls: list[Any] = []
@@ -307,7 +299,7 @@ class TestStartTaskAbortOnUploadFailure:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """An asyncssh.misc.Error during an input file write aborts start_task_on_machine."""
-        deployer = TaskDeployer(log=logging.getLogger(__name__))
+        deployer = TaskDeployer()
         err = asyncssh.misc.Error(2, "No such file")
         session, _sftp = _make_sftp_state(write_side_effect=err)
 
@@ -346,14 +338,12 @@ class TestSuccessfulWrite:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """_write_remote_file returns normally on success — no exception, no error log."""
-        log = logging.getLogger("test_write_remote_file_success")
-        log.setLevel(logging.DEBUG)
         file = _FakeSFTPFile(write_side_effect=None)
         sftp = _FakeSFTPClient(file)
 
-        with caplog.at_level(logging.ERROR, logger=log.name):
+        with caplog.at_level(logging.ERROR):
             await _write_remote_file(
-                cast("SFTPClient", sftp), "/r/input.txt", b"data", log, mode="wb"
+                cast("SFTPClient", sftp), "/r/input.txt", b"data", mode="wb"
             )
 
         file.write.assert_awaited_once_with(b"data")
@@ -364,7 +354,7 @@ class TestSuccessfulWrite:
     @pytest.mark.asyncio
     async def test_upload_loop_continues_across_files(self) -> None:
         """_upload_task_data writes every input file when none raise; returns True."""
-        deployer = TaskDeployer(log=logging.getLogger(__name__))
+        deployer = TaskDeployer()
         state, sftp = _make_sftp_state(write_side_effect=None)
 
         # Two input files; the _FakeSFTPFile is shared across calls so we can

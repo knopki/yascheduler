@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +30,7 @@ from yascheduler.domain.model import NewNode, Node, NodeId, Task, TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
 from yascheduler.infra.ssh.repository import SSHMachineRepository
+from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from yascheduler.entrypoints import Config
     from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
-log = logging.getLogger("e2e.test_consume_retry")
+log = get_logger("M-TEST")
 
 
 async def _setup_node_and_submit(
@@ -61,7 +61,7 @@ async def _setup_node_and_submit(
         )
         await uow.commit()
 
-    repository = SSHMachineRepository(log=log)
+    repository = SSHMachineRepository()
     session = await repository.connect(
         node=db_node,
         client_keys=[ssh_container["key_path"]],
@@ -286,7 +286,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
         assert captured_remote_dir, "download_outputs was never called"
         remote_dir = captured_remote_dir[-1]
         # Connect and check the remote dir exists
-        check_repo = SSHMachineRepository(log=log)
+        check_repo = SSHMachineRepository()
         check_node = Node(
             node_id=NodeId(9999),
             hostname=ssh_container["host"],

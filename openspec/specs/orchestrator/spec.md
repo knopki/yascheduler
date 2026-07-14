@@ -21,6 +21,12 @@ type), and `allocation_lock: asyncio.Lock`. The orchestrator SHALL own the
 tracker, the filtered cloud config list, and the lock — constructing them once
 and injecting them into use cases.
 
+The `Orchestrator.__init__` SHALL NOT accept a `log` parameter. The
+orchestrator module SHALL bind its logger at module top via
+`get_logger("M-APPLICATION-ORCHESTRATOR")`. All log calls inside the
+orchestrator SHALL use the module-local `logger`, not an injected
+`self._log`.
+
 The `Orchestrator` SHALL NOT import `AllSSHRetryExc` or `backoff` from
 `yascheduler.infra` at runtime. The `Orchestrator` SHALL NOT apply
 `@backoff.on_exception` decorators — all retry logic SHALL live in the
@@ -81,6 +87,11 @@ orchestrator SHALL NOT hold a `config` reference.
 - **WHEN** the orchestrator deploys a task whose allocated `Node.ncpus is None`
 - **THEN** `session.get_cpu_cores()` is called (returning the session-cached value on cache hits) and its result is passed to `task_deployer.start_task_on_machine`
 
+#### Scenario: Orchestrator does not accept a log parameter
+
+- **WHEN** `Orchestrator.__init__` is inspected for its parameters
+- **THEN** no parameter named `log` exists; the orchestrator module binds its logger via `get_logger("M-APPLICATION-ORCHESTRATOR")` at module top
+
 #### Scenario: Orchestrator does not import Config
 
 - **WHEN** `orchestrator.py` is inspected for `Config` imports
@@ -89,7 +100,7 @@ orchestrator SHALL NOT hold a `config` reference.
 #### Scenario: Orchestrator constructed with unpacked settings and three collaborators
 
 - **WHEN** `Orchestrator(...)` is constructed by the composition root
-- **THEN** the call passes `local_settings=` and `remote_defaults=` keyword arguments (instances of `LocalSettings` and `RemoteDefaults`), not a `Config` aggregate; the `list_private_keys_fn` callable is passed as before; `repository=`, `task_deployer=`, `output_downloader=`, and `occupancy_checker=` are passed as separate keyword arguments
+- **THEN** the call passes `local_settings=` and `remote_defaults=` keyword arguments (instances of `LocalSettings` and `RemoteDefaults`), not a `Config` aggregate; the `list_private_keys_fn` callable is passed as before; `repository=`, `task_deployer=`, `output_downloader=`, and `occupancy_checker=` are passed as separate keyword arguments; no `log=` keyword argument is passed
 
 ### Requirement: Allocate loop
 
@@ -119,13 +130,13 @@ carry domain `Task` objects. The orchestrator SHALL pass its
 `output_downloader` instance into each `consume_task` invocation. The
 `session` is resolved via `repository.get_session(task.allocated_node_id)`.
 
-The orchestrator SHALL maintain an in-process `set[TaskId]` of in-flight consume
+The orchestrator SHALL maintain an in-process set of in-flight consume
 task ids. The consume producer SHALL skip yielding a task
 whose id is in the in-flight set. The consume consumer SHALL add the task id to
 the in-flight set before awaiting `consume_task` and remove it in a `finally`
 block so a failed consume does not permanently block re-yield.
 
-The orchestrator SHALL maintain an in-process `set[NodeId]` of node_ids whose
+The orchestrator SHALL maintain an in-process set of node_ids whose
 occupancy check has been started. On the first
 consumer tick for a task, the orchestrator SHALL add `task.allocated_node_id`
 to the occupancy-started set and call
@@ -146,7 +157,7 @@ set.
 #### Scenario: Session resolved by allocated_node_id
 
 - **WHEN** the consume consumer runs for a task with `allocated_node_id=NodeId(7)`
-- **THEN** it calls `repository.get_session(NodeId(7))` once at the top; if `None`, the `MACHINE_GONE` path runs; if a session is returned, it is threaded through the consumer body
+- **THEN** it calls `repository.get_session(NodeId(7))` once at the top; if `None`, the machine-gone path runs; if a session is returned, it is threaded through the consumer body
 
 #### Scenario: occupancy_started keyed by NodeId
 
@@ -167,22 +178,6 @@ disconnect + disable + cloud delete + remove in two short UoWs bracketing
 the pure cloud call. The orchestrator SHALL use `repository.list_connected()`
 instead of iterating connected machines directly.
 
-The deallocate queue SHALL be typed `UniqueQueue[NodeId, Node]`.
-The producer SHALL yield
-`UMessage(node.node_id, node)` for each `Node` returned by `deallocate_nodes`
-— the message id is `node.node_id` (a `NodeId`, strictly unique `SERIAL PK`),
-the payload is the `Node`. This rekeys the dedup from `ip` (non-unique —
-duplicate IPs are valid behind different jump hosts) to
-`NodeId` (strictly unique), so two distinct nodes sharing an IP are both
-processed rather than one being silently dropped.
-
-The deallocate producer SHALL build `idle_machines: dict[NodeId, float]`
-by iterating
-`repository.list_connected()` and keying each FREE session by
-`session.machine.node_id`. The `free_since`
-monotonic timestamp is the value. This dict is passed to `deallocate_nodes`,
-which matches it against `node.node_id`.
-
 The deallocate consumer SHALL NOT perform its own SSH teardown
 fallback. SSH teardown is owned by `deallocate_node` (which calls
 `repository.contains(node.node_id)` + `repository.disconnect(node.node_id)`
@@ -196,7 +191,7 @@ the error and continues.
 
 #### Scenario: Deallocator queue keyed on NodeId, consumer takes Node from payload
 - **WHEN** the deallocate producer enqueues disabled nodes
-- **THEN** it yields `UMessage(node.node_id, node)` where `node.node_id` is a `NodeId` (queue dedup key) and `node` is the full `Node` (payload); the consumer takes `node = msg.payload` directly without a DB round-trip lookup
+- **THEN** the queue dedup key is `node.node_id` (a `NodeId`), and the payload carries the full `Node` so the consumer takes it directly without a DB round-trip lookup
 
 #### Scenario: Deallocator consumer does not duplicate SSH teardown
 - **WHEN** the deallocate consumer processes a node
@@ -208,14 +203,12 @@ The system SHALL poll enabled nodes from `NodeRepository` via UoW and establish
 SSH connections via `MachineRepository`. Connection failures SHALL be caught as
 `MachineConnectionError` (domain exception), not `asyncssh.misc.Error`.
 
-The orchestrator SHALL maintain a per-node connect-failure timer
-(`dict[NodeId, float]` mapping `node_id` to the monotonic timestamp of the
-first consecutive failure) in memory. On a successful
-`repository.connect(node, client_keys, ...)` for a node, the orchestrator SHALL
-pop that node's `node_id` from the failure timer. For cloud-provisioned nodes,
-on `MachineConnectionError`, the orchestrator SHALL compare the elapsed monotonic
-age against the node's cloud `connect_grace` (looked up from
-`active_clouds` by `prefix == node.cloud`).
+The orchestrator SHALL maintain a per-node connect-failure timer in memory. On a
+successful `repository.connect(node, client_keys, ...)` for a node, the
+orchestrator SHALL pop that node's `node_id` from the failure timer. For
+cloud-provisioned nodes, on `MachineConnectionError`, the orchestrator SHALL
+compare the elapsed monotonic age against the node's cloud `connect_grace`
+(looked up from `active_clouds` by `prefix == node.cloud`).
 
 The orchestrator SHALL NOT resolve jump-leg parameters (no `config.remote`
 lookup, no `CloudConfig` prefix-match loop for jump). All connection identity
@@ -226,26 +219,25 @@ The connect-machine producer SHALL yield all enabled nodes that are not
 currently registered in the repository, regardless of `cloud`. Static
 operator-managed nodes (`cloud is None`) SHALL be connected like cloud nodes.
 On `MachineConnectionError` for a static node (`cloud is None`), the
-orchestrator SHALL log a `CONNECT_RETRY_STATIC` warning and return early
-BEFORE the grace-check — so static nodes retry indefinitely on every producer
-cycle, never accumulate entries in the failure timer, and NEVER reach the
-`abandon_node` use case. A transient SSH outage (e.g. after a daemon restart)
-must not silently delete an operator's node row.
+orchestrator SHALL emit a trace DEBUG record (test target) plus a separate
+`warning(...)` narrative record (user target) and return early BEFORE the
+grace-check — so static nodes retry indefinitely on every producer cycle, never
+accumulate entries in the failure timer, and NEVER reach the `abandon_node` use
+case. A transient SSH outage (e.g. after a daemon restart) must not silently
+delete an operator's node row.
 
 For cloud nodes (`cloud is not None`):
 
-- If `age < connect_grace`, the orchestrator SHALL log the failure and return;
-  the next producer cycle re-yields the node (retry behavior unchanged).
-- If `age >= connect_grace`, the orchestrator SHALL call the `abandon_node`
-  use case with the node, the cloud provisioner, the UoW factory, and the
-  allocation tracker, then pop the `node_id` from the failure timer. The
-  `abandon_node` use case deletes the cloud VM, removes the
-  `yascheduler_nodes` row, and discards the tracker entry linked to the node
-  via `tracker.discard_by_node(node.node_id)` so the task re-allocates on the
-  next cycle. The discard is by node, not by a TO_DO task lookup — the
-  cloud-provisioning path never binds the task to the node, so the
-  task-to-node link is held by the tracker (established by `allocate_task`'s
-  `set_node` call), not by `Task.allocated_node_id`.
+- If `age < connect_grace`, the orchestrator SHALL emit a trace DEBUG record
+  plus a separate narrative record and return; the next producer cycle re-yields
+  the node (retry behavior unchanged).
+- If `age >= connect_grace`, the orchestrator SHALL emit a trace DEBUG record
+  plus a separate narrative record, call the `abandon_node` use case with the
+  node, the cloud provisioner, the UoW factory, and the allocation tracker,
+  then pop the `node_id` from the failure timer. The `abandon_node` use case
+  deletes the cloud VM, removes the `yascheduler_nodes` row, and discards the
+  tracker entry linked to the node via `tracker.discard_by_node(node.node_id)`
+  so the task re-allocates on the next cycle.
 
 The failure timer SHALL NOT be persisted across daemon restarts (in-memory
 only). A restart resets the grace window for any node that was mid-failure.
@@ -266,7 +258,16 @@ path.
 #### Scenario: Connection failure within grace retries, past grace triggers abandon
 
 - **WHEN** `repository.connect(node, client_keys, ...)` raises `MachineConnectionError` for a cloud node
-- **THEN** if elapsed failure age < `connect_grace`, the orchestrator logs and returns (retry next cycle); if age >= `connect_grace`, the orchestrator calls `abandon_node` (which discards the tracker entry by node via `discard_by_node`) and pops the `node_id` from the failure timer
+- **THEN** if elapsed failure age < `connect_grace`, the orchestrator emits a trace DEBUG record plus a narrative record and returns (retry next cycle); if age >= `connect_grace`, the orchestrator emits a trace DEBUG record plus a narrative record, calls `abandon_node` (which discards the tracker entry by node via `discard_by_node`), and pops the `node_id` from the failure timer
+
+#### Scenario: Static node connection failure emits trace plus narrative and retries indefinitely
+
+- **GIVEN** a static node (`cloud is None`) raises `MachineConnectionError`
+- **WHEN** the connect-machine producer handles the failure
+- **THEN** a trace DEBUG record is emitted (test target)
+- **AND** a separate `warning(...)` narrative record is emitted (user target)
+- **AND** the orchestrator returns early BEFORE the grace-check
+- **AND** the node is never added to the failure timer and never reaches `abandon_node`
 
 #### Scenario: Successful connect resets the failure timer
 
@@ -281,11 +282,18 @@ path.
 ### Requirement: Stats logging
 
 The system SHALL periodically log queue sizes, node counts, and task counts
-at a configurable interval using `repository.list_connected()`.
+at a configurable interval using `repository.list_connected()`. When the
+stats background job raises a non-`CancelledError` exception, the orchestrator
+SHALL log the error and continue on the next tick.
 
 #### Scenario: Stats tolerates empty or partial count mappings
 - **WHEN** the stats logger reads `nodes.count_by_status()` and the mapping lacks the `True` key
 - **THEN** it SHALL use `Mapping.get(key, 0)` and SHALL NOT raise `KeyError`
+
+#### Scenario: Stats error is logged and job continues on next tick
+- **GIVEN** the stats background job raises a non-`CancelledError` exception
+- **WHEN** the error is logged
+- **THEN** the stats job continues on the next tick
 
 ### Requirement: Orchestrator concurrency limits
 
@@ -299,30 +307,29 @@ The system SHALL enforce configurable concurrency limits for each loop:
 ### Requirement: Producer error resilience
 
 The orchestrator SHALL catch non-`CancelledError` exceptions raised by
-producer and consumer coroutines, log
-the error, and continue the loop on the next tick. A transient failure in a
-producer's dependency (DB query, repository read) SHALL NOT silently kill
-the subsystem for the daemon's lifetime. A consumer exception SHALL NOT
-silently kill the worker `asyncio.Task` — the queue item is still dequeued
-via `finally: queue.item_done(msg)` and the worker continues.
+producer and consumer coroutines. For a consumer exception or a producer
+exception, the orchestrator SHALL emit a trace DEBUG record (test target)
+plus a separate `error(...)` narrative record (user target), log the error,
+and continue the loop on the next tick. A transient failure in a producer's
+dependency (DB query, repository read) SHALL NOT silently kill the subsystem
+for the daemon's lifetime. A consumer exception SHALL NOT silently kill the
+worker `asyncio.Task` — the queue item is still dequeued and the worker
+continues.
 
 `CancelledError` (a `BaseException`) SHALL propagate past the `except
-Exception` clauses to the graceful-shutdown drain path. Workers SHALL be
-registered in a background-jobs registry so `stop()`'s cancel cascade reaches
-them even if the parent coroutine exits via a `BaseException` that `except
-Exception` does not catch. Cancelling an already-cancelled worker SHALL be
-a no-op.
+Exception` clauses to the graceful-shutdown drain path. Cancelling an
+already-cancelled worker SHALL be a no-op.
 
 The stats background job SHALL catch non-`CancelledError`
 exceptions from its reads, log, and continue on its next tick.
 
 #### Scenario: Transient producer error does not kill the loop
 - **WHEN** a producer coroutine raises an `Exception` (e.g. DB timeout)
-- **THEN** the orchestrator logs the error and the loop continues on the next tick
+- **THEN** the orchestrator emits a trace DEBUG record plus an `error(...)` narrative record, and the loop continues on the next tick
 
 #### Scenario: Transient consumer error does not kill the worker
 - **WHEN** the consumer callable raises an `Exception` while processing a queue message
-- **THEN** the orchestrator logs the error, the queue item is dequeued, and the worker continues
+- **THEN** the orchestrator emits a trace DEBUG record plus an `error(...)` narrative record, the queue item is dequeued, and the worker continues
 
 #### Scenario: CancelledError preserves graceful shutdown
 - **WHEN** the producer or consumer receives `asyncio.CancelledError` during shutdown
@@ -330,16 +337,15 @@ exceptions from its reads, log, and continue on its next tick.
 
 ### Requirement: Orchestrator.stop is idempotent and exception-safe
 
-`Orchestrator.stop()` SHALL be idempotent via a boolean guard
-initialized to `False` in `__init__`, checked and set with no `await` between
-them. If the guard is already `True`, `stop()` returns immediately.
+`Orchestrator.stop()` SHALL be idempotent: callable multiple times safely;
+the second invocation returns immediately with no effect.
 
-`stop()` SHALL be exception-safe: each cleanup step (`clouds.stop()`,
-`repository.disconnect_all()`, `http_session.close()`) SHALL be wrapped in
-its own `try/except Exception` so a failure in one step does not skip the
-remaining steps. The `http_session` SHALL be set to `None` after close.
-Background jobs that died with a non-`CancelledError` exception before
-shutdown SHALL be caught and logged without aborting the cleanup chain.
+`stop()` SHALL be exception-safe: a failure in one cleanup step
+(`clouds.stop()`, `repository.disconnect_all()`, `http_session.close()`)
+SHALL NOT skip the remaining steps. A cleanup-step failure SHALL be logged.
+The `http_session` SHALL be set to `None` after close. Background jobs that
+died with a non-`CancelledError` exception before shutdown SHALL be caught
+and logged without aborting the cleanup chain.
 
 #### Scenario: stop() runs cleanup body exactly once
 - **WHEN** `orch.stop()` is called twice
@@ -347,7 +353,7 @@ shutdown SHALL be caught and logged without aborting the cleanup chain.
 
 #### Scenario: failing cleanup step does not skip remaining steps
 - **WHEN** `await clouds.stop()` raises an `Exception` during `orch.stop()`
-- **THEN** the failure is logged at `warning`, and `stop()` proceeds to `repository.disconnect_all()` and `http_session.close()`
+- **THEN** the failure is logged, and `stop()` proceeds to `repository.disconnect_all()` and `http_session.close()`
 
 ### Requirement: Free-machine selection gated on DB-enabled nodes
 
@@ -355,21 +361,16 @@ The `allocate_task` use case SHALL only consider a machine allocatable
 when its `node_id` is enabled in `yascheduler_nodes`. The
 free-machine selection helper SHALL read `uow.nodes.list_enabled()` in the
 same Unit of Work it opens for `uow.tasks.list_by_status({RUNNING})`,
-build `nodes_by_id = {n.node_id: n for n in enabled_nodes}`, and filter
-`MachineRepository.list_free(platforms)` down to sessions whose
-`machine.node_id` is in `nodes_by_id` AND not in the busy-node node_ids
-derived from RUNNING tasks (`busy_node_ids = {t.allocated_node_id for t
-in running_tasks if t.allocated_node_id}`).
+and filter `MachineRepository.list_free(platforms)` down to sessions whose
+`machine.node_id` is in the enabled set AND not in the busy-node node_ids
+derived from RUNNING tasks.
 
 This restores the invariant that a machine is allocatable ONLY after its
 DB row is `enabled=TRUE`. The DB row is flipped from `enabled=FALSE`
 (the tmp-node inserted during provider
 selection) to `enabled=TRUE` by `allocate_task`'s persist step after
 `clouds.allocate` returns successfully — i.e. only after cloud-init, engine
-setup, and CPU detection have completed. The persist step
-is a single `uow.nodes.update(node)` (the cloud adapter returns a `Node`
-carrying `tmp_node_id` as its `node_id`; UPDATE flips enabled, sets
-ip/ncpus).
+setup, and CPU detection have completed.
 
 The gate SHALL live in the use case, not in `MachineRepository`. The
 `MachineRepository` Protocol (an infrastructure-layer SSH collection port)
@@ -390,13 +391,12 @@ two data sources is the use case's responsibility.
 
 ### Requirement: Free-machine loop isolates per-session failures
 
-The free-machine selection helper SHALL wrap each per-session
-invocation in a `try/except Exception` so a single stale session's exception
-is logged and the loop continues to the next free session. If no free session
-succeeds, the helper SHALL return `False` so the caller proceeds to the
-cloud-provisioning branch. The `except` block SHALL NOT call
-`repository.disconnect` — a transient SSH failure does not imply the session
-is dead.
+The free-machine selection helper SHALL isolate per-session failures: a
+single stale session's exception is caught and logged, and the loop continues
+to the next free session. If no free session succeeds, the helper SHALL return
+`False` so the caller proceeds to the cloud-provisioning branch. A session
+failure SHALL NOT trigger disconnecting that session — a transient SSH failure
+does not imply the session is dead.
 
 #### Scenario: Stale session failure does not abort the loop
 - **WHEN** `free_sessions` contains two sessions and the first raises during per-session invocation

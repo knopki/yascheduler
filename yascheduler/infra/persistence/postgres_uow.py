@@ -1,5 +1,6 @@
 # FILE: yascheduler/infra/persistence/postgres_uow.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
+#
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit of Work implementation for PostgreSQL using pg8000.
 #   SCOPE: PostgresUnitOfWork managing transaction lifecycle, repository wiring, event collection and dispatch.
@@ -13,18 +14,19 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - collect_events reads task.events directly and clears _saved_tasks.
-#   PREVIOUS_CHANGE: v1.5.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
+#   LAST_CHANGE: v1.7.0 - reform-grace-logging: strip grace marker from commit event-dispatch exception (pure narrative).
+#   PREVIOUS_CHANGE: v1.6.0 - collect_events reads task.events directly and clears _saved_tasks.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, TypeVar
 
 from pg8000.native import Connection
+
+from yascheduler.shared import get_logger
 
 from .exceptions import UnitOfWorkNotInitializedError
 from .postgres import PostgresNodeRepository, PostgresTaskRepository
@@ -40,7 +42,7 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-PERSISTENCE-UOW")
 
 
 # START_CONTRACT: PostgresUnitOfWork
@@ -159,7 +161,7 @@ class PostgresUnitOfWork:
         try:
             await self.publish_events()
         except Exception:
-            logger.exception("[PostgresUoW][commit] Event dispatch failed after commit")
+            logger.exception("event dispatch failed after commit")
 
     # START_CONTRACT: PostgresUnitOfWork.rollback
     #   PURPOSE: Roll back the current transaction and discard collected events.

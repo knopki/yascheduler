@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.13.0
+# VERSION: 5.16.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
 #   SCOPE: Factories per entry point (daemon, CLI).
@@ -15,14 +15,13 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.14.0 - CLIDeps drops remote_tasks_dir (submit_task no longer takes it; remote_folder is computed in allocate_task._try_start_on_machine at run time). CLIDeps.submit calls submit_task without remote_tasks_dir.
-#   PREVIOUS_CHANGE: v5.13.0 - make_daemon constructs three stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) instead of SSHMachineOperations; CloudProvisionerImpl is constructed without machine_operations; Orchestrator is wired with task_deployer/output_downloader/occupancy_checker.
+#   LAST_CHANGE: v5.16.0 - remove log parameter from collaborator constructors in make_daemon; bind module-local logger = get_logger("M-DI") at module top
+#   PREVIOUS_CHANGE: v5.15.0 - Migrate logger to get_logger factory; YaLogger type annotations; restore stripped design comment blocks.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
@@ -56,6 +55,9 @@ from yascheduler.infra import (
     resolve_adapter,
     webhook_handler,
 )
+from yascheduler.shared import get_logger
+
+logger = get_logger("M-DI")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -123,19 +125,16 @@ def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
 
 # START_CONTRACT: make_daemon
 #   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
-#   INPUTS: { config: Config, log: Optional[Logger], clouds: Optional[CloudProvisionerImpl] }
+#   INPUTS: { config: Config, clouds: Optional[CloudProvisionerImpl] }
 #   OUTPUTS: { Orchestrator - ready to await start() }
 #   SIDE_EFFECTS: Creates UoW factory, SSH connections, and cloud provisioner.
 #   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY, M-SSH-KEYS, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
 # END_CONTRACT: make_daemon
 async def make_daemon(
     config: Config,
-    log: logging.Logger | None = None,
     *,
     clouds: CloudProvisionerImpl | None = None,
 ) -> Orchestrator:
-    if log is None:
-        log = logging.getLogger("Orchestrator")
 
     bus, http = _setup_domain_events()
     try:
@@ -155,10 +154,10 @@ async def make_daemon(
         # constructed once each and passed to the orchestrator only.
         # The pre-built-clouds branch still wires a fresh repository to the
         # orchestrator; caller-supplied clouds keep their own.
-        repository = SSHMachineRepository(log=log)
-        task_deployer = TaskDeployer(log)
-        output_downloader = OutputDownloader(log)
-        occupancy_checker = OccupancyChecker(log)
+        repository = SSHMachineRepository()
+        task_deployer = TaskDeployer()
+        output_downloader = OutputDownloader()
+        occupancy_checker = OccupancyChecker()
 
         if clouds is None:
             active_clouds: list[ConfigCloud] = []
@@ -166,20 +165,20 @@ async def make_daemon(
             _configs: dict[str, ConfigCloud] = {}
             for cfg in config.clouds:
                 if cfg.max_nodes <= 0:
-                    log.warning(
+                    logger.warning(
                         "Cloud %s skipped: max_nodes=%d <= 0",
                         cfg.prefix,
                         cfg.max_nodes,
                     )
                     continue
-                adapter = resolve_adapter(cfg, log)
+                adapter = resolve_adapter(cfg)
                 if adapter is None:
                     continue
                 _adapters[adapter.name] = adapter
                 _configs[adapter.name] = cfg
                 active_clouds.append(cfg)
 
-            log.info("Active cloud APIs: %s", ", ".join(_adapters.keys()) or "-")
+            logger.info("Active cloud APIs: %s", ", ".join(_adapters.keys()) or "-")
             clouds = CloudProvisionerImpl(
                 adapters=_adapters,
                 configs=_configs,
@@ -187,7 +186,6 @@ async def make_daemon(
                 local_config=config.local,
                 remote_config=config.remote,
                 engines=config.engines,
-                log=log,
             )
         else:
             # Caller-supplied clouds: filter by max_nodes > 0 AND adapter
@@ -216,7 +214,6 @@ async def make_daemon(
             output_downloader=output_downloader,
             occupancy_checker=occupancy_checker,
             engines=config.engines,
-            log=log,
             config_clouds=config.clouds,
             local_tasks_dir=config.local.tasks_dir,
             http_session=http,

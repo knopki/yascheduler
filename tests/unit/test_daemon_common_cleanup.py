@@ -113,7 +113,6 @@ def _make_real_orchestrator(
         output_downloader=output_downloader,
         occupancy_checker=occupancy_checker,
         engines=engines,
-        log=MagicMock(spec=logging.Logger),
         config_clouds=[],
         local_tasks_dir=MagicMock(),  # type: ignore[arg-type]
         allocation_tracker=AllocationTracker(),

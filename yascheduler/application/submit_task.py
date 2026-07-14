@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from yascheduler.domain import (
@@ -27,6 +26,7 @@ from yascheduler.domain import (
     TaskId,
     UnsupportedEngineError,
 )
+from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from .uow import AbstractUnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-APPLICATION-SUBMIT")
 
 _KNOWN_TYPED_KEYS = frozenset(
     {

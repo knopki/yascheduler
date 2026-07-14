@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def task_deployer() -> TaskDeployer:
-    return TaskDeployer(log=logging.getLogger(__name__))
+    return TaskDeployer()
 
 
 def _make_engine() -> Engine:

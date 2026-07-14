@@ -9,11 +9,12 @@
 #
 # START_MODULE_MAP
 #   test_full_cycle - Multi-node entrypoint-driven full lifecycle: 4 jobs across 2 SSH containers
-#   _ALLOCATED_MARKER - Structured-log substring emitted by _try_start_on_machine on successful allocation
+#   _assert_allocation_logs - Assert ALLOCATED trace records via record.block/record.fields
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.hostname via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
+#   LAST_CHANGE: v2.2.0 - reform-grace-logging slice 8: migrate _assert_allocation_logs from getMessage() substring matching to record.block/record.fields structured fields; remove _ALLOCATED_MARKER constant; remove import re.
+#   PREVIOUS_CHANGE: v2.1.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.hostname via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
 #   PREVIOUS_CHANGE: v1.4.0 - fix-static-node-connect-exclusion: drop the `cloud="e2e"` workaround.
 #   PREVIOUS_CHANGE: v1.3.0 - session-based-machine-handle section 7.x: Migrate from get_machine_state to get_session.
 # END_CHANGE_SUMMARY
@@ -23,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -44,7 +44,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("e2e.test_full_cycle")
 
-_ALLOCATED_MARKER = "[AllocateTask][_try_allocate_to_machine][ALLOCATED]"
 _POLL_TIMEOUT_S = 30.0
 _POLL_INTERVAL_S = 0.5
 
@@ -350,7 +349,7 @@ async def _read_tasks(
 
 
 # START_CONTRACT: _assert_allocation_logs
-#   PURPOSE: Assert one [ALLOCATED] log record per task_id and that both node hostnames appear among the logged hostname= values.
+#   PURPOSE: Assert one [ALLOCATED] trace record per task_id and that both node hostnames appear among the logged hostname= values. Uses structured fields (record.block/record.fields), not getMessage() substrings.
 #   INPUTS: { records: list[LogRecord], task_ids: set[int] (coerced from list), expected_ips: set[str] }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — pure assertion over captured records.
@@ -361,33 +360,25 @@ def _assert_allocation_logs(
     task_ids: list[int],
     expected_ips: set[str],
 ) -> None:
-    allocated_msgs = [
-        r.getMessage() for r in records if _ALLOCATED_MARKER in r.getMessage()
-    ]
-    # One ALLOCATED record per task_id. The message format is
-    # "[AllocateTask][_try_allocate_to_machine][ALLOCATED] task_id=%s hostname=%s node_id=%s".
+    allocated_records = [r for r in records if getattr(r, "block", None) == "ALLOCATED"]
     seen_task_ids: set[int] = set()
     seen_ips: set[str] = set()
-    # Word-boundary matching: `task_id=3\b` avoids matching inside `task_id=30`;
-    # `hostname=10.88.0.1\b` avoids matching inside `hostname=10.88.0.165`. Task IDs
-    # accumulate across sessions (TRUNCATE without RESTART IDENTITY), so naive
-    # substring matching would eventually false-positive.
-    for msg in allocated_msgs:
-        for tid in task_ids:
-            if re.search(rf"task_id={tid}\b", msg):
-                seen_task_ids.add(tid)
-        for ip in expected_ips:
-            if re.search(rf"hostname={re.escape(ip)}\b", msg):
-                seen_ips.add(ip)
+    for rec in allocated_records:
+        tid = rec.fields.get("task_id")  # type: ignore[attr-defined]
+        if tid is not None:
+            seen_task_ids.add(tid.value)
+        hostname = rec.fields.get("hostname")  # type: ignore[attr-defined]
+        if hostname is not None:
+            seen_ips.add(hostname)
     missing_task_ids = set(task_ids) - seen_task_ids
     assert not missing_task_ids, (
         f"no [ALLOCATED] log for task_ids={missing_task_ids}; "
-        f"captured ALLOCATED msgs={allocated_msgs}"
+        f"captured ALLOCATED records={allocated_records}"
     )
     missing_ips = expected_ips - seen_ips
     assert not missing_ips, (
         f"[ALLOCATED] logs never mention hostname={missing_ips}; "
-        f"captured ALLOCATED msgs={allocated_msgs}"
+        f"captured ALLOCATED records={allocated_records}"
     )
 
 

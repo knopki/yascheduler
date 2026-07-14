@@ -39,8 +39,11 @@ from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.infra import SSHMachineRepository
 from yascheduler.infra.ssh.keys import list_private_keys
+from yascheduler.shared import get_logger
 
 from .args import add_config_arg, add_log_level_arg
+
+logger = get_logger("M-ENTRYPOINTS-CLI-MANAGE-NODE")
 
 
 @dataclass(frozen=True)
@@ -323,8 +326,8 @@ async def _add_node(
                     await uow.nodes.remove(tmp.node_id)
                     await uow.commit()
             except Exception:
-                logging.getLogger(__name__).warning(
-                    "[manage_node][_add_node][CLEANUP_FAILED] node_id=%s",
+                logger.warning(
+                    "add_node cleanup failed: node_id=%s",
                     tmp.node_id,
                 )
             raise

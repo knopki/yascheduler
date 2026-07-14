@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/hetzner.py
-# VERSION: 1.8.1
+# VERSION: 1.9.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Hetzner Cloud server creation and deletion via API.
@@ -17,8 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.1 - recovery branch now triggers on APIException code `uniqueness_error` (Hetzner's current duplicate-key wording "SSH key not unique") in addition to the legacy "already" substring; previously the new wording skipped the fingerprint/name lookup and re-raised, breaking all allocations once a key already existed on the Hetzner project.
-#   PREVIOUS_CHANGE: v1.8.0 - Retype hetzner_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
+#   LAST_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-HETZNER") at module top
+#   PREVIOUS_CHANGE: v1.8.1 - recovery branch now triggers on APIException code `uniqueness_error` (Hetzner's current duplicate-key wording "SSH key not unique") in addition to the legacy "already" substring; previously the new wording skipped the fingerprint/name lookup and re-raised, breaking all allocations once a key already existed on the Hetzner project.
 # END_CHANGE_SUMMARY
 #
 """Hetzner cloud methods"""
@@ -43,10 +43,11 @@ except ImportError:
     _HETZNER_AVAILABLE = False
 
 from yascheduler.infra.cloud import get_key_name, get_rnd_name
+from yascheduler.shared import get_logger
+
+logger = get_logger("M-CLOUD-PROVIDER-HETZNER")
 
 if TYPE_CHECKING:
-    import logging
-
     from asyncssh.public_key import SSHKey as ASSHKey
     from hcloud.servers.client import BoundServer
 
@@ -106,13 +107,12 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
 
 # START_CONTRACT: hetzner_create_node
 #   PURPOSE: Create Hetzner server with SSH key and cloud-config
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudHetzner - Hetzner config, key: ASSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
+#   INPUTS: { cfg: ConfigCloudHetzner - Hetzner config, key: ASSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
 #   OUTPUTS: { str - IP address of created server }
 #   SIDE_EFFECTS: Creates Hetzner Cloud server with associated resources
 #   LINKS: M-CLOUD-HETZNER
 # END_CONTRACT: hetzner_create_node
 async def hetzner_create_node(
-    log: logging.Logger,
     cfg: ConfigCloudHetzner,
     key: ASSHKey,
     cloud_config: CloudInitConfig | None = None,
@@ -138,7 +138,7 @@ async def hetzner_create_node(
     ip_addr = server.public_net and server.public_net.ipv4 and server.public_net.ipv4.ip
     assert ip_addr
     ip_str = str(ip_addr)
-    log.info("CREATED %s", ip_str)
+    logger.info("CREATED %s", ip_str)
     return ip_str
 
 
@@ -161,13 +161,12 @@ def find_srv(client: HClient, host: str) -> BoundServer | None:
 
 # START_CONTRACT: hetzner_delete_node
 #   PURPOSE: Delete Hetzner server by host IP address
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudHetzner - Hetzner config, host: str - IP address of server to delete }
+#   INPUTS: { cfg: ConfigCloudHetzner - Hetzner config, host: str - IP address of server to delete }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Deletes Hetzner Cloud server
 #   LINKS: M-CLOUD-HETZNER, find_srv
 # END_CONTRACT: hetzner_delete_node
 async def hetzner_delete_node(
-    log: logging.Logger,
     cfg: ConfigCloudHetzner,
     host: str,
 ) -> None:
@@ -180,7 +179,7 @@ async def hetzner_delete_node(
 
     if server:
         await loop.run_in_executor(executor, server.delete)
-        log.info("DELETED %s", host)
+        logger.info("DELETED %s", host)
 
     else:
-        log.info("NODE %s NOT DELETED AS UNKNOWN", host)
+        logger.info("NODE %s NOT DELETED AS UNKNOWN", host)

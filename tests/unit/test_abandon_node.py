@@ -142,7 +142,7 @@ class TestAbandonNode:
         tracker.discard_by_node.return_value = 0
 
         with caplog.at_level(
-            logging.ERROR, logger="yascheduler.application.abandon_node"
+            logging.DEBUG, logger="yascheduler.M-APPLICATION-ABANDON-NODE"
         ):
             # Must NOT raise — cloud delete failure is logged not raised.
             await abandon_node(
@@ -157,9 +157,10 @@ class TestAbandonNode:
         uow.commit.assert_awaited_once()
         tracker.discard_by_node.assert_called_once_with(node.node_id)
         assert any(
-            "CLOUD_DELETE_FAILED" in r.message
-            and "10.0.0.5" in r.message
-            and "aws" in r.message
+            getattr(r, "block", None) == "CLOUD_DELETE_FAILED"
+            and getattr(r, "fields", {}).get("node_id") == NodeId(1)
+            and getattr(r, "fields", {}).get("hostname") == "10.0.0.5"
+            and getattr(r, "fields", {}).get("cloud") == "aws"
             for r in caplog.records
         )
 
@@ -175,7 +176,7 @@ class TestAbandonNode:
         tracker = MagicMock(spec=AllocationTracker)
 
         with caplog.at_level(
-            logging.ERROR, logger="yascheduler.application.abandon_node"
+            logging.DEBUG, logger="yascheduler.M-APPLICATION-ABANDON-NODE"
         ):
             with pytest.raises(RuntimeError, match="db gone"):
                 await abandon_node(
@@ -188,7 +189,8 @@ class TestAbandonNode:
         clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         assert any(
-            "REMOVE_FAILED" in r.message and "10.0.0.5" in r.message
+            getattr(r, "block", None) == "REMOVE_FAILED"
+            and getattr(r, "fields", {}).get("hostname") == "10.0.0.5"
             for r in caplog.records
         )
         # discard_by_node runs AFTER the remove block; a remove failure
@@ -210,7 +212,7 @@ class TestAbandonNode:
         tracker.discard_by_node.return_value = 0
 
         with caplog.at_level(
-            logging.WARNING, logger="yascheduler.application.abandon_node"
+            logging.DEBUG, logger="yascheduler.M-APPLICATION-ABANDON-NODE"
         ):
             await abandon_node(
                 node,
@@ -220,7 +222,9 @@ class TestAbandonNode:
             )
 
         tracker.discard_by_node.assert_called_once_with(node.node_id)
-        assert not any("AMBIGUOUS_TRACKER" in r.message for r in caplog.records)
+        assert not any(
+            getattr(r, "block", None) == "AMBIGUOUS_TRACKER" for r in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_abandon_node_multiple_tracker_entries_logs_warning(
@@ -235,7 +239,7 @@ class TestAbandonNode:
         tracker.discard_by_node.return_value = 2
 
         with caplog.at_level(
-            logging.WARNING, logger="yascheduler.application.abandon_node"
+            logging.DEBUG, logger="yascheduler.M-APPLICATION-ABANDON-NODE"
         ):
             await abandon_node(
                 node,
@@ -246,8 +250,9 @@ class TestAbandonNode:
 
         tracker.discard_by_node.assert_called_once_with(node.node_id)
         assert any(
-            "AMBIGUOUS_TRACKER" in r.message
-            and "10.0.0.5" in r.message
-            and "count=2" in r.message
+            getattr(r, "block", None) == "AMBIGUOUS_TRACKER"
+            and getattr(r, "fields", {}).get("node_id") == NodeId(1)
+            and getattr(r, "fields", {}).get("hostname") == "10.0.0.5"
+            and getattr(r, "fields", {}).get("count") == 2
             for r in caplog.records
         )

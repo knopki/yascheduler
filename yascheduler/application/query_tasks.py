@@ -18,8 +18,9 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
+
+from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
     from .uow import AbstractUnitOfWork
 
-logger = logging.getLogger(__name__)
+logger = get_logger("M-APPLICATION-QUERY-TASKS")
 
 
 # START_CONTRACT: query_tasks
@@ -55,7 +56,7 @@ async def query_tasks(
 
     # START_BLOCK_EMPTY_DISPATCH
     if not statuses and not jobs:
-        logger.debug("[QueryTasks][query_tasks][EMPTY_DISPATCH] no filters supplied")
+        logger.trace("EMPTY_DISPATCH")
         return [], {}
     # END_BLOCK_EMPTY_DISPATCH
 

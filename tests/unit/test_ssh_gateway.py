@@ -678,18 +678,14 @@ class TestConnectionLifecycle:
                 username="root",
                 port=22,
             )
-            with caplog.at_level(logging.INFO, logger="SSHMachineRepository"):
+            with caplog.at_level(logging.DEBUG, logger="yascheduler.M-SSH-REPOSITORY"):
                 await repository.connect(node=node, client_keys=[])
 
-        # (a) CPU-count log emitted from connect path
-        cpu_logs = [
-            r
-            for r in caplog.records
-            if "[SSHRepository][connect][CPUs]" in r.getMessage()
-        ]
-        assert len(cpu_logs) == 1
-        assert "hostname=10.0.0.1" in cpu_logs[0].getMessage()
-        assert "ncpus=4" in cpu_logs[0].getMessage()
+        # (a) CPU-count log emitted from connect path as a trace record
+        cpu_trace = [r for r in caplog.records if getattr(r, "block", None) == "CPUS"]
+        assert len(cpu_trace) == 1
+        assert getattr(cpu_trace[0], "fields", {}).get("hostname") == "10.0.0.1"
+        assert getattr(cpu_trace[0], "fields", {}).get("ncpus") == 4
 
         # (b) setup_node does NOT emit a CPU-count log (the old "CPUs count:" format is absent)
         assert not any("CPUs count" in r.getMessage() for r in caplog.records), (

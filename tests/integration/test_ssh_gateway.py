@@ -31,7 +31,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
@@ -49,8 +48,6 @@ from yascheduler.infra.ssh.operations import (
     TaskDeployer,
 )
 from yascheduler.infra.ssh.repository import SSHMachineRepository
-
-log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -164,19 +161,19 @@ async def repository(
 @pytest.fixture
 def task_deployer() -> TaskDeployer:
     """Create TaskDeployer collaborator."""
-    return TaskDeployer(log)
+    return TaskDeployer()
 
 
 @pytest.fixture
 def output_downloader() -> OutputDownloader:
     """Create OutputDownloader collaborator."""
-    return OutputDownloader(log)
+    return OutputDownloader()
 
 
 @pytest.fixture
 def occupancy_checker() -> OccupancyChecker:
     """Create OccupancyChecker collaborator."""
-    return OccupancyChecker(log)
+    return OccupancyChecker()
 
 
 class TestSSHGatewayIntegration:

@@ -25,7 +25,6 @@
 #   PREVIOUS_CHANGE: v1.3.0 - session-based-machine-handle: download_outputs now takes a session param (was ip). Tests build a real SSHMachineSession via _make_state and wire sftp mocks on session._conn.start_sftp_client (was operations.get_sftp / repository.get_path monkey-patches). session.path replaces repository.get_path.
 # END_CHANGE_SUMMARY
 
-import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
@@ -76,7 +75,7 @@ def _make_session_with_sftp(sftp_mock: AsyncMock) -> SSHMachineSession:
 
 
 def _make_output_downloader() -> OutputDownloader:
-    return OutputDownloader(log=logging.getLogger(__name__))
+    return OutputDownloader()
 
 
 @pytest.mark.asyncio

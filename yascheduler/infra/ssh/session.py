@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/session.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Connected-machine entity handle owning SSH connection, machine state, and per-session monitor lifecycle.
 #   SCOPE: SSHMachineSession class (owns _conn, _adapter, _machine, _closed, _monitor_task) + my_backoff_exc canonical partial.
@@ -14,14 +14,13 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - add _cached_ncpus field, memoize get_cpu_cores per session, add _prime_ncpus_cache for repository priming.
-#   PREVIOUS_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: remove CPU-count log from setup_node (moved to repository connect discovery site). ConnectedMachine no longer carries ncpus.
+#   LAST_CHANGE: v1.2.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-SESSION") at module top
+#   PREVIOUS_CHANGE: v1.3.0 - add _cached_ncpus field, memoize get_cpu_cores per session, add _prime_ncpus_cache for repository priming.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import TYPE_CHECKING
@@ -29,9 +28,12 @@ from typing import TYPE_CHECKING
 import backoff
 
 from yascheduler.domain import ConnectedMachine, ProcessResult
+from yascheduler.shared import get_logger
 
 from .exceptions import AllSSHRetryExc, SSHRetryExc
 from .platform import make_run_fn
+
+logger = get_logger("M-SSH-SESSION")
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -67,7 +69,7 @@ my_backoff_exc = partial(
 
 # START_CONTRACT: SSHMachineSession
 #   PURPOSE: Concrete MachineSession — connected-machine entity handle owning connection, adapter, mutable machine snapshot, and per-session monitor task. Implements the MachineSession Protocol.
-#   INPUTS: { hostname: str, conn: SSHClientConnection, conn_opts: SSHClientConnectionOptions, machine: ConnectedMachine, adapter: RemoteMachineAdapter, platforms: Sequence[str], data_dir: PurePath, engines_dir: PurePath, tasks_dir: PurePath, log: logging.Logger | None }
+#   INPUTS: { hostname: str, conn: SSHClientConnection, conn_opts: SSHClientConnectionOptions, machine: ConnectedMachine, adapter: RemoteMachineAdapter, platforms: Sequence[str], data_dir: PurePath, engines_dir: PurePath, tasks_dir: PurePath }
 #   OUTPUTS: { None - instance methods return operation results }
 #   SIDE_EFFECTS: Owns an open SSH connection and at most one asyncio.Task (the monitor). _close() cancels the monitor, awaits its cancellation, and closes the connection. Idempotent on _closed.
 #   LINKS: M-SSH-SESSION, M-DOMAIN-PORTS, M-PLATFORM
@@ -94,7 +96,6 @@ class SSHMachineSession:
         data_dir: PurePath,
         engines_dir: PurePath,
         tasks_dir: PurePath,
-        log: logging.Logger | None = None,
     ) -> None:
         self._hostname = hostname
         self._conn = conn
@@ -105,7 +106,6 @@ class SSHMachineSession:
         self._data_dir = data_dir
         self._engines_dir = engines_dir
         self._tasks_dir = tasks_dir
-        self._log = log or logging.getLogger("SSHMachineSession")
         self._closed = False
         self._monitor_task: asyncio.Task[None] | None = None
         self._cached_ncpus: int | None = None
@@ -272,7 +272,7 @@ class SSHMachineSession:
             quote=self._adapter.quote,
             engines=engines.filter_platforms(self._platforms),
             engines_dir=self._engines_dir,
-            log=self._log,
+            log=logger,
         )
 
     async def pgrep(
@@ -385,9 +385,7 @@ class SSHMachineSession:
         task = self._monitor_task
         if task is not None:
             self._monitor_task = None
-            self._log.debug(
-                "[SSHSession][_close][CANCEL_MONITOR] hostname=%s", self._hostname
-            )
+            logger.trace("CANCEL_MONITOR", hostname=self._hostname)
             task.cancel()
             try:
                 await task
@@ -396,7 +394,7 @@ class SSHMachineSession:
         # END_BLOCK_CANCEL_MONITOR
         # START_BLOCK_CLOSE_CONN
         if self._conn._transport:
-            self._log.debug("[SSHSession][_close] hostname=%s", self._hostname)
+            logger.trace("CLOSE", hostname=self._hostname)
             self._conn.close()
             await self._conn.wait_closed()
         # END_BLOCK_CLOSE_CONN

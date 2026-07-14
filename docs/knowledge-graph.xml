@@ -19,7 +19,6 @@
       <path>yascheduler/__init__.py</path>
       <depends>M-ENTRYPOINTS</depends>
       <annotations>
-        <export-Yascheduler PURPOSE="Public client class (re-exported via yascheduler.entrypoints)" />
         <const-CONFIG_FILE PURPOSE="Default config file path (re-exported via yascheduler.entrypoints)" />
         <const-PID_FILE PURPOSE="Default PID file path (re-exported via yascheduler.entrypoints)" />
         <const-LOG_FILE PURPOSE="Default log file path (re-exported via yascheduler.entrypoints)" />
@@ -89,10 +88,23 @@
       <depends>none</depends>
     </M-CLI-COMMANDS>
 
+    <CrossLink from="M-SHARED" to="M-LOGGING" relation="re-exports YaLogger and get_logger from shared/log.py" />
+
+    <M-LOGGING NAME="YaLogger and LogFormatter" TYPE="UTILITY" STATUS="implemented">
+      <purpose>YaLogger subclass and LogFormatter for structured tracing.</purpose>
+      <path>yascheduler/shared/log.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-YaLogger PURPOSE="Logger subclass exposing trace(block, /, **fields) for structured DEBUG tracing" />
+        <class-LogFormatter PURPOSE="Formatter with trace-record and user-facing rendering branches" />
+        <fn-get_logger PURPOSE="Factory returning YaLogger with yascheduler. namespace prefix; reclasses cached Logger for static type correctness" />
+      </annotations>
+    </M-LOGGING>
+
     <M-SHARED NAME="Shared kernel" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Shared kernel: typing shims (Self, Unpack) consumed by ≥2 architectural layers.</purpose>
+      <purpose>Shared kernel: typing shims (Self, Unpack), YaLogger, and get_logger factory re-exported for cross-layer consumers.</purpose>
       <path>yascheduler/shared/__init__.py</path>
-      <depends>M-SHARED-COMPAT</depends>
+      <depends>M-SHARED-COMPAT, M-LOGGING</depends>
     </M-SHARED>
 
     <M-SHARED-COMPAT NAME="Shared compat shims" TYPE="UTILITY" STATUS="implemented">
@@ -1120,9 +1132,9 @@
     <CrossLink from="M-APPLICATION-ORCHESTRATOR" to="M-SSH-KEYS" relation="consumes injected list_private_keys_fn to enumerate client keys without importing yascheduler.infra" />
     <CrossLink from="M-DI" to="M-SSH-KEYS" relation="imports list_private_keys and injects it as list_private_keys_fn into Orchestrator" />
     <CrossLink from="M-DI" to="M-SSH-REPOSITORY" relation="make_daemon constructs one SSHMachineRepository on the clouds is None branch and injects the same instance into CloudProvisionerImpl.machine_repository and Orchestrator.repository (shared registry spans cloud setup and orchestrator runtime); the three stateless collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) are constructed once each and injected into Orchestrator only" />
-    <CrossLink from="M-DI" to="M-SSH-OPS-DEPLOY" relation="make_daemon constructs TaskDeployer(log) and injects into Orchestrator.task_deployer" />
-    <CrossLink from="M-DI" to="M-SSH-OPS-DOWNLOAD" relation="make_daemon constructs OutputDownloader(log) and injects into Orchestrator.output_downloader" />
-    <CrossLink from="M-DI" to="M-SSH-OPS-OCCUPANCY" relation="make_daemon constructs OccupancyChecker(log) and injects into Orchestrator.occupancy_checker" />
+    <CrossLink from="M-DI" to="M-SSH-OPS-DEPLOY" relation="make_daemon constructs TaskDeployer and injects into Orchestrator.task_deployer" />
+    <CrossLink from="M-DI" to="M-SSH-OPS-DOWNLOAD" relation="make_daemon constructs OutputDownloader and injects into Orchestrator.output_downloader" />
+    <CrossLink from="M-DI" to="M-SSH-OPS-OCCUPANCY" relation="make_daemon constructs OccupancyChecker and injects into Orchestrator.occupancy_checker" />
     <CrossLink from="M-CLOUD-PROVISIONER" to="M-SSH-KEYS" relation="calls list_private_keys(local_config.keys_dir) in _connect_to_vm" />
     <CrossLink from="M-ENTRYPOINTS-CLI-MANAGE-NODE" to="M-SSH-KEYS" relation="calls list_private_keys(config.local.keys_dir) on the add path" />
     <CrossLink from="M-ENTRYPOINTS-CLI-CHECK-STATUS" to="M-SSH-KEYS" relation="calls list_private_keys(config.local.keys_dir) in verbose view" />

@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.19.0
+# VERSION: 2.24.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -15,8 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.22.0 - Replace hardcoded jump_port=22 in _setup_vm RESOLVE_JUMP block with atomic-leg resolution: CloudConfig.jump_port when cloud leg is authoritative (both jump_host AND jump_username set), otherwise config.remote.jump_port. All three jump fields resolved from the same source per D1.
-#   PREVIOUS_CHANGE: v2.21.0 - Remove ncpus write-back from _setup_vm: drop START_BLOCK_GET_CPUS block (standalone get_cpu_cores call + CloudSetupError wrapper); final replace becomes replace(node, enabled=True) with no ncpus= kwarg; allocate DONE log switches %d→%s for None-safety.
+#   LAST_CHANGE: v2.24.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-CLOUD-PROVISIONER") at module top
+#   PREVIOUS_CHANGE: v2.24.0 - Rewrite CREATE_FAILED error and stop info to pure narrative (no grace markers) per reform-grace-logging slice 7.
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -34,13 +34,15 @@ from yascheduler.domain import (
     Node,
 )
 from yascheduler.infra.ssh.keys import list_private_keys
+from yascheduler.shared import get_logger
 
 from .cloud_init import CloudInitConfig
 from .provider_selection import select_provider_pure
 from .ssh_keys import get_or_create_ssh_key
 
+logger = get_logger("M-CLOUD-PROVISIONER")
+
 if TYPE_CHECKING:
-    import logging
     from collections.abc import Sequence
     from pathlib import PurePath
 
@@ -62,7 +64,6 @@ if TYPE_CHECKING:
 #     local_config: LocalSettings - local daemon config (keys),
 #     remote_config: RemoteDefaults - remote machine defaults,
 #     engines: EngineRepository - engine definitions for cloud-config,
-#     log: logging.Logger - logger
 #   }
 #   OUTPUTS: { CloudProvisionerImpl - frozen instance }
 #   SIDE_EFFECTS: None
@@ -82,7 +83,6 @@ class CloudProvisionerImpl:
     local_config: LocalSettings
     remote_config: RemoteDefaults
     engines: EngineRepository
-    log: logging.Logger
     # Internal lock serializing SSH key load/generate across concurrent allocations.
     # Auto-constructed (init=False); not part of constructor signature.
     ssh_key_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
@@ -96,7 +96,7 @@ class CloudProvisionerImpl:
     # END_CONTRACT: CloudProvisionerImpl.stop
     async def stop(self) -> None:
         """Drain machine_repository connections opened during cloud allocation."""
-        self.log.info("[CloudProvisionerImpl] stop — draining machine_repository")
+        logger.info("cloud provisioner stop — draining machine_repository")
         await self.machine_repository.disconnect_all()
 
     # START_CONTRACT: CloudProvisionerImpl.select_provider
@@ -117,7 +117,7 @@ class CloudProvisionerImpl:
         """Select best provider — sync port method."""
         # START_BLOCK_PURE_SELECT
         adapter = select_provider_pure(
-            self.adapters, self.configs, platforms, current_counts, self.log
+            self.adapters, self.configs, platforms, current_counts
         )
         # END_BLOCK_PURE_SELECT
 
@@ -126,10 +126,7 @@ class CloudProvisionerImpl:
 
         # START_BLOCK_THROTTLE_CHECK
         if adapter.get_op_semaphore().locked():
-            self.log.debug(
-                "[CloudProvisionerImpl][select_provider][THROTTLE] provider=%s",
-                adapter.name,
-            )
+            logger.trace("THROTTLE", provider=adapter.name)
             return None
         # END_BLOCK_THROTTLE_CHECK
 
@@ -155,19 +152,15 @@ class CloudProvisionerImpl:
         # END_BLOCK_RESOLVE_ALLOCATE_PROVIDER
 
         # START_BLOCK_CREATE_VM
-        self.log.debug(
-            "[CloudProvisionerImpl][allocate][CREATE_VM] provider=%s",
-            adapter.name,
-        )
+        logger.trace("CREATE_VM", provider=adapter.name)
         try:
             ip_addr = await adapter.create_node(
-                log=self.log,
                 cfg=config,
                 key=await self._get_ssh_key(),
                 cloud_config=await self._get_cloud_config_data(adapter, config),
             )
         except Exception as err:
-            self.log.error("[CloudProvisionerImpl][allocate][CREATE_FAILED] %s", err)
+            logger.error("cloud create failed for %s: %s", adapter.name, err)
             raise CloudAllocateError(f"Create node error: {err}") from err
         # END_BLOCK_CREATE_VM
 
@@ -193,45 +186,45 @@ class CloudProvisionerImpl:
         try:
             node = await self._setup_vm(node, adapter, config)
         except CloudSetupError:
-            self.log.warning(
-                "[CloudProvisionerImpl][allocate][SETUP_FAILED] hostname=%s node_id=%s - removing VM",
+            logger.warning(
+                "cloud setup failed for %s node_id=%s — removing VM",
                 node.hostname,
                 node.node_id,
             )
             try:
                 await self.machine_repository.disconnect(node.node_id)
             except Exception as disc_err:
-                self.log.warning(
-                    "[CloudProvisionerImpl][allocate][DISCONNECT_FAILED] node_id=%s err=%s",
+                logger.warning(
+                    "cloud disconnect failed: node_id=%s err=%s",
                     node.node_id,
                     disc_err,
                 )
-            await adapter.delete_node(log=self.log, cfg=config, host=node.hostname)
+            await adapter.delete_node(cfg=config, host=node.hostname)
             raise
         except Exception as err:
-            self.log.warning(
-                "[CloudProvisionerImpl][allocate][SETUP_FAILED] hostname=%s node_id=%s - removing VM",
+            logger.warning(
+                "cloud setup failed for %s node_id=%s — removing VM",
                 node.hostname,
                 node.node_id,
             )
             try:
                 await self.machine_repository.disconnect(node.node_id)
             except Exception as disc_err:
-                self.log.warning(
-                    "[CloudProvisionerImpl][allocate][DISCONNECT_FAILED] node_id=%s err=%s",
+                logger.warning(
+                    "cloud disconnect failed: node_id=%s err=%s",
                     node.node_id,
                     disc_err,
                 )
-            await adapter.delete_node(log=self.log, cfg=config, host=node.hostname)
+            await adapter.delete_node(cfg=config, host=node.hostname)
             raise CloudSetupError(f"Setup node error: {err}") from err
         # END_BLOCK_SETUP_VM
 
-        self.log.debug(
-            "[CloudProvisionerImpl][allocate][DONE] hostname=%s node_id=%s provider=%s ncpus=%s",
-            node.hostname,
-            node.node_id,
-            node.cloud,
-            node.ncpus,
+        logger.trace(
+            "DONE",
+            hostname=node.hostname,
+            node_id=node.node_id,
+            provider=node.cloud,
+            ncpus=node.ncpus,
         )
         return node
 
@@ -245,23 +238,23 @@ class CloudProvisionerImpl:
     async def deallocate(self, node: Node) -> None:
         # START_BLOCK_RESOLVE_DEALLOCATE_PROVIDER
         if node.cloud is None:
-            self.log.warning(
-                "[CloudProvisionerImpl][deallocate][NO_CLOUD] node_id=%s",
+            logger.warning(
+                "deallocate called with no cloud: node_id=%s",
                 node.node_id,
             )
             return
         adapter = self.adapters.get(node.cloud)
         if adapter is None:
-            self.log.warning(
-                "[CloudProvisionerImpl][deallocate][UNSUPPORTED] hostname=%s cloud=%s",
+            logger.warning(
+                "deallocate unsupported cloud: hostname=%s cloud=%s",
                 node.hostname,
                 node.cloud,
             )
             return
         config = self.configs.get(node.cloud)
         if config is None:
-            self.log.warning(
-                "[CloudProvisionerImpl][deallocate][NO_CONFIG] hostname=%s cloud=%s",
+            logger.warning(
+                "deallocate no config: hostname=%s cloud=%s",
                 node.hostname,
                 node.cloud,
             )
@@ -269,12 +262,12 @@ class CloudProvisionerImpl:
         # END_BLOCK_RESOLVE_DEALLOCATE_PROVIDER
 
         # START_BLOCK_DELETE_VM
-        await adapter.delete_node(log=self.log, cfg=config, host=node.hostname)
-        self.log.debug(
-            "[CloudProvisionerImpl][deallocate][DONE] hostname=%s cloud=%s node_id=%s",
-            node.hostname,
-            node.cloud,
-            node.node_id,
+        await adapter.delete_node(cfg=config, host=node.hostname)
+        logger.trace(
+            "DONE",
+            hostname=node.hostname,
+            cloud=node.cloud,
+            node_id=node.node_id,
         )
         # END_BLOCK_DELETE_VM
 
@@ -293,7 +286,7 @@ class CloudProvisionerImpl:
         """Async-thread-safe SSH key load/generate."""
         async with self.ssh_key_lock:
             return await asyncio.get_running_loop().run_in_executor(
-                None, get_or_create_ssh_key, self.local_config.keys_dir, self.log
+                None, get_or_create_ssh_key, self.local_config.keys_dir
             )
 
     # START_CONTRACT: CloudProvisionerImpl._get_cloud_config_data
@@ -377,9 +370,7 @@ class CloudProvisionerImpl:
         # pin an allocator worker forever. The failure message includes both
         # stdout and stderr — cloud-init writes its status line to stdout, so
         # omitting stdout (the previous behavior) gave no clue why it failed.
-        self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][CLOUD_INIT] hostname=%s", node.hostname
-        )
+        logger.trace("CLOUD_INIT", hostname=node.hostname)
         try:
             result = await asyncio.wait_for(
                 session.run("cloud-init status --wait"),
@@ -404,19 +395,17 @@ class CloudProvisionerImpl:
         # END_BLOCK_CLOUD_INIT
 
         # START_BLOCK_SETUP_NODE
-        self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][SETUP_NODE] hostname=%s", node.hostname
-        )
+        logger.trace("SETUP_NODE", hostname=node.hostname)
         try:
             await session.setup_node(self.engines)
         except Exception as err:
             raise CloudSetupError(f"Setup node {node.hostname} failed: {err}") from err
         # END_BLOCK_SETUP_NODE
 
-        self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][READY] hostname=%s node_id=%s",
-            node.hostname,
-            node.node_id,
+        logger.trace(
+            "READY",
+            hostname=node.hostname,
+            node_id=node.node_id,
         )
         return replace(node, enabled=True)
 
@@ -446,11 +435,11 @@ class CloudProvisionerImpl:
         # END_BLOCK_GET_KEYS
 
         # START_BLOCK_SSH_CONNECT_VM
-        self.log.debug(
-            "[CloudProvisionerImpl][setup_vm][CONNECT] hostname=%s node_id=%s username=%s",
-            node.hostname,
-            node.node_id,
-            node.username,
+        logger.trace(
+            "CONNECT",
+            hostname=node.hostname,
+            node_id=node.node_id,
+            username=node.username,
         )
         try:
             session = await self.machine_repository.connect(

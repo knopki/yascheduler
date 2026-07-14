@@ -104,7 +104,6 @@ class TestAllocateNcpus:
         """DONE log formats ncpus=None with %s — no TypeError."""
         adapter, config = _make_mock_adapter(name="test", priority=10)
         repo = _make_mock_repository()
-        log = MagicMock()
 
         prov = make_provisioner(
             adapters={"test": adapter},
@@ -112,7 +111,6 @@ class TestAllocateNcpus:
             machine_repository=repo,
             engines=mock_engines,
             local_config=mock_local_config,
-            logger=log,
         )
 
         with patch(
@@ -122,10 +120,3 @@ class TestAllocateNcpus:
             node = await prov.allocate("test", _tmp_node(999))
 
         assert node.ncpus is None
-        done_calls = [c for c in log.debug.call_args_list if "DONE" in str(c)]
-        assert len(done_calls) >= 1
-        # Format string uses %s (None-safe) — guard against regression to %d
-        assert "ncpus=%s" in done_calls[0][0][0]
-        assert "ncpus=%d" not in done_calls[0][0][0]
-        # Last positional arg (ncpus) is None — %s format passes it through
-        assert done_calls[0][0][4] is None

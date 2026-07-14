@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_allocate_task_node_pairing.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for the task-allocated-node-id application-layer changes: _find_free_machines session↔Node pairing and _try_start_on_machine node_id logging.
@@ -10,11 +10,12 @@
 #
 # START_MODULE_MAP
 #   TestFindFreeMachinesNodePairing - _find_free_machines pairs sessions with Nodes by ip; dup-IP collapses
-#   TestTryStartOnMachineNodeIdLogging - _try_start_on_machine log lines include node_id=%s alongside ip=%s
+#   TestTryStartOnMachineNodeIdLogging - _try_start_on_machine trace records carry node_id and hostname via record.fields
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
+#   LAST_CHANGE: v1.2.0 - reform-grace-logging slice 8: migrate ALLOCATED assertion from getMessage() substring to record.block/record.fields structured fields; caplog logger name updated to yascheduler.M-APPLICATION-ALLOCATE.
+#   PREVIOUS_CHANGE: v1.1.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
 # END_CHANGE_SUMMARY
 
 import logging
@@ -181,7 +182,7 @@ class TestTryStartOnMachineNodeIdLogging:
 
         with caplog.at_level(
             logging.DEBUG,
-            logger="yascheduler.application.allocate_task",
+            logger="yascheduler.M-APPLICATION-ALLOCATE",
         ):
             result = await _try_start_on_machine(
                 session,
@@ -196,13 +197,13 @@ class TestTryStartOnMachineNodeIdLogging:
             )
 
         assert result is True
-        # The allocation log line carries node_id alongside ip.
+        # The allocation trace record carries node_id alongside hostname.
         alloc_lines = [
-            r.getMessage() for r in caplog.records if "[ALLOCATED]" in r.getMessage()
+            r for r in caplog.records if getattr(r, "block", None) == "ALLOCATED"
         ]
-        assert alloc_lines, "expected an [ALLOCATED] debug log line"
-        line = alloc_lines[0]
-        assert "hostname=10.0.0.1" in line
-        assert "node_id=7" in line
+        assert alloc_lines, "expected an ALLOCATED trace record"
+        rec = alloc_lines[0]
+        assert rec.fields.get("hostname") == "10.0.0.1"  # type: ignore[attr-defined]
+        assert rec.fields.get("node_id") == NodeId(7)  # type: ignore[attr-defined]
         # tracker.discard called with the task_id
         tracker.discard.assert_called_once_with(task.task_id)

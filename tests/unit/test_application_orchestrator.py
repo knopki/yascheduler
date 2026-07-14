@@ -49,6 +49,7 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import Counter
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -175,8 +176,6 @@ def make_orchestrator(
     engines = MagicMock(spec=EngineRepository)
     engines.values.return_value = [engine]
 
-    log = MagicMock()
-
     if allocation_tracker is None:
         allocation_tracker = AllocationTracker()
     if active_clouds is None:
@@ -194,7 +193,6 @@ def make_orchestrator(
         output_downloader=output_downloader,
         occupancy_checker=occupancy_checker,
         engines=engines,
-        log=log,
         config_clouds=[],
         local_tasks_dir=Path("/tmp"),
         allocation_tracker=allocation_tracker,
@@ -668,10 +666,14 @@ class TestDeallocatorConsumer:
         orch._repository.disconnect.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_consumer_logs_node_id_and_ip_on_error(self) -> None:
-        """deallocate_node raises -> error log includes both node_id=%s and ip=%s (proves D5)."""
+    async def test_consumer_logs_node_id_and_ip_on_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """deallocate_node raises -> error log includes both node_id=%s and hostname=%s."""
         from yascheduler.application.queue import UMessage
         from yascheduler.domain.model import Node, NodeId
+
+        caplog.set_level(logging.ERROR)
 
         orch = make_orchestrator()
 
@@ -685,26 +687,24 @@ class TestDeallocatorConsumer:
             # Must not raise — consumer swallows to keep worker alive.
             await orch._deallocator_consumer(msg)
 
-        orch._log.error.assert_called_once()  # type: ignore[attr-defined]
-        args, _ = orch._log.error.call_args  # type: ignore[attr-defined]
-        fmt = args[0]
-        # The format string carries both node_id and hostname fields.
-        assert "node_id=%s" in fmt
-        assert "hostname=%s" in fmt
-        # The rendered args supply node_id and hostname in order.
-        assert args[1] == NodeId(7)
-        assert args[2] == "10.0.0.7"
+        assert len(caplog.records) >= 1
+        record = caplog.records[-1]
+        assert "node_id=7" in record.getMessage()
+        assert "hostname=10.0.0.7" in record.getMessage()
 
 
 class TestAllocatorConsumer:
     """_allocator_consumer swallows allocate_task exceptions (worker survival)."""
 
     @pytest.mark.asyncio
-    async def test_swallows_cloud_allocate_error(self) -> None:
+    async def test_swallows_cloud_allocate_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """CloudAllocateError from allocate_task is caught + logged; worker survives."""
         from yascheduler.application.queue import UMessage
         from yascheduler.domain.exceptions import CloudAllocateError
 
+        caplog.set_level(logging.ERROR)
         orch = make_orchestrator()
 
         task_payload = _make_task(engine="e", label="t")
@@ -718,14 +718,16 @@ class TestAllocatorConsumer:
             await orch._allocator_consumer(msg)
 
         mock_alloc.assert_called_once()
-        # Error was logged
-        orch._log.error.assert_called_once()  # type: ignore[attr-defined]
+        assert any("Allocator error" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_swallows_any_exception(self) -> None:
+    async def test_swallows_any_exception(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Any Exception from allocate_task is caught; worker survives."""
         from yascheduler.application.queue import UMessage
 
+        caplog.set_level(logging.ERROR)
         orch = make_orchestrator()
 
         task_payload = _make_task(task_id=TaskId(42), engine="e", label="t")
@@ -738,7 +740,7 @@ class TestAllocatorConsumer:
             await orch._allocator_consumer(msg)
 
         mock_alloc.assert_called_once()
-        orch._log.error.assert_called_once()  # type: ignore[attr-defined]
+        assert any("Allocator error" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_propagates_allocate_task_args(self) -> None:
