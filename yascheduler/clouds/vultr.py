@@ -5,14 +5,10 @@ import base64
 import hashlib
 import json
 import logging
-import socket
-import time
-import urllib.error
-import urllib.request
-from concurrent.futures.thread import ThreadPoolExecutor
 from functools import cache
 from typing import Optional, cast
 
+import aiohttp
 import asyncssh
 from asyncssh.public_key import SSHKey as ASSHKey
 
@@ -24,44 +20,55 @@ API_BASE = "https://api.vultr.com/v2"
 POLL_INTERVAL = 20
 POLL_TIMEOUT = 1200
 
-executor = ThreadPoolExecutor(max_workers=5)
-
 
 class APIError(Exception):
     """Vultr API error"""
 
 
 class VultrClient:
-    """Thin Vultr REST API client"""
+    """Async Vultr REST API client (aiohttp-based)."""
 
     def __init__(self, api_key: str):
         self.api_key = api_key
+        self._session: Optional[aiohttp.ClientSession] = None
 
-    def request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
-        """Send an HTTP request to the Vultr API v2 and return parsed JSON."""
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=aiohttp.ClientTimeout(total=60),
+            )
+        return self._session
+
+    async def request(
+        self, method: str, path: str, body: Optional[dict] = None
+    ) -> dict:
+        """Send an async HTTP request to the Vultr API v2 and return parsed JSON."""
         url = API_BASE + path
-        data = None
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(url=url, data=data, headers=headers, method=method)
+        session = await self._get_session()
+        data = json.dumps(body).encode("utf-8") if body is not None else None
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                raw = resp.read().decode("utf-8")
+            async with session.request(method, url, data=data) as resp:
+                raw = await resp.text()
+                if resp.status >= 400:
+                    raise APIError(f"HTTP {resp.status}: {raw}")
                 if not raw:
                     return {}
                 return cast(dict, json.loads(raw))
-        except urllib.error.HTTPError as err:
-            raw = err.read().decode("utf-8", errors="replace")
-            raise APIError(f"HTTP {err.code}: {raw}") from err
+        except aiohttp.ClientError as err:
+            raise APIError(f"HTTP request failed: {err}") from err
 
 
 @cache
 def get_client(cfg: ConfigCloudVultr) -> VultrClient:
-    """Get Vultr client (cached per api key)"""
+    """Get Vultr client (cached per api key).
+
+    The client creates its aiohttp session lazily on the first request,
+    so it is safe to construct it outside of an event loop.
+    """
     return VultrClient(cfg.api_key)
 
 
@@ -79,19 +86,21 @@ def ssh_key_fingerprint_md5(pubkey: str) -> str:
     return ":".join(md5_hex[i : i + 2] for i in range(0, len(md5_hex), 2))
 
 
-def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
+async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
     """Upload or reuse SSH key on Vultr, return its id"""
     key_name = get_key_name(key)
     pub_key = key.export_public_key("openssh").decode("utf-8")
     fingerprint = ssh_key_fingerprint_md5(pub_key)
 
-    data = client.request("GET", "/ssh-keys?per_page=500")
+    data = await client.request("GET", "/ssh-keys?per_page=500")
     for existing in data.get("ssh_keys", []):
         existing_fp = existing.get("fingerprint", "")
         if existing_fp and existing_fp.lower() == fingerprint.lower():
             return cast(str, existing["id"])
 
-    data = client.request("POST", "/ssh-keys", {"name": key_name, "ssh_key": pub_key})
+    data = await client.request(
+        "POST", "/ssh-keys", {"name": key_name, "ssh_key": pub_key}
+    )
     ssh_key = data.get("ssh_key", {})
     if "id" not in ssh_key:
         raise APIError(f"Cannot create SSH key: {data}")
@@ -187,6 +196,12 @@ async def _check_ssh_auth(
 
     On bare metal the SSH port may open before cloud-init has installed
     authorized_keys, so the first few connects get Permission denied.
+
+    This check is necessary because asyncssh.PermissionDenied is NOT in
+    SSHRetryExc (see remote_machine/protocol.py), so mk_machine /
+    RemoteMachine.create does not retry it — without this poll the node
+    would be deleted on the first Permission denied, triggering a
+    redundant provisioning cycle.
     """
     for attempt in range(1, attempts + 1):
         try:
@@ -221,7 +236,23 @@ async def _check_ssh_auth(
     return False
 
 
-def vultr_create_node_sync(
+async def _wait_ssh_port(log: logging.Logger, instance_id: str, ip_addr: str) -> None:
+    """Wait until the SSH port (22) accepts a TCP connection."""
+    deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip_addr, 22), timeout=10
+            )
+            writer.close()
+            await writer.wait_closed()
+            return
+        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+            await asyncio.sleep(10)
+    raise APIError(f"Bare-metal {instance_id} SSH not ready on {ip_addr} in time")
+
+
+async def vultr_create_node(
     log: logging.Logger,
     cfg: ConfigCloudVultr,
     key: ASSHKey,
@@ -235,7 +266,7 @@ def vultr_create_node_sync(
     first opens). Returns the instance IP address.
     """
     client = get_client(cfg)
-    ssh_key_id = get_ssh_key_id(client, key)
+    ssh_key_id = await get_ssh_key_id(client, key)
 
     label = get_rnd_name("node")
     user_data = build_baremetal_user_data(cloud_config, cfg.need_raid)
@@ -251,7 +282,7 @@ def vultr_create_node_sync(
         "user_data": user_data_b64,
         "enable_ipv6": True,
     }
-    data = client.request("POST", "/bare-metals", body)
+    data = await client.request("POST", "/bare-metals", body)
     bm = data.get("bare_metal", data)
     instance_id = bm.get("id")
     if not instance_id:
@@ -259,11 +290,11 @@ def vultr_create_node_sync(
 
     log.info("CREATING bare-metal %s (id=%s)", label, instance_id)
 
-    deadline = time.time() + POLL_TIMEOUT
+    deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT
     last_status: Optional[str] = None
     ip_addr: Optional[str] = None
-    while time.time() < deadline:
-        data = client.request("GET", f"/bare-metals/{instance_id}")
+    while asyncio.get_running_loop().time() < deadline:
+        data = await client.request("GET", f"/bare-metals/{instance_id}")
         bm = data.get("bare_metal", data)
         status = bm.get("status", "")
         ip_addr = bm.get("main_ip", "")
@@ -272,7 +303,7 @@ def vultr_create_node_sync(
             last_status = status
         if status == "active" and ip_addr and ip_addr != "0.0.0.0":
             break
-        time.sleep(POLL_INTERVAL)
+        await asyncio.sleep(POLL_INTERVAL)
     else:
         raise APIError(
             f"Bare-metal {instance_id} did not become active in {POLL_TIMEOUT}s"
@@ -280,16 +311,7 @@ def vultr_create_node_sync(
 
     assert ip_addr is not None
     log.info("Bare-metal %s active, waiting for SSH on %s", instance_id, ip_addr)
-    ssh_ready = False
-    while time.time() < deadline:
-        try:
-            with socket.create_connection((ip_addr, 22), timeout=10):
-                ssh_ready = True
-                break
-        except (socket.timeout, ConnectionRefusedError, OSError):
-            time.sleep(10)
-    if not ssh_ready:
-        raise APIError(f"Bare-metal {instance_id} SSH not ready on {ip_addr} in time")
+    await _wait_ssh_port(log, instance_id, ip_addr)
 
     # SSH port may open before cloud-init finishes installing authorized_keys,
     # causing Permission denied on first connect. Poll auth with the configured
@@ -298,7 +320,7 @@ def vultr_create_node_sync(
         "Bare-metal %s SSH port open, waiting for cloud-init to install keys",
         instance_id,
     )
-    ssh_ok = asyncio.run(_check_ssh_auth(log, instance_id, ip_addr, key, cfg.username))
+    ssh_ok = await _check_ssh_auth(log, instance_id, ip_addr, key, cfg.username)
     if not ssh_ok:
         raise APIError(
             f"Bare-metal {instance_id} SSH auth failed on {ip_addr} "
@@ -309,41 +331,13 @@ def vultr_create_node_sync(
     return cast(str, ip_addr)
 
 
-async def vultr_create_node(
-    log: logging.Logger,
-    cfg: ConfigCloudVultr,
-    key: ASSHKey,
-    cloud_config: Optional[PCloudConfig] = None,
-) -> str:
-    """Async wrapper around vultr_create_node_sync."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        executor, vultr_create_node_sync, log, cfg, key, cloud_config
-    )
-
-
-def find_baremetal(client: VultrClient, host: str) -> Optional[str]:
+async def find_baremetal(client: VultrClient, host: str) -> Optional[str]:
     """Find a bare-metal instance id by its IP address."""
-    data = client.request("GET", "/bare-metals?per_page=500")
+    data = await client.request("GET", "/bare-metals?per_page=500")
     for bm in data.get("bare_metals", []):
         if bm.get("main_ip") == host and bm.get("id"):
             return cast(str, bm["id"])
     return None
-
-
-def vultr_delete_node_sync(
-    log: logging.Logger,
-    cfg: ConfigCloudVultr,
-    host: str,
-) -> None:
-    """Delete a bare-metal instance by its IP address."""
-    client = get_client(cfg)
-    instance_id = find_baremetal(client, host)
-    if instance_id:
-        client.request("DELETE", f"/bare-metals/{instance_id}")
-        log.info("DELETED %s", host)
-    else:
-        log.info("NODE %s NOT DELETED AS UNKNOWN", host)
 
 
 async def vultr_delete_node(
@@ -351,6 +345,11 @@ async def vultr_delete_node(
     cfg: ConfigCloudVultr,
     host: str,
 ) -> None:
-    """Async wrapper around vultr_delete_node_sync."""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(executor, vultr_delete_node_sync, log, cfg, host)
+    """Delete a bare-metal instance by its IP address."""
+    client = get_client(cfg)
+    instance_id = await find_baremetal(client, host)
+    if instance_id:
+        await client.request("DELETE", f"/bare-metals/{instance_id}")
+        log.info("DELETED %s", host)
+    else:
+        log.info("NODE %s NOT DELETED AS UNKNOWN", host)
