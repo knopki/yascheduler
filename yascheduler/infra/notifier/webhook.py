@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/notifier/webhook.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Webhook event handler and outbound payload DTO — sends HTTP notifications for task lifecycle events.
 #   SCOPE: WebhookPayload frozen dataclass, webhook_handler async function, _send_webhook retry helper.
@@ -14,12 +14,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Rewrite GIVEUP exception to pure narrative (no grace marker) per reform-grace-logging slice 7.
-#   PREVIOUS_CHANGE: v1.3.0 - Split test-targeted RETRY warning into log.trace("RETRY", url=url) + log.warning("webhook retry to %s", url) per reform-grace-logging slice 6.1.
+
+#   LAST_CHANGE: v1.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.4.0 - Rewrite GIVEUP exception to pure narrative (no grace marker) per reform-grace-logging slice 7.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 from asyncio.locks import Semaphore
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -33,12 +35,11 @@ from yascheduler.domain import (
     TaskCreated,
     TaskStatus,
 )
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-logger = get_logger("M-NOTIFIER-WEBHOOK")
+logger = logging.getLogger(__name__)
 
 _webhook_sem: Semaphore | None = None
 
@@ -105,6 +106,6 @@ async def _send_webhook(
                     return
                 raise aiohttp.ClientError(f"HTTP {resp.status}: {await resp.text()}")
         except aiohttp.ClientError:
-            logger.trace("RETRY", url=url)
+            logger.debug("RETRY", extra={"url": url})
             logger.warning("webhook retry to %s", url)
             raise

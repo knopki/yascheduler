@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_full_cycle.py
-# VERSION: 2.1.0
+# VERSION: 2.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test exercising full scheduler lifecycle via real entrypoint code paths across two SSH nodes.
 #   SCOPE: Start daemon → submit 4 jobs via _submit_async → assert TO_DO → add 2 nodes via _manage_node_async → poll until DONE → assert outputs, distribution, logs → soft-remove both nodes.
@@ -9,14 +9,12 @@
 #
 # START_MODULE_MAP
 #   test_full_cycle - Multi-node entrypoint-driven full lifecycle: 4 jobs across 2 SSH containers
-#   _assert_allocation_logs - Assert ALLOCATED trace records via record.block/record.fields
+#   _assert_allocation_logs - Assert ALLOCATED trace records via getMessage() + extra-diff against _NATIVE_KEYS
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - reform-grace-logging slice 8: migrate _assert_allocation_logs from getMessage() substring matching to record.block/record.fields structured fields; remove _ALLOCATED_MARKER constant; remove import re.
-#   PREVIOUS_CHANGE: v2.1.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.hostname via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
-#   PREVIOUS_CHANGE: v1.4.0 - fix-static-node-connect-exclusion: drop the `cloud="e2e"` workaround.
-#   PREVIOUS_CHANGE: v1.3.0 - session-based-machine-handle section 7.x: Migrate from get_machine_state to get_session.
+#   LAST_CHANGE: v2.3.0 - switch-to-standard-logging: migrate _assert_allocation_logs off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS from yascheduler.shared.log).
+#   PREVIOUS_CHANGE: v2.2.0 - reform-grace-logging slice 8: migrate _assert_allocation_logs from getMessage() substring matching to record.block/record.fields structured fields; remove _ALLOCATED_MARKER constant; remove import re.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -30,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.log_assertions import extra_fields
 from yascheduler.domain.model import TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.cli.manage_node import _manage_node_async
@@ -349,7 +348,7 @@ async def _read_tasks(
 
 
 # START_CONTRACT: _assert_allocation_logs
-#   PURPOSE: Assert one [ALLOCATED] trace record per task_id and that both node hostnames appear among the logged hostname= values. Uses structured fields (record.block/record.fields), not getMessage() substrings.
+#   PURPOSE: Assert one ALLOCATED trace record per task_id and that both node hostnames appear among the logged hostname= values. Uses getMessage() (former block marker is now the message) plus extra-diff against _NATIVE_KEYS, not record.block/record.fields.
 #   INPUTS: { records: list[LogRecord], task_ids: set[int] (coerced from list), expected_ips: set[str] }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — pure assertion over captured records.
@@ -360,14 +359,15 @@ def _assert_allocation_logs(
     task_ids: list[int],
     expected_ips: set[str],
 ) -> None:
-    allocated_records = [r for r in records if getattr(r, "block", None) == "ALLOCATED"]
+    allocated_records = [r for r in records if r.getMessage() == "ALLOCATED"]
     seen_task_ids: set[int] = set()
     seen_ips: set[str] = set()
     for rec in allocated_records:
-        tid = rec.fields.get("task_id")  # type: ignore[attr-defined]
+        fields = extra_fields(rec)
+        tid = fields.get("task_id")
         if tid is not None:
             seen_task_ids.add(tid.value)
-        hostname = rec.fields.get("hostname")  # type: ignore[attr-defined]
+        hostname = fields.get("hostname")
         if hostname is not None:
             seen_ips.add(hostname)
     missing_task_ids = set(task_ids) - seen_task_ids

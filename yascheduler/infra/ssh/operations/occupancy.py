@@ -12,22 +12,22 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-OPS-OCCUPANCY") at module top
-#   PREVIOUS_CHANGE: v1.4.0 - Node-rename-and-fields: session.ip→session.hostname in all log lines (7 sites); hostname=%s→hostname=%s format labels.
+
+#   LAST_CHANGE: v1.6.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.5.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-OPS-OCCUPANCY") at module top
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
-
-from yascheduler.shared import get_logger
 
 from ..exceptions import SSHRetryExc
 
 if TYPE_CHECKING:
     from yascheduler.domain import Engine, MachineSession
 
-logger = get_logger("M-SSH-OPS-OCCUPANCY")
+logger = logging.getLogger(__name__)
 
 
 # START_CONTRACT: OccupancyChecker
@@ -58,18 +58,18 @@ class OccupancyChecker:
         # START_BLOCK_OCCUPANCY_PGREP
         try:
             async for proc in session.pgrep(pattern):
-                logger.trace(
+                logger.debug(
                     "PGREP",
-                    hostname=session.hostname,
-                    pid=proc.pid,
-                    name=proc.name,
-                    cmd=proc.command,
+                    extra={
+                        "hostname": session.hostname,
+                        "pid": proc.pid,
+                        "proc_name": proc.name,
+                        "cmd": proc.command,
+                    },
                 )
                 return True
-            logger.trace(
-                "PGREP_FREE",
-                hostname=session.hostname,
-                pattern=pattern,
+            logger.debug(
+                "PGREP_FREE", extra={"hostname": session.hostname, "pattern": pattern}
             )
             return False
         except SSHRetryExc as exc:
@@ -92,12 +92,14 @@ class OccupancyChecker:
         # START_BLOCK_OCCUPANCY_CMD
         try:
             proc = await session.run_full(cmd)
-            logger.trace(
+            logger.debug(
                 "CHECK_CMD",
-                hostname=session.hostname,
-                cmd=cmd,
-                exit_code=proc.returncode,
-                expected=expected_code,
+                extra={
+                    "hostname": session.hostname,
+                    "cmd": cmd,
+                    "exit_code": proc.returncode,
+                    "expected": expected_code,
+                },
             )
             return proc.returncode == expected_code
         except SSHRetryExc as exc:
@@ -130,7 +132,7 @@ class OccupancyChecker:
             return await self._occupancy_by_cmd(
                 session, config.check_cmd, config.check_cmd_code
             )
-        logger.trace("NO_CHECK", hostname=session.hostname)
+        logger.debug("NO_CHECK", extra={"hostname": session.hostname})
         return False
         # END_BLOCK_OCCUPANCY_DISPATCH
 

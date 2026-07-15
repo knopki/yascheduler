@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 4.9.0
+# VERSION: 4.10.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion.
 #   SCOPE: Idle cloud node deallocation — disable idle nodes, return Node objects for VM deletion.
@@ -13,17 +13,18 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.10.0 - Rewrite REMOVE_FAILED error to pure narrative (no grace marker) per reform-grace-logging slice 7.
-#   PREVIOUS_CHANGE: v4.9.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
+
+#   LAST_CHANGE: v4.10.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v4.10.0 - Rewrite REMOVE_FAILED error to pure narrative (no grace marker) per reform-grace-logging slice 7.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
 
 from yascheduler.domain import Node, NodeId, TaskStatus
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 
     from .uow import AbstractUnitOfWork
 
-logger = get_logger("M-APPLICATION-DEALLOCATE")
+logger = logging.getLogger(__name__)
 
 
 # START_CONTRACT: deallocate_node
@@ -55,11 +56,18 @@ async def deallocate_node(
 ) -> None:
     if repository.contains(node.node_id):
         await repository.disconnect(node.node_id)
-        logger.trace("DISCONNECT", node_id=node.node_id, hostname=node.hostname)
+        logger.debug(
+            "DISCONNECT", extra={"node_id": node.node_id, "hostname": node.hostname}
+        )
     if node.cloud:
         # START_BLOCK_DISABLE
-        logger.trace(
-            "DISABLE", node_id=node.node_id, hostname=node.hostname, cloud=node.cloud
+        logger.debug(
+            "DISABLE",
+            extra={
+                "node_id": node.node_id,
+                "hostname": node.hostname,
+                "cloud": node.cloud,
+            },
         )
         async with uow_factory() as uow:
             await uow.nodes.disable(node.node_id)
@@ -67,18 +75,25 @@ async def deallocate_node(
         # END_BLOCK_DISABLE
 
         # START_BLOCK_CLOUD_DELETE
-        logger.trace(
+        logger.debug(
             "CLOUD_DELETE",
-            node_id=node.node_id,
-            hostname=node.hostname,
-            cloud=node.cloud,
+            extra={
+                "node_id": node.node_id,
+                "hostname": node.hostname,
+                "cloud": node.cloud,
+            },
         )
         await clouds.deallocate(node)
         # END_BLOCK_CLOUD_DELETE
 
         # START_BLOCK_REMOVE
-        logger.trace(
-            "REMOVE", node_id=node.node_id, hostname=node.hostname, cloud=node.cloud
+        logger.debug(
+            "REMOVE",
+            extra={
+                "node_id": node.node_id,
+                "hostname": node.hostname,
+                "cloud": node.cloud,
+            },
         )
         try:
             async with uow_factory() as uow:
@@ -143,11 +158,13 @@ async def deallocate_nodes(
             async with uow_factory() as uow:
                 await uow.nodes.disable(node.node_id)
                 await uow.commit()
-                logger.trace(
+                logger.debug(
                     "DISABLE",
-                    node_id=node.node_id,
-                    hostname=node.hostname,
-                    cloud=node.cloud,
+                    extra={
+                        "node_id": node.node_id,
+                        "hostname": node.hostname,
+                        "cloud": node.cloud,
+                    },
                 )
     # END_BLOCK_DISABLE_IDLE
 

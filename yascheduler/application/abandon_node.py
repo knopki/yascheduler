@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/abandon_node.py
-# VERSION: 2.1.0
+# VERSION: 2.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Abandon never-connected cloud node use case — VM delete + DB-row remove + discard tracker entry linked to the node.
 #   SCOPE: Never-connected cloud node cleanup — VM delete, DB row remove, discard tracker entry by node via discard_by_node.
@@ -12,15 +12,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - Split test-targeted CLOUD_DELETE_FAILED and AMBIGUOUS_TRACKER emits into log.trace + log.error/log.warning per reform-grace-logging slices 6.2-6.3.
-#   PREVIOUS_CHANGE: v2.1.0 - node.ip→node.hostname in log lines (Wave 2 — domain rename consumed).
+#   LAST_CHANGE: v2.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...).
+#   PREVIOUS_CHANGE: v2.2.0 - Split test-targeted CLOUD_DELETE_FAILED and AMBIGUOUS_TRACKER emits into log.trace + log.error/log.warning per reform-grace-logging slices 6.2-6.3.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
-
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -30,7 +29,7 @@ if TYPE_CHECKING:
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
 
-logger = get_logger("M-APPLICATION-ABANDON-NODE")
+logger = logging.getLogger(__name__)
 
 
 # START_CONTRACT: abandon_node
@@ -57,12 +56,14 @@ async def abandon_node(
         try:
             await clouds.deallocate(node)
         except Exception as err:
-            logger.trace(
+            logger.debug(
                 "CLOUD_DELETE_FAILED",
-                node_id=node.node_id,
-                hostname=node.hostname,
-                cloud=node.cloud,
-                err=err,
+                extra={
+                    "node_id": node.node_id,
+                    "hostname": node.hostname,
+                    "cloud": node.cloud,
+                    "err": err,
+                },
             )
             logger.error("cloud delete failed for node %s: %s", node.hostname, err)
     # END_BLOCK_CLOUD_DELETE
@@ -73,8 +74,9 @@ async def abandon_node(
             await uow.nodes.remove(node.node_id)
             await uow.commit()
     except Exception as err:
-        logger.trace(
-            "REMOVE_FAILED", node_id=node.node_id, hostname=node.hostname, err=err
+        logger.debug(
+            "REMOVE_FAILED",
+            extra={"node_id": node.node_id, "hostname": node.hostname, "err": err},
         )
         logger.error(
             "abandon_node remove failed: node_id=%s hostname=%s err=%s",
@@ -88,11 +90,13 @@ async def abandon_node(
     # START_BLOCK_DISCARD_BY_NODE
     removed = tracker.discard_by_node(node.node_id)
     if removed > 1:
-        logger.trace(
+        logger.debug(
             "AMBIGUOUS_TRACKER",
-            node_id=node.node_id,
-            hostname=node.hostname,
-            count=removed,
+            extra={
+                "node_id": node.node_id,
+                "hostname": node.hostname,
+                "count": removed,
+            },
         )
         logger.warning(
             "ambiguous tracker: node %s has %d entries", node.hostname, removed

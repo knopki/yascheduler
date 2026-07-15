@@ -23,15 +23,17 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Migrate from logging.getLogger to get_logger factory; logging.Logger → YaLogger type annotations; remove # type: ignore[attr-defined].
-#   PREVIOUS_CHANGE: v1.2.0 - Import ProcessInfo from .protocol (not .common); list_processes/pgrep return AsyncGenerator[ProcessInfo, None].
+
+#   LAST_CHANGE: v1.5.0 - Remove injected `log` parameter from all platform functions; bind module-global logger = logging.getLogger(__name__) (rename _log → logger) and use it directly, dropping `if log:` guards; drop vestigial UPGRADE DEBUG trace (carried no extra fields, not asserted in tests).
+#   PREVIOUS_CHANGE: v1.4.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...).
 # END_CHANGE_SUMMARY
 
+import logging
 import re
 from collections.abc import AsyncGenerator, Sequence
 from pathlib import PurePath
 from re import Pattern
-from typing import TYPE_CHECKING, Optional, Union
+from typing import Optional, Union
 
 from asyncssh.connection import SSHClientConnection
 from asyncssh.sftp import SFTPClient
@@ -42,12 +44,10 @@ from yascheduler.domain import (
     LocalFilesDeploy,
     RemoteArchiveDeploy,
 )
-from yascheduler.shared import get_logger
 
 from .protocol import OuterRunCallable, ProcessInfo, QuoteCallable
 
-if TYPE_CHECKING:
-    from yascheduler.shared import YaLogger
+logger = logging.getLogger(__name__)
 
 
 # START_CONTRACT: linux_get_cpu_cores
@@ -76,9 +76,6 @@ async def linux_get_cpu_cores(run: OuterRunCallable) -> int:
 #   SIDE_EFFECTS: Runs command on remote machine.
 #   LINKS: M-REMOTE-LINUX
 # END_CONTRACT: linux_list_processes
-_log = get_logger("M-PLATFORM-LINUX")
-
-
 async def linux_list_processes(
     conn: SSHClientConnection, query: Optional[str] = None
 ) -> AsyncGenerator[ProcessInfo, None]:
@@ -92,7 +89,7 @@ async def linux_list_processes(
         ps_cmd = " ".join([query, "| xargs --no-run-if-empty ps -o", columns_part])
     else:
         ps_cmd = f"ps -eo {columns_part}"
-    _log.trace("LIST_PROCESSES", cmd=ps_cmd)
+    logger.debug("LIST_PROCESSES", extra={"cmd": ps_cmd})
     async with conn.create_process(ps_cmd) as proc:
         await proc.stdout.readline()  # skip headers
         line_count = 0
@@ -105,28 +102,26 @@ async def linux_list_processes(
             )
             if len(parts) < 3:
                 skipped_broken += 1
-                _log.trace(
+                logger.debug(
                     "BROKEN_LINE",
-                    line=line_count,
-                    parts=len(parts),
-                    raw=line,
+                    extra={"line": line_count, "parts": len(parts), "raw": line},
                 )
                 continue
             if parts[2].startswith(f"bash -c {ps_cmd}"):
                 skipped_self += 1
                 continue
-            _log.trace(
+            logger.debug(
                 "YIELD",
-                pid=parts[0],
-                comm=parts[1],
-                args=parts[2][:80],
+                extra={"pid": parts[0], "comm": parts[1], "proc_args": parts[2][:80]},
             )
             yield ProcessInfo(int(parts[0]), *parts[1:3])
-        _log.trace(
+        logger.debug(
             "DONE",
-            lines=line_count,
-            broken=skipped_broken,
-            self_skip=skipped_self,
+            extra={
+                "lines": line_count,
+                "broken": skipped_broken,
+                "self_skip": skipped_self,
+            },
         )
 
 
@@ -158,7 +153,7 @@ async def linux_pgrep(
 
 # START_CONTRACT: deploy_local_files
 #   PURPOSE: Upload local binary files to remote via SFTP
-#   INPUTS: { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { files: Sequence[PurePath] - local file paths } | { log: "YaLogger | None" - logger }
+#   INPUTS: { sftp: SFTPClient - SFTP connection, engine_dir: PurePath - destination directory, files: Sequence[PurePath] - local file paths }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Uploads files to remote machine
 #   LINKS: M-REMOTE-LINUX
@@ -167,18 +162,16 @@ async def deploy_local_files(
     sftp: SFTPClient,
     engine_dir: PurePath,
     files: Sequence[PurePath],
-    log: "YaLogger | None" = None,
 ) -> None:
     "Uploading binary from local; requires broadband connection"
     lpaths = list(map(str, files))
-    if log:
-        log.trace("UPLOAD", dir=engine_dir, files=", ".join(lpaths))
+    logger.debug("UPLOAD", extra={"dir": engine_dir, "files": ", ".join(lpaths)})
     await sftp.put(lpaths, engine_dir, preserve=True)
 
 
 # START_CONTRACT: deploy_local_archive
 #   PURPOSE: Upload local archive via SFTP and extract via tar on remote
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { archive: PurePath - local archive path } | { log: "YaLogger | None" - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner, quote: QuoteCallable - shell quoting function, sftp: SFTPClient - SFTP connection, engine_dir: PurePath - destination directory, archive: PurePath - local archive path }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Uploads archive, extracts it, removes archive file on remote
 #   LINKS: M-REMOTE-LINUX
@@ -189,25 +182,22 @@ async def deploy_local_archive(
     sftp: SFTPClient,
     engine_dir: PurePath,
     archive: PurePath,
-    log: "YaLogger | None" = None,
 ) -> None:
     """
     Upload local archive.
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
     """
     rpath = engine_dir / archive.name
-    if log:
-        log.trace("UPLOAD", name=archive.name, path=str(rpath))
+    logger.debug("UPLOAD", extra={"archive": archive.name, "path": str(rpath)})
     await sftp.put([str(archive)], engine_dir)
-    if log:
-        log.trace("EXTRACT", name=archive.name)
+    logger.debug("EXTRACT", extra={"archive": archive.name})
     await run(f"tar xfv {quote(str(archive.name))}", cwd=str(engine_dir), check=True)
     await sftp.remove(rpath)
 
 
 # START_CONTRACT: deploy_remote_archive
 #   PURPOSE: Download remote archive via wget and extract via tar on remote
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { url: str - download URL } | { log: "YaLogger | None" - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner, quote: QuoteCallable - shell quoting function, sftp: SFTPClient - SFTP connection, engine_dir: PurePath - destination directory, url: str - download URL }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Downloads archive from URL, extracts it, removes archive file on remote
 #   LINKS: M-REMOTE-LINUX
@@ -218,7 +208,6 @@ async def deploy_remote_archive(
     sftp: SFTPClient,
     engine_dir: PurePath,
     url: str,
-    log: "YaLogger | None" = None,
 ) -> None:
     """
     Downloading binary from a trusted non-public address.
@@ -226,18 +215,16 @@ async def deploy_remote_archive(
     """
     name = "archive.tar.gz"
     rpath = engine_dir / name
-    if log:
-        log.trace("DOWNLOAD", url=url, path=str(rpath))
+    logger.debug("DOWNLOAD", extra={"url": url, "path": str(rpath)})
     await run(f"wget {quote(url)} -O {quote(name)}", cwd=str(engine_dir), check=True)
-    if log:
-        log.trace("EXTRACT", name=name)
+    logger.debug("EXTRACT", extra={"archive": name})
     await run(f"tar xfv {quote(str(name))}", cwd=str(engine_dir), check=True)
     await sftp.remove(rpath)
 
 
 # START_CONTRACT: linux_deploy_engines
 #   PURPOSE: Deploy all engines for a node by iterating engine repository and dispatching deploy strategies
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: "YaLogger | None" - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner, quote: QuoteCallable - shell quoting function, sftp: SFTPClient - SFTP connection, engines: EngineRepository - engine definitions, engines_dir: PurePath - base engines directory }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates engine directories, uploads files/archives, downloads remote archives
 #   LINKS: M-REMOTE-LINUX
@@ -248,19 +235,17 @@ async def linux_deploy_engines(
     sftp: SFTPClient,
     engines: EngineRepository,
     engines_dir: PurePath,
-    log: "YaLogger | None" = None,
 ) -> None:
     """
     Setup node for target engines.
     """
     for engine in engines.values():
-        if log:
-            log.info(f"Setup {engine.name} engine...")
+        logger.info(f"Setup {engine.name} engine...")
         engine_dir = engines_dir / engine.name
         await sftp.makedirs(engine_dir, exist_ok=True)
         for deployment in engine.deployable:
             if isinstance(deployment, LocalFilesDeploy):
-                await deploy_local_files(sftp, engine_dir, deployment.files, log)
+                await deploy_local_files(sftp, engine_dir, deployment.files)
 
             if isinstance(deployment, LocalArchiveDeploy):
                 await deploy_local_archive(
@@ -271,26 +256,25 @@ async def linux_deploy_engines(
                 await deploy_remote_archive(
                     run, quote, sftp, engine_dir, deployment.url
                 )
-        if log:
-            log.info(f"Setup of {engine.name} engine is done...")
+        logger.info(f"Setup of {engine.name} engine is done...")
 
 
 # START_CONTRACT: log_mpi_version
 #   PURPOSE: Log MPI version info from remote via mpirun
-#   INPUTS: { run: OuterRunCallable - async command runner } | { log: "YaLogger | None" - logger }
+#   INPUTS: { run: OuterRunCallable - async command runner }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Runs mpirun on remote, logs version string
 #   LINKS: M-REMOTE-LINUX
 # END_CONTRACT: log_mpi_version
-async def log_mpi_version(run: OuterRunCallable, log: "YaLogger | None" = None) -> None:
+async def log_mpi_version(run: OuterRunCallable) -> None:
     r = await run("mpirun --allow-run-as-root -V", check=True)
-    if not r.returncode and log:
-        log.trace("VERSION", version=str(r.stdout or "").split("\n")[0])
+    if not r.returncode:
+        logger.debug("VERSION", extra={"version": str(r.stdout or "").split("\n")[0]})
 
 
 # START_CONTRACT: linux_setup_node
 #   PURPOSE: Setup generic Linux node by deploying engines via SFTP
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: "YaLogger | None" - logger }
+#   INPUTS: { conn: SSHClientConnection - SSH connection, run: OuterRunCallable - async command runner, quote: QuoteCallable - shell quoting function, engines: EngineRepository - engine definitions, engines_dir: PurePath - base engines directory }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Creates SFTP client, deploys all engines
 #   LINKS: M-REMOTE-LINUX
@@ -301,16 +285,15 @@ async def linux_setup_node(
     quote: QuoteCallable,
     engines: EngineRepository,
     engines_dir: PurePath,
-    log: "YaLogger | None" = None,
 ) -> None:
     "Setup generic linux node"
     async with conn.start_sftp_client() as sftp:
-        await linux_deploy_engines(run, quote, sftp, engines, engines_dir, log)
+        await linux_deploy_engines(run, quote, sftp, engines, engines_dir)
 
 
 # START_CONTRACT: linux_setup_deb_node
 #   PURPOSE: Setup Debian-like node with apt package installation and engine deployment
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - shell quoting function } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: "YaLogger | None" - logger }
+#   INPUTS: { conn: SSHClientConnection - SSH connection, run: OuterRunCallable - async command runner, quote: QuoteCallable - shell quoting function, engines: EngineRepository - engine definitions, engines_dir: PurePath - base engines directory }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Runs apt update/upgrade/install, logs MPI version, deploys engines via SFTP
 #   LINKS: M-REMOTE-LINUX
@@ -321,7 +304,6 @@ async def linux_setup_deb_node(
     quote: QuoteCallable,
     engines: EngineRepository,
     engines_dir: PurePath,
-    log: "YaLogger | None" = None,
 ) -> None:
     "Setup debian-like node"
 
@@ -330,16 +312,13 @@ async def linux_setup_deb_node(
     apt_cmd = f"{sudo_prefix}apt-get -o DPkg::Lock::Timeout=600 -y"
     pkgs = engines.get_platform_packages()
 
-    if log:
-        log.trace("UPGRADE")
     await run(f"{apt_cmd} update", check=True)
     await run(f"{apt_cmd} upgrade", check=True)
     if pkgs:
-        if log:
-            log.trace("INSTALL", packages=" ".join(pkgs))
+        logger.debug("INSTALL", extra={"packages": " ".join(pkgs)})
         await run(f"{apt_cmd} install {' '.join(pkgs)}", check=True)
     if [x for x in pkgs if "mpi" in x]:
-        await log_mpi_version(run, log)
+        await log_mpi_version(run)
 
     async with conn.start_sftp_client() as sftp:
-        await linux_deploy_engines(run, quote, sftp, engines, engines_dir, log)
+        await linux_deploy_engines(run, quote, sftp, engines, engines_dir)

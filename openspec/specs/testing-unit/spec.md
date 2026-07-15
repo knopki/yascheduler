@@ -368,51 +368,35 @@ Tests SHALL construct the client with a `FakeCLIDeps`-returning `deps_factory` w
 
 ### Requirement: Logging discipline guard tests
 
-The project SHALL provide three guard unit tests in `tests/unit/` that
+The project SHALL provide two guard unit tests in `tests/unit/` that
 statically enforce the logging contract across the package:
 
-1. **Trace-only DEBUG discipline**: no raw `.debug(` calls on loggers exist in
-   `yascheduler/`. All structured DEBUG tracing SHALL go through
-   `YaLogger.trace()`. The test SHALL statically verify the package source and
-   fail on any `.debug(` attribute call on a logger-like object. The shared
-   logging module (`yascheduler/shared/log.py`) is exempt.
-2. **M-ID validity and factory-only binding**: every `get_logger("<M-ID>")`
-   call in `yascheduler/` passes a string literal that matches a real `<M-*>`
-   tag name in `docs/knowledge-graph.xml`. The test SHALL statically verify
-   every `get_logger(...)` string-literal argument matches an existing M-ID.
-   The test SHALL additionally verify that no `logging.getLogger(...)` call
-   inside `yascheduler/` (outside `yascheduler/shared/log.py`) is used for
-   module-level logger binding — the factory is the only sanctioned path.
-3. **No injected logger in collaborator constructors**: none of the seven
+1. **No injected logger in collaborator constructors**: none of the seven
    collaborator classes (`Orchestrator`, `SSHMachineRepository`,
-   `SSHMachineSession`, `TaskDeployer`, `OutputDownloader`, `OccupancyChecker`,
-   `CloudProvisionerImpl`) SHALL accept a parameter named `log` in their
-   `__init__` method. The test SHALL statically verify the seven collaborator
-   modules and fail if any `__init__` method (or the class definition for frozen
-   dataclasses) declares a parameter named `log`.
+   `SSHMachineSession`, `TaskDeployer`, `OutputDownloader`,
+   `OccupancyChecker`, `CloudProvisionerImpl`) SHALL accept a parameter
+   named `log` in their `__init__` method. The test SHALL statically
+   verify the seven collaborator modules and fail if any `__init__`
+   method (or the class definition for frozen dataclasses) declares a
+   parameter named `log`.
+2. **No extra-key collision with native LogRecord attributes**: every
+   `extra={...}` literal callsite in `yascheduler/` SHALL use keys that
+   do NOT collide with the native `LogRecord` attribute set (the keys
+   present on a freshly constructed `logging.LogRecord`). The test
+   SHALL statically verify the package source and fail on any
+   `extra={...}` literal whose key set intersects the native attribute
+   set, because stdlib merges `extra` into the record via
+   `__dict__.update` and silently overwrites reserved keys
+   (e.g. `name`, `msg`, `funcName`, `levelname`, `lineno`, `module`).
 
-The guard tests SHALL run under the `unit` pytest marker without external resources.
+The project SHALL NOT retain the former "trace-only DEBUG discipline"
+guard (raw `.debug(` calls are now the sanctioned trace path via
+`debug(msg, extra=...)`), the "M-ID validity and factory-only binding"
+guard (the `get_logger` factory and M-ID logger names are removed), or
+any synthetic-violation meta-tests specific to those removed guards.
 
-#### Scenario: guard test fails on a raw debug call
-
-- **GIVEN** the trace-only DEBUG discipline guard test is run
-- **WHEN** a `log.debug("...")` call appears in `yascheduler/` (not via `.trace()`)
-- **THEN** the guard test fails, naming the file and the offending call
-- **AND** no such raw `.debug(` call exists in the committed package
-
-#### Scenario: guard test fails on a fabricated M-ID literal
-
-- **GIVEN** the M-ID validity guard test is run
-- **WHEN** a `get_logger("M-FABRICATED-NONEXISTENT")` call references an M-ID absent from `docs/knowledge-graph.xml`
-- **THEN** the guard test fails, naming the call and the file
-- **AND** no such fabricated call exists in the committed package
-
-#### Scenario: guard test fails on a direct logging.getLogger binding
-
-- **GIVEN** the M-ID validity guard test is run
-- **WHEN** a `logging.getLogger("yascheduler.M-...")` call (used for module-level logger binding) appears in `yascheduler/` outside `yascheduler/shared/log.py`
-- **THEN** the guard test fails, naming the call and the file
-- **AND** no such direct binding exists in the committed package outside `yascheduler/shared/log.py`
+The guard tests SHALL run under the `unit` pytest marker without
+external resources.
 
 #### Scenario: guard test fails on an injected logger parameter
 
@@ -421,13 +405,20 @@ The guard tests SHALL run under the `unit` pytest marker without external resour
 - **THEN** the guard test fails, naming the class and the file
 - **AND** no such `log` parameter exists in the committed package
 
+#### Scenario: guard test fails on an extra-key collision with a native LogRecord attribute
+
+- **GIVEN** the extra-key-collision guard test is run
+- **WHEN** a `logger.debug(msg, extra={...})` callsite in `yascheduler/` uses a key that is a native `LogRecord` attribute name (e.g. `funcName`, `levelname`, `msg`, `name`)
+- **THEN** the guard test fails, naming the file, the offending key, and the call
+- **AND** no such colliding `extra` key exists in the committed package
+
 #### Scenario: guard tests run under the unit marker without external resources
 
-- **WHEN** the three guard tests are run via `uv run pytest -m unit`
-- **THEN** all three pass without a database, SSH container, or cloud credentials
+- **WHEN** the two guard tests are run via `uv run pytest -m unit`
+- **THEN** both pass without a database, SSH container, or cloud credentials
 
 #### Scenario: guard tests pass on the committed package
 
-- **GIVEN** the committed `yascheduler/` package and `docs/knowledge-graph.xml`
-- **WHEN** the three guard tests are run via `uv run pytest -m unit`
-- **THEN** all three pass (no raw `.debug(` calls, no fabricated M-ID literals, no direct `logging.getLogger` bindings, and no `log` parameters in collaborator `__init__` methods exist in the committed package)
+- **GIVEN** the committed `yascheduler/` package
+- **WHEN** the two guard tests are run via `uv run pytest -m unit`
+- **THEN** both pass (no `log` parameters in collaborator `__init__` methods and no `extra`-key collisions with native `LogRecord` attributes exist in the committed package)

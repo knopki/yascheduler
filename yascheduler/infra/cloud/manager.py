@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.24.0
+# VERSION: 2.25.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -15,8 +15,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.24.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-CLOUD-PROVISIONER") at module top
-#   PREVIOUS_CHANGE: v2.24.0 - Rewrite CREATE_FAILED error and stop info to pure narrative (no grace markers) per reform-grace-logging slice 7.
+
+#   LAST_CHANGE: v2.25.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v2.24.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-CLOUD-PROVISIONER") at module top
 # END_CHANGE_SUMMARY
 
 """Cloud provisioner implementation"""
@@ -24,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
@@ -34,13 +36,12 @@ from yascheduler.domain import (
     Node,
 )
 from yascheduler.infra.ssh.keys import list_private_keys
-from yascheduler.shared import get_logger
 
 from .cloud_init import CloudInitConfig
 from .provider_selection import select_provider_pure
 from .ssh_keys import get_or_create_ssh_key
 
-logger = get_logger("M-CLOUD-PROVISIONER")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -126,7 +127,7 @@ class CloudProvisionerImpl:
 
         # START_BLOCK_THROTTLE_CHECK
         if adapter.get_op_semaphore().locked():
-            logger.trace("THROTTLE", provider=adapter.name)
+            logger.debug("THROTTLE", extra={"provider": adapter.name})
             return None
         # END_BLOCK_THROTTLE_CHECK
 
@@ -152,7 +153,7 @@ class CloudProvisionerImpl:
         # END_BLOCK_RESOLVE_ALLOCATE_PROVIDER
 
         # START_BLOCK_CREATE_VM
-        logger.trace("CREATE_VM", provider=adapter.name)
+        logger.debug("CREATE_VM", extra={"provider": adapter.name})
         try:
             ip_addr = await adapter.create_node(
                 cfg=config,
@@ -219,12 +220,14 @@ class CloudProvisionerImpl:
             raise CloudSetupError(f"Setup node error: {err}") from err
         # END_BLOCK_SETUP_VM
 
-        logger.trace(
+        logger.debug(
             "DONE",
-            hostname=node.hostname,
-            node_id=node.node_id,
-            provider=node.cloud,
-            ncpus=node.ncpus,
+            extra={
+                "hostname": node.hostname,
+                "node_id": node.node_id,
+                "provider": node.cloud,
+                "ncpus": node.ncpus,
+            },
         )
         return node
 
@@ -263,11 +266,13 @@ class CloudProvisionerImpl:
 
         # START_BLOCK_DELETE_VM
         await adapter.delete_node(cfg=config, host=node.hostname)
-        logger.trace(
+        logger.debug(
             "DONE",
-            hostname=node.hostname,
-            cloud=node.cloud,
-            node_id=node.node_id,
+            extra={
+                "hostname": node.hostname,
+                "cloud": node.cloud,
+                "node_id": node.node_id,
+            },
         )
         # END_BLOCK_DELETE_VM
 
@@ -370,7 +375,7 @@ class CloudProvisionerImpl:
         # pin an allocator worker forever. The failure message includes both
         # stdout and stderr — cloud-init writes its status line to stdout, so
         # omitting stdout (the previous behavior) gave no clue why it failed.
-        logger.trace("CLOUD_INIT", hostname=node.hostname)
+        logger.debug("CLOUD_INIT", extra={"hostname": node.hostname})
         try:
             result = await asyncio.wait_for(
                 session.run("cloud-init status --wait"),
@@ -395,17 +400,15 @@ class CloudProvisionerImpl:
         # END_BLOCK_CLOUD_INIT
 
         # START_BLOCK_SETUP_NODE
-        logger.trace("SETUP_NODE", hostname=node.hostname)
+        logger.debug("SETUP_NODE", extra={"hostname": node.hostname})
         try:
             await session.setup_node(self.engines)
         except Exception as err:
             raise CloudSetupError(f"Setup node {node.hostname} failed: {err}") from err
         # END_BLOCK_SETUP_NODE
 
-        logger.trace(
-            "READY",
-            hostname=node.hostname,
-            node_id=node.node_id,
+        logger.debug(
+            "READY", extra={"hostname": node.hostname, "node_id": node.node_id}
         )
         return replace(node, enabled=True)
 
@@ -435,11 +438,13 @@ class CloudProvisionerImpl:
         # END_BLOCK_GET_KEYS
 
         # START_BLOCK_SSH_CONNECT_VM
-        logger.trace(
+        logger.debug(
             "CONNECT",
-            hostname=node.hostname,
-            node_id=node.node_id,
-            username=node.username,
+            extra={
+                "hostname": node.hostname,
+                "node_id": node.node_id,
+                "username": node.username,
+            },
         )
         try:
             session = await self.machine_repository.connect(

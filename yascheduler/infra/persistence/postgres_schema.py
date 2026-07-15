@@ -12,20 +12,16 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
-# END_CHANGE_SUMMARY
 
+#   LAST_CHANGE: v1.1.0 - Remove vestigial block-boundary DEBUG traces (OPEN_CONNECTION/APPLY_SCHEMA/HANDLE_EXISTING/ROLLBACK/CLOSE — carried no extra fields, not asserted in tests) and the now-unused logger binding/logging import; the module no longer logs.
+#   PREVIOUS_CHANGE: v1.1.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
+# END_CHANGE_SUMMARY
 
 from pg8000 import DatabaseError
 from pg8000.native import Connection
 
-from yascheduler.shared import get_logger
-
 from .db_config import PostgresDbConfig
 from .sql_loader import load_query
-
-logger = get_logger("M-PERSISTENCE-SCHEMA")
 
 
 # START_CONTRACT: apply_schema
@@ -46,7 +42,6 @@ def apply_schema(config: PostgresDbConfig) -> None:
             port=config.port,
             password=config.password,
         )
-        logger.trace("OPEN_CONNECTION")
         # END_BLOCK_OPEN_CONNECTION
 
         # START_BLOCK_APPLY_SCHEMA
@@ -54,12 +49,10 @@ def apply_schema(config: PostgresDbConfig) -> None:
         conn.run("BEGIN")
         conn.run(schema_sql)
         conn.run("COMMIT")
-        logger.trace("APPLY_SCHEMA")
         # END_BLOCK_APPLY_SCHEMA
 
     except DatabaseError as e:
         # START_BLOCK_HANDLE_EXISTING
-        logger.trace("HANDLE_EXISTING")
         if conn is not None:
             try:
                 conn.run("ROLLBACK")
@@ -72,7 +65,6 @@ def apply_schema(config: PostgresDbConfig) -> None:
 
     except BaseException:
         # START_BLOCK_ROLLBACK
-        logger.trace("ROLLBACK")
         if conn is not None:
             try:
                 conn.run("ROLLBACK")
@@ -85,5 +77,4 @@ def apply_schema(config: PostgresDbConfig) -> None:
         # START_BLOCK_CLOSE
         if conn is not None:
             conn.close()
-            logger.trace("CLOSE")
         # END_BLOCK_CLOSE

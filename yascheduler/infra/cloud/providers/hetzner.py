@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/hetzner.py
-# VERSION: 1.9.0
+# VERSION: 1.10.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Hetzner Cloud server creation and deletion via API.
@@ -17,8 +17,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-HETZNER") at module top
-#   PREVIOUS_CHANGE: v1.8.1 - recovery branch now triggers on APIException code `uniqueness_error` (Hetzner's current duplicate-key wording "SSH key not unique") in addition to the legacy "already" substring; previously the new wording skipped the fingerprint/name lookup and re-raised, breaking all allocations once a key already existed on the Hetzner project.
+
+#   LAST_CHANGE: v1.10.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-HETZNER") at module top
 # END_CHANGE_SUMMARY
 #
 """Hetzner cloud methods"""
@@ -26,6 +27,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import cache, partial
 from typing import TYPE_CHECKING, cast
@@ -43,9 +45,8 @@ except ImportError:
     _HETZNER_AVAILABLE = False
 
 from yascheduler.infra.cloud import get_key_name, get_rnd_name
-from yascheduler.shared import get_logger
 
-logger = get_logger("M-CLOUD-PROVIDER-HETZNER")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey

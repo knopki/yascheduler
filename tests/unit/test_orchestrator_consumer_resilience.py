@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_orchestrator_consumer_resilience.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for orchestrator consumer-worker error resilience (fix-save-silent-zero-rows).
@@ -15,7 +15,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for orchestrator consumer-worker resilience (fix-save-silent-zero-rows).
+#   LAST_CHANGE: v1.1.0 - switch-to-standard-logging: migrate CONSUMER_ERROR assertion off record.block onto getMessage().
+#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for orchestrator consumer-worker resilience (fix-save-silent-zero-rows).
 # END_CHANGE_SUMMARY
 
 """Unit tests for orchestrator consumer-worker error resilience."""
@@ -184,9 +185,9 @@ class TestConsumerResilience:
         assert processed == [2], (
             f"worker did not continue to the second message; processed={processed}"
         )
-        assert any(
-            getattr(r, "block", None) == "CONSUMER_ERROR" for r in caplog.records
-        ), "consumer Exception was not logged as CONSUMER_ERROR trace"
+        assert any(r.getMessage() == "CONSUMER_ERROR" for r in caplog.records), (
+            "consumer Exception was not logged as CONSUMER_ERROR trace"
+        )
 
 
 # =============================================================================
@@ -232,6 +233,6 @@ class TestConsumerCancelledErrorDrain:
         await asyncio.gather(*orch._bg_jobs, return_exceptions=True)
 
         parent.removeHandler(handler)
-        assert not any(
-            getattr(r, "block", None) == "CONSUMER_ERROR" for r in handler.records
-        ), "CancelledError was swallowed by except Exception"
+        assert not any(r.getMessage() == "CONSUMER_ERROR" for r in handler.records), (
+            "CancelledError was swallowed by except Exception"
+        )

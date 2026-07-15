@@ -88,21 +88,19 @@
       <depends>none</depends>
     </M-CLI-COMMANDS>
 
-    <CrossLink from="M-SHARED" to="M-LOGGING" relation="re-exports YaLogger and get_logger from shared/log.py" />
+    <CrossLink from="M-SHARED" to="M-LOGGING" relation="re-exports LogFormatter from shared/log.py" />
 
-    <M-LOGGING NAME="YaLogger and LogFormatter" TYPE="UTILITY" STATUS="implemented">
-      <purpose>YaLogger subclass and LogFormatter for structured tracing.</purpose>
+    <M-LOGGING NAME="LogFormatter" TYPE="UTILITY" STATUS="implemented">
+      <purpose>LogFormatter rendering structured DEBUG trace records and user-facing records with distinct layouts.</purpose>
       <path>yascheduler/shared/log.py</path>
       <depends>none</depends>
       <annotations>
-        <class-YaLogger PURPOSE="Logger subclass exposing trace(block, /, **fields) for structured DEBUG tracing" />
-        <class-LogFormatter PURPOSE="Formatter with trace-record and user-facing rendering branches" />
-        <fn-get_logger PURPOSE="Factory returning YaLogger with yascheduler. namespace prefix; reclasses cached Logger for static type correctness" />
+        <class-LogFormatter PURPOSE="Formatter with trace-record (extra-diff) and user-facing rendering branches" />
       </annotations>
     </M-LOGGING>
 
     <M-SHARED NAME="Shared kernel" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Shared kernel: typing shims (Self, Unpack), YaLogger, and get_logger factory re-exported for cross-layer consumers.</purpose>
+      <purpose>Shared kernel: typing shims (Self, Unpack, StrEnum) and LogFormatter re-exported for cross-layer consumers.</purpose>
       <path>yascheduler/shared/__init__.py</path>
       <depends>M-SHARED-COMPAT, M-LOGGING</depends>
     </M-SHARED>

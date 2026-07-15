@@ -1,14 +1,45 @@
-# Logging
+## REMOVED Requirements
 
-## Purpose
+### Requirement: YaLogger project logger class
 
-The `LogFormatter` logging contract for the `yascheduler` package. Module-level
-loggers are bound via stdlib `logging.getLogger(__name__)`. Structured DEBUG
-tracing goes through `logger.debug(msg, extra={...})` with flat user-supplied
-keys; user-facing INFO/WARN/ERROR records render as plain narrative. The static
-guard tests live in the `testing-unit` spec.
+**Reason**: The `YaLogger(logging.Logger)` subclass, its `.trace(block, /, **fields)`
+method, and the `get_logger(name)` factory (which reclasses the cached
+`logging.Logger` instance's `__class__` for static type-checker
+acceptance) exist only to repackage what the stdlib already supports
+directly via `logging.getLogger(name)` plus `logger.debug(msg, extra={...})`.
+The subclass, the custom method, and the `__class__` reclass are
+removed in favor of stdlib idioms; `logging.getLogger(__name__)` is
+ statically typed to return `logging.Logger` with no reclass needed.
 
-## Requirements
+**Migration**: Package modules SHALL bind `logger = logging.getLogger(__name__)`.
+Structured DEBUG tracing SHALL be emitted via `logger.debug(msg, extra={...})`
+with flat user keys (no wrapper function, no nested sentinel dict).
+`yascheduler/shared/log.py` SHALL stop exporting `YaLogger` and
+`get_logger` and SHALL export only `LogFormatter`.
+`yascheduler/shared/__init__.py` SHALL stop re-exporting `YaLogger`
+and `get_logger`.
+
+### Requirement: M-ID namespaced logger names
+
+**Reason**: Canonicalizing runtime logger names to `yascheduler.<M-ID>`
+decouples log output from the module import path. An operator reading
+a log line cannot map a name like `yascheduler.M-APPLICATION-ORCHESTRATOR`
+back to a source file without consulting `docs/knowledge-graph.xml`,
+and the mapping goes stale on module rename. stdlib
+`logging.getLogger(__name__)` produces `yascheduler.<import-path>`
+names that preserve module provenance and remain correct through
+renames.
+
+**Migration**: Every package module SHALL bind
+`logger = logging.getLogger(__name__)`. The runtime name produced is
+`yascheduler.<dotted.module.path>` (e.g. `yascheduler.infra.persistence.postgres_uow`),
+which remains a descendant of the `"yascheduler"` parent logger, so
+the `log_records` e2e fixture (handler attached to `"yascheduler"` at
+DEBUG) continues to capture records via propagation without change.
+M-ID references are retired from runtime logger names; the static
+M-ID-validity guard test is removed.
+
+## ADDED Requirements
 
 ### Requirement: Module-local stdlib logger binding
 
@@ -26,12 +57,6 @@ into the record via `__dict__.update`, silently overwriting reserved
 keys (e.g. `name`, `msg`, `funcName`, `levelname`,
 `lineno`, `module`); a static guard SHALL reject any `extra={...}`
 literal in the package whose keys intersect the native attribute set.
-
-The package SHALL NOT provide a `YaLogger` subclass of `logging.Logger`
-or a `get_logger(...)` factory reclassing the cached `logging.Logger`
-instance; stdlib `logging.getLogger(__name__)` is statically typed to
-return `logging.Logger` with no reclass needed. The package SHALL NOT
-use `logging.setLoggerClass`.
 
 #### Scenario: module logger is bound via logging.getLogger(__name__)
 
@@ -58,6 +83,8 @@ use `logging.setLoggerClass`.
 - **GIVEN** the `log_records` e2e fixture attaches a handler to the `"yascheduler"` logger at DEBUG
 - **WHEN** a module `yascheduler/application/orchestrator.py` emits a DEBUG record via its `logging.getLogger(__name__)` logger
 - **THEN** the record propagates to the `"yascheduler"` parent logger and is captured by the fixture handler
+
+## MODIFIED Requirements
 
 ### Requirement: LogFormatter renders trace and user-facing records distinctly
 

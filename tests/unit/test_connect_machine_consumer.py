@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_connect_machine_consumer.py
-# VERSION: 1.3.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for Orchestrator._connect_machine_consumer never-connected-node grace timer + abandon dispatch.
@@ -16,8 +16,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - node-owns-connection-identity slice 2: removed cloud-prefix-resolution setup (cfg_cloud.jump_host/jump_username) from all tests; added TestConnectNewNode class with acceptance tests verifying connect call shape without jump kwargs and no inline resolution loop.
-#   PREVIOUS_CHANGE: v1.3.0 - add-node-id-identity: import NodeId, add node_id=NodeId(...) to _make_node helper and all inline Node(...) constructions.
+#   LAST_CHANGE: v1.5.0 - switch-to-standard-logging: migrate CONNECT_RETRY_STATIC assertion off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS).
+#   PREVIOUS_CHANGE: v1.4.0 - node-owns-connection-identity slice 2: removed cloud-prefix-resolution setup (cfg_cloud.jump_host/jump_username) from all tests; added TestConnectNewNode class with acceptance tests verifying connect call shape without jump kwargs and no inline resolution loop.
 # END_CHANGE_SUMMARY
 """Unit tests for Orchestrator._connect_machine_consumer grace timer + abandon dispatch.
 
@@ -43,6 +43,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.log_assertions import extra_fields
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UMessage
@@ -438,12 +439,10 @@ class TestConnectMachineProducerYieldsStaticNodes:
             "(consumer-side guard bypasses the grace-check)"
         )
         trace_records = [
-            r
-            for r in caplog.records
-            if getattr(r, "block", None) == "CONNECT_RETRY_STATIC"
+            r for r in caplog.records if r.getMessage() == "CONNECT_RETRY_STATIC"
         ]
         assert len(trace_records) == 1, "expected one CONNECT_RETRY_STATIC trace record"
-        assert getattr(trace_records[0], "fields", {}).get("hostname") == "10.0.0.9"
+        assert extra_fields(trace_records[0]).get("hostname") == "10.0.0.9"
 
     @pytest.mark.asyncio
     async def test_static_node_past_grace_does_not_abandon(self) -> None:

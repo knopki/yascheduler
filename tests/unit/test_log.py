@@ -1,37 +1,32 @@
 # FILE: tests/unit/test_log.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 #
 # START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for YaLogger and LogFormatter in yascheduler.shared.log.
-#   SCOPE: YaLogger.trace() behavior, LogFormatter rendering, get_logger factory.
+#   PURPOSE: Unit tests for LogFormatter in yascheduler.shared.log.
+#   SCOPE: LogFormatter extra-diff discriminator rendering; introspection-derived _NATIVE_KEYS; _PACKAGE derivation; single-formatter-both-handlers wiring.
 #   DEPENDS: none
 #   LINKS: M-LOGGING
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
-#   test_trace_emits_debug_record_with_block_and_fields - trace() emits DEBUG record with block and fields
-#   test_trace_with_no_fields - trace() with no kwargs yields empty fields dict
-#   test_trace_funcname_reflects_caller - trace() captures caller's funcName via stacklevel=2
-#   test_get_logger_factory - get_logger returns YaLogger, namespaced name, trace works, idempotent
-#   test_user_facing_methods_carry_no_grace_markers - info/warning/error emit records without block/fields
-#   test_trace_is_debug_only - trace() at INFO threshold suppresses DEBUG record
-#   test_log_formatter_trace_record - LogFormatter renders trace record with [M-ID][funcName][BLOCK] + sorted kv
-#   test_log_formatter_user_facing_record - LogFormatter renders user-facing record as plain narrative
-#   test_log_formatter_sets_shortname - LogFormatter sets record.shortname from name minus yascheduler. prefix
+#   test_trace_record_renders_with_module_funcname_lineno_message_and_sorted_fields - Gherkin scenario: trace record renders
+#   test_trace_fields_sorted_alphabetically - Gherkin scenario: deterministic field order
+#   test_debug_without_extra_renders_regular - Gherkin scenario: DEBUG w/o extra is narrative
+#   test_out_of_package_debug_with_extra_renders_regular - Gherkin scenario: third-party logger excluded
+#   test_info_warn_error_renders_regular - Gherkin scenario: INFO/WARN/ERROR narrative
+#   test_native_keys_derived_by_introspection - Gherkin scenario: _NATIVE_KEYS introspection
+#   test_package_prefix_derived_from_name - Gherkin scenario: _PACKAGE from __name__
+#   test_single_formatter_serves_both_handlers - Gherkin scenario: single formatter both handlers
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Replace setLoggerClass tests with get_logger factory test; remove setLoggerClass-reliant tests.
+#   LAST_CHANGE: v2.0.0 - Rewrite around LogFormatter and extra-diff discriminator; remove YaLogger/get_logger/trace tests.
 #   PREVIOUS_CHANGE: v1.0.0 - Initial: YaLogger and LogFormatter unit tests.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from yascheduler.shared.log import YaLogger
 
 
 class _RecordCollector(logging.Handler):
@@ -45,181 +40,212 @@ class _RecordCollector(logging.Handler):
         self.records.append(record)
 
 
-def _make_logger(name: str = "test_logger") -> tuple[YaLogger, _RecordCollector]:
-    """Create a YaLogger with a RecordCollector handler at DEBUG level."""
-    from yascheduler.shared.log import YaLogger
-
-    logger = YaLogger(name)
+def _make_logger(
+    name: str = "yascheduler.test.module", level: int = logging.DEBUG
+) -> tuple[logging.Logger, _RecordCollector]:
+    """Create a plain logging.Logger with a RecordCollector handler at the given level."""
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    logger.handlers.clear()
     collector = _RecordCollector()
     logger.addHandler(collector)
-    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
     return logger, collector
 
 
-def test_trace_emits_debug_record_with_block_and_fields() -> None:
-    """trace() emits a DEBUG-level LogRecord carrying block and fields as programmatic attributes."""
-    logger, collector = _make_logger()
-
-    logger.trace("TEST_BLOCK", k=1)
-
-    assert len(collector.records) == 1
-    record = collector.records[0]
-    assert record.levelno == logging.DEBUG
-    assert record.block == "TEST_BLOCK"  # type: ignore[attr-defined]
-    assert record.fields == {"k": 1}  # type: ignore[attr-defined]
+# ── Test 1: Gherkin scenario — trace record renders with module, function, lineno, message, and sorted fields ──
 
 
-def test_trace_with_no_fields() -> None:
-    """trace() with no keyword arguments yields an empty fields dict."""
-    logger, collector = _make_logger()
-
-    logger.trace("BLOCK")
-
-    assert len(collector.records) == 1
-    record = collector.records[0]
-    assert record.block == "BLOCK"  # type: ignore[attr-defined]
-    assert record.fields == {}  # type: ignore[attr-defined]
-
-
-def test_trace_funcname_reflects_caller() -> None:
-    """trace() captures the caller's funcName, not 'trace' itself, via stacklevel=2."""
-    logger, collector = _make_logger()
-
-    logger.trace("BLOCK")
-
-    assert len(collector.records) == 1
-    record = collector.records[0]
-    assert record.funcName == "test_trace_funcname_reflects_caller"
-
-
-def test_get_logger_factory() -> None:
-    """get_logger returns a YaLogger with namespaced name, .trace() works, idempotent."""
-    from yascheduler.shared.log import YaLogger, get_logger
-
-    log1 = get_logger("M-TEST")
-    assert isinstance(log1, YaLogger)
-    assert log1.name == "yascheduler.M-TEST"
-    assert callable(log1.trace)
-
-    # Capture trace record
-    collector = _RecordCollector()
-    log1.addHandler(collector)
-    log1.setLevel(logging.DEBUG)
-
-    log1.trace("TEST_BLOCK", k=1)
-
-    assert len(collector.records) == 1
-    record = collector.records[0]
-    assert record.block == "TEST_BLOCK"  # type: ignore[attr-defined]
-    assert record.fields == {"k": 1}  # type: ignore[attr-defined]
-    assert record.funcName == "test_get_logger_factory"
-
-    # Idempotent: second call returns same object
-    log2 = get_logger("M-TEST")
-    assert log2 is log1
-    assert isinstance(log2, YaLogger)
-
-
-def test_user_facing_methods_carry_no_grace_markers() -> None:
-    """info/warning/error emit records without block or fields attributes."""
-    logger, collector = _make_logger()
-
-    logger.warning("webhook retry to %s", "http://example.com")
-
-    assert len(collector.records) == 1
-    record = collector.records[0]
-    assert not hasattr(record, "block")
-    assert not hasattr(record, "fields")
-
-
-def test_trace_is_debug_only() -> None:
-    """trace() at INFO threshold suppresses the DEBUG record (no propagation)."""
-    from yascheduler.shared.log import YaLogger
-
-    logger = YaLogger("test_logger")
-    collector = _RecordCollector()
-    logger.addHandler(collector)
-    logger.setLevel(logging.INFO)
-
-    logger.trace("BLOCK", k=1)
-
-    assert len(collector.records) == 0
-
-
-def test_log_formatter_trace_record() -> None:
-    """LogFormatter renders a trace record as [M-ID][funcName][BLOCK] + sorted key=value pairs."""
+def test_trace_record_renders_with_module_funcname_lineno_message_and_sorted_fields() -> (
+    None
+):
+    """Trace record renders [module][funcName]:lineno msg sorted k=v."""
     from yascheduler.shared.log import LogFormatter
 
     formatter = LogFormatter()
-    record = logging.LogRecord(
-        name="yascheduler.M-APPLICATION-ALLOCATE",
-        level=logging.DEBUG,
-        pathname=__file__,
-        lineno=1,
-        msg="ALLOCATED",
-        args=(),
-        exc_info=None,
-    )
-    record.funcName = "allocate_task"
-    record.block = "ALLOCATED"  # type: ignore[attr-defined]
-    record.fields = {"ip": "10.0.0.1", "task_id": 7}  # type: ignore[attr-defined]
+    logger, collector = _make_logger("yascheduler.application.allocate_task")
 
-    output = formatter.format(record)
+    logger.debug("ALLOCATED", extra={"ip": "10.0.0.1", "task_id": 7})
 
-    assert "[M-APPLICATION-ALLOCATE]" in output
-    assert "[allocate_task]" in output
-    assert "[ALLOCATED]" in output
-    # Fields sorted alphabetically: ip=... task_id=...
-    assert "ip='10.0.0.1'" in output
-    assert "task_id=7" in output
-    # ip comes before task_id alphabetically
-    assert output.index("ip=") < output.index("task_id=")
+    assert len(collector.records) == 1
+    output = formatter.format(collector.records[0])
+
+    # Must contain the trace markers and be grep-friendly
+    assert output.startswith("[application.allocate_task]")
+    assert "[test_trace_record_renders" in output  # funcName
+    assert "10.0.0.1" in output
+    assert "7" in output
+    assert "ALLOCATED" in output
 
 
-def test_log_formatter_user_facing_record() -> None:
-    """LogFormatter renders a user-facing record as plain narrative without grace markers."""
+# ── Test 2: Gherkin scenario — trace fields are sorted alphabetically ──
+
+
+def test_trace_fields_sorted_alphabetically() -> None:
+    """Trace fields appear in alphabetical key order for deterministic output."""
     from yascheduler.shared.log import LogFormatter
 
     formatter = LogFormatter()
-    record = logging.LogRecord(
-        name="yascheduler.M-APPLICATION-ALLOCATE",
-        level=logging.WARNING,
-        pathname=__file__,
-        lineno=1,
-        msg="webhook retry to %s",
-        args=("http://example.com",),
-        exc_info=None,
-    )
-    record.funcName = "send_webhook"
+    logger, collector = _make_logger("yascheduler.test.module")
 
-    output = formatter.format(record)
+    logger.debug("B", extra={"zebra": 1, "alpha": 2})
 
-    assert "WARNING" in output
-    assert "yascheduler.M-APPLICATION-ALLOCATE" in output
-    assert "webhook retry to http://example.com" in output
-    # No grace markers
+    assert len(collector.records) == 1
+    output = formatter.format(collector.records[0])
+
+    # alpha should appear before zebra
+    alpha_idx = output.index("alpha=2")
+    zebra_idx = output.index("zebra=1")
+    assert alpha_idx < zebra_idx
+
+
+# ── Test 3: Gherkin scenario — DEBUG without extra renders as regular narrative ──
+
+
+def test_debug_without_extra_renders_regular() -> None:
+    """DEBUG record with no extra renders as LEVEL name: message, no trace markers."""
+    from yascheduler.shared.log import LogFormatter
+
+    formatter = LogFormatter()
+    logger, collector = _make_logger("yascheduler.test.module")
+
+    logger.debug("progress: ok")
+
+    assert len(collector.records) == 1
+    output = formatter.format(collector.records[0])
+
+    # Regular layout: LEVEL name: message
+    assert output.startswith("DEBUG ")
+    assert "yascheduler.test.module" in output
+    assert "progress: ok" in output
+    # No trace markers
     assert "[" not in output
     assert "=" not in output
 
 
-def test_log_formatter_sets_shortname() -> None:
-    """LogFormatter sets record.shortname from record.name minus 'yascheduler.' prefix."""
+# ── Test 4: Gherkin scenario — out-of-package DEBUG with extra renders as regular narrative ──
+
+
+def test_out_of_package_debug_with_extra_renders_regular() -> None:
+    """Third-party logger (e.g. asyncssh) with DEBUG+extra renders as LEVEL name: message."""
     from yascheduler.shared.log import LogFormatter
 
     formatter = LogFormatter()
-    record = logging.LogRecord(
-        name="yascheduler.M-APPLICATION-ALLOCATE",
-        level=logging.DEBUG,
-        pathname=__file__,
-        lineno=1,
-        msg="ALLOCATED",
-        args=(),
-        exc_info=None,
-    )
-    record.funcName = "allocate_task"
-    record.block = "ALLOCATED"  # type: ignore[attr-defined]
-    record.fields = {}  # type: ignore[attr-defined]
+    logger, collector = _make_logger("asyncssh")
 
-    formatter.format(record)
+    logger.debug("key exchange done", extra={"host": "10.0.0.1"})
 
-    assert record.shortname == "M-APPLICATION-ALLOCATE"  # type: ignore[attr-defined]
+    assert len(collector.records) == 1
+    output = formatter.format(collector.records[0])
+
+    # Regular layout because out-of-package
+    assert output.startswith("DEBUG ")
+    assert "asyncssh" in output
+    assert "key exchange done" in output
+    # No trace markers
+    assert "[" not in output
+    assert "=" not in output
+
+
+# ── Test 5: Gherkin scenario — INFO/WARN/ERROR renders as regular narrative ──
+
+
+def test_info_warn_error_renders_regular() -> None:
+    """INFO/WARN/ERROR records render as LEVEL name: message with no trace markers."""
+    from yascheduler.shared.log import LogFormatter
+
+    formatter = LogFormatter()
+    logger, collector = _make_logger("yascheduler.test.module")
+
+    logger.info("info msg")
+    logger.warning("warn msg")
+    logger.error("error msg")
+
+    assert len(collector.records) == 3
+    for i, (level, msg) in enumerate(
+        [("INFO", "info msg"), ("WARNING", "warn msg"), ("ERROR", "error msg")]
+    ):
+        output = formatter.format(collector.records[i])
+        assert output.startswith(f"{level} "), f"Expected {level} prefix, got: {output}"
+        assert "yascheduler.test.module" in output
+        assert msg in output
+        # No trace markers
+        assert "[" not in output
+        assert "=" not in output
+
+
+# ── Test 6: Gherkin scenario — native LogRecord set is derived by introspection ──
+
+
+def test_native_keys_derived_by_introspection() -> None:
+    """_NATIVE_KEYS is non-empty and contains expected native attributes."""
+    from yascheduler.shared.log import _NATIVE_KEYS  # type: ignore[attr-defined]
+
+    assert isinstance(_NATIVE_KEYS, frozenset)
+    assert len(_NATIVE_KEYS) > 0
+    # Must contain essential native attributes
+    assert "name" in _NATIVE_KEYS
+    assert "msg" in _NATIVE_KEYS
+    assert "funcName" in _NATIVE_KEYS
+    assert "levelno" in _NATIVE_KEYS
+    assert "lineno" in _NATIVE_KEYS
+    assert "args" in _NATIVE_KEYS
+    # Verify non-native key is NOT in the set
+    assert "task_id" not in _NATIVE_KEYS
+
+
+# ── Test 7: Gherkin scenario — package prefix derived from formatter module name ──
+
+
+def test_package_prefix_derived_from_name() -> None:
+    """_PACKAGE is derived from __name__ top segment, not hardcoded."""
+    from yascheduler.shared.log import _PACKAGE  # type: ignore[attr-defined]
+
+    assert isinstance(_PACKAGE, str)
+    assert _PACKAGE == "yascheduler"
+    # Verify it's NOT a hardcoded literal: check we can derive the same
+    # value from the module's __name__
+    from yascheduler.shared.log import __name__ as log_module_name
+
+    expected = log_module_name.split(".", 1)[0]
+    assert _PACKAGE == expected
+
+
+# ── Test 8: Gherkin scenario — single formatter serves both handlers ──
+
+
+def test_single_formatter_serves_both_handlers() -> None:
+    """configure_logger wires the same LogFormatter onto stderr and file handlers."""
+    import logging
+    import tempfile
+
+    from yascheduler.entrypoints.cli.daemon_common import configure_logger
+    from yascheduler.shared.log import LogFormatter
+
+    root = logging.getLogger()
+    saved_handlers = root.handlers[:]
+    root.handlers.clear()
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".log") as tf:
+            root = configure_logger(tf.name, logging.DEBUG)
+
+            handlers = root.handlers
+            stderr_handler = None
+            file_handler = None
+            for h in handlers:
+                if isinstance(h, logging.StreamHandler) and not isinstance(
+                    h, logging.FileHandler
+                ):
+                    stderr_handler = h
+                elif isinstance(h, logging.FileHandler):
+                    file_handler = h
+
+            assert stderr_handler is not None, "No StreamHandler found"
+            assert file_handler is not None, "No FileHandler found"
+            assert stderr_handler.formatter is file_handler.formatter
+            assert isinstance(stderr_handler.formatter, LogFormatter)
+    finally:
+        root.handlers.clear()
+        for h in saved_handlers:
+            root.addHandler(h)

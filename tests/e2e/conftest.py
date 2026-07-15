@@ -1,8 +1,8 @@
 # FILE: tests/e2e/conftest.py
-# VERSION: 2.5.0
+# VERSION: 2.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E test fixtures — PostgreSQL + SSH container pool, config, schema, log capture, and UoW-based DB access.
-#   SCOPE: Session-scoped containers (postgres + ssh_pool of two), config; function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE, log_records (structured-field assertions via record.block/record.fields).
+#   SCOPE: Session-scoped containers (postgres + ssh_pool of two), config; function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE, log_records (getMessage() + extra-diff assertions against _NATIVE_KEYS).
 #   DEPENDS: M-ENTRYPOINTS-CONFIG, M-SSH-REPOSITORY, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
 #   LINKS: M-ENTRYPOINTS-CONFIG, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
 # END_MODULE_CONTRACT
@@ -19,12 +19,12 @@
 #   pg_executor - function-scoped ThreadPoolExecutor for pg8000
 #   pg_conn - function-scoped raw pg8000 connection with TRUNCATE teardown
 #   uow_factory - function-scoped factory returning PostgresUnitOfWork instances
-#   log_records - function-scoped in-memory LogCaptureHandler attached to the "yascheduler" logger at DEBUG; tests assert on record.block/record.fields (structured attributes) rather than getMessage() substrings; propagation from M-ID-namespaced loggers
+#   log_records - function-scoped in-memory LogCaptureHandler attached to the "yascheduler" logger at DEBUG; tests assert via record.getMessage() (former block marker) plus extra-diff {k: getattr(r,k) for k in r.__dict__ if k not in _NATIVE_KEYS}; descendant propagation from yascheduler.* logger names (logging.getLogger(__name__)) still reaches the parent
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.5.0 - reform-grace-logging slice 8: update log_records fixture docstring to describe structured-field assertions (record.block/record.fields) and propagation from M-ID-namespaced loggers.
-#   PREVIOUS_CHANGE: v2.4.0 - _init_schema applies pending migrations via apply_migrations after apply_schema (add-db-migrations).
+#   LAST_CHANGE: v2.6.0 - switch-to-standard-logging: update log_records fixture docstring to describe getMessage() + extra-diff assertions (former block marker is now the message; structured fields are record attrs beyond _NATIVE_KEYS); descendant propagation from yascheduler.* names via logging.getLogger(__name__) unchanged.
+#   PREVIOUS_CHANGE: v2.5.0 - reform-grace-logging slice 8: update log_records fixture docstring to describe structured-field assertions (record.block/record.fields) and propagation from M-ID-namespaced loggers.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations

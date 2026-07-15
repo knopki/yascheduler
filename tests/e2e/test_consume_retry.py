@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_consume_retry.py
-# VERSION: 1.5.0
+# VERSION: 1.6.0
 # START_MODULE_CONTRACT
 #   PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
 #   SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
@@ -14,13 +14,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - drop-task-context-entity follow-up: wrappers return the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors); empty strings for the unused local/remote paths in the synthetic failure paths.
-#   PREVIOUS_CHANGE: v1.4.0 - simplify-cloud-connect-node-args: both repository.connect calls drop the `username=`/`port=` kwargs.
+#   LAST_CHANGE: v1.6.0 - switch-to-standard-logging: migrate test-file logger binding from get_logger("M-TEST") to logging.getLogger(__name__); remove yascheduler.shared.get_logger import.
+#   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity follow-up: wrappers return the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors); empty strings for the unused local/remote paths in the synthetic failure paths.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -30,7 +31,6 @@ from yascheduler.domain.model import NewNode, Node, NodeId, Task, TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
 from yascheduler.infra.ssh.repository import SSHMachineRepository
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from yascheduler.entrypoints import Config
     from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
-log = get_logger("M-TEST")
+log = logging.getLogger(__name__)
 
 
 async def _setup_node_and_submit(

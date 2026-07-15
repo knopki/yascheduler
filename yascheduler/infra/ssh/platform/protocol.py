@@ -22,12 +22,13 @@
 #   GetCPUCoresCallable      - Callable alias: async CPU core count retrieval.
 #   ListProcessesCallable    - Protocol: async generator listing running processes.
 #   PgrepCallable            - Protocol: async generator filtering processes by pattern.
-#   SetupNodeCallable        - Protocol: async node setup (engines, dirs, logging).
+#   SetupNodeCallable        - Protocol: async node setup (engines, dirs).
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Consolidate ProcessInfo into protocol.py (frozen dataclass); remove PProcessInfo and PNode Protocols. Consumers import ProcessInfo from .protocol; ListProcessesCallable/PgrepCallable now annotate AsyncGenerator[ProcessInfo, None].
-#   PREVIOUS_CHANGE: v1.1.0 - Delete PEngine and PEngineRepository Protocols; consumers import Engine/EngineRepository from yascheduler.domain directly. Switch Deploy* import from yascheduler.config to yascheduler.domain. SetupNodeCallable.__call__ now references EngineRepository (TYPE_CHECKING import from yascheduler.domain).
+
+#   LAST_CHANGE: v1.4.0 - Drop `log` parameter from SetupNodeCallable (platform functions now bind a module-global logger).
+#   PREVIOUS_CHANGE: v1.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...).
 # END_CHANGE_SUMMARY
 
 import asyncio
@@ -66,7 +67,6 @@ from asyncssh.sftp import (
 
 if TYPE_CHECKING:
     from yascheduler.domain import EngineRepository
-    from yascheduler.shared import YaLogger
 
 SFTPRetryExc = (
     asyncio.TimeoutError,
@@ -179,6 +179,5 @@ class SetupNodeCallable(Protocol):
         quote: QuoteCallable,
         engines: "EngineRepository",
         engines_dir: PurePath,
-        log: "YaLogger | None" = None,
     ) -> Coroutine[Any, Any, None]:
         pass

@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/message_bus.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: In-process message bus that dispatches domain events to registered handlers.
@@ -13,23 +13,23 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - reform-grace-logging: bind logger via get_logger("M-APPLICATION-MESSAGE-BUS"); strip grace marker from dispatch-failure exception (pure narrative).
-#   PREVIOUS_CHANGE: v1.0.0 - Create MessageBus for domain event dispatch.
+
+#   LAST_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.1.0 - reform-grace-logging: bind logger via get_logger("M-APPLICATION-MESSAGE-BUS"); strip grace marker from dispatch-failure exception (pure narrative).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
-
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from yascheduler.domain import DomainEvent
 
-logger = get_logger("M-APPLICATION-MESSAGE-BUS")
+logger = logging.getLogger(__name__)
 
 
 # START_CONTRACT: MessageBus

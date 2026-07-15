@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/consume_task.py
-# VERSION: 6.2.0
+# VERSION: 6.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
 #   SCOPE: Task consumption / finalisation lifecycle — download outputs, finalise (DONE) or defer (retry).
@@ -16,17 +16,17 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v6.2.0 - _decide_finalisation uses atomic Task transitions: task.fail(reason, local_folder=, remote_folder=) and task.complete(local_folder=, remote_folder=) set folders and emit TaskFailed/TaskCompleted inline. Removed with_download_results + with_event chain and the has_errors=False argument. Removed TaskCompleted/TaskFailed imports (no longer constructed here).
-#   PREVIOUS_CHANGE: v6.1.0 - operations: MachineOperations parameter renamed to output_downloader: OutputDownloader (facade dissolved); consume_task calls output_downloader.download_outputs directly.
+
+#   LAST_CHANGE: v6.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v6.2.0 - _decide_finalisation uses atomic Task transitions: task.fail(reason, local_folder=, remote_folder=) and task.complete(local_folder=, remote_folder=) set folders and emit TaskFailed/TaskCompleted inline. Removed with_download_results + with_event chain and the has_errors=False argument. Removed TaskCompleted/TaskFailed imports (no longer constructed here).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
-
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
 
-logger = get_logger("M-APPLICATION-CONSUME")
+logger = logging.getLogger(__name__)
 
 
 # START_CONTRACT: _prepare_store_folder

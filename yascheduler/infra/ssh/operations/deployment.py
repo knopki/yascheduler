@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/deployment.py
-# VERSION: 1.6.0
+# VERSION: 1.7.0
 # START_MODULE_CONTRACT
 #   PURPOSE: TaskDeployer — upload task inputs and spawn the calculation process on a remote machine via MachineSession. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: TaskDeployer class + _write_remote_file + _safe_b64decode module-private helpers.
@@ -14,20 +14,20 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-OPS-DEPLOY") at module top
-#   PREVIOUS_CHANGE: v1.5.0 - Node-rename-and-fields: session.ip→session.hostname in all log lines (3 sites).
+
+#   LAST_CHANGE: v1.7.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.6.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-OPS-DEPLOY") at module top
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import base64
+import logging
 from typing import TYPE_CHECKING
 
 import asyncssh
 
-from yascheduler.shared import get_logger
-
-logger = get_logger("M-SSH-OPS-DEPLOY")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

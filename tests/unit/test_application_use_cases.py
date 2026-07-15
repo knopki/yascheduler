@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.9.0
+# VERSION: 4.9.1
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
@@ -17,7 +17,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.1.0 - ConnectedMachine-runtime-only: drop free_machine.hostname from mock (ConnectedMachine no longer carries hostname).
+#   LAST_CHANGE: v4.9.1 - switch-to-standard-logging: caplog logger name yascheduler.M-APPLICATION-DEALLOCATE → yascheduler.application.deallocate_nodes.
+#   PREVIOUS_CHANGE: v5.1.0 - ConnectedMachine-runtime-only: drop free_machine.hostname from mock (ConnectedMachine no longer carries hostname).
 #   PREVIOUS_CHANGE: v5.0.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), node.hostname→node.hostname, free_machine.hostname→free_machine.hostname, SimpleNamespace ip→hostname.
 #   PREVIOUS_CHANGE: v4.9.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); task.context.X → task.X reads; remove TaskContext import.
 #   PREVIOUS_CHANGE: v4.8.0 - cloud-port-node-arg: allocate/deallocate asserts + _persist_node_with_cleanup call use Node args (was NodeId/scalars).
@@ -965,7 +966,9 @@ class TestDeallocateNodeBracketing:
         clouds = MagicMock(spec=CloudProvisioner)
         clouds.deallocate = AsyncMock()
 
-        with caplog.at_level("ERROR", logger="yascheduler.M-APPLICATION-DEALLOCATE"):
+        with caplog.at_level(
+            "ERROR", logger="yascheduler.application.deallocate_nodes"
+        ):
             # Must not raise — the cloud VM is already gone.
             await deallocate_node(
                 node=node,

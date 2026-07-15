@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/operations/download.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OutputDownloader class + my_backoff_sftp partial (canonical location — its first user is download_outputs).
@@ -13,19 +13,19 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-OPS-DOWNLOAD") at module top
-#   PREVIOUS_CHANGE: v1.3.0 - download_outputs drops the legacy meta_add list-of-pairs (a metadata-blob relic); returns typed fields directly as (local_folder: str, remote_folder: str, transient_errors, permanent_errors). consume_task receives them as named values, not via a meta_dict.
+
+#   LAST_CHANGE: v1.5.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.4.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-OPS-DOWNLOAD") at module top
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 from functools import partial
 from typing import TYPE_CHECKING
 
 import backoff
 from asyncssh.sftp import SFTPError
-
-from yascheduler.shared import get_logger
 
 from ..exceptions import SFTPRetryExc
 
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from yascheduler.domain import MachineSession, TaskId
 
-logger = get_logger("M-SSH-OPS-DOWNLOAD")
+logger = logging.getLogger(__name__)
 
 my_backoff_sftp = partial(
     backoff.on_exception,

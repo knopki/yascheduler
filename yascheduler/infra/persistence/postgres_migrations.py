@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/persistence/postgres_migrations.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Apply pending database schema/data migrations in forward-only order.
 #   SCOPE: Forward-only DDL/DML migration application over sql/migrations/ via one pg8000 connection, one transaction per migration, with yascheduler_migrations tracker recording.
@@ -22,25 +22,25 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-PERSISTENCE-MIGRATIONS") at module top
-#   PREVIOUS_CHANGE: v1.0.0 - Introduce forward-only migration runner. Applies .sql (multi-statement) and .py (Migration subclass) migrations in string-sorted prefix_id order, one transaction per migration.
+
+#   LAST_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...); drop vestigial OPEN_CONNECTION/CLOSE DEBUG traces (carried no extra fields, not asserted in tests).
+#   PREVIOUS_CHANGE: v1.1.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-PERSISTENCE-MIGRATIONS") at module top
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import importlib.util
 import inspect
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pg8000 import DatabaseError
 from pg8000.native import Connection
 
-from yascheduler.shared import get_logger
-
 from .migration_base import Migration
 
-logger = get_logger("M-PERSISTENCE-MIGRATIONS")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -148,7 +148,7 @@ def _apply_sql_migration(conn: Connection, path: Path, prefix_id: str) -> None:
             p=prefix_id,
         )
         conn.run("COMMIT")
-        logger.trace("APPLY_SQL", prefix=prefix_id)
+        logger.debug("APPLY_SQL", extra={"prefix": prefix_id})
         # END_BLOCK_APPLY_SQL
     except Exception:
         _rollback(conn)
@@ -184,17 +184,14 @@ def _record_py_tracker(conn: Connection, prefix_id: str) -> None:
         )
         conn.run("COMMIT")
     except DatabaseError as exc:
-        logger.trace(
-            "TRACKER_RECORD",
-            exc=exc,
-        )
+        logger.debug("TRACKER_RECORD", extra={"exc": exc})
         conn.run("BEGIN")
         conn.run(
             "INSERT INTO yascheduler_migrations (migration_id) VALUES (:p)",
             p=prefix_id,
         )
         conn.run("COMMIT")
-    logger.trace("TRACKER_RECORD", prefix=prefix_id)
+    logger.debug("TRACKER_RECORD", extra={"prefix": prefix_id})
     # END_BLOCK_TRACKER_RECORD
 
 
@@ -248,14 +245,13 @@ def apply_migrations(config: PostgresDbConfig) -> None:
             port=config.port,
             password=config.password,
         )
-        logger.trace("OPEN_CONNECTION")
         # END_BLOCK_OPEN_CONNECTION
 
         # START_BLOCK_READ_LAST
         last = _last_applied(conn)
         files = _scan_migrations()
         pending = _pending(last, files)
-        logger.trace("READ_LAST", last=last, pending=len(pending))
+        logger.debug("READ_LAST", extra={"last": last, "pending": len(pending)})
         # END_BLOCK_READ_LAST
 
         # START_BLOCK_APPLY_PENDING
@@ -265,11 +261,10 @@ def apply_migrations(config: PostgresDbConfig) -> None:
                 _apply_sql_migration(conn, path, pid)
             else:
                 _apply_py_migration(conn, path, pid, config)
-            logger.trace("APPLY_PENDING", prefix=pid)
+            logger.debug("APPLY_PENDING", extra={"prefix": pid})
         # END_BLOCK_APPLY_PENDING
     finally:
         # START_BLOCK_CLOSE
         if conn is not None:
             conn.close()
-            logger.trace("CLOSE")
         # END_BLOCK_CLOSE

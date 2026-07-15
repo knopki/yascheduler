@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/az.py
-# VERSION: 1.12.0
+# VERSION: 1.13.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Azure VM creation and deletion using Azure SDK.
@@ -23,8 +23,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-AZ") at module top
-#   PREVIOUS_CHANGE: v1.11.0 - Migrate from logging.Logger to YaLogger type annotations in function signatures; move CloudInitConfig import to TYPE_CHECKING.
+
+#   LAST_CHANGE: v1.13.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.12.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-AZ") at module top
 # END_CHANGE_SUMMARY
 #
 """Azure cloud methods"""
@@ -76,9 +77,8 @@ except ImportError:
     _AZURE_AVAILABLE = False
 
 from yascheduler.infra.cloud import get_rnd_name
-from yascheduler.shared import get_logger
 
-logger = get_logger("M-CLOUD-PROVIDER-AZ")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
@@ -97,7 +97,6 @@ for logger_name in [
     "msrest.serialization",
 ]:
     logging.getLogger(logger_name).setLevel(logging.ERROR)
-
 
 ID_TAG_NAME = "yascheduler_ip"
 
@@ -132,9 +131,9 @@ async def _fetch_network_resources(
         virtual_network_name=cfg.vnet,
         subnet_name=cfg.subnet,
     )
-    logger.trace("FETCH_SUBNET", subnet=subnet.name)
+    logger.debug("FETCH_SUBNET", extra={"subnet": subnet.name})
     nsg = await client.network_security_groups.get(cfg.resource_group, cfg.nsg)
-    logger.trace("FETCH_NSG", nsg=nsg.name)
+    logger.debug("FETCH_NSG", extra={"nsg": nsg.name})
     # END_BLOCK_FETCH_RESOURCES
     return subnet, nsg
 
@@ -173,7 +172,7 @@ async def create_nic(
     )
     await poller.wait()
     nic = await poller.result()
-    logger.trace("CREATE_NIC", nic=nic.name)
+    logger.debug("CREATE_NIC", extra={"nic": nic.name})
     ip_addr = None
     if nic.ip_configurations:
         for ip_conf in nic.ip_configurations:
@@ -304,7 +303,7 @@ async def create_node(
     )
     await poller.wait()
     vm_res = await poller.result()
-    logger.trace("CREATE_VM", vm=vm_res.name)
+    logger.debug("CREATE_VM", extra={"vm": vm_res.name})
     return ip_addr
 
 
@@ -361,7 +360,7 @@ async def delete_node(
                 cfg.resource_group, cast("str", vm_res.name)
             )
             await poller.wait()
-            logger.trace("DELETE_VM", vm=vm_res.name)
+            logger.debug("DELETE_VM", extra={"vm": vm_res.name})
             break
 
     nic = None
@@ -373,7 +372,7 @@ async def delete_node(
                 cfg.resource_group, cast("str", nic.name)
             )
             await poller.wait()
-            logger.trace("DELETE_NIC", nic=nic.name)
+            logger.debug("DELETE_NIC", extra={"nic": nic.name})
             break
 
 

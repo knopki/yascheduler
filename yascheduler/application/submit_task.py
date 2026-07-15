@@ -1,5 +1,5 @@
 # FILE: yascheduler/application/submit_task.py
-# VERSION: 1.7.0
+# VERSION: 1.8.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Register a new task in TO_DO state after validation.
 #   SCOPE: Task submission use case — validation, NewTask construction, persistence via UoW.
@@ -12,12 +12,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Remove remote_tasks_dir param.  Remove with_remote_folder + with_event(TaskCreated) chain; insert now returns a Task with TaskCreated in events (attached by materialize_task). submit_task no longer constructs DomainEvent subclasses.
-#   PREVIOUS_CHANGE: v1.6.0 - Extract typed fields from caller metadata dict; construct NewTask directly; use with_remote_folder/with_event (no TaskContext).
+
+#   LAST_CHANGE: v1.8.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.7.0 - Remove remote_tasks_dir param.  Remove with_remote_folder + with_event(TaskCreated) chain; insert now returns a Task with TaskCreated in events (attached by materialize_task). submit_task no longer constructs DomainEvent subclasses.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from yascheduler.domain import (
@@ -26,7 +28,6 @@ from yascheduler.domain import (
     TaskId,
     UnsupportedEngineError,
 )
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 
     from .uow import AbstractUnitOfWork
 
-logger = get_logger("M-APPLICATION-SUBMIT")
+logger = logging.getLogger(__name__)
 
 _KNOWN_TYPED_KEYS = frozenset(
     {

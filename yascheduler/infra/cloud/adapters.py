@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/adapters.py
-# VERSION: 1.3.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Mapping of cloud config types to create/delete callables.
 #   SCOPE: Adapter registry mapping provider config classes to their operations.
@@ -22,22 +22,22 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-ADAPTERS") at module top
-#   PREVIOUS_CHANGE: v1.2.0 - Migrate CloudAdapter from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); drop 4× bare field(); remove stale FIXME marker.
+
+#   LAST_CHANGE: v1.4.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.3.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-ADAPTERS") at module top
 # END_CHANGE_SUMMARY
 """Cloud adapters"""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from functools import cache
 from typing import TYPE_CHECKING, Generic
 
 if TYPE_CHECKING:
     from .cloud_configs import ConfigCloud
-
-from yascheduler.shared import get_logger
 
 from .protocols import (
     CreateNodeCallable,
@@ -46,7 +46,7 @@ from .protocols import (
     TConfigCloud_co,
 )
 
-logger = get_logger("M-CLOUD-ADAPTERS-NEW")
+logger = logging.getLogger(__name__)
 
 
 def can_debian_buster(platform: str) -> bool:

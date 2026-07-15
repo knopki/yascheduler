@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.16.0
+# VERSION: 5.17.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
 #   SCOPE: Factories per entry point (daemon, CLI).
@@ -15,13 +15,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.16.0 - remove log parameter from collaborator constructors in make_daemon; bind module-local logger = get_logger("M-DI") at module top
-#   PREVIOUS_CHANGE: v5.15.0 - Migrate logger to get_logger factory; YaLogger type annotations; restore stripped design comment blocks.
+
+#   LAST_CHANGE: v5.17.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v5.16.0 - remove log parameter from collaborator constructors in make_daemon; bind module-local logger = get_logger("M-DI") at module top
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
@@ -55,9 +57,8 @@ from yascheduler.infra import (
     resolve_adapter,
     webhook_handler,
 )
-from yascheduler.shared import get_logger
 
-logger = get_logger("M-DI")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable

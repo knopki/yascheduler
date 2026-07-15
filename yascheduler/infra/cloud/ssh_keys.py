@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/ssh_keys.py
-# VERSION: 1.1.0
+# VERSION: 1.2.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH key generation, loading, and name extraction for cloud provisioning.
@@ -14,23 +14,23 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-SSH-KEYS") at module top
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
+
+#   LAST_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.1.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-SSH-KEYS") at module top
 # END_CHANGE_SUMMARY
 
 """SSH key management for cloud provisioning"""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path, PurePath
 
 from asyncssh.public_key import SSHKey, generate_private_key, read_private_key
 
-from yascheduler.shared import get_logger
-
 from .utils import get_rnd_name
 
-logger = get_logger("M-CLOUD-SSH-KEYS")
+logger = logging.getLogger(__name__)
 
 
 # START_CONTRACT: get_or_create_ssh_key
@@ -49,10 +49,12 @@ def get_or_create_ssh_key(keys_dir: Path) -> SSHKey:
             continue
         ssh_key = read_private_key(filepath)
         ssh_key.set_comment(filepath.name)
-        logger.trace(
+        logger.debug(
             "LOADED_KEY",
-            key_name=filepath.name,
-            fingerprint=ssh_key.get_fingerprint("md5"),
+            extra={
+                "key_name": filepath.name,
+                "fingerprint": ssh_key.get_fingerprint("md5"),
+            },
         )
         return ssh_key
     # END_BLOCK_LOAD_EXISTING

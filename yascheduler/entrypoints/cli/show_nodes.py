@@ -1,5 +1,5 @@
 # FILE: yascheduler/entrypoints/cli/show_nodes.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output.
 #   SCOPE: show_nodes command — list nodes and running tasks.
@@ -19,8 +19,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - _NodeView.ncpus widens to int | None; table renderer maps None (and legacy 0) to "MAX"; JSON schema docstring updated to int | null.
-#   PREVIOUS_CHANGE: v1.5.0 - _NodeView.ip→hostname + new node fields (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); table header IP→HOSTNAME; JSON renderer emits hostname key + all new fields.
+
+#   LAST_CHANGE: v1.5.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.6.0 - _NodeView.ncpus widens to int | None; table renderer maps None (and legacy 0) to "MAX"; JSON schema docstring updated to int | null.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -36,7 +37,6 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import NodeId, NodeStatus, TaskId, TaskStatus
 from yascheduler.entrypoints import make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.shared import get_logger
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -47,8 +47,7 @@ if TYPE_CHECKING:
     from yascheduler.application import AbstractUnitOfWork
     from yascheduler.domain import Task
 
-
-logger = get_logger("M-ENTRYPOINTS-CLI-SHOW-NODES")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -132,7 +131,7 @@ def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
 # END_CONTRACT: _fetch_nodes_view
 async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
     # START_BLOCK_READ_NODES
-    logger.trace("READ", detail="nodes and running tasks")
+    logger.debug("READ", extra={"detail": "nodes and running tasks"})
     tasks = await uow.tasks.list_by_status(statuses={TaskStatus.RUNNING})
     nodes = await uow.nodes.list_all()
     # END_BLOCK_READ_NODES

@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_orchestrator_producer_resilience.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for orchestrator producer/stats error resilience (fix-orchestrator-producer-silent-death).
@@ -18,8 +18,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - test_producer_exception_continues_loop: explicitly cancel+await the worker registered in _bg_jobs after the producer loop exits via cancellation_event (normal exit does NOT run the `except CancelledError` drain, so the worker would otherwise remain blocked on queue.get() and emit a PytestUnraisableExceptionWarning "Event loop is closed" at teardown). Matches the explicit-cancel pattern already used in test_workers_registered_in_bg_jobs.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for orchestrator producer/stats resilience and worker registration (fix-orchestrator-producer-silent-death).
+#   LAST_CHANGE: v1.1.0 - switch-to-standard-logging: migrate PRODUCER_ERROR/ERROR assertions off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS).
+#   PREVIOUS_CHANGE: v1.0.1 - test_producer_exception_continues_loop: explicitly cancel+await the worker registered in _bg_jobs after the producer loop exits via cancellation_event (normal exit does NOT run the `except CancelledError` drain, so the worker would otherwise remain blocked on queue.get() and emit a PytestUnraisableExceptionWarning "Event loop is closed" at teardown). Matches the explicit-cancel pattern already used in test_workers_registered_in_bg_jobs.
 # END_CHANGE_SUMMARY
 #
 """Unit tests for orchestrator producer and stats error resilience."""
@@ -34,6 +34,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.log_assertions import extra_fields
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.application.queue import UMessage, UniqueQueue
@@ -221,9 +222,9 @@ class TestProducerResilience:
 
         assert call_count["n"] >= 2, "producer was not retried after raising"
         assert success["n"] >= 1, "second producer cycle did not complete"
-        assert any(
-            getattr(r, "block", None) == "PRODUCER_ERROR" for r in caplog.records
-        ), "producer Exception was not logged as PRODUCER_ERROR trace"
+        assert any(r.getMessage() == "PRODUCER_ERROR" for r in caplog.records), (
+            "producer Exception was not logged as PRODUCER_ERROR trace"
+        )
 
 
 # =============================================================================
@@ -286,9 +287,9 @@ class TestCancelledErrorDrain:
         finally:
             parent.removeHandler(handler)
 
-        assert not any(
-            getattr(r, "block", None) == "PRODUCER_ERROR" for r in handler.records
-        ), "CancelledError was swallowed by except Exception"
+        assert not any(r.getMessage() == "PRODUCER_ERROR" for r in handler.records), (
+            "CancelledError was swallowed by except Exception"
+        )
 
 
 # =============================================================================
@@ -528,8 +529,7 @@ class TestStatsResilience:
 
         assert boom.calls >= 2, "stats loop did not continue after the first error"
         assert any(
-            getattr(r, "block", None) == "ERROR"
-            and getattr(r, "fields", {}).get("context") == "stats"
+            r.getMessage() == "ERROR" and extra_fields(r).get("context") == "stats"
             for r in caplog.records
         ), "stats Exception was not logged with the ERROR trace and context=stats"
 
@@ -617,7 +617,6 @@ class TestStatsEmptyDbRegression:
             for r in caplog.records
         ), "stats did not log successfully on empty nodes table"
         assert not any(
-            getattr(r, "block", None) == "ERROR"
-            and getattr(r, "fields", {}).get("context") == "stats"
+            r.getMessage() == "ERROR" and extra_fields(r).get("context") == "stats"
             for r in caplog.records
         ), "stats raised on empty nodes table (KeyError regression)"

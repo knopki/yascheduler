@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/cloud/providers/vastai.py
-# VERSION: 1.9.0
+# VERSION: 1.10.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: VastAI GPU marketplace instance creation and deletion via REST API.
@@ -22,8 +22,9 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-VASTAI") at module top
-#   PREVIOUS_CHANGE: v1.8.0 - Retype vastai_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade.
+
+#   LAST_CHANGE: v1.10.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-VASTAI") at module top
 # END_CHANGE_SUMMARY
 
 """VastAI cloud methods"""
@@ -31,6 +32,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any, cast
 
 try:
@@ -40,9 +42,7 @@ try:
 except ImportError:
     _AIOHTTP_AVAILABLE = False
 
-from yascheduler.shared import get_logger
-
-logger = get_logger("M-CLOUD-PROVIDER-VASTAI")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey

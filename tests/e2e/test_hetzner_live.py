@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_hetzner_live.py
-# VERSION: 1.2.0
+# VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Real-Hetzner cloud-provider E2E test — autoscale -> allocate -> download -> idle-deallocate happy path against a live Hetzner Cloud account.
 #   SCOPE: opt-in env-gated test (YASCHEDULER_TEST_HETZNER=1 + token); drives make_daemon + _submit_async; asserts VM creation, both jobs DONE with matching outputs, idle deallocation, strong deletion via find_srv; guaranteed observed-IP cleanup with loud-fail-on-leak in finally.
@@ -23,8 +23,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - reform-grace-logging slice 8: migrate _assert_cloud_done_log / _assert_cloud_delete_log from getMessage() substring matching to record.block/record.fields structured fields; remove _CLOUD_DONE_MARKER and _CLOUD_DELETE_MARKER constants; remove import re.
-#   PREVIOUS_CHANGE: v1.2.0 - task-schema-and-entity-cleanup: t.allocated_ip -> node.hostname via uow.nodes.get_by_id(t.allocated_node_id); assert created_at/updated_at on DONE tasks.
+#   LAST_CHANGE: v1.4.0 - switch-to-standard-logging: migrate _assert_cloud_done_log / _assert_cloud_delete_log off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS from yascheduler.shared.log).
+#   PREVIOUS_CHANGE: v1.3.0 - reform-grace-logging slice 8: migrate _assert_cloud_done_log / _assert_cloud_delete_log from getMessage() substring matching to record.block/record.fields structured fields; remove _CLOUD_DONE_MARKER and _CLOUD_DELETE_MARKER constants; remove import re.
 #   PREVIOUS_CHANGE: v1.0.0 - add-hetzner-live-e2e: new opt-in env-gated real-Hetzner e2e exercising the cold-start autoscale -> allocate -> download -> idle-deallocate happy path through the real entrypoints (make_daemon, _submit_async) and asserting via uow_factory. Hetzner hcloud SDK is imported lazily inside helpers so module collection succeeds without the optional extra; the env gate (YASCHEDULER_TEST_HETZNER=1 + YASCHEDULER_CLOUDS_HETZNER_TOKEN) skips by default. Cleanup is observed-IP based with a loud-fail-on-leak finally; a strong find_srv deletion assertion complements DB-row removal. Refined via a live run: _poll_for_hetzner_node requires n.enabled (the tmp node inserted by _select_and_insert_tmp has cloud=hetzner/enabled=False with a placeholder IP); CLOUD_DELETE is asserted after _poll_node_gone (it is emitted by the idle-deallocate loop, not at completion); timeouts sized to the observed ~83s cold-start.
 # END_CHANGE_SUMMARY
 
@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.log_assertions import extra_fields
 from yascheduler.domain.model import TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.cli.submit import _submit_async
@@ -419,7 +420,7 @@ async def _assert_outputs(
 
 
 # START_CONTRACT: _assert_cloud_done_log
-#   PURPOSE: Assert captured log_records contain a CLOUD_DONE trace record with hostname=<node_ip> cloud=hetzner. Uses structured fields (record.block/record.fields), not getMessage() substrings. Emitted by _persist_node_with_cleanup at provision time, so it is present once both tasks have reached DONE.
+#   PURPOSE: Assert captured log_records contain a CLOUD_DONE trace record with hostname=<node_ip> cloud=hetzner. Uses getMessage() (former block marker is now the message) plus extra-diff against _NATIVE_KEYS, not record.block/record.fields. Emitted by _persist_node_with_cleanup at provision time, so it is present once both tasks have reached DONE.
 #   INPUTS: { records: list[LogRecord], node_ips: list[str] - provisioned hetzner IPs to match against hostname= }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — pure assertion over captured records.
@@ -428,37 +429,32 @@ async def _assert_outputs(
 def _assert_cloud_done_log(
     records: list[logging.LogRecord], node_ips: list[str]
 ) -> None:
-    cloud_done_records = [
-        r for r in records if getattr(r, "block", None) == "CLOUD_DONE"
-    ]
+    cloud_done_records = [r for r in records if r.getMessage() == "CLOUD_DONE"]
     done_match = any(
-        rec.fields.get("cloud") == "hetzner"  # type: ignore[attr-defined]
-        and rec.fields.get("hostname") in node_ips  # type: ignore[attr-defined]
+        (fields := extra_fields(rec)).get("cloud") == "hetzner"
+        and fields.get("hostname") in node_ips
         for rec in cloud_done_records
     )
     assert done_match, (
-        f"no [CLOUD_DONE] trace record with cloud=hetzner and hostname in {node_ips}; "
+        f"no CLOUD_DONE trace record with cloud=hetzner and hostname in {node_ips}; "
         f"captured CLOUD_DONE records={cloud_done_records}"
     )
 
 
 # START_CONTRACT: _assert_cloud_delete_log
-#   PURPOSE: Assert captured log_records contain a CLOUD_DELETE trace record with cloud=hetzner. Uses structured fields (record.block/record.fields), not getMessage() substrings. Emitted by deallocate_node during idle-deallocation, so it is only present AFTER the node row has been removed — must be called after _poll_node_gone, not at completion time.
+#   PURPOSE: Assert captured log_records contain a CLOUD_DELETE trace record with cloud=hetzner. Uses getMessage() (former block marker is now the message) plus extra-diff against _NATIVE_KEYS, not record.block/record.fields. Emitted by deallocate_node during idle-deallocation, so it is only present AFTER the node row has been removed — must be called after _poll_node_gone, not at completion time.
 #   INPUTS: { records: list[LogRecord] }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: None — pure assertion over captured records.
 #   LINKS: M-APPLICATION-DEALLOCATE
 # END_CONTRACT: _assert_cloud_delete_log
 def _assert_cloud_delete_log(records: list[logging.LogRecord]) -> None:
-    cloud_delete_records = [
-        r for r in records if getattr(r, "block", None) == "CLOUD_DELETE"
-    ]
+    cloud_delete_records = [r for r in records if r.getMessage() == "CLOUD_DELETE"]
     delete_match = any(
-        rec.fields.get("cloud") == "hetzner"  # type: ignore[attr-defined]
-        for rec in cloud_delete_records
+        extra_fields(rec).get("cloud") == "hetzner" for rec in cloud_delete_records
     )
     assert delete_match, (
-        f"no [CLOUD_DELETE] trace record with cloud=hetzner; "
+        f"no CLOUD_DELETE trace record with cloud=hetzner; "
         f"captured CLOUD_DELETE records={cloud_delete_records}"
     )
 

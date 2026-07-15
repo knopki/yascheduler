@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_webhook_handler.py
-# VERSION: 1.4.0
+# VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Tests for the webhook notification handler.
 #   SCOPE: Unit tests for webhook_handler event dispatch, _send_webhook, and WebhookPayload construction.
@@ -19,8 +19,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Relocate TestWebhookPayload (construction/default custom_params) from tests/unit/test_scheduler.py prior to scheduler.py deletion.
-#   PREVIOUS_CHANGE: v1.3.0 - Add autouse _fast_backoff fixture (no-op asyncio.sleep + fast-forward datetime.now) so the backoff fibonacci retry (max_time=60) does not stall or overflow tests.
+#   LAST_CHANGE: v1.5.0 - switch-to-standard-logging: migrate RETRY assertion off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS).
+#   PREVIOUS_CHANGE: v1.4.0 - Relocate TestWebhookPayload (construction/default custom_params) from tests/unit/test_scheduler.py prior to scheduler.py deletion.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ import aiohttp
 import backoff._async as _backoff_async
 import pytest
 
+from tests.log_assertions import extra_fields
 from yascheduler.domain.events import (
     DomainEvent,
     TaskAbandoned,
@@ -180,8 +181,7 @@ async def test_send_error_logged_not_raised(caplog: pytest.LogCaptureFixture) ->
     with caplog.at_level(logging.DEBUG):
         await webhook_handler(event, http)
     assert any(
-        getattr(r, "block", None) == "RETRY"
-        and getattr(r, "fields", {}).get("url") == URL
+        r.getMessage() == "RETRY" and extra_fields(r).get("url") == URL
         for r in caplog.records
     )
 

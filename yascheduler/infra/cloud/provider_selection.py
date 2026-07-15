@@ -13,22 +13,21 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-PROVIDER-SELECTION") at module top
-#   PREVIOUS_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
+
+#   LAST_CHANGE: v1.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...); drop vestigial NONE DEBUG trace (carried no extra fields, not asserted in tests).
+#   PREVIOUS_CHANGE: v1.2.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-PROVIDER-SELECTION") at module top
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
-
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from .adapters import CloudAdapter
     from .cloud_configs import ConfigCloud
 
-logger = get_logger("M-CLOUD-PROVIDER-SELECTION")
-
+logger = logging.getLogger(__name__)
 
 # START_CONTRACT: select_provider_pure
 #   PURPOSE: Pick the highest-priority provider with available capacity and platform support.
@@ -78,21 +77,27 @@ def select_provider_pure(
             continue
         current = current_counts.get(name, 0)
         if current >= config.max_nodes:
-            logger.trace(
-                "MAXED", provider=name, current=current, max_nodes=config.max_nodes
+            logger.debug(
+                "MAXED",
+                extra={
+                    "provider": name,
+                    "current": current,
+                    "max_nodes": config.max_nodes,
+                },
             )
             continue
         # Inline platform-support check (was _is_platform_supported on CloudProvisionerImpl).
         # Early-break loop is clearer than nested any(any(...)) and short-circuits
         # on the first supported platform.
         if not _adapter_supports_any_platform(adapter, platforms):
-            logger.trace("NO_PLATFORM", provider=name, platforms=platforms)
+            logger.debug(
+                "NO_PLATFORM", extra={"provider": name, "platforms": platforms}
+            )
             continue
         suitable.append(adapter)
     # END_BLOCK_FILTER_SUITABLE
 
     if not suitable:
-        logger.trace("NONE")
         return None
 
     # START_BLOCK_SORT_BY_PRIORITY
@@ -101,6 +106,9 @@ def select_provider_pure(
         reverse=True,
     )
     chosen = suitable[0]
-    logger.trace("CHOSEN", provider=chosen.name, priority=configs[chosen.name].priority)
+    logger.debug(
+        "CHOSEN",
+        extra={"provider": chosen.name, "priority": configs[chosen.name].priority},
+    )
     # END_BLOCK_SORT_BY_PRIORITY
     return chosen

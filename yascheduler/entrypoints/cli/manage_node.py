@@ -21,9 +21,10 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.14.0 - _add_node sources jump_port from config.remote.jump_port (was hardcoded 22).
-#   PREVIOUS_CHANGE: v1.13.0 - _add_node encodes absent ~ncpus as None (not 0): ncpus=spec.ncpus passes HostSpec.ncpus (int | None) directly to NewNode. HostSpec docstring updated.
-#   PREVIOUS_CHANGE: v1.12.0 - _add_node stamps jump_host/jump_username/jump_port from config.remote onto NewNode at construction. connect(node=tmp, …) receives no jump kwargs — the tmp row carries them.
+
+#   LAST_CHANGE: v1.15.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.14.0 - _add_node sources jump_port from config.remote.jump_port (was hardcoded 22).
+#   PREVIOUS_CHANGE: v1.14.0 - _add_node sources jump_port from config.remote.jump_port (was hardcoded 22).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -39,11 +40,10 @@ from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.infra import SSHMachineRepository
 from yascheduler.infra.ssh.keys import list_private_keys
-from yascheduler.shared import get_logger
 
 from .args import add_config_arg, add_log_level_arg
 
-logger = get_logger("M-ENTRYPOINTS-CLI-MANAGE-NODE")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

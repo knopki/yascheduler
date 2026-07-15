@@ -1,5 +1,5 @@
 # FILE: tests/unit/test_ssh_gateway.py
-# VERSION: 1.2.0
+# VERSION: 1.5.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: Unit tests for SSHMachineRepository + SSHMachineSession — connection lifecycle, command execution via session, SFTP via session, machine state via session, repository collection semantics.
@@ -20,8 +20,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_state and list_free ConnectedMachine constructions; add test_connect_logs_cpu_count_at_discovery_site caplog test for CPU-count log at discovery site (not in setup_node).
-#   PREVIOUS_CHANGE: v1.3.0 - node-owns-connection-identity: add TestBuildTunnelOptions (4 tests), TestConnectJumpIdentity (3 acceptance tests), test_init_owns_sessions_dict. code-quality: replace test_forward_empty_client_keys with mock-based client_keys propagation tests; add test_tunnel_leg_forwards_client_keys acceptance test to lock client_keys forwarding invariant.
+#   LAST_CHANGE: v1.5.0 - switch-to-standard-logging: migrate CPUS assertion off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS); caplog logger name yascheduler.M-SSH-REPOSITORY → yascheduler.infra.ssh.repository.
+#   PREVIOUS_CHANGE: v1.4.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_state and list_free ConnectedMachine constructions; add test_connect_logs_cpu_count_at_discovery_site caplog test for CPU-count log at discovery site (not in setup_node).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.log_assertions import extra_fields
 from yascheduler.domain import Engine
 from yascheduler.domain.model import (
     ConnectedMachine,
@@ -678,14 +679,17 @@ class TestConnectionLifecycle:
                 username="root",
                 port=22,
             )
-            with caplog.at_level(logging.DEBUG, logger="yascheduler.M-SSH-REPOSITORY"):
+            with caplog.at_level(
+                logging.DEBUG, logger="yascheduler.infra.ssh.repository"
+            ):
                 await repository.connect(node=node, client_keys=[])
 
         # (a) CPU-count log emitted from connect path as a trace record
-        cpu_trace = [r for r in caplog.records if getattr(r, "block", None) == "CPUS"]
+        cpu_trace = [r for r in caplog.records if r.getMessage() == "CPUS"]
         assert len(cpu_trace) == 1
-        assert getattr(cpu_trace[0], "fields", {}).get("hostname") == "10.0.0.1"
-        assert getattr(cpu_trace[0], "fields", {}).get("ncpus") == 4
+        cpu_fields = extra_fields(cpu_trace[0])
+        assert cpu_fields.get("hostname") == "10.0.0.1"
+        assert cpu_fields.get("ncpus") == 4
 
         # (b) setup_node does NOT emit a CPU-count log (the old "CPUs count:" format is absent)
         assert not any("CPUs count" in r.getMessage() for r in caplog.records), (

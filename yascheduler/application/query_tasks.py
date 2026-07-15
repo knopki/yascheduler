@@ -12,15 +12,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Return type widens to tuple[list[Task], dict[NodeId, Node]]; batch-load nodes via uow.nodes.get_by_ids.
-#   PREVIOUS_CHANGE: v1.1.0 - jobs param narrows to Sequence[TaskId]; forwards list(jobs) to list_by_jobs(list[TaskId]).
+
+#   LAST_CHANGE: v1.3.0 - Remove vestigial EMPTY_DISPATCH DEBUG trace (carried no extra fields, not asserted in tests) along with the now-unused logger binding and logging import; the module no longer logs.
+#   PREVIOUS_CHANGE: v1.2.0 - Return type widens to tuple[list[Task], dict[NodeId, Node]]; batch-load nodes via uow.nodes.get_by_ids.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-
-from yascheduler.shared import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -28,8 +27,6 @@ if TYPE_CHECKING:
     from yascheduler.domain import Node, NodeId, Task, TaskId, TaskStatus
 
     from .uow import AbstractUnitOfWork
-
-logger = get_logger("M-APPLICATION-QUERY-TASKS")
 
 
 # START_CONTRACT: query_tasks
@@ -56,7 +53,6 @@ async def query_tasks(
 
     # START_BLOCK_EMPTY_DISPATCH
     if not statuses and not jobs:
-        logger.trace("EMPTY_DISPATCH")
         return [], {}
     # END_BLOCK_EMPTY_DISPATCH
 

@@ -1,5 +1,5 @@
 # FILE: yascheduler/infra/ssh/repository.py
-# VERSION: 2.4.0
+# VERSION: 2.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. True collection only — no state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession).
 #   SCOPE: SSHMachineRepository: connected-machine collection lifecycle, keyed by NodeId; connection-building helpers.
@@ -15,12 +15,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.4.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-REPOSITORY") at module top
-#   PREVIOUS_CHANGE: v2.7.0 - Split test-targeted CPUs info into log.trace("CPUS", ...) + log.info("connected to ...") per reform-grace-logging slice 6.11.
+
+#   LAST_CHANGE: v2.5.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v2.4.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-REPOSITORY") at module top
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -35,19 +37,17 @@ from yascheduler.domain import (
     Node,
     NodeId,
 )
-from yascheduler.shared import get_logger
 
 from .platform import ADAPTERS, _detect_platform, _init_paths, make_run_fn
 from .session import SSHMachineSession, my_backoff_exc
 
-logger = get_logger("M-SSH-REPOSITORY")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import PurePath
 
     from asyncssh.public_key import SSHKey
-
 
 # ---- Connection-building bits (stay in repository.py — used by _open_connection) ----
 
@@ -142,10 +142,12 @@ class SSHMachineRepository:
         )
         # END_BLOCK_BUILD_OPTS
         # START_BLOCK_CONNECT
-        logger.trace(
+        logger.debug(
             "CONNECT",
-            hostname=hostname,
-            tunnel=tunnel_opts.host if tunnel_opts else None,
+            extra={
+                "hostname": hostname,
+                "tunnel": tunnel_opts.host if tunnel_opts else None,
+            },
         )
         conn = await asyncssh.connection.connect(
             options=conn_opts,
@@ -229,14 +231,16 @@ class SSHMachineRepository:
         )
         # START_BLOCK_DETECT
         adapter, platforms = await _detect_platform(conn, ADAPTERS)
-        logger.trace("DETECT", platform=adapter.platform, hostname=node.hostname)
+        logger.debug(
+            "DETECT", extra={"platform": adapter.platform, "hostname": node.hostname}
+        )
         # END_BLOCK_DETECT
         # START_BLOCK_PATHS
         rd, re, rt = _init_paths(adapter, data_dir, engines_dir, tasks_dir)
         # END_BLOCK_PATHS
         # START_BLOCK_CREATE_MACHINE
         ncpus = await adapter.get_cpu_cores(make_run_fn(conn, adapter))
-        logger.trace("CPUS", hostname=node.hostname, ncpus=ncpus)
+        logger.debug("CPUS", extra={"hostname": node.hostname, "ncpus": ncpus})
         logger.info("connected to %s (%d CPUs)", node.hostname, ncpus)
         machine = ConnectedMachine(
             node_id=node.node_id,

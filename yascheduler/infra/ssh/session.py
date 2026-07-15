@@ -14,13 +14,15 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-SESSION") at module top
-#   PREVIOUS_CHANGE: v1.3.0 - add _cached_ncpus field, memoize get_cpu_cores per session, add _prime_ncpus_cache for repository priming.
+
+#   LAST_CHANGE: v1.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
+#   PREVIOUS_CHANGE: v1.2.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-SESSION") at module top
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import TYPE_CHECKING
@@ -28,12 +30,11 @@ from typing import TYPE_CHECKING
 import backoff
 
 from yascheduler.domain import ConnectedMachine, ProcessResult
-from yascheduler.shared import get_logger
 
 from .exceptions import AllSSHRetryExc, SSHRetryExc
 from .platform import make_run_fn
 
-logger = get_logger("M-SSH-SESSION")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -57,7 +58,6 @@ if TYPE_CHECKING:
         QuoteCallable,
         RemoteMachineAdapter,
     )
-
 
 my_backoff_exc = partial(
     backoff.on_exception,
@@ -272,7 +272,6 @@ class SSHMachineSession:
             quote=self._adapter.quote,
             engines=engines.filter_platforms(self._platforms),
             engines_dir=self._engines_dir,
-            log=logger,
         )
 
     async def pgrep(
@@ -385,7 +384,7 @@ class SSHMachineSession:
         task = self._monitor_task
         if task is not None:
             self._monitor_task = None
-            logger.trace("CANCEL_MONITOR", hostname=self._hostname)
+            logger.debug("CANCEL_MONITOR", extra={"hostname": self._hostname})
             task.cancel()
             try:
                 await task
@@ -394,7 +393,7 @@ class SSHMachineSession:
         # END_BLOCK_CANCEL_MONITOR
         # START_BLOCK_CLOSE_CONN
         if self._conn._transport:
-            logger.trace("CLOSE", hostname=self._hostname)
+            logger.debug("CLOSE", extra={"hostname": self._hostname})
             self._conn.close()
             await self._conn.wait_closed()
         # END_BLOCK_CLOSE_CONN
