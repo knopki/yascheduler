@@ -86,6 +86,7 @@ class ConfigCloudAzure:
             [
                 *cls.get_valid_config_parser_fields(),
                 *ConfigCloudHetzner.get_valid_config_parser_fields(),
+                *ConfigCloudVultr.get_valid_config_parser_fields(),
                 *ConfigCloudUpcloud.get_valid_config_parser_fields(),
             ],
             sec,
@@ -153,6 +154,7 @@ class ConfigCloudHetzner:
             [
                 *ConfigCloudAzure.get_valid_config_parser_fields(),
                 *cls.get_valid_config_parser_fields(),
+                *ConfigCloudVultr.get_valid_config_parser_fields(),
                 *ConfigCloudUpcloud.get_valid_config_parser_fields(),
             ],
             sec,
@@ -165,6 +167,75 @@ class ConfigCloudHetzner:
             server_type=sec.get(fmt("server_type")),  # type: ignore
             location=sec.get(fmt("location")),
             image_name=sec.get(fmt("image_name")),  # type: ignore
+            priority=sec.getint(fmt("priority")),  # type: ignore
+            idle_tolerance=sec.getint(fmt("idle_tolerance")),  # type: ignore
+            jump_username=sec.get(fmt("jump_user"), None),
+            jump_host=sec.get(fmt("jump_host"), None),
+        )
+
+
+@define(frozen=True)
+class ConfigCloudVultr:
+    """Vultr bare-metal cloud configuration.
+
+    Key fields:
+      api_key       — Vultr API key (required)
+      location      — datacenter region, e.g. 'ams'
+      server_type   — bare-metal plan id, e.g. 'vbm-24c-256gb-amd'
+      image_name    — Vultr OS id (int, 2284 = Ubuntu 24.04)
+      need_raid     — whether to set up RAID0 NVMe + /dev/shm during
+                      cloud-init (True for vbm-24c-256gb-amd, False for
+                      plans where NVMe is already the main disk)
+      idle_tolerance — seconds of idleness before auto-deletion
+    """
+
+    prefix = "vultr"
+    api_key: str = field(validator=validators.instance_of(str))
+    location: str = make_default_field("ams")
+    server_type: str = make_default_field("vbm-24c-256gb-amd")
+    image_name: int = make_default_field(2284, extra_validators=[validators.ge(1)])
+    need_raid: bool = make_default_field(True)
+    max_nodes: int = make_default_field(10, extra_validators=[validators.ge(0)])
+    username: str = make_default_field("root")
+    priority: int = make_default_field(0)
+    idle_tolerance: int = make_default_field(1800, extra_validators=[validators.ge(1)])
+    jump_username: Optional[str] = field(default=None, validator=opt_str_val)
+    jump_host: Optional[str] = field(default=None, validator=opt_str_val)
+
+    @classmethod
+    def get_valid_config_parser_fields(cls) -> Sequence[str]:
+        "Returns a list of valid config keys"
+        exclude_names = ["prefix", "username", "jump_username"]
+        include_names = ["user", "jump_user"]
+        return [
+            f"{cls.prefix}_{x}"
+            for x in [f.name for f in fields(cls) if f.name not in exclude_names]
+            + include_names
+        ]
+
+    @classmethod
+    def from_config_parser_section(cls, sec: SectionProxy) -> "ConfigCloudVultr":
+        "Create config from config parser's section"
+        fmt = partial(_fmt_key, cls.prefix)
+
+        warn_unknown_fields(
+            [
+                *ConfigCloudAzure.get_valid_config_parser_fields(),
+                *ConfigCloudHetzner.get_valid_config_parser_fields(),
+                *ConfigCloudUpcloud.get_valid_config_parser_fields(),
+                *cls.get_valid_config_parser_fields(),
+            ],
+            sec,
+        )
+
+        return cls(
+            api_key=sec.get(fmt("api_key")),  # type: ignore
+            location=sec.get(fmt("location")),  # type: ignore
+            server_type=sec.get(fmt("server_type")),  # type: ignore
+            image_name=sec.getint(fmt("image_name")),  # type: ignore
+            need_raid=sec.getboolean(fmt("need_raid"), fallback=True),
+            max_nodes=sec.getint(fmt("max_nodes")),  # type: ignore
+            username=sec.get(fmt("user")),  # type: ignore
             priority=sec.getint(fmt("priority")),  # type: ignore
             idle_tolerance=sec.getint(fmt("idle_tolerance")),  # type: ignore
             jump_username=sec.get(fmt("jump_user"), None),
@@ -206,6 +277,7 @@ class ConfigCloudUpcloud:
             [
                 *ConfigCloudAzure.get_valid_config_parser_fields(),
                 *ConfigCloudHetzner.get_valid_config_parser_fields(),
+                *ConfigCloudVultr.get_valid_config_parser_fields(),
                 *cls.get_valid_config_parser_fields(),
             ],
             sec,
@@ -223,4 +295,6 @@ class ConfigCloudUpcloud:
         )
 
 
-ConfigCloud = Union[ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud]
+ConfigCloud = Union[
+    ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVultr
+]

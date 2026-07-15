@@ -23,6 +23,7 @@ To install the appropriate connector, use one of the commands:
 - for Microsoft Azure: `pip install yascheduler[azure]`
 - for Hetzner Cloud: `pip install yascheduler[hetzner]`
 - for UpCloud: `pip install yascheduler[upcloud]`
+- for Vultr: no extra dependencies required (`pip install yascheduler`)
 
 The last updates and bugfixes can be obtained cloning the repository:
 
@@ -386,6 +387,49 @@ Settings prefix is `upcloud`.
 - `upcloud_password`
 
   Password.
+
+#### Vultr
+
+Vultr provides **bare-metal** instances suitable for heavy `ab initio`
+calculations. This integration uses the Vultr REST API v2 directly via `urllib`
+(no extra Python dependency is required — only `asyncssh`, which is already a
+core dependency).
+
+See [Cloud Providers](CLOUD.md) for details on bare-metal provisioning, RAID0
+NVMe setup, and cloud-init configuration.
+
+Settings prefix is `vultr`.
+
+- `vultr_api_key`
+
+  Vultr API key (required). Create one in the
+  [Vultr customer portal](https://my.vultr.com/settings/#settingsapi).
+
+- `vultr_location`
+
+  Datacenter region (Vultr API `region`).
+
+  _Default_: `ams`
+
+- `vultr_server_type`
+
+  Bare-metal plan id (Vultr API `plan`).
+
+  _Default_: `vbm-24c-256gb-amd`
+
+- `vultr_image_name`
+
+  Vultr OS id (integer, sent as `os_id` in the API). For example, `2284` =
+  Ubuntu 24.04 LTS x64, `2136` = Debian 12.
+
+  _Default_: `2284`
+
+- `vultr_need_raid`
+
+  Whether cloud-init sets up RAID0 NVMe + `/dev/shm`. Set to `False` for plans
+  where NVMe is already the main disk (e.g. `vbm-8c-132gb`).
+
+  _Default_: `True`
 
 ### Engines `[engine.*]`
 

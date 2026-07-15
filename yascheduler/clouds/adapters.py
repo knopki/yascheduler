@@ -90,3 +90,21 @@ def get_upcloud_adapter(name: str):
         delete_node=upcload_delete_node,
         op_limit=1,
     )
+
+
+def get_vultr_adapter(name: str):
+    """Build a CloudAdapter for Vultr bare metal.
+
+    op_limit is 2 (bare metal provisions slowly), create_node_timeout is
+    1200 s (~20 min) to accommodate long boot times.
+    """
+    from .vultr import vultr_create_node, vultr_delete_node
+
+    return CloudAdapter(
+        name=name,
+        supported_platform_checks=(can_debian_bullseye,),
+        create_node=vultr_create_node,
+        delete_node=vultr_delete_node,
+        op_limit=2,
+        create_node_timeout=1200,
+    )
