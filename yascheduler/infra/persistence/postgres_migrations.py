@@ -1,5 +1,6 @@
+"""Apply pending database schema/data migrations in forward-only order."""
 # FILE: yascheduler/infra/persistence/postgres_migrations.py
-# VERSION: 1.2.0
+# VERSION: 1.3.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Apply pending database schema/data migrations in forward-only order.
 #   SCOPE: Forward-only DDL/DML migration application over sql/migrations/ via one pg8000 connection, one transaction per migration, with yascheduler_migrations tracker recording.
@@ -23,12 +24,13 @@
 #
 # START_CHANGE_SUMMARY
 
-#   LAST_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...); drop vestigial OPEN_CONNECTION/CLOSE DEBUG traces (carried no extra fields, not asserted in tests).
-#   PREVIOUS_CHANGE: v1.1.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-PERSISTENCE-MIGRATIONS") at module top
+#   LAST_CHANGE: v1.3.0 - _apply_py_migration: move spec/loader load+check before conn.run("BEGIN") (ruff TRY301); it needs no open transaction and its failure must not trigger ROLLBACK on a never-begun txn.
+#   PREVIOUS_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...); drop vestigial OPEN_CONNECTION/CLOSE DEBUG traces (carried no extra fields, not asserted in tests).
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import inspect
 import logging
@@ -115,19 +117,18 @@ def _one_migration_subclass(module: ModuleType) -> type[Migration]:
         and cls.__module__ == module.__name__
     ]
     if len(candidates) != 1:
-        raise RuntimeError(
+        msg = (
             f"{module.__file__}: expected exactly one Migration subclass, "
             f"found {len(candidates)}"
         )
+        raise RuntimeError(msg)
     return candidates[0]
 
 
 def _rollback(conn: Connection) -> None:
     # START_BLOCK_ROLLBACK
-    try:
+    with contextlib.suppress(Exception):
         conn.run("ROLLBACK")
-    except Exception:
-        pass
     # END_BLOCK_ROLLBACK
 
 
@@ -208,12 +209,13 @@ def _apply_py_migration(
     prefix_id: str,
     config: PostgresDbConfig,
 ) -> None:
+    spec = importlib.util.spec_from_file_location(prefix_id, path)
+    if spec is None or spec.loader is None:
+        msg = f"{path}: cannot load migration module"
+        raise RuntimeError(msg)
     conn.run("BEGIN")
     try:
         # START_BLOCK_APPLY_PY
-        spec = importlib.util.spec_from_file_location(prefix_id, path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"{path}: cannot load migration module")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         klass = _one_migration_subclass(module)
@@ -235,6 +237,7 @@ def _apply_py_migration(
 #   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA
 # END_CONTRACT: apply_migrations
 def apply_migrations(config: PostgresDbConfig) -> None:
+    """Apply pending migrations from sql/migrations/ to the DB described by config, each in its own transaction."""
     conn: Connection | None = None
     try:
         # START_BLOCK_OPEN_CONNECTION

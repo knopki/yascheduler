@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from pytest_mock import MockerFixture  # noqa: TC002
+from pytest_mock import MockerFixture
 
 from yascheduler.domain.model import NewNode, Node, NodeId
 from yascheduler.infra.persistence.postgres import PostgresNodeRepository
@@ -32,7 +32,7 @@ from yascheduler.infra.persistence.sql_loader import load_query
 pytestmark = pytest.mark.unit
 
 
-def _make_node_row(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
+def _make_node_row(**overrides: Any) -> dict[str, Any]:
     """Build a fake _run row dict for a Node with sensible defaults; overrides win."""
     from datetime import datetime
 
@@ -78,7 +78,7 @@ class TestPostgresNodeRepository:
     # -- get -------------------------------------------------------------------
 
     async def test_get_returns_node(self, mocker: MockerFixture) -> None:
-        """get returns a Node hydrated from the row returned by _run."""
+        """Get returns a Node hydrated from the row returned by _run."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             _make_node_row(
@@ -89,7 +89,7 @@ class TestPostgresNodeRepository:
                 cloud="hetzner",
                 username="root",
                 port=22,
-            )
+            ),
         ]
 
         node = await repo.get_by_id(NodeId(1))
@@ -104,7 +104,7 @@ class TestPostgresNodeRepository:
         assert node.port == 22
 
     async def test_get_returns_none_when_not_found(self, mocker: MockerFixture) -> None:
-        """get returns None when _run returns empty."""
+        """Get returns None when _run returns empty."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
 
@@ -113,7 +113,7 @@ class TestPostgresNodeRepository:
         assert node is None
 
     async def test_get_handles_null_ncpus(self, mocker: MockerFixture) -> None:
-        """get handles null ncpus correctly (round-trips as None)."""
+        """Get handles null ncpus correctly (round-trips as None)."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             _make_node_row(
@@ -125,7 +125,7 @@ class TestPostgresNodeRepository:
                 username="admin",
                 port=2222,
                 status="OTHER",
-            )
+            ),
         ]
 
         node = await repo.get_by_id(NodeId(2))
@@ -139,9 +139,10 @@ class TestPostgresNodeRepository:
         assert node.port == 2222
 
     async def test_get_handles_positive_ncpus_unchanged(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
-        """get round-trips a positive int ncpus unchanged."""
+        """Get round-trips a positive int ncpus unchanged."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             _make_node_row(
@@ -152,7 +153,7 @@ class TestPostgresNodeRepository:
                 cloud="aws",
                 username="root",
                 port=22,
-            )
+            ),
         ]
 
         node = await repo.get_by_id(NodeId(3))
@@ -174,7 +175,7 @@ class TestPostgresNodeRepository:
                 cloud="aws",
                 username="root",
                 port=22,
-            )
+            ),
         ]
 
         result = await repo.get_by_id(NodeId(5))
@@ -183,7 +184,8 @@ class TestPostgresNodeRepository:
         assert result.node_id == NodeId(5)
         assert result.hostname == "10.0.0.5"
         repo._run.assert_awaited_once_with(  # type: ignore[attr-defined]
-            load_query("node/get_by_id"), node_id=5
+            load_query("node/get_by_id"),
+            node_id=5,
         )
 
     async def test_get_by_id_missing_returns_none(self, mocker: MockerFixture) -> None:
@@ -198,7 +200,8 @@ class TestPostgresNodeRepository:
     # -- get_by_ids -----------------------------------------------------------
 
     async def test_get_by_ids_empty_returns_empty_dict(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """get_by_ids([]) returns an empty dict."""
         repo = self._make_repo(mocker)
@@ -246,7 +249,8 @@ class TestPostgresNodeRepository:
     # -- list_enabled / list_disabled ------------------------------------------
 
     async def test_list_enabled_returns_only_enabled(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """list_enabled returns only nodes with valid IPs (containing '.')."""
         repo = self._make_repo(mocker)
@@ -286,7 +290,8 @@ class TestPostgresNodeRepository:
         assert len(nodes) == 3
 
     async def test_list_enabled_no_python_post_filter(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """list_enabled returns all enabled rows from SQL — no python post-filter (remove-tmp-node-fake-ip).
 
@@ -323,7 +328,8 @@ class TestPostgresNodeRepository:
         assert len(nodes) == 2
 
     async def test_list_disabled_returns_disabled_with_valid_ips(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """list_disabled returns all rows (SQL filters disabled) that have valid IPs."""
         repo = self._make_repo(mocker)
@@ -354,7 +360,8 @@ class TestPostgresNodeRepository:
         assert all(n.enabled is False for n in nodes)
 
     async def test_list_disabled_no_python_post_filter(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """list_disabled returns all rows from SQL — no python post-filter (remove-tmp-node-fake-ip).
 
@@ -395,7 +402,7 @@ class TestPostgresNodeRepository:
     # -- add -------------------------------------------------------------------
 
     async def test_insert_returns_node_with_id(self, mocker: MockerFixture) -> None:
-        """insert runs INSERT SQL and returns Node with generated NodeId."""
+        """Insert runs INSERT SQL and returns Node with generated NodeId."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [_make_node_row(node_id=42)]  # type: ignore[attr-defined]
         new_node = NewNode(
@@ -421,7 +428,7 @@ class TestPostgresNodeRepository:
         assert kwargs["port"] == 22
 
     async def test_insert_inserts_cloud_node(self, mocker: MockerFixture) -> None:
-        """insert persists a cloud-provisioned node."""
+        """Insert persists a cloud-provisioned node."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [_make_node_row(node_id=7)]  # type: ignore[attr-defined]
         new_node = NewNode(
@@ -442,7 +449,8 @@ class TestPostgresNodeRepository:
         assert kwargs["enabled"] is False
 
     async def test_insert_with_none_ncpus_returns_none(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """insert(NewNode(ncpus=None)) produces a row whose ncpus is None."""
         repo = self._make_repo(mocker)
@@ -462,9 +470,10 @@ class TestPostgresNodeRepository:
         assert result.ncpus is None
 
     async def test_update_binds_all_fields_including_ip(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
-        """update runs UPDATE SQL binding ip, ncpus, enabled, cloud, username, port, node_id (V1 cloud lifecycle relies on ip being SET)."""
+        """Update runs UPDATE SQL binding ip, ncpus, enabled, cloud, username, port, node_id (V1 cloud lifecycle relies on ip being SET)."""
         repo = self._make_repo(mocker)
 
         await repo.update(
@@ -476,7 +485,7 @@ class TestPostgresNodeRepository:
                 cloud="hetzner",
                 username="root",
                 port=22,
-            )
+            ),
         )
 
         repo._run.assert_awaited_once()  # type: ignore[attr-defined]
@@ -494,7 +503,7 @@ class TestPostgresNodeRepository:
     # -- enable / disable / remove ---------------------------------------------
 
     async def test_enable_executes_update(self, mocker: MockerFixture) -> None:
-        """enable calls _run with the enable query and node_id.value."""
+        """Enable calls _run with the enable query and node_id.value."""
         repo = self._make_repo(mocker)
 
         await repo.enable(NodeId(7))
@@ -502,7 +511,7 @@ class TestPostgresNodeRepository:
         repo._run.assert_awaited_once_with(load_query("node/enable"), node_id=7)  # type: ignore[attr-defined]
 
     async def test_disable_executes_update(self, mocker: MockerFixture) -> None:
-        """disable calls _run with the disable query and node_id.value."""
+        """Disable calls _run with the disable query and node_id.value."""
         repo = self._make_repo(mocker)
 
         await repo.disable(NodeId(7))
@@ -510,7 +519,7 @@ class TestPostgresNodeRepository:
         repo._run.assert_awaited_once_with(load_query("node/disable"), node_id=7)  # type: ignore[attr-defined]
 
     async def test_remove_executes_delete(self, mocker: MockerFixture) -> None:
-        """remove calls _run with the remove (delete) query and node_id.value."""
+        """Remove calls _run with the remove (delete) query and node_id.value."""
         repo = self._make_repo(mocker)
 
         await repo.remove(NodeId(7))

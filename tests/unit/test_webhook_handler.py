@@ -78,7 +78,9 @@ def _fast_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
             return base
 
     monkeypatch.setattr(
-        _backoff_async, "datetime", types.SimpleNamespace(datetime=_FastDateTime)
+        _backoff_async,
+        "datetime",
+        types.SimpleNamespace(datetime=_FastDateTime),
     )
 
 
@@ -113,10 +115,14 @@ async def test_event_dispatches_correct_status(
     expected_status: TaskStatus,
 ) -> None:
     event = event_cls(
-        task_id=TaskId(42), webhook_url=URL, webhook_custom_params={}, **extra_kw
+        task_id=TaskId(42),
+        webhook_url=URL,
+        webhook_custom_params={},
+        **extra_kw,
     )
     with patch(
-        "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
+        "yascheduler.infra.notifier.webhook._send_webhook",
+        new_callable=AsyncMock,
     ) as mock_send:
         await webhook_handler(event, AsyncMock())
 
@@ -138,7 +144,8 @@ async def test_skip_when_no_webhook_url() -> None:
         engine_name="fleur",
     )
     with patch(
-        "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
+        "yascheduler.infra.notifier.webhook._send_webhook",
+        new_callable=AsyncMock,
     ) as mock_send:
         await webhook_handler(event, AsyncMock())
     mock_send.assert_not_awaited()
@@ -153,7 +160,8 @@ async def test_custom_params_forwarded() -> None:
         engine_name="fleur",
     )
     with patch(
-        "yascheduler.infra.notifier.webhook._send_webhook", new_callable=AsyncMock
+        "yascheduler.infra.notifier.webhook._send_webhook",
+        new_callable=AsyncMock,
     ) as mock_send:
         await webhook_handler(event, AsyncMock())
 

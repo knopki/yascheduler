@@ -1,3 +1,4 @@
+"""Register a new task in TO_DO state after validation."""
 # FILE: yascheduler/application/submit_task.py
 # VERSION: 1.8.0
 # START_MODULE_CONTRACT
@@ -46,7 +47,7 @@ _KNOWN_TYPED_KEYS = frozenset(
         "webhook_url",
         "webhook_custom_params",
         "error",
-    }
+    },
 )
 
 
@@ -71,6 +72,7 @@ async def submit_task(
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> TaskId:
+    """Create a new TO_DO task after validating engine and inputs."""
     # START_BLOCK_VALIDATE
     if engine_name not in engines:
         raise UnsupportedEngineError(engine_name)

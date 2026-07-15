@@ -1,3 +1,4 @@
+"""Clouds helper utilities."""
 # FILE: yascheduler/infra/cloud/utils.py
 # VERSION: 1.1.1
 #
@@ -17,16 +18,16 @@
 #   PREVIOUS_CHANGE: v1.1.0 - Move get_key_name to ssh_keys.py.
 # END_CHANGE_SUMMARY
 
-"""Clouds helper utilities"""
-
 import random
 import string
 
 
 def get_rnd_name(prefix: str) -> str:
-    """Create random string with prefix"""
+    """Create random string with prefix."""
     return (
         prefix
         + "-"
-        + "".join([random.choice(string.ascii_lowercase) for _ in range(8)])
+        + "".join(
+            [random.choice(string.ascii_lowercase) for _ in range(8)],  # noqa: S311
+        )  # non-crypto jitter, not for secrets
     )

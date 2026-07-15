@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+"""Yascheduler systemd daemon entry point (foreground, logs to stderr → journald)."""
 # FILE: yascheduler/entrypoints/cli/daemon_systemd.py
 # VERSION: 2.0.0
 #
@@ -17,7 +18,6 @@
 #   LAST_CHANGE: v2.0.0 - Reimplemented as a thin entry point: builds its own argparse parser via args.py helpers (--config/--log-level/--log-file default None for journald); delegates to daemon_common.run_daemon; no python-daemon (foreground under systemd); --log-file default None is a BREAKING change from LOG_FILE (journald convention); uniform 0/1/2 exit-code contract.
 #   PREVIOUS_CHANGE: v1.8.0 - Relocated into yascheduler/entrypoints/cli/ subpackage; entrypoints/daemon/ liquidated; launcher now sibling of init/show_nodes/submit/manage_node.
 # END_CHANGE_SUMMARY
-"""Yascheduler systemd daemon entry point (foreground, logs to stderr → journald)."""
 
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ from .daemon_common import configure_logger, run_daemon
 #   LINKS: M-DAEMON-SYSTEMD, M-DAEMON-COMMON
 # END_CONTRACT: main
 def main(argv: list[str] | None = None) -> None:
+    """Start the daemon under systemd supervision (foreground, stderr → journald); exit 0/1/2."""
     # START_BLOCK_PARSE_ARGS
     parser = argparse.ArgumentParser(
         prog="yascheduler",
@@ -65,7 +66,7 @@ def main(argv: list[str] | None = None) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
 

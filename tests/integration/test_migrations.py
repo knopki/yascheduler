@@ -84,7 +84,7 @@ def _tracker_rows(conn: pg8000.native.Connection) -> list[str]:
     conn.run("BEGIN")
     try:
         rows = conn.run(
-            "SELECT migration_id FROM yascheduler_migrations ORDER BY migration_id"
+            "SELECT migration_id FROM yascheduler_migrations ORDER BY migration_id",
         )
     finally:
         conn.run("ROLLBACK")
@@ -130,7 +130,7 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
             seeded = _tracker_rows(conn)
             assert seeded == ["013"]
             assert {"username", "port", "node_id"} <= set(
-                _columns(conn, "yascheduler_nodes")
+                _columns(conn, "yascheduler_nodes"),
             )
         finally:
             conn.close()
@@ -160,7 +160,7 @@ def test_legacy_db_runs_all_migrations() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_nodes ("
                 "ip VARCHAR(15) UNIQUE, cloud VARCHAR(32) DEFAULT NULL, "
-                "ncpus SMALLINT DEFAULT NULL)"
+                "ncpus SMALLINT DEFAULT NULL)",
             )
             # Pre-create yascheduler_tasks at the pre-004 era schema (no
             # allocated_node_id) so migration 004's ALTER ADD COLUMN is
@@ -170,7 +170,7 @@ def test_legacy_db_runs_all_migrations() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
-                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)",
             )
         finally:
             conn.close()
@@ -203,7 +203,7 @@ def test_legacy_db_runs_all_migrations() -> None:
                 "013",
             ]
             assert {"username", "port", "node_id"} <= set(
-                _columns(conn, "yascheduler_nodes")
+                _columns(conn, "yascheduler_nodes"),
             )
         finally:
             conn.close()
@@ -224,12 +224,12 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
         try:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
-                "(migration_id TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "(migration_id TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run(
                 "CREATE TABLE yascheduler_nodes ("
                 "ip VARCHAR(15) UNIQUE, cloud VARCHAR(32) DEFAULT NULL, "
-                "ncpus SMALLINT DEFAULT NULL)"
+                "ncpus SMALLINT DEFAULT NULL)",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('000')")
             # Pre-create yascheduler_tasks at the pre-004 era schema (no
@@ -237,7 +237,7 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
-                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)",
             )
         finally:
             conn.close()
@@ -271,7 +271,7 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
                 "013",
             ]
             assert {"username", "port", "node_id"} <= set(
-                _columns(conn, "yascheduler_nodes")
+                _columns(conn, "yascheduler_nodes"),
             )
         finally:
             conn.close()
@@ -295,7 +295,7 @@ def test_py_migration_best_effort_reopen(
         "class Reopen(Migration):\n"
         "    def migrate(self) -> None:\n"
         "        self.commit()\n"
-        "        self.conn.run('CREATE TABLE test_reopen (id int)')\n"
+        "        self.conn.run('CREATE TABLE test_reopen (id int)')\n",
     )
     monkeypatch.setattr(
         "yascheduler.infra.persistence.postgres_migrations._MIGRATIONS_DIR",
@@ -329,7 +329,7 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
     (migrations_dir / "014_fail.sql").write_text(
-        "CREATE TABLE fail_tbl (id int); CREATE TABLE fail_tbl (id int);"
+        "CREATE TABLE fail_tbl (id int); CREATE TABLE fail_tbl (id int);",
     )
     monkeypatch.setattr(
         "yascheduler.infra.persistence.postgres_migrations._MIGRATIONS_DIR",
@@ -370,7 +370,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
                 "CREATE TABLE yascheduler_nodes ("
                 "ip VARCHAR(15) UNIQUE, port INTEGER DEFAULT 22, "
                 "username VARCHAR(255) DEFAULT 'root', ncpus SMALLINT DEFAULT NULL, "
-                "enabled BOOLEAN DEFAULT TRUE, cloud VARCHAR(32) DEFAULT NULL)"
+                "enabled BOOLEAN DEFAULT TRUE, cloud VARCHAR(32) DEFAULT NULL)",
             )
             conn.run("INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.1')")
             conn.run("INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.2')")
@@ -379,7 +379,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
-                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)",
             )
         finally:
             conn.close()
@@ -419,7 +419,7 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
             conn.run("BEGIN")
             try:
                 rows = conn.run(
-                    "SELECT node_id, hostname FROM yascheduler_nodes ORDER BY node_id"
+                    "SELECT node_id, hostname FROM yascheduler_nodes ORDER BY node_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -452,20 +452,20 @@ def test_migration_005_converts_serial_to_identity() -> None:
                 "CREATE TABLE yascheduler_nodes ("
                 "node_id SERIAL PRIMARY KEY, ip VARCHAR(15), port INTEGER DEFAULT 22, "
                 "username VARCHAR(255) DEFAULT 'root', ncpus SMALLINT DEFAULT NULL, "
-                "enabled BOOLEAN DEFAULT TRUE, cloud VARCHAR(32) DEFAULT NULL)"
+                "enabled BOOLEAN DEFAULT TRUE, cloud VARCHAR(32) DEFAULT NULL)",
             )
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), metadata JSONB, "
                 "ip VARCHAR(15), status SMALLINT, "
-                "allocated_node_id INTEGER)"
+                "allocated_node_id INTEGER)",
             )
             conn.run("INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.1')")
             # Note the SERIAL-assigned id (expected: 1).
             conn.run("BEGIN")
             try:
                 assigned = conn.run(
-                    "SELECT node_id FROM yascheduler_nodes WHERE ip = '10.0.0.1'"
+                    "SELECT node_id FROM yascheduler_nodes WHERE ip = '10.0.0.1'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -474,7 +474,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('004')")
         finally:
@@ -497,7 +497,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
                     "WHERE (table_name, column_name) IN "
                     "(('yascheduler_nodes','node_id'),"
                     "('yascheduler_tasks','task_id')) "
-                    "ORDER BY table_name"
+                    "ORDER BY table_name",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -529,7 +529,7 @@ def test_migration_005_converts_serial_to_identity() -> None:
             try:
                 next_id = conn.run(
                     "SELECT nextval(pg_get_serial_sequence('yascheduler_nodes',"
-                    "'node_id'))"
+                    "'node_id'))",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -540,10 +540,10 @@ def test_migration_005_converts_serial_to_identity() -> None:
             try:
                 inserted = conn.run(
                     "INSERT INTO yascheduler_nodes (hostname) VALUES ('10.0.0.2') "
-                    "RETURNING node_id"
+                    "RETURNING node_id",
                 )
                 node_rows = conn.run(
-                    "SELECT node_id FROM yascheduler_nodes ORDER BY node_id"
+                    "SELECT node_id FROM yascheduler_nodes ORDER BY node_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -572,7 +572,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('005')")
             conn.run(
@@ -580,7 +580,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
                 "node_id SERIAL PRIMARY KEY, ip VARCHAR(15), "
                 "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
                 "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
-                "cloud VARCHAR(32) DEFAULT NULL)"
+                "cloud VARCHAR(32) DEFAULT NULL)",
             )
             # Pre-006 schema: label (not title), status SMALLINT, ip present.
             # allocated_node_id IS present (added by migration 004, which a DB
@@ -590,11 +590,11 @@ def test_legacy_db_at_005_applies_006_010() -> None:
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
                 "metadata JSONB, ip VARCHAR(15), status SMALLINT, "
-                "allocated_node_id INTEGER)"
+                "allocated_node_id INTEGER)",
             )
             conn.run(
                 "INSERT INTO yascheduler_tasks (label, ip, status, metadata) "
-                "VALUES ('legacy_task', '10.0.0.1', 0, '{}'::jsonb)"
+                "VALUES ('legacy_task', '10.0.0.1', 0, '{}'::jsonb)",
             )
         finally:
             conn.close()
@@ -628,7 +628,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
             try:
                 type_rows = conn.run(
                     "SELECT data_type FROM information_schema.columns "
-                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'"
+                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -639,7 +639,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
                 enum_rows = conn.run(
                     "SELECT e.enumlabel FROM pg_enum e "
                     "JOIN pg_type t ON t.oid = e.enumtypid "
-                    "WHERE t.typname = 'task_status' ORDER BY e.enumsortorder"
+                    "WHERE t.typname = 'task_status' ORDER BY e.enumsortorder",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -651,7 +651,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
                 trig_rows = conn.run(
                     "SELECT tgname FROM pg_trigger "
                     "WHERE tgrelid = 'yascheduler_tasks'::regclass "
-                    "AND tgname = 'yascheduler_tasks_touch_updated_at'"
+                    "AND tgname = 'yascheduler_tasks_touch_updated_at'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -663,7 +663,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_tasks (title, status, engine) "
-                    "VALUES ('trigger_test', 'TO_DO', 'fleur')"
+                    "VALUES ('trigger_test', 'TO_DO', 'fleur')",
                 )
             finally:
                 conn.run("COMMIT")
@@ -672,7 +672,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
             try:
                 row = conn.run(
                     "SELECT task_id, created_at, updated_at "
-                    "FROM yascheduler_tasks WHERE title = 'trigger_test'"
+                    "FROM yascheduler_tasks WHERE title = 'trigger_test'",
                 )
                 assert len(row) == 1
                 task_id = row[0][0]
@@ -722,7 +722,7 @@ def test_legacy_db_at_005_applies_006_010() -> None:
             try:
                 legacy = conn.run(
                     "SELECT title, status::text FROM yascheduler_tasks "
-                    "WHERE title = 'legacy_task'"
+                    "WHERE title = 'legacy_task'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -771,7 +771,7 @@ def test_fresh_db_full_shape() -> None:
             try:
                 type_rows = conn.run(
                     "SELECT data_type FROM information_schema.columns "
-                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'"
+                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -783,7 +783,7 @@ def test_fresh_db_full_shape() -> None:
                 trig_rows = conn.run(
                     "SELECT tgname FROM pg_trigger "
                     "WHERE tgrelid = 'yascheduler_tasks'::regclass "
-                    "AND tgname = 'yascheduler_tasks_touch_updated_at'"
+                    "AND tgname = 'yascheduler_tasks_touch_updated_at'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -818,7 +818,7 @@ def test_migration_008_fails_on_out_of_range_status() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('007')")
             conn.run(
@@ -826,19 +826,19 @@ def test_migration_008_fails_on_out_of_range_status() -> None:
                 "node_id SERIAL PRIMARY KEY, ip VARCHAR(15), "
                 "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
                 "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
-                "cloud VARCHAR(32) DEFAULT NULL)"
+                "cloud VARCHAR(32) DEFAULT NULL)",
             )
             # Pre-008 schema: status SMALLINT NOT NULL DEFAULT 0, no allocated_node_id, no type.
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
                 "metadata JSONB, ip VARCHAR(15), "
-                "status SMALLINT NOT NULL DEFAULT 0)"
+                "status SMALLINT NOT NULL DEFAULT 0)",
             )
             # Row with out-of-range status = 3 (maps to NULL via USING CASE).
             conn.run(
                 "INSERT INTO yascheduler_tasks (label, status, metadata) "
-                "VALUES ('bad', 3, '{}'::jsonb)"
+                "VALUES ('bad', 3, '{}'::jsonb)",
             )
         finally:
             conn.close()
@@ -859,7 +859,7 @@ def test_migration_008_fails_on_out_of_range_status() -> None:
             try:
                 type_rows = conn.run(
                     "SELECT data_type FROM information_schema.columns "
-                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'"
+                    "WHERE table_name = 'yascheduler_tasks' AND column_name = 'status'",
                 )
             finally:
                 conn.run("ROLLBACK")

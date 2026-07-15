@@ -1,3 +1,4 @@
+"""Pure-function SSH private-key discovery from a keys directory."""
 # FILE: yascheduler/infra/ssh/keys.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
@@ -27,7 +28,7 @@ from pathlib import Path, PurePath
 #   LINKS: M-SSH-KEYS
 # END_CONTRACT: list_private_keys
 def list_private_keys(keys_dir: Path) -> Sequence[PurePath]:
-    "List private key file paths"
+    """List private key file paths."""
     # START_BLOCK_SCAN_KEYS_DIR
     # Call iterdir() directly on keys_dir rather than Path(keys_dir).iterdir():
     # tests pass a MagicMock whose __fspath__ is intentionally absent, so Path(keys_dir)

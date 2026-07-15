@@ -73,7 +73,8 @@ async def test_save_nonexistent_task_raises(
 #   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-EXCEPTIONS
 # END_CONTRACT: test_update_status_nonexistent_task_raises
 async def test_update_status_nonexistent_task_raises(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """update_status() on a non-existent task_id raises TaskRowNotFoundError."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)

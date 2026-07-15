@@ -1,3 +1,4 @@
+"""Process-global file-path constants (config, log, pid) consumed by the entrypoints layer."""
 # FILE: yascheduler/entrypoints/paths.py
 # VERSION: 1.7.0
 #
@@ -18,6 +19,7 @@
 #   LAST_CHANGE: v1.7.0 - Relocated from yascheduler/shared/variables.py to yascheduler/entrypoints/paths.py.
 #   PREVIOUS_CHANGE: v1.6.0 - Moved from yascheduler/variables.py to yascheduler/shared/variables.py.
 # END_CHANGE_SUMMARY
+
 from os import getenv
 
 CONFIG_FILE = getenv("YASCHEDULER_CONF_PATH", "/etc/yascheduler/yascheduler.conf")

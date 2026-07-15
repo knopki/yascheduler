@@ -138,7 +138,9 @@ class TestTryStartOnMachineNodeIdLogging:
     """_try_start_on_machine log lines include node_id=%s alongside ip=%s."""
 
     async def test_logs_node_id(
-        self, engine: Engine, caplog: pytest.LogCaptureFixture
+        self,
+        engine: Engine,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         from yascheduler.domain.model import ConnectedMachine, MachineState
 

@@ -1,3 +1,4 @@
+"""Hetzner cloud methods."""
 # FILE: yascheduler/infra/cloud/providers/hetzner.py
 # VERSION: 1.10.0
 #
@@ -22,7 +23,6 @@
 #   PREVIOUS_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-HETZNER") at module top
 # END_CHANGE_SUMMARY
 #
-"""Hetzner cloud methods"""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ executor = ThreadPoolExecutor(max_workers=5)
 # END_CONTRACT: get_client
 @cache
 def get_client(cfg: ConfigCloudHetzner) -> HClient:
-    "Get Hetzner client"
+    """Get Hetzner client."""
     return HClient(cfg.token)
 
 
@@ -79,7 +79,7 @@ def get_client(cfg: ConfigCloudHetzner) -> HClient:
 # END_CONTRACT: get_ssh_key_id
 @cache
 def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
-    "Get Hetzner ssh id"
+    """Get Hetzner ssh id."""
     key_name = get_key_name(key)
     pub_key = key.export_public_key("openssh").decode("utf-8")
 
@@ -91,7 +91,7 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
         # API wording "SSH key not unique"); older wording contained "already".
         if err.code == "uniqueness_error" or "already" in str(err):
             hkey = client.ssh_keys.get_by_fingerprint(
-                key.get_fingerprint("md5").split(":", maxsplit=1)[1]
+                key.get_fingerprint("md5").split(":", maxsplit=1)[1],
             ) or client.ssh_keys.get_by_name(key_name)
             if hkey:
                 return cast("int", hkey.id)
@@ -103,7 +103,7 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
                     and len(cast("str", hkey.name)) == name_len
                 ):
                     return cast("int", hkey.id)
-        raise err
+        raise
 
 
 # START_CONTRACT: hetzner_create_node
@@ -118,9 +118,10 @@ async def hetzner_create_node(
     key: ASSHKey,
     cloud_config: CloudInitConfig | None = None,
 ) -> str:
-    """Create node"""
+    """Create node."""
     if not _HETZNER_AVAILABLE:
-        raise ImportError("Hetzner SDK not installed. Install hcloud package.")
+        msg = "Hetzner SDK not installed. Install hcloud package."
+        raise ImportError(msg)
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)
     ssh_key_id = await loop.run_in_executor(executor, get_ssh_key_id, client, key)
@@ -151,7 +152,7 @@ async def hetzner_create_node(
 #   LINKS: M-CLOUD-HETZNER
 # END_CONTRACT: find_srv
 def find_srv(client: HClient, host: str) -> BoundServer | None:
-    """Find BoundServer by IP addr"""
+    """Find BoundServer by IP addr."""
     for server in client.servers.get_all():
         if (
             server.public_net and server.public_net.ipv4 and server.public_net.ipv4.ip
@@ -171,9 +172,10 @@ async def hetzner_delete_node(
     cfg: ConfigCloudHetzner,
     host: str,
 ) -> None:
-    """Delete node"""
+    """Delete node."""
     if not _HETZNER_AVAILABLE:
-        raise ImportError("Hetzner SDK not installed. Install hcloud package.")
+        msg = "Hetzner SDK not installed. Install hcloud package."
+        raise ImportError(msg)
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)
     server = await loop.run_in_executor(executor, find_srv, client, host)

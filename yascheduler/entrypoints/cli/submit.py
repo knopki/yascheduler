@@ -17,9 +17,11 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Runtime import Engine from yascheduler.domain (Config stays from yascheduler.config).
-#   PREVIOUS_CHANGE: v1.1.1 - post-review fix: added StreamHandler→stderr guard (`if not log.handlers:`) so --log-level DEBUG produces visible output (was relying on logging.lastResort at WARNING only).
+#   LAST_CHANGE: v1.2.1 - Drop `import os`; use pathlib.Path for cwd + file reads (PTH109, PTH123); _read_input_files/_build_metadata accept str|Path.
+#   PREVIOUS_CHANGE: v1.2.0 - Runtime import Engine from yascheduler.domain (Config stays from yascheduler.config).
 # END_CHANGE_SUMMARY
+
+"""yasubmit CLI command — parse AiiDA script and submit task via DI."""
 
 from __future__ import annotations
 
@@ -27,7 +29,6 @@ import argparse
 import asyncio
 import base64
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,6 +46,20 @@ if TYPE_CHECKING:
     from yascheduler.domain import Engine
 
 
+class EngineNotDefinedError(ValueError):
+    """Script has not defined an engine."""
+
+    def __init__(self) -> None:
+        super().__init__("Script has not defined an engine")
+
+
+class EngineNotSupportedError(ValueError):
+    """Engine is not supported."""
+
+    def __init__(self, engine_name: str) -> None:
+        super().__init__(f"Engine {engine_name} is not supported")
+
+
 def _parse_submit_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yasubmit",
@@ -54,9 +69,8 @@ def _parse_submit_args(argv: list[str] | None = None) -> argparse.Namespace:
     add_config_arg(parser)
     add_log_level_arg(parser, default="WARNING")
     # START_BLOCK_PARSE_ARGS
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
     # END_BLOCK_PARSE_ARGS
-    return args
 
 
 def _parse_script_metadata(script_text: str) -> dict[str, str]:
@@ -65,19 +79,19 @@ def _parse_script_metadata(script_text: str) -> dict[str, str]:
         try:
             k, v = line.split("=")
             script_params[k.strip()] = v.strip()
-        except ValueError:
+        except ValueError:  # noqa: PERF203
             pass
     return script_params
 
 
-def _read_input_files(engine: Engine, local_folder: str) -> dict[str, str]:
+def _read_input_files(engine: Engine, local_folder: str | Path) -> dict[str, str]:
     metadata: dict[str, str] = {}
     for input_file in engine.input_files:
         path = Path(local_folder, input_file)
         try:
             metadata[input_file] = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            with open(path, "rb") as f:
+            with path.open("rb") as f:
                 metadata[input_file] = base64.b64encode(f.read()).decode("ascii")
     return metadata
 
@@ -85,10 +99,10 @@ def _read_input_files(engine: Engine, local_folder: str) -> dict[str, str]:
 def _build_metadata(
     script_params: dict[str, str],
     config: Config,
-    local_folder: str,
+    local_folder: str | Path,
 ) -> dict[str, Any]:
     # START_BLOCK_BUILD_METADATA
-    metadata: dict[str, Any] = {"local_folder": local_folder}
+    metadata: dict[str, Any] = {"local_folder": str(local_folder)}
     engine = config.engines.get(script_params.get("ENGINE", ""))
     if engine is not None:
         metadata.update(_read_input_files(engine, local_folder))
@@ -131,20 +145,20 @@ async def _submit_async(argv: list[str] | None) -> None:
         # START_BLOCK_VALIDATE_CONTENT
         engine_name = script_params.get("ENGINE")
         if not engine_name:
-            raise ValueError("Script has not defined an engine")
+            raise EngineNotDefinedError  # noqa: TRY301
         engine = config.engines.get(engine_name)
         if not engine:
-            raise ValueError(f"Engine {engine_name} is not supported")
+            raise EngineNotSupportedError(engine_name)  # noqa: TRY301
         # END_BLOCK_VALIDATE_CONTENT
 
-        metadata = _build_metadata(script_params, config, os.getcwd())
+        metadata = _build_metadata(script_params, config, Path.cwd())
 
         # START_BLOCK_SUBMIT
         task_id = await deps.submit(label, dict(metadata), engine.name)
-        print(str(task_id))
+        sys.stdout.write(f"{task_id!s}\n")
         # END_BLOCK_SUBMIT
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
 
@@ -157,6 +171,7 @@ async def _submit_async(argv: list[str] | None) -> None:
 #   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
 # END_CONTRACT: submit
 def submit(argv: list[str] | None = None) -> None:
+    """Sync entry point — runs _submit_async via asyncio.run."""
     asyncio.run(_submit_async(argv))
 
 

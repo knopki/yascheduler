@@ -54,7 +54,8 @@ def _make_orchestrator(
     disconnect_all: AsyncMock | None = None,
 ) -> Orchestrator:
     """Build an Orchestrator with mocked deps. Inject cleanup-step AsyncMocks
-    via the real dependency slots so tests can assert on the held references."""
+    via the real dependency slots so tests can assert on the held references.
+    """
     local = MagicMock(spec=LocalSettings)
     local.conn_machine_pending = 10
     local.allocate_pending = 5
@@ -95,7 +96,7 @@ def _make_orchestrator(
     return Orchestrator(
         local_settings=local,
         remote_defaults=remote,
-        uow_factory=lambda: AsyncMock(),
+        uow_factory=AsyncMock,
         clouds=clouds,
         repository=repository,
         task_deployer=task_deployer,
@@ -154,7 +155,8 @@ class TestStopHttpSessionNulled:
 
     @pytest.mark.parametrize("close_raises", [False, True])
     async def test_stop_http_session_nulled_after_close(
-        self, close_raises: bool
+        self,
+        close_raises: bool,
     ) -> None:
         http_session = MagicMock()
         if close_raises:
@@ -271,10 +273,7 @@ class TestStopCancelledError:
         )
 
         async def _hang_until_cancelled() -> None:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                raise
+            await asyncio.Event().wait()
 
         live_task = asyncio.create_task(_hang_until_cancelled())
         orch._bg_jobs.add(live_task)

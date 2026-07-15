@@ -143,7 +143,8 @@ def make_task(
 
 
 def make_mock_repository(
-    stdout: str = "remote output", returncode: int = 0
+    stdout: str = "remote output",
+    returncode: int = 0,
 ) -> MagicMock:
     """Return a MagicMock SSHMachineRepository with async connect/disconnect.
 
@@ -155,7 +156,7 @@ def make_mock_repository(
     session.path = PurePosixPath
     session.quote = lambda s: s
     session.run_full = AsyncMock(
-        return_value=MagicMock(returncode=returncode, stdout=stdout)
+        return_value=MagicMock(returncode=returncode, stdout=stdout),
     )
     session.hostname = "10.0.0.1"
     session.machine = MagicMock(node_id=NodeId(1))
@@ -179,7 +180,9 @@ def stub_config_deps(
     uow = make_mock_uow()
     deps = make_mock_deps(config, uow)
     monkeypatch.setattr(
-        check_status_mod, "parse_config", MagicMock(return_value=config)
+        check_status_mod,
+        "parse_config",
+        MagicMock(return_value=config),
     )
     monkeypatch.setattr(check_status_mod, "make_cli_deps", MagicMock(return_value=deps))
     return config, uow, deps
@@ -248,7 +251,8 @@ class TestCheckStatusAiiDAContract:
     """The default renderer's output must parse via the AiiDA plugin's exact logic."""
 
     def test_default_output_parses_like_aiida_plugin(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         tasks = [
             make_task(task_id=1, status=TaskStatus.TO_DO),
@@ -258,9 +262,7 @@ class TestCheckStatusAiiDAContract:
         check_status_mod._render_default(tasks)
         out, _ = capsys.readouterr()
         job_list = [job.split() for job in out.split("\n") if job]
-        parsed: dict[str, str] = {}
-        for job_id, status in job_list:
-            parsed[job_id] = status
+        parsed: dict[str, str] = dict(job_list)
         assert set(parsed.values()) <= {"TO_DO", "RUNNING", "DONE"}
         assert parsed == {"1": "TO_DO", "2": "RUNNING", "3": "DONE"}
 
@@ -281,11 +283,11 @@ class TestCheckStatusDefault:
             return_value=[
                 make_task(task_id=1, status=TaskStatus.RUNNING, label="job_a"),
                 make_task(task_id=2, status=TaskStatus.TO_DO, label="job_b"),
-            ]
+            ],
         )
         _run([])
         uow.tasks.list_by_status.assert_called_once_with(
-            statuses={TaskStatus.RUNNING, TaskStatus.TO_DO}
+            statuses={TaskStatus.RUNNING, TaskStatus.TO_DO},
         )
         out, _ = capsys.readouterr()
         assert "1   RUNNING" in out
@@ -298,7 +300,7 @@ class TestCheckStatusDefault:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(
-            return_value=[make_task(task_id=1, status=TaskStatus.RUNNING)]
+            return_value=[make_task(task_id=1, status=TaskStatus.RUNNING)],
         )
         _run([])
         out, _ = capsys.readouterr()
@@ -312,7 +314,7 @@ class TestCheckStatusDefault:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_jobs = AsyncMock(
-            return_value=[make_task(task_id=1, status=TaskStatus.RUNNING, label="x")]
+            return_value=[make_task(task_id=1, status=TaskStatus.RUNNING, label="x")],
         )
         _run(["-j", "1", "2"])
         uow.tasks.list_by_jobs.assert_called_once_with(job_ids=[TaskId(1), TaskId(2)])
@@ -340,7 +342,7 @@ class TestCheckStatusInfo:
                     label="job_a",
                     allocated_node_id=NodeId(1),
                 ),
-            ]
+            ],
         )
         _run(["-i"])
         out, _ = capsys.readouterr()
@@ -377,8 +379,8 @@ class TestCheckStatusJson:
                     task_id=1,
                     status=TaskStatus.RUNNING,
                     allocated_node_id=NodeId(1),
-                )
-            ]
+                ),
+            ],
         )
         uow.nodes.get_by_ids = AsyncMock(return_value={NodeId(1): node})
         _run(["--json"])
@@ -430,15 +432,18 @@ class TestCheckStatusJson:
                     task_id=1,
                     status=TaskStatus.RUNNING,
                     allocated_node_id=NodeId(1),
-                )
-            ]
+                ),
+            ],
         )
         uow.nodes.get_by_ids = AsyncMock(
             return_value={
                 NodeId(1): Node(
-                    node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, port=22
-                )
-            }
+                    node_id=NodeId(1),
+                    hostname="10.0.0.1",
+                    ncpus=4,
+                    port=22,
+                ),
+            },
         )
         _run(["--json"])
         uow.nodes.get_by_ids.assert_called_once()
@@ -450,7 +455,7 @@ class TestCheckStatusJson:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         uow.tasks.list_by_status = AsyncMock(
-            return_value=[make_task(task_id=5, status=TaskStatus.TO_DO)]
+            return_value=[make_task(task_id=5, status=TaskStatus.TO_DO)],
         )
         _run(["--json"])
         out, _ = capsys.readouterr()
@@ -486,15 +491,18 @@ class TestCheckStatusJson:
                     task_id=1,
                     status=TaskStatus.RUNNING,
                     allocated_node_id=NodeId(1),
-                )
-            ]
+                ),
+            ],
         )
         uow.nodes.get_by_ids = AsyncMock(
             return_value={
                 NodeId(1): Node(
-                    node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, port=22
-                )
-            }
+                    node_id=NodeId(1),
+                    hostname="10.0.0.1",
+                    ncpus=4,
+                    port=22,
+                ),
+            },
         )
         _run(["--json", "-j", "1"])
         uow.tasks.list_by_jobs.assert_called_once_with(job_ids=[TaskId(1)])
@@ -531,7 +539,9 @@ class TestCheckStatusExitCodes:
         assert "Error:" in err
 
     def test_exit_one_on_config_error(
-        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(
             check_status_mod,
@@ -589,19 +599,19 @@ class TestCheckStatusViewAcceptance:
         "node_kwargs,cloud_kwargs_list,connect_asserts",
         [
             (
-                dict(cloud="hetzner", username="yascheduler", port=22),
-                [dict(username="hcloud-user")],
+                {"cloud": "hetzner", "username": "yascheduler", "port": 22},
+                [{"username": "hcloud-user"}],
                 lambda k: "username" not in k and k["node"].username == "yascheduler",
             ),
             (
-                dict(
-                    cloud="hetzner",
-                    username="yascheduler",
-                    port=22,
-                    jump_host="jump.example.com",
-                    jump_username="jumper",
-                ),
-                [dict(jump_host="jump.example.com", jump_username="jumper")],
+                {
+                    "cloud": "hetzner",
+                    "username": "yascheduler",
+                    "port": 22,
+                    "jump_host": "jump.example.com",
+                    "jump_username": "jumper",
+                },
+                [{"jump_host": "jump.example.com", "jump_username": "jumper"}],
                 lambda k: (
                     "jump_host" not in k
                     and "jump_username" not in k
@@ -610,14 +620,19 @@ class TestCheckStatusViewAcceptance:
                 ),
             ),
             (
-                dict(
-                    cloud="hetzner",
-                    username="yascheduler",
-                    port=22,
-                    jump_host="old-bastion.example.com",
-                    jump_username="old-jumper",
-                ),
-                [dict(jump_host="new-bastion.example.com", jump_username="new-jumper")],
+                {
+                    "cloud": "hetzner",
+                    "username": "yascheduler",
+                    "port": 22,
+                    "jump_host": "old-bastion.example.com",
+                    "jump_username": "old-jumper",
+                },
+                [
+                    {
+                        "jump_host": "new-bastion.example.com",
+                        "jump_username": "new-jumper",
+                    },
+                ],
                 lambda k: (
                     "jump_host" not in k
                     and "jump_username" not in k
@@ -647,14 +662,18 @@ class TestCheckStatusViewAcceptance:
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
                 make_task(
-                    task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(1)
-                )
-            ]
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    allocated_node_id=NodeId(1),
+                ),
+            ],
         )
         uow.nodes.get_by_ids = AsyncMock(return_value={NodeId(1): node})
         repo = make_mock_repository()
         monkeypatch.setattr(
-            check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
+            check_status_mod,
+            "SSHMachineRepository",
+            MagicMock(return_value=repo),
         )
         _run(["-v"])
         assert connect_asserts(repo.connect.call_args.kwargs)
@@ -684,15 +703,19 @@ class TestCheckStatusViewHappyPath:
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
                 make_task(
-                    task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(1)
-                )
-            ]
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    allocated_node_id=NodeId(1),
+                ),
+            ],
         )
         uow.nodes.get_by_ids = AsyncMock(return_value={NodeId(1): node})
         repo = make_mock_repository(stdout="OUTPUT TAIL")
         session = repo.connect.return_value
         monkeypatch.setattr(
-            check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
+            check_status_mod,
+            "SSHMachineRepository",
+            MagicMock(return_value=repo),
         )
         _run(["-v"])
         repo.connect.assert_called_once()
@@ -723,13 +746,13 @@ class TestCheckStatusViewHappyPath:
                     task_id=1,
                     status=TaskStatus.RUNNING,
                     allocated_node_id=NodeId(1),
-                )
-            ]
+                ),
+            ],
         )
         uow.nodes.get_by_ids = AsyncMock(
             return_value={
-                NodeId(1): Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4)
-            }
+                NodeId(1): Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4),
+            },
         )
         monkeypatch.setattr(
             check_status_mod,
@@ -748,9 +771,11 @@ class TestCheckStatusViewHappyPath:
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
                 make_task(
-                    task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(1)
-                )
-            ]
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    allocated_node_id=NodeId(1),
+                ),
+            ],
         )
         _run([])
         uow.nodes.get_by_ids.assert_not_called()
@@ -764,9 +789,11 @@ class TestCheckStatusViewHappyPath:
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
                 make_task(
-                    task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(1)
-                )
-            ]
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    allocated_node_id=NodeId(1),
+                ),
+            ],
         )
         _run(["-i"])
         uow.nodes.get_by_ids.assert_not_called()
@@ -791,17 +818,19 @@ class TestCheckStatusQueryRenderSeparation:
                     task_id=1,
                     status=TaskStatus.RUNNING,
                     allocated_node_id=NodeId(1),
-                )
-            ]
+                ),
+            ],
         )
         uow.nodes.get_by_ids = AsyncMock(
             return_value={
-                NodeId(1): Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4)
-            }
+                NodeId(1): Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4),
+            },
         )
         repo = make_mock_repository()
         monkeypatch.setattr(
-            check_status_mod, "SSHMachineRepository", MagicMock(return_value=repo)
+            check_status_mod,
+            "SSHMachineRepository",
+            MagicMock(return_value=repo),
         )
         manager = MagicMock()
         manager.attach_mock(uow.__aexit__, "uow_aexit")
@@ -820,7 +849,8 @@ class TestCheckStatusConfigLogLevel:
     """--config and --log-level argparse + behavior scenarios (defaults WARNING)."""
 
     def test_help_lists_config_and_log_level(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             check_status_mod._parse_status_args(["--help"])
@@ -830,7 +860,8 @@ class TestCheckStatusConfigLogLevel:
         assert "--log-level" in out
 
     def test_config_nonexistent_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             check_status_mod._parse_status_args(["--config", "/nonexistent.conf"])

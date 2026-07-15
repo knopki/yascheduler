@@ -1,3 +1,4 @@
+"""Domain entities."""
 # FILE: yascheduler/domain/model.py
 # VERSION: 1.24.0
 # START_MODULE_CONTRACT
@@ -129,7 +130,8 @@ class TaskId:
 
     def __post_init__(self) -> None:
         if self.value <= 0:
-            raise ValueError(f"TaskId must be > 0, got {self.value}")
+            msg = f"TaskId must be > 0, got {self.value}"
+            raise ValueError(msg)
 
     def __str__(self) -> str:
         return str(self.value)
@@ -193,8 +195,8 @@ class Task:
 
     task_id: TaskId
     engine: str
-    created_at: datetime = field(default_factory=lambda: datetime.now())
-    updated_at: datetime = field(default_factory=lambda: datetime.now())
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
     label: str = ""
     local_folder: str | None = None
     remote_folder: str | None = None
@@ -233,7 +235,7 @@ class Task:
             allocated_node_id=node_id,
             remote_folder=remote_folder,
             status=TaskStatus.RUNNING,
-            events=self.events + (event,),
+            events=(*self.events, event),
         )
         # END_BLOCK_APPLY_RUN
 
@@ -262,7 +264,7 @@ class Task:
             self,
             status=TaskStatus.DONE,
             error=reason,
-            events=self.events + (event,),
+            events=(*self.events, event),
         )
         # END_BLOCK_APPLY_REJECT
 
@@ -292,7 +294,7 @@ class Task:
             status=TaskStatus.DONE,
             local_folder=local_folder,
             remote_folder=remote_folder,
-            events=self.events + (event,),
+            events=(*self.events, event),
         )
         # END_BLOCK_APPLY_COMPLETE
 
@@ -323,7 +325,7 @@ class Task:
             error=reason,
             local_folder=local_folder,
             remote_folder=remote_folder,
-            events=self.events + (event,),
+            events=(*self.events, event),
         )
         # END_BLOCK_APPLY_FAIL
 
@@ -350,7 +352,7 @@ class Task:
                 webhook_custom_params=self.webhook_custom_params,
                 node_id=node_id,
             )
-            new_events = new_events + (event,)
+            new_events = (*new_events, event)
         return replace(
             self,
             status=TaskStatus.DONE,
@@ -403,7 +405,8 @@ class NodeId:
 
     def __post_init__(self) -> None:
         if self.value <= 0:
-            raise ValueError(f"NodeId must be > 0, got {self.value}")
+            msg = f"NodeId must be > 0, got {self.value}"
+            raise ValueError(msg)
 
     def __str__(self) -> str:
         return str(self.value)
@@ -418,7 +421,8 @@ class NodeId:
 # END_CONTRACT: NewNode
 @dataclass(frozen=True)
 class NewNode:
-    """Pre-persistence node record — no identity yet. Mirrors :class:`Node`
+    """Pre-persistence node record — no identity yet; mirrors :class:`Node`.
+
     minus ``node_id``.
     """
 
@@ -453,8 +457,8 @@ class Node:
     node_id: NodeId
     hostname: str
     ncpus: int | None
-    created_at: datetime = field(default_factory=lambda: datetime.now())
-    updated_at: datetime = field(default_factory=lambda: datetime.now())
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
     username: str = "root"
     port: int = 22
     jump_host: str | None = None

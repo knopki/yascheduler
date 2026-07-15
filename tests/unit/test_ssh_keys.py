@@ -31,7 +31,7 @@ from yascheduler.infra.ssh.keys import list_private_keys
 #   LINKS: M-SSH-KEYS
 # END_CONTRACT: test_list_private_keys_returns_file_paths
 def test_list_private_keys_returns_file_paths(tmp_path: Path) -> None:
-    """returns the file paths present in keys_dir"""
+    """Returns the file paths present in keys_dir"""
     (tmp_path / "id_rsa").write_text("PRIVATE")
     (tmp_path / "id_ed25519").write_text("PRIVATE")
 
@@ -51,7 +51,7 @@ def test_list_private_keys_returns_file_paths(tmp_path: Path) -> None:
 #   LINKS: M-SSH-KEYS
 # END_CONTRACT: test_list_private_keys_skips_subdirectories
 def test_list_private_keys_skips_subdirectories(tmp_path: Path) -> None:
-    """subdirectories are filtered out (is_file() is False)"""
+    """Subdirectories are filtered out (is_file() is False)"""
     (tmp_path / "id_rsa").write_text("PRIVATE")
     (tmp_path / "subdir").mkdir()
 
@@ -68,6 +68,6 @@ def test_list_private_keys_skips_subdirectories(tmp_path: Path) -> None:
 #   LINKS: M-SSH-KEYS
 # END_CONTRACT: test_list_private_keys_empty_dir_returns_empty
 def test_list_private_keys_empty_dir_returns_empty(tmp_path: Path) -> None:
-    """an empty keys_dir yields an empty list"""
+    """An empty keys_dir yields an empty list"""
     result = list_private_keys(tmp_path)
     assert list(result) == []

@@ -1,3 +1,4 @@
+"""Pure closure binding conn + adapter.quote into an OuterRunCallable for adapter.get_cpu_cores / setup_node."""
 # FILE: yascheduler/infra/ssh/platform/run_fn.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
@@ -36,14 +37,15 @@ if TYPE_CHECKING:
 #   LINKS: M-PLATFORM-PROTOCOL
 # END_CONTRACT: make_run_fn
 def make_run_fn(
-    conn: SSHClientConnection, adapter: RemoteMachineAdapter
+    conn: SSHClientConnection,
+    adapter: RemoteMachineAdapter,
 ) -> OuterRunCallable:
     """Build OuterRunCallable with pre-bound conn and quote."""
 
     async def _run_fn(
         *args: object,
         cwd: str | None = None,
-        **kwargs: Any,  # noqa: ANN401
+        **kwargs: dict[str, Any],
     ) -> SSHCompletedProcess:
         return await adapter.run(
             conn,

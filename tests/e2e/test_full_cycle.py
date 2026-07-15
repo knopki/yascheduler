@@ -71,13 +71,20 @@ async def test_full_cycle(
     try:
         # START_BLOCK_SUBMIT_JOBS
         task_ids = await _submit_four_jobs(
-            config, ini_path, monkeypatch, tmp_path, capfd
+            config,
+            ini_path,
+            monkeypatch,
+            tmp_path,
+            capfd,
         )
         # END_BLOCK_SUBMIT_JOBS
 
         # START_BLOCK_ASSERT_QUEUED
         await _assert_all_status(
-            uow_factory, task_ids, DomainTaskStatus.TO_DO, "after submit, before nodes"
+            uow_factory,
+            task_ids,
+            DomainTaskStatus.TO_DO,
+            "after submit, before nodes",
         )
         # END_BLOCK_ASSERT_QUEUED
 
@@ -195,7 +202,7 @@ def _ini_path_from_env() -> str:
     path = os.environ.get("YASCHEDULER_CONF_PATH")
     if not path:
         raise RuntimeError(
-            "YASCHEDULER_CONF_PATH unset; e2e_config fixture must run first"
+            "YASCHEDULER_CONF_PATH unset; e2e_config fixture must run first",
         )
     return path
 
@@ -327,7 +334,7 @@ async def _wait_all_done(
         await asyncio.sleep(_POLL_INTERVAL_S)
     pytest.fail(
         f"tasks not all DONE within {_POLL_TIMEOUT_S}s; "
-        f"task_ids={task_ids} last statuses={statuses}"
+        f"task_ids={task_ids} last statuses={statuses}",
     )
 
 
@@ -395,7 +402,7 @@ async def _remove_nodes_soft(
 ) -> None:
     for entry in ssh_pool:
         await _manage_node_async(
-            [_host_spec(entry), "--remove-soft", "--config", ini_path]
+            [_host_spec(entry), "--remove-soft", "--config", ini_path],
         )
 
 

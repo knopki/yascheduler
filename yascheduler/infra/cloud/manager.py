@@ -1,5 +1,6 @@
+"""Cloud provisioner implementation."""
 # FILE: yascheduler/infra/cloud/manager.py
-# VERSION: 2.25.0
+# VERSION: 2.26.0
 #
 # START_MODULE_CONTRACT
 #   PURPOSE: CloudProvisionerImpl — pure cloud-API adapter implementing CloudProvisioner port (create/delete VM, cloud-init, setup, SSH keys); no DB access.
@@ -16,11 +17,9 @@
 #
 # START_CHANGE_SUMMARY
 
-#   LAST_CHANGE: v2.25.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v2.24.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-CLOUD-PROVISIONER") at module top
+#   LAST_CHANGE: v2.26.0 - CLOUD_INIT: move exit_code!=0 raise outside the try (ruff TRY301); drop redundant `except CloudSetupError: raise` it made necessary.
+#   PREVIOUS_CHANGE: v2.25.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
 # END_CHANGE_SUMMARY
-
-"""Cloud provisioner implementation"""
 
 from __future__ import annotations
 
@@ -118,7 +117,10 @@ class CloudProvisionerImpl:
         """Select best provider — sync port method."""
         # START_BLOCK_PURE_SELECT
         adapter = select_provider_pure(
-            self.adapters, self.configs, platforms, current_counts
+            self.adapters,
+            self.configs,
+            platforms,
+            current_counts,
         )
         # END_BLOCK_PURE_SELECT
 
@@ -143,13 +145,16 @@ class CloudProvisionerImpl:
     #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-SESSION
     # END_CONTRACT: CloudProvisionerImpl.allocate
     async def allocate(self, provider: str, node: Node) -> Node:
+        """Create VM on named provider, run cloud-init and engine setup, return the enabled Node (no DB write; caller flips enabled=TRUE via NodeRepository."""
         # START_BLOCK_RESOLVE_ALLOCATE_PROVIDER
         adapter = self.adapters.get(provider)
         if adapter is None:
-            raise CloudAllocateError(f"Unknown provider: {provider}")
+            msg = f"Unknown provider: {provider}"
+            raise CloudAllocateError(msg)
         config = self.configs.get(provider)
         if config is None:
-            raise CloudAllocateError(f"Config not found for provider {provider}")
+            msg = f"Config not found for provider {provider}"
+            raise CloudAllocateError(msg)
         # END_BLOCK_RESOLVE_ALLOCATE_PROVIDER
 
         # START_BLOCK_CREATE_VM
@@ -161,8 +166,9 @@ class CloudProvisionerImpl:
                 cloud_config=await self._get_cloud_config_data(adapter, config),
             )
         except Exception as err:
-            logger.error("cloud create failed for %s: %s", adapter.name, err)
-            raise CloudAllocateError(f"Create node error: {err}") from err
+            logger.exception("cloud create failed for %s", adapter.name)
+            msg = f"Create node error: {err}"
+            raise CloudAllocateError(msg) from err
         # END_BLOCK_CREATE_VM
 
         # START_BLOCK_SETUP_VM
@@ -217,7 +223,8 @@ class CloudProvisionerImpl:
                     disc_err,
                 )
             await adapter.delete_node(cfg=config, host=node.hostname)
-            raise CloudSetupError(f"Setup node error: {err}") from err
+            msg = f"Setup node error: {err}"
+            raise CloudSetupError(msg) from err
         # END_BLOCK_SETUP_VM
 
         logger.debug(
@@ -239,6 +246,7 @@ class CloudProvisionerImpl:
     #   LINKS: M-CLOUD-PROVISIONER
     # END_CONTRACT: CloudProvisionerImpl.deallocate
     async def deallocate(self, node: Node) -> None:
+        """Delete VM via named provider's SDK (no DB access)."""
         # START_BLOCK_RESOLVE_DEALLOCATE_PROVIDER
         if node.cloud is None:
             logger.warning(
@@ -291,7 +299,9 @@ class CloudProvisionerImpl:
         """Async-thread-safe SSH key load/generate."""
         async with self.ssh_key_lock:
             return await asyncio.get_running_loop().run_in_executor(
-                None, get_or_create_ssh_key, self.local_config.keys_dir
+                None,
+                get_or_create_ssh_key,
+                self.local_config.keys_dir,
             )
 
     # START_CONTRACT: CloudProvisionerImpl._get_cloud_config_data
@@ -305,7 +315,9 @@ class CloudProvisionerImpl:
     #   LINKS: M-CLOUD-INIT, M-CLOUD-CONFIGS
     # END_CONTRACT: CloudProvisionerImpl._get_cloud_config_data
     async def _get_cloud_config_data(
-        self, adapter: CloudAdapter, config: ConfigCloud
+        self,
+        adapter: CloudAdapter,
+        config: ConfigCloud,
     ) -> CloudInitConfig:
         """Build cloud-config with engine packages for this adapter's platforms."""
         # START_BLOCK_FILTER_ENGINES
@@ -318,7 +330,7 @@ class CloudProvisionerImpl:
                     )
                 )
                 or not e.platforms
-            )
+            ),
         )
         pkgs = supported_engines.get_platform_packages()
         # END_BLOCK_FILTER_ENGINES
@@ -381,22 +393,21 @@ class CloudProvisionerImpl:
                 session.run("cloud-init status --wait"),
                 timeout=adapter.create_node_timeout,
             )
-            if result.exit_code != 0:
-                raise CloudSetupError(
-                    f"cloud-init failed on {node.hostname}: exit={result.exit_code} "
-                    f"stdout={result.stdout} stderr={result.stderr}"
-                )
         except asyncio.TimeoutError as err:
-            raise CloudSetupError(
+            msg = (
                 f"cloud-init status --wait timed out on {node.hostname} "
                 f"after {adapter.create_node_timeout}s"
-            ) from err
-        except CloudSetupError:
-            raise
+            )
+            raise CloudSetupError(msg) from err
         except Exception as err:
-            raise CloudSetupError(
-                f"cloud-init status --wait failed on {node.hostname}: {err}"
-            ) from err
+            msg = f"cloud-init status --wait failed on {node.hostname}: {err}"
+            raise CloudSetupError(msg) from err
+        if result.exit_code != 0:
+            msg = (
+                f"cloud-init failed on {node.hostname}: exit={result.exit_code} "
+                f"stdout={result.stdout} stderr={result.stderr}"
+            )
+            raise CloudSetupError(msg)
         # END_BLOCK_CLOUD_INIT
 
         # START_BLOCK_SETUP_NODE
@@ -404,11 +415,13 @@ class CloudProvisionerImpl:
         try:
             await session.setup_node(self.engines)
         except Exception as err:
-            raise CloudSetupError(f"Setup node {node.hostname} failed: {err}") from err
+            msg = f"Setup node {node.hostname} failed: {err}"
+            raise CloudSetupError(msg) from err
         # END_BLOCK_SETUP_NODE
 
         logger.debug(
-            "READY", extra={"hostname": node.hostname, "node_id": node.node_id}
+            "READY",
+            extra={"hostname": node.hostname, "node_id": node.node_id},
         )
         return replace(node, enabled=True)
 
@@ -428,12 +441,14 @@ class CloudProvisionerImpl:
         self,
         node: Node,
         adapter: CloudAdapter,
-        config: ConfigCloud,
+        config: ConfigCloud,  # noqa:  ARG002 Unused method argument
     ) -> MachineSession:
         """Connect to VM via SSH gateway with retry-friendly error wrapping."""
         # START_BLOCK_GET_KEYS
         keys: Sequence[PurePath] = await asyncio.get_running_loop().run_in_executor(
-            None, list_private_keys, self.local_config.keys_dir
+            None,
+            list_private_keys,
+            self.local_config.keys_dir,
         )
         # END_BLOCK_GET_KEYS
 
@@ -456,8 +471,9 @@ class CloudProvisionerImpl:
                 tasks_dir=self.remote_config.tasks_dir,
             )
         except Exception as err:
+            msg = f"SSH connect to {node.hostname} failed: {err}"
             raise CloudSetupError(
-                f"SSH connect to {node.hostname} failed: {err}"
+                msg,
             ) from err
         # END_BLOCK_SSH_CONNECT_VM
         return session

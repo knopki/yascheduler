@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+"""Yascheduler SysV init daemon entry point (detached via python-daemon)."""
 # FILE: yascheduler/entrypoints/cli/daemon_sysv.py
 # VERSION: 2.1.0
 #
@@ -17,7 +18,6 @@
 #   LAST_CHANGE: v2.1.0 - Import LOG_FILE/PID_FILE from yascheduler.entrypoints facade instead of yascheduler.shared.
 #   PREVIOUS_CHANGE: v2.0.0 - Reimplemented as a thin entry point: builds its own argparse parser via args.py helpers; delegates to daemon_common.run_daemon; DaemonContext working_directory="/" (was os.path.dirname(__file__) — bug D); configure_logger called INSIDE the context so FileHandler opens the daemon's fd; uniform 0/1/2 exit-code contract; fixes the -l short-flag collision (each launcher parses once, no sys.argv re-parse).
 # END_CHANGE_SUMMARY
-"""Yascheduler SysV init daemon entry point (detached via python-daemon)."""
 
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ from .daemon_common import configure_logger, run_daemon
 #   LINKS: M-DAEMON-SYSV, M-DAEMON-COMMON
 # END_CONTRACT: main
 def main(argv: list[str] | None = None) -> None:
+    """Start the daemon detached via python-daemon with PID file management; exit 0/1/2."""
     # START_BLOCK_PARSE_ARGS
     parser = argparse.ArgumentParser(
         prog="yascheduler",
@@ -83,7 +84,8 @@ def main(argv: list[str] | None = None) -> None:
             # configure_logger is called INSIDE the context so the FileHandler opens
             # the file in the daemon's context (post-double-fork).
             logger = configure_logger(
-                args.log_file, logging.getLevelName(args.log_level)
+                args.log_file,
+                logging.getLevelName(args.log_level),
             )
             config = parse_config(args.config)
             asyncio.run(run_daemon(config, logger))
@@ -91,7 +93,7 @@ def main(argv: list[str] | None = None) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
 

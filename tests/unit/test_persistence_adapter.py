@@ -54,7 +54,7 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.infra.persistence.sql_loader import load_query
 
 
-def _make_task_row(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
+def _make_task_row(**overrides: Any) -> dict[str, Any]:
     """Build a fake _run row dict for a Task with sensible defaults; overrides win."""
     base = {
         "task_id": 1,
@@ -85,7 +85,8 @@ def _make_task_row(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
 # END_CONTRACT: test_load_query_first_call_reads_file
 @pytest.mark.unit
 def test_load_query_first_call_reads_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """load_query reads the file on first call and returns its content."""
     load_query.cache_clear()
@@ -115,7 +116,8 @@ def test_load_query_first_call_reads_file(
 # END_CONTRACT: test_load_query_second_call_uses_cache
 @pytest.mark.unit
 def test_load_query_second_call_uses_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """load_query returns the cached value; file mutation has no effect."""
     load_query.cache_clear()
@@ -283,7 +285,8 @@ async def test_uow_commit_after_exit_raises(mocker: MockerFixture) -> None:
         pass  # connection now closed by __aexit__
 
     with pytest.raises(
-        UnitOfWorkNotInitializedError, match="Connection not initialized"
+        UnitOfWorkNotInitializedError,
+        match="Connection not initialized",
     ):
         await uow.commit()
 
@@ -338,7 +341,7 @@ class TestPostgresTaskRepository:
     # -- get -------------------------------------------------------------------
 
     async def test_get_returns_task(self, mocker: MockerFixture) -> None:
-        """get returns a Task hydrated from the row returned by _run."""
+        """Get returns a Task hydrated from the row returned by _run."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [_make_task_row(task_id=42, status="RUNNING")]  # type: ignore[attr-defined]
 
@@ -352,7 +355,7 @@ class TestPostgresTaskRepository:
         assert task.status == DomainTaskStatus.RUNNING
 
     async def test_get_returns_none_when_not_found(self, mocker: MockerFixture) -> None:
-        """get returns None when _run returns an empty list."""
+        """Get returns None when _run returns an empty list."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
 
@@ -361,9 +364,10 @@ class TestPostgresTaskRepository:
         assert task is None
 
     async def test_get_with_none_ip_and_extra_fields(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
-        """get handles null allocated_node_id and extra metadata fields."""
+        """Get handles null allocated_node_id and extra metadata fields."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             _make_task_row(
@@ -375,7 +379,7 @@ class TestPostgresTaskRepository:
                 webhook_url="https://hook.example.com",
                 webhook_custom_params=json.dumps({"key": "val"}),
                 extra=json.dumps({"extra_field": "extra_val"}),
-            )
+            ),
         ]  # type: ignore[attr-defined]
 
         task = await repo.get(TaskId(1))
@@ -395,7 +399,7 @@ class TestPostgresTaskRepository:
     # -- insert ----------------------------------------------------------------
 
     async def test_insert_returns_task_with_id(self, mocker: MockerFixture) -> None:
-        """insert runs INSERT SQL and returns Task with generated ID."""
+        """Insert runs INSERT SQL and returns Task with generated ID."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [_make_task_row(task_id=99, title="label")]  # type: ignore[attr-defined]
 
@@ -412,7 +416,7 @@ class TestPostgresTaskRepository:
     # -- save ------------------------------------------------------------------
 
     async def test_save_calls_update_by_id(self, mocker: MockerFixture) -> None:
-        """save calls _run with the update_by_id query and all task fields."""
+        """Save calls _run with the update_by_id query and all task fields."""
         repo = self._make_repo(mocker)
         from datetime import datetime
 
@@ -446,7 +450,7 @@ class TestPostgresTaskRepository:
         assert kwargs["remote_folder"] == "/remote"
 
     async def test_save_running_task(self, mocker: MockerFixture) -> None:
-        """save persists a RUNNING task with its allocated_node_id."""
+        """Save persists a RUNNING task with its allocated_node_id."""
         repo = self._make_repo(mocker)
         from datetime import datetime
 
@@ -484,7 +488,7 @@ class TestPostgresTaskRepository:
         ]
 
         tasks = await repo.list_by_status(
-            {DomainTaskStatus.TO_DO, DomainTaskStatus.RUNNING}
+            {DomainTaskStatus.TO_DO, DomainTaskStatus.RUNNING},
         )
 
         assert len(tasks) == 2

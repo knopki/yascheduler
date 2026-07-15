@@ -84,7 +84,8 @@ class TestDaemonSysvParsing:
     """argparse: --help, -p/-l short flags, --log-level long-only, defaults."""
 
     def test_help_exits_zero_prog_yascheduler(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])
@@ -105,14 +106,18 @@ class TestDaemonSysvParsing:
         assert "/nonexistent.conf" in err
 
     def test_short_flags_parse_correctly(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         cfg = tmp_path / "yascheduler.conf"
         cfg.write_text("[local]")
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(sysv_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
+            sysv_mod,
+            "parse_config",
+            MagicMock(return_value=MagicMock()),
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -127,19 +132,23 @@ class TestDaemonSysvParsing:
                 "/var/run/yascheduler.pid",
                 "-l",
                 "/var/log/yascheduler.log",
-            ]
+            ],
         )
         assert cfg_logger_spy.call_args.args[0] == "/var/log/yascheduler.log"
 
     def test_log_level_long_only_no_collision_with_l(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         cfg = tmp_path / "yascheduler.conf"
         cfg.write_text("[local]")
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(sysv_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
+            sysv_mod,
+            "parse_config",
+            MagicMock(return_value=MagicMock()),
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -154,20 +163,24 @@ class TestDaemonSysvParsing:
                 "DEBUG",
                 "-l",
                 "/var/log/yascheduler.log",
-            ]
+            ],
         )
         # -l is --log-file, --log-level is long-only → both parse cleanly.
         assert cfg_logger_spy.call_args.args[0] == "/var/log/yascheduler.log"
 
     def test_default_log_file_is_log_file(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         cfg = tmp_path / "yascheduler.conf"
         cfg.write_text("[local]")
         cfg_logger_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(sysv_mod, "configure_logger", cfg_logger_spy)
         monkeypatch.setattr(
-            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
+            sysv_mod,
+            "parse_config",
+            MagicMock(return_value=MagicMock()),
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -186,10 +199,14 @@ class TestDaemonSysvParsing:
         cfg = tmp_path / "yascheduler.conf"
         cfg.write_text("[local]")
         monkeypatch.setattr(
-            sysv_mod, "configure_logger", MagicMock(return_value=MagicMock())
+            sysv_mod,
+            "configure_logger",
+            MagicMock(return_value=MagicMock()),
         )
         monkeypatch.setattr(
-            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
+            sysv_mod,
+            "parse_config",
+            MagicMock(return_value=MagicMock()),
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -214,10 +231,14 @@ class TestDaemonSysvContext:
         cfg = tmp_path / "yascheduler.conf"
         cfg.write_text("[local]")
         monkeypatch.setattr(
-            sysv_mod, "configure_logger", MagicMock(return_value=MagicMock())
+            sysv_mod,
+            "configure_logger",
+            MagicMock(return_value=MagicMock()),
         )
         monkeypatch.setattr(
-            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
+            sysv_mod,
+            "parse_config",
+            MagicMock(return_value=MagicMock()),
         )
 
         def fake_run(coro: Coroutine) -> None:
@@ -244,7 +265,9 @@ class TestDaemonSysvContext:
 
         monkeypatch.setattr(sysv_mod, "configure_logger", spy_configure_logger)
         monkeypatch.setattr(
-            sysv_mod, "parse_config", MagicMock(return_value=MagicMock())
+            sysv_mod,
+            "parse_config",
+            MagicMock(return_value=MagicMock()),
         )
 
         def fake_run(coro: Coroutine) -> None:

@@ -77,9 +77,9 @@ def _query_config(
         f"check_pname = sleep\n"
         f"input_files = 1.input\n"
         f"output_files = 1.input.out\n"
-        f"platforms = linux\n"
+        f"platforms = linux\n",
     )
-    yield str(ini_path)
+    return str(ini_path)
 
 
 # START_CONTRACT: _submit_task
@@ -107,7 +107,9 @@ class TestClientQueryIntegration:
     """Implementation-agnostic: query methods return 5-key Mapping shape with nested node object."""
 
     def test_query_by_jobs_returns_five_key_mapping_with_node(
-        self, _query_config: str, _submit_task: int
+        self,
+        _query_config: str,
+        _submit_task: int,
     ) -> None:
         task_id = _submit_task
         result = Yascheduler(_query_config).queue_get_tasks(jobs=[task_id])
@@ -126,7 +128,9 @@ class TestClientQueryIntegration:
         assert isinstance(mapping["metadata"], dict)
 
     def test_query_by_status_returns_five_key_mapping_with_node(
-        self, _query_config: str, _submit_task: int
+        self,
+        _query_config: str,
+        _submit_task: int,
     ) -> None:
         task_id = _submit_task
         result = Yascheduler(_query_config).queue_get_tasks(status=[0])
@@ -141,7 +145,9 @@ class TestClientQueryIntegration:
         assert "node" in mapping
 
     def test_query_single_task_returns_mapping_or_none(
-        self, _query_config: str, _submit_task: int
+        self,
+        _query_config: str,
+        _submit_task: int,
     ) -> None:
         task_id = _submit_task
         found = Yascheduler(_query_config).queue_get_task(task_id)

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+"""Protocol definitions for process info, SSH checks, and adapters."""
 # FILE: yascheduler/infra/ssh/platform/protocol.py
 # VERSION: 1.2.0
 #
@@ -31,13 +31,13 @@
 #   PREVIOUS_CHANGE: v1.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...).
 # END_CHANGE_SUMMARY
 
+from __future__ import annotations
+
 import asyncio
 from abc import abstractmethod
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from dataclasses import dataclass
-from pathlib import PurePath
-from re import Pattern
-from typing import TYPE_CHECKING, Any, Optional, Protocol, Union
+from typing import TYPE_CHECKING, Any, Protocol
 
 from asyncssh.connection import SSHClientConnection
 from asyncssh.misc import (
@@ -50,7 +50,6 @@ from asyncssh.misc import (
     ProtocolError,
     ServiceNotAvailable,
 )
-from asyncssh.process import SSHClientProcess, SSHCompletedProcess
 from asyncssh.sftp import (
     SFTPBadMessage,
     SFTPByteRangeLockConflict,
@@ -66,6 +65,11 @@ from asyncssh.sftp import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import PurePath
+    from re import Pattern
+
+    from asyncssh.process import SSHClientProcess, SSHCompletedProcess
+
     from yascheduler.domain import EngineRepository
 
 SFTPRetryExc = (
@@ -99,6 +103,8 @@ AllSSHRetryExc = SSHRetryExc + SFTPRetryExc
 
 @dataclass(frozen=True)
 class ProcessInfo:
+    """Remote process information — PID, name, and command line."""
+
     pid: int
     name: str
     command: str
@@ -109,6 +115,8 @@ QuoteCallable = Callable[[str], str]
 
 
 class RunCallable(Protocol):
+    """Callable protocol for synchronous SSH command execution."""
+
     @abstractmethod
     def __call__(
         self,
@@ -116,13 +124,15 @@ class RunCallable(Protocol):
         quote: QuoteCallable,
         command: str,
         *args: object,
-        cwd: Optional[str] = None,
+        cwd: str | None = None,
         **kwargs: dict[str, Any],
     ) -> Coroutine[Any, Any, SSHCompletedProcess]:
-        pass
+        """Call."""
 
 
 class RunBgCallable(Protocol):
+    """Callable protocol for background SSH command execution."""
+
     @abstractmethod
     def __call__(
         self,
@@ -130,54 +140,65 @@ class RunBgCallable(Protocol):
         quote: QuoteCallable,
         command: str,
         *args: object,
-        cwd: Optional[str] = None,
+        cwd: str | None = None,
         **kwargs: object,
     ) -> Coroutine[Any, Any, SSHClientProcess[Any]]:
-        pass
+        """Call."""
 
 
 class OuterRunCallable(Protocol):
+    """Callable protocol wrapping ``run``/``run_bg`` with platform dispatch."""
+
     @abstractmethod
     def __call__(
         self,
         *args: object,
-        cwd: Optional[str] = None,
-        **kwargs: Any,  # noqa: ANN401
+        cwd: str | None = None,
+        **kwargs: dict[str, Any],
     ) -> Coroutine[Any, Any, SSHCompletedProcess]:
-        pass
+        """Call."""
 
 
 GetCPUCoresCallable = Callable[[OuterRunCallable], Coroutine[Any, Any, int]]
 
 
 class ListProcessesCallable(Protocol):
+    """Callable protocol for listing remote processes."""
+
     @abstractmethod
     def __call__(
-        self, conn: SSHClientConnection, query: Optional[str] = None
+        self,
+        conn: SSHClientConnection,
+        query: str | None = None,
     ) -> AsyncGenerator[ProcessInfo, None]:
-        pass
+        """Call."""
 
 
 class PgrepCallable(Protocol):
+    """Callable protocol for pattern-matching remote processes."""
+
     @abstractmethod
     def __call__(
         self,
         conn: SSHClientConnection,
         quote: QuoteCallable,
-        pattern: Union[str, Pattern[str]],
+        pattern: str | Pattern[str],
+        *,
         full: bool = True,
     ) -> AsyncGenerator[ProcessInfo, None]:
-        pass
+        """Call."""
 
 
 class SetupNodeCallable(Protocol):
+    """Callable protocol for node setup operations."""
+
     @abstractmethod
     def __call__(
         self,
         conn: SSHClientConnection,
         run: OuterRunCallable,
         quote: QuoteCallable,
-        engines: "EngineRepository",
+        engines: EngineRepository,
         engines_dir: PurePath,
     ) -> Coroutine[Any, Any, None]:
-        pass
+        """Call."""

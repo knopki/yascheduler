@@ -1,3 +1,4 @@
+"""Notifier subpackage facade — re-exports notification handlers for the adapters layer."""
 # FILE: yascheduler/infra/notifier/__init__.py
 # VERSION: 1.1.1
 # START_MODULE_CONTRACT

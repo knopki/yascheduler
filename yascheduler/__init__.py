@@ -1,3 +1,4 @@
+"""Package entry point exposing public client and constants."""
 # FILE: yascheduler/__init__.py
 # VERSION: 1.9.0
 # START_MODULE_CONTRACT

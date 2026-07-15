@@ -255,8 +255,6 @@ list[MachineSession]`, `list_connected() → list[MachineSession]`,
   (adapter registry, platform detection, run-fn closure).
 - **`keys.py`** — the pure `list_private_keys(keys_dir)` discovery function
   the orchestrator consumes via injection.
-- **`exceptions.py`** — re-exports the retry-exception tuples
-  (`AllSSHRetryExc`, `SFTPRetryExc`).
 
 ### 2.5 Cloud Adapter (`yascheduler/infra/cloud/`)
 

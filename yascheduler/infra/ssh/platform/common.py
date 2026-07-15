@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+"""Shared helpers for remote machine operations: command execution."""
 # FILE: yascheduler/infra/ssh/platform/common.py
 # VERSION: 1.2.0
 #
@@ -20,13 +20,16 @@
 # END_CHANGE_SUMMARY
 #
 
+from __future__ import annotations
+
 from subprocess import DEVNULL
-from typing import AnyStr, Optional
+from typing import TYPE_CHECKING, AnyStr
 
-from asyncssh.connection import SSHClientConnection
-from asyncssh.process import SSHClientProcess, SSHCompletedProcess
+if TYPE_CHECKING:
+    from asyncssh.connection import SSHClientConnection
+    from asyncssh.process import SSHClientProcess, SSHCompletedProcess
 
-from .protocol import QuoteCallable
+    from .protocol import QuoteCallable
 
 
 # START_CONTRACT: run
@@ -41,11 +44,11 @@ async def run(
     quote: QuoteCallable,
     command: str,
     *args: object,
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     **kwargs: object,
 ) -> SSHCompletedProcess:
-    """
-    Run process and wait for exit
+    """Run process and wait for exit.
+
     :raises asyncssh.Error: An SSH error has occurred.
     """
     if cwd:
@@ -74,15 +77,20 @@ async def run_bg(
     quote: QuoteCallable,
     command: str,
     *args: object,
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     **kwargs: object,
 ) -> SSHClientProcess[AnyStr]:
-    """
-    Create background process.
+    """Create background process.
+
     :raises asyncssh.ChannelOpenError: An SSH error has occurred.
     """
     if cwd:
         command = f"cd {quote(cwd)}; {command}"
     return await conn.create_process(
-        command, *args, **kwargs, stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL
+        command,
+        *args,
+        **kwargs,
+        stdin=DEVNULL,
+        stdout=DEVNULL,
+        stderr=DEVNULL,
     )

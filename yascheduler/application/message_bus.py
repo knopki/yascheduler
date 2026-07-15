@@ -1,3 +1,4 @@
+"""In-process message bus that dispatches domain events to registered handlers."""
 # FILE: yascheduler/application/message_bus.py
 # VERSION: 1.2.0
 #
@@ -40,6 +41,8 @@ logger = logging.getLogger(__name__)
 #   LINKS: M-DOMAIN-EVENTS
 # END_CONTRACT: MessageBus
 class MessageBus:
+    """In-process event dispatcher with type-based handler registry."""
+
     def __init__(self) -> None:
         self._handlers: dict[type[DomainEvent], list[Callable[[DomainEvent], Any]]] = {}
 
@@ -51,6 +54,7 @@ class MessageBus:
     #   LINKS: M-DOMAIN-EVENTS
     # END_CONTRACT: MessageBus.register
     def register(self, event_type: type, handler: Callable) -> None:
+        """Register a handler callable for a specific event type."""
         self._handlers.setdefault(event_type, []).append(handler)
 
     # START_CONTRACT: MessageBus.dispatch
@@ -61,13 +65,14 @@ class MessageBus:
     #   LINKS: M-DOMAIN-EVENTS
     # END_CONTRACT: MessageBus.dispatch
     async def dispatch(self, events: Sequence[DomainEvent]) -> None:
+        """Dispatch a sequence of domain events to their registered handlers."""
         for event in events:
             for handler in self._handlers.get(type(event), []):
                 try:
                     result = handler(event)
                     if asyncio.iscoroutine(result):
                         await result
-                except Exception:
+                except Exception:  # noqa: PERF203
                     logger.exception(
                         "message bus handler %s failed for %s",
                         getattr(handler, "__name__", handler),

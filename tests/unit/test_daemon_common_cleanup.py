@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import signal
 from pathlib import PurePosixPath
@@ -65,7 +66,8 @@ def _make_real_orchestrator(
     disconnect_all: AsyncMock | None = None,
 ) -> Orchestrator:
     """Build a real Orchestrator with mocked deps so stop() exercises the real
-    idempotent/exception-safe cleanup path. ``start`` is monkeypatched per-test."""
+    idempotent/exception-safe cleanup path. ``start`` is monkeypatched per-test.
+    """
     local = MagicMock(spec=LocalSettings)
     local.conn_machine_pending = 10
     local.allocate_pending = 5
@@ -106,7 +108,7 @@ def _make_real_orchestrator(
     return Orchestrator(
         local_settings=local,
         remote_defaults=remote,
-        uow_factory=lambda: AsyncMock(),
+        uow_factory=AsyncMock,
         clouds=clouds,
         repository=repository,
         task_deployer=task_deployer,
@@ -127,7 +129,8 @@ def _capture_signal_handlers(
     loop: asyncio.AbstractEventLoop,
 ) -> dict[signal.Signals, Callable[[], object]]:
     """Override loop.add_signal_handler so SIGTERM/SIGINT registrations are captured
-    as zero-arg callables (each returns a task wrapping on_signal)."""
+    as zero-arg callables (each returns a task wrapping on_signal).
+    """
     registered: dict[signal.Signals, Callable[[], object]] = {}
 
     def fake_add_signal_handler(sig: object, handler: object, *args: object) -> None:
@@ -213,10 +216,8 @@ class TestSignalHandlerThenFinallyIsNoop:
             # so pytest-asyncio teardown doesn't destroy a pending task.
             assert isinstance(sig_task, asyncio.Task)
             sig_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await sig_task
-            except asyncio.CancelledError:
-                pass
 
         orch.start = _start  # type: ignore[method-assign]
         daemon_common.make_daemon = AsyncMock(return_value=orch)  # type: ignore[assignment]
@@ -254,10 +255,7 @@ class TestMakeDaemonStartRaisesCleansEarlyJobs:
         )
 
         async def _early_job() -> None:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                raise
+            await asyncio.Event().wait()
 
         early_task = asyncio.create_task(_early_job())
         orch._bg_jobs.add(early_task)

@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -54,7 +55,8 @@ if TYPE_CHECKING:
 
 def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
     """Build an Orchestrator with mocked deps; real Engine so _sleep_interval
-    is configurable and _asleep_until returns immediately when interval is 0."""
+    is configurable and _asleep_until returns immediately when interval is 0.
+    """
     local = MagicMock(spec=LocalSettings)
     local.conn_machine_pending = 10
     local.allocate_pending = 5
@@ -149,7 +151,8 @@ class _EmptyAsyncGen:
 
 class _RaisingAsyncGen:
     """Async iterable that raises ``exc`` on first ``__anext__`` (after yielding
-    control once). Models a producer whose dependency fails mid-read."""
+    control once). Models a producer whose dependency fails mid-read.
+    """
 
     def __init__(self, exc: BaseException) -> None:
         self._exc = exc
@@ -186,7 +189,8 @@ class TestProducerResilience:
 
     @pytest.mark.asyncio
     async def test_producer_exception_continues_loop(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         orch = _make_orchestrator(sleep_interval=0)
         q: UniqueQueue = UniqueQueue("test", maxsize=10)
@@ -242,7 +246,8 @@ class TestCancelledErrorDrain:
         producer-error `except Exception` does NOT swallow the CancelledError.
         Observed via: exactly one producer invocation (no retry), no consumer
         call (no message enqueued), and the function returns cleanly (the drain
-        awaited the workers instead of propagating an unhandled error)."""
+        awaited the workers instead of propagating an unhandled error).
+        """
         orch = _make_orchestrator(sleep_interval=0)
         q: UniqueQueue = UniqueQueue("test", maxsize=10)
 
@@ -325,7 +330,7 @@ class TestWorkerRegistration:
         # Mirror start(): wrap _create_producer_consumers in a task and register
         # the parent coroutine task in _bg_jobs, exactly as start() does.
         loop_task = asyncio.create_task(
-            orch._create_producer_consumers(q, producer, consumer, workers_num=2)
+            orch._create_producer_consumers(q, producer, consumer, workers_num=2),
         )
         orch._bg_jobs.add(loop_task)
 
@@ -346,10 +351,8 @@ class TestWorkerRegistration:
             await asyncio.sleep(0.001)
         if not loop_task.done():
             loop_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await loop_task
-        except asyncio.CancelledError:
-            pass
         # The parent returns normally (cancellation_event set, not CancelledError),
         # so the `except CancelledError` drain does NOT run and workers remain
         # blocked on queue.get() — cancel them explicitly to avoid a hang.
@@ -373,8 +376,11 @@ class TestWorkerRegistration:
 
         loop_task = asyncio.create_task(
             orch._create_producer_consumers(
-                q, producer, _blocking_consumer, workers_num=1
-            )
+                q,
+                producer,
+                _blocking_consumer,
+                workers_num=1,
+            ),
         )
         # Mirror start() so stop()'s cascade cancels the parent too.
         orch._bg_jobs.add(loop_task)
@@ -402,10 +408,8 @@ class TestWorkerRegistration:
 
         assert loop_task.done(), "parent loop task was not cancelled by stop()"
         loop_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await loop_task
-        except asyncio.CancelledError:
-            pass
 
     @pytest.mark.asyncio
     async def test_double_cancel_is_idempotent(self) -> None:
@@ -423,8 +427,11 @@ class TestWorkerRegistration:
 
         loop_task = asyncio.create_task(
             orch._create_producer_consumers(
-                q, producer, _blocking_consumer, workers_num=1
-            )
+                q,
+                producer,
+                _blocking_consumer,
+                workers_num=1,
+            ),
         )
         orch._bg_jobs.add(loop_task)
 
@@ -444,10 +451,8 @@ class TestWorkerRegistration:
 
         orch._cancellation_event.set()
         loop_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await loop_task
-        except asyncio.CancelledError:
-            pass
         await asyncio.gather(*orch._bg_jobs, return_exceptions=True)
 
 
@@ -484,7 +489,7 @@ class _CancelUow:
     """Raises CancelledError on __aenter__."""
 
     async def __aenter__(self) -> object:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     async def __aexit__(self, *args: object) -> bool:
         return False
@@ -495,7 +500,8 @@ class TestStatsResilience:
 
     @pytest.mark.asyncio
     async def test_print_stats_exception_continues_loop(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         orch = _make_orchestrator(sleep_interval=0)
         orch._repository.list_connected = MagicMock(return_value=[])  # type: ignore[method-assign]
@@ -509,23 +515,23 @@ class TestStatsResilience:
         async def _noop_sleep(_end: object) -> None:
             await asyncio.sleep(0)
 
-        with caplog.at_level(logging.DEBUG, logger="yascheduler"):
-            with patch(
+        with (
+            caplog.at_level(logging.DEBUG, logger="yascheduler"),
+            patch(
                 "yascheduler.application.orchestrator._asleep_until",
                 new=_noop_sleep,
-            ):
-                stats_task = asyncio.create_task(orch._print_stats())
-                # Shut down after the second nodes access (raise then succeed).
-                for _ in range(800):
-                    if boom.calls >= 2:
-                        orch._cancellation_event.set()
-                        break
-                    await asyncio.sleep(0)
-                stats_task.cancel()
-                try:
-                    await stats_task
-                except asyncio.CancelledError:
-                    pass
+            ),
+        ):
+            stats_task = asyncio.create_task(orch._print_stats())
+            # Shut down after the second nodes access (raise then succeed).
+            for _ in range(800):
+                if boom.calls >= 2:
+                    orch._cancellation_event.set()
+                    break
+                await asyncio.sleep(0)
+            stats_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stats_task
 
         assert boom.calls >= 2, "stats loop did not continue after the first error"
         assert any(
@@ -545,11 +551,14 @@ class TestStatsResilience:
         async def _noop_sleep(_end: object) -> None:
             await asyncio.sleep(0)
 
-        with patch(
-            "yascheduler.application.orchestrator._asleep_until", new=_noop_sleep
+        with (
+            patch(
+                "yascheduler.application.orchestrator._asleep_until",
+                new=_noop_sleep,
+            ),
+            pytest.raises(asyncio.CancelledError),
         ):
-            with pytest.raises(asyncio.CancelledError):
-                await orch._print_stats()
+            await orch._print_stats()
 
 
 class _EmptyMappingsUow:
@@ -583,7 +592,8 @@ class TestStatsEmptyDbRegression:
 
     @pytest.mark.asyncio
     async def test_print_stats_succeeds_on_empty_nodes(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         orch = _make_orchestrator(sleep_interval=0)
         orch._repository.list_connected = MagicMock(return_value=[])  # type: ignore[method-assign]
@@ -592,25 +602,23 @@ class TestStatsEmptyDbRegression:
         async def _noop_sleep(_end: object) -> None:
             await asyncio.sleep(0)
 
-        with caplog.at_level(logging.INFO, logger="yascheduler"):
-            with patch(
+        with (
+            caplog.at_level(logging.INFO, logger="yascheduler"),
+            patch(
                 "yascheduler.application.orchestrator._asleep_until",
                 new=_noop_sleep,
-            ):
-                stats_task = asyncio.create_task(orch._print_stats())
-                # Let one full tick execute, then stop.
-                for _ in range(50):
-                    if any(
-                        r.getMessage().startswith("THREADS:") for r in caplog.records
-                    ):
-                        break
-                    await asyncio.sleep(0)
-                orch._cancellation_event.set()
-                stats_task.cancel()
-                try:
-                    await stats_task
-                except asyncio.CancelledError:
-                    pass
+            ),
+        ):
+            stats_task = asyncio.create_task(orch._print_stats())
+            # Let one full tick execute, then stop.
+            for _ in range(50):
+                if any(r.getMessage().startswith("THREADS:") for r in caplog.records):
+                    break
+                await asyncio.sleep(0)
+            orch._cancellation_event.set()
+            stats_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stats_task
         assert any(
             r.getMessage().startswith("THREADS:")
             and "enabled:0/total:0" in r.getMessage()

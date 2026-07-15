@@ -46,7 +46,8 @@ from yascheduler.infra.persistence import TaskRowNotFoundError
 
 def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
     """Build an Orchestrator with mocked deps; real Engine so _sleep_interval
-    is configurable and _asleep_until returns immediately when interval is 0."""
+    is configurable and _asleep_until returns immediately when interval is 0.
+    """
     local = MagicMock(spec=LocalSettings)
     local.conn_machine_pending = 10
     local.allocate_pending = 5
@@ -135,11 +136,13 @@ def _idle_producer() -> _EmptyAsyncGen:
 
 class TestConsumerResilience:
     """Consumer raises Exception on first message → logged, worker continues,
-    subsequent messages are still processed (worker task NOT killed)."""
+    subsequent messages are still processed (worker task NOT killed).
+    """
 
     @pytest.mark.asyncio
     async def test_consumer_exception_continues_loop(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         orch = _make_orchestrator(sleep_interval=0)
         q: UniqueQueue = UniqueQueue("test", maxsize=10)
@@ -165,7 +168,7 @@ class TestConsumerResilience:
 
         with caplog.at_level(logging.DEBUG, logger="yascheduler"):
             loop_task = asyncio.create_task(
-                orch._create_producer_consumers(q, producer, consumer, workers_num=1)
+                orch._create_producer_consumers(q, producer, consumer, workers_num=1),
             )
             orch._bg_jobs.add(loop_task)
 
@@ -204,12 +207,13 @@ class TestConsumerCancelledErrorDrain:
     ) -> None:
         """The CONSUMER_ERROR log line must NOT appear for a CancelledError, and
         the worker exits cleanly (CancelledError propagates past `except Exception`
-        to the `finally: queue.item_done(msg)` and onward to the drain)."""
+        to the `finally: queue.item_done(msg)` and onward to the drain).
+        """
         orch = _make_orchestrator(sleep_interval=0)
         q: UniqueQueue = UniqueQueue("test", maxsize=10)
 
         async def consumer(_msg: UMessage[int, int]) -> None:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         def producer() -> _EmptyAsyncGen:
             return _idle_producer()
@@ -222,7 +226,7 @@ class TestConsumerCancelledErrorDrain:
         parent.setLevel(logging.DEBUG)
 
         loop_task = asyncio.create_task(
-            orch._create_producer_consumers(q, producer, consumer, workers_num=1)
+            orch._create_producer_consumers(q, producer, consumer, workers_num=1),
         )
         orch._bg_jobs.add(loop_task)
 

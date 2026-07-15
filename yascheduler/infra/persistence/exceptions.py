@@ -1,3 +1,4 @@
+"""Adapter-layer exceptions for persistence operations."""
 # FILE: yascheduler/infra/persistence/exceptions.py
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
@@ -44,5 +45,6 @@ class TaskRowNotFoundError(RuntimeError):
     """
 
     def __init__(self, task_id: TaskId) -> None:
+        """Record the task ID and format the error message."""
         self.task_id = task_id
         super().__init__(f"task row not found for task_id={task_id}")

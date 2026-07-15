@@ -1,3 +1,4 @@
+"""Dependency injection composition root — factories per entry point (daemon, CLI)."""
 # FILE: yascheduler/entrypoints/di.py
 # VERSION: 5.17.0
 # START_MODULE_CONTRACT
@@ -78,6 +79,8 @@ if TYPE_CHECKING:
 # END_CONTRACT: CLIDeps
 @dataclass
 class CLIDeps:
+    """Lightweight dependency container for CLI submit operations."""
+
     engines: EngineRepository
     uow_factory: Callable[[], AbstractUnitOfWork]
 
@@ -94,6 +97,7 @@ class CLIDeps:
         metadata: dict[str, object],
         engine_name: str,
     ) -> TaskId:
+        """Submit a new task via the submit_task use case."""
         return await submit_task(
             label,
             metadata,
@@ -136,7 +140,7 @@ async def make_daemon(
     *,
     clouds: CloudProvisionerImpl | None = None,
 ) -> Orchestrator:
-
+    """Async factory creating Orchestrator with all daemon dependencies."""
     bus, http = _setup_domain_events()
     try:
 
@@ -236,7 +240,7 @@ async def make_daemon(
 #   LINKS: M-APPLICATION-SUBMIT, M-PERSISTENCE-UOW
 # END_CONTRACT: make_cli_deps
 def make_cli_deps(config: Config) -> CLIDeps:
-
+    """Sync factory creating lightweight CLIDeps for CLI commands (no SSH/cloud)."""
     bus = MessageBus()
 
     def _uow_factory() -> AbstractUnitOfWork:

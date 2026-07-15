@@ -73,7 +73,9 @@ class _FakeSFTPClient:
     """SFTP client whose open() returns a configured _FakeSFTPFile context manager."""
 
     def __init__(
-        self, file: _FakeSFTPFile, open_side_effect: BaseException | None = None
+        self,
+        file: _FakeSFTPFile,
+        open_side_effect: BaseException | None = None,
     ) -> None:
         self._file = file
         self.open = (
@@ -108,7 +110,7 @@ def _make_sftp_state(
     async def _sftp_ctx() -> AsyncGenerator[_FakeSFTPClient, None]:
         yield sftp
 
-    state._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
+    state._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]
     return state, sftp
 
 
@@ -145,11 +147,13 @@ def _make_task(extra: dict[str, object] | None = None) -> Task:
 
 class TestWriteRemoteFilePropagation:
     """_write_remote_file SHALL re-raise non-SFTP exceptions (not swallow) and
-    SHALL log structured code/reason for asyncssh.misc.Error then re-raise."""
+    SHALL log structured code/reason for asyncssh.misc.Error then re-raise.
+    """
 
     @pytest.mark.asyncio
     async def test_non_sftp_exception_propagates(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A ValueError raised by f.write() propagates out of _write_remote_file.
 
@@ -159,11 +163,16 @@ class TestWriteRemoteFilePropagation:
         file = _FakeSFTPFile(write_side_effect=ValueError("bad data"))
         sftp = _FakeSFTPClient(file)
 
-        with caplog.at_level(logging.ERROR):
-            with pytest.raises(ValueError, match="bad data"):
-                await _write_remote_file(
-                    cast("SFTPClient", sftp), "/r/input.txt", b"data", mode="wb"
-                )
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(ValueError, match="bad data"),
+        ):
+            await _write_remote_file(
+                cast("SFTPClient", sftp),
+                "/r/input.txt",
+                b"data",
+                mode="wb",
+            )
 
         # The structured SFTPError log line is reserved for asyncssh.misc.Error.
         assert not any("SFTPError" in r.getMessage() for r in caplog.records), (
@@ -180,7 +189,10 @@ class TestWriteRemoteFilePropagation:
 
         with pytest.raises(binascii.Error):
             await _write_remote_file(
-                cast("SFTPClient", sftp), "/r/fort.9", b"x", mode="wb"
+                cast("SFTPClient", sftp),
+                "/r/fort.9",
+                b"x",
+                mode="wb",
             )
 
     @pytest.mark.asyncio
@@ -195,7 +207,10 @@ class TestWriteRemoteFilePropagation:
 
         with pytest.raises(OSError, match="open boom"):
             await _write_remote_file(
-                cast("SFTPClient", sftp), "/r/input.txt", b"data", mode="wb"
+                cast("SFTPClient", sftp),
+                "/r/input.txt",
+                b"data",
+                mode="wb",
             )
 
         # write was never reached (open failed first).
@@ -203,18 +218,24 @@ class TestWriteRemoteFilePropagation:
 
     @pytest.mark.asyncio
     async def test_asyncssh_misc_error_logged_and_reraised(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """An asyncssh.misc.Error is logged with structured code/reason and re-raised."""
         err = asyncssh.misc.Error(2, "No such file")
         file = _FakeSFTPFile(write_side_effect=err)
         sftp = _FakeSFTPClient(file)
 
-        with caplog.at_level(logging.ERROR):
-            with pytest.raises(asyncssh.misc.Error) as exc_info:
-                await _write_remote_file(
-                    cast("SFTPClient", sftp), "/r/input.txt", b"data", mode="wb"
-                )
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(asyncssh.misc.Error) as exc_info,
+        ):
+            await _write_remote_file(
+                cast("SFTPClient", sftp),
+                "/r/input.txt",
+                b"data",
+                mode="wb",
+            )
 
         # The same exception instance is re-raised (no swallow, no rewrap).
         assert exc_info.value is err
@@ -228,7 +249,8 @@ class TestWriteRemoteFilePropagation:
 
     @pytest.mark.asyncio
     async def test_sftp_error_subclass_logged_and_reraised(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """SFTPError (asyncssh.misc.Error subclass from sftp.open/f.write) is logged and re-raised."""
         from asyncssh.sftp import SFTPError
@@ -237,11 +259,13 @@ class TestWriteRemoteFilePropagation:
         file = _FakeSFTPFile(write_side_effect=err)
         sftp = _FakeSFTPClient(file)
 
-        with caplog.at_level(logging.ERROR):
-            with pytest.raises(SFTPError) as exc_info:
-                await _write_remote_file(
-                    cast("SFTPClient", sftp), "/r/fort.9", b"x", mode="wb"
-                )
+        with caplog.at_level(logging.ERROR), pytest.raises(SFTPError) as exc_info:
+            await _write_remote_file(
+                cast("SFTPClient", sftp),
+                "/r/fort.9",
+                b"x",
+                mode="wb",
+            )
 
         assert exc_info.value is err
         assert any(
@@ -260,7 +284,8 @@ class TestStartTaskAbortOnUploadFailure:
 
     @pytest.mark.asyncio
     async def test_non_sftp_upload_failure_aborts_spawn(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A non-SFTP exception during an input file write aborts start_task_on_machine:
         _exec_spawn_command is NOT called; the exception propagates to the caller;
@@ -271,18 +296,20 @@ class TestStartTaskAbortOnUploadFailure:
 
         spawn_calls: list[Any] = []
         deployer._exec_spawn_command = AsyncMock(  # type: ignore[method-assign]
-            side_effect=lambda *a, **kw: spawn_calls.append((a, kw))
+            side_effect=lambda *a, **kw: spawn_calls.append((a, kw)),
         )
 
-        with caplog.at_level(logging.ERROR):
-            with pytest.raises(ValueError, match="bad input"):
-                await deployer.start_task_on_machine(
-                    session,
-                    _make_engine(input_files=("input.txt",)),
-                    _make_task(extra={"input.txt": "hello"}),
-                    4,
-                    PurePosixPath("/engines"),
-                )
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(ValueError, match="bad input"),
+        ):
+            await deployer.start_task_on_machine(
+                session,
+                _make_engine(input_files=("input.txt",)),
+                _make_task(extra={"input.txt": "hello"}),
+                4,
+                PurePosixPath("/engines"),
+            )
 
         # spawn never runs — the abort contract.
         assert spawn_calls == [], (
@@ -296,7 +323,8 @@ class TestStartTaskAbortOnUploadFailure:
 
     @pytest.mark.asyncio
     async def test_sftp_upload_failure_aborts_spawn(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """An asyncssh.misc.Error during an input file write aborts start_task_on_machine."""
         deployer = TaskDeployer()
@@ -305,15 +333,14 @@ class TestStartTaskAbortOnUploadFailure:
 
         deployer._exec_spawn_command = AsyncMock()  # type: ignore[method-assign]
 
-        with caplog.at_level(logging.ERROR):
-            with pytest.raises(asyncssh.misc.Error):
-                await deployer.start_task_on_machine(
-                    session,
-                    _make_engine(input_files=("input.txt",)),
-                    _make_task(extra={"input.txt": "hello"}),
-                    4,
-                    PurePosixPath("/engines"),
-                )
+        with caplog.at_level(logging.ERROR), pytest.raises(asyncssh.misc.Error):
+            await deployer.start_task_on_machine(
+                session,
+                _make_engine(input_files=("input.txt",)),
+                _make_task(extra={"input.txt": "hello"}),
+                4,
+                PurePosixPath("/engines"),
+            )
 
         deployer._exec_spawn_command.assert_not_awaited()  # type: ignore[attr-defined]
         # Both diagnostic lines present: the structured SFTPError (from the
@@ -335,7 +362,8 @@ class TestSuccessfulWrite:
 
     @pytest.mark.asyncio
     async def test_successful_write_no_log_no_raise(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """_write_remote_file returns normally on success — no exception, no error log."""
         file = _FakeSFTPFile(write_side_effect=None)
@@ -343,7 +371,10 @@ class TestSuccessfulWrite:
 
         with caplog.at_level(logging.ERROR):
             await _write_remote_file(
-                cast("SFTPClient", sftp), "/r/input.txt", b"data", mode="wb"
+                cast("SFTPClient", sftp),
+                "/r/input.txt",
+                b"data",
+                mode="wb",
             )
 
         file.write.assert_awaited_once_with(b"data")

@@ -1,9 +1,10 @@
+"""OccupancyChecker — pgrep/cmd-based occupancy check logic + monitor installer composing the session's generic monitor mechanism. Stateless: takes (log) at construction, (session, ...) per call."""
 # FILE: yascheduler/infra/ssh/operations/occupancy.py
 # VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: OccupancyChecker — pgrep/cmd-based occupancy check logic + monitor installer composing the session's generic monitor mechanism. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OccupancyChecker: occupancy probing via pgrep or shell command on a remote session.
-#   DEPENDS: M-SSH-SESSION, M-DOMAIN-ENGINE, M-SSH-EXCEPTIONS
+#   DEPENDS: M-SSH-SESSION, M-DOMAIN-ENGINE, M-PLATFORM-PROTOCOL
 #   LINKS: M-SSH-OPS-OCCUPANCY
 # END_MODULE_CONTRACT
 #
@@ -22,7 +23,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..exceptions import SSHRetryExc
+from yascheduler.domain import MachineState
+from yascheduler.infra.ssh.platform.protocol import SSHRetryExc
 
 if TYPE_CHECKING:
     from yascheduler.domain import Engine, MachineSession
@@ -43,9 +45,6 @@ class OccupancyChecker:
     session.install_monitor(interval=..., check_factory=...,
     on_free=session.release).
     """
-
-    def __init__(self) -> None:
-        """Initialize OccupancyChecker (stateless)."""
 
     # START_CONTRACT: OccupancyChecker._occupancy_by_pgrep
     #   PURPOSE: Occupancy check via pgrep on check_pname. Returns True (busy)
@@ -69,14 +68,18 @@ class OccupancyChecker:
                 )
                 return True
             logger.debug(
-                "PGREP_FREE", extra={"hostname": session.hostname, "pattern": pattern}
+                "PGREP_FREE",
+                extra={"hostname": session.hostname, "pattern": pattern},
             )
-            return False
         except SSHRetryExc as exc:
             logger.warning(
-                "Machine %s pgrep failed, assuming busy: %s", session.hostname, exc
+                "Machine %s pgrep failed, assuming busy: %s",
+                session.hostname,
+                exc,
             )
             return True
+        else:
+            return False
         # END_BLOCK_OCCUPANCY_PGREP
 
     # START_CONTRACT: OccupancyChecker._occupancy_by_cmd
@@ -87,7 +90,10 @@ class OccupancyChecker:
     #   OUTPUTS: { bool - True if busy or SSH failed, False if confirmed free }
     #   SIDE_EFFECTS: Runs check command on remote machine.
     async def _occupancy_by_cmd(
-        self, session: MachineSession, cmd: str, expected_code: int
+        self,
+        session: MachineSession,
+        cmd: str,
+        expected_code: int,
     ) -> bool:
         # START_BLOCK_OCCUPANCY_CMD
         try:
@@ -101,12 +107,15 @@ class OccupancyChecker:
                     "expected": expected_code,
                 },
             )
-            return proc.returncode == expected_code
         except SSHRetryExc as exc:
             logger.warning(
-                "Machine %s check_cmd failed, assuming busy: %s", session.hostname, exc
+                "Machine %s check_cmd failed, assuming busy: %s",
+                session.hostname,
+                exc,
             )
             return True
+        else:
+            return proc.returncode == expected_code
         # END_BLOCK_OCCUPANCY_CMD
 
     # START_CONTRACT: OccupancyChecker.occupancy_check
@@ -130,7 +139,9 @@ class OccupancyChecker:
             return await self._occupancy_by_pgrep(session, config.check_pname)
         if config.check_cmd:
             return await self._occupancy_by_cmd(
-                session, config.check_cmd, config.check_cmd_code
+                session,
+                config.check_cmd,
+                config.check_cmd_code,
             )
         logger.debug("NO_CHECK", extra={"hostname": session.hostname})
         return False
@@ -152,8 +163,6 @@ class OccupancyChecker:
         Re-registering for an already-monitored session cancels the prior
         monitor (session.install_monitor handles the replacement).
         """
-        from yascheduler.domain import MachineState
-
         if session.machine.state == MachineState.FREE:
             session.occupy()
 
@@ -162,7 +171,7 @@ class OccupancyChecker:
             # cancellation, so SSHMachineSession._close() hangs on task.cancel().
             try:
                 return await self.occupancy_check(session, config)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception(
                     "Occupancy check failed for %s on %s",
                     config.name,

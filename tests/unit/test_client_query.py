@@ -54,7 +54,10 @@ class FakeTaskRepository:
         self.list_by_jobs_calls: list[list[TaskId]] = []
 
     async def list_by_status(
-        self, statuses: set[TaskStatus], *, limit: int | None = None
+        self,
+        statuses: set[TaskStatus],
+        *,
+        limit: int | None = None,
     ) -> list[Task]:
         self.list_by_status_calls.append(statuses)
         return self._tasks
@@ -78,7 +81,9 @@ class FakeUnitOfWork:
     """In-memory UoW exposing FakeTaskRepository + FakeNodeRepository."""
 
     def __init__(
-        self, repo: FakeTaskRepository, nodes: FakeNodeRepository | None = None
+        self,
+        repo: FakeTaskRepository,
+        nodes: FakeNodeRepository | None = None,
     ) -> None:
         self.tasks = repo
         self.nodes = nodes or FakeNodeRepository()
@@ -87,7 +92,7 @@ class FakeUnitOfWork:
     async def __aenter__(self) -> FakeUnitOfWork:
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:  # noqa: ANN001
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
         return False
 
     async def commit(self) -> None:
@@ -191,7 +196,7 @@ class TestClientQueryDispatch:
             cloud="hetzner",
         )
         repo = FakeTaskRepository(
-            tasks=[_make_task(task_id=1, allocated_node_id=NodeId(7))]
+            tasks=[_make_task(task_id=1, allocated_node_id=NodeId(7))],
         )
         nodes_repo = FakeNodeRepository(nodes=[node])
         uow = FakeUnitOfWork(repo, nodes=nodes_repo)
@@ -265,7 +270,7 @@ class TestDepsFactoryInvocation:
 
         invocation_count = 0
 
-        def counting_factory(cfg) -> FakeCLIDeps:  # noqa: ANN001
+        def counting_factory(cfg) -> FakeCLIDeps:
             nonlocal invocation_count
             invocation_count += 1
             return fake_deps

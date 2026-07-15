@@ -1,3 +1,4 @@
+"""OS checks."""
 #
 # FILE: yascheduler/infra/ssh/platform/checks.py
 # VERSION: 1.0.1
@@ -26,13 +27,15 @@
 # END_CHANGE_SUMMARY
 #
 
-"OS checks"
+from __future__ import annotations
 
 from functools import partial
-from typing import Optional, cast
+from typing import TYPE_CHECKING, cast
 
-from asyncssh.connection import SSHClientConnection
 from asyncstdlib import lru_cache
+
+if TYPE_CHECKING:
+    from asyncssh.connection import SSHClientConnection
 
 
 # START_CONTRACT: check_is_linux
@@ -44,7 +47,7 @@ from asyncstdlib import lru_cache
 # END_CONTRACT: check_is_linux
 @lru_cache
 async def check_is_linux(conn: SSHClientConnection) -> bool:
-    "Check for generic Linux"
+    """Check for generic Linux."""
     proc = await conn.run("uname")
     return (
         proc.returncode == 0
@@ -62,7 +65,7 @@ async def check_is_linux(conn: SSHClientConnection) -> bool:
 # END_CONTRACT: check_is_darwin
 @lru_cache
 async def check_is_darwin(conn: SSHClientConnection) -> bool:
-    "Check for Mac"
+    """Check for Mac."""
     proc = await conn.run("uname")
     return (
         proc.returncode == 0
@@ -79,14 +82,14 @@ async def check_is_darwin(conn: SSHClientConnection) -> bool:
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: _get_os_release
 @lru_cache
-async def _get_os_release(conn: SSHClientConnection) -> Optional[tuple[str, ...]]:
-    "Get os release string on linuxes"
+async def _get_os_release(conn: SSHClientConnection) -> tuple[str, ...] | None:
+    """Get os release string on linuxes."""
     proc = await conn.run(
-        "sh -c 'source /etc/os-release; echo $ID@@@$ID_LIKE@@@$VERSION_ID'"
+        "sh -c 'source /etc/os-release; echo $ID@@@$ID_LIKE@@@$VERSION_ID'",
     )
     if proc.returncode != 0 or not proc.stdout:
         return None
-    return tuple(map(lambda x: x.strip(), str(proc.stdout).split("@@@", maxsplit=3)))
+    return tuple(x.strip() for x in str(proc.stdout).split("@@@", maxsplit=3))
 
 
 # START_CONTRACT: check_is_debian_like
@@ -97,7 +100,7 @@ async def _get_os_release(conn: SSHClientConnection) -> Optional[tuple[str, ...]
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: check_is_debian_like
 async def check_is_debian_like(conn: SSHClientConnection) -> bool:
-    "Check for any Debian-like"
+    """Check for any Debian-like."""
     os_release = await _get_os_release(conn)
     if not os_release:
         return False
@@ -113,7 +116,7 @@ async def check_is_debian_like(conn: SSHClientConnection) -> bool:
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: check_is_debian
 async def check_is_debian(conn: SSHClientConnection) -> bool:
-    "Check for any Debian"
+    """Check for any Debian."""
     os_release = await _get_os_release(conn)
     return os_release[0] == "debian" if os_release else False
 
@@ -126,12 +129,13 @@ async def check_is_debian(conn: SSHClientConnection) -> bool:
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: _check_debian_version
 async def _check_debian_version(version: str, conn: SSHClientConnection) -> bool:
-    "Check for Debian version"
+    """Check for Debian version."""
     os_release = await _get_os_release(conn)
     if not os_release:
         return False
     parts = cast("tuple[str, str, str]", os_release)
-    return len(parts) >= 3 and parts[2] == version
+    min_parts = 3
+    return len(parts) >= min_parts and parts[2] == version
 
 
 check_is_debian_10 = partial(_check_debian_version, "10")
@@ -151,7 +155,7 @@ check_is_debian_15 = partial(_check_debian_version, "15")
 # END_CONTRACT: check_is_windows
 @lru_cache
 async def check_is_windows(conn: SSHClientConnection) -> bool:
-    "Check for any Windows with Powershell"
+    """Check for any Windows with Powershell."""
     proc = await conn.run("[environment]::OSVersion")
     return proc.returncode == 0
 
@@ -164,11 +168,12 @@ async def check_is_windows(conn: SSHClientConnection) -> bool:
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: get_wmi_w32_os_caption
 @lru_cache
-async def get_wmi_w32_os_caption(conn: SSHClientConnection) -> Optional[str]:
-    "Get OS caption from WMI object"
+async def get_wmi_w32_os_caption(conn: SSHClientConnection) -> str | None:
+    """Get OS caption from WMI object."""
     proc = await conn.run("(Get-WmiObject -class Win32_OperatingSystem).Caption")
     if proc.stdout:
         return str(proc.stdout)
+    return None
 
 
 # START_CONTRACT: _check_is_windows_caption_version
@@ -179,9 +184,10 @@ async def get_wmi_w32_os_caption(conn: SSHClientConnection) -> Optional[str]:
 #   LINKS: M-REMOTE-CHECKS
 # END_CONTRACT: _check_is_windows_caption_version
 async def _check_is_windows_caption_version(
-    version: str, conn: SSHClientConnection
+    version: str,
+    conn: SSHClientConnection,
 ) -> bool:
-    "Check for Windows version in caption"
+    """Check for Windows version in caption."""
     caption = await get_wmi_w32_os_caption(conn)
     return version in caption if caption else False
 

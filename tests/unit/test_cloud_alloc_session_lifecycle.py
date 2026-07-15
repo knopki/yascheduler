@@ -29,7 +29,6 @@
 #   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
 # END_CHANGE_SUMMARY
 
-# ruff: noqa: ANN401
 from __future__ import annotations
 
 import asyncio
@@ -154,7 +153,7 @@ class FakeMachineRepository:
             else:
                 session.run = AsyncMock(side_effect=self._session_run_side_effect)
         session.get_cpu_cores = AsyncMock(
-            return_value=self._session_get_cpu_cores_return
+            return_value=self._session_get_cpu_cores_return,
         )
         self._sessions[node.hostname] = session
         self._node_id_to_ip[node.node_id] = node.hostname
@@ -300,7 +299,10 @@ class _FakeTaskRepo:
         self._store[task.task_id] = task
 
     async def list_by_status(
-        self, statuses: set[TaskStatus], *, limit: int | None = None
+        self,
+        statuses: set[TaskStatus],
+        *,
+        limit: int | None = None,
     ) -> list[Task]:
         result = [t for t in self._store.values() if t.status in statuses]
         return result[:limit] if limit is not None else result
@@ -338,7 +340,9 @@ class _FakeTaskRepo:
             self._store[task_id] = replace(t, status=status)
 
     async def list_ids_by_node_id_and_status(
-        self, node_id: NodeId, status: TaskStatus
+        self,
+        node_id: NodeId,
+        status: TaskStatus,
     ) -> list[TaskId]:
         return [
             t.task_id
@@ -444,7 +448,7 @@ class FakeCloudProvisioner:
                     ncpus=None,
                     enabled=True,
                     cloud=provider,
-                )
+                ),
             )
             await uow.commit()
         return Node(
@@ -461,7 +465,9 @@ class FakeCloudProvisioner:
         pass
 
     def select_provider(
-        self, platforms: list[str], current_counts: dict[str, int]
+        self,
+        platforms: list[str],
+        current_counts: dict[str, int],
     ) -> str | None:
         return self._select_result
 
@@ -623,7 +629,8 @@ def _make_engine_repo(engine: Engine) -> Any:
 
 def _patch_ssh_key() -> Any:
     """Patch CloudProvisionerImpl._get_ssh_key so create_node gets a mock key
-    without touching the filesystem (get_or_create_ssh_key does real IO)."""
+    without touching the filesystem (get_or_create_ssh_key does real IO).
+    """
     return patch(
         "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
         new=AsyncMock(return_value=MagicMock()),
@@ -641,7 +648,8 @@ async def _allocate(
 ) -> Any:
     """Thin allocate_task wrapper. Fakes are Any-typed so the Protocol-typed
     parameters (uow_factory/repository/clouds) accept the concrete fakes without
-    per-call type: ignore. Returns the allocate_task bool result."""
+    per-call type: ignore. Returns the allocate_task bool result.
+    """
     return await allocate_task(
         task_id=task_id,
         engines=engines or _make_engine_repo(_make_engine()),
@@ -674,7 +682,11 @@ class TestFixA:
 
         start_cb: AsyncMock = AsyncMock(return_value=True)
         clouds = FakeCloudProvisioner(
-            repo, lambda: uow, provider="aws", fail=False, select_provider_result=None
+            repo,
+            lambda: uow,
+            provider="aws",
+            fail=False,
+            select_provider_result=None,
         )
 
         result = await _allocate(TaskId(1), repo, uow, clouds, start_cb)
@@ -741,7 +753,10 @@ class TestFixA:
 
         start_cb: AsyncMock = AsyncMock(return_value=True)
         clouds = FakeCloudProvisioner(
-            repo, lambda: uow, provider="aws", select_provider_result=None
+            repo,
+            lambda: uow,
+            provider="aws",
+            select_provider_result=None,
         )
 
         result = await _allocate(TaskId(1), repo, uow, clouds, start_cb)
@@ -765,7 +780,9 @@ class TestFixB:
         """CloudSetupError from _setup_vm (cloud-init failure) triggers disconnect(ip) before delete_node, leaving _sessions empty."""
         repo = FakeMachineRepository(
             session_run_side_effect=MagicMock(
-                exit_code=2, stdout="status: error", stderr=""
+                exit_code=2,
+                stdout="status: error",
+                stderr="",
             ),
         )
         prov, adapter = _make_real_provisioner(repo)
@@ -856,7 +873,9 @@ class TestFixB:
         repo = FakeMachineRepository(
             disconnect_raises=RuntimeError("wait_closed failed"),
             session_run_side_effect=MagicMock(
-                exit_code=2, stdout="status: error", stderr=""
+                exit_code=2,
+                stdout="status: error",
+                stderr="",
             ),
         )
         prov, adapter = _make_real_provisioner(repo)
@@ -917,7 +936,11 @@ class TestFixC:
             raise RuntimeError("unreachable session")
 
         clouds = FakeCloudProvisioner(
-            repo, lambda: uow, provider="aws", new_ip="10.0.0.99", fail=False
+            repo,
+            lambda: uow,
+            provider="aws",
+            new_ip="10.0.0.99",
+            fail=False,
         )
 
         result = await _allocate(TaskId(1), repo, uow, clouds, _start_fails)
@@ -941,7 +964,9 @@ class TestFixD:
         """cloud-init exit_code=2 with stdout='status: error' yields a CloudSetupError whose message contains stdout=status: error."""
         repo = FakeMachineRepository(
             session_run_side_effect=MagicMock(
-                exit_code=2, stdout="status: error", stderr=""
+                exit_code=2,
+                stdout="status: error",
+                stderr="",
             ),
         )
         prov, _adapter = _make_real_provisioner(repo)

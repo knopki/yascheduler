@@ -1,9 +1,10 @@
+"""SSHMachineRepository — connected-machine collection: registration, lifecycle, queries."""
 # FILE: yascheduler/infra/ssh/repository.py
 # VERSION: 2.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. True collection only — no state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession).
 #   SCOPE: SSHMachineRepository: connected-machine collection lifecycle, keyed by NodeId; connection-building helpers.
-#   DEPENDS: M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION
+#   DEPENDS: M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION
 #   LINKS: M-SSH-REPOSITORY
 # END_MODULE_CONTRACT
 #
@@ -37,6 +38,7 @@ from yascheduler.domain import (
     Node,
     NodeId,
 )
+from yascheduler.domain.exceptions import MachineConnectionError
 
 from .platform import ADAPTERS, _detect_platform, _init_paths, make_run_fn
 from .session import SSHMachineSession, my_backoff_exc
@@ -49,13 +51,18 @@ if TYPE_CHECKING:
 
     from asyncssh.public_key import SSHKey
 
-# ---- Connection-building bits (stay in repository.py — used by _open_connection) ----
-
 
 class MySSHClient(SSHClient):
+    """SSH client that trusts all host keys (insecure — accept for dev/staging)."""
+
     def validate_host_public_key(
-        self, host: str, addr: str, port: int, key: SSHKey
+        self,
+        host: str,  # noqa: ARG002
+        addr: str,  # noqa: ARG002
+        port: int,  # noqa: ARG002
+        key: SSHKey,  # noqa: ARG002
     ) -> bool:
+        """Trust all host keys — accept connection."""
         # NOTE: trust all host keys — insecure for MiM attacks
         return True
 
@@ -195,8 +202,6 @@ class SSHMachineRepository:
                 tasks_dir=tasks_dir,
             )
         except (asyncssh.misc.Error, OSError) as err:
-            from yascheduler.domain.exceptions import MachineConnectionError
-
             raise MachineConnectionError(node.node_id, node.hostname, str(err)) from err
 
     # START_CONTRACT: SSHMachineRepository._connect_impl
@@ -232,7 +237,8 @@ class SSHMachineRepository:
         # START_BLOCK_DETECT
         adapter, platforms = await _detect_platform(conn, ADAPTERS)
         logger.debug(
-            "DETECT", extra={"platform": adapter.platform, "hostname": node.hostname}
+            "DETECT",
+            extra={"platform": adapter.platform, "hostname": node.hostname},
         )
         # END_BLOCK_DETECT
         # START_BLOCK_PATHS
@@ -261,7 +267,7 @@ class SSHMachineRepository:
             engines_dir=re,
             tasks_dir=rt,
         )
-        session._prime_ncpus_cache(ncpus)
+        session._prime_ncpus_cache(ncpus)  # noqa: SLF001
         self._sessions[node.node_id] = session
         # END_BLOCK_CREATE_SESSION
         return session
@@ -283,7 +289,7 @@ class SSHMachineRepository:
         # END_BLOCK_POP_SESSION
         # START_BLOCK_DELEGATE_CLOSE
         # session._close() sets is_closed=True synchronously before its first await.
-        await session._close()
+        await session._close()  # noqa: SLF001
         # END_BLOCK_DELEGATE_CLOSE
 
     # START_CONTRACT: SSHMachineRepository.disconnect_all
@@ -294,8 +300,6 @@ class SSHMachineRepository:
         """Close all sessions."""
         for node_id in list(self._sessions):
             await self.disconnect(node_id)
-
-    # ---- Queries ----
 
     # START_CONTRACT: SSHMachineRepository.list_free
     #   PURPOSE: Return FREE sessions filtered by platform, oldest first by session.machine.free_since.
@@ -340,6 +344,7 @@ class SSHMachineRepository:
         return self._sessions.get(node_id)
 
     def contains(self, node_id: NodeId) -> bool:
+        """Return True if node_id has an active session."""
         return node_id in self._sessions
 
     def __contains__(self, node_id: NodeId) -> bool:

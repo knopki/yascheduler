@@ -24,7 +24,6 @@
 #   PREVIOUS_CHANGE: v2.13.0 - node-ncpus-as-config: extract ncpus-related allocate tests to test_cloud_provisioner_ncpus.py (file over 1000-line hard limit); _tmp_node ncpus=0→None; happy-path asserts ncpus is None.
 # END_CHANGE_SUMMARY
 
-# ruff: noqa: ANN401
 
 from __future__ import annotations
 
@@ -111,7 +110,7 @@ def _make_mock_adapter(
     adapter.delete_node = _delete_node
 
     config = MagicMock()
-    config.prefix = name.split("-")[0]
+    config.prefix = name.split("-", maxsplit=1)[0]
     config.max_nodes = max_nodes
     config.priority = priority
     config.username = "root"
@@ -139,11 +138,11 @@ def _make_mock_repository(**kwargs: Any) -> MagicMock:
         repo.connect_calls.append(kw)
         machine = MagicMock()
         node = kw.get("node")
-        # FIXME: IP?!
+        # TODO(yascheduler): Add proper IP handling when node is None
         machine.hostname = node.hostname if node is not None else "[IP]"
         # Session methods called directly by CloudProvisionerImpl._setup_vm.
         machine.run = AsyncMock(
-            return_value=MagicMock(exit_code=0, stdout="", stderr="")
+            return_value=MagicMock(exit_code=0, stdout="", stderr=""),
         )
         machine.setup_node = AsyncMock()
         machine.get_cpu_cores = AsyncMock(return_value=kwargs.get("ncpus", 4))
@@ -266,7 +265,9 @@ class TestAllocate:
 
     @pytest.mark.asyncio
     async def test_allocate_happy_path(
-        self, mock_engines: MagicMock, mock_local_config: MagicMock
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
     ) -> None:
         """Full flow: create VM -> SSH -> cloud-init -> setup -> return Node."""
         adapter, config = _make_mock_adapter(name="test", priority=10)
@@ -313,7 +314,9 @@ class TestAllocate:
 
     @pytest.mark.asyncio
     async def test_setup_vm_stamps_jump_from_cloud_config(
-        self, mock_engines: MagicMock, mock_local_config: MagicMock
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
     ) -> None:
         """When CloudConfig sets jump_host/jump_username/jump_port, the returned Node carries them and connect has no jump kwargs."""
         adapter, config = _make_mock_adapter(name="hetzner", priority=10)
@@ -354,7 +357,9 @@ class TestAllocate:
 
     @pytest.mark.asyncio
     async def test_setup_vm_falls_back_to_remote_defaults(
-        self, mock_engines: MagicMock, mock_local_config: MagicMock
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
     ) -> None:
         """When CloudConfig lacks jump, node jump values come from remote defaults."""
         adapter, config = _make_mock_adapter(name="hetzner", priority=10)
@@ -401,7 +406,9 @@ class TestAllocate:
 
     @pytest.mark.asyncio
     async def test_setup_vm_does_not_mix_cloud_jump_host_with_remote_jump_port(
-        self, mock_engines: MagicMock, mock_local_config: MagicMock
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
     ) -> None:
         """When CloudConfig sets jump_host but NOT jump_username, ALL three jump fields come from remote (no mixing)."""
         adapter, config = _make_mock_adapter(name="hetzner", priority=10)
@@ -442,7 +449,9 @@ class TestAllocate:
 
     @pytest.mark.asyncio
     async def test_setup_vm_stamps_jump_before_connect_to_vm(
-        self, mock_engines: MagicMock, mock_local_config: MagicMock
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
     ) -> None:
         """Regression: jump is stamped on node BEFORE _connect_to_vm opens the setup SSH session.
 
@@ -459,12 +468,15 @@ class TestAllocate:
         captured_node: list[Node] = []
 
         async def _fake_connect_to_vm(
-            _self: Any, node: Node, _adapter: Any, _config: Any
+            _self: Any,
+            node: Node,
+            _adapter: Any,
+            _config: Any,
         ) -> MagicMock:
             captured_node.append(node)
             session = MagicMock()
             session.run = AsyncMock(
-                return_value=MagicMock(exit_code=0, stdout="", stderr="")
+                return_value=MagicMock(exit_code=0, stdout="", stderr=""),
             )
             session.setup_node = AsyncMock()
             session.get_cpu_cores = AsyncMock(return_value=4)
@@ -484,7 +496,9 @@ class TestAllocate:
             new=_fake_connect_to_vm,
         ):
             node_obj = await prov._setup_vm(
-                _tmp_node(999, cloud="hetzner"), adapter, config
+                _tmp_node(999, cloud="hetzner"),
+                adapter,
+                config,
             )
 
         # The captured node already has jump fields stamped
@@ -508,7 +522,9 @@ class TestAllocate:
 
     @pytest.mark.asyncio
     async def test_allocate_create_node_failure(
-        self, mock_local_config: MagicMock, mock_engines: MagicMock
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
     ) -> None:
         """Raises CloudAllocateError when VM creation fails."""
         adapter, config = _make_mock_adapter(name="test")
@@ -530,7 +546,9 @@ class TestAllocate:
 
     @pytest.mark.asyncio
     async def test_allocate_setup_failure_cleans_up_vm(
-        self, mock_local_config: MagicMock, mock_engines: MagicMock
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
     ) -> None:
         """Deletes VM when SSH/cloud-init/setup fails."""
         adapter, config = _make_mock_adapter(name="test")
@@ -586,7 +604,9 @@ class TestAllocate:
 
     @pytest.mark.asyncio
     async def test_allocate_cloud_init_timeout_cleans_up_vm(
-        self, mock_local_config: MagicMock, mock_engines: MagicMock
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
     ) -> None:
         """cloud-init status --wait exceeding adapter.create_node_timeout raises CloudSetupError and deletes the VM (no infinite worker pin)."""
         adapter, config = _make_mock_adapter(name="test")
@@ -691,7 +711,7 @@ class TestDeallocate:
     @pytest.mark.asyncio
     async def test_deallocate_no_config(self) -> None:
         """Logs warning when cloud is in adapters but not in configs."""
-        adapter, config = _make_mock_adapter(name="test-cloud")
+        adapter, _config = _make_mock_adapter(name="test-cloud")
         adapter.delete_node = AsyncMock()
 
         prov = make_provisioner(
@@ -784,10 +804,10 @@ class TestSshKeyGeneration:
     """get_or_create_ssh_key() — SSH key load/generate (filesystem)."""
 
     def test_generates_new_key_when_none_exists(
-        self, mock_local_config: MagicMock
+        self,
+        mock_local_config: MagicMock,
     ) -> None:
         """Generates new SSH key and writes to keys_dir when no existing key."""
-
         mock_key = MagicMock()
         mock_key.get_fingerprint.return_value = "md5:abcd"
 
@@ -837,7 +857,8 @@ class TestCloudConfigGeneration:
 
     @pytest.mark.asyncio
     async def test_cloud_config_with_engine_packages(
-        self, mock_engines: MagicMock
+        self,
+        mock_engines: MagicMock,
     ) -> None:
         """Returns CloudInitConfig with packages from matched engines."""
         adapter, _config = _make_mock_adapter(name="test")
@@ -858,7 +879,8 @@ class TestCloudConfigGeneration:
 
     @pytest.mark.asyncio
     async def test_cloud_config_package_upgrade_sourced_from_per_cloud_config(
-        self, mock_engines: MagicMock
+        self,
+        mock_engines: MagicMock,
     ) -> None:
         """package_upgrade is sourced from config.package_upgrade (False propagates)."""
         adapter, _config = _make_mock_adapter(name="test")

@@ -85,19 +85,19 @@ def _node(node_id: int = 7, hostname: str = "10.0.0.1") -> Node:
 
 def _make_task(**overrides: object) -> Task:
     """Build a Task with typed fields; all 11 required fields supplied."""
-    base: dict[str, object] = dict(
-        task_id=TaskId(1),
-        label="test",
-        engine="cp2k",
-        remote_folder=None,
-        local_folder=None,
-        webhook_url=None,
-        webhook_custom_params={},
-        error=None,
-        extra={},
-        created_at=_DT,
-        updated_at=_DT,
-    )
+    base: dict[str, object] = {
+        "task_id": TaskId(1),
+        "label": "test",
+        "engine": "cp2k",
+        "remote_folder": None,
+        "local_folder": None,
+        "webhook_url": None,
+        "webhook_custom_params": {},
+        "error": None,
+        "extra": {},
+        "created_at": _DT,
+        "updated_at": _DT,
+    }
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 
@@ -508,7 +508,7 @@ class TestNewNode:
 # END_CONTRACT: test_connected_machine
 class TestConnectedMachine:
     def make_machine(self, **overrides: object) -> ConnectedMachine:
-        defaults: dict[str, object] = dict(node_id=NodeId(1), platform="linux")
+        defaults: dict[str, object] = {"node_id": NodeId(1), "platform": "linux"}
         defaults.update(overrides)
         return ConnectedMachine(**defaults)  # type: ignore[arg-type]
 

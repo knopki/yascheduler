@@ -1,3 +1,4 @@
+"""TaskDeployer — upload task inputs and spawn the calculation process on a remote machine via MachineSession. Stateless: takes (log) at construction, (session, ...) per call."""
 # FILE: yascheduler/infra/ssh/operations/deployment.py
 # VERSION: 1.7.0
 # START_MODULE_CONTRACT
@@ -23,9 +24,12 @@ from __future__ import annotations
 
 import base64
 import logging
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 import asyncssh
+
+from yascheduler.domain import MachineState
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +77,13 @@ async def _write_remote_file(
         async with sftp.open(path, mode) as f:
             await f.write(data)  # type: ignore[type-var]
     except asyncssh.misc.Error as err:
-        logger.error(
+        logger.exception(
             "Write %s - SFTPError: %s (%s)",
             path,
             err.reason,
             err.code,
         )
-        raise err
+        raise
     # END_BLOCK_WRITE_FILE
 
 
@@ -96,7 +100,7 @@ class TaskDeployer:
     """
 
     def __init__(self) -> None:
-        pass
+        """Stateless deployer — no initialisation needed."""
 
     # START_CONTRACT: TaskDeployer._upload_task_data
     #   PURPOSE: Upload task input files to remote machine via SFTP.
@@ -112,21 +116,20 @@ class TaskDeployer:
         remote_dir: PurePath,
         input_files: Sequence[str],
     ) -> bool:
-        from pathlib import PurePosixPath
 
         # START_BLOCK_UPLOAD
         async with session.open_sftp() as sftp:
             try:
                 await sftp.makedirs(PurePosixPath(remote_dir), exist_ok=True)
             except asyncssh.misc.Error as err:
-                logger.error(
+                logger.exception(
                     "Create %s - SFTPError: %s (%s) (task_id=%s)",
                     remote_dir,
                     err.reason,
                     err.code,
                     task.task_id,
                 )
-                raise err
+                raise
 
             for input_file in input_files:
                 r_input_file = remote_dir / input_file
@@ -158,7 +161,7 @@ class TaskDeployer:
         self,
         session: MachineSession,
         engine: Engine,
-        task: Task,
+        task: Task,  # noqa:  ARG002 Unused method argument
         task_dir: PurePath,
         eng_path: PurePath,
         ncpus: int,
@@ -171,9 +174,9 @@ class TaskDeployer:
                 ncpus=ncpus,
             )
             await session.run_bg(run_cmd, cwd=str(task_dir))
-        except Exception as err:
-            logger.error("SSH spawn cmd error: %s", err)
-            raise err
+        except Exception:
+            logger.exception("SSH spawn cmd error")
+            raise
         # END_BLOCK_SPAWN
 
     # START_CONTRACT: TaskDeployer.start_task_on_machine
@@ -197,10 +200,11 @@ class TaskDeployer:
         ncpus: int,
         engines_dir: PurePath,
     ) -> bool:
-        from yascheduler.domain import MachineState
-
+        """Upload task inputs and spawn calculation process on remote machine."""
         # START_BLOCK_START_TASK
-        assert task.remote_folder is not None
+        if task.remote_folder is None:
+            msg = "task.remote_folder must not be None"
+            raise AssertionError(msg)
         session.occupy()
 
         logger.info(
@@ -229,15 +233,26 @@ class TaskDeployer:
                     else:
                         engine_path = root_dir / engines_dir / engine.name
                     await self._upload_task_data(
-                        session, task, task_dir, engine.input_files
+                        session,
+                        task,
+                        task_dir,
+                        engine.input_files,
                     )
-                except Exception as err:
-                    logger.error("Can't upload task_id=%s files: %s", task.task_id, err)
-                    raise err
+                except Exception:
+                    logger.exception(
+                        "Can't upload task_id=%s files",
+                        task.task_id,
+                    )
+                    raise
             # END_BLOCK_DEPLOY
 
             await self._exec_spawn_command(
-                session, engine, task, task_dir, engine_path, ncpus
+                session,
+                engine,
+                task,
+                task_dir,
+                engine_path,
+                ncpus,
             )
         except BaseException as err:
             # START_BLOCK_ROLLBACK_BUSY

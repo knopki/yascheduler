@@ -1,3 +1,4 @@
+"""Domain exception hierarchy for business-level error handling."""
 # FILE: yascheduler/domain/exceptions.py
 # VERSION: 1.12.0
 # START_MODULE_CONTRACT
@@ -99,7 +100,7 @@ class MachineConnectionError(DomainError):
         self.hostname = hostname
         self.reason = reason
         super().__init__(
-            f"cannot connect to machine ({node_id}) at {hostname}: {reason}"
+            f"cannot connect to machine ({node_id}) at {hostname}: {reason}",
         )
 
 
@@ -114,7 +115,7 @@ class NoCompatibleNodeError(SchedulingError):
         self.task_id = task_id
         self.platforms = platforms
         super().__init__(
-            f"no compatible node found for task {task_id} on platforms: {platforms}"
+            f"no compatible node found for task {task_id} on platforms: {platforms}",
         )
 
 

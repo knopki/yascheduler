@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+"""Linux-specific remote commands: package install, process listing, CPU detection."""
 # FILE: yascheduler/infra/ssh/platform/linux.py
 # VERSION: 1.3.0
 #
@@ -28,15 +28,12 @@
 #   PREVIOUS_CHANGE: v1.4.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...).
 # END_CHANGE_SUMMARY
 
+from __future__ import annotations
+
 import logging
 import re
-from collections.abc import AsyncGenerator, Sequence
-from pathlib import PurePath
 from re import Pattern
-from typing import Optional, Union
-
-from asyncssh.connection import SSHClientConnection
-from asyncssh.sftp import SFTPClient
+from typing import TYPE_CHECKING
 
 from yascheduler.domain import (
     EngineRepository,
@@ -46,6 +43,13 @@ from yascheduler.domain import (
 )
 
 from .protocol import OuterRunCallable, ProcessInfo, QuoteCallable
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Sequence
+    from pathlib import PurePath
+
+    from asyncssh.connection import SSHClientConnection
+    from asyncssh.sftp import SFTPClient
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +62,13 @@ logger = logging.getLogger(__name__)
 #   LINKS: M-REMOTE-LINUX
 # END_CONTRACT: linux_get_cpu_cores
 async def linux_get_cpu_cores(run: OuterRunCallable) -> int:
-    """
-    Get number of CPU cores
+    """Get number of CPU cores.
+
     :raises asyncssh.Error: An SSH error has occurred.
     """
     r = await run("getconf NPROCESSORS_ONLN 2> /dev/null || getconf _NPROCESSORS_ONLN")
     try:
-        return int(r.stdout and r.stdout.strip() or "1")
+        return int((r.stdout and r.stdout.strip()) or "1")
     except ValueError:
         return 1
 
@@ -77,16 +81,17 @@ async def linux_get_cpu_cores(run: OuterRunCallable) -> int:
 #   LINKS: M-REMOTE-LINUX
 # END_CONTRACT: linux_list_processes
 async def linux_list_processes(
-    conn: SSHClientConnection, query: Optional[str] = None
+    conn: SSHClientConnection,
+    query: str | None = None,
 ) -> AsyncGenerator[ProcessInfo, None]:
-    """
-    Returns information about all running processes
+    """Return information about all running processes.
+
     :raises asyncssh.Error: An SSH error has occurred.
     """
     columns = ["pid", "comm", "args"]
     columns_part = ",".join([f"{x}:255" for x in columns])
     if query:
-        ps_cmd = " ".join([query, "| xargs --no-run-if-empty ps -o", columns_part])
+        ps_cmd = f"{query} | xargs --no-run-if-empty ps -o {columns_part}"
     else:
         ps_cmd = f"ps -eo {columns_part}"
     logger.debug("LIST_PROCESSES", extra={"cmd": ps_cmd})
@@ -97,10 +102,9 @@ async def linux_list_processes(
         skipped_self = 0
         async for line in proc.stdout:
             line_count += 1
-            parts = list(
-                map(lambda x: x.strip(), filter(None, str(line).split(" " * 10)))
-            )
-            if len(parts) < 3:
+            parts = [x.strip() for x in filter(None, str(line).split(" " * 10))]
+            min_parts = 3
+            if len(parts) < min_parts:
                 skipped_broken += 1
                 logger.debug(
                     "BROKEN_LINE",
@@ -135,17 +139,18 @@ async def linux_list_processes(
 async def linux_pgrep(
     conn: SSHClientConnection,
     quote: QuoteCallable,
-    pattern: Union[str, Pattern[str]],
+    pattern: str | Pattern[str],
+    *,
     full: bool = True,
 ) -> AsyncGenerator[ProcessInfo, None]:
-    """
-    Returns information about running processes, that name matches a pattern.
+    """Return information about running processes matching a name pattern.
+
     If `full`, check match against name or full cmd.
     :raises asyncssh.Error: An SSH error has occurred.
     """
     str_pattern = pattern.pattern if isinstance(pattern, re.Pattern) else pattern
     pgrep_query = " ".join(
-        filter(None, ["pgrep", "-f" if full else None, quote(str_pattern)])
+        filter(None, ["pgrep", "-f" if full else None, quote(str_pattern)]),
     )
     async for x in linux_list_processes(conn, query=pgrep_query):
         yield x
@@ -163,7 +168,7 @@ async def deploy_local_files(
     engine_dir: PurePath,
     files: Sequence[PurePath],
 ) -> None:
-    "Uploading binary from local; requires broadband connection"
+    """Upload binary from local; requires broadband connection."""
     lpaths = list(map(str, files))
     logger.debug("UPLOAD", extra={"dir": engine_dir, "files": ", ".join(lpaths)})
     await sftp.put(lpaths, engine_dir, preserve=True)
@@ -183,8 +188,8 @@ async def deploy_local_archive(
     engine_dir: PurePath,
     archive: PurePath,
 ) -> None:
-    """
-    Upload local archive.
+    """Upload local archive.
+
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
     """
     rpath = engine_dir / archive.name
@@ -209,8 +214,8 @@ async def deploy_remote_archive(
     engine_dir: PurePath,
     url: str,
 ) -> None:
-    """
-    Downloading binary from a trusted non-public address.
+    """Download a binary from a trusted non-public address.
+
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
     """
     name = "archive.tar.gz"
@@ -236,11 +241,9 @@ async def linux_deploy_engines(
     engines: EngineRepository,
     engines_dir: PurePath,
 ) -> None:
-    """
-    Setup node for target engines.
-    """
+    """Set up node for target engines."""
     for engine in engines.values():
-        logger.info(f"Setup {engine.name} engine...")
+        logger.info("Setup %s engine...", engine.name)
         engine_dir = engines_dir / engine.name
         await sftp.makedirs(engine_dir, exist_ok=True)
         for deployment in engine.deployable:
@@ -249,14 +252,22 @@ async def linux_deploy_engines(
 
             if isinstance(deployment, LocalArchiveDeploy):
                 await deploy_local_archive(
-                    run, quote, sftp, engine_dir, deployment.file
+                    run,
+                    quote,
+                    sftp,
+                    engine_dir,
+                    deployment.file,
                 )
 
             if isinstance(deployment, RemoteArchiveDeploy):
                 await deploy_remote_archive(
-                    run, quote, sftp, engine_dir, deployment.url
+                    run,
+                    quote,
+                    sftp,
+                    engine_dir,
+                    deployment.url,
                 )
-        logger.info(f"Setup of {engine.name} engine is done...")
+        logger.info("Setup of %s engine is done...", engine.name)
 
 
 # START_CONTRACT: log_mpi_version
@@ -267,6 +278,7 @@ async def linux_deploy_engines(
 #   LINKS: M-REMOTE-LINUX
 # END_CONTRACT: log_mpi_version
 async def log_mpi_version(run: OuterRunCallable) -> None:
+    """Log MPI version info from remote via mpirun."""
     r = await run("mpirun --allow-run-as-root -V", check=True)
     if not r.returncode:
         logger.debug("VERSION", extra={"version": str(r.stdout or "").split("\n")[0]})
@@ -286,7 +298,7 @@ async def linux_setup_node(
     engines: EngineRepository,
     engines_dir: PurePath,
 ) -> None:
-    "Setup generic linux node"
+    """Set up generic linux node."""
     async with conn.start_sftp_client() as sftp:
         await linux_deploy_engines(run, quote, sftp, engines, engines_dir)
 
@@ -305,8 +317,7 @@ async def linux_setup_deb_node(
     engines: EngineRepository,
     engines_dir: PurePath,
 ) -> None:
-    "Setup debian-like node"
-
+    """Set up debian-like node."""
     is_root = conn.get_extra_info("username") == "root"
     sudo_prefix = "" if is_root else "sudo "
     apt_cmd = f"{sudo_prefix}apt-get -o DPkg::Lock::Timeout=600 -y"

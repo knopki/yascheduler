@@ -1,3 +1,4 @@
+"""In-memory dedup of in-flight cloud allocations by task_id, with a task-to-node link for discard-by-node on abandon."""
 # FILE: yascheduler/application/allocation_tracker.py
 # VERSION: 2.0.0
 # START_MODULE_CONTRACT
@@ -48,7 +49,7 @@ class AllocationTracker:
         self._entries: dict[TaskId, NodeId | None] = {}
 
     def add(self, task_id: TaskId, node_id: NodeId | None = None) -> bool:
-        """Returns True if newly added, False if already tracked.
+        """Return True if newly added, False if already tracked.
 
         The optional node_id defaults to None so the dedup gate can call
         add(task_id) before the tmp node exists; set_node patches the link
@@ -67,10 +68,12 @@ class AllocationTracker:
     #   LINKS: M-APPLICATION-ALLOCATE
     # END_CONTRACT: set_node
     def set_node(self, task_id: TaskId, node_id: NodeId) -> None:
+        """Patch the node link into an existing tracker entry."""
         if task_id in self._entries:
             self._entries[task_id] = node_id
 
     def discard(self, task_id: TaskId) -> None:
+        """Remove a tracker entry by ``task_id`` (no-op if absent)."""
         self._entries.pop(task_id, None)
 
     # START_CONTRACT: discard_by_node
@@ -81,6 +84,7 @@ class AllocationTracker:
     #   LINKS: M-APPLICATION-ABANDON-NODE
     # END_CONTRACT: discard_by_node
     def discard_by_node(self, node_id: NodeId) -> int:
+        """Remove all tracker entries linked to the given node and return the count removed."""
         matching = [tid for tid, nid in self._entries.items() if nid == node_id]
         for tid in matching:
             self._entries.pop(tid, None)

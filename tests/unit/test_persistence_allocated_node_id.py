@@ -101,7 +101,8 @@ class TestRowToTaskAllocatedNodeId:
         assert task.allocated_node_id is None
 
     async def test_handles_missing_allocated_node_id_key(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         repo = _make_repo(mocker)
         r = _row(task_id=1, allocated_node_id=None)
@@ -124,7 +125,7 @@ class TestRowToTaskAllocatedNodeId:
         assert task.label == "my_job"
 
     async def test_reads_status_by_name_lookup(self, mocker: MockerFixture) -> None:
-        """status is read via TaskStatus[row["status"]] (name lookup, was int cast)."""
+        """Status is read via TaskStatus[row["status"]] (name lookup, was int cast)."""
         repo = _make_repo(mocker)
         repo._run.return_value = [_row(task_id=1, status="RUNNING")]  # type: ignore[attr-defined]
 
@@ -139,7 +140,7 @@ class TestRowToTaskAllocatedNodeId:
         created = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         updated = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
         repo._run.return_value = [  # type: ignore[attr-defined]
-            _row(task_id=1, created_at=created, updated_at=updated)
+            _row(task_id=1, created_at=created, updated_at=updated),
         ]
 
         task = await repo.get(TaskId(1))
@@ -177,7 +178,8 @@ class TestInsertSaveBindAllocatedNodeId:
         assert "ip" not in kwargs
 
     async def test_insert_binds_null_allocated_node_id_by_default(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         repo = _make_repo(mocker)
         repo._run.return_value = [_row(task_id=99, allocated_node_id=None)]  # type: ignore[attr-defined]
@@ -217,7 +219,8 @@ class TestInsertSaveBindAllocatedNodeId:
         assert "ip" not in kwargs
 
     async def test_save_binds_null_allocated_node_id(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         repo = _make_repo(mocker)
         from datetime import datetime

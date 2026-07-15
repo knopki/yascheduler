@@ -1,10 +1,11 @@
+"""SSH adapter package root — re-exports repository, session, operations collaborators, and retry exceptions."""
 # FILE: yascheduler/infra/ssh/__init__.py
 # VERSION: 1.4.0
 # START_MODULE_CONTRACT
 #   PURPOSE: SSH adapter package root — re-exports repository, session, operations collaborators, and retry exceptions.
 #   SCOPE: SSH subpackage facade: connected-machine repository, single-machine operations collaborators, retry exception aliases.
-#   DEPENDS: M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS, M-SSH-EXCEPTIONS
-#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS, M-SSH-EXCEPTIONS
+#   DEPENDS: M-PLATFORM-PROTOCOL, M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS
+#   LINKS: M-PLATFORM-PROTOCOL, M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS
 # END_MODULE_CONTRACT
 #
 # START_MODULE_MAP
@@ -25,8 +26,8 @@
 
 from yascheduler.domain import MachineRepository
 
-from .exceptions import AllSSHRetryExc, SFTPRetryExc
 from .operations import OccupancyChecker, OutputDownloader, TaskDeployer
+from .platform.protocol import AllSSHRetryExc, SFTPRetryExc
 from .repository import SSHMachineRepository
 from .session import SSHMachineSession
 

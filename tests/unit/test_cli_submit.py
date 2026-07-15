@@ -129,7 +129,8 @@ class TestSubmitParsing:
         assert err.strip()  # argparse usage error
 
     def test_nonexistent_file_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["/nonexistent/script.in"])
@@ -189,7 +190,7 @@ class TestSubmitHappyPath:
         monkeypatch: pytest.MonkeyPatch,
         stub_config_deps: tuple[MagicMock, MagicMock],
     ) -> None:
-        config, deps = stub_config_deps
+        _config, deps = stub_config_deps
         script = tmp_path / "test.in"
         script.write_text("LABEL = Test job\nENGINE = g09\n")
         (tmp_path / "input").write_text("dummy input")
@@ -289,7 +290,9 @@ class TestSubmitWebhook:
         (tmp_path / "input").write_text("data")
 
         metadata = submit_mod._build_metadata(
-            {"ENGINE": "g09", "PARENT": "42"}, config, str(tmp_path)
+            {"ENGINE": "g09", "PARENT": "42"},
+            config,
+            str(tmp_path),
         )
         assert metadata["webhook_url"] == "https://example.com/hook"
         assert metadata["webhook_custom_params"] == {"parent": "42"}
@@ -317,7 +320,9 @@ class TestSubmitWebhook:
         monkeypatch.chdir(tmp_path)
 
         metadata = submit_mod._build_metadata(
-            {"ENGINE": "g09", "PARENT": "42"}, config, str(tmp_path)
+            {"ENGINE": "g09", "PARENT": "42"},
+            config,
+            str(tmp_path),
         )
         assert "webhook_url" not in metadata
         assert "webhook_custom_params" not in metadata
@@ -337,7 +342,7 @@ class TestSubmitHelpers:
 
     def test_parse_script_metadata_malformed_ignored(self) -> None:
         result = submit_mod._parse_script_metadata(
-            "LABEL = Test\nmalformed line\nENGINE = g09\n"
+            "LABEL = Test\nmalformed line\nENGINE = g09\n",
         )
         assert result == {"LABEL": "Test", "ENGINE": "g09"}
 
@@ -345,7 +350,9 @@ class TestSubmitHelpers:
         assert submit_mod._parse_script_metadata("") == {}
 
     def test_read_input_files_utf8(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         engine = Engine(name="g09", spawn="run.sh", input_files=("input",))
         (tmp_path / "input").write_text("hello", encoding="utf-8")
@@ -355,7 +362,9 @@ class TestSubmitHelpers:
         assert result == {"input": "hello"}
 
     def test_read_input_files_base64_fallback(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         engine = Engine(name="g09", spawn="run.sh", input_files=("binary.dat",))
         # Bytes that are not valid UTF-8 (0xFF is invalid alone)
@@ -365,11 +374,13 @@ class TestSubmitHelpers:
         result = submit_mod._read_input_files(engine, str(tmp_path))
         assert "binary.dat" in result
         assert result["binary.dat"] == base64.b64encode(b"\xff\xfe\x00\x01").decode(
-            "ascii"
+            "ascii",
         )
 
     def test_build_metadata_local_folder_always_present(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config = make_mock_config(webhook_url=None)
         (tmp_path / "input").write_text("data")
@@ -379,7 +390,9 @@ class TestSubmitHelpers:
         assert metadata["local_folder"] == str(tmp_path)
 
     def test_build_metadata_input_files_merged(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config = make_mock_config(webhook_url=None)
         (tmp_path / "input").write_text("merged-content")
@@ -528,7 +541,8 @@ class TestSubmitConfigLogLevel:
     """--config and --log-level argparse + behavior scenarios."""
 
     def test_help_lists_config_and_log_level(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])
@@ -538,7 +552,9 @@ class TestSubmitConfigLogLevel:
         assert "--log-level" in out
 
     def test_config_nonexistent_exits_two(
-        self, capsys: pytest.CaptureFixture[str], tmp_path: Path
+        self,
+        capsys: pytest.CaptureFixture[str],
+        tmp_path: Path,
     ) -> None:
         script = tmp_path / "s.in"
         script.write_text("ENGINE = g09\n")

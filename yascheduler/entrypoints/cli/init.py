@@ -1,3 +1,4 @@
+"""yainit CLI command — install service unit files and/or apply DB schema + migrations, with --schema/--daemon subset-selector flags."""
 # FILE: yascheduler/entrypoints/cli/init.py
 # VERSION: 1.3.0
 # START_MODULE_CONTRACT
@@ -23,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -47,16 +47,17 @@ def _init_systemd(
     install_path: Path,
     unit_file: Path = Path("/etc/systemd/system/yascheduler.service"),
 ) -> None:
-    print("Installing systemd service")
+    sys.stdout.write("Installing systemd service\n")
     src_unit_file = install_path / "data/yascheduler.service"
     daemon_file = install_path / "entrypoints/cli/daemon_systemd.py"
     systemd_script = src_unit_file.read_text("utf-8").replace(
-        "%YASCHEDULER_DAEMON_FILE%", str(daemon_file)
+        "%YASCHEDULER_DAEMON_FILE%",
+        str(daemon_file),
     )
     try:
         unit_file.write_text(systemd_script, "utf-8")
     except OSError as e:
-        print(f"Error: cannot write to {unit_file}: {e}")
+        sys.stderr.write(f"Error: cannot write to {unit_file}: {e}\n")
         sys.exit(1)
 
 
@@ -71,17 +72,18 @@ def _init_sysv(
     install_path: Path,
     startup_file: Path = Path("/etc/init.d/yascheduler"),
 ) -> None:
-    print("Installing SysV service")
+    sys.stdout.write("Installing SysV service\n")
     src_startup_file = install_path / "data/yascheduler.sh"
     daemon_file = install_path / "entrypoints/cli/daemon_sysv.py"
     sysv_script = src_startup_file.read_text("utf-8").replace(
-        "%YASCHEDULER_DAEMON_FILE%", str(daemon_file)
+        "%YASCHEDULER_DAEMON_FILE%",
+        str(daemon_file),
     )
     try:
         startup_file.write_text(sysv_script, "utf-8")
-        os.chmod(startup_file, 0o755)
+        startup_file.chmod(0o755)
     except OSError as e:
-        print(f"Error: cannot write to {startup_file}: {e}")
+        sys.stderr.write(f"Error: cannot write to {startup_file}: {e}\n")
         sys.exit(1)
 
 
@@ -102,7 +104,7 @@ def _init_schema(config_path: str | Path = CONFIG_FILE) -> None:
         apply_migrations(config.db)
         # END_BLOCK_APPLY_MIGRATIONS
     except DatabaseError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
 
 
@@ -114,6 +116,7 @@ def _init_schema(config_path: str | Path = CONFIG_FILE) -> None:
 #   LINKS: M-ENTRYPOINTS-CLI-INIT, M-PERSISTENCE-SCHEMA
 # END_CONTRACT: init
 def init(argv: list[str] | None = None) -> None:
+    """Parse --schema/--daemon flags, install service and/or apply schema per the selected subset, exit 0/1/2."""
     parser = argparse.ArgumentParser(
         prog="yainit",
         description="Install yascheduler service and initialize the database schema",
@@ -167,7 +170,7 @@ def init(argv: list[str] | None = None) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
 

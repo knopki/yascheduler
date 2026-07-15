@@ -16,7 +16,6 @@
 #   LAST_CHANGE: v1.0.0 - node-ncpus-as-config: extract ncpus-related allocate tests from test_cloud_provisioner_impl.py (file over 1000-line hard limit).
 # END_CHANGE_SUMMARY
 
-# ruff: noqa: ANN401
 
 from __future__ import annotations
 
@@ -59,7 +58,9 @@ class TestAllocateNcpus:
 
     @pytest.mark.asyncio
     async def test_setup_vm_does_not_write_ncpus(
-        self, mock_engines: MagicMock, mock_local_config: MagicMock
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
     ) -> None:
         """Node.ncpus is None after allocate; get_cpu_cores not called inside _setup_vm."""
         adapter, config = _make_mock_adapter(name="test", priority=10)
@@ -69,7 +70,7 @@ class TestAllocateNcpus:
             machine = MagicMock()
             machine.hostname = kw["node"].hostname
             machine.run = AsyncMock(
-                return_value=MagicMock(exit_code=0, stdout="", stderr="")
+                return_value=MagicMock(exit_code=0, stdout="", stderr=""),
             )
             machine.setup_node = AsyncMock()
             machine.get_cpu_cores = AsyncMock(return_value=4)
@@ -99,7 +100,9 @@ class TestAllocateNcpus:
 
     @pytest.mark.asyncio
     async def test_allocate_done_log_is_none_safe_for_ncpus(
-        self, mock_engines: MagicMock, mock_local_config: MagicMock
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
     ) -> None:
         """DONE log formats ncpus=None with %s — no TypeError."""
         adapter, config = _make_mock_adapter(name="test", priority=10)

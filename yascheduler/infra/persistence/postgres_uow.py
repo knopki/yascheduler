@@ -1,3 +1,4 @@
+"""Unit of Work implementation for PostgreSQL using pg8000."""
 # FILE: yascheduler/infra/persistence/postgres_uow.py
 # VERSION: 1.8.0
 #
@@ -22,11 +23,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, TypeVar
 
 from pg8000.native import Connection
+from typing_extensions import Self
 
 from .exceptions import UnitOfWorkNotInitializedError
 from .postgres import PostgresNodeRepository, PostgresTaskRepository
@@ -64,7 +67,8 @@ class PostgresUnitOfWork:
     #   LINKS: ThreadPoolExecutor, PostgresDbConfig
     # END_CONTRACT: PostgresUnitOfWork.__init__
     def __init__(self, config: PostgresDbConfig, bus: MessageBus) -> None:
-        # FIXME: no backoff.on_exception on InterfaceError
+        """Initialise UoW with config and a single-worker thread pool."""
+        # TODO(knopki): #001 no backoff.on_exception on InterfaceError
         self._config = config
         self._bus = bus
         self._saved_tasks: list[Task] = []
@@ -75,18 +79,18 @@ class PostgresUnitOfWork:
 
     @property
     def tasks(self) -> PostgresTaskRepository:
+        """Tasks."""
         if self._tasks is None:
-            raise UnitOfWorkNotInitializedError(
-                "UoW not entered; use 'async with' to access repositories"
-            )
+            msg = "UoW not entered; use 'async with' to access repositories"
+            raise UnitOfWorkNotInitializedError(msg)
         return self._tasks
 
     @property
     def nodes(self) -> PostgresNodeRepository:
+        """Nodes."""
         if self._nodes is None:
-            raise UnitOfWorkNotInitializedError(
-                "UoW not entered; use 'async with' to access repositories"
-            )
+            msg = "UoW not entered; use 'async with' to access repositories"
+            raise UnitOfWorkNotInitializedError(msg)
         return self._nodes
 
     # START_CONTRACT: PostgresUnitOfWork.__aenter__
@@ -96,25 +100,26 @@ class PostgresUnitOfWork:
     #   SIDE_EFFECTS: Opens a real PostgreSQL connection via pg8000.
     #   LINKS: _create_connection, PostgresTaskRepository, PostgresNodeRepository
     # END_CONTRACT: PostgresUnitOfWork.__aenter__
-    async def __aenter__(self) -> PostgresUnitOfWork:
+    async def __aenter__(self) -> Self:
         """Open connection, begin transaction, wire repositories."""
         self._saved_tasks = []
         loop = asyncio.get_running_loop()
         try:
             self._conn = await loop.run_in_executor(
-                self._executor, self._create_connection
+                self._executor,
+                self._create_connection,
             )
             await loop.run_in_executor(self._executor, lambda: self._conn.run("BEGIN"))
             self._tasks = PostgresTaskRepository(
-                self._conn, self._executor, self._saved_tasks
+                self._conn,
+                self._executor,
+                self._saved_tasks,
             )
             self._nodes = PostgresNodeRepository(self._conn, self._executor)
         except BaseException:
             if self._conn is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await loop.run_in_executor(self._executor, self._conn.close)
-                except Exception:
-                    pass
             self._executor.shutdown(wait=False)
             raise
         return self
@@ -134,15 +139,11 @@ class PostgresUnitOfWork:
     ) -> bool:
         """Rollback on error, close connection, shutdown executor."""
         if exc_type is not None and self._conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self.rollback()
-            except Exception:
-                pass
         if self._conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._run_sync(self._conn.close)
-            except Exception:
-                pass
         self._executor.shutdown(wait=False)
         self._conn = None
         return False
@@ -184,6 +185,7 @@ class PostgresUnitOfWork:
     #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
     # END_CONTRACT: PostgresUnitOfWork.collect_events
     async def collect_events(self) -> list[DomainEvent]:
+        """Read events from all saved aggregates via the public events field and clear _saved_tasks."""
         events: list[DomainEvent] = []
         for task in self._saved_tasks:
             events.extend(task.events)
@@ -198,6 +200,7 @@ class PostgresUnitOfWork:
     #   LINKS: M-APPLICATION-MESSAGE-BUS
     # END_CONTRACT: PostgresUnitOfWork.publish_events
     async def publish_events(self) -> None:
+        """Collect events and dispatch them via the message bus."""
         events = await self.collect_events()
         await self._bus.dispatch(events)
         self._saved_tasks.clear()
@@ -207,8 +210,9 @@ class PostgresUnitOfWork:
     def _require_conn(self) -> Connection:
         """Return active connection, or raise if not yet entered."""
         if self._conn is None:
+            msg = "Connection not initialized; use 'async with' to enter the UoW"
             raise UnitOfWorkNotInitializedError(
-                "Connection not initialized; use 'async with' to enter the UoW"
+                msg,
             )
         return self._conn
 

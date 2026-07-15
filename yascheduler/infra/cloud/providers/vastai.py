@@ -27,7 +27,7 @@
 #   PREVIOUS_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-VASTAI") at module top
 # END_CHANGE_SUMMARY
 
-"""VastAI cloud methods"""
+"""VastAI cloud methods."""
 
 from __future__ import annotations
 
@@ -52,8 +52,64 @@ if TYPE_CHECKING:
 BASE_URL = "https://console.vast.ai/api/v0"
 
 
+class _VastApiError(RuntimeError):
+    def __init__(self, status: int, reason: str | None, text: str) -> None:
+        self.status = status
+        self.reason = reason
+        self.text = text
+        super().__init__(f"VastAI API error: {status} {reason}: {text}")
+
+
+class _VastDeleteApiError(RuntimeError):
+    def __init__(
+        self,
+        instance_id: int,
+        status: int,
+        reason: str | None,
+        text: str,
+    ) -> None:
+        self.instance_id = instance_id
+        self.status = status
+        self.reason = reason
+        self.text = text
+        super().__init__(
+            f"VastAI API error deleting instance {instance_id}: "
+            f"{status} {reason}: {text}",
+        )
+
+
+class _VastNoOffersError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("No VastAI offers found matching criteria")
+
+
+class _VastInvalidOfferIdError(TypeError):
+    def __init__(self) -> None:
+        super().__init__("Offer missing required 'id' field")
+
+
+class _VastInvalidInstanceIdError(TypeError):
+    def __init__(self) -> None:
+        super().__init__("Failed to create instance - no contract ID returned")
+
+
+class _VastInstanceTimeoutError(TimeoutError):
+    def __init__(self, instance_id: int, max_wait: int) -> None:
+        self.instance_id = instance_id
+        self.max_wait = max_wait
+        super().__init__(
+            f"Instance {instance_id} did not become ready within {max_wait} seconds",
+        )
+
+
+class _VastInvalidHostInstanceIdError(TypeError):
+    def __init__(self, host: str) -> None:
+        self.host = host
+        super().__init__(f"Instance for {host} has invalid ID")
+
+
 def _get_headers(api_key: str) -> dict[str, str]:
-    """Get headers for VastAI API requests"""
+    """Get headers for VastAI API requests."""
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
 
@@ -69,17 +125,21 @@ async def _api_request(
     method: str,
     url: str,
     api_key: str,
-    **kwargs: Any,  # noqa: ANN401
+    **kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     headers = _get_headers(api_key)
     timeout = aiohttp.ClientTimeout(total=30)
 
     async with session.request(
-        method, url, headers=headers, timeout=timeout, **kwargs
+        method,
+        url,
+        headers=headers,
+        timeout=timeout,
+        **kwargs,
     ) as resp:
         if not resp.ok:
             text = await resp.text()
-            raise RuntimeError(f"VastAI API error: {resp.status} {resp.reason}: {text}")
+            raise _VastApiError(resp.status, resp.reason, text)
         return await resp.json()
 
 
@@ -110,7 +170,11 @@ async def _search_offers(
     }
     params = {"q": str(query)}
     data = await _api_request(
-        session, "GET", f"{BASE_URL}/bundles/", api_key, params=params
+        session,
+        "GET",
+        f"{BASE_URL}/bundles/",
+        api_key,
+        params=params,
     )
     return data.get("offers", [])
 
@@ -143,15 +207,24 @@ async def _create_instance(
         "force": False,
     }
     return await _api_request(
-        session, "PUT", f"{BASE_URL}/asks/{offer_id}/", api_key, json=payload
+        session,
+        "PUT",
+        f"{BASE_URL}/asks/{offer_id}/",
+        api_key,
+        json=payload,
     )
 
 
 async def _get_instance_info(
-    session: aiohttp.ClientSession, api_key: str, instance_id: int
+    session: aiohttp.ClientSession,
+    api_key: str,
+    instance_id: int,
 ) -> dict[str, Any]:
     data = await _api_request(
-        session, "GET", f"{BASE_URL}/instances/{instance_id}/", api_key
+        session,
+        "GET",
+        f"{BASE_URL}/instances/{instance_id}/",
+        api_key,
     )
     inner = data.get("instances")
     if isinstance(inner, dict):
@@ -162,7 +235,9 @@ async def _get_instance_info(
 
 
 async def _find_instance_by_ip(
-    session: aiohttp.ClientSession, api_key: str, host: str
+    session: aiohttp.ClientSession,
+    api_key: str,
+    host: str,
 ) -> dict[str, Any] | None:
     data = await _api_request(session, "GET", f"{BASE_URL}/instances/", api_key)
     instances = data.get("instances", [])
@@ -175,7 +250,9 @@ async def _find_instance_by_ip(
 
 
 async def _delete_instance(
-    session: aiohttp.ClientSession, api_key: str, instance_id: int
+    session: aiohttp.ClientSession,
+    api_key: str,
+    instance_id: int,
 ) -> None:
     headers = _get_headers(api_key)
     timeout = aiohttp.ClientTimeout(total=30)
@@ -184,10 +261,7 @@ async def _delete_instance(
     async with session.delete(url, headers=headers, timeout=timeout) as resp:
         if not resp.ok:
             text = await resp.text()
-            raise RuntimeError(
-                f"VastAI API error deleting instance {instance_id}: "
-                f"{resp.status} {resp.reason}: {text}"
-            )
+            raise _VastDeleteApiError(instance_id, resp.status, resp.reason, text)
 
 
 # START_CONTRACT: vastai_create_node
@@ -199,22 +273,27 @@ async def _delete_instance(
 # END_CONTRACT: vastai_create_node
 async def vastai_create_node(
     cfg: ConfigCloudVastAI,
-    key: SSHKey,
-    cloud_config: CloudInitConfig | None = None,
+    key: SSHKey,  # noqa: ARG001
+    cloud_config: CloudInitConfig | None = None,  # noqa: ARG001
 ) -> str:
+    """Create VastAI instance from cheapest matching offer and wait for readiness."""
     async with aiohttp.ClientSession() as session:
         logger.info("Searching VastAI offers...")
         offers = await _search_offers(
-            session, cfg.api_key, cfg.min_vram_mb, cfg.num_gpus, cfg.max_price_per_hr
+            session,
+            cfg.api_key,
+            cfg.min_vram_mb,
+            cfg.num_gpus,
+            cfg.max_price_per_hr,
         )
         if not offers:
-            raise RuntimeError("No VastAI offers found matching criteria")
+            raise _VastNoOffersError
 
         offer = offers[0]
         offer_id = offer.get("id")
         if not isinstance(offer_id, int):
-            raise RuntimeError("Offer missing required 'id' field")
-        logger.info(f"Creating instance from offer {offer_id}")
+            raise _VastInvalidOfferIdError
+        logger.info("Creating instance from offer %s", offer_id)
 
         result = await _create_instance(
             session,
@@ -228,7 +307,7 @@ async def vastai_create_node(
         )
         instance_id = result.get("new_contract")
         if not isinstance(instance_id, int):
-            raise RuntimeError("Failed to create instance - no contract ID returned")
+            raise _VastInvalidInstanceIdError
         instance_id = cast("int", instance_id)
 
         max_wait = 600  # 10 minutes
@@ -238,18 +317,16 @@ async def vastai_create_node(
 
             info = await _get_instance_info(session, cfg.api_key, instance_id)
             status = info.get("actual_status") or info.get("status")
-            logger.info(f"Instance {instance_id} status: {status}")
+            logger.info("Instance %s status: %s", instance_id, status)
 
             if status == "running":
                 ip_addr = info.get("public_ipaddr")
                 if ip_addr:
-                    logger.info(f"Instance running at {ip_addr}")
+                    logger.info("Instance running at %s", ip_addr)
                     return ip_addr
                 logger.warning("Instance running but no public IP address yet")
 
-        raise TimeoutError(
-            f"Instance {instance_id} did not become ready within {max_wait} seconds"
-        )
+        raise _VastInstanceTimeoutError(instance_id, max_wait)
 
 
 # START_CONTRACT: vastai_delete_node
@@ -263,13 +340,14 @@ async def vastai_delete_node(
     cfg: ConfigCloudVastAI,
     host: str,
 ) -> None:
+    """Delete VastAI instance by its IP address."""
     async with aiohttp.ClientSession() as session:
         inst = await _find_instance_by_ip(session, cfg.api_key, host)
         if inst:
             instance_id = inst.get("id")
             if not isinstance(instance_id, int):
-                raise RuntimeError(f"Instance for {host} has invalid ID")
+                raise _VastInvalidHostInstanceIdError(host)
             await _delete_instance(session, cfg.api_key, cast("int", instance_id))
-            logger.info(f"Deleted VastAI instance {instance_id}")
+            logger.info("Deleted VastAI instance %s", instance_id)
         else:
-            logger.warning(f"No VastAI instance found with IP {host}")
+            logger.warning("No VastAI instance found with IP %s", host)

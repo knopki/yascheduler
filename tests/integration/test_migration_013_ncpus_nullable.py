@@ -56,7 +56,7 @@ def _tracker_rows(conn: pg8000.native.Connection) -> list[str]:
     conn.run("BEGIN")
     try:
         rows = conn.run(
-            "SELECT migration_id FROM yascheduler_migrations ORDER BY migration_id"
+            "SELECT migration_id FROM yascheduler_migrations ORDER BY migration_id",
         )
     finally:
         conn.run("ROLLBACK")
@@ -82,7 +82,7 @@ def test_migration_013_ncpus_nullable() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('012')")
 
@@ -102,7 +102,7 @@ def test_migration_013_ncpus_nullable() -> None:
                 "external_id VARCHAR(255), "
                 "jump_host VARCHAR(255), "
                 "jump_port INTEGER NOT NULL DEFAULT 22, "
-                "jump_username VARCHAR(255) NOT NULL DEFAULT 'root')"
+                "jump_username VARCHAR(255) NOT NULL DEFAULT 'root')",
             )
 
             # Insert test data for the backfill scenario:
@@ -110,14 +110,14 @@ def test_migration_013_ncpus_nullable() -> None:
             # ncpus=8 (valid positive — must be left untouched)
             # ncpus=NULL (already "no limit" — must be left untouched)
             conn.run(
-                "INSERT INTO yascheduler_nodes (hostname, ncpus) VALUES ('zero_node', 0)"
+                "INSERT INTO yascheduler_nodes (hostname, ncpus) VALUES ('zero_node', 0)",
             )
             conn.run(
-                "INSERT INTO yascheduler_nodes (hostname, ncpus) VALUES ('eight_node', 8)"
+                "INSERT INTO yascheduler_nodes (hostname, ncpus) VALUES ('eight_node', 8)",
             )
             conn.run(
                 "INSERT INTO yascheduler_nodes (hostname, ncpus) "
-                "VALUES ('null_node', NULL)"
+                "VALUES ('null_node', NULL)",
             )
 
             # Create yascheduler_tasks so apply_schema's trigger lookup works
@@ -135,7 +135,7 @@ def test_migration_013_ncpus_nullable() -> None:
                 "webhook_url VARCHAR(2048), "
                 "webhook_custom_params JSONB NOT NULL DEFAULT '{}'::JSONB, "
                 "error TEXT, "
-                "extra JSONB NOT NULL DEFAULT '{}'::JSONB)"
+                "extra JSONB NOT NULL DEFAULT '{}'::JSONB)",
             )
         finally:
             conn.close()
@@ -154,7 +154,7 @@ def test_migration_013_ncpus_nullable() -> None:
                     "SELECT constraint_name FROM information_schema.table_constraints "
                     "WHERE table_name = 'yascheduler_nodes' "
                     "AND constraint_type = 'CHECK' "
-                    "AND constraint_name = 'node_ncpus_positive'"
+                    "AND constraint_name = 'node_ncpus_positive'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -171,7 +171,7 @@ def test_migration_013_ncpus_nullable() -> None:
             conn.run("BEGIN")
             try:
                 rows = conn.run(
-                    "SELECT hostname, ncpus FROM yascheduler_nodes ORDER BY node_id"
+                    "SELECT hostname, ncpus FROM yascheduler_nodes ORDER BY node_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -197,7 +197,7 @@ def test_migration_013_ncpus_nullable() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, ncpus) "
-                    "VALUES ('bad_zero', 0)"
+                    "VALUES ('bad_zero', 0)",
                 )
                 conn.run("ROLLBACK")
                 assert False, "INSERT with ncpus=0 should be rejected by CHECK"
@@ -208,7 +208,7 @@ def test_migration_013_ncpus_nullable() -> None:
             conn.run("BEGIN")
             try:
                 conn.run(
-                    "UPDATE yascheduler_nodes SET ncpus = 0 WHERE hostname = 'eight_node'"
+                    "UPDATE yascheduler_nodes SET ncpus = 0 WHERE hostname = 'eight_node'",
                 )
                 conn.run("ROLLBACK")
                 assert False, "UPDATE with ncpus=0 should be rejected by CHECK"
@@ -220,7 +220,7 @@ def test_migration_013_ncpus_nullable() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, ncpus) "
-                    "VALUES ('bad_neg', -1)"
+                    "VALUES ('bad_neg', -1)",
                 )
                 conn.run("ROLLBACK")
                 assert False, "INSERT with ncpus=-1 should be rejected by CHECK"
@@ -232,7 +232,7 @@ def test_migration_013_ncpus_nullable() -> None:
             try:
                 conn.run(
                     "UPDATE yascheduler_nodes SET ncpus = -1 "
-                    "WHERE hostname = 'eight_node'"
+                    "WHERE hostname = 'eight_node'",
                 )
                 conn.run("ROLLBACK")
                 assert False, "UPDATE with ncpus=-1 should be rejected by CHECK"
@@ -244,7 +244,7 @@ def test_migration_013_ncpus_nullable() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, ncpus) "
-                    "VALUES ('good_node', 4)"
+                    "VALUES ('good_node', 4)",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -254,7 +254,7 @@ def test_migration_013_ncpus_nullable() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, ncpus) "
-                    "VALUES ('null_node2', NULL)"
+                    "VALUES ('null_node2', NULL)",
                 )
             finally:
                 conn.run("ROLLBACK")

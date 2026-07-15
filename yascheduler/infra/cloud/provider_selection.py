@@ -1,3 +1,4 @@
+"""Pure function for selecting best cloud provider by priority, capacity, and platform support."""
 # FILE: yascheduler/infra/cloud/provider_selection.py
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
@@ -91,7 +92,8 @@ def select_provider_pure(
         # on the first supported platform.
         if not _adapter_supports_any_platform(adapter, platforms):
             logger.debug(
-                "NO_PLATFORM", extra={"provider": name, "platforms": platforms}
+                "NO_PLATFORM",
+                extra={"provider": name, "platforms": platforms},
             )
             continue
         suitable.append(adapter)

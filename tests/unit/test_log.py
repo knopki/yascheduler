@@ -41,7 +41,8 @@ class _RecordCollector(logging.Handler):
 
 
 def _make_logger(
-    name: str = "yascheduler.test.module", level: int = logging.DEBUG
+    name: str = "yascheduler.test.module",
+    level: int = logging.DEBUG,
 ) -> tuple[logging.Logger, _RecordCollector]:
     """Create a plain logging.Logger with a RecordCollector handler at the given level."""
     logger = logging.getLogger(name)
@@ -163,7 +164,7 @@ def test_info_warn_error_renders_regular() -> None:
 
     assert len(collector.records) == 3
     for i, (level, msg) in enumerate(
-        [("INFO", "info msg"), ("WARNING", "warn msg"), ("ERROR", "error msg")]
+        [("INFO", "info msg"), ("WARNING", "warn msg"), ("ERROR", "error msg")],
     ):
         output = formatter.format(collector.records[i])
         assert output.startswith(f"{level} "), f"Expected {level} prefix, got: {output}"
@@ -208,7 +209,7 @@ def test_package_prefix_derived_from_name() -> None:
     from yascheduler.shared.log import __name__ as log_module_name
 
     expected = log_module_name.split(".", 1)[0]
-    assert _PACKAGE == expected
+    assert expected == _PACKAGE
 
 
 # ── Test 8: Gherkin scenario — single formatter serves both handlers ──
@@ -235,7 +236,8 @@ def test_single_formatter_serves_both_handlers() -> None:
             file_handler = None
             for h in handlers:
                 if isinstance(h, logging.StreamHandler) and not isinstance(
-                    h, logging.FileHandler
+                    h,
+                    logging.FileHandler,
                 ):
                     stderr_handler = h
                 elif isinstance(h, logging.FileHandler):

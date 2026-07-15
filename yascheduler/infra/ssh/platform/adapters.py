@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+"""Platform-specific adapter registry mapping OS identifiers to adapter instances."""
 #
 # FILE: yascheduler/infra/ssh/platform/adapters.py
 # VERSION: 1.1.0
@@ -80,7 +80,7 @@ from .windows import (
 
 @dataclass(frozen=True)
 class RemoteMachineAdapter:
-    "Remote machine adapter"
+    """Remote machine adapter."""
 
     platform: str
     path: type[PurePath]

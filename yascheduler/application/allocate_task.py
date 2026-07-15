@@ -1,3 +1,4 @@
+"""Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning."""
 # FILE: yascheduler/application/allocate_task.py
 # VERSION: 5.24.0
 # START_MODULE_CONTRACT
@@ -87,7 +88,9 @@ async def _validate_engine(
     engine = engines.get(engine_name) if engine_name else None
     if engine is None:
         logger.warning(
-            "Unsupported engine '%s' for task_id=%s", engine_name, task.task_id
+            "Unsupported engine '%s' for task_id=%s",
+            engine_name,
+            task.task_id,
         )
         task = task.reject("unsupported engine")
         async with uow_factory() as uow:
@@ -177,12 +180,11 @@ async def _find_free_machines(
         enabled_nodes = await uow.nodes.list_enabled()
     busy_node_ids = {t.allocated_node_id for t in running_tasks if t.allocated_node_id}
     nodes_by_id = {n.node_id: n for n in enabled_nodes}
-    free_sessions = [
+    return [
         (s, nodes_by_id[s.machine.node_id])
         for s in repository.list_free(platforms=list(engine.platforms))
         if s.machine.node_id in nodes_by_id and s.machine.node_id not in busy_node_ids
     ]
-    return free_sessions
     # END_BLOCK_FIND_FREE_MACHINES
 
 
@@ -228,7 +230,7 @@ async def _allocate_free_machine(
                 remote_tasks_dir,
             ):
                 return True
-        except Exception as err:
+        except Exception as err:  # noqa: PERF203
             logger.debug(
                 "SESSION_FAILED",
                 extra={
@@ -271,18 +273,17 @@ async def _select_and_insert_tmp(
     allocation_lock: asyncio.Lock,
 ) -> _TmpSelection | None:
     # START_BLOCK_CAPACITY_AND_SELECT
-    async with allocation_lock:
-        async with uow_factory() as uow:
-            nodes = await uow.nodes.list_all()
-            counts = _count_nodes_by_cloud(nodes)
-            selected_name = clouds.select_provider(list(engine.platforms), counts)
-            if selected_name is None:
-                return None
-            tmp_node = await uow.nodes.insert(
-                NewNode(cloud=selected_name, enabled=False)
-            )
-            await uow.commit()
-            return _TmpSelection(name=selected_name, node=tmp_node)
+    async with allocation_lock, uow_factory() as uow:
+        nodes = await uow.nodes.list_all()
+        counts = _count_nodes_by_cloud(nodes)
+        selected_name = clouds.select_provider(list(engine.platforms), counts)
+        if selected_name is None:
+            return None
+        tmp_node = await uow.nodes.insert(
+            NewNode(cloud=selected_name, enabled=False),
+        )
+        await uow.commit()
+        return _TmpSelection(name=selected_name, node=tmp_node)
     # END_BLOCK_CAPACITY_AND_SELECT
 
 
@@ -309,13 +310,12 @@ async def _cleanup_tmp_node_best_effort(
         async with uow_factory() as uow:
             await uow.nodes.remove(tmp_node_id)
             await uow.commit()
-    except Exception as cleanup_err:
-        logger.error(
-            "tmp-node cleanup failed: task_id=%s ctx=%s tmp_node_id=%s err=%s",
+    except Exception:
+        logger.exception(
+            "tmp-node cleanup failed: task_id=%s ctx=%s tmp_node_id=%s",
             task_id,
             context,
             tmp_node_id,
-            cleanup_err,
         )
     # END_BLOCK_BEST_EFFORT_TMP_CLEANUP
 
@@ -344,12 +344,15 @@ async def _allocate_cloud_node(
     # START_BLOCK_CLOUD_ALLOCATE
     try:
         node = await clouds.allocate(selected_name, tmp_node)
-    except Exception as err:
-        logger.error("cloud allocation failed: task_id=%s err=%s", task_id, err)
+    except Exception:
+        logger.exception("cloud allocation failed: task_id=%s", task_id)
         # Best-effort tmp-node cleanup; failure here is logged but does
         # not mask the original cloud-allocation exception.
         await _cleanup_tmp_node_best_effort(
-            uow_factory, tmp_node.node_id, task_id, "cloud-alloc-failed"
+            uow_factory,
+            tmp_node.node_id,
+            task_id,
+            "cloud-alloc-failed",
         )
         raise
     # END_BLOCK_CLOUD_ALLOCATE
@@ -382,12 +385,11 @@ async def _persist_node_with_cleanup(
         async with uow_factory() as uow:
             await uow.nodes.update(node)
             await uow.commit()
-    except Exception as persist_err:
-        logger.error(
-            "persist node failed: task_id=%s hostname=%s err=%s",
+    except Exception:
+        logger.exception(
+            "persist node failed: task_id=%s hostname=%s",
             task_id,
             node.hostname,
-            persist_err,
         )
         # VM is up and billing but the DB row was not flipped; best-effort
         # delete so we don't leak a billable orphan. Failure here is logged
@@ -396,15 +398,17 @@ async def _persist_node_with_cleanup(
         # resolves the provider from node.cloud directly.
         try:
             await clouds.deallocate(node)
-        except Exception as dealloc_err:
-            logger.error(
-                "deallocate node failed: task_id=%s hostname=%s err=%s",
+        except Exception:
+            logger.exception(
+                "deallocate node failed: task_id=%s hostname=%s",
                 task_id,
                 node.hostname,
-                dealloc_err,
             )
         await _cleanup_tmp_node_best_effort(
-            uow_factory, tmp_node_id, task_id, "persist-failed"
+            uow_factory,
+            tmp_node_id,
+            task_id,
+            "persist-failed",
         )
         raise
     # END_BLOCK_FINAL_PERSIST
@@ -444,6 +448,7 @@ async def allocate_task(
     allocation_lock: asyncio.Lock,
     remote_tasks_dir: PurePath,
 ) -> bool:
+    """Match a TO_DO task to a free compatible machine or request cloud allocation."""
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
     if task is None:
@@ -496,7 +501,10 @@ async def allocate_task(
     tmp_owned_by_provisioner = False
     try:
         selected = await _select_and_insert_tmp(
-            clouds, engine, uow_factory, allocation_lock
+            clouds,
+            engine,
+            uow_factory,
+            allocation_lock,
         )
         if selected is None:
             logger.debug("NO_PROVIDER", extra={"task_id": task.task_id})
@@ -506,10 +514,18 @@ async def allocate_task(
         tmp_owned_by_provisioner = True
         tracker.set_node(task.task_id, tmp_node_id)
         node = await _allocate_cloud_node(
-            clouds, uow_factory, selected_name, selected.node, task_id
+            clouds,
+            uow_factory,
+            selected_name,
+            selected.node,
+            task_id,
         )
         await _persist_node_with_cleanup(
-            node, clouds, uow_factory, tmp_node_id, task_id
+            node,
+            clouds,
+            uow_factory,
+            tmp_node_id,
+            task_id,
         )
         cloud_allocated = True
         return False
@@ -518,6 +534,9 @@ async def allocate_task(
             tracker.discard(task.task_id)
             if tmp_node_id is not None and not tmp_owned_by_provisioner:
                 await _cleanup_tmp_node_best_effort(
-                    uow_factory, tmp_node_id, task.task_id, "allocator-unexpected"
+                    uow_factory,
+                    tmp_node_id,
+                    task.task_id,
+                    "allocator-unexpected",
                 )
     # END_BLOCK_ALLOCATE_CLOUD_CRITICAL_SECTION

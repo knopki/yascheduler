@@ -1,3 +1,4 @@
+"""yastatus CLI command — query and display task status."""
 # FILE: yascheduler/entrypoints/cli/check_status.py
 # VERSION: 1.7.0
 # START_MODULE_CONTRACT
@@ -111,7 +112,7 @@ async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> lis
         # repository (same int→TaskId marshalling pattern as the facade).
         return await uow.tasks.list_by_jobs(job_ids=[TaskId(j) for j in args.jobs])
     return await uow.tasks.list_by_status(
-        statuses={TaskStatus.RUNNING, TaskStatus.TO_DO}
+        statuses={TaskStatus.RUNNING, TaskStatus.TO_DO},
     )
     # END_BLOCK_QUERY
 
@@ -125,7 +126,7 @@ async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> lis
 # END_CONTRACT: _render_default
 def _render_default(tasks: list[Task]) -> None:
     for task in tasks:
-        print(f"{task.task_id}   {task.status.name}")
+        sys.stdout.write(f"{task.task_id}   {task.status.name}\n")
 
 
 # START_CONTRACT: _render_info
@@ -137,13 +138,13 @@ def _render_default(tasks: list[Task]) -> None:
 # END_CONTRACT: _render_info
 def _render_info(tasks: list[Task]) -> None:
     for task in tasks:
-        print(
-            "task_id={}\tstatus={}\tlabel={}\tnode_id={}".format(
+        sys.stdout.write(
+            "task_id={}\tstatus={}\tlabel={}\tnode_id={}\n".format(
                 task.task_id,
                 task.status.name,
                 task.label,
                 task.allocated_node_id or "-",
-            )
+            ),
         )
 
 
@@ -188,7 +189,7 @@ def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
                     if node is not None
                     else None
                 ),
-            }
+            },
         )
     return json.dumps(objects)
     # END_BLOCK_RENDER_JSON
@@ -204,15 +205,16 @@ async def _download_convergence_snippet(
         r_output = session.path(remote_folder) / "OUTPUT"
         async with session.open_sftp() as sftp:
             await sftp.get([str(r_output)], local_path)
-        return True
     except OSError:
         return False
+    else:
+        return True
 
 
 def _parse_convergence(filepath: Path) -> str:
     """Parse CRYSTAL output file for convergence and geometry optimization info."""
-    from numpy import nan  # pyright: ignore[reportMissingImports]
-    from pycrystal import (  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
+    from numpy import nan  # noqa: PLC0415
+    from pycrystal import (  # noqa: PLC0415
         CRYSTOUT,
         CRYSTOUT_Error,
     )
@@ -257,11 +259,13 @@ def _parse_convergence(filepath: Path) -> str:
 #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
 # END_CONTRACT: _display_remote_output
 async def _display_remote_output(
-    task: Task, node: Node | None, config: Config
+    task: Task,
+    node: Node | None,
+    config: Config,
 ) -> tuple[MachineSession, str, SSHMachineRepository] | None:
     """Connect to machine via repository (under node.node_id), display tail of remote OUTPUT."""
     if node is None:
-        print("NO ALLOCATED HOSTNAME")
+        sys.stdout.write("NO ALLOCATED HOSTNAME\n")
         return None
     repository = SSHMachineRepository()
     try:
@@ -270,24 +274,24 @@ async def _display_remote_output(
             client_keys=list_private_keys(config.local.keys_dir),
         )
     except Exception:
-        print("CAN'T CONNECT")
+        sys.stdout.write("CAN'T CONNECT\n")
         return None
     remote_folder = task.remote_folder
     if not remote_folder:
-        print("OUTDATED TASK, SKIPPING")
+        sys.stdout.write("OUTDATED TASK, SKIPPING\n")
         await repository.disconnect(session.machine.node_id)
         return None
     if session.is_closed:
-        print("CAN'T CONNECT")
+        sys.stdout.write("CAN'T CONNECT\n")
         return None
     r_output = session.path(remote_folder) / "OUTPUT"
     result = await session.run_full(
         f"tail -n15 {session.quote(str(r_output))}",
     )
     if result.returncode:
-        print("OUTDATED TASK, SKIPPING")
+        sys.stdout.write("OUTDATED TASK, SKIPPING\n")
     else:
-        print(result.stdout)
+        sys.stdout.write(f"{result.stdout}\n")
     return session, remote_folder, repository
 
 
@@ -309,8 +313,8 @@ async def _render_view(
     snippet: Path | None = None
     # START_BLOCK_CREATE_SNIPPET
     if fetch_convergence:
-        fd, name = tempfile.mkstemp(suffix=".tmp")  # noqa: ASYNC241
-        os.close(fd)  # noqa: ASYNC230
+        fd, name = tempfile.mkstemp(suffix=".tmp")
+        os.close(fd)
         snippet = Path(name)
     # END_BLOCK_CREATE_SNIPPET
     try:
@@ -323,16 +327,16 @@ async def _render_view(
             )
             username = node.username if node is not None else config.remote.username
             cloud_str = node.cloud if node and node.cloud else ""
-            print(
+            sys.stdout.write(
                 "." * 50
-                + "ID{} {} at {}@{}:{}:{}".format(
+                + "ID{} {} at {}@{}:{}:{}\n".format(
                     task.task_id,
                     task.label,
                     username,
                     node.hostname if node else "",
                     cloud_str,
                     task.remote_folder or "",
-                )
+                ),
             )
             conn = await _display_remote_output(task, node, config)
             if conn is None:
@@ -341,20 +345,22 @@ async def _render_view(
             try:
                 if fetch_convergence and snippet is not None:
                     success = await _download_convergence_snippet(
-                        session, remote_folder, snippet
+                        session,
+                        remote_folder,
+                        snippet,
                     )
                     if success:
                         output = _parse_convergence(snippet)
                         if output:
-                            print(output)
+                            sys.stdout.write(f"{output}\n")
             finally:
                 await repository.disconnect(session.machine.node_id)
         # END_BLOCK_ITERATE_RUNNING
     except Exception:
         # Self-clean the snippet on exception so the temp file never leaks; re-raise to the caller's
         # top-level handler (which prints "Error: ..." and exits 1).
-        if snippet is not None and os.path.exists(snippet):  # noqa: ASYNC240
-            os.unlink(snippet)  # noqa: ASYNC230
+        if snippet is not None and snippet.exists():
+            snippet.unlink()
         raise
     return snippet
 
@@ -392,21 +398,25 @@ async def _check_status_async(argv: list[str] | None) -> None:
         # RENDER PHASE — no DB connection held during SSH.
         if args.view:
             snippet = await _render_view(
-                tasks, nodes_by_id, config, bool(args.convergence), deps
+                tasks,
+                nodes_by_id,
+                config,
+                bool(args.convergence),
+                deps,
             )
         elif args.info:
             _render_info(tasks)
         elif args.json:
-            print(_render_json(tasks, nodes_by_id))
+            sys.stdout.write(f"{_render_json(tasks, nodes_by_id)}\n")
         else:
             _render_default(tasks)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
     finally:
-        if snippet is not None and os.path.exists(snippet):  # noqa: ASYNC240
-            os.unlink(snippet)  # noqa: ASYNC230
+        if snippet is not None and snippet.exists():
+            snippet.unlink()
 
 
 # START_CONTRACT: check_status
@@ -417,6 +427,7 @@ async def _check_status_async(argv: list[str] | None) -> None:
 #   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
 # END_CONTRACT: check_status
 def check_status(argv: list[str] | None = None) -> None:
+    """Sync entry point — runs _check_status_async via asyncio.run."""
     asyncio.run(_check_status_async(argv))
 
 

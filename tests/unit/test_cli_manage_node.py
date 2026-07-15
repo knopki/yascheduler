@@ -81,7 +81,7 @@ def make_mock_uow() -> AsyncMock:
             cloud=None,
             username="root",
             port=22,
-        )
+        ),
     )
     uow.commit = AsyncMock()
     return uow
@@ -115,7 +115,9 @@ def stub_env(
     monkeypatch.setattr(manage_node_mod, "parse_config", MagicMock(return_value=config))
     monkeypatch.setattr(manage_node_mod, "make_cli_deps", MagicMock(return_value=deps))
     monkeypatch.setattr(
-        manage_node_mod, "SSHMachineRepository", MagicMock(return_value=repo)
+        manage_node_mod,
+        "SSHMachineRepository",
+        MagicMock(return_value=repo),
     )
     return config, uow, deps, repo
 
@@ -136,43 +138,64 @@ class TestHostSpecParsing:
     def test_plain_ipv4(self) -> None:
         spec = manage_node_mod._parse_host_spec("10.0.0.1")
         assert spec == manage_node_mod.HostSpec(
-            host="10.0.0.1", username=None, port=22, ncpus=None
+            host="10.0.0.1",
+            username=None,
+            port=22,
+            ncpus=None,
         )
 
     def test_user_at_host(self) -> None:
         spec = manage_node_mod._parse_host_spec("deploy@10.0.0.1")
         assert spec == manage_node_mod.HostSpec(
-            host="10.0.0.1", username="deploy", port=22, ncpus=None
+            host="10.0.0.1",
+            username="deploy",
+            port=22,
+            ncpus=None,
         )
 
     def test_host_with_port(self) -> None:
         spec = manage_node_mod._parse_host_spec("10.0.0.1:2222")
         assert spec == manage_node_mod.HostSpec(
-            host="10.0.0.1", username=None, port=2222, ncpus=None
+            host="10.0.0.1",
+            username=None,
+            port=2222,
+            ncpus=None,
         )
 
     def test_host_with_ncpus(self) -> None:
         spec = manage_node_mod._parse_host_spec("10.0.0.1~4")
         assert spec == manage_node_mod.HostSpec(
-            host="10.0.0.1", username=None, port=22, ncpus=4
+            host="10.0.0.1",
+            username=None,
+            port=22,
+            ncpus=4,
         )
 
     def test_full_spec(self) -> None:
         spec = manage_node_mod._parse_host_spec("deploy@10.0.0.1:2222~4")
         assert spec == manage_node_mod.HostSpec(
-            host="10.0.0.1", username="deploy", port=2222, ncpus=4
+            host="10.0.0.1",
+            username="deploy",
+            port=2222,
+            ncpus=4,
         )
 
     def test_bracketed_ipv6(self) -> None:
         spec = manage_node_mod._parse_host_spec("[::1]")
         assert spec == manage_node_mod.HostSpec(
-            host="::1", username=None, port=22, ncpus=None
+            host="::1",
+            username=None,
+            port=22,
+            ncpus=None,
         )
 
     def test_bracketed_ipv6_with_port(self) -> None:
         spec = manage_node_mod._parse_host_spec("[fe80::1]:2222")
         assert spec == manage_node_mod.HostSpec(
-            host="fe80::1", username=None, port=2222, ncpus=None
+            host="fe80::1",
+            username=None,
+            port=2222,
+            ncpus=None,
         )
 
     def test_tilde_zero_maps_to_none(self) -> None:
@@ -234,7 +257,10 @@ class TestHostSpecParsing:
     def test_hostname_passes(self) -> None:
         spec = manage_node_mod._parse_host_spec("compute-node-7")
         assert spec == manage_node_mod.HostSpec(
-            host="compute-node-7", username=None, port=22, ncpus=None
+            host="compute-node-7",
+            username=None,
+            port=22,
+            ncpus=None,
         )
 
 
@@ -247,7 +273,8 @@ class TestManageNodeArgparse:
     """argparse: prog, --help, missing host, unknown flag, mutex, skip-setup × remove, value form."""
 
     def test_help_shows_prog_yasetnode(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])
@@ -274,7 +301,8 @@ class TestManageNodeArgparse:
         assert err.strip()
 
     def test_remove_soft_and_hard_mutex_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["10.0.0.1", "--remove-soft", "--remove-hard"])
@@ -283,7 +311,8 @@ class TestManageNodeArgparse:
         assert err.strip()
 
     def test_skip_setup_with_remove_hard_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["10.0.0.1", "--skip-setup", "--remove-hard"])
@@ -292,7 +321,8 @@ class TestManageNodeArgparse:
         assert err.strip()
 
     def test_skip_setup_with_remove_soft_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["10.0.0.1", "--skip-setup", "--remove-soft"])
@@ -301,7 +331,8 @@ class TestManageNodeArgparse:
         assert err.strip()
 
     def test_skip_setup_does_not_accept_value(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         # store_true flag takes no value; "true" is treated as an extra positional → exit 2.
         with pytest.raises(SystemExit) as exc:
@@ -323,7 +354,8 @@ class TestManageNodeArgparse:
         assert "Added host" in out
 
     def test_unbracketed_ipv6_rejected_at_argparse(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["::1"])
@@ -409,7 +441,9 @@ class TestManageNodeAddPath:
     ) -> None:
         _config, uow, _deps, repo = stub_env
         uow.nodes.list_all = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), hostname="IP", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="IP", ncpus=4, enabled=True),
+            ],
         )
 
         with pytest.raises(SystemExit) as exc:
@@ -487,7 +521,8 @@ class TestManageNodeAddPath:
         stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
     ) -> None:
         """Gherkin: yasetnode add-path stamps jump from config.remote before insert.
-        Domain: Static node stamps jump from remote defaults at creation."""
+        Domain: Static node stamps jump from remote defaults at creation.
+        """
         config, uow, _deps, repo = stub_env
         config.remote.jump_host = "bastion.example.com"
         config.remote.jump_username = "jumper"
@@ -589,8 +624,8 @@ class TestManageNodeRemovePath:
         _config, uow, _deps, repo = stub_env
         uow.nodes.list_all = AsyncMock(
             return_value=[
-                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
-            ]
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True),
+            ],
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1, 2])
 
@@ -616,8 +651,8 @@ class TestManageNodeRemovePath:
         _config, uow, _deps, _repo = stub_env
         uow.nodes.list_all = AsyncMock(
             return_value=[
-                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
-            ]
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True),
+            ],
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1])
 
@@ -638,8 +673,8 @@ class TestManageNodeRemovePath:
         _config, uow, _deps, _repo = stub_env
         uow.nodes.list_all = AsyncMock(
             return_value=[
-                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
-            ]
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True),
+            ],
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[])
 
@@ -676,8 +711,8 @@ class TestManageNodeRemovePath:
         _config, uow, _deps, _repo = stub_env
         uow.nodes.list_all = AsyncMock(
             return_value=[
-                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True)
-            ]
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True),
+            ],
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1])
         # Failing commit proves the success prints live AFTER commit, not before.
@@ -824,7 +859,8 @@ class TestManageNodeConfigLogLevel:
     """--config and --log-level argparse + behavior scenarios (defaults WARNING)."""
 
     def test_help_lists_config_and_log_level(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])
@@ -834,7 +870,8 @@ class TestManageNodeConfigLogLevel:
         assert "--log-level" in out
 
     def test_config_nonexistent_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["10.0.0.1", "--config", "/nonexistent.conf"])
@@ -938,7 +975,10 @@ class TestParseNodeTarget:
         nt = manage_node_mod._parse_node_target("10.0.0.1")
         assert nt.node_id is None
         assert nt.host_spec == manage_node_mod.HostSpec(
-            host="10.0.0.1", username=None, port=22, ncpus=None
+            host="10.0.0.1",
+            username=None,
+            port=22,
+            ncpus=None,
         )
 
     def test_zero_raises_value_error(self) -> None:
@@ -972,8 +1012,11 @@ class TestManageNodeIdPath:
         _config, uow, _deps, _repo = stub_env
         uow.nodes.get_by_id = AsyncMock(
             return_value=Node(
-                node_id=NodeId(5), hostname="10.0.0.5", ncpus=4, enabled=True
-            )
+                node_id=NodeId(5),
+                hostname="10.0.0.5",
+                ncpus=4,
+                enabled=True,
+            ),
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[])
 

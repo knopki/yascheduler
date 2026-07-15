@@ -1,5 +1,6 @@
+"""yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec."""
 # FILE: yascheduler/entrypoints/cli/manage_node.py
-# VERSION: 1.14.0
+# VERSION: 1.16.0
 # START_MODULE_CONTRACT
 #   PURPOSE: yasetnode CLI command — add, soft-remove, or hard-remove nodes via per-helper UoW (+ SSH gateway on the add path). Positional accepts either a node_id (purely-digit) or a host spec.
 #   SCOPE: manage_node command — add, soft-remove, or hard-remove nodes.
@@ -10,6 +11,7 @@
 # START_MODULE_MAP
 #   manage_node - Sync entry point: asyncio.run(_manage_node_async(argv))
 #   _manage_node_async - Add/soft-remove/hard-remove a node; validation UoW read-only, dispatch to per-helper UoW; exit 0/1/2
+#   _resolve_and_validate_node - Resolve Node (node_id or host_spec path) via read-only UoW and enforce add/remove presence rules; raises NodeAlreadyInDBError/NodeIdNotInDBError/HostNotInDBError
 #   HostSpec - Frozen parsed host spec (host, username, port, ncpus)
 #   NodeTarget - Frozen parsed node target (node_id: NodeId | None, host_spec: HostSpec | None; exactly one set)
 #   _parse_host_spec - argparse type: parse [user@]host[:port][~ncpus] grammar (UNCHANGED)
@@ -22,9 +24,8 @@
 #
 # START_CHANGE_SUMMARY
 
-#   LAST_CHANGE: v1.15.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v1.14.0 - _add_node sources jump_port from config.remote.jump_port (was hardcoded 22).
-#   PREVIOUS_CHANGE: v1.14.0 - _add_node sources jump_port from config.remote.jump_port (was hardcoded 22).
+#   LAST_CHANGE: v1.16.0 - Extract the VALIDATE block (Node resolution + add/remove presence raises) into _resolve_and_validate_node helper (ruff TRY301); raises now live outside the caller's try/except.
+#   PREVIOUS_CHANGE: v1.15.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
@@ -44,6 +45,40 @@ from yascheduler.infra.ssh.keys import list_private_keys
 from .args import add_config_arg, add_log_level_arg
 
 logger = logging.getLogger(__name__)
+
+MAX_PORT = 65535
+
+
+class MalformedHostSpecError(argparse.ArgumentTypeError):
+    """Raised when the host spec argument fails validation."""
+
+    def __init__(self, raw: str) -> None:
+        self.raw = raw
+        super().__init__(f"malformed host spec: {raw!r}")
+
+
+class NodeAlreadyInDBError(ValueError):
+    """Raised when attempting to add a host that is already in the database."""
+
+    def __init__(self, host: str) -> None:
+        self.host = host
+        super().__init__(f"Host already in DB: {host}")
+
+
+class NodeIdNotInDBError(ValueError):
+    """Raised when a node_id is not found in the database on a remove path."""
+
+    def __init__(self, node_id: NodeId) -> None:
+        self.node_id = node_id
+        super().__init__(f"Node ID not in DB: {node_id}")
+
+
+class HostNotInDBError(ValueError):
+    """Raised when a host name is not found in the database on a remove path."""
+
+    def __init__(self, host: str) -> None:
+        self.host = host
+        super().__init__(f"Host NOT in DB: {host}")
 
 
 @dataclass(frozen=True)
@@ -86,30 +121,30 @@ def _parse_host_spec(s: str) -> HostSpec:
     # START_BLOCK_PARSE_USER
     at_count = s.count("@")
     if at_count > 1:
-        raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+        raise MalformedHostSpecError(raw)
     username: str | None = None
     if at_count == 1:
         user_part, _, s = s.partition("@")
         if not user_part:
-            raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+            raise MalformedHostSpecError(raw)
         username = user_part
     # END_BLOCK_PARSE_USER
 
     # START_BLOCK_PARSE_NCPUS
     tilde_count = s.count("~")
     if tilde_count > 1:
-        raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+        raise MalformedHostSpecError(raw)
     ncpus: int | None = None
     if tilde_count == 1:
         host_part, _, ncpus_part = s.partition("~")
         if not ncpus_part:
-            raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+            raise MalformedHostSpecError(raw)
         try:
             n = int(ncpus_part)
         except ValueError:
-            raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}") from None
+            raise MalformedHostSpecError(raw) from None
         if n < 0:
-            raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+            raise MalformedHostSpecError(raw)
         s = host_part
         ncpus = None if n == 0 else n
     # END_BLOCK_PARSE_NCPUS
@@ -118,7 +153,7 @@ def _parse_host_spec(s: str) -> HostSpec:
     if s.startswith("["):
         close = s.find("]")
         if close == -1:
-            raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+            raise MalformedHostSpecError(raw)
         host = s[1:close]
         remainder = s[close + 1 :]
         if remainder == "":
@@ -128,32 +163,28 @@ def _parse_host_spec(s: str) -> HostSpec:
             try:
                 port = int(port_str)
             except ValueError:
-                raise argparse.ArgumentTypeError(
-                    f"malformed host spec: {raw!r}"
-                ) from None
+                raise MalformedHostSpecError(raw) from None
         else:
-            raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+            raise MalformedHostSpecError(raw)
     else:
         colon_count = s.count(":")
         if colon_count > 1:
             # Unbracketed IPv6 is ambiguous against :port — require brackets.
-            raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+            raise MalformedHostSpecError(raw)
         if colon_count == 1:
             host, _, port_str = s.partition(":")
             try:
                 port = int(port_str)
             except ValueError:
-                raise argparse.ArgumentTypeError(
-                    f"malformed host spec: {raw!r}"
-                ) from None
+                raise MalformedHostSpecError(raw) from None
         else:
             host = s
             port = 22
 
     if not host:
-        raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
-    if port < 1 or port > 65535:
-        raise argparse.ArgumentTypeError(f"malformed host spec: {raw!r}")
+        raise MalformedHostSpecError(raw)
+    if port < 1 or port > MAX_PORT:
+        raise MalformedHostSpecError(raw)
     # END_BLOCK_PARSE_HOST_AND_PORT
 
     return HostSpec(host=host, username=username, port=port, ncpus=ncpus)
@@ -207,10 +238,10 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--skip-setup cannot be combined with --remove-soft/--remove-hard")
     # A node cannot be added by id (adding requires a real host). The node_id
     # positional is valid ONLY on a remove path; reject the add-by-id
-    # combination here (exit 2, consistent with the --skip-setup × remove check).
+    # combination here (exit 2, consistent with the --skip-setup x remove check).
     if args.host.node_id is not None and not (args.remove_soft or args.remove_hard):
         parser.error(
-            "a node cannot be added by id; provide a host like user@host[:port][~ncpus]"
+            "a node cannot be added by id; provide a host like user@host[:port][~ncpus]",
         )
     # END_BLOCK_PARSE_ARGS
     return args
@@ -227,7 +258,8 @@ async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
     # START_BLOCK_MARK_AND_REMOVE
     async with deps.uow_factory() as uow:
         task_ids = await uow.tasks.list_ids_by_node_id_and_status(
-            node.node_id, TaskStatus.RUNNING
+            node.node_id,
+            TaskStatus.RUNNING,
         )
         for task_id in task_ids:
             await uow.tasks.update_status(task_id, TaskStatus.DONE)
@@ -236,8 +268,10 @@ async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
     # END_BLOCK_MARK_AND_REMOVE
     # START_BLOCK_ANNOUNCE
     for task_id in task_ids:
-        print(f"An associated task {task_id} at {node.hostname} is now marked done!")
-    print(f"Removed host from yascheduler: {node.hostname}")
+        sys.stdout.write(
+            f"An associated task {task_id} at {node.hostname} is now marked done!\n",
+        )
+    sys.stdout.write(f"Removed host from yascheduler: {node.hostname}\n")
     # END_BLOCK_ANNOUNCE
 
 
@@ -252,18 +286,23 @@ async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
     # START_BLOCK_DISABLE_OR_REMOVE
     async with deps.uow_factory() as uow:
         task_ids = await uow.tasks.list_ids_by_node_id_and_status(
-            node.node_id, TaskStatus.RUNNING
+            node.node_id,
+            TaskStatus.RUNNING,
         )
         if task_ids:
             await uow.nodes.disable(node.node_id)
             await uow.commit()
-            print("A task associated, prevent from assigning the new tasks")
-            print(f"Prevented from assigning the new tasks: {node.hostname}")
+            sys.stdout.write(
+                "A task associated, prevent from assigning the new tasks\n",
+            )
+            sys.stdout.write(
+                f"Prevented from assigning the new tasks: {node.hostname}\n",
+            )
         else:
             await uow.nodes.remove(node.node_id)
             await uow.commit()
-            print("No tasks associated, remove node immediately")
-            print(f"Removed host from yascheduler: {node.hostname}")
+            sys.stdout.write("No tasks associated, remove node immediately\n")
+            sys.stdout.write(f"Removed host from yascheduler: {node.hostname}\n")
     # END_BLOCK_DISABLE_OR_REMOVE
 
 
@@ -285,6 +324,7 @@ async def _add_node(
     repository: SSHMachineRepository,
     spec: HostSpec,
     config: Config,
+    *,
     skip_setup: bool,
 ) -> None:
     # HostSpec is frozen and the parser cannot resolve config defaults, so resolve here.
@@ -305,7 +345,7 @@ async def _add_node(
                 jump_host=config.remote.jump_host,
                 jump_username=config.remote.jump_username or "root",
                 jump_port=config.remote.jump_port,
-            )
+            ),
         )
         await uow.commit()
     # END_BLOCK_INSERT_TMP
@@ -332,16 +372,76 @@ async def _add_node(
                 )
             raise
         if not skip_setup:
-            print("Setup host...")
+            sys.stdout.write("Setup host...\n")
             await session.setup_node(config.engines)
         # Flip the tmp row to enabled=True (single UPDATE on the same node_id).
         async with deps.uow_factory() as uow:
             await uow.nodes.update(replace(tmp, enabled=True))
             await uow.commit()
-        print(f"Added host to yascheduler: {spec.host}:{spec.port}")
+        sys.stdout.write(f"Added host to yascheduler: {spec.host}:{spec.port}\n")
     finally:
         await repository.disconnect(tmp.node_id)
     # END_BLOCK_CONNECT_SETUP_ADD
+
+
+# START_CONTRACT: _resolve_and_validate_node
+#   PURPOSE: Resolve the Node (node_id or host_spec path) via a read-only UoW and enforce add/remove presence rules; raises on rule violation.
+#   INPUTS: { target: NodeTarget - parsed target, deps: CLIDeps - composition root, remove_soft: bool, remove_hard: bool - dispatch flags }
+#   OUTPUTS: { Node | None - the resolved Node (carrying node_id) or None if not present }
+#   SIDE_EFFECTS: Opens and closes a read-only UoW (no commit). A TOCTOU window exists between this close and the helper's own UoW open; accepted for a single-operator CLI (design D18).
+#   RAISES: NodeAlreadyInDBError - host_spec add path but node already in DB; NodeIdNotInDBError - node_id remove path but not in DB; HostNotInDBError - host_spec remove path but not in DB
+#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE, M-APPLICATION-UOW
+# END_CONTRACT: _resolve_and_validate_node
+async def _resolve_and_validate_node(
+    target: NodeTarget,
+    deps: CLIDeps,
+    *,
+    remove_soft: bool,
+    remove_hard: bool,
+) -> Node | None:
+    """Resolve the Node and enforce add/remove presence rules (read-only UoW).
+
+    On the node_id path the node is resolved via ``get_by_id``; on the
+    host_spec path via ``list_all`` + filter by hostname (node_id is the sole
+    identity; hostname is no longer a unique key). The resolved Node is passed
+    to the remove helpers — ``node.node_id`` keys the mutators,
+    ``node.hostname`` keys the user-facing stdout.
+    """
+    # START_BLOCK_RESOLVE
+    if target.node_id is not None:
+        async with deps.uow_factory() as uow:
+            resolved_node = await uow.nodes.get_by_id(target.node_id)
+    else:
+        assert target.host_spec is not None  # exactly one of the two is set
+        async with deps.uow_factory() as uow:
+            all_nodes = await uow.nodes.list_all()
+        resolved_node = next(
+            (n for n in all_nodes if n.hostname == target.host_spec.host),
+            None,
+        )
+    already_there = resolved_node is not None
+    # END_BLOCK_RESOLVE
+
+    # START_BLOCK_ENFORCE_PRESENCE
+    # On the node_id path the "already in DB" check is meaningless (add-by-id
+    # is already rejected in _parse_node_args), so only the remove-path
+    # "NOT in DB" check applies.
+    if (
+        target.host_spec is not None
+        and already_there
+        and not (remove_soft or remove_hard)
+    ):
+        raise NodeAlreadyInDBError(target.host_spec.host)
+    if not already_there and (remove_soft or remove_hard):
+        # Distinguish the two not-in-DB paths: node_id (no HostSpec parsed)
+        # vs host_spec (current behavior). The spec lists "node_id NOT in DB"
+        # as a separate exit-1 scenario from "host NOT in DB".
+        if target.node_id is not None:
+            raise NodeIdNotInDBError(target.node_id)
+        assert target.host_spec is not None
+        raise HostNotInDBError(target.host_spec.host)
+    # END_BLOCK_ENFORCE_PRESENCE
+    return resolved_node
 
 
 # START_CONTRACT: _manage_node_async
@@ -369,46 +469,12 @@ async def _manage_node_async(argv: list[str] | None) -> None:
         # END_BLOCK_CONFIGURE
 
         # START_BLOCK_VALIDATE
-        # Read-only validation UoW: closed without commit (nothing mutated).
-        # A TOCTOU window exists between this close and the helper's own UoW open;
-        # accepted for a single-operator CLI (design D18).
-        # Resolve the Node early on both paths: get_by_id on the node_id path,
-        # list_all + filter by hostname on the host_spec path (the hostname-keyed
-        # get(hostname) lookup is removed — node_id is the sole identity; resolving
-        # a host_spec to a Node requires listing because hostname is no longer
-        # a unique key). The resolved Node (carrying node_id) is passed to the
-        # remove helpers — node.node_id keys the node_id-keyed mutators;
-        # node.hostname keys the hostname-keyed user-facing stdout.
-        resolved_node: Node | None = None
-        if target.node_id is not None:
-            async with deps.uow_factory() as uow:
-                resolved_node = await uow.nodes.get_by_id(target.node_id)
-            already_there = resolved_node is not None
-        else:
-            assert target.host_spec is not None  # exactly one of the two is set
-            async with deps.uow_factory() as uow:
-                all_nodes = await uow.nodes.list_all()
-            resolved_node = next(
-                (n for n in all_nodes if n.hostname == target.host_spec.host), None
-            )
-            already_there = resolved_node is not None
-        # On the node_id path the "already in DB" check is meaningless (add-by-id
-        # is already rejected in _parse_node_args), so only the remove-path
-        # "NOT in DB" check applies.
-        if (
-            target.host_spec is not None
-            and already_there
-            and not (args.remove_soft or args.remove_hard)
-        ):
-            raise ValueError(f"Host already in DB: {target.host_spec.host}")
-        if not already_there and (args.remove_soft or args.remove_hard):
-            # Distinguish the two not-in-DB paths: node_id (no HostSpec parsed)
-            # vs host_spec (current behavior). The spec lists "node_id NOT in DB"
-            # as a separate exit-1 scenario from "host NOT in DB".
-            if target.node_id is not None:
-                raise ValueError(f"Node ID not in DB: {target.node_id}")
-            assert target.host_spec is not None
-            raise ValueError(f"Host NOT in DB: {target.host_spec.host}")
+        resolved_node = await _resolve_and_validate_node(
+            target,
+            deps,
+            remove_soft=args.remove_soft,
+            remove_hard=args.remove_hard,
+        )
         # END_BLOCK_VALIDATE
 
         # START_BLOCK_DISPATCH
@@ -424,10 +490,16 @@ async def _manage_node_async(argv: list[str] | None) -> None:
             await _remove_node_soft(deps, resolved_node)
         else:
             assert target.host_spec is not None  # add path is host-only
-            await _add_node(deps, repository, target.host_spec, config, args.skip_setup)
+            await _add_node(
+                deps,
+                repository,
+                target.host_spec,
+                config,
+                skip_setup=args.skip_setup,
+            )
         # END_BLOCK_DISPATCH
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
 
@@ -440,6 +512,7 @@ async def _manage_node_async(argv: list[str] | None) -> None:
 #   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
 # END_CONTRACT: manage_node
 def manage_node(argv: list[str] | None = None) -> None:
+    """Sync entry point — run _manage_node_async via asyncio."""
     asyncio.run(_manage_node_async(argv))
 
 

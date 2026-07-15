@@ -115,7 +115,7 @@ async def test_check_rejects_running_allocated_node_id_null(
     with pytest.raises(DatabaseError) as excinfo:
         pg_conn.run(
             "UPDATE yascheduler_tasks SET allocated_node_id = NULL "
-            "WHERE status = 'RUNNING'"
+            "WHERE status = 'RUNNING'",
         )
     assert _CONSTRAINT in str(excinfo.value), str(excinfo.value)
 
@@ -134,7 +134,7 @@ async def test_check_rejects_todo_with_error(
     with pytest.raises(DatabaseError) as excinfo:
         pg_conn.run(
             "INSERT INTO yascheduler_tasks (status, engine, error) "
-            "VALUES ('TO_DO', 'fleur', 'x')"
+            "VALUES ('TO_DO', 'fleur', 'x')",
         )
     assert _CONSTRAINT in str(excinfo.value), str(excinfo.value)
 
@@ -179,7 +179,8 @@ async def test_check_rejects_bare_node_delete_with_running_task(
     )
     with pytest.raises(DatabaseError) as excinfo:
         pg_conn.run(
-            "DELETE FROM yascheduler_nodes WHERE node_id = :node_id", node_id=node_id
+            "DELETE FROM yascheduler_nodes WHERE node_id = :node_id",
+            node_id=node_id,
         )
     assert _CONSTRAINT in str(excinfo.value), str(excinfo.value)
 
@@ -192,7 +193,7 @@ async def test_check_rejects_bare_node_delete_with_running_task(
         )
         task_row = pg_conn.run(
             "SELECT task_id, status, allocated_node_id FROM yascheduler_tasks "
-            "WHERE title = 'job'"
+            "WHERE title = 'job'",
         )
     finally:
         pg_conn.run("ROLLBACK")
@@ -216,7 +217,7 @@ async def test_hard_remove_path_succeeds_with_running_task(
     # Seed a node + a CHECK-valid RUNNING task referencing it.
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=2, enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=2, enabled=True),
         )
         task = await uow.tasks.insert(NewTask(label="job", engine="fleur"))
         task = task.run(node.node_id, "/r")

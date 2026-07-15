@@ -99,7 +99,11 @@ async def test_connect_translates_asyncssh_error() -> None:
     err = asyncssh.misc.PermissionDenied("denied")
     gw._connect_impl = AsyncMock(side_effect=err)  # type: ignore[method-assign]
     node = Node(
-        node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, username="root", port=22
+        node_id=NodeId(1),
+        hostname="10.0.0.1",
+        ncpus=4,
+        username="root",
+        port=22,
     )
     with pytest.raises(MachineConnectionError) as exc_info:
         await gw.connect(node, None)
@@ -120,7 +124,11 @@ async def test_connect_translates_oserror() -> None:
     gw = SSHMachineRepository()
     gw._connect_impl = AsyncMock(side_effect=OSError("refused"))  # type: ignore[method-assign]
     node = Node(
-        node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, username="root", port=22
+        node_id=NodeId(1),
+        hostname="10.0.0.1",
+        ncpus=4,
+        username="root",
+        port=22,
     )
     with pytest.raises(MachineConnectionError) as exc_info:
         await gw.connect(node, None)
@@ -141,7 +149,11 @@ async def test_connect_returns_session_on_success() -> None:
     session = _make_state(hostname="10.0.0.1")
     gw._connect_impl = AsyncMock(return_value=session)  # type: ignore[method-assign]
     node = Node(
-        node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, username="root", port=22
+        node_id=NodeId(1),
+        hostname="10.0.0.1",
+        ncpus=4,
+        username="root",
+        port=22,
     )
     result = await gw.connect(node, None)
     assert result is session
@@ -162,7 +174,7 @@ async def test_connect_primes_session_cache(
     mock_conn: MagicMock,
     mock_adapter: MagicMock,
 ) -> None:
-    """connect primes the session cache; first get_cpu_cores returns cached value without adapter call."""
+    """Connect primes the session cache; first get_cpu_cores returns cached value without adapter call."""
     with (
         patch(
             "yascheduler.infra.ssh.repository.asyncssh.connection.connect",
@@ -182,7 +194,11 @@ async def test_connect_primes_session_cache(
         ),
     ):
         node = Node(
-            node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, username="root", port=22
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            username="root",
+            port=22,
         )
         session = await repository.connect(node=node, client_keys=[])
 

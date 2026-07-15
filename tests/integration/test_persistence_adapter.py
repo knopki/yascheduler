@@ -75,7 +75,8 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 #   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.get
 # END_CONTRACT: test_repo_task_insert_and_get
 async def test_repo_task_insert_and_get(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """Insert a task via repo, get it back, verify all fields including JSONB roundtrip."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -120,7 +121,8 @@ async def test_repo_task_insert_and_get(
 #   LINKS: PostgresTaskRepository.get
 # END_CONTRACT: test_repo_task_get_none
 async def test_repo_task_get_none(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """get() returns None for non-existent task."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -135,7 +137,8 @@ async def test_repo_task_get_none(
 #   LINKS: PostgresTaskRepository.save, PostgresTaskRepository.get
 # END_CONTRACT: test_repo_task_save_updates
 async def test_repo_task_save_updates(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """Save updates an existing task's fields via update_by_id."""
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -164,7 +167,8 @@ async def test_repo_task_save_updates(
 #   LINKS: PostgresTaskRepository.list_by_status
 # END_CONTRACT: test_repo_task_list_by_status
 async def test_repo_task_list_by_status(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """list_by_status filters correctly."""
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -194,7 +198,8 @@ async def test_repo_task_list_by_status(
 #   LINKS: PostgresTaskRepository.count_by_status
 # END_CONTRACT: test_repo_task_count_by_status
 async def test_repo_task_count_by_status(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """count_by_status returns correct aggregates."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -216,7 +221,8 @@ async def test_repo_task_count_by_status(
 #   LINKS: PostgresTaskRepository.update_status
 # END_CONTRACT: test_repo_task_update_status_atomic
 async def test_repo_task_update_status_atomic(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """update_status only changes the status field."""
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -245,7 +251,8 @@ async def test_repo_task_update_status_atomic(
 #   LINKS: PostgresTaskRepository.insert
 # END_CONTRACT: test_repo_task_insert_returns_created_updated_at
 async def test_repo_task_insert_returns_created_updated_at(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """Insert returns Task with created_at and updated_at populated."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -263,7 +270,8 @@ async def test_repo_task_insert_returns_created_updated_at(
 #   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.save
 # END_CONTRACT: test_repo_task_save_triggers_updated_at
 async def test_repo_task_save_triggers_updated_at(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """Save (UPDATE) triggers updated_at to advance; created_at unchanged."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -295,7 +303,8 @@ async def test_repo_task_save_triggers_updated_at(
 #   LINKS: PostgresTaskRepository.list_by_status
 # END_CONTRACT: test_repo_task_list_by_status_enum_cast
 async def test_repo_task_list_by_status_enum_cast(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """list_by_status with enum-label cast works."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -316,7 +325,8 @@ async def test_repo_task_list_by_status_enum_cast(
 #   LINKS: PostgresTaskRepository.count_by_status
 # END_CONTRACT: test_repo_task_count_by_status_name_lookup
 async def test_repo_task_count_by_status_name_lookup(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """count_by_status keys are TaskStatus members accessible via name lookup."""
     repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -339,7 +349,8 @@ async def test_repo_task_count_by_status_name_lookup(
 #   LINKS: PostgresTaskRepository.list_ids_by_node_id_and_status, PostgresNodeRepository.insert
 # END_CONTRACT: test_repo_task_list_ids_by_node_id_and_status
 async def test_repo_task_list_ids_by_node_id_and_status(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """list_ids_by_node_id_and_status filters by allocated_node_id and status."""
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
@@ -369,7 +380,8 @@ async def test_repo_task_list_ids_by_node_id_and_status(
     await task_repo.save(t3_done)
 
     ids = await task_repo.list_ids_by_node_id_and_status(
-        node.node_id, DomainTaskStatus.RUNNING
+        node.node_id,
+        DomainTaskStatus.RUNNING,
     )
     assert ids == [t1.task_id]
 
@@ -387,7 +399,8 @@ async def test_repo_task_list_ids_by_node_id_and_status(
 #   LINKS: PostgresNodeRepository.add, get, enable, disable, remove
 # END_CONTRACT: test_repo_node_crud
 async def test_repo_node_crud(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """Full node lifecycle through repository."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
@@ -437,7 +450,8 @@ async def test_repo_node_crud(
 #   LINKS: PostgresNodeRepository.list_enabled, list_disabled, list_all
 # END_CONTRACT: test_repo_node_list_filters
 async def test_repo_node_list_filters(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """list_enabled/disabled return correct subsets."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
@@ -461,13 +475,14 @@ async def test_repo_node_list_filters(
 #   LINKS: PostgresNodeRepository.update
 # END_CONTRACT: test_repo_node_update
 async def test_repo_node_update(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
-    """update persists all mutable fields (including ip — V1 cloud lifecycle relies on this)."""
+    """Update persists all mutable fields (including ip — V1 cloud lifecycle relies on this)."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
     # Insert with ip="" mirroring the tmp-reservation row (NewNode cloud defaults).
     persisted = await repo.insert(
-        NewNode(hostname="", ncpus=None, enabled=False, cloud="aws")
+        NewNode(hostname="", ncpus=None, enabled=False, cloud="aws"),
     )
 
     # Flip to enabled=True + real hostname/ncpus via update (the V1 single-row lifecycle).
@@ -480,7 +495,7 @@ async def test_repo_node_update(
             cloud="azure",
             username="admin",
             port=2222,
-        )
+        ),
     )
     n = await repo.get_by_id(persisted.node_id)
     assert n is not None
@@ -502,7 +517,8 @@ async def test_repo_node_update(
 #   LINKS: PostgresNodeRepository.insert
 # END_CONTRACT: test_repo_node_tmp_via_insert
 async def test_repo_node_tmp_via_insert(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """insert(NewNode(cloud=..., enabled=False)) inserts a tmp row with ip="" and node_id."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
@@ -525,14 +541,15 @@ async def test_repo_node_tmp_via_insert(
 #   LINKS: PostgresNodeRepository.count_by_cloud, count_by_status
 # END_CONTRACT: test_repo_node_count
 async def test_repo_node_count(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """Count aggregations work correctly."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
     await repo.insert(NewNode(hostname="10.0.0.1", ncpus=2, cloud="aws", enabled=True))
     await repo.insert(NewNode(hostname="10.0.0.2", ncpus=2, cloud="aws", enabled=False))
     await repo.insert(
-        NewNode(hostname="10.0.0.3", ncpus=2, cloud="azure", enabled=True)
+        NewNode(hostname="10.0.0.3", ncpus=2, cloud="azure", enabled=True),
     )
 
     clouds = await repo.count_by_cloud()
@@ -552,7 +569,8 @@ async def test_repo_node_count(
 #   LINKS: PostgresNodeRepository.get_by_ids
 # END_CONTRACT: test_repo_node_get_by_ids
 async def test_repo_node_get_by_ids(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """Batch get_by_ids returns only matching nodes keyed by NodeId."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
@@ -575,12 +593,13 @@ async def test_repo_node_get_by_ids(
 #   LINKS: PostgresNodeRepository.get_by_id
 # END_CONTRACT: test_repo_node_get_by_id
 async def test_repo_node_get_by_id(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """get_by_id returns node by primary key, None for missing id."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
     persisted = await repo.insert(
-        NewNode(hostname="10.0.0.20", ncpus=4, enabled=True, cloud="aws")
+        NewNode(hostname="10.0.0.20", ncpus=4, enabled=True, cloud="aws"),
     )
 
     fetched = await repo.get_by_id(persisted.node_id)
@@ -595,7 +614,8 @@ async def test_repo_node_get_by_id(
 
 
 async def test_repo_node_get_by_ids_empty(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """get_by_ids([]) returns empty dict."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
@@ -610,7 +630,8 @@ async def test_repo_node_get_by_ids_empty(
 #   LINKS: PostgresNodeRepository.list_all
 # END_CONTRACT: test_repo_node_list_all_ordered_by_node_id
 async def test_repo_node_list_all_ordered_by_node_id(
-    pg_conn: pg8000.native.Connection, pg_executor: ThreadPoolExecutor
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
 ) -> None:
     """list_all returns nodes ordered by node_id ascending."""
     repo = PostgresNodeRepository(pg_conn, pg_executor)
@@ -636,10 +657,10 @@ async def test_repo_node_list_all_ordered_by_node_id(
 #   LINKS: PostgresUnitOfWork
 # END_CONTRACT: test_uow_integration
 async def test_uow_integration(
-    _db_config: PostgresDbConfig, _init_schema: None
+    _db_config: PostgresDbConfig,
+    _init_schema: None,
 ) -> None:
     """UoW creates repos from config, commit persists, exit closes."""
-
     config: PostgresDbConfig = _db_config
 
     async with PostgresUnitOfWork(config, MessageBus()) as uow:
@@ -668,16 +689,16 @@ async def test_uow_integration(
 #   LINKS: PostgresUnitOfWork
 # END_CONTRACT: test_uow_rollback_integration
 async def test_uow_rollback_integration(
-    _db_config: PostgresDbConfig, _init_schema: None
+    _db_config: PostgresDbConfig,
+    _init_schema: None,
 ) -> None:
     """Uncommitted changes are lost on rollback."""
-
     config: PostgresDbConfig = _db_config
 
     with pytest.raises(ValueError):
         async with PostgresUnitOfWork(config, MessageBus()) as uow:
             persisted = await uow.nodes.insert(
-                NewNode(hostname="10.0.0.99", ncpus=2, enabled=True)
+                NewNode(hostname="10.0.0.99", ncpus=2, enabled=True),
             )
             raise ValueError("simulated error")
 

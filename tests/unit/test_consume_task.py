@@ -144,7 +144,12 @@ class TestConsumeTask:
         """Permanent-only errors -> save DONE with error, tracker discarded, returns True."""
         session_mock = SimpleNamespace(ip="[IP]")
         mock_output_downloader.download_outputs = AsyncMock(
-            return_value=("", "", [], [("/remote/file", OSError("Connection refused"))])
+            return_value=(
+                "",
+                "",
+                [],
+                [("/remote/file", OSError("Connection refused"))],
+            ),
         )
 
         uow = AsyncMock()
@@ -197,7 +202,7 @@ class TestConsumeTask:
                 "",
                 [("/remote/file", SFTPFailure("transient blip"))],
                 [],
-            )
+            ),
         )
 
         uow = AsyncMock()
@@ -244,7 +249,7 @@ class TestConsumeTask:
         transient = [("/remote/a", SFTPFailure("transient"))]
         permanent = [("/remote/b", OSError("permanent missing"))]
         mock_output_downloader.download_outputs = AsyncMock(
-            return_value=("", "", transient, permanent)
+            return_value=("", "", transient, permanent),
         )
 
         uow = AsyncMock()

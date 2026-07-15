@@ -1,3 +1,4 @@
+"""Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion."""
 # FILE: yascheduler/application/deallocate_nodes.py
 # VERSION: 4.10.0
 # START_MODULE_CONTRACT
@@ -54,10 +55,12 @@ async def deallocate_node(
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> None:
+    """Disconnect and cloud-deallocate a single node."""
     if repository.contains(node.node_id):
         await repository.disconnect(node.node_id)
         logger.debug(
-            "DISCONNECT", extra={"node_id": node.node_id, "hostname": node.hostname}
+            "DISCONNECT",
+            extra={"node_id": node.node_id, "hostname": node.hostname},
         )
     if node.cloud:
         # START_BLOCK_DISABLE
@@ -99,20 +102,19 @@ async def deallocate_node(
             async with uow_factory() as uow:
                 await uow.nodes.remove(node.node_id)
                 await uow.commit()
-        except Exception as remove_err:
+        except Exception:
             # Cloud VM is already gone; the disabled DB row is stale. Log
             # loudly so operators can reconcile manually. Not re-raised: the
             # cloud delete succeeded, and the next cycle's deallocate_node
             # will re-attempt (cloud-SDK delete-idempotency dependent) plus
             # this remove.
-            logger.error(
-                "node remove failed: node_id=%s hostname=%s cloud=%s err=%s "
+            logger.exception(
+                "node remove failed: node_id=%s hostname=%s cloud=%s "
                 "— VM is deleted but DB row left disabled; "
                 "manual reconciliation needed",
                 node.node_id,
                 node.hostname,
                 node.cloud,
-                remove_err,
             )
         # END_BLOCK_REMOVE
 
@@ -133,6 +135,7 @@ async def deallocate_nodes(
     config_clouds: Sequence[CloudConfig],
     idle_machines: dict[NodeId, float],
 ) -> list[Node]:
+    """Disable idle cloud nodes exceeding tolerance and return their Node objects for VM deletion."""
     # START_BLOCK_DISABLE_IDLE
     async with uow_factory() as uow:
         running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
@@ -169,11 +172,13 @@ async def deallocate_nodes(
     # END_BLOCK_DISABLE_IDLE
 
     # START_BLOCK_COLLECT_DISABLED
+    # Note: intermediate var is required — inlining the return inside the
+    # async-with makes pyright/mypy infer an implicit None fall-through.
     async with uow_factory() as uow:
         free_disabled_nodes = [
             node
             for node in await uow.nodes.list_disabled()
             if node.node_id not in busy_node_ids and node.cloud
         ]
-    return free_disabled_nodes
+    return free_disabled_nodes  # noqa: RET504
     # END_BLOCK_COLLECT_DISABLED

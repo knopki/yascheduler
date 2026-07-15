@@ -58,7 +58,10 @@ class TestMessageBus:
     async def test_dispatch_with_no_handlers(self) -> None:
         bus = MessageBus()
         event = TaskFailed(
-            task_id=TaskId(1), webhook_url=None, webhook_custom_params={}, reason="err"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            reason="err",
         )
         await bus.dispatch([event])  # no error raised
 
@@ -131,7 +134,7 @@ class TestUoWEventDispatch:
     """Tests verifying UoW event dispatch flow via MessageBus."""
 
     async def test_commit_dispatches_events_via_bus(self) -> None:
-        """commit calls publish_events which dispatches via bus."""
+        """Commit calls publish_events which dispatches via bus."""
         bus = MessageBus()
         dispatched: list[object] = []
 
@@ -186,7 +189,7 @@ class TestUoWEventDispatch:
         assert dispatched == [event]
 
     async def test_rollback_clears_without_dispatch(self) -> None:
-        """rollback clears saved tasks without dispatching events."""
+        """Rollback clears saved tasks without dispatching events."""
         bus = MessageBus()
         dispatched: list[object] = []
 

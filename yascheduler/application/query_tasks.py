@@ -1,3 +1,4 @@
+"""Read-only task query by statuses or job IDs."""
 # FILE: yascheduler/application/query_tasks.py
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
@@ -46,9 +47,11 @@ async def query_tasks(
     statuses: Sequence[TaskStatus] | None,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> tuple[list[Task], dict[NodeId, Node]]:
+    """Read-only task query by statuses XOR job IDs within a single UoW; returns tasks alongside their allocated nodes."""
     # START_BLOCK_VALIDATE_INPUT
     if jobs and statuses:
-        raise ValueError("jobs and statuses are mutually exclusive")
+        msg = "jobs and statuses are mutually exclusive"
+        raise ValueError(msg)
     # END_BLOCK_VALIDATE_INPUT
 
     # START_BLOCK_EMPTY_DISPATCH

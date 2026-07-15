@@ -1,3 +1,4 @@
+"""yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output."""
 # FILE: yascheduler/entrypoints/cli/show_nodes.py
 # VERSION: 1.5.0
 # START_MODULE_CONTRACT
@@ -48,6 +49,8 @@ if TYPE_CHECKING:
     from yascheduler.domain import Task
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_SSH_PORT = 22
 
 
 @dataclass(frozen=True)
@@ -115,9 +118,8 @@ def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
     add_config_arg(parser)
     add_log_level_arg(parser, default="WARNING")
     # START_BLOCK_PARSE_ARGS
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
     # END_BLOCK_PARSE_ARGS
-    return args
 
 
 # START_CONTRACT: _fetch_nodes_view
@@ -163,7 +165,7 @@ async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
                 updated_at=node.updated_at,
                 task_id=task.task_id if task else None,
                 label=task.label if task else None,
-            )
+            ),
         )
     # END_BLOCK_JOIN
     return rows
@@ -213,7 +215,7 @@ def _render_nodes_table(rows: list[_NodeView]) -> str:
         return [
             str(row.node_id),
             row.hostname,
-            "-" if row.port == 22 else str(row.port),
+            "-" if row.port == _DEFAULT_SSH_PORT else str(row.port),
             "MAX" if row.ncpus is None else str(row.ncpus),
             "yes" if row.enabled else "no",
             "-" if row.cloud is None else row.cloud,
@@ -221,9 +223,7 @@ def _render_nodes_table(rows: list[_NodeView]) -> str:
             "-" if row.label is None else row.label,
         ]
 
-    all_rows = [headers]
-    for r in rows:
-        all_rows.append(_cells(r))
+    all_rows = [headers] + [_cells(r) for r in rows]
     col_widths = [
         max(len(all_rows[i][col_idx]) for i in range(len(all_rows)))
         for col_idx in range(len(headers))
@@ -297,12 +297,12 @@ async def _show_nodes_async(argv: list[str] | None) -> None:
             rows = await _fetch_nodes_view(uow)
         rows = _filter_rows(rows, args)
         if args.json:
-            print(_render_nodes_json(rows))
+            sys.stdout.write(f"{_render_nodes_json(rows)}\n")
         else:
-            print(_render_nodes_table(rows))
+            sys.stdout.write(f"{_render_nodes_table(rows)}\n")
         # END_BLOCK_ORCHESTRATE
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
 
@@ -315,6 +315,7 @@ async def _show_nodes_async(argv: list[str] | None) -> None:
 #   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
 # END_CONTRACT: show_nodes
 def show_nodes(argv: list[str] | None = None) -> None:
+    """Sync entry point — run _show_nodes_async via asyncio."""
     asyncio.run(_show_nodes_async(argv))
 
 

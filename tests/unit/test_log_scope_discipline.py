@@ -83,30 +83,30 @@ def test_no_injected_logger_in_collaborator_constructors() -> None:
                 if isinstance(item, ast.FunctionDef) and item.name == "__init__":
                     # Skip 'self' (first arg)
                     args = item.args
-                    all_arg_names: list[str] = []
-                    for arg in args.args:
-                        all_arg_names.append(arg.arg)
-                    for arg in args.posonlyargs:
-                        all_arg_names.append(arg.arg)
-                    for arg in args.kwonlyargs:
-                        all_arg_names.append(arg.arg)
+                    all_arg_names: list[str] = [arg.arg for arg in args.args]
+                    all_arg_names.extend(arg.arg for arg in args.posonlyargs)
+                    all_arg_names.extend(arg.arg for arg in args.kwonlyargs)
                     if "log" in all_arg_names:
                         errors.append(
                             f"{rel_path}: {class_name}.__init__ accepts "
-                            f"a parameter named 'log'"
+                            f"a parameter named 'log'",
                         )
                     break
 
             # Check class-level annotations for 'log' field (frozen dataclass)
             for item in node.body:
-                if isinstance(item, ast.AnnAssign) and isinstance(
-                    item.target, ast.Name
+                if (
+                    isinstance(item, ast.AnnAssign)
+                    and isinstance(
+                        item.target,
+                        ast.Name,
+                    )
+                    and item.target.id == "log"
                 ):
-                    if item.target.id == "log":
-                        errors.append(
-                            f"{rel_path}: {class_name} has a class-level "
-                            f"'log' annotation (frozen dataclass field)"
-                        )
+                    errors.append(
+                        f"{rel_path}: {class_name} has a class-level "
+                        f"'log' annotation (frozen dataclass field)",
+                    )
 
     assert not errors, (
         "Collaborator constructor 'log' parameter violations:\n" + "\n".join(errors)
@@ -151,12 +151,16 @@ class CloudProvisionerImpl:
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "CloudProvisionerImpl":
             for item in node.body:
-                if isinstance(item, ast.AnnAssign) and isinstance(
-                    item.target, ast.Name
+                if (
+                    isinstance(item, ast.AnnAssign)
+                    and isinstance(
+                        item.target,
+                        ast.Name,
+                    )
+                    and item.target.id == "log"
                 ):
-                    if item.target.id == "log":
-                        assert True
-                        return
+                    assert True
+                    return
             assert False, "Did not find log annotation"
 
 
@@ -187,7 +191,8 @@ def _find_extra_keys_from_ast(
             keys: set[str] = set()
             for key_node in kw.value.keys:
                 if isinstance(key_node, ast.Constant) and isinstance(
-                    key_node.value, str
+                    key_node.value,
+                    str,
                 ):
                     keys.add(key_node.value)
             if keys:
@@ -225,7 +230,7 @@ def test_no_extra_key_collision_with_native_attrs() -> None:
             for key in sorted(colliding):
                 errors.append(
                     f"{rel}:{lineno}: extra key {key!r} collides with native "
-                    f"LogRecord attribute in call: {call_text}"
+                    f"LogRecord attribute in call: {call_text}",
                 )
     assert not errors, (
         "Extra-key collisions with native LogRecord attributes:\n" + "\n".join(errors)

@@ -1,3 +1,4 @@
+"""Shared daemon core — configure_logger and run_daemon, consumed by all three daemon entry points (daemonize, daemon_systemd, daemon_sysv)."""
 # FILE: yascheduler/entrypoints/cli/daemon_common.py
 # VERSION: 1.3.0
 # START_MODULE_CONTRACT
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
 #   LINKS: M-DAEMON-COMMON
 # END_CONTRACT: configure_logger
 def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
+    """Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers)."""
     # START_BLOCK_ROOT_HANDLERS
     root = logging.getLogger()
     root.setLevel(level)
@@ -80,6 +82,7 @@ def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
 #   LINKS: M-DAEMON-COMMON, M-DI, M-APPLICATION-ORCHESTRATOR
 # END_CONTRACT: run_daemon
 async def run_daemon(config: Config, logger: logging.Logger) -> None:
+    """Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator."""
     # START_BUILD_ORCHESTRATOR
     orch = await make_daemon(config)
     # END_BUILD_ORCHESTRATOR
@@ -97,12 +100,12 @@ async def run_daemon(config: Config, logger: logging.Logger) -> None:
         sig: signal.Signals,
     ) -> None:
         signame = signal.strsignal(sig)
-        logger.info(f"Received signal {signame}")
+        logger.info("Received signal %s", signame)
         if sig in [signal.SIGTERM, signal.SIGINT]:
             await orch.stop()
             shielded_tasks = [*shield, asyncio.current_task()]
             tasks = [t for t in asyncio.all_tasks() if t not in shielded_tasks]
-            logger.info(f"Cancelling {len(tasks)} outstanding tasks")
+            logger.info("Cancelling %d outstanding tasks", len(tasks))
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)

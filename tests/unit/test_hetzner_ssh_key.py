@@ -23,9 +23,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 hcloud = pytest.importorskip("hcloud")
-from hcloud import APIException  # noqa: E402
+from hcloud import APIException
 
-from yascheduler.infra.cloud.providers.hetzner import get_ssh_key_id  # noqa: E402
+from yascheduler.infra.cloud.providers.hetzner import get_ssh_key_id
 
 
 @pytest.fixture(autouse=True)
@@ -158,11 +158,13 @@ class TestGetSshKeyIdUniqueness:
         )
 
         key = _make_key()
-        with patch(
-            "yascheduler.infra.cloud.providers.hetzner.get_key_name",
-            return_value="yakey-abc",
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner.get_key_name",
+                return_value="yakey-abc",
+            ),
+            pytest.raises(APIException),
         ):
-            with pytest.raises(APIException):
-                get_ssh_key_id(client, key)
+            get_ssh_key_id(client, key)
 
         client.ssh_keys.get_by_fingerprint.assert_not_called()

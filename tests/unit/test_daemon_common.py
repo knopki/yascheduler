@@ -163,7 +163,9 @@ class TestRunDaemonShape:
             loop = asyncio.get_running_loop()
 
             def fake_add_signal_handler(
-                sig: object, handler: object, *args: object
+                sig: object,
+                handler: object,
+                *args: object,
             ) -> None:
                 registered.append((sig, handler))
 
@@ -203,7 +205,9 @@ class TestRunDaemonShape:
             loop = asyncio.get_running_loop()
 
             def fake_add_signal_handler(
-                sig: object, handler: object, *args: object
+                sig: object,
+                handler: object,
+                *args: object,
             ) -> None:
                 registered[_signal.Signals(sig)] = handler
 

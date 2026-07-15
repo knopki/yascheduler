@@ -1,3 +1,4 @@
+"""Application layer facade — sole public surface for cross-layer consumers and composition root."""
 # FILE: yascheduler/application/__init__.py
 # VERSION: 1.5.0
 # START_MODULE_CONTRACT

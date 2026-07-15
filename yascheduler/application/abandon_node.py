@@ -1,3 +1,4 @@
+"""Abandon never-connected cloud node use case — VM delete + DB-row remove + discard tracker entry linked to the node."""
 # FILE: yascheduler/application/abandon_node.py
 # VERSION: 2.3.0
 # START_MODULE_CONTRACT
@@ -51,6 +52,7 @@ async def abandon_node(
     uow_factory: Callable[[], AbstractUnitOfWork],
     tracker: AllocationTracker,
 ) -> None:
+    """Clean up a cloud node that never established its SSH connection and discard the tracker entry linked to the node."""
     # START_BLOCK_CLOUD_DELETE
     if node.cloud is not None:
         try:
@@ -65,7 +67,7 @@ async def abandon_node(
                     "err": err,
                 },
             )
-            logger.error("cloud delete failed for node %s: %s", node.hostname, err)
+            logger.exception("cloud delete failed for node %s", node.hostname)
     # END_BLOCK_CLOUD_DELETE
 
     # START_BLOCK_REMOVE_ROW
@@ -78,11 +80,10 @@ async def abandon_node(
             "REMOVE_FAILED",
             extra={"node_id": node.node_id, "hostname": node.hostname, "err": err},
         )
-        logger.error(
-            "abandon_node remove failed: node_id=%s hostname=%s err=%s",
+        logger.exception(
+            "abandon_node remove failed: node_id=%s hostname=%s",
             node.node_id,
             node.hostname,
-            err,
         )
         raise
     # END_BLOCK_REMOVE_ROW
@@ -99,6 +100,8 @@ async def abandon_node(
             },
         )
         logger.warning(
-            "ambiguous tracker: node %s has %d entries", node.hostname, removed
+            "ambiguous tracker: node %s has %d entries",
+            node.hostname,
+            removed,
         )
     # END_BLOCK_DISCARD_BY_NODE

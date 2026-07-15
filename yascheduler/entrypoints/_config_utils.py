@@ -51,4 +51,5 @@ def opt_str_val(value: object) -> str | None:
         return None
     if isinstance(value, str):
         return value
-    raise ValueError(f"expected Optional[str], got {type(value).__name__}")
+    msg = f"expected Optional[str], got {type(value).__name__}"
+    raise ValueError(msg)

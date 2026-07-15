@@ -1,3 +1,4 @@
+"""INI config parsing — adapter between ConfigParser and domain/infra types."""
 # FILE: yascheduler/entrypoints/config_parser.py
 # VERSION: 1.7.0
 # START_MODULE_CONTRACT
@@ -34,13 +35,14 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Add {prefix}_jump_port parsing with range validation (1–65535) to all four per-prefix cloud parsers (_parse_azure_section, _parse_hetzner_section, _parse_upcloud_section, _parse_vastai_section). jump_port auto-registers via DTO field introspection (no _CLOUD_FIELD_RULES change needed).
-#   PREVIOUS_CHANGE: v1.6.0 - _parse_remote_section reads optional [remote] jump_port key (getint, fallback 22) with range validation 1–65535.
+#   LAST_CHANGE: v1.7.0 - Add {prefix}_jump_port parsing with range validation (1-65535) to all four per-prefix cloud parsers (_parse_azure_section, _parse_hetzner_section, _parse_upcloud_section, _parse_vastai_section). jump_port auto-registers via DTO field introspection (no _CLOUD_FIELD_RULES change needed).
+#   PREVIOUS_CHANGE: v1.6.0 - _parse_remote_section reads optional [remote] jump_port key (getint, fallback 22) with range validation 1-65535.
 # END_CHANGE_SUMMARY
 
 from __future__ import annotations
 
 import dataclasses
+from configparser import ConfigParser
 from functools import partial
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
@@ -54,6 +56,7 @@ from yascheduler.domain.engine import (
     RemoteArchiveDeploy,
 )
 from yascheduler.domain.settings import LocalSettings, RemoteDefaults, _int_or_default
+from yascheduler.entrypoints.config import Config
 from yascheduler.infra.cloud.cloud_configs import (
     AzureImageReference,
     ConfigCloudAzure,
@@ -67,9 +70,8 @@ from ._config_utils import warn_unknown_fields
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from configparser import ConfigParser, SectionProxy
+    from configparser import SectionProxy
 
-    from yascheduler.entrypoints.config import Config
     from yascheduler.infra.cloud.cloud_configs import ConfigCloud
 
 
@@ -83,16 +85,27 @@ def _check_spawn(engine: Engine, value: str) -> None:
 
 def _check_check_(engine: Engine) -> None:
     if not engine.check_cmd and not engine.check_pname:
-        raise ValueError(
-            f"Engine {engine.name} has no *check_cmd* or *check_pname* set"
-        )
+        msg = f"Engine {engine.name} has no *check_cmd* or *check_pname* set"
+        raise ValueError(msg)
 
 
 def _check_at_least_one_elem(
-    engine: Engine, field_name: str, value: Sequence[object] | None
+    engine: Engine,
+    field_name: str,
+    value: Sequence[object] | None,
 ) -> None:
     if not value or len(value) < 1:
-        raise ValueError(f"Engine {engine.name} has no *{field_name}* config set")
+        msg = f"Engine {engine.name} has no *{field_name}* config set"
+        raise ValueError(msg)
+
+
+def _check_port(name: str, value: int) -> int:
+    min_port = 1
+    max_port = 65535
+    if value < min_port or value > max_port:
+        msg = f"{name} must be between {min_port} and {max_port}, got {value}"
+        raise ValueError(msg)
+    return value
 
 
 # START_CONTRACT: engine_valid_fields
@@ -103,6 +116,7 @@ def _check_at_least_one_elem(
 #   LINKS: M-DOMAIN-ENGINE, M-ENTRYPOINTS-CONFIG
 # END_CONTRACT: engine_valid_fields
 def engine_valid_fields() -> Sequence[str]:
+    """Return valid INI keys for an [engine."""
     exclude_names = ["name", "deployable"]
     include_names = [
         "deploy_local_files",
@@ -123,6 +137,7 @@ def engine_valid_fields() -> Sequence[str]:
 #   LINKS: M-DOMAIN-ENGINE, M-ENTRYPOINTS-CONFIG
 # END_CONTRACT: parse_engine_section
 def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
+    """Build a frozen Engine from a single [engine."""
     warn_unknown_fields(engine_valid_fields(), sec)
 
     def gettuple(key: str) -> tuple[str, ...]:
@@ -146,7 +161,8 @@ def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
 
     spawn = sec.get("spawn")
     if spawn is None:
-        raise ValueError(f"Engine {name} has no spawn command")
+        msg = f"Engine {name} has no spawn command"
+        raise ValueError(msg)
     input_files = gettuple("input_files")
     output_files = gettuple("output_files")
 
@@ -182,6 +198,7 @@ def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
 #   LINKS: M-DOMAIN-ENGINE, M-ENTRYPOINTS-CONFIG
 # END_CONTRACT: parse_engines
 def parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository:
+    """Parse all engine."""
     snames = filter(lambda x: x.startswith("engine."), cfg.sections())
     data: dict[str, Engine] = {}
     for sname in snames:
@@ -197,7 +214,8 @@ def parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository:
 
 def _check_az_user(username: str) -> None:
     if username == "root":
-        raise ValueError("Root user is forbidden on Azure")
+        msg = "Root user is forbidden on Azure"
+        raise ValueError(msg)
 
 
 def _fmt_key(prefix: str, name: str) -> str:
@@ -227,6 +245,7 @@ _VASTAI_INCLUDES = ["user", "jump_user"]
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: cloud_valid_fields
 def cloud_valid_fields(prefix: str) -> Sequence[str]:
+    """Return valid INI keys for a [clouds] sub-section keyed by a cloud provider prefix."""
     exclude_names, include_names = _CLOUD_FIELD_RULES[prefix]
     dto_cls = _CLOUD_DTO_BY_PREFIX[prefix]
     return [
@@ -260,14 +279,14 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
 
     max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
     if max_nodes < 0:
-        raise ValueError(f"az max_nodes must be >= 0, got {max_nodes}")
+        msg = f"az max_nodes must be >= 0, got {max_nodes}"
+        raise ValueError(msg)
     idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=300)
     if idle_tolerance < 1:
-        raise ValueError(f"az idle_tolerance must be >= 1, got {idle_tolerance}")
+        msg = f"az idle_tolerance must be >= 1, got {idle_tolerance}"
+        raise ValueError(msg)
 
-    jump_port = sec.getint(fmt("jump_port"), fallback=22)
-    if jump_port < 1 or jump_port > 65535:
-        raise ValueError(f"az jump_port must be between 1 and 65535, got {jump_port}")
+    jump_port = _check_port("az jump_port", sec.getint(fmt("jump_port"), fallback=22))
 
     return ConfigCloudAzure(
         tenant_id=sec.get(fmt("tenant_id"), ""),
@@ -308,16 +327,17 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
 
     max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
     if max_nodes < 0:
-        raise ValueError(f"hetzner max_nodes must be >= 0, got {max_nodes}")
+        msg = f"hetzner max_nodes must be >= 0, got {max_nodes}"
+        raise ValueError(msg)
     idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=120)
     if idle_tolerance < 1:
-        raise ValueError(f"hetzner idle_tolerance must be >= 1, got {idle_tolerance}")
+        msg = f"hetzner idle_tolerance must be >= 1, got {idle_tolerance}"
+        raise ValueError(msg)
 
-    jump_port = sec.getint(fmt("jump_port"), fallback=22)
-    if jump_port < 1 or jump_port > 65535:
-        raise ValueError(
-            f"hetzner jump_port must be between 1 and 65535, got {jump_port}"
-        )
+    jump_port = _check_port(
+        "hetzner jump_port",
+        sec.getint(fmt("jump_port"), fallback=22),
+    )
 
     return ConfigCloudHetzner(
         token=sec.get(fmt("token"), ""),
@@ -351,16 +371,17 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
 
     max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
     if max_nodes < 0:
-        raise ValueError(f"upcloud max_nodes must be >= 0, got {max_nodes}")
+        msg = f"upcloud max_nodes must be >= 0, got {max_nodes}"
+        raise ValueError(msg)
     idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=120)
     if idle_tolerance < 1:
-        raise ValueError(f"upcloud idle_tolerance must be >= 1, got {idle_tolerance}")
+        msg = f"upcloud idle_tolerance must be >= 1, got {idle_tolerance}"
+        raise ValueError(msg)
 
-    jump_port = sec.getint(fmt("jump_port"), fallback=22)
-    if jump_port < 1 or jump_port > 65535:
-        raise ValueError(
-            f"upcloud jump_port must be between 1 and 65535, got {jump_port}"
-        )
+    jump_port = _check_port(
+        "upcloud jump_port",
+        sec.getint(fmt("jump_port"), fallback=22),
+    )
 
     return ConfigCloudUpcloud(
         login=sec.get(fmt("login"), ""),
@@ -389,33 +410,39 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
     fmt = partial(_fmt_key, prefix)
 
     warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
+    kibi = 1024
 
     disk_gb = sec.getint(fmt("disk_gb"), fallback=80)
     if disk_gb < 1:
-        raise ValueError(f"vastai disk_gb must be >= 1, got {disk_gb}")
-    min_vram_mb = sec.getint(fmt("min_vram_mb"), fallback=80 * 1024)
-    if min_vram_mb < 1024:
-        raise ValueError(f"vastai min_vram_mb must be >= 1024, got {min_vram_mb}")
+        msg = f"vastai disk_gb must be >= 1, got {disk_gb}"
+        raise ValueError(msg)
+    min_vram_mb = sec.getint(fmt("min_vram_mb"), fallback=80 * kibi)
+    if min_vram_mb < kibi:
+        msg = f"vastai min_vram_mb must be >= 1024, got {min_vram_mb}"
+        raise ValueError(msg)
     num_gpus = sec.getint(fmt("num_gpus"), fallback=1)
     if num_gpus < 1:
-        raise ValueError(f"vastai num_gpus must be >= 1, got {num_gpus}")
+        msg = f"vastai num_gpus must be >= 1, got {num_gpus}"
+        raise ValueError(msg)
     max_price_per_hr = sec.getfloat(fmt("max_price_per_hr"), fallback=1.50)
     if max_price_per_hr < 0:
+        msg = f"vastai max_price_per_hr must be >= 0, got {max_price_per_hr}"
         raise ValueError(
-            f"vastai max_price_per_hr must be >= 0, got {max_price_per_hr}"
+            msg,
         )
     max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
     if max_nodes < 0:
-        raise ValueError(f"vastai max_nodes must be >= 0, got {max_nodes}")
+        msg = f"vastai max_nodes must be >= 0, got {max_nodes}"
+        raise ValueError(msg)
     idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=300)
     if idle_tolerance < 1:
-        raise ValueError(f"vastai idle_tolerance must be >= 1, got {idle_tolerance}")
+        msg = f"vastai idle_tolerance must be >= 1, got {idle_tolerance}"
+        raise ValueError(msg)
 
-    jump_port = sec.getint(fmt("jump_port"), fallback=22)
-    if jump_port < 1 or jump_port > 65535:
-        raise ValueError(
-            f"vastai jump_port must be between 1 and 65535, got {jump_port}"
-        )
+    jump_port = _check_port(
+        "vastai jump_port",
+        sec.getint(fmt("jump_port"), fallback=22),
+    )
 
     return ConfigCloudVastAI(
         api_key=sec.get(fmt("api_key"), ""),
@@ -487,6 +514,7 @@ _ALL_CLOUD_VALID_FIELDS: list[str] = [
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: parse_cloud_section
 def parse_cloud_section(sec: SectionProxy, prefix: str) -> ConfigCloud:
+    """Dispatch a [clouds] sub-section to its per-prefix parser via the registry."""
     return CLOUD_CONFIG_PARSERS[prefix](sec)
 
 
@@ -498,6 +526,7 @@ def parse_cloud_section(sec: SectionProxy, prefix: str) -> ConfigCloud:
 #   LINKS: M-CLOUD-CONFIGS, M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: parse_clouds
 def parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[ConfigCloud]:
+    """Build the list of ConfigCloud DTOs from a [clouds] section, inheriting remote."""
     if not cfg.has_section("clouds"):
         cfg.add_section("clouds")
     sec = cfg["clouds"]
@@ -571,28 +600,35 @@ def _parse_local_section(sec: SectionProxy) -> LocalSettings:
         engines_dir=Path(sec.get("engines_dir", str(data_dir / "engines"))).resolve(),
         keys_dir=Path(sec.get("keys_dir", str(data_dir / "keys"))).resolve(),
         webhook_reqs_limit=_int_or_default(
-            "webhook_reqs_limit", sec.getint("webhook_reqs_limit")
+            "webhook_reqs_limit",
+            sec.getint("webhook_reqs_limit"),
         ),
         webhook_url=sec.get("webhook_url"),
         conn_machine_limit=_int_or_default(
-            "conn_machine_limit", sec.getint("conn_machine_limit")
+            "conn_machine_limit",
+            sec.getint("conn_machine_limit"),
         ),
         conn_machine_pending=_int_or_default(
-            "conn_machine_pending", sec.getint("conn_machine_pending")
+            "conn_machine_pending",
+            sec.getint("conn_machine_pending"),
         ),
         allocate_limit=_int_or_default("allocate_limit", sec.getint("allocate_limit")),
         allocate_pending=_int_or_default(
-            "allocate_pending", sec.getint("allocate_pending")
+            "allocate_pending",
+            sec.getint("allocate_pending"),
         ),
         consume_limit=_int_or_default("consume_limit", sec.getint("consume_limit")),
         consume_pending=_int_or_default(
-            "consume_pending", sec.getint("consume_pending")
+            "consume_pending",
+            sec.getint("consume_pending"),
         ),
         deallocate_limit=_int_or_default(
-            "deallocate_limit", sec.getint("deallocate_limit")
+            "deallocate_limit",
+            sec.getint("deallocate_limit"),
         ),
         deallocate_pending=_int_or_default(
-            "deallocate_pending", sec.getint("deallocate_pending")
+            "deallocate_pending",
+            sec.getint("deallocate_pending"),
         ),
     )
 
@@ -619,9 +655,7 @@ def _parse_remote_section(sec: SectionProxy) -> RemoteDefaults:
     warn_unknown_fields(_remote_valid_fields(), sec)
     data_dir = PurePath(sec.get("data_dir", "./data"))
 
-    jump_port = sec.getint("jump_port", fallback=22)
-    if jump_port < 1 or jump_port > 65535:
-        raise ValueError(f"jump_port must be between 1 and 65535, got {jump_port}")
+    jump_port = _check_port("jump_port", sec.getint("jump_port", fallback=22))
 
     return RemoteDefaults(
         data_dir=data_dir,
@@ -643,10 +677,6 @@ def _parse_remote_section(sec: SectionProxy) -> RemoteDefaults:
 # END_CONTRACT: parse_config
 def parse_config(path: str | bytes | PurePath) -> Config:
     """Parse an INI config file (path or contents) into a frozen Config aggregate."""
-    from configparser import ConfigParser
-
-    from yascheduler.entrypoints.config import Config
-
     cfg = ConfigParser()
     cfg.read(path)
 

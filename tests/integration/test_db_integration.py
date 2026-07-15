@@ -153,7 +153,7 @@ async def test_enable_disable_node(
     """Toggle node enabled status and verify."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=None, enabled=False)
+            NewNode(hostname="10.0.0.1", ncpus=None, enabled=False),
         )
         await uow.commit()
 
@@ -211,13 +211,13 @@ async def test_count_aggregations(
     """Verify cloud and status aggregation queries."""
     async with uow_factory() as uow:
         await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=None, cloud="azure", enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=None, cloud="azure", enabled=True),
         )
         await uow.nodes.insert(
-            NewNode(hostname="10.0.0.2", ncpus=None, cloud="azure", enabled=False)
+            NewNode(hostname="10.0.0.2", ncpus=None, cloud="azure", enabled=False),
         )
         await uow.nodes.insert(
-            NewNode(hostname="10.0.0.3", ncpus=None, cloud="hetzner", enabled=True)
+            NewNode(hostname="10.0.0.3", ncpus=None, cloud="hetzner", enabled=True),
         )
         await uow.commit()
 
@@ -246,7 +246,7 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
     """Add a task and retrieve it; verify all fields including typed fields and JSONB extra."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=4, enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=4, enabled=True),
         )
         task = await uow.tasks.insert(
             NewTask(
@@ -254,7 +254,7 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
                 engine="fleur",
                 webhook_custom_params={},
                 extra={"param": 42},
-            )
+            ),
         )
         # Transition to a CHECK-valid RUNNING state via task.run.
         # A TO_DO + allocated_node_id save is rejected by the
@@ -297,7 +297,7 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         # Insert a node first so allocate_to(node) can bind a real node_id
         # (the DB FK allocated_node_id REFERENCES yascheduler_nodes(node_id)).
         node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.5", ncpus=4, enabled=True)
+            NewNode(hostname="10.0.0.5", ncpus=4, enabled=True),
         )
         task = await uow.tasks.insert(
             NewTask(
@@ -305,7 +305,7 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
                 engine="fleur",
                 webhook_custom_params={},
                 extra={"param": 42},
-            )
+            ),
         )
         await uow.commit()
         assert task.status == DomainTaskStatus.TO_DO
@@ -352,11 +352,10 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
 # END_CONTRACT: test_set_task_error
 async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """set_task_error embeds error in typed error field; without error extra is preserved."""
-
     # With error message
     async with uow_factory() as uow:
         task = await uow.tasks.insert(
-            NewTask(label="fail-job", engine="fleur", webhook_custom_params={})
+            NewTask(label="fail-job", engine="fleur", webhook_custom_params={}),
         )
         await uow.commit()
         task_id = task.task_id
@@ -386,7 +385,7 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     # Without error message (use a new task for clarity)
     async with uow_factory() as uow:
         task2 = await uow.tasks.insert(
-            NewTask(label="fail-job2", engine="fleur", webhook_custom_params={})
+            NewTask(label="fail-job2", engine="fleur", webhook_custom_params={}),
         )
         await uow.commit()
         task2_id = task2.task_id
@@ -427,7 +426,7 @@ async def test_get_tasks_by_status(
     async with uow_factory() as uow:
         await uow.tasks.insert(NewTask(label="todo", engine="fleur"))
         node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.7", ncpus=2, enabled=True)
+            NewNode(hostname="10.0.0.7", ncpus=2, enabled=True),
         )
         t2 = await uow.tasks.insert(NewTask(label="running", engine="fleur"))
         t3 = await uow.tasks.insert(NewTask(label="done", engine="fleur"))
@@ -441,7 +440,7 @@ async def test_get_tasks_by_status(
                 engine="fleur",
                 label="done",
                 status=DomainTaskStatus.DONE,
-            )
+            ),
         )
         await uow.commit()
 
@@ -460,7 +459,7 @@ async def test_get_tasks_by_status(
 
         # Multiple statuses
         multi = await uow.tasks.list_by_status(
-            {DomainTaskStatus.TO_DO, DomainTaskStatus.DONE}
+            {DomainTaskStatus.TO_DO, DomainTaskStatus.DONE},
         )
         assert len(multi) == 2
 
@@ -500,11 +499,11 @@ async def test_get_task_ids_by_node_id_and_status(
     """Filter task IDs by node_id and status."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(hostname="192.168.1.1", ncpus=4, enabled=True)
+            NewNode(hostname="192.168.1.1", ncpus=4, enabled=True),
         )
         node_id = node.node_id
         other_node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=4, enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=4, enabled=True),
         )
 
         t1 = await uow.tasks.insert(NewTask(label="x", engine="fleur"))
@@ -529,7 +528,8 @@ async def test_get_task_ids_by_node_id_and_status(
 
     async with uow_factory() as uow:
         ids = await uow.tasks.list_ids_by_node_id_and_status(
-            node_id, DomainTaskStatus.RUNNING
+            node_id,
+            DomainTaskStatus.RUNNING,
         )
         assert ids == [t1.task_id]
 
@@ -547,7 +547,7 @@ async def test_get_tasks_with_cloud_by_id_status(
     """Compose list_by_jobs + get_by_ids to get cloud attribute."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(hostname="10.0.0.1", ncpus=None, cloud="azure", enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=None, cloud="azure", enabled=True),
         )
         node_id = node.node_id
         await uow.commit()
@@ -669,7 +669,7 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('002')")
             conn.run(
@@ -677,11 +677,11 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
                 "node_id SERIAL PRIMARY KEY, ip VARCHAR(15) UNIQUE, "
                 "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
                 "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
-                "cloud VARCHAR(32) DEFAULT NULL)"
+                "cloud VARCHAR(32) DEFAULT NULL)",
             )
             conn.run(
                 "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
-                "VALUES ('provabc1234567', FALSE, 'aws')"
+                "VALUES ('provabc1234567', FALSE, 'aws')",
             )
             # Pre-create yascheduler_tasks at the 002-era schema (no
             # allocated_node_id) so apply_migrations runs 003 then 004
@@ -690,7 +690,7 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
-                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)",
             )
         finally:
             conn.close()
@@ -713,7 +713,7 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             try:
                 rows = conn.run(
                     "SELECT hostname, enabled, cloud FROM yascheduler_nodes "
-                    "WHERE cloud = 'aws'"
+                    "WHERE cloud = 'aws'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -727,11 +727,11 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, enabled, cloud) "
-                    "VALUES ('10.0.0.99', TRUE, 'aws')"
+                    "VALUES ('10.0.0.99', TRUE, 'aws')",
                 )
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, enabled, cloud) "
-                    "VALUES ('10.0.0.99', TRUE, 'hetzner')"
+                    "VALUES ('10.0.0.99', TRUE, 'hetzner')",
                 )
             finally:
                 conn.run("ROLLBACK")

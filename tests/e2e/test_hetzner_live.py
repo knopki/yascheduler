@@ -1,5 +1,5 @@
 # FILE: tests/e2e/test_hetzner_live.py
-# VERSION: 1.4.0
+# VERSION: 1.4.1
 # START_MODULE_CONTRACT
 #   PURPOSE: Real-Hetzner cloud-provider E2E test — autoscale -> allocate -> download -> idle-deallocate happy path against a live Hetzner Cloud account.
 #   SCOPE: opt-in env-gated test (YASCHEDULER_TEST_HETZNER=1 + token); drives make_daemon + _submit_async; asserts VM creation, both jobs DONE with matching outputs, idle deallocation, strong deletion via find_srv; guaranteed observed-IP cleanup with loud-fail-on-leak in finally.
@@ -12,7 +12,8 @@
 #   hetzner_config     - session-scoped Config fixture: temp INI with [db]/[local]/[remote]/[engine.test_shell]/[clouds](max_nodes=1, hetzner_package_upgrade=false)
 #   _ini_path_from_env - read YASCHEDULER_CONF_PATH published by hetzner_config
 #   _assert_vm_deleted - poll find_srv(client, ip) until None; pytest.fail naming the leaked IP otherwise
-#   _cleanup_observed  - best-effort hetzner_delete_node per observed IP, then strong _assert_vm_deleted per IP
+#   _delete_one_best_effort - delete a single VM best-effort (swallow+log errors) so caller's loop continues
+#   _cleanup_observed  - best-effort _delete_one_best_effort per observed IP, then strong _assert_vm_deleted per IP
 #   _submit_two_jobs   - submit 2 tasks via _submit_async in per-job temp CWDs with distinct payloads
 #   _poll_for_hetzner_node - poll uow.nodes.list_all() until a cloud=="hetzner" node appears; record its IP
 #   _wait_both_done    - poll until both tasks DONE, capturing RUNNING node.hostname snapshots
@@ -23,7 +24,8 @@
 # END_MODULE_MAP
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - switch-to-standard-logging: migrate _assert_cloud_done_log / _assert_cloud_delete_log off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS from yascheduler.shared.log).
+#   LAST_CHANGE: v1.4.1 - fix-perf203: extract _delete_one_best_effort helper to move try/except out of the per-IP loop body in _cleanup_observed (ruff PERF203); loop now just awaits the helper per IP, best-effort semantics unchanged.
+#   PREVIOUS_CHANGE: v1.4.0 - switch-to-standard-logging: migrate _assert_cloud_done_log / _assert_cloud_delete_log off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS from yascheduler.shared.log).
 #   PREVIOUS_CHANGE: v1.3.0 - reform-grace-logging slice 8: migrate _assert_cloud_done_log / _assert_cloud_delete_log from getMessage() substring matching to record.block/record.fields structured fields; remove _CLOUD_DONE_MARKER and _CLOUD_DELETE_MARKER constants; remove import re.
 #   PREVIOUS_CHANGE: v1.0.0 - add-hetzner-live-e2e: new opt-in env-gated real-Hetzner e2e exercising the cold-start autoscale -> allocate -> download -> idle-deallocate happy path through the real entrypoints (make_daemon, _submit_async) and asserting via uow_factory. Hetzner hcloud SDK is imported lazily inside helpers so module collection succeeds without the optional extra; the env gate (YASCHEDULER_TEST_HETZNER=1 + YASCHEDULER_CLOUDS_HETZNER_TOKEN) skips by default. Cleanup is observed-IP based with a loud-fail-on-leak finally; a strong find_srv deletion assertion complements DB-row removal. Refined via a live run: _poll_for_hetzner_node requires n.enabled (the tmp node inserted by _select_and_insert_tmp has cloud=hetzner/enabled=False with a placeholder IP); CLOUD_DELETE is asserted after _poll_node_gone (it is emitted by the idle-deallocate loop, not at completion); timeouts sized to the observed ~83s cold-start.
 # END_CHANGE_SUMMARY
@@ -79,12 +81,12 @@ _POLL_INTERVAL_S = 1.0
 def _cloud_env_or_skip() -> tuple[str, str, str, str]:
     if os.environ.get("YASCHEDULER_TEST_HETZNER") != "1":
         pytest.skip(
-            "YASCHEDULER_TEST_HETZNER != 1; set YASCHEDULER_TEST_HETZNER=1 to enable"
+            "YASCHEDULER_TEST_HETZNER != 1; set YASCHEDULER_TEST_HETZNER=1 to enable",
         )
     token = os.environ.get("YASCHEDULER_CLOUDS_HETZNER_TOKEN", "")
     if not token:
         pytest.skip(
-            "YASCHEDULER_CLOUDS_HETZNER_TOKEN unset/empty; set it to a real Hetzner API token"
+            "YASCHEDULER_CLOUDS_HETZNER_TOKEN unset/empty; set it to a real Hetzner API token",
         )
     server_type = os.environ.get("YASCHEDULER_CLOUDS_HETZNER_SERVER_TYPE", "cx23")
     location = os.environ.get("YASCHEDULER_CLOUDS_HETZNER_LOCATION", "hel1")
@@ -105,8 +107,8 @@ def _cloud_env_or_skip() -> tuple[str, str, str, str]:
 # END_CONTRACT: hetzner_config
 @pytest.fixture(scope="session")
 def hetzner_config(
-    tmp_path_factory: Any,  # noqa: ANN401
-    _db_config: Any,  # noqa: ANN401
+    tmp_path_factory: Any,
+    _db_config: Any,
     _init_schema: None,
 ) -> Config:
     token, server_type, location, image = _cloud_env_or_skip()
@@ -171,10 +173,8 @@ def hetzner_config(
 
     # START_BLOCK_ENV_CONFIG
     os.environ["YASCHEDULER_CONF_PATH"] = str(ini_path)
-    config = parse_config(str(ini_path))
+    return parse_config(str(ini_path))
     # END_BLOCK_ENV_CONFIG
-
-    return config
 
 
 # START_CONTRACT: _ini_path_from_env
@@ -189,7 +189,7 @@ def _ini_path_from_env() -> str:
     path = os.environ.get("YASCHEDULER_CONF_PATH")
     if not path:
         raise RuntimeError(
-            "YASCHEDULER_CONF_PATH unset; hetzner_config fixture must run first"
+            "YASCHEDULER_CONF_PATH unset; hetzner_config fixture must run first",
         )
     return path
 
@@ -204,7 +204,7 @@ def _ini_path_from_env() -> str:
 #   SIDE_EFFECTS: pytest.fail(...) if the VM is not deleted within _VM_DELETE_TIMEOUT_S; makes a Hetzner API list call per poll.
 #   LINKS: M-CLOUD-PROVIDER-HETZNER
 # END_CONTRACT: _assert_vm_deleted
-async def _assert_vm_deleted(client: Any, ip: str) -> None:  # noqa: ANN401
+async def _assert_vm_deleted(client: Any, ip: str) -> None:
     from yascheduler.infra.cloud.providers.hetzner import find_srv
 
     deadline = asyncio.get_running_loop().time() + _VM_DELETE_TIMEOUT_S
@@ -214,13 +214,45 @@ async def _assert_vm_deleted(client: Any, ip: str) -> None:  # noqa: ANN401
             return
         await asyncio.sleep(_POLL_INTERVAL_S)
     log.error(
-        "[hetzner_live][CLEANUP] VM %s was NOT deleted — manual cleanup required", ip
+        "[hetzner_live][CLEANUP] VM %s was NOT deleted — manual cleanup required",
+        ip,
     )
     pytest.fail(f"Hetzner VM {ip} was NOT deleted — manual cleanup required")
 
 
+# START_CONTRACT: _delete_one_best_effort
+#   PURPOSE: Delete a single VM via hetzner_delete_node, swallowing+logging any error so the caller's per-IP loop can continue.
+#   INPUTS: {
+#     cfg: ConfigCloudHetzner - provider config passed to hetzner_delete_node,
+#     ip: str - VM IP to delete,
+#     log: logging.Logger - logger
+#   }
+#   OUTPUTS: { None }
+#   SIDE_EFFECTS: Calls the real Hetzner delete API; logs (never re-raises) on failure.
+#   LINKS: M-CLOUD-PROVIDER-HETZNER, hetzner_delete_node
+# END_CONTRACT: _delete_one_best_effort
+async def _delete_one_best_effort(
+    cfg: ConfigCloudHetzner,
+    ip: str,
+    log: logging.Logger,
+) -> None:
+    from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
+
+    # START_BLOCK_BEST_EFFORT_DELETE
+    try:
+        await hetzner_delete_node(cfg, ip)
+    except Exception as err:
+        log.error(
+            "[hetzner_live][CLEANUP] hetzner_delete_node raised for ip=%s err=%s "
+            "— proceeding to deletion verification",
+            ip,
+            err,
+        )
+    # END_BLOCK_BEST_EFFORT_DELETE
+
+
 # START_CONTRACT: _cleanup_observed
-#   PURPOSE: Best-effort delete every observed VM IP via hetzner_delete_node (per-IP failures swallowed+logged so all IPs are attempted), then strong _assert_vm_deleted per IP which fails loudly if any VM survived. Builds a fresh minimal ConfigCloudHetzner so its get_client is a DISTINCT hcloud.Client from the daemon's (only cfg.token is read).
+#   PURPOSE: Best-effort delete every observed VM IP via _delete_one_best_effort (per-IP failures swallowed+logged so all IPs are attempted), then strong _assert_vm_deleted per IP which fails loudly if any VM survived. Builds a fresh minimal ConfigCloudHetzner so its get_client is a DISTINCT hcloud.Client from the daemon's (only cfg.token is read).
 #   INPUTS: {
 #     token: str - Hetzner API token,
 #     observed_ips: list[str] - VM IPs observed during the test,
@@ -228,34 +260,23 @@ async def _assert_vm_deleted(client: Any, ip: str) -> None:  # noqa: ANN401
 #   }
 #   OUTPUTS: { None }
 #   SIDE_EFFECTS: Deletes cloud VMs via the real Hetzner API; pytest.fail on survivor.
-#   LINKS: M-CLOUD-PROVIDER-HETZNER, _assert_vm_deleted
+#   LINKS: M-CLOUD-PROVIDER-HETZNER, _assert_vm_deleted, _delete_one_best_effort
 # END_CONTRACT: _cleanup_observed
 async def _cleanup_observed(
-    token: str, observed_ips: list[str], log: logging.Logger
+    token: str,
+    observed_ips: list[str],
+    log: logging.Logger,
 ) -> None:
     if not observed_ips:
         return
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
-    from yascheduler.infra.cloud.providers.hetzner import (
-        get_client,
-        hetzner_delete_node,
-    )
+    from yascheduler.infra.cloud.providers.hetzner import get_client
 
     cfg: ConfigCloudHetzner = ConfigCloudHetzner(token=token, max_nodes=1)
     client = get_client(cfg)
 
-    # START_BLOCK_BEST_EFFORT_DELETE
     for ip in observed_ips:
-        try:
-            await hetzner_delete_node(cfg, ip)
-        except Exception as err:  # noqa: BLE001
-            log.error(
-                "[hetzner_live][CLEANUP] hetzner_delete_node raised for ip=%s err=%s "
-                "— proceeding to deletion verification",
-                ip,
-                err,
-            )
-    # END_BLOCK_BEST_EFFORT_DELETE
+        await _delete_one_best_effort(cfg, ip, log)
 
     # START_BLOCK_VERIFY_DELETED
     # Strong per-IP deletion assertion: a survivor fails the test loudly.
@@ -366,7 +387,7 @@ async def _wait_both_done(
         await asyncio.sleep(_POLL_INTERVAL_S)
     pytest.fail(
         f"tasks not all DONE within {timeout_s}s; "
-        f"task_ids={task_ids} last statuses={statuses}"
+        f"task_ids={task_ids} last statuses={statuses}",
     )
 
 
@@ -427,7 +448,8 @@ async def _assert_outputs(
 #   LINKS: M-APPLICATION-ALLOCATE
 # END_CONTRACT: _assert_cloud_done_log
 def _assert_cloud_done_log(
-    records: list[logging.LogRecord], node_ips: list[str]
+    records: list[logging.LogRecord],
+    node_ips: list[str],
 ) -> None:
     cloud_done_records = [r for r in records if r.getMessage() == "CLOUD_DONE"]
     done_match = any(
@@ -534,7 +556,10 @@ async def test_hetzner_live(
 
         # START_BLOCK_COMPLETION
         await _wait_both_done(
-            uow_factory, task_ids, observed_ips, _COMPLETION_TIMEOUT_S
+            uow_factory,
+            task_ids,
+            observed_ips,
+            _COMPLETION_TIMEOUT_S,
         )
         # END_BLOCK_COMPLETION
 

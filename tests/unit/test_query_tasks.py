@@ -46,7 +46,10 @@ class FakeTaskRepository:
         self.list_by_jobs_calls: list[list[TaskId]] = []
 
     async def list_by_status(
-        self, statuses: set[TaskStatus], *, limit: int | None = None
+        self,
+        statuses: set[TaskStatus],
+        *,
+        limit: int | None = None,
     ) -> list[Task]:
         self.list_by_status_calls.append(statuses)
         return self._tasks
@@ -72,7 +75,9 @@ class FakeUnitOfWork:
     """In-memory UoW exposing FakeTaskRepository + FakeNodeRepository and tracking commit calls."""
 
     def __init__(
-        self, repo: FakeTaskRepository, nodes: FakeNodeRepository | None = None
+        self,
+        repo: FakeTaskRepository,
+        nodes: FakeNodeRepository | None = None,
     ) -> None:
         self.tasks = repo
         self.nodes = nodes or FakeNodeRepository()
@@ -81,7 +86,7 @@ class FakeUnitOfWork:
     async def __aenter__(self) -> FakeUnitOfWork:
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:  # noqa: ANN001
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
         return False
 
     async def commit(self) -> None:
@@ -129,7 +134,9 @@ class TestQueryTasks:
         uow = FakeUnitOfWork(repo)
 
         tasks, nodes_by_id = await query_tasks(
-            jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=_factory(uow)
+            jobs=None,
+            statuses=[TaskStatus.TO_DO],
+            uow_factory=_factory(uow),
         )
 
         assert len(tasks) == 1
@@ -159,7 +166,9 @@ class TestQueryTasks:
 
         with pytest.raises(ValueError, match="mutually exclusive"):
             await query_tasks(
-                jobs=[TaskId(1)], statuses=[TaskStatus.TO_DO], uow_factory=factory
+                jobs=[TaskId(1)],
+                statuses=[TaskStatus.TO_DO],
+                uow_factory=factory,
             )
 
         factory.assert_not_called()
@@ -191,7 +200,9 @@ class TestQueryTasks:
         uow = FakeUnitOfWork(repo, nodes=nodes_repo)
 
         tasks, nodes_by_id = await query_tasks(
-            jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=_factory(uow)
+            jobs=None,
+            statuses=[TaskStatus.TO_DO],
+            uow_factory=_factory(uow),
         )
 
         assert len(tasks) == 1
@@ -227,7 +238,9 @@ class TestQueryTasks:
     async def test_query_by_statuses_loads_nodes(self) -> None:
         """Query by statuses dispatches to list_by_status and loads nodes."""
         task = _make_task(
-            task_id=1, status=TaskStatus.TO_DO, allocated_node_id=NodeId(7)
+            task_id=1,
+            status=TaskStatus.TO_DO,
+            allocated_node_id=NodeId(7),
         )
         node = Node(node_id=NodeId(7), hostname="10.0.0.1", ncpus=2)
         repo = FakeTaskRepository(tasks=[task])
@@ -235,7 +248,9 @@ class TestQueryTasks:
         uow = FakeUnitOfWork(repo, nodes=nodes_repo)
 
         tasks, nodes_by_id = await query_tasks(
-            jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=_factory(uow)
+            jobs=None,
+            statuses=[TaskStatus.TO_DO],
+            uow_factory=_factory(uow),
         )
 
         assert len(tasks) == 1

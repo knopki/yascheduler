@@ -57,7 +57,7 @@ def _tracker_rows(conn: pg8000.native.Connection) -> list[str]:
     conn.run("BEGIN")
     try:
         rows = conn.run(
-            "SELECT migration_id FROM yascheduler_migrations ORDER BY migration_id"
+            "SELECT migration_id FROM yascheduler_migrations ORDER BY migration_id",
         )
     finally:
         conn.run("ROLLBACK")
@@ -95,7 +95,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('011')")
 
@@ -108,17 +108,17 @@ def test_migration_012_node_rename_and_fields() -> None:
                 "username VARCHAR(255) DEFAULT 'root', "
                 "ncpus SMALLINT DEFAULT NULL, "
                 "enabled BOOLEAN DEFAULT TRUE, "
-                "cloud VARCHAR(32) DEFAULT NULL)"
+                "cloud VARCHAR(32) DEFAULT NULL)",
             )
 
             # Insert test data for backfill scenario
             # Cloud node (node_id=1) — should get external_id backfilled
             conn.run(
-                "INSERT INTO yascheduler_nodes (ip, cloud) VALUES ('10.0.0.1', 'aws')"
+                "INSERT INTO yascheduler_nodes (ip, cloud) VALUES ('10.0.0.1', 'aws')",
             )
             # Static node (node_id=2) — should NOT get external_id
             conn.run(
-                "INSERT INTO yascheduler_nodes (ip, cloud) VALUES ('10.0.0.2', NULL)"
+                "INSERT INTO yascheduler_nodes (ip, cloud) VALUES ('10.0.0.2', NULL)",
             )
 
             # Create yascheduler_tasks at a compatible era so apply_schema's trigger
@@ -126,7 +126,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
-                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)",
             )
         finally:
             conn.close()
@@ -148,7 +148,7 @@ def test_migration_012_node_rename_and_fields() -> None:
                 type_rows = conn.run(
                     "SELECT character_maximum_length FROM information_schema.columns "
                     "WHERE table_name = 'yascheduler_nodes' "
-                    "AND column_name = 'hostname'"
+                    "AND column_name = 'hostname'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -168,7 +168,7 @@ def test_migration_012_node_rename_and_fields() -> None:
                 trig_rows = conn.run(
                     "SELECT tgname FROM pg_trigger "
                     "WHERE tgrelid = 'yascheduler_nodes'::regclass "
-                    "AND tgname = 'yascheduler_nodes_touch_updated_at'"
+                    "AND tgname = 'yascheduler_nodes_touch_updated_at'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -181,7 +181,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             try:
                 row = conn.run(
                     "SELECT node_id, created_at, updated_at "
-                    "FROM yascheduler_nodes WHERE node_id = 1"
+                    "FROM yascheduler_nodes WHERE node_id = 1",
                 )
                 assert len(row) == 1
                 node_id = row[0][0]
@@ -214,7 +214,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             try:
                 rows = conn.run(
                     "SELECT hostname, cloud, external_id "
-                    "FROM yascheduler_nodes ORDER BY node_id"
+                    "FROM yascheduler_nodes ORDER BY node_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -236,7 +236,7 @@ def test_migration_012_node_rename_and_fields() -> None:
                 enum_rows = conn.run(
                     "SELECT e.enumlabel FROM pg_enum e "
                     "JOIN pg_type t ON t.oid = e.enumtypid "
-                    "WHERE t.typname = 'node_status' ORDER BY e.enumsortorder"
+                    "WHERE t.typname = 'node_status' ORDER BY e.enumsortorder",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -250,7 +250,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             try:
                 type_rows = conn.run(
                     "SELECT data_type FROM information_schema.columns "
-                    "WHERE table_name = 'yascheduler_nodes' AND column_name = 'status'"
+                    "WHERE table_name = 'yascheduler_nodes' AND column_name = 'status'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -262,7 +262,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             conn.run("BEGIN")
             try:
                 status_rows = conn.run(
-                    "SELECT status::text FROM yascheduler_nodes ORDER BY node_id"
+                    "SELECT status::text FROM yascheduler_nodes ORDER BY node_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -275,7 +275,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, port) "
-                    "VALUES ('null_port', NULL)"
+                    "VALUES ('null_port', NULL)",
                 )
                 conn.run("ROLLBACK")
                 assert False, "port=NULL should be rejected by NOT NULL"
@@ -287,7 +287,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, port) "
-                    "VALUES ('bad_port', 0)"
+                    "VALUES ('bad_port', 0)",
                 )
                 conn.run("ROLLBACK")
                 assert False, "port=0 should be rejected by CHECK"
@@ -299,7 +299,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, port) "
-                    "VALUES ('bad_port', 65536)"
+                    "VALUES ('bad_port', 65536)",
                 )
                 conn.run("ROLLBACK")
                 assert False, "port=65536 should be rejected by CHECK"
@@ -311,7 +311,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             try:
                 conn.run(
                     "INSERT INTO yascheduler_nodes (hostname, port) "
-                    "VALUES ('good_port', 22)"
+                    "VALUES ('good_port', 22)",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -323,7 +323,7 @@ def test_migration_012_node_rename_and_fields() -> None:
                     "SELECT constraint_name FROM information_schema.table_constraints "
                     "WHERE table_name = 'yascheduler_nodes' "
                     "AND constraint_type = 'CHECK' "
-                    "AND constraint_name = 'node_port_range'"
+                    "AND constraint_name = 'node_port_range'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -338,7 +338,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             conn.run("BEGIN")
             try:
                 port_rows = conn.run(
-                    "SELECT jump_port FROM yascheduler_nodes ORDER BY node_id"
+                    "SELECT jump_port FROM yascheduler_nodes ORDER BY node_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -349,7 +349,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             conn.run("BEGIN")
             try:
                 user_rows = conn.run(
-                    "SELECT jump_username FROM yascheduler_nodes ORDER BY node_id"
+                    "SELECT jump_username FROM yascheduler_nodes ORDER BY node_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -360,7 +360,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             conn.run("BEGIN")
             try:
                 host_rows = conn.run(
-                    "SELECT jump_host FROM yascheduler_nodes ORDER BY node_id"
+                    "SELECT jump_host FROM yascheduler_nodes ORDER BY node_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -380,7 +380,7 @@ def test_migration_012_node_rename_and_fields() -> None:
             conn.run("BEGIN")
             try:
                 conn.run(
-                    "UPDATE yascheduler_nodes SET jump_port = 65536 WHERE node_id = 1"
+                    "UPDATE yascheduler_nodes SET jump_port = 65536 WHERE node_id = 1",
                 )
                 conn.run("ROLLBACK")
                 assert False, "jump_port=65536 should be rejected by CHECK"

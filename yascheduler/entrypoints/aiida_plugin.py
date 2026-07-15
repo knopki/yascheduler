@@ -19,14 +19,12 @@
 # END_CHANGE_SUMMARY
 #
 
-"""
-Aiida plugin for yascheduler,
-with respect to the supported yascheduler engines
-"""
+"""AiiDA scheduler plugin entry point for yascheduler."""
 
 from __future__ import annotations
 
-from typing import NoReturn
+import contextlib
+from typing import Any, NoReturn
 
 import aiida.schedulers
 from aiida.common.escaping import escape_for_bash
@@ -40,6 +38,29 @@ from aiida.schedulers.datastructures import (
 )
 from aiida.schedulers.scheduler import SchedulerError
 
+
+class _JobNotFoundError(SchedulerError):
+    def __init__(self) -> None:
+        super().__init__("Found at least one job without jobid")
+
+
+class _QueryByUserNotAvailableError(FeatureNotAvailable):
+    def __init__(self) -> None:
+        super().__init__("Cannot query by user in Yascheduler")
+
+
+class _InvalidJobsTypeError(TypeError):
+    def __init__(self) -> None:
+        super().__init__(
+            "If provided, the 'jobs' variable must be a string or a list of strings",
+        )
+
+
+class _JobCancellationNotSupportedError(FeatureNotAvailable):
+    def __init__(self) -> None:
+        super().__init__("Job cancellation is not supported by Yascheduler")
+
+
 _MAP_STATUS_YASCHEDULER = {
     "TO_DO": JobState.QUEUED,
     "RUNNING": JobState.RUNNING,
@@ -49,19 +70,19 @@ _CMD_PREFIX = ""  # NB under virtualenv, this should refer to virtualenv's /bin/
 
 
 class YaschedJobResource(NodeNumberJobResource):
-    def __init__(self, *_, **kwargs) -> None:  # noqa: ANN002, ANN003
+    """Resource class for yascheduler jobs in AiiDA."""
+
+    def __init__(self, *_: list[Any], **kwargs: dict[str, Any]) -> None:
         super().__init__(**kwargs)
 
 
 class YaScheduler(aiida.schedulers.Scheduler):
-    """
-    Support for the YaScheduler designed specifically for MPDS
-    """
+    """Support for the YaScheduler designed specifically for MPDS."""
 
-    _logger = aiida.schedulers.Scheduler._logger.getChild("yascheduler")
+    _logger = aiida.schedulers.Scheduler._logger.getChild("yascheduler")  # noqa: SLF001
 
     # Query only by list of jobs and not by user
-    _features = {
+    _features = {  # noqa: RUF012
         "can_query_by_user": False,
     }
 
@@ -76,15 +97,14 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   LINKS: M-AIIDA
     # END_CONTRACT: submit_job
     def submit_job(self, working_directory: str, filename: str) -> str:
-        """
-        Submit a job script to yascheduler.
+        """Submit a job script to yascheduler.
 
         AiiDA 2.7 makes this public method abstract on the base Scheduler.
         Older AiiDA versions provided the same behavior through submit_from_script.
         """
         self.transport.chdir(working_directory)
         result = self.transport.exec_command_wait(
-            self._get_submit_command(escape_for_bash(filename))
+            self._get_submit_command(escape_for_bash(filename)),
         )
         return self._parse_submit_output(*result)
 
@@ -101,21 +121,20 @@ class YaScheduler(aiida.schedulers.Scheduler):
         user: str | None = None,
         as_dict: bool = False,
     ) -> list[JobInfo] | dict[str, JobInfo]:
-        """
-        Return the list of currently active jobs.
+        """Return the list of currently active jobs.
 
         AiiDA 2.7 makes this public method abstract on the base Scheduler.
         """
         with self.transport:
             retval, stdout, stderr = self.transport.exec_command_wait(
-                self._get_joblist_command(jobs=jobs, user=user)
+                self._get_joblist_command(jobs=jobs, user=user),
             )
 
         joblist = self._parse_joblist_output(retval, stdout, stderr)
         if as_dict:
             jobdict = {job.job_id: job for job in joblist}
             if None in jobdict:
-                raise SchedulerError("Found at least one job without jobid")
+                raise _JobNotFoundError
             return jobdict
 
         return joblist
@@ -128,15 +147,15 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   LINKS: M-AIIDA
     # END_CONTRACT: kill_job
     def kill_job(self, jobid: str) -> bool:
-        """
-        Report that job cancellation is not supported by yascheduler.
+        """Report that job cancellation is not supported by yascheduler.
 
         The CLI currently exposes status and submit commands, but no task
         cancellation command. Returning False lets AiiDA handle this as an
         unsuccessful kill without pretending the remote task was stopped.
         """
         self.logger.warning(
-            f"Job cancellation is not supported by yascheduler: {jobid}"
+            "Job cancellation is not supported by yascheduler: %s",
+            jobid,
         )
         return False
 
@@ -148,14 +167,13 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_joblist_command
     def _get_joblist_command(
-        self, jobs: str | list[str] | None = None, user: str | None = None
+        self,
+        jobs: str | list[str] | None = None,
+        user: str | None = None,
     ) -> str:
-        """
-        The command to report full information on existing jobs.
-        """
-
+        """Return the command to report full information on existing jobs."""
         if user:
-            raise FeatureNotAvailable("Cannot query by user in Yascheduler")
+            raise _QueryByUserNotAvailableError
         command = [f"{_CMD_PREFIX}yastatus"]
         # make list from job ids (taken from slurm scheduler)
         if jobs:
@@ -164,9 +182,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
                 joblist.append(jobs)
             else:
                 if not isinstance(jobs, (tuple, list)):
-                    raise TypeError(
-                        "If provided, the 'jobs' variable must be a string or a list of strings"
-                    )
+                    raise _InvalidJobsTypeError
                 joblist = jobs
             command.append("--jobs {}".format(" ".join(joblist)))
         return " ".join(command)
@@ -179,9 +195,9 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_detailed_jobinfo_command
     def _get_detailed_jobinfo_command(self, jobid: str) -> str:
-        """
-        Return the command to run to get the detailed information on a job,
-        even after the job has finished.
+        """Return the command to run to get the detailed information on a job.
+
+        Even after the job has finished.
         """
         return f"{_CMD_PREFIX}yastatus --jobs {jobid}"
 
@@ -193,8 +209,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_detailed_job_info_command
     def _get_detailed_job_info_command(self, job_id: str) -> str:
-        """
-        Return the command to run to get detailed information on a job.
+        """Return the command to run to get detailed information on a job.
 
         This is the method name expected by AiiDA. Keep the older misspelled
         variant above as an alias for any external callers.
@@ -209,9 +224,9 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_submit_script_header
     def _get_submit_script_header(self, job_tmpl: JobTemplate) -> str:
-        """
-        Return the submit script header, using the parameters from the
-        job_tmpl.
+        """Return the submit script header.
+
+        Using the parameters from the job_tmpl.
         """
         assert job_tmpl.job_name
         # There is no other way to get the code label and the WF uuid except this (TODO?)
@@ -222,10 +237,8 @@ class YaScheduler(aiida.schedulers.Scheduler):
         # so that the required input file(s) can be deduced
         lines = [f"ENGINE={aiida_node.inputs.code.label.lower()}"]
 
-        try:
+        with contextlib.suppress(AttributeError):
             lines.append(f"PARENT={aiida_node.caller.uuid}")
-        except AttributeError:
-            pass
 
         lines.append(f"LABEL={job_tmpl.job_name}")
         return "\n".join(lines)
@@ -238,9 +251,7 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_submit_command
     def _get_submit_command(self, submit_script: str) -> str:
-        """
-        Return the string to execute to submit a given script.
-        """
+        """Return the string to execute to submit a given script."""
         return f"{_CMD_PREFIX}yasubmit {submit_script}"
 
     # START_CONTRACT: _parse_submit_output
@@ -250,20 +261,20 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: Logs warnings/errors on stderr or invalid output
     #   LINKS: M-AIIDA
     # END_CONTRACT: _parse_submit_output
-    def _parse_submit_output(self, retval: int, stdout: str, stderr: str) -> str:
-        """
-        Parse the output of the submit command, as returned by executing the
-        command returned by _get_submit_command command.
+    def _parse_submit_output(self, retval: int, stdout: str, stderr: str) -> str:  # noqa: ARG002
+        """Parse the output of the submit command.
+
+        As returned by executing the command returned by _get_submit_command command.
         """
         if stderr.strip():
-            self.logger.warning(f"Stderr when submitting: {stderr.strip()}")
+            self.logger.warning("Stderr when submitting: %s", stderr.strip())
 
         output = stdout.strip()
 
         try:
             int(output)
         except ValueError:
-            self.logger.error("Submitting failed, no task id received")
+            self.logger.exception("Submitting failed, no task id received")
 
         return output
 
@@ -275,19 +286,20 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   LINKS: M-AIIDA
     # END_CONTRACT: _parse_joblist_output
     def _parse_joblist_output(
-        self, retval: int, stdout: str, stderr: str
+        self,
+        retval: int,  # noqa: ARG002
+        stdout: str,
+        stderr: str,
     ) -> list[JobInfo]:
-        """
-        Parse the queue output string, as returned by executing the
-        command returned by _get_joblist_command command,
-        that is here implemented as a list of lines, one for each
-        job, with _field_separator as separator. The order is described
-        in the _get_joblist_command function.
-        Return a list of JobInfo objects, one of each job,
-        each relevant parameters implemented.
+        """Parse the queue output string from yastatus.
+
+        The output is a list of lines, one for each job, with _field_separator
+        as separator. The order is described in the _get_joblist_command
+        function. Return a list of JobInfo objects, one of each job, each
+        relevant parameters implemented.
         """
         if stderr.strip():
-            self.logger.warning(f"Stderr when parsing joblist: {stderr.strip()}")
+            self.logger.warning("Stderr when parsing joblist: %s", stderr.strip())
         job_list = [job.split() for job in stdout.split("\n") if job]
         job_infos = []
         for job_id, status in job_list:
@@ -305,11 +317,9 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   RAISES: FeatureNotAvailable - job cancellation is not supported
     #   LINKS: M-AIIDA
     # END_CONTRACT: _get_kill_command
-    def _get_kill_command(self, jobid: str) -> NoReturn:
-        """
-        Return the command to kill the job with specified jobid.
-        """
-        raise FeatureNotAvailable("Job cancellation is not supported by Yascheduler")
+    def _get_kill_command(self, jobid: str) -> NoReturn:  # noqa: ARG002
+        """Return the command to kill the job with specified jobid."""
+        raise _JobCancellationNotSupportedError
 
     # START_CONTRACT: _parse_kill_output
     #   PURPOSE: Return False indicating kill was not performed
@@ -318,8 +328,6 @@ class YaScheduler(aiida.schedulers.Scheduler):
     #   SIDE_EFFECTS: None
     #   LINKS: M-AIIDA
     # END_CONTRACT: _parse_kill_output
-    def _parse_kill_output(self, retval: int, stdout: str, stderr: str) -> bool:
-        """
-        Parse the output of the kill command.
-        """
+    def _parse_kill_output(self, retval: int, stdout: str, stderr: str) -> bool:  # noqa: ARG002
+        """Parse the output of the kill command."""
         return False

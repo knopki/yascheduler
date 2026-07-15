@@ -68,7 +68,8 @@ pytestmark = pytest.mark.unit
     ],
 )
 def test_prefix_id_extracts_token_before_first_underscore(
-    filename: Path, expected: str
+    filename: Path,
+    expected: str,
 ) -> None:
     assert _prefix_id(filename) == expected
 
@@ -129,7 +130,7 @@ def _make_module(name: str, body: str) -> types.ModuleType:
     """Build a module whose defined classes carry __module__ == name."""
     mod = types.ModuleType(name)
     mod.__file__ = name
-    exec(compile(body, name, "exec"), mod.__dict__)  # noqa: S102
+    exec(compile(body, name, "exec"), mod.__dict__)
     return mod
 
 

@@ -1,3 +1,4 @@
+"""SQL query file loader — reads .sql files from the bundled sql/ directory with caching."""
 # FILE: yascheduler/infra/persistence/sql_loader.py
 # VERSION: 1.0.1
 # START_MODULE_CONTRACT
@@ -17,7 +18,7 @@
 #   PREVIOUS_CHANGE: v1.0.0 - Extract load_query from __init__.py into dedicated module.
 # END_CHANGE_SUMMARY
 
-import functools
+from functools import cache
 from pathlib import Path
 
 _SQL_DIR = Path(__file__).parent / "sql"
@@ -31,7 +32,7 @@ _SQL_DIR = Path(__file__).parent / "sql"
 #   SIDE_EFFECTS: Reads SQL file from disk on first call per process.
 #   LINKS: functools.cache
 # END_CONTRACT: load_query
-@functools.cache
+@cache
 def load_query(name: str) -> str:
     """Return the content of infra/persistence/sql/<name>.sql."""
     path = _SQL_DIR / f"{name}.sql"

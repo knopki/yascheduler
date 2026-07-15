@@ -1,3 +1,4 @@
+"""LogFormatter with extra-diff trace discriminator for stdlib structured DEBUG tracing."""
 # FILE: yascheduler/shared/log.py
 # VERSION: 2.0.0
 #
@@ -25,7 +26,7 @@ import logging
 # LogRecord. Derived by introspection once at import time so that
 # version-specific attributes (e.g. taskName in 3.12) are auto-included.
 _NATIVE_KEYS = frozenset(
-    logging.LogRecord("ref", logging.DEBUG, "<ref>", 0, "", (), None).__dict__.keys()
+    logging.LogRecord("ref", logging.DEBUG, "<ref>", 0, "", (), None).__dict__.keys(),
 )
 
 # _PACKAGE: the top segment of this module's __name__ (e.g. "yascheduler"
@@ -50,6 +51,7 @@ class LogFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format a log record; trace records get the structured format."""
         if self._is_trace(record):
             return self._format_trace(record)
         return self._format_user(record)
@@ -63,10 +65,7 @@ class LogFormatter(logging.Formatter):
         if record.levelno != logging.DEBUG:
             return False
         # Condition 3: carries extra attributes beyond native keys
-        extra_keys = set(record.__dict__) - _NATIVE_KEYS
-        if not extra_keys:
-            return False
-        return True
+        return set(record.__dict__) - _NATIVE_KEYS
 
     def _format_trace(self, record: logging.LogRecord) -> str:
         """Render a trace record: [shortname][funcName]:lineno msg k=v ..."""
@@ -76,5 +75,5 @@ class LogFormatter(logging.Formatter):
         return f"[{shortname}][{record.funcName}]:{record.lineno} {record.getMessage()} {kv}"
 
     def _format_user(self, record: logging.LogRecord) -> str:
-        """Render a user-facing record: LEVEL name: message"""
+        """Render a user-facing record: LEVEL name: message."""
         return f"{record.levelname} {record.name}: {record.getMessage()}"

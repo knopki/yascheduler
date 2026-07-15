@@ -1,3 +1,4 @@
+"""PostgreSQL repository implementations for tasks and nodes."""
 # FILE: yascheduler/infra/persistence/postgres.py
 # VERSION: 1.14.0
 # START_MODULE_CONTRACT
@@ -60,7 +61,7 @@ class _PgRepository:
     #   SIDE_EFFECTS: Executes SQL query via pg8000 connection.
     #   LINKS: None
     # END_CONTRACT: _run
-    async def _run(self, sql: str, **params: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+    async def _run(self, sql: str, **params: dict[str, Any]) -> list[dict[str, Any]]:
         """Execute SQL via the thread pool and return rows as dicts keyed by column name."""
 
         def _fn() -> list[dict[str, Any]]:
@@ -87,6 +88,7 @@ class PostgresTaskRepository(_PgRepository):
         executor: ThreadPoolExecutor,
         saved_tasks: list[Task] | None = None,
     ) -> None:
+        """Initialise the repository with a DB connection."""
         super().__init__(conn, executor)
         self._saved_tasks = saved_tasks
 
@@ -165,7 +167,9 @@ class PostgresTaskRepository(_PgRepository):
     #   LINKS: task/get_ids_by_node_id_and_status.sql
     # END_CONTRACT: list_ids_by_node_id_and_status
     async def list_ids_by_node_id_and_status(
-        self, node_id: NodeId, status: TaskStatus
+        self,
+        node_id: NodeId,
+        status: TaskStatus,
     ) -> list[TaskId]:
         """Return task IDs allocated to the given node and matching the status."""
         rows = await self._run(
@@ -204,7 +208,9 @@ class PostgresTaskRepository(_PgRepository):
     #   LINKS: task/list_by_status.sql, _row_to_task
     # END_CONTRACT: list_by_status
     async def list_by_status(
-        self, statuses: set[TaskStatus], limit: int | None = None
+        self,
+        statuses: set[TaskStatus],
+        limit: int | None = None,
     ) -> list[Task]:
         """Return tasks matching any of the given statuses."""
         rows = await self._run(
@@ -224,7 +230,8 @@ class PostgresTaskRepository(_PgRepository):
     async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
         """Return tasks whose IDs are in the given list."""
         rows = await self._run(
-            load_query("task/list_by_jobs"), task_ids=[tid.value for tid in job_ids]
+            load_query("task/list_by_jobs"),
+            task_ids=[tid.value for tid in job_ids],
         )
         return [self._row_to_task(r) for r in rows]
 

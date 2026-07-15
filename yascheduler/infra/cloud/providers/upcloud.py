@@ -1,3 +1,4 @@
+"""Upcloud cloud methods."""
 # FILE: yascheduler/infra/cloud/providers/upcloud.py
 # VERSION: 1.10.0
 #
@@ -22,7 +23,6 @@
 #   PREVIOUS_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-UPCLOUD") at module top
 # END_CHANGE_SUMMARY
 #
-"""Upcloud cloud methods"""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ executor = ThreadPoolExecutor(max_workers=5)
 # END_CONTRACT: get_client
 @cache
 def get_client(cfg: ConfigCloudUpcloud) -> CloudManager:
-    """Get Upcloud client"""
+    """Get Upcloud client."""
     client = CloudManager(cfg.login, cfg.password)
     client.authenticate()
     return client
@@ -79,9 +79,10 @@ def upcloud_create_node_sync(
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
 ) -> str:
-    """Create node"""
+    """Create node."""
     if not _UPCLOUD_AVAILABLE:
-        raise ImportError("UpCloud SDK not installed. Install upcloud-api package.")
+        msg = "UpCloud SDK not installed. Install upcloud-api package."
+        raise ImportError(msg)
     client = get_client(cfg)
 
     login_user = login_user_block(
@@ -98,7 +99,7 @@ def upcloud_create_node_sync(
             storage_devices=[Storage(os="Debian 10.0", size=40)],
             login_user=login_user,
             user_data=cloud_config.render() if cloud_config else None,
-        )
+        ),
     )
     ip_addr = cast("str | None", server.get_public_ip())
     assert ip_addr is not None
@@ -118,11 +119,16 @@ async def upcloud_create_node(
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
 ) -> str:
-    """Create node"""
+    """Create node."""
     if not _UPCLOUD_AVAILABLE:
-        raise ImportError("UpCloud SDK not installed. Install upcloud-api package.")
+        msg = "UpCloud SDK not installed. Install upcloud-api package."
+        raise ImportError(msg)
     return await asyncio.get_running_loop().run_in_executor(
-        executor, upcloud_create_node_sync, cfg, key, cloud_config
+        executor,
+        upcloud_create_node_sync,
+        cfg,
+        key,
+        cloud_config,
     )
 
 
@@ -137,9 +143,10 @@ def upcload_delete_node_sync(
     cfg: ConfigCloudUpcloud,
     host: str,
 ) -> None:
-    """Delete node"""
+    """Delete node."""
     if not _UPCLOUD_AVAILABLE:
-        raise ImportError("UpCloud SDK not installed. Install upcloud-api package.")
+        msg = "UpCloud SDK not installed. Install upcloud-api package."
+        raise ImportError(msg)
     client = get_client(cfg)
     for server in client.get_servers():
         if server.get_public_ip() == host:
@@ -149,7 +156,7 @@ def upcload_delete_node_sync(
             while True:
                 try:
                     server.destroy()
-                except Exception:
+                except Exception:  # noqa: PERF203
                     time.sleep(5)
                 else:
                     break
@@ -172,9 +179,13 @@ async def upcload_delete_node(
     cfg: ConfigCloudUpcloud,
     host: str,
 ) -> None:
-    """Delete node"""
+    """Delete node."""
     if not _UPCLOUD_AVAILABLE:
-        raise ImportError("UpCloud SDK not installed. Install upcloud-api package.")
+        msg = "UpCloud SDK not installed. Install upcloud-api package."
+        raise ImportError(msg)
     return await asyncio.get_running_loop().run_in_executor(
-        executor, upcload_delete_node_sync, cfg, host
+        executor,
+        upcload_delete_node_sync,
+        cfg,
+        host,
     )

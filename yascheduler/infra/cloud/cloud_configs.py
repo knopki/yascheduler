@@ -1,3 +1,5 @@
+"""Cloud provider config DTOs."""
+
 # FILE: yascheduler/infra/cloud/cloud_configs.py
 # VERSION: 1.3.0
 #
@@ -22,13 +24,15 @@
 #   PREVIOUS_CHANGE: v1.3.0 - Add package_upgrade: bool = True field to all 4 ConfigCloud* DTOs; controls the cloud-init package_upgrade flag on freshly-provisioned VMs and is read by CloudProvisionerImpl._get_cloud_config_data. Default True. Not added to the CloudConfig Protocol (infra-only consumer) nor to AzureImageReference.
 # END_CHANGE_SUMMARY
 #
-"""Cloud provider config DTOs."""
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Union
 
 from yascheduler.domain import CloudConfig
-from yascheduler.shared import Self
+
+if TYPE_CHECKING:
+    from yascheduler.shared import Self
 
 
 @dataclass(frozen=True)
@@ -49,11 +53,13 @@ class AzureImageReference:
     # END_CONTRACT: from_urn
     @classmethod
     def from_urn(cls, urn: str) -> Self:
-        "Create image reference from urn in format `publisher:offer:sku:version`"
-        parts = urn.split(":", maxsplit=4)
-        if len(parts) < 4:
+        """Create image reference from urn in format `publisher:offer:sku:version`."""
+        min_parts = 4
+        parts = urn.split(":", maxsplit=min_parts)
+        if len(parts) < min_parts:
+            msg = "`Image reference URN should be in format publisher:offer:sku:version"
             raise ValueError(
-                "`Image reference URN should be in format publisher:offer:sku:version"
+                msg,
             )
         return cls(*parts)
 
@@ -82,8 +88,8 @@ class ConfigCloudAzure(CloudConfig):
     idle_tolerance: int = 300
     connect_grace: int = 120
     package_upgrade: bool = True
-    jump_username: Optional[str] = None
-    jump_host: Optional[str] = None
+    jump_username: str | None = None
+    jump_host: str | None = None
     jump_port: int = 22
 
 
@@ -98,13 +104,13 @@ class ConfigCloudHetzner(CloudConfig):
     username: str = "root"
     priority: int = 0
     server_type: str = "cx52"
-    location: Optional[str] = None
+    location: str | None = None
     image_name: str = "debian-13"
     idle_tolerance: int = 120
     connect_grace: int = 60
     package_upgrade: bool = True
-    jump_username: Optional[str] = None
-    jump_host: Optional[str] = None
+    jump_username: str | None = None
+    jump_host: str | None = None
     jump_port: int = 22
 
 
@@ -122,8 +128,8 @@ class ConfigCloudUpcloud(CloudConfig):
     idle_tolerance: int = 120
     connect_grace: int = 60
     package_upgrade: bool = True
-    jump_username: Optional[str] = None
-    jump_host: Optional[str] = None
+    jump_username: str | None = None
+    jump_host: str | None = None
     jump_port: int = 22
 
 
@@ -148,11 +154,14 @@ class ConfigCloudVastAI(CloudConfig):
     onstart_script: str = ""
     docker_options: str = ""
     env: dict = field(default_factory=dict)
-    jump_username: Optional[str] = None
-    jump_host: Optional[str] = None
+    jump_username: str | None = None
+    jump_host: str | None = None
     jump_port: int = 22
 
 
 ConfigCloud = Union[
-    ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI
+    ConfigCloudAzure,
+    ConfigCloudHetzner,
+    ConfigCloudUpcloud,
+    ConfigCloudVastAI,
 ]

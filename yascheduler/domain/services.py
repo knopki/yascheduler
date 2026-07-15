@@ -1,3 +1,4 @@
+"""Domain services: cross-entity business logic for the scheduler domain."""
 # FILE: yascheduler/domain/services.py
 # VERSION: 1.6.0
 # START_MODULE_CONTRACT
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 #   LINKS:
 # END_CONTRACT: match_task_to_node
 def match_task_to_node(
-    task: Task,
+    _task: Task,
     engine: Engine,
     free_machines: list[ConnectedMachine],
 ) -> ConnectedMachine | None:

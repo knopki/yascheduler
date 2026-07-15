@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+"""Custom exceptions for remote machine operations."""
 # FILE: yascheduler/infra/ssh/platform/exc.py
 # VERSION: 1.0.1
 #
@@ -21,4 +21,4 @@
 
 
 class PlatformGuessFailedError(Exception):
-    pass
+    """Raised when the remote platform cannot be determined."""

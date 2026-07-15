@@ -32,7 +32,8 @@ class TestClientQueueSubmitTaskAsync:
     @pytest.mark.asyncio
     @patch("yascheduler.entrypoints.client.parse_config")
     async def test_queue_submit_task_async_uses_cli_deps(
-        self, mock_from_cfg: MagicMock
+        self,
+        mock_from_cfg: MagicMock,
     ) -> None:
         """queue_submit_task_async calls deps.submit() via the injected deps_factory, not Scheduler."""
         from yascheduler.entrypoints.client import Yascheduler

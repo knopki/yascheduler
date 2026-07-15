@@ -1,3 +1,4 @@
+"""Normalize remote data/engines/tasks dirs using the adapter's path type."""
 # FILE: yascheduler/infra/ssh/platform/paths.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT

@@ -23,7 +23,6 @@
 #   PREVIOUS_CHANGE: v1.11.0 - node-owns-connection-identity: drop jump_host/jump_username from StubMachineRepository.connect; add test_machine_repository_connect_signature_no_jump_kwargs.
 # END_CHANGE_SUMMARY
 
-# ruff: noqa: ANN401
 
 from __future__ import annotations
 
@@ -69,7 +68,10 @@ class StubTaskRepository:
         pass
 
     async def list_by_status(
-        self, statuses: set[TaskStatus], *, limit: int | None = None
+        self,
+        statuses: set[TaskStatus],
+        *,
+        limit: int | None = None,
     ) -> list[Task]:
         return []
 
@@ -83,7 +85,9 @@ class StubTaskRepository:
         pass
 
     async def list_ids_by_node_id_and_status(
-        self, node_id: NodeId, status: TaskStatus
+        self,
+        node_id: NodeId,
+        status: TaskStatus,
     ) -> list[TaskId]:
         return []
 
@@ -208,7 +212,9 @@ class StubMachineSession(MachineSession):
         pass
 
     async def pgrep(
-        self, pattern: str | Pattern[str], full: bool = True
+        self,
+        pattern: str | Pattern[str],
+        full: bool = True,
     ) -> AsyncGenerator[Any, None]:
         return
         yield  # type: ignore[unreachable]
@@ -281,7 +287,9 @@ class StubCloudProvisioner:
         pass
 
     def select_provider(
-        self, platforms: list[str], current_counts: dict[str, int]
+        self,
+        platforms: list[str],
+        current_counts: dict[str, int],
     ) -> str | None:
         return None
 

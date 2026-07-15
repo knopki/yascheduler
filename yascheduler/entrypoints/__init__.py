@@ -1,3 +1,4 @@
+"""Entrypoints layer facade."""
 # FILE: yascheduler/entrypoints/__init__.py
 # VERSION: 2.5.0
 # START_MODULE_CONTRACT
@@ -23,19 +24,17 @@
 #   PREVIOUS_CHANGE: v2.4.0 - Re-export CONFIG_FILE/LOG_FILE/PID_FILE from .paths.
 # END_CHANGE_SUMMARY
 
-"""Entrypoints layer facade."""
-
 from .client import Yascheduler
 from .config import Config
 from .di import CLIDeps, make_cli_deps, make_daemon
 from .paths import CONFIG_FILE, LOG_FILE, PID_FILE
 
 __all__ = [
-    "CLIDeps",
     "CONFIG_FILE",
-    "Config",
     "LOG_FILE",
     "PID_FILE",
+    "CLIDeps",
+    "Config",
     "Yascheduler",
     "make_cli_deps",
     "make_daemon",

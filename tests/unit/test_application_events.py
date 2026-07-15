@@ -69,7 +69,10 @@ class TestSubmitTaskEvents:
     """Verify submit_task records TaskCreated event."""
 
     async def test_submit_task_records_task_created_event(
-        self, engine: Engine, mock_engine_repo: MagicMock, mock_uow_factory: MagicMock
+        self,
+        engine: Engine,
+        mock_engine_repo: MagicMock,
+        mock_uow_factory: MagicMock,
     ) -> None:
         uow = mock_uow_factory.return_value
 
@@ -166,7 +169,8 @@ class TestAllocateTaskEvents:
         assert event.reason == "unsupported engine"
 
     async def test_allocate_free_machine_records_task_allocated_event(
-        self, engine: Engine
+        self,
+        engine: Engine,
     ) -> None:
         """Successful allocation records TaskAllocated event."""
         import time
@@ -212,8 +216,8 @@ class TestAllocateTaskEvents:
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
             return_value=[
-                Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, enabled=True)
-            ]
+                Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, enabled=True),
+            ],
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -266,7 +270,7 @@ class TestConsumeTaskEvents:
 
     async def _run_consume(
         self,
-        session: Any,  # noqa: ANN401 - test stub for MachineSession
+        session: Any,
         output_downloader: MagicMock,
         task: Task,
         uow_factory: Callable[[], AbstractUnitOfWork],
@@ -330,7 +334,12 @@ class TestConsumeTaskEvents:
         mock_engine_repo: MagicMock,
     ) -> None:
         mock_output_downloader.download_outputs = AsyncMock(
-            return_value=("", "", [], [("/remote/file", OSError("Connection refused"))])
+            return_value=(
+                "",
+                "",
+                [],
+                [("/remote/file", OSError("Connection refused"))],
+            ),
         )
 
         uow = AsyncMock()

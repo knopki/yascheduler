@@ -1,3 +1,4 @@
+"""Platform detection — run adapter checks on a connected host, return first match and all matched platforms."""
 # FILE: yascheduler/infra/ssh/platform/detect.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
@@ -44,7 +45,8 @@ MAX_SESSIONS = 10  # default MaxSessions on OpenSSH server
 #   LINKS: M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL
 # END_CONTRACT: _detect_platform
 async def _detect_platform(
-    conn: SSHClientConnection, adapters: Sequence[RemoteMachineAdapter]
+    conn: SSHClientConnection,
+    adapters: Sequence[RemoteMachineAdapter],
 ) -> tuple[RemoteMachineAdapter, Sequence[str]]:
     sess_lim = Semaphore(MAX_SESSIONS)
 
@@ -57,11 +59,11 @@ async def _detect_platform(
     checks: Sequence[bool] = [
         await aall(amap(lambda y: with_limit(conn, y), x.checks)) for x in adapters
     ]
-    for candidate, check in zip(adapters, checks):  # noqa: B905
+    for candidate, check in zip(adapters, checks):
         if check:
             platforms.append(candidate.platform)
         if check and not adapter:
             adapter = candidate
     if not adapter:
-        raise PlatformGuessFailedError()
+        raise PlatformGuessFailedError
     return adapter, platforms

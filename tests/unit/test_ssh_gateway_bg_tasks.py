@@ -169,8 +169,8 @@ class TestBgTaskScoping:
             # Let each monitor enter its loop
             await asyncio.sleep(0.05)
 
-            task_a = session_a._monitor_task  # noqa: SLF001
-            task_c = session_c._monitor_task  # noqa: SLF001
+            task_a = session_a._monitor_task
+            task_c = session_c._monitor_task
             assert task_a is not None
             assert task_c is not None
 
@@ -181,8 +181,8 @@ class TestBgTaskScoping:
             # A and C monitors are still alive and registered
             assert not task_a.cancelled(), "A monitor must survive disconnect(B)"
             assert not task_c.cancelled(), "C monitor must survive disconnect(B)"
-            assert session_a._monitor_task is task_a  # noqa: SLF001
-            assert session_c._monitor_task is task_c  # noqa: SLF001
+            assert session_a._monitor_task is task_a
+            assert session_c._monitor_task is task_c
             assert NodeId(1) in repository._sessions
             assert NodeId(3) in repository._sessions
 
@@ -214,7 +214,7 @@ class TestBgTaskScoping:
 
         with patch.object(occupancy_checker, "occupancy_check", _always_busy):
             occupancy_checker.start_occupancy_check(session, mock_pengine)
-            first = session._monitor_task  # noqa: SLF001
+            first = session._monitor_task
             assert first is not None
             await asyncio.sleep(0.02)
             assert not first.done()
@@ -222,7 +222,7 @@ class TestBgTaskScoping:
             # Reset machine to FREE so the second start_occupancy_check can occupy it
             session.release()
             occupancy_checker.start_occupancy_check(session, mock_pengine)
-            second = session._monitor_task  # noqa: SLF001
+            second = session._monitor_task
             assert second is not None
             # Let the prior task finish cancelling. _checker swallows
             # CancelledError, so the prior task finishes with result=None
@@ -233,14 +233,14 @@ class TestBgTaskScoping:
             # First monitor done and replaced; second installed and distinct
             assert second is not first
             assert first.done(), "prior monitor must be stopped on re-register"
-            assert session._monitor_task is second  # noqa: SLF001
+            assert session._monitor_task is second
             assert not second.done()
 
             await repository.disconnect(NodeId(1))
 
         # After disconnect, the session's monitor task is cleared
         assert NodeId(1) not in repository._sessions
-        assert session._monitor_task is None  # noqa: SLF001
+        assert session._monitor_task is None
 
     @pytest.mark.asyncio
     async def test_disconnect_unknown_ip_leaves_other_monitors_alive(
@@ -249,7 +249,7 @@ class TestBgTaskScoping:
         occupancy_checker: OccupancyChecker,
         mock_pengine: MagicMock,
     ) -> None:
-        """disconnect on an unknown IP is a no-op for every other monitor."""
+        """Disconnect on an unknown IP is a no-op for every other monitor."""
         ip_a, ip_b = "[IP]", "[IP]"
         sessions = {}
         for idx, ip in enumerate((ip_a, ip_b), 1):
@@ -269,8 +269,8 @@ class TestBgTaskScoping:
             occupancy_checker.start_occupancy_check(session_b, mock_pengine)
             await asyncio.sleep(0.05)
 
-            task_a = session_a._monitor_task  # noqa: SLF001
-            task_b = session_b._monitor_task  # noqa: SLF001
+            task_a = session_a._monitor_task
+            task_b = session_b._monitor_task
             assert task_a is not None
             assert task_b is not None
 
@@ -278,8 +278,8 @@ class TestBgTaskScoping:
 
             assert not task_a.cancelled()
             assert not task_b.cancelled()
-            assert session_a._monitor_task is task_a  # noqa: SLF001
-            assert session_b._monitor_task is task_b  # noqa: SLF001
+            assert session_a._monitor_task is task_a
+            assert session_b._monitor_task is task_b
             assert NodeId(1) in repository._sessions
             assert NodeId(2) in repository._sessions
 

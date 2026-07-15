@@ -71,11 +71,13 @@ class _AnnUnionFinder(ast.NodeVisitor):
             self._check(arg.annotation, f"param {arg.arg!r} of {node.name}()")
         if args.vararg is not None:
             self._check(
-                args.vararg.annotation, f"param *{args.vararg.arg} of {node.name}()"
+                args.vararg.annotation,
+                f"param *{args.vararg.arg} of {node.name}()",
             )
         if args.kwarg is not None:
             self._check(
-                args.kwarg.annotation, f"param **{args.kwarg.arg} of {node.name}()"
+                args.kwarg.annotation,
+                f"param **{args.kwarg.arg} of {node.name}()",
             )
         self._check(node.returns, f"return of {node.name}()")
         self._func_depth += 1

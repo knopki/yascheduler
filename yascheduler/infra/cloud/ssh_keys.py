@@ -1,3 +1,4 @@
+"""SSH key management for cloud provisioning."""
 # FILE: yascheduler/infra/cloud/ssh_keys.py
 # VERSION: 1.2.0
 #
@@ -18,8 +19,6 @@
 #   LAST_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
 #   PREVIOUS_CHANGE: v1.1.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-SSH-KEYS") at module top
 # END_CHANGE_SUMMARY
-
-"""SSH key management for cloud provisioning"""
 
 from __future__ import annotations
 
@@ -67,7 +66,9 @@ def get_or_create_ssh_key(keys_dir: Path) -> SSHKey:
     filepath.chmod(0o600)
     ssh_key.set_comment(key_name)
     logger.info(
-        "generated ssh key=%s fingerprint=%s", key_name, ssh_key.get_fingerprint("md5")
+        "generated ssh key=%s fingerprint=%s",
+        key_name,
+        ssh_key.get_fingerprint("md5"),
     )
     # END_BLOCK_GENERATE_NEW
     return ssh_key
@@ -80,7 +81,7 @@ def get_or_create_ssh_key(keys_dir: Path) -> SSHKey:
 #   LINKS: M-CLOUD-PROVISIONER
 # END_CONTRACT: get_key_name
 def get_key_name(key: SSHKey) -> str:
-    """Get SSHKey's name"""
+    """Get SSHKey's name."""
     fname_opt = key.get_filename()
     key_filename = fname_opt.decode("utf-8") if fname_opt else None
     if key_filename:

@@ -172,7 +172,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     async with uow_factory() as uow:
         persisted_node = await uow.nodes.insert(node)
         inserted_task = await uow.tasks.insert(
-            NewTask(label="stuck", engine="test_engine")
+            NewTask(label="stuck", engine="test_engine"),
         )
         await uow.commit()
     task_id = inserted_task.task_id
@@ -189,11 +189,13 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     # END_BLOCK_SEED
 
     orch = _build_orchestrator(
-        uow_factory, config_clouds=config_clouds, tracker=tracker
+        uow_factory,
+        config_clouds=config_clouds,
+        tracker=tracker,
     )
     # Simulate SSH connect always failing for the dead IP.
     orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-        side_effect=MachineConnectionError(NodeId(999), dead_ip, "connection refused")
+        side_effect=MachineConnectionError(NodeId(999), dead_ip, "connection refused"),
     )
 
     # START_BLOCK_DRIVE_PAST_GRACE
@@ -212,7 +214,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
         return_value=200.0,
     ):
         await orch._connect_machine_consumer(
-            UMessage(persisted_node.node_id, persisted_node)
+            UMessage(persisted_node.node_id, persisted_node),
         )
     # END_BLOCK_DRIVE_PAST_GRACE
 

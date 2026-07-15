@@ -1,3 +1,4 @@
+"""Azure cloud methods."""
 # FILE: yascheduler/infra/cloud/providers/az.py
 # VERSION: 1.13.0
 #
@@ -28,7 +29,6 @@
 #   PREVIOUS_CHANGE: v1.12.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-AZ") at module top
 # END_CHANGE_SUMMARY
 #
-"""Azure cloud methods"""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ async def _fetch_network_resources(
     cfg: ConfigCloudAzure,
     client: NetworkManagementClient,
 ) -> tuple:
-    """Fetch subnet and network security group for NIC creation"""
+    """Fetch subnet and network security group for NIC creation."""
     # START_BLOCK_FETCH_RESOURCES
     subnet = await client.subnets.get(
         resource_group_name=cfg.resource_group,
@@ -150,7 +150,7 @@ async def create_nic(
     client: NetworkManagementClient,
     vm_name: str,
 ) -> tuple[NetworkInterface, str]:
-    "Create network interface"
+    """Create network interface."""
     nic_name = f"{vm_name}-nic"
     ip_config_name = f"{nic_name}-ip-config"
     subnet, nsg = await _fetch_network_resources(cfg, client)
@@ -178,7 +178,8 @@ async def create_nic(
         for ip_conf in nic.ip_configurations:
             ip_addr = ip_conf.private_ip_address
     if not ip_addr:
-        raise RuntimeError("Azure VM created but no IP is assigned")
+        msg = "Azure VM created but no IP is assigned"
+        raise RuntimeError(msg)
     await client.network_interfaces.update_tags(
         cfg.resource_group,
         cast("str", nic.name),
@@ -197,7 +198,7 @@ async def create_nic(
 def _render_custom_data(
     cloud_config: CloudInitConfig | None = None,
 ) -> str | None:
-    """Render cloud-config custom data with Azure-specific boot commands"""
+    """Render cloud-config custom data with Azure-specific boot commands."""
     # START_BLOCK_RENDER_CUSTOM_DATA
     custom_data = None
     if cloud_config:
@@ -206,7 +207,8 @@ def _render_custom_data(
             "systemctl mask waagent-apt.service",
         ]
         custom_data = replace(
-            cloud_config, bootcmd=(*my_boot_cmds, *cloud_config.bootcmd)
+            cloud_config,
+            bootcmd=(*my_boot_cmds, *cloud_config.bootcmd),
         ).render_base64()
     # END_BLOCK_RENDER_CUSTOM_DATA
     return custom_data
@@ -230,9 +232,9 @@ def create_vm_params(
     tags: dict[str, str],
     cloud_config: CloudInitConfig | None = None,
 ) -> VirtualMachine:
-    """Create VirtualMachine params"""
+    """Create VirtualMachine params."""
     img_ref = ImageReference.from_dict(
-        dataclass_asdict(vm_image)  # type: ignore[arg-type]
+        dataclass_asdict(vm_image),  # type: ignore[arg-type]
     )
     pub_key = SshPublicKey(
         path=str(PurePosixPath("/home", username, ".ssh/authorized_keys")),
@@ -262,7 +264,7 @@ def create_vm_params(
             ),
         ),
         diagnostics_profile=DiagnosticsProfile(
-            boot_diagnostics=BootDiagnostics(enabled=True)
+            boot_diagnostics=BootDiagnostics(enabled=True),
         ),
     )
 
@@ -281,7 +283,7 @@ async def create_node(
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
 ) -> str:
-    """Create virtual machine with nic"""
+    """Create virtual machine with nic."""
     vm_name = get_rnd_name("yascheduler-vm")
     nic, ip_addr = await create_nic(cfg=cfg, client=nmc, vm_name=vm_name)
     vm_params = create_vm_params(
@@ -319,18 +321,23 @@ async def az_create_node(
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
 ) -> str:
-    """Create virtual machine with network interface"""
+    """Create virtual machine with network interface."""
     if not _AZURE_AVAILABLE:
-        raise ImportError(
+        msg = (
             "Azure SDK not installed. Install azure-identity and azure-mgmt-* packages."
         )
+        raise ImportError(msg)
     async with ClientSecretCredential(
-        cfg.tenant_id, cfg.client_id, cfg.client_secret
+        cfg.tenant_id,
+        cfg.client_id,
+        cfg.client_secret,
     ) as cred:
         cred = cast("AsyncTokenCredential", cred)  # fix library type errors
-        async with NetworkManagementClient(cred, cfg.subscription_id) as nmc:
-            async with ComputeManagementClient(cred, cfg.subscription_id) as cmc:
-                return await create_node(nmc, cmc, cfg, key, cloud_config)
+        async with (
+            NetworkManagementClient(cred, cfg.subscription_id) as nmc,
+            ComputeManagementClient(cred, cfg.subscription_id) as cmc,
+        ):
+            return await create_node(nmc, cmc, cfg, key, cloud_config)
 
 
 # START_CONTRACT: delete_node
@@ -346,18 +353,20 @@ async def delete_node(
     cfg: ConfigCloudAzure,
     host: str,
 ) -> None:
-    """Delete virtual machine with network interface"""
+    """Delete virtual machine with network interface."""
     async for result in cmc.virtual_machines.list(cfg.resource_group):
         vm_res = cast("VirtualMachine", result)
         tag_ip = (vm_res.tags or {}).get(ID_TAG_NAME)
         if tag_ip == host:
             poller = await cmc.virtual_machines.begin_power_off(
-                cfg.resource_group, cast("str", vm_res.name)
+                cfg.resource_group,
+                cast("str", vm_res.name),
             )
             await poller.wait()
 
             poller = await cmc.virtual_machines.begin_delete(
-                cfg.resource_group, cast("str", vm_res.name)
+                cfg.resource_group,
+                cast("str", vm_res.name),
             )
             await poller.wait()
             logger.debug("DELETE_VM", extra={"vm": vm_res.name})
@@ -369,7 +378,8 @@ async def delete_node(
         tag_ip = (nic.tags or {}).get(ID_TAG_NAME)
         if tag_ip == host:
             poller = await nmc.network_interfaces.begin_delete(
-                cfg.resource_group, cast("str", nic.name)
+                cfg.resource_group,
+                cast("str", nic.name),
             )
             await poller.wait()
             logger.debug("DELETE_NIC", extra={"nic": nic.name})
@@ -387,15 +397,20 @@ async def az_delete_node(
     cfg: ConfigCloudAzure,
     host: str,
 ) -> None:
-    """Delete virtual machine with network interface"""
+    """Delete virtual machine with network interface."""
     if not _AZURE_AVAILABLE:
-        raise ImportError(
+        msg = (
             "Azure SDK not installed. Install azure-identity and azure-mgmt-* packages."
         )
+        raise ImportError(msg)
     async with ClientSecretCredential(
-        cfg.tenant_id, cfg.client_id, cfg.client_secret
+        cfg.tenant_id,
+        cfg.client_id,
+        cfg.client_secret,
     ) as cred:
         cred = cast("AsyncTokenCredential", cred)  # fix library type errors
-        async with NetworkManagementClient(cred, cfg.subscription_id) as nmc:
-            async with ComputeManagementClient(cred, cfg.subscription_id) as cmc:
-                return await delete_node(nmc, cmc, cfg, host)
+        async with (
+            NetworkManagementClient(cred, cfg.subscription_id) as nmc,
+            ComputeManagementClient(cred, cfg.subscription_id) as cmc,
+        ):
+            return await delete_node(nmc, cmc, cfg, host)

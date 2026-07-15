@@ -57,7 +57,7 @@ async def _setup_node_and_submit(
                 port=ssh_container["port"],
                 enabled=True,
                 ncpus=None,
-            )
+            ),
         )
         await uow.commit()
 
@@ -74,7 +74,9 @@ async def _setup_node_and_submit(
 
     deps = make_cli_deps(e2e_config)
     task_id = await deps.submit(
-        "e2e retry test", {"1.input": "hello e2e"}, "test_shell"
+        "e2e retry test",
+        {"1.input": "hello e2e"},
+        "test_shell",
     )
     assert task_id.value > 0
     return task_id
@@ -105,7 +107,8 @@ async def test_consume_retry_then_success(
 ) -> None:
     """A RUNNING task whose first download_outputs returns transient errors
     (remote dir preserved) succeeds on the second consume cycle -> task DONE,
-    remote dir removed, TaskCompleted recorded."""
+    remote dir removed, TaskCompleted recorded.
+    """
     task_id = await _setup_node_and_submit(e2e_config, uow_factory, ssh_container)
 
     orchestrator = await make_daemon(e2e_config)
@@ -178,7 +181,8 @@ async def test_consume_permanent_marks_done_with_error(
 ) -> None:
     """A RUNNING task whose download_outputs returns permanent errors
     (e.g. missing output file) -> task DONE+error, remote dir removed,
-    TaskFailed recorded."""
+    TaskFailed recorded.
+    """
     task_id = await _setup_node_and_submit(e2e_config, uow_factory, ssh_container)
 
     orchestrator = await make_daemon(e2e_config)
@@ -228,7 +232,8 @@ async def test_consume_transient_preserves_remote_dir_regression(
 ) -> None:
     """Regression: when download_outputs returns transient errors, the remote
     directory still exists after consume_task returns False (the original bug
-    would have rmtree'd it, losing undownloaded outputs irrecoverably)."""
+    would have rmtree'd it, losing undownloaded outputs irrecoverably).
+    """
     task_id = await _setup_node_and_submit(e2e_config, uow_factory, ssh_container)
 
     orchestrator = await make_daemon(e2e_config)
@@ -315,7 +320,8 @@ async def test_consume_transient_preserves_remote_dir_regression(
 
 
 async def _stop_orchestrator(
-    orchestrator: Orchestrator, orch_task: asyncio.Task[None]
+    orchestrator: Orchestrator,
+    orch_task: asyncio.Task[None],
 ) -> None:
     await orchestrator.stop()
     try:

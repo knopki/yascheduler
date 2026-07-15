@@ -795,7 +795,7 @@
     <M-SSH NAME="SSH subpackage facade (internal)" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>SSH subpackage facade — internal organization of the adapters layer; re-exports repository, session, operations, and retry exceptions for the M-ADAPTERS layer facade.</purpose>
       <path>yascheduler/infra/ssh/__init__.py</path>
-      <depends>M-SSH-EXCEPTIONS, M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS</depends>
+      <depends>M-PLATFORM-PROTOCOL, M-SSH-REPOSITORY, M-SSH-SESSION, M-SSH-OPERATIONS</depends>
       <annotations>
         <export-SSHMachineRepository PURPOSE="Concrete MachineRepository implementation" />
         <export-SSHMachineSession PURPOSE="Concrete MachineSession implementation (connected-machine entity handle)" />
@@ -810,7 +810,7 @@
     <M-SSH-SESSION NAME="SSH machine session" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>SSHMachineSession — concrete connected-machine entity handle: domain identity (hostname, mutable machine snapshot, is_closed, occupy/release/update), connect-time config (adapter, platforms, data_dir, engines_dir, tasks_dir), adapter-derived accessors (path, quote, hostname), base SSH primitives (run/run_full/run_bg/upload/open_sftp/get_cpu_cores/setup_node/pgrep/list_processes), and the per-session monitor mechanism (install_monitor/cancel_monitor) with self-owned teardown (_close). Implements the MachineSession Protocol. Owns my_backoff_exc canonical partial.</purpose>
       <path>yascheduler/infra/ssh/session.py</path>
-      <depends>M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN</depends>
+      <depends>M-PLATFORM, M-PLATFORM-PROTOCOL, M-DOMAIN</depends>
       <annotations>
         <type-MachineSession PURPOSE="Domain Protocol for the connected-machine entity handle" />
         <class-SSHMachineSession PURPOSE="Concrete MachineSession implementation" />
@@ -821,7 +821,7 @@
     <M-SSH-REPOSITORY NAME="SSH machine repository" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. Implements the MachineRepository Protocol.</purpose>
       <path>yascheduler/infra/ssh/repository.py</path>
-      <depends>M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-SSH-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION</depends>
+      <depends>M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION</depends>
       <annotations>
         <class-SSHMachineRepository PURPOSE="Concrete MachineRepository port implementation owning _sessions; connect reads jump-leg identity (jump_host/jump_port/jump_username) from node — no jump kwargs in signature" />
         <class-MySSHClient PURPOSE="Insecure SSH client trusting all host keys (connection-building bit; stays)" />
@@ -833,7 +833,7 @@
     <M-SSH-OPERATIONS NAME="SSH machine operations" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>SSH single-machine operations collaborators.</purpose>
       <path>yascheduler/infra/ssh/operations/</path>
-      <depends>M-SSH-SESSION, M-PLATFORM, M-SSH-EXCEPTIONS, M-DOMAIN, M-DOMAIN-ENGINE, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
+      <depends>M-SSH-SESSION, M-PLATFORM, M-PLATFORM-PROTOCOL, M-DOMAIN, M-DOMAIN-ENGINE, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY</depends>
     </M-SSH-OPERATIONS>
 
     <M-SSH-OPS-DEPLOY NAME="Task deployer" TYPE="CORE_LOGIC" STATUS="implemented">
@@ -849,7 +849,7 @@
     <M-SSH-OPS-DOWNLOAD NAME="Output downloader" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Operates on a MachineSession; stateless.</purpose>
       <path>yascheduler/infra/ssh/operations/download.py</path>
-      <depends>M-SSH-SESSION, M-SSH-EXCEPTIONS, M-PLATFORM</depends>
+      <depends>M-SSH-SESSION, M-PLATFORM-PROTOCOL, M-PLATFORM</depends>
       <annotations>
         <class-OutputDownloader PURPOSE="Per-file SFTP-isolated download with retry and error classification" />
         <fn-download_outputs PURPOSE="Per-file SFTP-isolated download via session.open_sftp/session.path with retry, error classification, conservative post-loop rmtree" />
@@ -860,7 +860,7 @@
     <M-SSH-OPS-OCCUPANCY NAME="Occupancy checker" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>OccupancyChecker — pgrep/cmd-based occupancy check logic + monitor installer composing the session's monitor mechanism. Operates on a MachineSession; stateless.</purpose>
       <path>yascheduler/infra/ssh/operations/occupancy.py</path>
-      <depends>M-SSH-SESSION, M-DOMAIN-ENGINE, M-SSH-EXCEPTIONS</depends>
+      <depends>M-SSH-SESSION, M-DOMAIN-ENGINE, M-PLATFORM-PROTOCOL</depends>
       <annotations>
         <class-OccupancyChecker PURPOSE="Occupancy check via pgrep or check_cmd; start_occupancy_check composes session.install_monitor; stateless (takes log)" />
         <fn-occupancy_check PURPOSE="Check if engine process is still running via session.pgrep or session.run_full on check_cmd" />
@@ -980,17 +980,6 @@
         <type-AllSSHRetryExc PURPOSE="Union of all retryable SSH exceptions" />
       </annotations>
     </M-PLATFORM-PROTOCOL>
-
-    <M-SSH-EXCEPTIONS NAME="SSH exceptions" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Public SSH retry exception types — re-exports from platform protocol for infra/ssh/ consumers.</purpose>
-      <path>yascheduler/infra/ssh/exceptions.py</path>
-      <depends>M-PLATFORM-PROTOCOL</depends>
-      <annotations>
-        <type-SSHRetryExc PURPOSE="Tuple of retriable SSH exception types" />
-        <type-SFTPRetryExc PURPOSE="Tuple of retriable SFTP exception types" />
-        <type-AllSSHRetryExc PURPOSE="Union of SSHRetryExc and SFTPRetryExc" />
-      </annotations>
-    </M-SSH-EXCEPTIONS>
 
     <M-SSH-KEYS NAME="SSH key discovery" TYPE="UTILITY" STATUS="implemented">
       <purpose>Pure-function SSH private-key discovery from a keys directory; consumed by the orchestrator (injected callable), cloud provisioner, and node-management CLI.</purpose>

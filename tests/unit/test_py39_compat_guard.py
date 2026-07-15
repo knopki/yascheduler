@@ -62,7 +62,8 @@ class TestParamAndReturnViolations:
 
     def test_vararg_and_kwarg_flagged(self) -> None:
         v = check_source(
-            "def f(*args: int | None, **kw: str | None) -> None: ...\n", "m.py"
+            "def f(*args: int | None, **kw: str | None) -> None: ...\n",
+            "m.py",
         )
         contexts = {x.context for x in v}
         assert "param *args of f()" in contexts
@@ -114,7 +115,7 @@ class TestScanPaths:
         nested.mkdir()
         (nested / "suppressed.py").write_text(
             "from __future__ import annotations\n"
-            "def f(x: int | None = None) -> None: ...\n"
+            "def f(x: int | None = None) -> None: ...\n",
         )
 
         v = scan_paths([tmp_path])

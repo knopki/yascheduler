@@ -154,7 +154,7 @@ def test_apply_schema_has_node_ncpus_positive_check() -> None:
                     "SELECT constraint_name FROM information_schema.table_constraints "
                     "WHERE table_name = 'yascheduler_nodes' "
                     "AND constraint_type = 'CHECK' "
-                    "AND constraint_name = 'node_ncpus_positive'"
+                    "AND constraint_name = 'node_ncpus_positive'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -169,7 +169,7 @@ def test_apply_schema_has_node_ncpus_positive_check() -> None:
                     "SELECT is_nullable, column_default, data_type "
                     "FROM information_schema.columns "
                     "WHERE table_name = 'yascheduler_nodes' "
-                    "AND column_name = 'ncpus'"
+                    "AND column_name = 'ncpus'",
                 )
             finally:
                 conn.run("ROLLBACK")

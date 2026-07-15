@@ -51,7 +51,8 @@ def _iter_python_files(root: Path) -> list[Path]:
 
 
 def _import_first_segment(
-    node: ast.ImportFrom | ast.Import, alias: ast.alias
+    node: ast.ImportFrom | ast.Import,
+    alias: ast.alias,
 ) -> str | None:
     """Return the first dotted segment of an import's module name.
 
@@ -76,14 +77,12 @@ def _attrs_violations(path: Path, source: bytes) -> list[tuple[Path, int, str]]:
     except SyntaxError as exc:
         raise AssertionError(
             f"{path}: cannot parse (SyntaxError: {exc.msg} at line {exc.lineno}). "
-            "Fix the syntax error so the attrs-import canary can inspect this file."
+            "Fix the syntax error so the attrs-import canary can inspect this file.",
         ) from exc
     found: list[tuple[Path, int, str]] = []
     for node in ast.walk(tree):
         aliases: list[ast.alias] = []
-        if isinstance(node, ast.Import):
-            aliases = node.names
-        elif isinstance(node, ast.ImportFrom):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
             aliases = node.names
         else:
             continue
@@ -132,5 +131,5 @@ def test_no_attrs_imports_in_yascheduler() -> None:
         )
         raise AssertionError(
             "yascheduler modules must not import 'attrs' or 'attr'.\n"
-            "Offending imports:\n" + formatted
+            "Offending imports:\n" + formatted,
         )

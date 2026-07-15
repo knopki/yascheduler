@@ -40,7 +40,8 @@ class TestDaemonSystemdParsing:
     """--help exit 0 (prog=yascheduler); default --log-file None (journald); default --log-level INFO."""
 
     def test_help_exits_zero_prog_yascheduler(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])

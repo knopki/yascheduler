@@ -155,7 +155,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "refused")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "refused"),
         )
 
         # Constant return_value (never exhausts): on first failure line 309
@@ -185,7 +185,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "refused")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "refused"),
         )
 
         # Pre-seed first_seen so age = 165 - 100 = 65s >= 60s grace → abandon.
@@ -216,7 +216,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "x")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "x"),
         )
 
         # First call: failure within grace → IP recorded (constant monotonic →
@@ -242,7 +242,7 @@ class TestConnectMachineConsumerGraceTimer:
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "x")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.5", "x"),
         )
 
         # Pre-seed first_seen so age = 200 - 100 = 100s >= 60s → abandon path
@@ -270,14 +270,14 @@ class TestConnectGraceFor:
     """_connect_grace_for: per-cloud lookup with conservative fallback."""
 
     def test_known_cloud_returns_dto_default(self) -> None:
-        """hetzner config → connect_grace=60."""
+        """Hetzner config → connect_grace=60."""
         orch = make_orchestrator(config_clouds=[ConfigCloudHetzner()])
         assert orch._connect_grace_for("hetzner") == 60
 
     def test_azure_returns_120(self) -> None:
         """Azure (prefix 'az') → connect_grace=120."""
         orch = make_orchestrator(
-            config_clouds=[ConfigCloudHetzner(), ConfigCloudAzure()]
+            config_clouds=[ConfigCloudHetzner(), ConfigCloudAzure()],
         )
         assert orch._connect_grace_for("az") == 120
 
@@ -356,7 +356,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         # Gateway contains neither IP → both are yielded.
         orch._repository.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
         orch._uow_factory = MagicMock(  # type: ignore[method-assign]
-            return_value=_uow_with_nodes([static_node, cloud_node])
+            return_value=_uow_with_nodes([static_node, cloud_node]),
         )
 
         yielded_ids = [msg.id async for msg in orch._connect_machine_producer()]
@@ -385,7 +385,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         orch = make_orchestrator(config_clouds=[])
         orch._repository.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
         orch._uow_factory = MagicMock(  # type: ignore[method-assign]
-            return_value=_uow_with_nodes([static_node])
+            return_value=_uow_with_nodes([static_node]),
         )
 
         yielded_ips = [msg.id async for msg in orch._connect_machine_producer()]
@@ -393,7 +393,8 @@ class TestConnectMachineProducerYieldsStaticNodes:
 
     @pytest.mark.asyncio
     async def test_static_node_failure_retries_without_abandon(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A static node that fails SSH is retried without reaching abandon_node.
 
@@ -421,7 +422,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
 
         orch = make_orchestrator(config_clouds=[])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError(NodeId(1), "10.0.0.9", "refused")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.9", "refused"),
         )
 
         with (
@@ -429,9 +430,9 @@ class TestConnectMachineProducerYieldsStaticNodes:
                 "yascheduler.application.orchestrator.abandon_node",
                 new=AsyncMock(),
             ) as mock_abandon,
+            caplog.at_level(logging.DEBUG),
         ):
-            with caplog.at_level(logging.DEBUG):
-                await orch._connect_machine_consumer(UMessage(NodeId(1), static_node))
+            await orch._connect_machine_consumer(UMessage(NodeId(1), static_node))
 
         mock_abandon.assert_not_called()
         assert NodeId(1) not in orch._connect_failures, (
@@ -470,7 +471,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
 
         orch = make_orchestrator(config_clouds=[])
         orch._repository.connect = AsyncMock(  # type: ignore[method-assign]
-            side_effect=MachineConnectionError(NodeId(1), "10.0.0.9", "refused")
+            side_effect=MachineConnectionError(NodeId(1), "10.0.0.9", "refused"),
         )
 
         with (
@@ -499,7 +500,8 @@ class TestConnectNewNode:
     @pytest.mark.asyncio
     async def test_connect_new_node_no_jump_kwargs(self) -> None:
         """WHEN new enabled node appears, THEN repository.connect(node, client_keys, ...)
-        called with NO jump_host / jump_username arguments."""
+        called with NO jump_host / jump_username arguments.
+        """
         orch = make_orchestrator(config_clouds=[])
         connect_mock = AsyncMock(return_value=MagicMock())
         orch._repository.connect = connect_mock  # type: ignore[method-assign]
@@ -522,7 +524,8 @@ class TestConnectNewNode:
     ) -> None:
         """WHEN orchestrator calls repository.connect for a node with
         jump_host set, THEN no inline resolution loop runs (no iteration over
-        config.clouds, no read of config.remote.jump_host)."""
+        config.clouds, no read of config.remote.jump_host).
+        """
         cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
         orch = make_orchestrator(config_clouds=[cfg_cloud])
         connect_mock = AsyncMock(return_value=MagicMock())

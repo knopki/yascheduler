@@ -173,7 +173,8 @@ class TestMakeDaemon:
         session = MagicMock()
         session.close = AsyncMock()
         with patch(
-            "yascheduler.entrypoints.di.aiohttp.ClientSession", return_value=session
+            "yascheduler.entrypoints.di.aiohttp.ClientSession",
+            return_value=session,
         ):
             yield session
 
@@ -185,14 +186,15 @@ class TestMakeDaemon:
 
         with (
             patch(
-                "yascheduler.entrypoints.di.resolve_adapter", return_value=None
+                "yascheduler.entrypoints.di.resolve_adapter",
+                return_value=None,
             ) as mock_resolve,
             patch("yascheduler.entrypoints.di.SSHMachineRepository") as mock_repo_ctor,
             patch("yascheduler.entrypoints.di.TaskDeployer") as mock_deploy_ctor,
             patch("yascheduler.entrypoints.di.OutputDownloader") as mock_dl_ctor,
             patch("yascheduler.entrypoints.di.OccupancyChecker") as mock_occ_ctor,
             patch(
-                "yascheduler.entrypoints.di.CloudProvisionerImpl"
+                "yascheduler.entrypoints.di.CloudProvisionerImpl",
             ) as mock_clouds_ctor,
             patch(
                 "yascheduler.entrypoints.di.Orchestrator",

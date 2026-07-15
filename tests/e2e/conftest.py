@@ -127,7 +127,7 @@ def _db_config(postgres_container: PostgresContainer) -> PostgresDbConfig:
 
 @pytest.fixture(scope="session")
 async def ssh_pool(
-    tmp_path_factory: Any,  # noqa: ANN401
+    tmp_path_factory: Any,
 ) -> AsyncGenerator[list[dict[str, Any]], None]:
     # START_BLOCK_KEYPAIR
     key_dir = tmp_path_factory.mktemp("ssh_keys")
@@ -164,7 +164,7 @@ async def ssh_pool(
                     "port": 2222,
                     "username": _SSH_USERNAME,
                     "key_path": PurePosixPath(str(key_path)),
-                }
+                },
             )
         assert entries[0]["host"] != entries[1]["host"], (
             "ssh_pool containers must have distinct bridge IPs; "
@@ -187,7 +187,7 @@ def ssh_container(ssh_pool: list[dict[str, Any]]) -> dict[str, Any]:
 
 @pytest.fixture(scope="session")
 def e2e_config(
-    tmp_path_factory: Any,  # noqa: ANN401
+    tmp_path_factory: Any,
     _db_config: PostgresDbConfig,
     ssh_pool: list[dict[str, Any]],
 ) -> Config:
@@ -242,10 +242,8 @@ def e2e_config(
 
     # START_BLOCK_ENV_CONFIG
     os.environ["YASCHEDULER_CONF_PATH"] = str(ini_path)
-    config = parse_config(str(ini_path))
+    return parse_config(str(ini_path))
     # END_BLOCK_ENV_CONFIG
-
-    return config
 
 
 @pytest.fixture(scope="session")

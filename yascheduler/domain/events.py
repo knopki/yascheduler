@@ -1,3 +1,4 @@
+"""Domain events for task lifecycle transitions."""
 # FILE: yascheduler/domain/events.py
 # VERSION: 1.4.0
 # START_MODULE_CONTRACT
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class DomainEvent:
+    """Domainevent."""
+
     task_id: TaskId
     webhook_url: str | None
     webhook_custom_params: dict[str, object]
@@ -40,27 +43,37 @@ class DomainEvent:
 
 @dataclass(frozen=True)
 class TaskCreated(DomainEvent):
+    """Taskcreated."""
+
     engine_name: str
 
 
 @dataclass(frozen=True)
 class TaskAllocated(DomainEvent):
+    """Taskallocated."""
+
     node_id: NodeId
     engine_name: str
 
 
 @dataclass(frozen=True)
 class TaskCompleted(DomainEvent):
+    """Taskcompleted."""
+
     local_folder: str
 
 
 @dataclass(frozen=True)
 class TaskFailed(DomainEvent):
+    """Taskfailed."""
+
     reason: str
 
 
 @dataclass(frozen=True)
 class TaskAbandoned(DomainEvent):
+    """Taskabandoned."""
+
     node_id: NodeId
 
 

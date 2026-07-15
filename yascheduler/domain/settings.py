@@ -1,3 +1,4 @@
+"""Cross-layer application settings as frozen stdlib dataclasses — local daemon config and remote SSH defaults."""
 # FILE: yascheduler/domain/settings.py
 # VERSION: 1.4.0
 # START_MODULE_CONTRACT
@@ -19,7 +20,7 @@
 
 from __future__ import annotations
 
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path, PurePath
 from typing import cast
 
@@ -70,28 +71,26 @@ class LocalSettings:
                 continue
             if f.name in _GE1_LIMIT_FIELDS:
                 if not isinstance(value, int):
-                    raise ValueError(
-                        f"{f.name} must be int, got {type(value).__name__}"
-                    )
+                    msg = f"{f.name} must be int, got {type(value).__name__}"
+                    raise ValueError(msg)
                 if value < 1:
-                    raise ValueError(f"{f.name} must be >= 1, got {value}")
+                    msg = f"{f.name} must be >= 1, got {value}"
+                    raise ValueError(msg)
             elif f.name == "webhook_reqs_limit":
                 if not isinstance(value, int):
-                    raise ValueError(
-                        f"webhook_reqs_limit must be int, got {type(value).__name__}"
-                    )
+                    msg = f"webhook_reqs_limit must be int, got {type(value).__name__}"
+                    raise ValueError(msg)
                 if value < 0:
-                    raise ValueError(f"webhook_reqs_limit must be >= 0, got {value}")
+                    msg = f"webhook_reqs_limit must be >= 0, got {value}"
+                    raise ValueError(msg)
             elif f.name in ("data_dir", "tasks_dir", "engines_dir", "keys_dir"):
                 if not isinstance(value, Path):
-                    raise ValueError(
-                        f"{f.name} must be Path, got {type(value).__name__}"
-                    )
+                    msg = f"{f.name} must be Path, got {type(value).__name__}"
+                    raise ValueError(msg)
             elif f.name == "webhook_url":
                 if not isinstance(value, str):
-                    raise ValueError(
-                        f"webhook_url must be str, got {type(value).__name__}"
-                    )
+                    msg = f"webhook_url must be str, got {type(value).__name__}"
+                    raise ValueError(msg)
 
     # END_BLOCK_VALIDATE
 
@@ -100,9 +99,9 @@ class LocalSettings:
 class RemoteDefaults:
     """Remote machine defaults: data directories, SSH username, jump host."""
 
-    data_dir: PurePath = PurePath("./data")
-    tasks_dir: PurePath = PurePath("./data/tasks")
-    engines_dir: PurePath = PurePath("./data/engines")
+    data_dir: PurePath = field(default_factory=lambda: PurePath("./data"))
+    tasks_dir: PurePath = field(default_factory=lambda: PurePath("./data/tasks"))
+    engines_dir: PurePath = field(default_factory=lambda: PurePath("./data/engines"))
     username: str = "root"
     jump_username: str | None = None
     jump_host: str | None = None
@@ -114,7 +113,7 @@ class RemoteDefaults:
 _INT_DEFAULTS: dict[str, int] = {
     f.name: cast("int", f.default)
     for f in fields(LocalSettings)
-    if f.name in (_GE1_LIMIT_FIELDS + ("webhook_reqs_limit",))
+    if f.name in ((*_GE1_LIMIT_FIELDS, "webhook_reqs_limit"))
     and f.default is not MISSING
 }
 

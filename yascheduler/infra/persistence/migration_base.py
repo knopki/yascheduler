@@ -1,3 +1,4 @@
+"""Migration base class for .py migrations with injected config/conn/log and begin()/commit() helpers."""
 # FILE: yascheduler/infra/persistence/migration_base.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
@@ -68,4 +69,5 @@ class Migration:
         self.conn.run("COMMIT")
 
     def migrate(self) -> None:
+        """Run a single migration step."""
         raise NotImplementedError

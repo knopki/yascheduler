@@ -43,7 +43,8 @@ class TestDaemonizeParsing:
     """argparse: --help prog=yascheduler, --bogus exit 2, --config missing exit 2, defaults."""
 
     def test_help_exits_zero_prog_yascheduler(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])
@@ -56,7 +57,8 @@ class TestDaemonizeParsing:
         assert "--log-file" in out
 
     def test_log_level_short_alias_parses(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # `yascheduler -l DEBUG` MUST work (pre-refactor backward compatibility).
         cfg_logger_spy = MagicMock(return_value=MagicMock())
@@ -142,7 +144,9 @@ class TestDaemonizeRuntime:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(
-            daemonize_mod, "configure_logger", MagicMock(return_value=MagicMock())
+            daemonize_mod,
+            "configure_logger",
+            MagicMock(return_value=MagicMock()),
         )
         monkeypatch.setattr(
             daemonize_mod,
@@ -169,7 +173,9 @@ class TestDaemonizeRuntime:
         cfg_spy = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(daemonize_mod, "parse_config", cfg_spy)
         monkeypatch.setattr(
-            daemonize_mod, "configure_logger", MagicMock(return_value=MagicMock())
+            daemonize_mod,
+            "configure_logger",
+            MagicMock(return_value=MagicMock()),
         )
 
         def fake_run(coro: Coroutine) -> None:

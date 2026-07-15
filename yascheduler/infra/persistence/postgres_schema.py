@@ -1,3 +1,4 @@
+"""Synchronous, transactional application of schema.sql via pg8000."""
 # FILE: yascheduler/infra/persistence/postgres_schema.py
 # VERSION: 1.0.1
 # START_MODULE_CONTRACT
@@ -17,6 +18,8 @@
 #   PREVIOUS_CHANGE: v1.1.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
 # END_CHANGE_SUMMARY
 
+import contextlib
+
 from pg8000 import DatabaseError
 from pg8000.native import Connection
 
@@ -32,6 +35,7 @@ from .sql_loader import load_query
 #   LINKS: M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG, pg8000.native.Connection
 # END_CONTRACT: apply_schema
 def apply_schema(config: PostgresDbConfig) -> None:
+    """Apply schema."""
     conn: Connection | None = None
     try:
         # START_BLOCK_OPEN_CONNECTION
@@ -54,22 +58,18 @@ def apply_schema(config: PostgresDbConfig) -> None:
     except DatabaseError as e:
         # START_BLOCK_HANDLE_EXISTING
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.run("ROLLBACK")
-            except Exception:
-                pass
         if "already exists" in str(e.args[0]):
-            print("Database already initialized!")
+            pass
         raise
         # END_BLOCK_HANDLE_EXISTING
 
     except BaseException:
         # START_BLOCK_ROLLBACK
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.run("ROLLBACK")
-            except Exception:
-                pass
         raise
         # END_BLOCK_ROLLBACK
 

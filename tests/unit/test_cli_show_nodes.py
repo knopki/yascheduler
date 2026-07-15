@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import sys
 from pathlib import Path, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
@@ -191,7 +190,11 @@ class TestShowNodesRendering:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         node1 = Node(
-            node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True, port=22
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            enabled=True,
+            port=22,
         )
         node2 = Node(
             node_id=NodeId(2),
@@ -207,8 +210,8 @@ class TestShowNodesRendering:
                     task_id=1,
                     label="my_job",
                     allocated_node_id=NodeId(1),
-                )
-            ]
+                ),
+            ],
         )
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
 
@@ -292,8 +295,8 @@ class TestShowNodesRendering:
         )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=7, label="job7", allocated_node_id=NodeId(1))
-            ]
+                make_task(task_id=7, label="job7", allocated_node_id=NodeId(1)),
+            ],
         )
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
 
@@ -303,7 +306,7 @@ class TestShowNodesRendering:
         data = _json.loads(out)
         assert isinstance(data, list)
         assert len(data) == 2
-        assert list(data[0])[0] == "node_id"
+        assert next(iter(data[0])) == "node_id"
         assert data[0]["node_id"] == 1
         # Busy node: raw port=22 (not "-" or null), ncpus=None (null in JSON), enabled bool,
         # cloud null, occupied_by object.
@@ -321,7 +324,7 @@ class TestShowNodesRendering:
         assert data[0]["updated_at"] is not None
         assert data[0]["occupied_by"] == {"task_id": 7, "label": "job7"}
         # Free node: occupied_by null.
-        assert list(data[1])[0] == "node_id"
+        assert next(iter(data[1])) == "node_id"
         assert data[1]["node_id"] == 2
         assert data[1]["hostname"] == "10.0.0.2"
         assert data[1]["port"] == 2222
@@ -599,13 +602,25 @@ class TestShowNodesOrder:
         _config, uow, _deps = stub_config_deps
         nodes = [
             Node(
-                node_id=NodeId(3), hostname="10.0.0.3", ncpus=4, enabled=True, port=22
+                node_id=NodeId(3),
+                hostname="10.0.0.3",
+                ncpus=4,
+                enabled=True,
+                port=22,
             ),
             Node(
-                node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True, port=22
+                node_id=NodeId(1),
+                hostname="10.0.0.1",
+                ncpus=4,
+                enabled=True,
+                port=22,
             ),
             Node(
-                node_id=NodeId(2), hostname="10.0.0.2", ncpus=4, enabled=True, port=22
+                node_id=NodeId(2),
+                hostname="10.0.0.2",
+                ncpus=4,
+                enabled=True,
+                port=22,
             ),
         ]
         _wire(uow, nodes)
@@ -668,7 +683,7 @@ class TestShowNodesStructure:
         # Also assert the module globals don't expose rich/tabulate.
         assert "rich" not in show_nodes_mod.__dict__
         assert "tabulate" not in show_nodes_mod.__dict__
-        assert "rich" not in sys.modules or "tabulate" not in sys.modules or True
+        assert True
 
     def test_fetch_nodes_view_is_o_n_plus_m(
         self,
@@ -685,7 +700,7 @@ class TestShowNodesStructure:
                     ncpus=4,
                     enabled=True,
                     port=22,
-                )
+                ),
             ],
             [make_task(task_id=1, label="j1", allocated_node_id=NodeId(1))],
         )
@@ -707,7 +722,8 @@ class TestShowNodesConfigLogLevel:
     """--config and --log-level argparse + behavior scenarios (defaults WARNING)."""
 
     def test_help_lists_config_and_log_level(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])
@@ -717,7 +733,8 @@ class TestShowNodesConfigLogLevel:
         assert "--log-level" in out
 
     def test_config_nonexistent_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--config", "/nonexistent.conf"])
@@ -761,7 +778,9 @@ class TestShowNodesConfigLogLevel:
         _wire(uow, [])
         deps = make_mock_deps(make_mock_config(), uow)
         monkeypatch.setattr(
-            show_nodes_mod, "make_cli_deps", MagicMock(return_value=deps)
+            show_nodes_mod,
+            "make_cli_deps",
+            MagicMock(return_value=deps),
         )
         _run(["--config", str(custom_conf)])
         from_config_spy.assert_called_once_with(custom_conf)

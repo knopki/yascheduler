@@ -49,23 +49,23 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-def _make_task(**overrides: Any) -> Task:  # noqa: ANN401
+def _make_task(**overrides: Any) -> Task:
     """Build a Task with default typed fields; overrides win."""
-    base: dict[str, Any] = dict(
-        task_id=TaskId(1),
-        engine="test_engine",
-        created_at=datetime(2025, 1, 1),
-        updated_at=datetime(2025, 1, 1),
-        label="test",
-        local_folder=None,
-        remote_folder=None,
-        webhook_url=None,
-        webhook_custom_params={},
-        error=None,
-        extra={},
-        status=TaskStatus.TO_DO,
-        allocated_node_id=None,
-    )
+    base: dict[str, Any] = {
+        "task_id": TaskId(1),
+        "engine": "test_engine",
+        "created_at": datetime(2025, 1, 1),
+        "updated_at": datetime(2025, 1, 1),
+        "label": "test",
+        "local_folder": None,
+        "remote_folder": None,
+        "webhook_url": None,
+        "webhook_custom_params": {},
+        "error": None,
+        "extra": {},
+        "status": TaskStatus.TO_DO,
+        "allocated_node_id": None,
+    }
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 
@@ -115,7 +115,7 @@ def make_orchestrator() -> Orchestrator:
     engines = MagicMock(spec=EngineRepository)
     engines.values.return_value = [engine]
 
-    orch = Orchestrator(
+    return Orchestrator(
         local_settings=config.local,
         remote_defaults=config.remote,
         uow_factory=uow_factory,
@@ -132,7 +132,6 @@ def make_orchestrator() -> Orchestrator:
         allocation_lock=MagicMock(),
         list_private_keys_fn=lambda _keys_dir: [],
     )
-    return orch
 
 
 # =============================================================================
@@ -175,7 +174,11 @@ class TestStartTaskOnMachine:
         assert result is True
         session.get_cpu_cores.assert_not_called()
         orch._task_deployer.start_task_on_machine.assert_awaited_once_with(
-            session, engine, task, 8, orch._remote_defaults.engines_dir
+            session,
+            engine,
+            task,
+            8,
+            orch._remote_defaults.engines_dir,
         )
 
     @pytest.mark.asyncio
@@ -210,7 +213,11 @@ class TestStartTaskOnMachine:
         assert result is True
         session.get_cpu_cores.assert_awaited_once()
         orch._task_deployer.start_task_on_machine.assert_awaited_once_with(
-            session, engine, task, 4, orch._remote_defaults.engines_dir
+            session,
+            engine,
+            task,
+            4,
+            orch._remote_defaults.engines_dir,
         )
 
     @pytest.mark.asyncio
@@ -242,5 +249,9 @@ class TestStartTaskOnMachine:
         assert result is True
         session.get_cpu_cores.assert_awaited_once()
         orch._task_deployer.start_task_on_machine.assert_awaited_once_with(
-            session, engine, task, 4, orch._remote_defaults.engines_dir
+            session,
+            engine,
+            task,
+            4,
+            orch._remote_defaults.engines_dir,
         )

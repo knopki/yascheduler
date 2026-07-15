@@ -1,3 +1,4 @@
+"""Adapters layer facade — sole public surface for cross-layer consumers (application, composition root)."""
 # FILE: yascheduler/infra/__init__.py
 # VERSION: 1.5.0
 # START_MODULE_CONTRACT
@@ -47,12 +48,12 @@ __all__ = [
     "OccupancyChecker",
     "OutputDownloader",
     "PostgresUnitOfWork",
-    "SSHMachineRepository",
     "SFTPRetryExc",
+    "SSHMachineRepository",
     "TaskDeployer",
-    "webhook_handler",
-    "resolve_adapter",
     "apply_migrations",
     "apply_schema",
     "list_private_keys",
+    "resolve_adapter",
+    "webhook_handler",
 ]

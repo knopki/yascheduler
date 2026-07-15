@@ -136,7 +136,8 @@ class TestAddLogLevelArg:
         assert args.log_level == "INFO"
 
     def test_long_only_by_default_rejects_short_l(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         # Without `short`, only --log-level is registered; -l is unrecognized.
         parser = _parser()
@@ -153,7 +154,8 @@ class TestAddLogLevelArg:
         assert parser.parse_args(["--log-level", "DEBUG"]).log_level == "DEBUG"
 
     def test_short_alias_honors_choices(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         # The short alias MUST reject invalid choices just like --log-level.
         parser = _parser()

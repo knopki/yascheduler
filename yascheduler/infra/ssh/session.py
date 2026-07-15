@@ -1,9 +1,10 @@
+"""Connected-machine entity handle owning SSH connection, machine state, and per-session monitor lifecycle."""
 # FILE: yascheduler/infra/ssh/session.py
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
 #   PURPOSE: Connected-machine entity handle owning SSH connection, machine state, and per-session monitor lifecycle.
 #   SCOPE: SSHMachineSession class (owns _conn, _adapter, _machine, _closed, _monitor_task) + my_backoff_exc canonical partial.
-#   DEPENDS: M-DOMAIN, M-SSH-EXCEPTIONS, M-PLATFORM
+#   DEPENDS: M-DOMAIN, M-PLATFORM, M-PLATFORM-PROTOCOL
 #   LINKS: M-SSH-SESSION
 # END_MODULE_CONTRACT
 #
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -31,8 +32,8 @@ import backoff
 
 from yascheduler.domain import ConnectedMachine, ProcessResult
 
-from .exceptions import AllSSHRetryExc, SSHRetryExc
 from .platform import make_run_fn
+from .platform.protocol import AllSSHRetryExc, SSHRetryExc
 
 logger = logging.getLogger(__name__)
 
@@ -114,14 +115,17 @@ class SSHMachineSession:
 
     @property
     def hostname(self) -> str:
+        """Remote machine hostname (immutable after construction)."""
         return self._hostname
 
     @property
     def machine(self) -> ConnectedMachine:
+        """Connected machine runtime state."""
         return self._machine
 
     @property
     def is_closed(self) -> bool:
+        """``True`` when the underlying connection is closed."""
         return self._closed
 
     # START_CONTRACT: SSHMachineSession.occupy
@@ -132,6 +136,7 @@ class SSHMachineSession:
     #   LINKS: M-SSH-SESSION, M-DOMAIN-MODEL
     # END_CONTRACT: SSHMachineSession.occupy
     def occupy(self) -> None:
+        """Read-modify-write transitioning the snapshot to BUSY."""
         self._machine = self._machine.occupy()
 
     # START_CONTRACT: SSHMachineSession.release
@@ -142,6 +147,7 @@ class SSHMachineSession:
     #   LINKS: M-SSH-SESSION, M-DOMAIN-MODEL
     # END_CONTRACT: SSHMachineSession.release
     def release(self) -> None:
+        """Read-modify-write transitioning the snapshot to FREE with free_since = time."""
         self._machine = self._machine.release()
 
     # START_CONTRACT: SSHMachineSession.update
@@ -152,28 +158,34 @@ class SSHMachineSession:
     #   LINKS: M-SSH-SESSION, M-DOMAIN-MODEL
     # END_CONTRACT: SSHMachineSession.update
     def update(self, machine: ConnectedMachine) -> None:
+        """Replace the internal machine snapshot (used by rollback paths)."""
         self._machine = machine
 
     # ---- Connect-time config (read-only) ----
 
     @property
     def adapter(self) -> RemoteMachineAdapter:
+        """Platform-specific remote machine adapter (resolved at connect time)."""
         return self._adapter
 
     @property
     def platforms(self) -> Sequence[str]:
+        """Platform tags resolved at connect time."""
         return self._platforms
 
     @property
     def data_dir(self) -> PurePath:
+        """Remote data directory path configured at connect time."""
         return self._data_dir
 
     @property
     def engines_dir(self) -> PurePath:
+        """Remote engines directory path configured at connect time."""
         return self._engines_dir
 
     @property
     def tasks_dir(self) -> PurePath:
+        """Remote tasks directory path configured at connect time."""
         return self._tasks_dir
 
     # ---- Cache priming (repository only) ----
@@ -186,10 +198,12 @@ class SSHMachineSession:
 
     @property
     def path(self) -> type[PurePath]:
+        """``PurePath`` subclass matching the remote OS path semantics."""
         return self._adapter.path
 
     @property
     def quote(self) -> QuoteCallable:
+        """Shell-quoting callable matching the remote OS syntax."""
         return self._adapter.quote
 
     # ---- Base primitives ----
@@ -250,7 +264,7 @@ class SSHMachineSession:
         # END_BLOCK_CHECK_CACHE
         # START_BLOCK_DISCOVER
         ncpus = await self._adapter.get_cpu_cores(
-            make_run_fn(self._conn, self._adapter)
+            make_run_fn(self._conn, self._adapter),
         )
         self._cached_ncpus = ncpus
         # END_BLOCK_DISCOVER
@@ -281,7 +295,10 @@ class SSHMachineSession:
     ) -> AsyncGenerator[ProcessInfo, None]:
         """Yield remote processes matching pattern."""
         async for proc in self._adapter.pgrep(
-            self._conn, self._adapter.quote, pattern, full
+            self._conn,
+            self._adapter.quote,
+            pattern,
+            full=full,
         ):
             yield proc
 
@@ -289,8 +306,6 @@ class SSHMachineSession:
         """Yield all running processes on remote machine."""
         async for proc in self._adapter.list_processes(self._conn, None):
             yield proc
-
-    # ---- Monitor mechanism (generic, Engine-agnostic) ----
 
     # START_CONTRACT: SSHMachineSession.install_monitor
     #   PURPOSE: Generic occupancy-monitor installer on this session. Re-installing cancels the prior monitor before installing the new one. Idempotent on a closed session: returns immediately without installing.
@@ -386,10 +401,8 @@ class SSHMachineSession:
             self._monitor_task = None
             logger.debug("CANCEL_MONITOR", extra={"hostname": self._hostname})
             task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
         # END_BLOCK_CANCEL_MONITOR
         # START_BLOCK_CLOSE_CONN
         if self._conn._transport:

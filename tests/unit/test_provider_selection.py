@@ -88,7 +88,10 @@ class TestSelectProviderPure:
         configs = {"aws": _make_config(max_nodes=10, priority=100)}
         # Request both; aws matches linux
         result = select_provider_pure(
-            adapters, configs, ["linux", "windows"], {"aws": 0}
+            adapters,
+            configs,
+            ["linux", "windows"],
+            {"aws": 0},
         )
         assert result is adapter_a
 

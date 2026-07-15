@@ -100,10 +100,10 @@ from yascheduler.infra.persistence import PostgresDbConfig
 #   LINKS: [M-INFRA-DB-CONFIG]
 # END_CONTRACT: test_config_db_full_overrides
 def test_config_db_full_overrides() -> None:
-    """parses full INI section with overrides"""
+    """Parses full INI section with overrides"""
     cfg = ConfigParser()
     cfg.read_string(
-        "[db]\nuser=myuser\npassword=secret\ndatabase=mydb\nhost=db.example.com\nport=5433\n"
+        "[db]\nuser=myuser\npassword=secret\ndatabase=mydb\nhost=db.example.com\nport=5433\n",
     )
     db = _parse_db_section(cfg["db"])
     assert db.user == "myuser"
@@ -121,7 +121,7 @@ def test_config_db_full_overrides() -> None:
 #   LINKS: [M-INFRA-DB-CONFIG]
 # END_CONTRACT: test_config_db_defaults
 def test_config_db_defaults() -> None:
-    """applies defaults when section has no keys"""
+    """Applies defaults when section has no keys"""
     cfg = ConfigParser()
     cfg.read_string("[db]\n")
     db = _parse_db_section(cfg["db"])
@@ -140,7 +140,7 @@ def test_config_db_defaults() -> None:
 #   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_local_custom_data_dir
 def test_config_local_custom_data_dir() -> None:
-    """derived paths resolve under custom data_dir"""
+    """Derived paths resolve under custom data_dir"""
     cfg = ConfigParser()
     cfg.read_string("[local]\ndata_dir=/opt/data\n")
     local = _parse_local_section(cfg["local"])
@@ -155,7 +155,7 @@ def test_config_local_custom_data_dir() -> None:
 #   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_local_defaults
 def test_config_local_defaults() -> None:
-    """applies numeric defaults for empty section"""
+    """Applies numeric defaults for empty section"""
     cfg = ConfigParser()
     cfg.read_string("[local]\n")
     local = _parse_local_section(cfg["local"])
@@ -291,10 +291,10 @@ def test_config_remote_jump_port_rejects_non_integer() -> None:
 #   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_remote_with_jump_host
 def test_config_remote_with_jump_host() -> None:
-    """parses jump host fields"""
+    """Parses jump host fields"""
     cfg = ConfigParser()
     cfg.read_string(
-        "[remote]\nuser=admin\njump_user=jumper\njump_host=bastion.example.com\n"
+        "[remote]\nuser=admin\njump_user=jumper\njump_host=bastion.example.com\n",
     )
     remote = _parse_remote_section(cfg["remote"])
     assert remote.username == "admin"
@@ -310,7 +310,7 @@ def test_config_remote_with_jump_host() -> None:
 #   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_remote_without_jump_host
 def test_config_remote_without_jump_host() -> None:
-    """jump host fields default to None"""
+    """Jump host fields default to None"""
     cfg = ConfigParser()
     cfg.read_string("[remote]\nuser=root\n")
     remote = _parse_remote_section(cfg["remote"])
@@ -385,7 +385,8 @@ def test_config_cloud_upcloud_jump_port_rejects_65536() -> None:
     cfg = ConfigParser()
     cfg.read_string("[clouds]\nupcloud_login=user\nupcloud_jump_port=70000\n")
     with pytest.raises(
-        ValueError, match="upcloud jump_port must be between 1 and 65535"
+        ValueError,
+        match="upcloud jump_port must be between 1 and 65535",
     ):
         parse_clouds(cfg, RemoteDefaults())
 
@@ -406,7 +407,7 @@ def test_config_cloud_hetzner_jump_port_rejects_non_integer() -> None:
 
 
 def test_config_cloud_hetzner_parsing() -> None:
-    """parses hetzner token and username via parse_cloud_section"""
+    """Parses hetzner token and username via parse_cloud_section"""
     cfg = ConfigParser()
     cfg.read_string("[clouds]\nhetzner_token=abc123\nhetzner_user=root\n")
     hetzner = cast("ConfigCloudHetzner", parse_cloud_section(cfg["clouds"], "hetzner"))
@@ -424,7 +425,7 @@ def test_config_cloud_hetzner_parsing() -> None:
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: test_config_cloud_upcloud_parsing
 def test_config_cloud_upcloud_parsing() -> None:
-    """parses upcloud login and password via parse_cloud_section"""
+    """Parses upcloud login and password via parse_cloud_section"""
     cfg = ConfigParser()
     cfg.read_string("[clouds]\nupcloud_login=user\nupcloud_password=pass\n")
     upcloud = cast("ConfigCloudUpcloud", parse_cloud_section(cfg["clouds"], "upcloud"))
@@ -441,7 +442,7 @@ def test_config_cloud_upcloud_parsing() -> None:
 #   LINKS: [M-CLOUD-CONFIGS]
 # END_CONTRACT: test_azure_image_reference_from_urn
 def test_azure_image_reference_from_urn() -> None:
-    """parses URN into publisher, offer, sku, version"""
+    """Parses URN into publisher, offer, sku, version"""
     ref = AzureImageReference.from_urn("Publisher:Offer:SKU:1.0")
     assert ref.publisher == "Publisher"
     assert ref.offer == "Offer"
@@ -457,7 +458,7 @@ def test_azure_image_reference_from_urn() -> None:
 #   LINKS: [M-CLOUD-CONFIGS]
 # END_CONTRACT: test_azure_image_reference_invalid_urn
 def test_azure_image_reference_invalid_urn() -> None:
-    """raises ValueError for too-short URN"""
+    """Raises ValueError for too-short URN"""
     with pytest.raises(ValueError):
         AzureImageReference.from_urn("a:b:c")
 
@@ -485,7 +486,7 @@ def test_config_cloud_azure_rejects_root() -> None:
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: test_config_cloud_hetzner_package_upgrade_false
 @pytest.mark.filterwarnings(
-    "error::yascheduler.entrypoints._config_utils.ConfigWarning"
+    "error::yascheduler.entrypoints._config_utils.ConfigWarning",
 )
 def test_config_cloud_hetzner_package_upgrade_false() -> None:
     """[clouds] hetzner_package_upgrade=false → ConfigCloudHetzner.package_upgrade is False (no ConfigWarning)"""
@@ -504,7 +505,7 @@ def test_config_cloud_hetzner_package_upgrade_false() -> None:
 #   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: test_config_cloud_package_upgrade_defaults_true
 def test_config_cloud_package_upgrade_defaults_true() -> None:
-    """absent hetzner_package_upgrade → ConfigCloudHetzner.package_upgrade is True (default)"""
+    """Absent hetzner_package_upgrade → ConfigCloudHetzner.package_upgrade is True (default)"""
     cfg = ConfigParser()
     cfg.read_string("[clouds]\nhetzner_token=t\n")
     clouds = parse_clouds(cfg, RemoteDefaults())
@@ -533,7 +534,7 @@ def test_package_upgrade_not_on_cloud_config_protocol() -> None:
 #   LINKS: M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
 # END_CONTRACT: test_local_cloud_package_upgrade_now_warns_unknown
 def test_local_cloud_package_upgrade_now_warns_unknown() -> None:
-    """a leftover [local] cloud_package_upgrade=false emits a ConfigWarning (clean break, no deprecation shim)"""
+    """A leftover [local] cloud_package_upgrade=false emits a ConfigWarning (clean break, no deprecation shim)"""
     cfg = ConfigParser()
     cfg.read_string("[local]\ncloud_package_upgrade=false\n")
     with pytest.warns(ConfigWarning, match="unknown fields"):
@@ -549,16 +550,16 @@ def test_local_cloud_package_upgrade_now_warns_unknown() -> None:
 #   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_valid_parsing
 def test_engine_valid_parsing() -> None:
-    """parses a valid engine section"""
+    """Parses a valid engine section"""
     cfg = ConfigParser()
     cfg.read_string(
         "[engine.test]\n"
         "spawn={task_path} {engine_path} {ncpus}\n"
         "check_cmd=echo ok\n"
         "input_files=input.txt\n"
-        "output_files=output.txt\n"
+        "output_files=output.txt\n",
     )
-    engine = parse_engine_section(cfg["engine.test"], PurePath("."))
+    engine = parse_engine_section(cfg["engine.test"], PurePath())
     assert engine.name == "test"
     assert engine.spawn == "{task_path} {engine_path} {ncpus}"
     assert engine.check_cmd == "echo ok"
@@ -574,7 +575,7 @@ def test_engine_valid_parsing() -> None:
 #   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_invalid_spawn_template
 def test_engine_invalid_spawn_template() -> None:
-    """raises ValueError for unknown template placeholder in spawn"""
+    """Raises ValueError for unknown template placeholder in spawn"""
     with pytest.raises(ValueError, match="unknown"):
         cfg = ConfigParser()
         cfg.read_string(
@@ -582,9 +583,9 @@ def test_engine_invalid_spawn_template() -> None:
             "spawn={unknown} {engine_path}\n"
             "check_cmd=echo ok\n"
             "input_files=input.txt\n"
-            "output_files=out.txt\n"
+            "output_files=out.txt\n",
         )
-        parse_engine_section(cfg["engine.test"], PurePath("."))
+        parse_engine_section(cfg["engine.test"], PurePath())
 
 
 # START_CONTRACT: test_engine_missing_check_methods
@@ -595,16 +596,16 @@ def test_engine_invalid_spawn_template() -> None:
 #   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_missing_check_methods
 def test_engine_missing_check_methods() -> None:
-    """raises ValueError when no check method is set"""
+    """Raises ValueError when no check method is set"""
     with pytest.raises(ValueError):
         cfg = ConfigParser()
         cfg.read_string(
             "[engine.test]\n"
             "spawn={task_path}\n"
             "input_files=input.txt\n"
-            "output_files=out.txt\n"
+            "output_files=out.txt\n",
         )
-        parse_engine_section(cfg["engine.test"], PurePath("."))
+        parse_engine_section(cfg["engine.test"], PurePath())
 
 
 # START_CONTRACT: test_engine_empty_input_files
@@ -618,10 +619,10 @@ def test_engine_empty_input_files() -> None:
     """parse_engine_section raises ValueError when input_files is empty"""
     cfg = ConfigParser()
     cfg.read_string(
-        "[engine.test]\nspawn={task_path}\ncheck_cmd=echo ok\noutput_files=output.txt\n"
+        "[engine.test]\nspawn={task_path}\ncheck_cmd=echo ok\noutput_files=output.txt\n",
     )
     with pytest.raises(ValueError):
-        parse_engine_section(cfg["engine.test"], PurePath("."))
+        parse_engine_section(cfg["engine.test"], PurePath())
 
 
 # START_CONTRACT: test_engine_repository_filter
@@ -632,7 +633,7 @@ def test_engine_empty_input_files() -> None:
 #   LINKS: [M-DOMAIN-ENGINE]
 # END_CONTRACT: test_engine_repository_filter
 def test_engine_repository_filter() -> None:
-    """filter returns new repo with matching engines only"""
+    """Filter returns new repo with matching engines only"""
     e1 = Engine(
         name="a",
         spawn="{task_path}",
@@ -721,7 +722,7 @@ def test_engine_repository_immutable() -> None:
 #   LINKS: [M-ENTRYPOINTS-CONFIG-PARSER]
 # END_CONTRACT: test_warn_unknown_fields
 def test_warn_unknown_fields() -> None:
-    """emits ConfigWarning for unknown config keys"""
+    """Emits ConfigWarning for unknown config keys"""
     cfg = ConfigParser()
     cfg.read_string("[db]\nuser=root\nunknown_key=value\n")
     with pytest.warns(ConfigWarning, match="unknown fields"):
@@ -736,13 +737,13 @@ def test_warn_unknown_fields() -> None:
 #   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_remote_no_warnings_known_keys
 @pytest.mark.filterwarnings(
-    "error::yascheduler.entrypoints._config_utils.ConfigWarning"
+    "error::yascheduler.entrypoints._config_utils.ConfigWarning",
 )
 def test_config_remote_no_warnings_known_keys() -> None:
-    """no warnings for known INI keys user and jump_user"""
+    """No warnings for known INI keys user and jump_user"""
     cfg = ConfigParser()
     cfg.read_string(
-        "[remote]\nuser=admin\njump_user=jumper\njump_host=bastion\njump_port=22\n"
+        "[remote]\nuser=admin\njump_user=jumper\njump_host=bastion\njump_port=22\n",
     )
     remote = _parse_remote_section(cfg["remote"])
     assert remote.username == "admin"
@@ -757,7 +758,7 @@ def test_config_remote_no_warnings_known_keys() -> None:
 #   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_remote_warns_unknown_keys
 def test_config_remote_warns_unknown_keys() -> None:
-    """emits ConfigWarning for unknown keys in remote section"""
+    """Emits ConfigWarning for unknown keys in remote section"""
     cfg = ConfigParser()
     cfg.read_string("[remote]\nuser=root\nbogus=yes\n")
     with pytest.warns(ConfigWarning, match="unknown fields"):
@@ -772,7 +773,7 @@ def test_config_remote_warns_unknown_keys() -> None:
 #   LINKS: [M-ENTRYPOINTS-CONFIG]
 # END_CONTRACT: test_config_top_level_full_ini
 def test_config_top_level_full_ini(tmp_path: Path) -> None:
-    """assembles all sub-configs from full INI"""
+    """Assembles all sub-configs from full INI"""
     ini = "[db]\nuser=myuser\n[local]\n[remote]\nuser=root\n[clouds]\n"
     cfg_file = tmp_path / "full.ini"
     cfg_file.write_text(ini)
@@ -792,7 +793,7 @@ def test_config_top_level_full_ini(tmp_path: Path) -> None:
 #   LINKS: [M-ENTRYPOINTS-CONFIG]
 # END_CONTRACT: test_config_top_level_empty_sections
 def test_config_top_level_empty_sections(tmp_path: Path) -> None:
-    """handles empty sections with defaults"""
+    """Handles empty sections with defaults"""
     ini = "[db]\n[local]\n[remote]\n[clouds]\n"
     cfg_file = tmp_path / "empty.ini"
     cfg_file.write_text(ini)
@@ -861,7 +862,7 @@ def test_config_local_is_frozen_dataclass_without_get_private_keys() -> None:
 #   LINKS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
 # END_CONTRACT: test_config_cloud_dtos_jump_port_default
 def test_config_cloud_dtos_jump_port_default() -> None:
-    """each ConfigCloud* DTO has jump_port == 22 by default"""
+    """Each ConfigCloud* DTO has jump_port == 22 by default"""
     for dto_cls in (
         ConfigCloudAzure,
         ConfigCloudHetzner,
@@ -916,7 +917,7 @@ def test_config_local_post_init_rejects_zero_limit() -> None:
 #   LINKS: [M-DOMAIN-SETTINGS]
 # END_CONTRACT: test_config_local_parser_passes_zero_through_to_post_init
 def test_config_local_parser_passes_zero_through_to_post_init() -> None:
-    """vastai parser fix companion: a 0 in INI reaches __post_init__ (no falsy 'or' coercion)"""
+    """Vastai parser fix companion: a 0 in INI reaches __post_init__ (no falsy 'or' coercion)"""
     cfg = ConfigParser()
     cfg.read_string("[local]\nallocate_limit=0\n")
     with pytest.raises(ValueError):

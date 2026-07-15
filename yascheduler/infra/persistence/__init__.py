@@ -1,3 +1,4 @@
+"""Persistence subpackage facade — re-exports persistence symbols for the adapters layer facade."""
 # FILE: yascheduler/infra/persistence/__init__.py
 # VERSION: 1.7.0
 # START_MODULE_CONTRACT

@@ -1,3 +1,4 @@
+"""Abstract Unit of Work Protocol defining the transactional boundary contract for use cases."""
 # FILE: yascheduler/application/uow.py
 # VERSION: 1.1.0
 # START_MODULE_CONTRACT
@@ -20,6 +21,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from typing_extensions import Self
+
 if TYPE_CHECKING:
     import types
 
@@ -31,24 +34,40 @@ class AbstractUnitOfWork(Protocol):
     """Async context manager providing task and node repositories sharing a transaction."""
 
     @property
-    def tasks(self) -> TaskRepository: ...
+    def tasks(self) -> TaskRepository:
+        """Access the task repository within the current transaction."""
+        ...
 
     @property
-    def nodes(self) -> NodeRepository: ...
+    def nodes(self) -> NodeRepository:
+        """Access the node repository within the current transaction."""
+        ...
 
-    async def __aenter__(self) -> AbstractUnitOfWork: ...
+    async def __aenter__(self) -> Self:
+        """Enter the unit of work context."""
+        ...
 
     async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: types.TracebackType | None,
-    ) -> bool: ...
+    ) -> bool:
+        """Exit the unit of work context, rolling back on exception."""
+        ...
 
-    async def commit(self) -> None: ...
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        ...
 
-    async def rollback(self) -> None: ...
+    async def rollback(self) -> None:
+        """Roll back the current transaction."""
+        ...
 
-    async def collect_events(self) -> list[DomainEvent]: ...
+    async def collect_events(self) -> list[DomainEvent]:
+        """Collect domain events from all saved aggregates."""
+        ...
 
-    async def publish_events(self) -> None: ...
+    async def publish_events(self) -> None:
+        """Dispatch collected domain events via the message bus."""
+        ...

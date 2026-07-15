@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+"""Windows-specific remote commands: engine deployment, process listing."""
 # FILE: yascheduler/infra/ssh/platform/windows.py
 # VERSION: 1.3.0
 #
@@ -28,17 +28,15 @@
 #   PREVIOUS_CHANGE: v1.4.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...).
 # END_CHANGE_SUMMARY
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncGenerator, Sequence
 from pathlib import PurePath, PureWindowsPath
 from re import Pattern
-from typing import Optional, Union
-
-from asyncssh.connection import SSHClientConnection
-from asyncssh.sftp import SFTPClient
+from typing import TYPE_CHECKING
 
 from yascheduler.domain import (
     EngineRepository,
@@ -49,10 +47,18 @@ from yascheduler.domain import (
 
 from .protocol import OuterRunCallable, ProcessInfo, QuoteCallable
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Sequence
+
+    from asyncssh.connection import SSHClientConnection
+    from asyncssh.sftp import SFTPClient
+
 logger = logging.getLogger(__name__)
 
 
 class MyPureWindowsPath(PureWindowsPath):
+    """Custom ``PureWindowsPath`` subclass preventing leading slashes."""
+
     # START_CONTRACT: MyPureWindowsPath._parse_args
     #   PURPOSE: Custom path parsing to prevent leading slash on Windows paths
     #   INPUTS: { path: - path string to parse }
@@ -64,7 +70,8 @@ class MyPureWindowsPath(PureWindowsPath):
     def _parse_args(cls, path: str) -> tuple[str, str, list[str]]:
         drv, root, parts = cls._parse_args(path)
         # prevent leading slash like \C:\Users\user
-        if not drv and root == "\\" and len(parts) > 2 and parts[0] == "\\":
+        parts_len = 3
+        if not drv and root == "\\" and len(parts) >= parts_len and parts[0] == "\\":
             drv = parts[1]
             parts = parts[1:]
         # prevent eating first part when parsing PurePath instance
@@ -82,6 +89,7 @@ class MyPureWindowsPath(PureWindowsPath):
 #   LINKS: M-REMOTE-WINDOWS
 # END_CONTRACT: windows_quote
 def windows_quote(s: str) -> str:
+    """Quote a string for PowerShell by wrapping in single quotes and escaping embedded single quotes."""
     return "'{}'".format(str(s).replace("'", "''"))
 
 
@@ -93,13 +101,13 @@ def windows_quote(s: str) -> str:
 #   LINKS: M-REMOTE-WINDOWS
 # END_CONTRACT: windows_get_cpu_cores
 async def windows_get_cpu_cores(run: OuterRunCallable) -> int:
-    """
-    Get number of CPU cores
+    """Get number of CPU cores.
+
     :raises asyncssh.Error: An SSH error has occurred.
     """
     res = await run("[environment]::ProcessorCount")
     try:
-        return int(res.stdout and res.stdout.strip() or "1")
+        return int((res.stdout and res.stdout.strip()) or "1")
     except ValueError:
         return 1
 
@@ -112,10 +120,11 @@ async def windows_get_cpu_cores(run: OuterRunCallable) -> int:
 #   LINKS: M-REMOTE-WINDOWS
 # END_CONTRACT: windows_list_processes
 async def windows_list_processes(
-    conn: SSHClientConnection, query: Optional[str] = None
+    conn: SSHClientConnection,
+    query: str | None = None,
 ) -> AsyncGenerator[ProcessInfo, None]:
-    """
-    Returns information about all running processes
+    """Return information about all running processes.
+
     :raises asyncssh.Error: An SSH error has occurred.
     """
     where_pipe_cmd = f"| ?{{ {query} }}" if query else ""
@@ -129,9 +138,12 @@ async def windows_list_processes(
                 data = json.loads(line)
                 if not data["command"]:
                     data["command"] = data["name"]
-                assert isinstance(data["pid"], int)
-                assert isinstance(data["name"], str)
-                assert isinstance(data["command"], str)
+                if not isinstance(data["pid"], int):
+                    continue
+                if not isinstance(data["name"], str):
+                    continue
+                if not isinstance(data["command"], str):
+                    continue
                 # skip self
                 if (
                     data["name"] == "powershell.exe"
@@ -139,7 +151,7 @@ async def windows_list_processes(
                 ):
                     continue
                 yield ProcessInfo(**data)
-            except Exception:
+            except Exception:  # noqa: S112
                 continue
 
 
@@ -153,11 +165,12 @@ async def windows_list_processes(
 async def windows_pgrep(
     conn: SSHClientConnection,
     quote: QuoteCallable,
-    pattern: Union[str, Pattern[str]],
+    pattern: str | Pattern[str],
+    *,
     full: bool = True,
 ) -> AsyncGenerator[ProcessInfo, None]:
-    """
-    Returns information about running processes, that name matches a pattern.
+    """Return information about running processes matching a name pattern.
+
     If `full`, check match against name or full cmd.
     :raises asyncssh.Error: An SSH error has occurred.
     """
@@ -185,13 +198,13 @@ async def deploy_local_files(
     engine_dir: PurePath,
     files: Sequence[PurePath],
 ) -> None:
-    "Uploading binary from local; requires broadband connection"
+    """Upload binary from local; requires broadband connection."""
 
     async def upload(src: PurePath, dst: PurePath) -> None:
         logger.debug("UPLOAD", extra={"src": str(src), "dst": str(dst)})
         await sftp.put([str(src)], str(dst))
 
-    await asyncio.gather(*map(lambda x: upload(x, engine_dir / x.name), files))
+    await asyncio.gather(*(upload(x, engine_dir / x.name) for x in files))
 
 
 # START_CONTRACT: deploy_local_archive
@@ -208,8 +221,8 @@ async def deploy_local_archive(
     engine_dir: PurePath,
     archive: PurePath,
 ) -> None:
-    """
-    Upload local archive.
+    """Upload local archive.
+
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
     """
     rpath = engine_dir / archive.name
@@ -239,8 +252,8 @@ async def deploy_remote_archive(
     engine_dir: PurePath,
     url: str,
 ) -> None:
-    """
-    Downloading binary from a trusted non-public address.
+    """Download a binary from a trusted non-public address.
+
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
     """
     name = "archive.zip"
@@ -275,13 +288,11 @@ async def windows_deploy_engines(
     engines: EngineRepository,
     engines_dir: PurePath,
 ) -> None:
-    """
-    Setup node for target engines.
-    """
+    """Set up node for target engines."""
     for engine in engines.values():
-        logger.info(f"Setup {engine.name} engine...")
+        logger.info("Setup %s engine...", engine.name)
         engine_dir = PureWindowsPath(
-            (await sftp.realpath(engines_dir / engine.name))[1:]
+            (await sftp.realpath(engines_dir / engine.name))[1:],
         )
         # sftp.makedirs is broken for PureWindowsPath
         await sftp.makedirs(PurePath(engine_dir), exist_ok=True)
@@ -291,14 +302,22 @@ async def windows_deploy_engines(
 
             if isinstance(deployment, LocalArchiveDeploy):
                 await deploy_local_archive(
-                    run, quote, sftp, engine_dir, deployment.file
+                    run,
+                    quote,
+                    sftp,
+                    engine_dir,
+                    deployment.file,
                 )
 
             if isinstance(deployment, RemoteArchiveDeploy):
                 await deploy_remote_archive(
-                    run, quote, sftp, engine_dir, deployment.url
+                    run,
+                    quote,
+                    sftp,
+                    engine_dir,
+                    deployment.url,
                 )
-        logger.info(f"Setup of {engine.name} engine is done...")
+        logger.info("Setup of %s engine is done...", engine.name)
 
 
 # START_CONTRACT: windows_setup_node
@@ -315,6 +334,6 @@ async def windows_setup_node(
     engines: EngineRepository,
     engines_dir: PurePath,
 ) -> None:
-    "Setup Windows node"
+    """Set up Windows node."""
     async with conn.start_sftp_client() as sftp:
         await windows_deploy_engines(run, quote, sftp, engines, engines_dir)

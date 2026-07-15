@@ -1,3 +1,4 @@
+"""Type compatibility shims: Self and Unpack for older Python versions."""
 # FILE: yascheduler/shared/compat.py
 # VERSION: 1.9.0
 #

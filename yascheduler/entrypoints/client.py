@@ -1,3 +1,4 @@
+"""Yascheduler client."""
 # FILE: yascheduler/entrypoints/client.py
 # VERSION: 2.10.0
 #
@@ -19,24 +20,26 @@
 #   PREVIOUS_CHANGE: v2.10.0 - _task_to_dict reconstructs flat metadata dict inline from six typed Task fields plus t.extra. Public dict shape {task_id, label, status, metadata, node} unchanged.
 # END_CHANGE_SUMMARY
 
-"""Yascheduler client"""
+from __future__ import annotations
 
 import asyncio
-import logging
 import sys
-from collections.abc import Callable, Coroutine, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from pathlib import PurePath
-from typing import Any, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from yascheduler.application import query_tasks
 from yascheduler.domain import Node, NodeId, Task, TaskId, TaskStatus
-from yascheduler.entrypoints.config import Config
 from yascheduler.entrypoints.config_parser import parse_config
 
 from .di import CLIDeps, make_cli_deps
 from .paths import CONFIG_FILE
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine, Mapping, Sequence
+    from pathlib import PurePath
+
+    from yascheduler.entrypoints.config import Config
 
 if sys.version_info < (3, 10):
     from typing_extensions import ParamSpec
@@ -57,15 +60,11 @@ ParamT = ParamSpec("ParamT")
 def to_sync(
     func: Callable[ParamT, Coroutine[Any, Any, ReturnT_co]],
 ) -> Callable[ParamT, ReturnT_co]:
-    """
-    Wraps async function and run it sync in thread.
-    """
+    """Wrap async function and run it sync in thread."""
 
     @wraps(func)
-    def outer(*args: ParamT.args, **kwargs: ParamT.kwargs):  # noqa: ANN202
-        """
-        Execute the async method synchronously in sync and async runtime.
-        """
+    def outer(*args: ParamT.args, **kwargs: ParamT.kwargs) -> ReturnT_co:
+        """Execute the async method synchronously in sync and async runtime."""
         coro = func(*args, **kwargs)
         try:
             asyncio.get_running_loop()  # Triggers RuntimeError if no running event loop
@@ -121,14 +120,13 @@ def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]
 
 
 class Yascheduler:
-    """Yascheduler client"""
+    """Yascheduler client."""
 
     STATUS_TO_DO = TaskStatus.TO_DO.value
     STATUS_RUNNING = TaskStatus.RUNNING.value
     STATUS_DONE = TaskStatus.DONE.value
 
     config: Config
-    _logger: Optional[logging.Logger] = None
 
     # START_CONTRACT: __init__
     #   PURPOSE: Initialize the Yascheduler client with config path and optional DI factory.
@@ -143,13 +141,13 @@ class Yascheduler:
     # END_CONTRACT: __init__
     def __init__(
         self,
-        config_path: Union[PurePath, str] = CONFIG_FILE,
-        logger: Optional[logging.Logger] = None,
+        config_path: PurePath | str = CONFIG_FILE,
         *,
-        deps_factory: Optional[Callable[[Config], CLIDeps]] = None,
+        deps_factory: Callable[[Config], CLIDeps] | None = None,
+        **_: dict[str, Any],
     ) -> None:
+        """Initialize the Yascheduler client with config path and optional DI factory."""
         self.config = parse_config(config_path)
-        self._logger = logger
         self._deps_factory = deps_factory or make_cli_deps
 
     # START_CONTRACT: queue_submit_task_async
@@ -164,9 +162,10 @@ class Yascheduler:
         label: str,
         metadata: Mapping[str, Any],
         engine_name: str,
-        webhook_onsubmit: bool = False,
+        *,
+        _webhook_onsubmit: bool = False,
     ) -> int:
-        """Submit new task"""
+        """Submit new task."""
         deps = self._deps_factory(self.config)
         # deps.submit (-> TaskId) → extract .value so the public contract stays int.
         return (await deps.submit(label, dict(metadata), engine_name)).value
@@ -183,11 +182,12 @@ class Yascheduler:
         label: str,
         metadata: Mapping[str, Any],
         engine_name: str,
+        *,
         webhook_onsubmit: bool = False,
     ) -> int:
-        """Submit new task"""
+        """Submit new task."""
         fn = to_sync(self.queue_submit_task_async)
-        return fn(label, metadata, engine_name, webhook_onsubmit)
+        return fn(label, metadata, engine_name, _webhook_onsubmit=webhook_onsubmit)
 
     # START_CONTRACT: queue_get_tasks_async
     #   PURPOSE: Query tasks asynchronously by job IDs or statuses via the query_tasks use case.
@@ -199,17 +199,17 @@ class Yascheduler:
     # END_CONTRACT: queue_get_tasks_async
     async def queue_get_tasks_async(
         self,
-        jobs: Optional[Sequence[int]] = None,
-        status: Optional[Sequence[int]] = None,
+        jobs: Sequence[int] | None = None,
+        status: Sequence[int] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
-        """Get tasks by ids or statuses"""
+        """Get tasks by ids or statuses."""
         # raise ValueError if unknown task status
-        statuses: Optional[list[TaskStatus]] = (
+        statuses: list[TaskStatus] | None = (
             [TaskStatus(x) for x in status] if status else None
         )
         # The facade is the sole int/TaskId boundary: wrap job ints → TaskId
         # before crossing into the use case (public jobs: list[int] preserved).
-        job_ids: Optional[list[TaskId]] = [TaskId(i) for i in jobs] if jobs else None
+        job_ids: list[TaskId] | None = [TaskId(i) for i in jobs] if jobs else None
         deps = self._deps_factory(self.config)
         tasks, nodes_by_id = await query_tasks(job_ids, statuses, deps.uow_factory)
         return [_task_to_dict(t, nodes_by_id) for t in tasks]
@@ -223,10 +223,10 @@ class Yascheduler:
     # END_CONTRACT: queue_get_tasks
     def queue_get_tasks(
         self,
-        jobs: Optional[Sequence[int]] = None,
-        status: Optional[Sequence[int]] = None,
+        jobs: Sequence[int] | None = None,
+        status: Sequence[int] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
-        """Get tasks by ids or statuses"""
+        """Get tasks by ids or statuses."""
         return to_sync(self.queue_get_tasks_async)(jobs, status)
 
     # START_CONTRACT: queue_get_task_async
@@ -236,10 +236,11 @@ class Yascheduler:
     #   SIDE_EFFECTS: Opens a UoW via queue_get_tasks_async
     #   LINKS: M-ENTRYPOINTS-CLIENT, M-APPLICATION-QUERY-TASKS
     # END_CONTRACT: queue_get_task_async
-    async def queue_get_task_async(self, task_id: int) -> Optional[Mapping[str, Any]]:
-        """Get task by id"""
+    async def queue_get_task_async(self, task_id: int) -> Mapping[str, Any] | None:
+        """Get task by id."""
         for task_dict in await self.queue_get_tasks_async(jobs=[task_id]):
             return task_dict
+        return None
 
     # START_CONTRACT: queue_get_task
     #   PURPOSE: Get a single task by ID synchronously
@@ -248,7 +249,8 @@ class Yascheduler:
     #   SIDE_EFFECTS: Opens a UoW via queue_get_tasks
     #   LINKS: M-ENTRYPOINTS-CLIENT, M-APPLICATION-QUERY-TASKS
     # END_CONTRACT: queue_get_task
-    def queue_get_task(self, task_id: int) -> Optional[Mapping[str, Any]]:
-        """Get task by id"""
+    def queue_get_task(self, task_id: int) -> Mapping[str, Any] | None:
+        """Get task by id."""
         for task_dict in self.queue_get_tasks(jobs=[task_id]):
             return task_dict
+        return None

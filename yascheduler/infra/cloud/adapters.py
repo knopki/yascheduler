@@ -1,3 +1,4 @@
+"""Cloud adapters."""
 # FILE: yascheduler/infra/cloud/adapters.py
 # VERSION: 1.4.0
 # START_MODULE_CONTRACT
@@ -26,7 +27,6 @@
 #   LAST_CHANGE: v1.4.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
 #   PREVIOUS_CHANGE: v1.3.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-ADAPTERS") at module top
 # END_CHANGE_SUMMARY
-"""Cloud adapters"""
 
 from __future__ import annotations
 
@@ -50,42 +50,42 @@ logger = logging.getLogger(__name__)
 
 
 def can_debian_buster(platform: str) -> bool:
-    "Platform is compatible with Debian Buster"
+    """Platform is compatible with Debian Buster."""
     return platform in ["debian-10", "debian", "debian-like", "linux"]
 
 
 def can_debian_bullseye(platform: str) -> bool:
-    "Platform is compatible with Debian Bullseye"
+    """Platform is compatible with Debian Bullseye."""
     return platform in ["debian-11", "debian", "debian-like", "linux"]
 
 
 def can_debian_bookworm(platform: str) -> bool:
-    "Platform is compatible with Debian Bookworm"
+    """Platform is compatible with Debian Bookworm."""
     return platform in ["debian-12", "debian", "debian-like", "linux"]
 
 
 def can_debian_trixie(platform: str) -> bool:
-    "Platform is compatible with Debian Trixie"
+    """Platform is compatible with Debian Trixie."""
     return platform in ["debian-13", "debian", "debian-like", "linux"]
 
 
 def can_debian_forky(platform: str) -> bool:
-    "Platform is compatible with Debian Forky"
+    """Platform is compatible with Debian Forky."""
     return platform in ["debian-14", "debian", "debian-like", "linux"]
 
 
 def can_debian_duke(platform: str) -> bool:
-    "Platform is compatible with Debian Duke"
+    """Platform is compatible with Debian Duke."""
     return platform in ["debian-13", "debian", "debian-like", "linux"]
 
 
 def can_win10(platform: str) -> bool:
-    "Platform is compatible with Windows 10"
+    """Platform is compatible with Windows 10."""
     return platform in ["windows-10", "windows"]
 
 
 def can_win11(platform: str) -> bool:
-    "Platform is compatible with Windows 11"
+    """Platform is compatible with Windows 11."""
     return platform in ["windows-11", "windows"]
 
 
@@ -98,7 +98,7 @@ def can_win11(platform: str) -> bool:
 # END_CONTRACT: CloudAdapter.__init__
 @dataclass(frozen=True)
 class CloudAdapter(Generic[TConfigCloud_co]):
-    """Cloud adapter"""
+    """Cloud adapter."""
 
     name: str
     supported_platform_checks: tuple[SupportedPlatformChecker, ...]
@@ -108,10 +108,10 @@ class CloudAdapter(Generic[TConfigCloud_co]):
     create_node_conn_timeout: int = field(default=10)
     create_node_timeout: int = field(default=300)
 
-    @cache
+    @cache  # noqa: B019
     def get_op_semaphore(self) -> asyncio.Semaphore:
-        """
-        Cached semaphore getter.
+        """Get the cached semaphore.
+
         It's because you cannot create async semaphore outside the loop.
         "attached to a different loop" error.
         """
@@ -126,7 +126,8 @@ class CloudAdapter(Generic[TConfigCloud_co]):
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-AZ
 # END_CONTRACT: get_azure_adapter
 def get_azure_adapter(name: str) -> CloudAdapter:
-    from .providers.az import az_create_node, az_delete_node
+    """Create CloudAdapter for Azure with Bullseye/Windows 11 platform support."""
+    from .providers.az import az_create_node, az_delete_node  # noqa: PLC0415
 
     return CloudAdapter(
         name=name,
@@ -145,7 +146,11 @@ def get_azure_adapter(name: str) -> CloudAdapter:
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-HETZNER
 # END_CONTRACT: get_hetzner_adapter
 def get_hetzner_adapter(name: str) -> CloudAdapter:
-    from .providers.hetzner import hetzner_create_node, hetzner_delete_node
+    """Create CloudAdapter for Hetzner with Trixie platform support."""
+    from .providers.hetzner import (  # noqa: PLC0415
+        hetzner_create_node,
+        hetzner_delete_node,
+    )
 
     return CloudAdapter(
         name=name,
@@ -169,7 +174,11 @@ def get_hetzner_adapter(name: str) -> CloudAdapter:
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-UPCLOUD
 # END_CONTRACT: get_upcloud_adapter
 def get_upcloud_adapter(name: str) -> CloudAdapter:
-    from .providers.upcloud import upcload_delete_node, upcloud_create_node
+    """Create CloudAdapter for UpCloud with Buster platform support, single op limit."""
+    from .providers.upcloud import (  # noqa: PLC0415
+        upcload_delete_node,
+        upcloud_create_node,
+    )
 
     return CloudAdapter(
         name=name,
@@ -188,7 +197,11 @@ def get_upcloud_adapter(name: str) -> CloudAdapter:
 #   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
 # END_CONTRACT: get_vastai_adapter
 def get_vastai_adapter(name: str) -> CloudAdapter:
-    from .providers.vastai import vastai_create_node, vastai_delete_node
+    """Create CloudAdapter for VastAI with Bullseye platform support, single op limit."""
+    from .providers.vastai import (  # noqa: PLC0415
+        vastai_create_node,
+        vastai_delete_node,
+    )
 
     return CloudAdapter(
         name=name,
@@ -220,13 +233,14 @@ CLOUD_ADAPTER_GETTERS = {
 #   LINKS: M-CLOUD-ADAPTERS
 # END_CONTRACT: resolve_adapter
 def resolve_adapter(cfg: ConfigCloud) -> CloudAdapter | None:
+    """Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry."""
     try:
         getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]
         return getter(cfg.prefix)
     except KeyError:
         return None
     except ImportError:
-        logger.error(
+        logger.exception(
             "The cloud %s is skipped because the dependencies are not installed",
             cfg.prefix,
         )

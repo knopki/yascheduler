@@ -91,7 +91,8 @@ class TestMachineQueries:
     """Session-query methods after session-based-machine-handle."""
 
     def test_get_session_returns_live_session(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """get_session returns the live MachineSession registered for ip, or None."""
         session = _make_session(hostname="10.0.0.1", node_id=1)
@@ -100,7 +101,8 @@ class TestMachineQueries:
         assert repository.get_session(NodeId(2)) is None
 
     def test_get_session_returns_none_after_disconnect(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """get_session returns None once the node_id is popped from _sessions."""
         session = _make_session(hostname="10.0.0.1", node_id=1)

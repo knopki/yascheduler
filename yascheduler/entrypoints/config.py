@@ -1,3 +1,4 @@
+"""Composition-root config aggregate bundling settings from all inner layers for delivery to the orchestrator and CLIs."""
 # FILE: yascheduler/entrypoints/config.py
 # VERSION: 1.1.0
 # START_MODULE_CONTRACT

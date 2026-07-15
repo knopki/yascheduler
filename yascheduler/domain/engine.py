@@ -1,3 +1,4 @@
+"""Define calculation engine value objects and deploy strategy types."""
 # FILE: yascheduler/domain/engine.py
 # VERSION: 1.1.0
 # START_MODULE_CONTRACT
@@ -104,6 +105,7 @@ class EngineRepository:
     data: Mapping[str, Engine] = field(default_factory=dict)
 
     def get(self, name: str) -> Engine | None:
+        """Return the engine for the given name, or ``None``."""
         return self.data.get(name)
 
     def __getitem__(self, name: str) -> Engine:
@@ -113,6 +115,7 @@ class EngineRepository:
         return name in self.data
 
     def values(self) -> ValuesView[Engine]:
+        """Return a view of all engine values."""
         return self.data.values()
 
     # START_CONTRACT: EngineRepository.filter
@@ -123,6 +126,7 @@ class EngineRepository:
     #   LINKS: M-DOMAIN-ENGINE
     # END_CONTRACT: EngineRepository.filter
     def filter(self, fn: Callable[[Engine], bool]) -> EngineRepository:
+        """Filter engines by predicate and return a new frozen repository."""
         return EngineRepository(data={k: v for k, v in self.data.items() if fn(v)})
 
     # START_CONTRACT: EngineRepository.filter_platforms
@@ -133,6 +137,7 @@ class EngineRepository:
     #   LINKS: M-DOMAIN-ENGINE
     # END_CONTRACT: EngineRepository.filter_platforms
     def filter_platforms(self, platforms: Sequence[str]) -> EngineRepository:
+        """Filter engines by supported platforms and return a new frozen repository."""
         return self.filter(lambda e: bool(set(e.platforms) & set(platforms)))
 
     # START_CONTRACT: EngineRepository.get_platform_packages
@@ -143,5 +148,6 @@ class EngineRepository:
     #   LINKS: M-DOMAIN-ENGINE
     # END_CONTRACT: EngineRepository.get_platform_packages
     def get_platform_packages(self) -> list[str]:
-        mapped = map(lambda e: e.platform_packages, self.values())
+        """Collect the unique union of platform_packages across all engines."""
+        mapped = (e.platform_packages for e in self.values())
         return list(set(chain(*mapped)))

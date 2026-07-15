@@ -88,7 +88,7 @@ def _wire_realpath(state: SSHMachineSession) -> None:
     async def _sftp_ctx() -> AsyncGenerator[AsyncMock, None]:
         yield sftp
 
-    state._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
+    state._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]
 
 
 # =============================================================================
@@ -117,7 +117,7 @@ class TestNonIdempotentRetry:
     async def test_upload_no_longer_retries_on_sftp_error(
         self,
     ) -> None:
-        """upload propagates SFTPConnectionLost immediately, single put attempt."""
+        """Upload propagates SFTPConnectionLost immediately, single put attempt."""
         session = _make_state()
         sftp = AsyncMock()
         sftp.put = AsyncMock(side_effect=SFTPConnectionLost("connection lost"))
@@ -126,7 +126,7 @@ class TestNonIdempotentRetry:
         async def _sftp_ctx() -> AsyncGenerator[AsyncMock, None]:
             yield sftp
 
-        session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
+        session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]
 
         with pytest.raises(SFTPConnectionLost):
             await session.upload(Path("/tmp/local"), "/remote/file")
@@ -137,7 +137,7 @@ class TestNonIdempotentRetry:
     async def test_download_no_longer_retries_on_sftp_error(
         self,
     ) -> None:
-        """download equivalent via open_sftp propagates SFTPConnectionLost immediately, single get attempt."""
+        """Download equivalent via open_sftp propagates SFTPConnectionLost immediately, single get attempt."""
         session = _make_state()
         sftp = AsyncMock()
         sftp.get = AsyncMock(side_effect=SFTPConnectionLost("connection lost"))
@@ -146,7 +146,7 @@ class TestNonIdempotentRetry:
         async def _sftp_ctx() -> AsyncGenerator[AsyncMock, None]:
             yield sftp
 
-        session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]  # noqa: SLF001
+        session._conn.start_sftp_client = _sftp_ctx  # type: ignore[assignment]
 
         with pytest.raises(SFTPConnectionLost):
             async with session.open_sftp() as sftp_client:
@@ -175,20 +175,22 @@ class TestStartTaskRollback:
         _wire_realpath(session)
         repository._sessions[NodeId(1)] = session
 
-        with patch.object(
-            task_deployer,
-            "_upload_task_data",
-            AsyncMock(side_effect=OSError("upload boom")),
+        with (
+            patch.object(
+                task_deployer,
+                "_upload_task_data",
+                AsyncMock(side_effect=OSError("upload boom")),
+            ),
+            caplog.at_level(logging.INFO),
+            pytest.raises(OSError, match="upload boom"),
         ):
-            with caplog.at_level(logging.INFO):
-                with pytest.raises(OSError, match="upload boom"):
-                    await task_deployer.start_task_on_machine(
-                        session,
-                        _make_engine(),
-                        _make_task(),
-                        4,
-                        PurePosixPath("/engines"),
-                    )
+            await task_deployer.start_task_on_machine(
+                session,
+                _make_engine(),
+                _make_task(),
+                4,
+                PurePosixPath("/engines"),
+            )
 
         assert repository._sessions[NodeId(1)].machine.state == MachineState.FREE
         assert "rolling back BUSY" in caplog.text
@@ -207,23 +209,25 @@ class TestStartTaskRollback:
 
         with (
             patch.object(
-                task_deployer, "_upload_task_data", AsyncMock(return_value=True)
+                task_deployer,
+                "_upload_task_data",
+                AsyncMock(return_value=True),
             ),
             patch.object(
                 task_deployer,
                 "_exec_spawn_command",
                 AsyncMock(side_effect=ChannelOpenError(11, "no chan")),
             ),
+            caplog.at_level(logging.INFO),
+            pytest.raises(ChannelOpenError),
         ):
-            with caplog.at_level(logging.INFO):
-                with pytest.raises(ChannelOpenError):
-                    await task_deployer.start_task_on_machine(
-                        session,
-                        _make_engine(),
-                        _make_task(),
-                        4,
-                        PurePosixPath("/engines"),
-                    )
+            await task_deployer.start_task_on_machine(
+                session,
+                _make_engine(),
+                _make_task(),
+                4,
+                PurePosixPath("/engines"),
+            )
 
         assert repository._sessions[NodeId(1)].machine.state == MachineState.FREE
         assert "rolling back BUSY" in caplog.text
@@ -240,20 +244,22 @@ class TestStartTaskRollback:
         _wire_realpath(session)
         repository._sessions[NodeId(1)] = session
 
-        with patch.object(
-            task_deployer,
-            "_upload_task_data",
-            AsyncMock(side_effect=asyncio.CancelledError()),
+        with (
+            patch.object(
+                task_deployer,
+                "_upload_task_data",
+                AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+            caplog.at_level(logging.INFO),
+            pytest.raises(asyncio.CancelledError),
         ):
-            with caplog.at_level(logging.INFO):
-                with pytest.raises(asyncio.CancelledError):
-                    await task_deployer.start_task_on_machine(
-                        session,
-                        _make_engine(),
-                        _make_task(),
-                        4,
-                        PurePosixPath("/engines"),
-                    )
+            await task_deployer.start_task_on_machine(
+                session,
+                _make_engine(),
+                _make_task(),
+                4,
+                PurePosixPath("/engines"),
+            )
 
         assert repository._sessions[NodeId(1)].machine.state == MachineState.FREE
         assert "rolling back BUSY" in caplog.text
@@ -271,26 +277,31 @@ class TestStartTaskRollback:
         repository._sessions[NodeId(1)] = session
 
         async def _fail_with_unexpected_state(
-            s: object, task: Task, task_dir: object, input_files: object
+            s: object,
+            task: Task,
+            task_dir: object,
+            input_files: object,
         ) -> bool:
             # Simulate a concurrent transition away from BUSY before rollback.
             session.release()
             raise OSError("boom")
 
-        with patch.object(
-            task_deployer,
-            "_upload_task_data",
-            AsyncMock(side_effect=_fail_with_unexpected_state),
+        with (
+            patch.object(
+                task_deployer,
+                "_upload_task_data",
+                AsyncMock(side_effect=_fail_with_unexpected_state),
+            ),
+            caplog.at_level(logging.WARNING),
+            pytest.raises(OSError),
         ):
-            with caplog.at_level(logging.WARNING):
-                with pytest.raises(OSError):
-                    await task_deployer.start_task_on_machine(
-                        session,
-                        _make_engine(),
-                        _make_task(),
-                        4,
-                        PurePosixPath("/engines"),
-                    )
+            await task_deployer.start_task_on_machine(
+                session,
+                _make_engine(),
+                _make_task(),
+                4,
+                PurePosixPath("/engines"),
+            )
 
         assert repository._sessions[NodeId(1)].machine.state == MachineState.FREE
         assert "unexpected state" in caplog.text
@@ -309,9 +320,12 @@ class TestStartTaskRollback:
         repository._sessions[NodeId(1)] = session
 
         async def _fail_after_disconnect(
-            s: object, task: Task, task_dir: object, input_files: object
+            s: object,
+            task: Task,
+            task_dir: object,
+            input_files: object,
         ) -> bool:
-            await session._close()  # noqa: SLF001
+            await session._close()
             raise OSError("boom")
 
         occupy_spy = patch.object(session, "occupy", wraps=session.occupy)
@@ -323,16 +337,16 @@ class TestStartTaskRollback:
                 "_upload_task_data",
                 AsyncMock(side_effect=_fail_after_disconnect),
             ),
+            caplog.at_level(logging.WARNING),
+            pytest.raises(OSError),
         ):
-            with caplog.at_level(logging.WARNING):
-                with pytest.raises(OSError):
-                    await task_deployer.start_task_on_machine(
-                        session,
-                        _make_engine(),
-                        _make_task(),
-                        4,
-                        PurePosixPath("/engines"),
-                    )
+            await task_deployer.start_task_on_machine(
+                session,
+                _make_engine(),
+                _make_task(),
+                4,
+                PurePosixPath("/engines"),
+            )
 
         # Rollback saw is_closed and skipped release; session stays BUSY in repo.
         assert session.is_closed

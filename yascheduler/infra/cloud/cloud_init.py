@@ -1,3 +1,4 @@
+"""Cloud-init user-data renderer module."""
 # FILE: yascheduler/infra/cloud/cloud_init.py
 # VERSION: 1.4.0
 #
@@ -17,19 +18,18 @@
 #   PREVIOUS_CHANGE: v1.3.0 - Rename file cloud_config.py → cloud_init.py and class CloudConfig → CloudInitConfig; drop PCloudConfig base class (Protocol removed); disambiguate from the ConfigCloud* provider-config DTOs in cloud_configs.py and from the domain CloudConfig Protocol in domain/ports.py.
 # END_CHANGE_SUMMARY
 
-"""Cloud-init user-data renderer module"""
+from __future__ import annotations
 
 import base64
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Union
 
 
 @dataclass(frozen=True)
 class CloudInitConfig:
     """Cloud-init user-data renderer (base64 for cloud providers)."""
 
-    bootcmd: tuple[Union[str, list[str]], ...] = field(default_factory=tuple)
+    bootcmd: tuple[str | list[str], ...] = field(default_factory=tuple)
     package_upgrade: bool = field(default=False)
     packages: list[str] = field(default_factory=list)
 

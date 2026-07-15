@@ -80,7 +80,7 @@ def _tracker_rows(conn: pg8000.native.Connection) -> list[str]:
     conn.run("BEGIN")
     try:
         rows = conn.run(
-            "SELECT migration_id FROM yascheduler_migrations ORDER BY migration_id"
+            "SELECT migration_id FROM yascheduler_migrations ORDER BY migration_id",
         )
     finally:
         conn.run("ROLLBACK")
@@ -116,7 +116,7 @@ def _fk_on_delete_action(conn: pg8000.native.Connection) -> str:
             "JOIN pg_class c ON c.oid = conf.conrelid "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
             "WHERE n.nspname = 'public' AND c.relname = 'yascheduler_tasks' "
-            "AND conf.contype = 'f'"
+            "AND conf.contype = 'f'",
         )
     finally:
         conn.run("ROLLBACK")
@@ -146,7 +146,7 @@ def test_migration_004_adds_allocated_node_id_column() -> None:
                 nullability = conn.run(
                     "SELECT is_nullable FROM information_schema.columns "
                     "WHERE table_name = 'yascheduler_tasks' "
-                    "AND column_name = 'allocated_node_id'"
+                    "AND column_name = 'allocated_node_id'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -174,7 +174,7 @@ def test_migration_004_backfills_existing_tasks() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('003')")
             conn.run(
@@ -182,12 +182,12 @@ def test_migration_004_backfills_existing_tasks() -> None:
                 "node_id SERIAL PRIMARY KEY, ip VARCHAR(15), "
                 "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
                 "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
-                "cloud VARCHAR(32) DEFAULT NULL)"
+                "cloud VARCHAR(32) DEFAULT NULL)",
             )
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
-                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)",
             )
             # Two nodes with distinct ips.
             conn.run("INSERT INTO yascheduler_nodes (ip) VALUES ('10.0.0.1')")
@@ -198,11 +198,11 @@ def test_migration_004_backfills_existing_tasks() -> None:
             # 011 runs (RUNNING requires allocated_node_id + remote_folder).
             conn.run(
                 "INSERT INTO yascheduler_tasks (label, ip, status, metadata) "
-                "VALUES ('a', '10.0.0.1', 1, '{\"remote_folder\": \"/r/a\"}'::jsonb)"
+                "VALUES ('a', '10.0.0.1', 1, '{\"remote_folder\": \"/r/a\"}'::jsonb)",
             )
             conn.run(
                 "INSERT INTO yascheduler_tasks (label, ip, status, metadata) "
-                "VALUES ('b', '10.0.0.2', 1, '{\"remote_folder\": \"/r/b\"}'::jsonb)"
+                "VALUES ('b', '10.0.0.2', 1, '{\"remote_folder\": \"/r/b\"}'::jsonb)",
             )
         finally:
             conn.close()
@@ -234,7 +234,7 @@ def test_migration_004_backfills_existing_tasks() -> None:
                     "SELECT t.allocated_node_id, n.hostname "
                     "FROM yascheduler_tasks t "
                     "LEFT JOIN yascheduler_nodes n ON n.node_id = t.allocated_node_id "
-                    "ORDER BY t.task_id"
+                    "ORDER BY t.task_id",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -263,7 +263,7 @@ def test_migration_004_leaves_unallocated_tasks_null() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('003')")
             conn.run(
@@ -271,17 +271,17 @@ def test_migration_004_leaves_unallocated_tasks_null() -> None:
                 "node_id SERIAL PRIMARY KEY, ip VARCHAR(15), "
                 "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
                 "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
-                "cloud VARCHAR(32) DEFAULT NULL)"
+                "cloud VARCHAR(32) DEFAULT NULL)",
             )
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
-                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)",
             )
             # An unallocated TO_DO task: ip IS NULL.
             conn.run(
                 "INSERT INTO yascheduler_tasks (label, ip, status, metadata) "
-                "VALUES ('todo', NULL, 0, '{}'::jsonb)"
+                "VALUES ('todo', NULL, 0, '{}'::jsonb)",
             )
         finally:
             conn.close()
@@ -296,7 +296,7 @@ def test_migration_004_leaves_unallocated_tasks_null() -> None:
                 # After migration 006, label was renamed to title.
                 rows = conn.run(
                     "SELECT allocated_node_id FROM yascheduler_tasks "
-                    "WHERE title = 'todo'"
+                    "WHERE title = 'todo'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -321,7 +321,7 @@ def test_fk_on_delete_set_null() -> None:
         conn = _connect(config)
         try:
             conn.run(
-                "INSERT INTO yascheduler_nodes (hostname, enabled) VALUES ('10.0.0.1', TRUE)"
+                "INSERT INTO yascheduler_nodes (hostname, enabled) VALUES ('10.0.0.1', TRUE)",
             )
             # DONE task referencing the node. DONE is unconstrained by the
             # task_status_field_invariants CHECK, so the FK ON DELETE SET NULL
@@ -330,13 +330,13 @@ def test_fk_on_delete_set_null() -> None:
             conn.run(
                 "INSERT INTO yascheduler_tasks (title, status, engine, allocated_node_id, remote_folder) "
                 "VALUES ('job', 'DONE', 'fleur', "
-                "(SELECT node_id FROM yascheduler_nodes WHERE hostname = '10.0.0.1'), '/remote/job')"
+                "(SELECT node_id FROM yascheduler_nodes WHERE hostname = '10.0.0.1'), '/remote/job')",
             )
             # Sanity: the task references the node.
             conn.run("BEGIN")
             try:
                 pre = conn.run(
-                    "SELECT allocated_node_id FROM yascheduler_tasks WHERE title = 'job'"
+                    "SELECT allocated_node_id FROM yascheduler_tasks WHERE title = 'job'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -349,7 +349,7 @@ def test_fk_on_delete_set_null() -> None:
             try:
                 post = conn.run(
                     "SELECT allocated_node_id, title FROM yascheduler_tasks "
-                    "WHERE title = 'job'"
+                    "WHERE title = 'job'",
                 )
             finally:
                 conn.run("ROLLBACK")

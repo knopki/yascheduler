@@ -1,3 +1,4 @@
+"""Shared argparse helpers for CLI entry points — validators and flag adders consumed by all six CLI commands and the three daemon launchers."""
 # FILE: yascheduler/entrypoints/cli/args.py
 # VERSION: 1.2.0
 # START_MODULE_CONTRACT
@@ -39,9 +40,11 @@ LOG_LEVEL_CHOICES = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 #   LINKS: M-ENTRYPOINTS-CLI-ARGS
 # END_CONTRACT: existing_path
 def existing_path(s: str) -> Path:
+    """Argparse type validator — return Path(s) if s points to an existing file, else raise ArgumentTypeError (argparse converts to exit 2)."""
     p = Path(s)
     if not p.is_file():
-        raise argparse.ArgumentTypeError(f"not a file: {s}")
+        msg = f"not a file: {s}"
+        raise argparse.ArgumentTypeError(msg)
     return p
 
 
@@ -58,6 +61,7 @@ def add_config_arg(
     default: str = CONFIG_FILE,
     dest: str = "config",
 ) -> None:
+    """Add a --config PATH argument with type=existing_path so a missing config file exits 2 with a clear message."""
     # The default is wrapped in Path so argparse does NOT run `type=existing_path` on it
     # (Python 3.13+ applies `type` to string defaults; the default CONFIG_FILE may not
     # exist on a dev machine, and existence is deferred to Config.from_config_parser).
@@ -84,6 +88,7 @@ def add_log_level_arg(
     default: str = "WARNING",
     short: str | None = None,
 ) -> None:
+    """Add a --log-level argument with an explicit choices list resolved via logging."""
     # `short` (when given) is listed before --log-level so argparse renders the
     # short flag first in the usage line and help, matching the pre-refactor
     # `yascheduler -l DEBUG` convention. daemon_sysv MUST NOT pass short="-l"
@@ -111,6 +116,7 @@ def add_log_file_arg(
     *,
     default: str | None = None,
 ) -> None:
+    """Add a --log-file PATH argument (path string, no existence check) used by the three daemon entry points."""
     parser.add_argument(
         "--log-file",
         dest="log_file",

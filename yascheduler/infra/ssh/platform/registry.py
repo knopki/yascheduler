@@ -1,3 +1,4 @@
+"""Ordered platform adapter registry for platform detection."""
 # FILE: yascheduler/infra/ssh/platform/registry.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT

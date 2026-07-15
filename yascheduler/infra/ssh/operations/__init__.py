@@ -1,3 +1,4 @@
+"""Single-machine SSH operations collaborators — stateless deploy/download/occupancy classes that take a session per call."""
 # FILE: yascheduler/infra/ssh/operations/__init__.py
 # VERSION: 2.0.0
 # START_MODULE_CONTRACT
@@ -23,7 +24,7 @@ from .download import OutputDownloader
 from .occupancy import OccupancyChecker
 
 __all__ = [
-    "TaskDeployer",
-    "OutputDownloader",
     "OccupancyChecker",
+    "OutputDownloader",
+    "TaskDeployer",
 ]

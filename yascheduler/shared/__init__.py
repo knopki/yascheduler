@@ -1,3 +1,4 @@
+"""Shared kernel for cross-layer typing shims."""
 # FILE: yascheduler/shared/__init__.py
 # VERSION: 2.0.0
 #
@@ -23,4 +24,4 @@
 from .compat import Self, StrEnum, Unpack
 from .log import LogFormatter
 
-__all__ = ["Self", "Unpack", "StrEnum", "LogFormatter"]
+__all__ = ["LogFormatter", "Self", "StrEnum", "Unpack"]

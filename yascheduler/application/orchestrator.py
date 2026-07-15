@@ -1,3 +1,4 @@
+"""Daemon orchestrator — manages producer-consumer loops calling use cases."""
 # FILE: yascheduler/application/orchestrator.py
 # VERSION: 7.13.0
 # START_MODULE_CONTRACT
@@ -21,11 +22,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from asyncio.locks import Event
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -74,8 +76,8 @@ if TYPE_CHECKING:
 
 
 async def _asleep_until(end: datetime) -> None:
-    "Sleep until :end:"
-    now = datetime.now()
+    """Sleep until :end:."""
+    now = datetime.now(timezone.utc)
     if now >= end:
         return
     await asyncio.sleep((end - now).total_seconds())
@@ -89,6 +91,8 @@ async def _asleep_until(end: datetime) -> None:
 #   LINKS: M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE, M-APPLICATION-UOW, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
 # END_CONTRACT: Orchestrator
 class Orchestrator:
+    """Manage the daemon's 4 producer-consumer loops, delegating business logic to use cases."""
+
     # START_CONTRACT: Orchestrator.__init__
     #   PURPOSE: Initialise orchestrator with all daemon dependencies.
     #   INPUTS: { local_settings, remote_defaults, uow_factory, clouds, repository, task_deployer, output_downloader, occupancy_checker, engines, config_clouds, local_tasks_dir, allocation_tracker, active_clouds, allocation_lock, list_private_keys_fn, http_session }
@@ -115,6 +119,7 @@ class Orchestrator:
         list_private_keys_fn: Callable[[Path], Sequence[PurePath]],
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """Initialise orchestrator with all daemon dependencies."""
         self._local_settings = local_settings
         self._remote_defaults = remote_defaults
         self._uow_factory = uow_factory
@@ -154,16 +159,20 @@ class Orchestrator:
 
         lcfg = local_settings
         self._conn_machine_q: UniqueQueue[NodeId, Node] = UniqueQueue(
-            "conn_machine", maxsize=lcfg.conn_machine_pending
+            "conn_machine",
+            maxsize=lcfg.conn_machine_pending,
         )
         self._allocate_q: UniqueQueue[TaskId, Task] = UniqueQueue(
-            "allocate", maxsize=lcfg.allocate_pending
+            "allocate",
+            maxsize=lcfg.allocate_pending,
         )
         self._consume_q: UniqueQueue[TaskId, Task] = UniqueQueue(
-            "consume", maxsize=lcfg.consume_pending
+            "consume",
+            maxsize=lcfg.consume_pending,
         )
         self._deallocate_q: UniqueQueue[NodeId, Node] = UniqueQueue(
-            "deallocate", maxsize=lcfg.deallocate_pending
+            "deallocate",
+            maxsize=lcfg.deallocate_pending,
         )
 
     # ---- Task deployment wrapper ----
@@ -195,7 +204,11 @@ class Orchestrator:
         )
         # END_BLOCK_RESOLVE_NCPUS
         return await self._task_deployer.start_task_on_machine(
-            session, engine, task, ncpus, self._remote_defaults.engines_dir
+            session,
+            engine,
+            task,
+            ncpus,
+            self._remote_defaults.engines_dir,
         )
 
     # ---- Stats ----
@@ -209,7 +222,7 @@ class Orchestrator:
     # END_CONTRACT: Orchestrator._print_stats
     async def _print_stats(self) -> None:
         while not self._cancellation_event.is_set():
-            end_time = datetime.now() + timedelta(seconds=10)
+            end_time = datetime.now(timezone.utc) + timedelta(seconds=10)
             # START_BLOCK_STATS_RESILIENCE
             try:
                 async with self._uow_factory() as uow:
@@ -243,12 +256,12 @@ class Orchestrator:
                     self._consume_q,
                 ]
                 qmsgs = [f"{q.name}: {q.psize()}/{q.qsize()}" for q in queues]
-                logger.info("QUEUES: {}".format(" ".join(qmsgs)))
+                logger.info("QUEUES: %s", " ".join(qmsgs))
             # CancelledError is a BaseException — do NOT broaden to
             # `except BaseException` or shutdown will be swallowed.
             except Exception as err:
                 logger.debug("ERROR", extra={"context": "stats", "err": err})
-                logger.error("stats print failed: %s", err)
+                logger.exception("stats print failed")
             finally:
                 await _asleep_until(end_time)
             # END_BLOCK_STATS_RESILIENCE
@@ -276,7 +289,9 @@ class Orchestrator:
     async def _connect_machine_consumer(self, msg: UMessage[NodeId, Node]) -> None:
         node = msg.payload
         keys = await asyncio.get_running_loop().run_in_executor(
-            None, self._list_private_keys_fn, self._local_settings.keys_dir
+            None,
+            self._list_private_keys_fn,
+            self._local_settings.keys_dir,
         )
         try:
             await self._repository.connect(
@@ -312,7 +327,8 @@ class Orchestrator:
             # END_BLOCK_STATIC_NODE_RETRY
             # START_BLOCK_CONNECT_GRACE_CHECK
             first_seen = self._connect_failures.setdefault(
-                node.node_id, time.monotonic()
+                node.node_id,
+                time.monotonic(),
             )
             age = time.monotonic() - first_seen
             grace = self._connect_grace_for(node.cloud)
@@ -341,7 +357,10 @@ class Orchestrator:
                     "grace": grace,
                 },
             )
-            logger.error("abandoning cloud node %s after grace exceeded", node.hostname)
+            logger.exception(
+                "abandoning cloud node %s after grace exceeded",
+                node.hostname,
+            )
             try:
                 await abandon_node(
                     node,
@@ -358,13 +377,14 @@ class Orchestrator:
                         "err": abandon_err,
                     },
                 )
-                logger.error(
-                    "abandon_node failed for node %s: %s", node.hostname, abandon_err
+                logger.exception(
+                    "abandon_node failed for node %s",
+                    node.hostname,
                 )
             self._connect_failures.pop(node.node_id, None)
             # END_BLOCK_CONNECT_ABANDON
-        except Exception as err:
-            logger.error("An error occuried on remote machine creation: %s", err)
+        except Exception:
+            logger.exception("An error occuried on remote machine creation")
 
     def _connect_grace_for(self, cloud: str | None) -> int:
         if cloud is None:
@@ -410,8 +430,8 @@ class Orchestrator:
                 allocation_lock=self._allocation_lock,
                 remote_tasks_dir=self._remote_defaults.tasks_dir,
             )
-        except Exception as err:
-            logger.error("Allocator error for task %s: %s", msg.id, err)
+        except Exception:
+            logger.exception("Allocator error for task %s", msg.id)
         # END_BLOCK_ALLOCATE
 
     async def _task_consumer_producer(
@@ -439,7 +459,9 @@ class Orchestrator:
     #   LINKS: M-APPLICATION-CONSUME, M-DOMAIN-EVENTS
     # END_CONTRACT: Orchestrator._task_consumer_consumer
     async def _task_consumer_consumer(
-        self, msg: UMessage[TaskId, Task], machine_not_found: Counter
+        self,
+        msg: UMessage[TaskId, Task],
+        machine_not_found: Counter,
     ) -> None:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
@@ -541,7 +563,9 @@ class Orchestrator:
 
         # START_BLOCK_DEALLOCATE_USE_CASE
         disabled_nodes = await deallocate_nodes(
-            self._uow_factory, self._config_clouds, idle_machines
+            self._uow_factory,
+            self._config_clouds,
+            idle_machines,
         )
         # END_BLOCK_DEALLOCATE_USE_CASE
 
@@ -561,14 +585,16 @@ class Orchestrator:
         node = msg.payload
         try:
             await deallocate_node(
-                node, self._repository, self._clouds, self._uow_factory
+                node,
+                self._repository,
+                self._clouds,
+                self._uow_factory,
             )
-        except Exception as err:
-            logger.error(
-                "Deallocator error for node_id=%s hostname=%s: %s",
+        except Exception:
+            logger.exception(
+                "Deallocator error for node_id=%s hostname=%s",
                 node.node_id,
                 node.hostname,
-                err,
             )
 
     # ---- Infrastructure ----
@@ -627,9 +653,10 @@ class Orchestrator:
                     await consumer(msg)
                 except Exception as err:
                     logger.debug(
-                        "CONSUMER_ERROR", extra={"queue": queue.name, "err": err}
+                        "CONSUMER_ERROR",
+                        extra={"queue": queue.name, "err": err},
                     )
-                    logger.error("consumer error on queue %s: %s", queue.name, err)
+                    logger.exception("consumer error on queue %s", queue.name)
                 finally:
                     queue.item_done(msg)
                 # END_BLOCK_CONSUMER_RESILIENCE
@@ -649,7 +676,9 @@ class Orchestrator:
 
         try:
             while not self._cancellation_event.is_set():
-                end_time = datetime.now() + timedelta(seconds=self._sleep_interval)
+                end_time = datetime.now(timezone.utc) + timedelta(
+                    seconds=self._sleep_interval,
+                )
                 # START_BLOCK_PRODUCER_RESILIENCE
                 try:
                     async for msg in producer():
@@ -659,16 +688,19 @@ class Orchestrator:
                 # shutdown will be swallowed and the drain below bypassed.
                 except Exception as err:
                     logger.debug(
-                        "PRODUCER_ERROR", extra={"queue": queue.name, "err": err}
+                        "PRODUCER_ERROR",
+                        extra={"queue": queue.name, "err": err},
                     )
-                    logger.error("producer error on queue %s: %s", queue.name, err)
+                    logger.exception("producer error on queue %s", queue.name)
                 finally:
                     await _asleep_until(end_time)
                 # END_BLOCK_PRODUCER_RESILIENCE
         except asyncio.CancelledError:
             if not queue.empty():
                 logger.info(
-                    "Queue %s has %s items - waiting", queue.name, queue.qsize()
+                    "Queue %s has %s items - waiting",
+                    queue.name,
+                    queue.qsize(),
                 )
                 await queue.join()
             for task in workers:
@@ -694,16 +726,14 @@ class Orchestrator:
 
         wait_task = asyncio.create_task(_wait())
         timeout_task = asyncio.create_task(asyncio.sleep(30))
-        done, pending = await asyncio.wait(
+        _done, pending = await asyncio.wait(
             [wait_task, timeout_task],
             return_when="FIRST_COMPLETED",
         )
         for t in pending:
             t.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await t
-            except asyncio.CancelledError:
-                pass
         # END_BLOCK_WAIT_MACHINES
 
     async def _shutdown_barrier(self) -> None:
@@ -717,6 +747,7 @@ class Orchestrator:
     #   LINKS: M-QUEUE, M-APPLICATION-UOW
     # END_CONTRACT: Orchestrator.start
     async def start(self) -> None:
+        """Start all producer-consumer loops for the daemon."""
         logger.debug(
             "START",
             extra={"engines": ", ".join(e.name for e in self._engines.values())},
@@ -772,6 +803,7 @@ class Orchestrator:
     #   LINKS: M-CLOUD-PROVISIONER, M-SSH-REPOSITORY
     # END_CONTRACT: Orchestrator.stop
     async def stop(self) -> None:
+        """Signal the daemon to stop and clean up non-session resources."""
         # START_BLOCK_STOP_GUARD
         if self._stopped:
             return

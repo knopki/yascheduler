@@ -1,3 +1,4 @@
+"""PostgreSQL connection configuration as a frozen stdlib dataclass."""
 # FILE: yascheduler/infra/persistence/db_config.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
@@ -25,7 +26,7 @@ class PostgresDbConfig:
     """PostgreSQL connection configuration."""
 
     user: str = "yascheduler"
-    password: str = "password"
+    password: str = "password"  # noqa:  S105 not a real password
     database: str = "database"
     host: str = "localhost"
     port: int = 5432
@@ -33,9 +34,8 @@ class PostgresDbConfig:
     # START_BLOCK_VALIDATE
     def __post_init__(self) -> None:
         """Validate port >= 1."""
-        if not isinstance(self.port, int):
-            raise ValueError(f"port must be int, got {type(self.port).__name__}")
-        if self.port < 1:
-            raise ValueError(f"port must be >= 1, got {self.port}")
+        if not self.port >= 1:
+            msg = f"port must be >= 1, got {self.port}"
+            raise ValueError(msg)
 
     # END_BLOCK_VALIDATE

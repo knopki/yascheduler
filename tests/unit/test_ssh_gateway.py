@@ -68,11 +68,11 @@ class _AsyncIter:
     def __aiter__(self) -> _AsyncIter:
         return self
 
-    async def __anext__(self) -> Any:  # noqa: ANN401
+    async def __anext__(self) -> Any:
         try:
             return next(self._it)
         except StopIteration:
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
 
 def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
@@ -82,7 +82,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     adapter.path = PurePosixPath
     adapter.quote = lambda s: s
 
-    async def _run(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
+    async def _run(*args: object, **kwargs: Any) -> MagicMock:
         result = MagicMock()
         result.returncode = 0
         result.stdout = "stdout"
@@ -91,14 +91,14 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
     adapter.run = _run
 
-    async def _run_bg(*args: object, **kwargs: Any) -> MagicMock:  # noqa: ANN401
+    async def _run_bg(*args: object, **kwargs: Any) -> MagicMock:
         return MagicMock()
 
     adapter.run_bg = _run_bg
 
     adapter.get_cpu_cores = AsyncMock(return_value=ncpus)
 
-    def _pgrep(*args: object, **kwargs: Any) -> _AsyncIter:  # noqa: ANN401
+    def _pgrep(*args: object, **kwargs: Any) -> _AsyncIter:
         proc = MagicMock(spec=ProcessInfo)
         proc.pid = 1234
         proc.name = "testproc"
@@ -107,7 +107,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
     adapter.pgrep = _pgrep
 
-    def _list_processes(*args: object, **kwargs: Any) -> _AsyncIter:  # noqa: ANN401
+    def _list_processes(*args: object, **kwargs: Any) -> _AsyncIter:
         proc = MagicMock(spec=ProcessInfo)
         proc.pid = 1
         proc.name = "init"
@@ -366,7 +366,7 @@ class TestConnectJumpIdentity:
         mock_conn: MagicMock,
         mock_adapter: MagicMock,
     ) -> None:
-        """connect passes tunnel=None when node.jump_host is None."""
+        """Connect passes tunnel=None when node.jump_host is None."""
         node = Node(
             node_id=NodeId(1),
             hostname="10.0.0.1",
@@ -406,7 +406,7 @@ class TestConnectJumpIdentity:
         mock_conn: MagicMock,
         mock_adapter: MagicMock,
     ) -> None:
-        """connect builds tunnel from node.jump_host/jump_port/jump_username."""
+        """Connect builds tunnel from node.jump_host/jump_port/jump_username."""
         node = Node(
             node_id=NodeId(1),
             hostname="10.0.0.1",
@@ -532,7 +532,9 @@ class TestConnectJumpIdentity:
         ):
             mock_opts_cls.side_effect = lambda *args, **kwargs: MagicMock()
             await repository.connect(
-                node=node, client_keys=test_keys, connect_timeout=10
+                node=node,
+                client_keys=test_keys,
+                connect_timeout=10,
             )
 
         # Call 0: tunnel (_build_tunnel_options), Call 1: destination (_open_connection)
@@ -680,7 +682,8 @@ class TestConnectionLifecycle:
                 port=22,
             )
             with caplog.at_level(
-                logging.DEBUG, logger="yascheduler.infra.ssh.repository"
+                logging.DEBUG,
+                logger="yascheduler.infra.ssh.repository",
             ):
                 await repository.connect(node=node, client_keys=[])
 
@@ -698,7 +701,8 @@ class TestConnectionLifecycle:
 
     @pytest.mark.asyncio
     async def test_disconnect_removes_session(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """disconnect() removes the session from the repository."""
         session = _make_state()
@@ -708,7 +712,8 @@ class TestConnectionLifecycle:
 
     @pytest.mark.asyncio
     async def test_disconnect_closes_connection(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """disconnect() delegates teardown to session._close() (which closes conn)."""
         session = _make_state()
@@ -719,7 +724,8 @@ class TestConnectionLifecycle:
 
     @pytest.mark.asyncio
     async def test_disconnect_all_removes_all(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """disconnect_all() clears all sessions."""
         s1 = _make_state(hostname="10.0.0.1", node_id=1)
@@ -731,7 +737,8 @@ class TestConnectionLifecycle:
 
     @pytest.mark.asyncio
     async def test_disconnect_unknown_ip_does_nothing(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """disconnect() with no session does not raise."""
         await repository.disconnect(NodeId(99))  # should not raise
@@ -746,7 +753,8 @@ class TestListFree:
     """list_free filtering by state and platform — returns sessions."""
 
     def test_list_free_returns_free_sessions(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """list_free returns only FREE sessions."""
         s_free = _make_state(hostname="10.0.0.1", node_id=1, state=MachineState.FREE)
@@ -759,14 +767,21 @@ class TestListFree:
         assert result[0].hostname == "10.0.0.1"
 
     def test_list_free_filters_by_platform(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """list_free filters sessions by platform."""
         s_linux = _make_state(
-            hostname="10.0.0.1", node_id=1, platform="linux", state=MachineState.FREE
+            hostname="10.0.0.1",
+            node_id=1,
+            platform="linux",
+            state=MachineState.FREE,
         )
         s_win = _make_state(
-            hostname="10.0.0.2", node_id=2, platform="windows", state=MachineState.FREE
+            hostname="10.0.0.2",
+            node_id=2,
+            platform="windows",
+            state=MachineState.FREE,
         )
         repository._sessions[NodeId(1)] = s_linux
         repository._sessions[NodeId(2)] = s_win
@@ -776,11 +791,15 @@ class TestListFree:
         assert result[0].hostname == "10.0.0.1"
 
     def test_list_free_empty_when_no_match(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """list_free returns empty list when no sessions match."""
         s_linux = _make_state(
-            hostname="10.0.0.1", node_id=1, platform="linux", state=MachineState.FREE
+            hostname="10.0.0.1",
+            node_id=1,
+            platform="linux",
+            state=MachineState.FREE,
         )
         repository._sessions[NodeId(1)] = s_linux
 
@@ -788,18 +807,23 @@ class TestListFree:
         assert len(result) == 0
 
     def test_list_free_skips_busy_session_matching_platform(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """list_free excludes BUSY sessions even when platform matches."""
         s = _make_state(
-            hostname="10.0.0.1", node_id=1, platform="linux", state=MachineState.BUSY
+            hostname="10.0.0.1",
+            node_id=1,
+            platform="linux",
+            state=MachineState.BUSY,
         )
         repository._sessions[NodeId(1)] = s
         result = repository.list_free(platforms=["linux"])
         assert len(result) == 0
 
     def test_list_free_returns_oldest_first(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """list_free sorts by session.machine.free_since ascending (oldest first)."""
         older = time.monotonic() - 100
@@ -813,7 +837,7 @@ class TestListFree:
                 platform="linux",
                 state=MachineState.FREE,
                 free_since=older,
-            )
+            ),
         )
         s2.update(
             ConnectedMachine(
@@ -821,7 +845,7 @@ class TestListFree:
                 platform="linux",
                 state=MachineState.FREE,
                 free_since=newer,
-            )
+            ),
         )
         repository._sessions[NodeId(1)] = s1
         repository._sessions[NodeId(2)] = s2
@@ -848,7 +872,7 @@ class TestSessionFileTransfer:
         await session.upload(local, remote)
 
         # Enter the sftp context to access the same singleton sftp mock
-        async with session._conn.start_sftp_client() as sf:  # noqa: SLF001
+        async with session._conn.start_sftp_client() as sf:
             sf.put.assert_awaited_once_with(str(local), remote)  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
@@ -898,7 +922,8 @@ class TestRepositoryCollection:
         assert repository.contains(NodeId(2)) is False
 
     def test_get_session_returns_live_or_none(
-        self, repository: SSHMachineRepository
+        self,
+        repository: SSHMachineRepository,
     ) -> None:
         """get_session(node_id) returns the registered session or None."""
         session = _make_state(hostname="10.0.0.1", node_id=1)

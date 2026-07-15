@@ -87,7 +87,7 @@ class TestAbandonNode:
 
     @pytest.mark.asyncio
     async def test_happy_path_vm_deleted_row_removed_tracker_discarded(self) -> None:
-        """cloud node + one tracker entry linked -> all three actions fire, discard_by_node returns 1, no raise."""
+        """Cloud node + one tracker entry linked -> all three actions fire, discard_by_node returns 1, no raise."""
         node = _cloud_node()
         uow = _build_uow()
 
@@ -131,7 +131,8 @@ class TestAbandonNode:
 
     @pytest.mark.asyncio
     async def test_abandon_node_cloud_delete_failure_does_not_block_db_cleanup(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """clouds.deallocate raises -> logged at error, DB remove still runs, discard_by_node still runs, no raise."""
         node = _cloud_node()
@@ -143,7 +144,8 @@ class TestAbandonNode:
         tracker.discard_by_node.return_value = 0
 
         with caplog.at_level(
-            logging.DEBUG, logger="yascheduler.application.abandon_node"
+            logging.DEBUG,
+            logger="yascheduler.application.abandon_node",
         ):
             # Must NOT raise — cloud delete failure is logged not raised.
             await abandon_node(
@@ -167,7 +169,8 @@ class TestAbandonNode:
 
     @pytest.mark.asyncio
     async def test_abandon_node_db_remove_failure_reraised(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """uow.nodes.remove raises -> logged at error + re-raised (caller keeps worker alive). discard_by_node is NOT called (discard runs after the remove; remove failure skips it)."""
         node = _cloud_node()
@@ -176,16 +179,19 @@ class TestAbandonNode:
         clouds = AsyncMock()
         tracker = MagicMock(spec=AllocationTracker)
 
-        with caplog.at_level(
-            logging.DEBUG, logger="yascheduler.application.abandon_node"
+        with (
+            caplog.at_level(
+                logging.DEBUG,
+                logger="yascheduler.application.abandon_node",
+            ),
+            pytest.raises(RuntimeError, match="db gone"),
         ):
-            with pytest.raises(RuntimeError, match="db gone"):
-                await abandon_node(
-                    node,
-                    clouds=clouds,
-                    uow_factory=_uow_factory(uow),
-                    tracker=tracker,
-                )
+            await abandon_node(
+                node,
+                clouds=clouds,
+                uow_factory=_uow_factory(uow),
+                tracker=tracker,
+            )
 
         clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
@@ -202,7 +208,8 @@ class TestAbandonNode:
 
     @pytest.mark.asyncio
     async def test_abandon_node_no_matching_tracker_entry_no_discard(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """discard_by_node returns 0 -> no warning logged, function returns without raising."""
         node = _cloud_node()
@@ -213,7 +220,8 @@ class TestAbandonNode:
         tracker.discard_by_node.return_value = 0
 
         with caplog.at_level(
-            logging.DEBUG, logger="yascheduler.application.abandon_node"
+            logging.DEBUG,
+            logger="yascheduler.application.abandon_node",
         ):
             await abandon_node(
                 node,
@@ -227,7 +235,8 @@ class TestAbandonNode:
 
     @pytest.mark.asyncio
     async def test_abandon_node_multiple_tracker_entries_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """discard_by_node returns 2 (corruption) -> warning logged with AMBIGUOUS_TRACKER, node_id, ip, count=2, no raise."""
         node = _cloud_node()
@@ -238,7 +247,8 @@ class TestAbandonNode:
         tracker.discard_by_node.return_value = 2
 
         with caplog.at_level(
-            logging.DEBUG, logger="yascheduler.application.abandon_node"
+            logging.DEBUG,
+            logger="yascheduler.application.abandon_node",
         ):
             await abandon_node(
                 node,

@@ -1,3 +1,4 @@
+"""Cloud adapters module."""
 # FILE: yascheduler/infra/cloud/__init__.py
 # VERSION: 1.8.0
 #
@@ -34,8 +35,6 @@
 #   LAST_CHANGE: v1.8.0 - Re-export CloudInitConfig from .cloud_init (renamed from CloudConfig in cloud_config.py); drop PCloudConfig and CloudCapacity re-exports (Protocol collapsed into CloudInitConfig / dead dataclass deleted).
 #   PREVIOUS_CHANGE: v1.7.0 - Re-export AzureImageReference, ConfigCloud, ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI from .cloud_configs.
 # END_CHANGE_SUMMARY
-
-"""Cloud adapters module"""
 
 from .adapters import (
     CloudAdapter,

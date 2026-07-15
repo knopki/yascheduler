@@ -1,9 +1,10 @@
+"""OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Stateless: takes (log) at construction, (session, ...) per call."""
 # FILE: yascheduler/infra/ssh/operations/download.py
 # VERSION: 1.5.0
 # START_MODULE_CONTRACT
 #   PURPOSE: OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Stateless: takes (log) at construction, (session, ...) per call.
 #   SCOPE: OutputDownloader class + my_backoff_sftp partial (canonical location — its first user is download_outputs).
-#   DEPENDS: M-SSH-SESSION, M-SSH-EXCEPTIONS
+#   DEPENDS: M-PLATFORM-PROTOCOL, M-SSH-SESSION
 #   LINKS: M-SSH-OPS-DOWNLOAD
 # END_MODULE_CONTRACT
 #
@@ -27,7 +28,7 @@ from typing import TYPE_CHECKING
 import backoff
 from asyncssh.sftp import SFTPError
 
-from ..exceptions import SFTPRetryExc
+from yascheduler.infra.ssh.platform.protocol import SFTPRetryExc
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -59,9 +60,6 @@ class OutputDownloader:
     (local_folder, remote_folder, transient_errors, permanent_errors).
     """
 
-    def __init__(self) -> None:
-        pass
-
     # START_CONTRACT: OutputDownloader.download_outputs
     #   PURPOSE: Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree.
     #   INPUTS: { session: MachineSession, remote_dir: str, local_dir: Path, files: list[str], task_id: TaskId | None }
@@ -82,6 +80,7 @@ class OutputDownloader:
         list[tuple[str | None, Exception]],
         list[tuple[str | None, Exception]],
     ]:
+        """Per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree."""
         # START_BLOCK_DOWNLOAD_OUTPUTS
         local_folder = str(local_dir)
         remote_folder = remote_dir
@@ -99,7 +98,9 @@ class OutputDownloader:
                 async with session.open_sftp() as sftp:
                     try:
                         await file_get_retry(sftp.get)(
-                            out_file, local_dir, preserve=True
+                            out_file,
+                            local_dir,
+                            preserve=True,
                         )
                     except (OSError, SFTPError) as err:
                         # START_BLOCK_CLASSIFY

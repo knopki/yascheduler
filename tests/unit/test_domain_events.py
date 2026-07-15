@@ -81,7 +81,10 @@ class TestDomainEvents:
 
     def test_task_failed_all_fields(self) -> None:
         evt = TaskFailed(
-            task_id=TaskId(5), webhook_url=None, webhook_custom_params={}, reason="OOM"
+            task_id=TaskId(5),
+            webhook_url=None,
+            webhook_custom_params={},
+            reason="OOM",
         )
         assert evt.reason == "OOM"
 
@@ -125,7 +128,10 @@ class TestDomainEvents:
             local_folder="/r",
         )
         failed: Event = TaskFailed(
-            task_id=TaskId(1), webhook_url=None, webhook_custom_params={}, reason="err"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            reason="err",
         )
         abandoned: Event = TaskAbandoned(
             task_id=TaskId(1),
@@ -181,19 +187,19 @@ class TestDomainEvents:
 def _make_task(**overrides: object) -> Task:
     from datetime import datetime
 
-    base: dict[str, object] = dict(
-        task_id=TaskId(1),
-        label="test",
-        engine="fleur",
-        remote_folder=None,
-        local_folder=None,
-        webhook_url=None,
-        webhook_custom_params={},
-        error=None,
-        extra={},
-        created_at=datetime(2025, 1, 1),
-        updated_at=datetime(2025, 1, 1),
-    )
+    base: dict[str, object] = {
+        "task_id": TaskId(1),
+        "label": "test",
+        "engine": "fleur",
+        "remote_folder": None,
+        "local_folder": None,
+        "webhook_url": None,
+        "webhook_custom_params": {},
+        "error": None,
+        "extra": {},
+        "created_at": datetime(2025, 1, 1),
+        "updated_at": datetime(2025, 1, 1),
+    }
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 

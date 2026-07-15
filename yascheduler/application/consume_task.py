@@ -1,3 +1,4 @@
+"""Consume task use case — download outputs from a remote machine and finalise or defer the task."""
 # FILE: yascheduler/application/consume_task.py
 # VERSION: 6.3.0
 # START_MODULE_CONTRACT
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -72,7 +74,8 @@ async def _prepare_store_folder(
     else:
         store_folder = local_tasks_dir / Path(remote_folder).name
     await asyncio.get_running_loop().run_in_executor(
-        None, store_folder.mkdir, 0o777, True, True
+        None,
+        partial(store_folder.mkdir, 0o777, parents=True, exist_ok=True),
     )
     # END_BLOCK_CREATE_DIR
     return store_folder, output_files, remote_folder
@@ -228,6 +231,7 @@ async def consume_task(
     local_tasks_dir: Path,
     tracker: AllocationTracker,
 ) -> bool:
+    """Load task by id via UoW, download outputs from remote machine, finalise or defer."""
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
     if task is None:
@@ -238,7 +242,9 @@ async def consume_task(
         return True
 
     store_folder, output_files, task_remote_folder = await _prepare_store_folder(
-        task, local_tasks_dir, engines
+        task,
+        local_tasks_dir,
+        engines,
     )
     (
         local_folder,

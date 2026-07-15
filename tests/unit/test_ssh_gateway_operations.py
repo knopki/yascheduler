@@ -81,7 +81,7 @@ class TestOccupancy:
         session = _make_state()
         mock_pengine.check_pname = "nonexistent"
         # Override adapter.pgrep to yield nothing
-        session._adapter.pgrep = lambda *a, **kw: _AsyncIter([])  # type: ignore[assignment,misc]  # noqa: SLF001
+        session._adapter.pgrep = lambda *a, **kw: _AsyncIter([])  # type: ignore[assignment,misc]
         result = await occupancy_checker.occupancy_check(session, mock_pengine)
         assert result is False
 
@@ -104,7 +104,7 @@ class TestOccupancy:
             result.stderr = ""
             return result
 
-        session._adapter.run = _run_match  # type: ignore[assignment,misc]  # noqa: SLF001
+        session._adapter.run = _run_match  # type: ignore[assignment,misc]
 
         result = await occupancy_checker.occupancy_check(session, mock_pengine)
         assert result is True
@@ -128,7 +128,7 @@ class TestOccupancy:
             result.stderr = ""
             return result
 
-        session._adapter.run = _run_mismatch  # type: ignore[assignment,misc]  # noqa: SLF001
+        session._adapter.run = _run_mismatch  # type: ignore[assignment,misc]
 
         result = await occupancy_checker.occupancy_check(session, mock_pengine)
         assert result is False
@@ -171,13 +171,14 @@ class TestOccupancy:
         mock_pengine.check_pname = "sleep"
 
         # Replace adapter.pgrep with one that raises SSHRetryExc-class (ChannelOpenError)
-        async def _pgrep_ssh_fail(  # noqa: ANN202
-            *args: object, **kwargs: object
+        async def _pgrep_ssh_fail(
+            *args: object,
+            **kwargs: object,
         ):  # type: ignore[return-type]
             raise ChannelOpenError(1, "SSH connection lost")
             yield  # type: ignore[unreachable]  # makes this an async generator
 
-        session._adapter.pgrep = _pgrep_ssh_fail  # type: ignore[assignment,misc]  # noqa: SLF001
+        session._adapter.pgrep = _pgrep_ssh_fail  # type: ignore[assignment,misc]
 
         result = await occupancy_checker.occupancy_check(session, mock_pengine)
         assert result is True
@@ -219,11 +220,13 @@ class TestOccupancy:
         with (
             patch("yascheduler.infra.ssh.session.asyncio.sleep", AsyncMock()),
             patch.object(
-                occupancy_checker, "occupancy_check", AsyncMock(return_value=False)
+                occupancy_checker,
+                "occupancy_check",
+                AsyncMock(return_value=False),
             ),
         ):
             occupancy_checker.start_occupancy_check(session, mock_pengine)
-            task = session._monitor_task  # noqa: SLF001
+            task = session._monitor_task
             assert task is not None
             await asyncio.wait_for(task, timeout=1.0)
 
@@ -237,7 +240,6 @@ class TestOccupancy:
         mock_pengine: MagicMock,
     ) -> None:
         """Start occupancy check then cancel it (disconnect cancels monitor via _close)."""
-
         from yascheduler.domain.model import MachineState
 
         session = _make_state(state=MachineState.FREE)
@@ -256,6 +258,6 @@ class TestOccupancy:
             await asyncio.sleep(0)
 
             # _close cancels the monitor task
-            await session._close()  # noqa: SLF001
+            await session._close()
 
         assert session.is_closed is True

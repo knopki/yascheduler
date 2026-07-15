@@ -1,3 +1,4 @@
+"""yascheduler CLI command — start the daemon (foreground, intended for manual/debug/container use) via the shared daemon core."""
 # FILE: yascheduler/entrypoints/cli/daemonize.py
 # VERSION: 2.1.0
 # START_MODULE_CONTRACT
@@ -40,6 +41,7 @@ from yascheduler.entrypoints.config_parser import parse_config
 #   LINKS: M-CLI-COMMANDS, M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS
 # END_CONTRACT: daemonize
 def daemonize(argv: list[str] | None = None) -> None:
+    """Start the yascheduler daemon in the foreground via the shared daemon core; exit 0 on clean shutdown, 1 on runtime error, 2 on argparse error."""
     # START_BLOCK_PARSE_ARGS
     parser = argparse.ArgumentParser(
         prog="yascheduler",
@@ -65,7 +67,7 @@ def daemonize(argv: list[str] | None = None) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     # END_BLOCK_HANDLE_FAILURE
 

@@ -275,7 +275,7 @@ def test_cloud_allocate_error_under_cloud_error() -> None:
         raise err
     with pytest.raises(DomainError):
         raise err
-    with pytest.raises(Exception):  # noqa: PT011
+    with pytest.raises(Exception):
         raise err
 
 
@@ -294,7 +294,7 @@ def test_cloud_setup_error_under_cloud_error() -> None:
         raise err
     with pytest.raises(DomainError):
         raise err
-    with pytest.raises(Exception):  # noqa: PT011
+    with pytest.raises(Exception):
         raise err
 
 
@@ -423,9 +423,7 @@ def test_cloud_error_importable_from_domain_package() -> None:
 # END_CONTRACT: test_cloud_error_not_reexported_from_adapters
 def test_cloud_error_not_reexported_from_adapters() -> None:
     with pytest.raises(ImportError):
-        from yascheduler.infra.cloud import (  # noqa: F401
-            CloudError,
-        )
+        from yascheduler.infra.cloud import CloudError  # noqa: F401
 
 
 # START_CONTRACT: test_all_exceptions_importable
