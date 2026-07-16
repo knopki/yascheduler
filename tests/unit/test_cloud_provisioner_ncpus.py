@@ -1,21 +1,8 @@
-# FILE: tests/unit/test_cloud_provisioner_ncpus.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for CloudProvisionerImpl ncpus semantics — no write-back, None-safe DONE log.
-#   SCOPE: allocate/_setup_vm ncpus behavior with all provider SDKs and SSHMachineGateway mocked (no DB).
-#   DEPENDS: M-CLOUD-PROVISIONER, M-DOMAIN-MODEL
-#   LINKS: M-CLOUD-PROVISIONER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestAllocateNcpus - allocate does not write ncpus onto Node; DONE log is None-safe
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - node-ncpus-as-config: extract ncpus-related allocate tests from test_cloud_provisioner_impl.py (file over 1000-line hard limit).
-# END_CHANGE_SUMMARY
-
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for CloudProvisionerImpl ncpus semantics — no write-back, None-safe DONE log.
+# SCOPE: allocate/_setup_vm ncpus behavior with all provider SDKs and SSHMachineGateway mocked (no DB).
+# KEYWORDS: CloudProvisionerImpl, ncpus, no write-back, DONE log
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

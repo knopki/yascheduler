@@ -1,21 +1,3 @@
-# FILE: tests/unit/test_connect_grace.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the connect_grace defaults on the 4 ConfigCloud* DTOs.
-#   SCOPE: Hetzner/Upcloud default to 60, Azure/VastAI default to 120; all 4 satisfy CloudConfig via isinstance.
-#   DEPENDS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
-#   LINKS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_connect_grace_defaults_on_all_four_dtos - DTO default + CloudConfig isinstance parity
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial test for connect_grace DTO defaults (fix-never-connected-node-leak).
-#   PREVIOUS_CHANGE: none
-# END_CHANGE_SUMMARY
 """Tests for the connect_grace DTO defaults on the 4 ConfigCloud* DTOs.
 
 The cloud-config-protocol spec scenario "connect_grace defaults on all four
@@ -30,6 +12,11 @@ and that each DTO still satisfies CloudConfig via isinstance (the Protocol
 surface widened from 6 to 7 fields but the explicit inheritance means the
 DTOs declare the field).
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the connect_grace defaults on the 4 ConfigCloud* DTOs.
+# SCOPE: Hetzner/Upcloud default to 60, Azure/VastAI default to 120; all 4 satisfy CloudConfig via isinstance.
+# KEYWORDS: connect_grace, ConfigCloud DTOs, CloudConfig Protocol
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

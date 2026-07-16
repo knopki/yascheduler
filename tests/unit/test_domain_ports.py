@@ -1,28 +1,8 @@
-# FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.10.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
-#   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, CloudProvisioner Protocols.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_task_repository_protocol - Stub with all TaskRepository methods passes isinstance
-#   test_node_repository_protocol - Stub with all NodeRepository methods passes isinstance
-#   test_machine_repository_protocol - Stub with all MachineRepository methods passes isinstance
-#   test_machine_session_protocol - Stub with all MachineSession methods passes isinstance
-#   test_cloud_provisioner_protocol - Stub with all CloudProvisioner methods passes isinstance
-#   test_machine_session_hostname - MachineSession `hostname` property exists
-#   test_two_protocols_defined - MachineRepository and MachineSession defined, runtime_checkable; no MachineOperations
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_session_stub ConnectedMachine construction.
-#   PREVIOUS_CHANGE: v1.11.0 - node-owns-connection-identity: drop jump_host/jump_username from StubMachineRepository.connect; add test_machine_repository_connect_signature_no_jump_kwargs.
-# END_CHANGE_SUMMARY
-
+# region MODULE_CONTRACT
+# PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
+# SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, CloudProvisioner Protocols.
+# KEYWORDS: domain port Protocols, isinstance, structural conformance
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -297,46 +277,21 @@ class StubCloudProvisioner:
         pass
 
 
-# START_CONTRACT: test_task_repository_protocol
-#   PURPOSE: Verify a stub implementing all TaskRepository methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_task_repository_protocol
 def test_task_repository_protocol() -> None:
     stub = StubTaskRepository()
     assert isinstance(stub, TaskRepository)
 
 
-# START_CONTRACT: test_node_repository_protocol
-#   PURPOSE: Verify a stub implementing all NodeRepository methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_node_repository_protocol
 def test_node_repository_protocol() -> None:
     stub = StubNodeRepository()
     assert isinstance(stub, NodeRepository)
 
 
-# START_CONTRACT: test_machine_repository_protocol
-#   PURPOSE: Verify a stub implementing all MachineRepository methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_machine_repository_protocol
 def test_machine_repository_protocol() -> None:
     stub = StubMachineRepository()
     assert isinstance(stub, MachineRepository)
 
 
-# START_CONTRACT: test_machine_repository_connect_signature
-#   PURPOSE: Verify MachineRepository.connect takes no jump_host/jump_username params — locks the Protocol contract that jump identity is read from Node.
-#   LINKS: M-DOMAIN-PORTS
-# END_CONTRACT: test_machine_repository_connect_signature
 def test_machine_repository_connect_signature_no_jump_kwargs() -> None:
     """MachineRepository.connect has no jump_host or jump_username parameters."""
     import inspect
@@ -350,49 +305,21 @@ def test_machine_repository_connect_signature_no_jump_kwargs() -> None:
     assert "client_keys" in params
 
 
-# START_CONTRACT: test_machine_session_protocol
-#   PURPOSE: Verify a stub implementing all MachineSession methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_machine_session_protocol
 def test_machine_session_protocol() -> None:
     stub = StubMachineSession()
     assert isinstance(stub, MachineSession)
 
 
-# START_CONTRACT: test_cloud_provisioner_protocol
-#   PURPOSE: Verify a stub implementing all CloudProvisioner methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_cloud_provisioner_protocol
 def test_cloud_provisioner_protocol() -> None:
     stub = StubCloudProvisioner()
     assert isinstance(stub, CloudProvisioner)
 
 
-# START_CONTRACT: test_machine_session_hostname
-#   PURPOSE: Verify MachineSession Protocol has hostname property and is runtime_checkable.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS
-# END_CONTRACT: test_machine_session_hostname
 def test_machine_session_hostname() -> None:
     """MachineSession Protocol has hostname property."""
     assert hasattr(MachineSession, "hostname")
 
 
-# START_CONTRACT: test_two_protocols_defined
-#   PURPOSE: Verify MachineRepository and MachineSession are defined, runtime_checkable; no MachineOperations.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS
-# END_CONTRACT: test_two_protocols_defined
 def test_two_protocols_defined() -> None:
     """MachineRepository and MachineSession are defined as runtime_checkable Protocols."""
     assert issubclass(MachineRepository, Protocol)  # type: ignore[arg-type]
@@ -406,13 +333,6 @@ def test_two_protocols_defined() -> None:
         from yascheduler.domain.ports import MachineOperations  # noqa: F401
 
 
-# START_CONTRACT: test_node_repository_insert_shape
-#   PURPOSE: Verify NodeRepository.insert takes NewNode and returns Node.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS
-# END_CONTRACT: test_node_repository_insert_shape
 def test_node_repository_insert_shape() -> None:
     """NodeRepository.insert takes NewNode and returns Node."""
     import inspect
@@ -422,13 +342,6 @@ def test_node_repository_insert_shape() -> None:
     assert "new_node" in params
 
 
-# START_CONTRACT: test_node_repository_get_by_id_shape
-#   PURPOSE: Verify NodeRepository.get_by_id takes NodeId, returns Node | None.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS
-# END_CONTRACT: test_node_repository_get_by_id_shape
 def test_node_repository_get_by_id_shape() -> None:
     """NodeRepository.get_by_id takes NodeId and returns Node | None."""
     import inspect
@@ -441,13 +354,6 @@ def test_node_repository_get_by_id_shape() -> None:
     assert ann is not inspect.Parameter.empty
 
 
-# START_CONTRACT: test_node_repository_remove_shape
-#   PURPOSE: Verify NodeRepository.remove takes NodeId.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS
-# END_CONTRACT: test_node_repository_remove_shape
 def test_node_repository_remove_shape() -> None:
     """NodeRepository.remove takes NodeId."""
     import inspect
@@ -457,13 +363,6 @@ def test_node_repository_remove_shape() -> None:
     assert "node_id" in params
 
 
-# START_CONTRACT: test_cloud_allocate_sets_external_id_alongside_hostname
-#   PURPOSE: Verify CloudProvisioner.allocate takes provider and Node and returns Node.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS
-# END_CONTRACT: test_cloud_allocate_sets_external_id_alongside_hostname
 def test_cloud_allocate_sets_external_id_alongside_hostname() -> None:
     """CloudProvisioner.allocate takes provider and node, returns Node."""
     import inspect
@@ -476,13 +375,6 @@ def test_cloud_allocate_sets_external_id_alongside_hostname() -> None:
     assert str(ann) == "Node"
 
 
-# START_CONTRACT: test_cloud_deallocate_reads_node_cloud_and_hostname
-#   PURPOSE: Verify CloudProvisioner.deallocate takes node and reads node.cloud/node.hostname.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS
-# END_CONTRACT: test_cloud_deallocate_reads_node_cloud_and_hostname
 def test_cloud_deallocate_reads_node_cloud_and_hostname() -> None:
     """CloudProvisioner.deallocate takes a Node."""
     import inspect

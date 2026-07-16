@@ -1,26 +1,15 @@
 """LogFormatter with extra-diff trace discriminator for stdlib structured DEBUG tracing."""
-# FILE: yascheduler/shared/log.py
-# VERSION: 2.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: LogFormatter with extra-diff trace discriminator for stdlib structured DEBUG tracing.
-#   SCOPE: LogFormatter only — renders trace records (DEBUG + in-package + extra-diff) as [module][funcName]:lineno msg sorted k=v; regular records as LEVEL name: message.
-#   DEPENDS: none
-#   LINKS: M-LOGGING
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   LogFormatter - Formatter with extra-diff discriminator: trace records vs regular narrative
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Rewrite: remove YaLogger/get_logger; new trace discriminator (DEBUG + extra diff + in-package); _NATIVE_KEYS via introspection; _PACKAGE from __name__; no record.shortname mutation.
-#   PREVIOUS_CHANGE: v1.1.0 - Add get_logger factory; reclasses cached Logger to YaLogger for static type correctness.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Make internal trace flow observable via structured DEBUG logs without polluting user-facing output.
+# SCOPE: LogFormatter only — renders trace records (DEBUG + in-package + extra-diff) as [module][funcName]:lineno msg sorted k=v; regular records as LEVEL name: message.
+# KEYWORDS: logging, formatter, trace, structured logging, debug, discriminator
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import logging
+
+__all__ = ["LogFormatter"]
 
 # _NATIVE_KEYS: set of attribute names present on a freshly constructed
 # LogRecord. Derived by introspection once at import time so that
@@ -35,6 +24,8 @@ _NATIVE_KEYS = frozenset(
 _PACKAGE = __name__.split(".", 1)[0]
 
 
+# region CLASS_LogFormatter
+# PURPOSE: Let developers observe internal execution flow at DEBUG level while keeping production output clean.
 class LogFormatter(logging.Formatter):
     """Formatter with two rendering branches rooted on the extra-diff discriminator.
 
@@ -50,11 +41,15 @@ class LogFormatter(logging.Formatter):
         <LEVEL> <name>: <message>
     """
 
+    # region METHOD_format
+    # PURPOSE: Route log records to trace or user-facing format based on the extra-diff discriminator.
     def format(self, record: logging.LogRecord) -> str:
         """Format a log record; trace records get the structured format."""
         if self._is_trace(record):
             return self._format_trace(record)
         return self._format_user(record)
+
+    # endregion METHOD_format
 
     def _is_trace(self, record: logging.LogRecord) -> bool:
         """Check all three trace discriminator conditions."""
@@ -65,7 +60,7 @@ class LogFormatter(logging.Formatter):
         if record.levelno != logging.DEBUG:
             return False
         # Condition 3: carries extra attributes beyond native keys
-        return set(record.__dict__) - _NATIVE_KEYS
+        return bool(set(record.__dict__) - _NATIVE_KEYS)
 
     def _format_trace(self, record: logging.LogRecord) -> str:
         """Render a trace record: [shortname][funcName]:lineno msg k=v ..."""
@@ -77,3 +72,6 @@ class LogFormatter(logging.Formatter):
     def _format_user(self, record: logging.LogRecord) -> str:
         """Render a user-facing record: LEVEL name: message."""
         return f"{record.levelname} {record.name}: {record.getMessage()}"
+
+
+# endregion CLASS_LogFormatter

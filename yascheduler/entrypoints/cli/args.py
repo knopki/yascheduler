@@ -1,25 +1,9 @@
 """Shared argparse helpers for CLI entry points — validators and flag adders consumed by all six CLI commands and the three daemon launchers."""
-# FILE: yascheduler/entrypoints/cli/args.py
-# VERSION: 1.2.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Shared argparse helpers for CLI entry points — validators and flag adders consumed by all six CLI commands and the three daemon launchers.
-#   SCOPE: Shared argparse helpers for CLI entry points.
-#   DEPENDS: M-ENTRYPOINTS
-#   LINKS: M-ENTRYPOINTS-CLI-ARGS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   LOG_LEVEL_CHOICES - Explicit list of accepted log-level names (no logging._levelToName private API)
-#   existing_path - argparse type validator: Path(s) if s is an existing file else ArgumentTypeError
-#   add_config_arg - Add --config PATH (type=existing_path, default=CONFIG_FILE)
-#   add_log_level_arg - Add --log-level (choices=LOG_LEVEL_CHOICES, default="WARNING"); optional short alias (e.g. "-l") when `short` is passed
-#   add_log_file_arg - Add --log-file PATH (default=None unless caller overrides)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - add_log_level_arg gains optional `short` parameter so a caller can register a short flag alias (e.g. "-l") for --log-level; preserves the `yascheduler -l DEBUG` behavior on daemonize without affecting daemon_sysv (which keeps -l for --log-file).
-#   PREVIOUS_CHANGE: v1.1.0 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Provide shared argparse helpers — validators and flag adders — consumed by all six CLI commands and the three daemon launchers.
+# SCOPE: Argparse helpers for all CLI commands — path validation, config/log-level/log-file flag registration.
+# KEYWORDS: argparse, cli, validators, config, log-level, log-file
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -31,14 +15,8 @@ from yascheduler.entrypoints import CONFIG_FILE
 LOG_LEVEL_CHOICES = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
-# START_CONTRACT: existing_path
-#   PURPOSE: argparse type validator — return Path(s) if s points to an existing file, else raise ArgumentTypeError (argparse converts to exit 2).
-#   INPUTS: { s: str - path string from argparse }
-#   OUTPUTS: { Path - resolved path if it points to an existing file }
-#   SIDE_EFFECTS: None
-#   RAISES: argparse.ArgumentTypeError - on missing/non-file path; argparse surfaces as exit 2
-#   LINKS: M-ENTRYPOINTS-CLI-ARGS
-# END_CONTRACT: existing_path
+# region FUNC_existing_path
+# PURPOSE: argparse type validator — return Path(s) if s points to an existing file, else raise ArgumentTypeError (argparse converts to exit 2).
 def existing_path(s: str) -> Path:
     """Argparse type validator — return Path(s) if s points to an existing file, else raise ArgumentTypeError (argparse converts to exit 2)."""
     p = Path(s)
@@ -48,13 +26,11 @@ def existing_path(s: str) -> Path:
     return p
 
 
-# START_CONTRACT: add_config_arg
-#   PURPOSE: Add a --config PATH argument with type=existing_path so a missing config file exits 2 with a clear message.
-#   INPUTS: { parser: argparse.ArgumentParser - parser to mutate, default: str - default config path (CONFIG_FILE), dest: str - argparse dest ("config") }
-#   OUTPUTS: { None - mutates parser in place }
-#   SIDE_EFFECTS: Registers --config on the parser; argparse may exit 2 at parse time via the existing_path type validator.
-#   LINKS: M-ENTRYPOINTS-CLI-ARGS
-# END_CONTRACT: add_config_arg
+# endregion FUNC_existing_path
+
+
+# region FUNC_add_config_arg
+# PURPOSE: Add a --config PATH argument with type=existing_path so a missing config file exits 2 with a clear message.
 def add_config_arg(
     parser: argparse.ArgumentParser,
     *,
@@ -75,13 +51,11 @@ def add_config_arg(
     )
 
 
-# START_CONTRACT: add_log_level_arg
-#   PURPOSE: Add a --log-level argument with an explicit choices list resolved via logging.getLevelName (no private logging._levelToName API); optionally register a short flag alias.
-#   INPUTS: { parser: argparse.ArgumentParser - parser to mutate, default: str - default level name (WARNING), short: str | None - optional short flag (e.g. "-l") registered as an alias for --log-level }
-#   OUTPUTS: { None - mutates parser in place }
-#   SIDE_EFFECTS: Registers --log-level (and the short alias when given) on the parser; argparse exits 2 on an invalid choice (e.g. WARN is rejected — only WARNING is accepted). The caller MUST ensure `short` does not collide with another option on the same parser (e.g. daemon_sysv registers -l for --log-file, so it MUST NOT pass short="-l").
-#   LINKS: M-ENTRYPOINTS-CLI-ARGS
-# END_CONTRACT: add_log_level_arg
+# endregion FUNC_add_config_arg
+
+
+# region FUNC_add_log_level_arg
+# PURPOSE: Add a --log-level argument with an explicit choices list resolved via logging.getLevelName (no private logging._levelToName API); optionally register a short flag alias.
 def add_log_level_arg(
     parser: argparse.ArgumentParser,
     *,
@@ -104,13 +78,11 @@ def add_log_level_arg(
     )
 
 
-# START_CONTRACT: add_log_file_arg
-#   PURPOSE: Add a --log-file PATH argument (path string, no existence check) used by the three daemon entry points.
-#   INPUTS: { parser: argparse.ArgumentParser - parser to mutate, default: str | None - default log file path (None → stderr / journald) }
-#   OUTPUTS: { None - mutates parser in place }
-#   SIDE_EFFECTS: Registers --log-file on the parser.
-#   LINKS: M-ENTRYPOINTS-CLI-ARGS
-# END_CONTRACT: add_log_file_arg
+# endregion FUNC_add_log_level_arg
+
+
+# region FUNC_add_log_file_arg
+# PURPOSE: Add a --log-file PATH argument (path string, no existence check) used by the three daemon entry points.
 def add_log_file_arg(
     parser: argparse.ArgumentParser,
     *,
@@ -123,3 +95,6 @@ def add_log_file_arg(
         default=default,
         help="Path to the log file (default: stderr; a FileHandler is created only when set)",
     )
+
+
+# endregion FUNC_add_log_file_arg

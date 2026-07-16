@@ -1,21 +1,8 @@
-# FILE: tests/unit/test_allocation_tracker.py
-# VERSION: 2.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for AllocationTracker — in-flight cloud allocation dedup with a task-to-node link.
-#   SCOPE: AllocationTracker add/set_node/discard/discard_by_node/__contains__ behavior.
-#   DEPENDS: M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ALLOCATION-TRACKER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestAllocationTracker - Tests for add (new/duplicate/with node_id), set_node (tracked/untracked), discard (tracked/untracked), discard_by_node (single/multiple/none), __contains__
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Cover set_node (tracked/untracked) and discard_by_node (single/multiple/none) for the task-to-node link; add with node_id form.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial test suite for AllocationTracker (cloud-provisioner-pure).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for AllocationTracker — in-flight cloud allocation dedup with a task-to-node link.
+# SCOPE: AllocationTracker add/set_node/discard/discard_by_node/__contains__ behavior.
+# KEYWORDS: AllocationTracker, add, set_node, discard, dedup
+# endregion MODULE_CONTRACT
 
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.domain.model import NodeId, TaskId

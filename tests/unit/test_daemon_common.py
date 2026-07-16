@@ -1,22 +1,8 @@
-# FILE: tests/unit/test_daemon_common.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_common.py — configure_logger and run_daemon with mocked DI (no real DB/SSH).
-#   SCOPE: configure_logger handler/level/suppression/captureWarnings behavior; run_daemon shape (async, awaits make_daemon + orch.start, owns signal handlers) with mocked make_daemon.
-#   DEPENDS: M-DAEMON-COMMON
-#   LINKS: M-DAEMON-COMMON
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestConfigureLogger - stderr-only when log_file=None; +FileHandler when set; backoff/asyncssh ERROR; captureWarnings(True); no basicConfig; LogFormatter on both handlers
-#   TestRunDaemonShape - run_daemon is async; awaits make_daemon + orch.start with mocked DI
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Assert LogFormatter wired on both StreamHandler and FileHandler in configure_logger (reform-grace-logging).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for daemon_common.py (consolidate-daemon-entrypoints).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_common.py — configure_logger and run_daemon with mocked DI (no real DB/SSH).
+# SCOPE: configure_logger handler/level/suppression/captureWarnings behavior; run_daemon shape (async, awaits make_daemon + orch.start, owns signal handlers) with mocked make_daemon.
+# KEYWORDS: daemon_common, configure_logger, run_daemon, signal handlers
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

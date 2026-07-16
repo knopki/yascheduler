@@ -1,21 +1,9 @@
 """Abstract Unit of Work Protocol defining the transactional boundary contract for use cases."""
-# FILE: yascheduler/application/uow.py
-# VERSION: 1.1.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Abstract Unit of Work Protocol defining the transactional boundary contract for use cases.
-#   SCOPE: AbstractUnitOfWork Protocol defining the transactional boundary contract for use cases — task/node repositories, commit/rollback, event dispatch, and async context manager.
-#   DEPENDS: M-DOMAIN-PORTS, M-DOMAIN-EVENTS
-#   LINKS: M-DOMAIN-PORTS, M-PERSISTENCE-UOW, M-DOMAIN-EVENTS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   AbstractUnitOfWork - Protocol for transactional boundaries with task and node repositories
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Add collect_events and publish_events to AbstractUnitOfWork Protocol.
-#   PREVIOUS_CHANGE: v1.0.0 - Create AbstractUnitOfWork Protocol for application layer.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Define the abstract Unit of Work Protocol that use cases depend on, keeping transaction management decoupled from any persistence implementation.
+# SCOPE: AbstractUnitOfWork Protocol — async context manager.
+# KEYWORDS: uow, unit of work, protocol, transaction, repository
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -27,6 +15,10 @@ if TYPE_CHECKING:
     import types
 
     from yascheduler.domain import DomainEvent, NodeRepository, TaskRepository
+
+__all__ = [
+    "AbstractUnitOfWork",
+]
 
 
 @runtime_checkable

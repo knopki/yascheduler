@@ -1,20 +1,8 @@
-# FILE: tests/integration/test_migration_012_node_rename.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration test for migration 012 (node ip→hostname rename + new fields).
-#   SCOPE: testcontainers-based verification of migration 012 steps.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_migration_012_node_rename_and_fields - Verifies all 7 Gherkin scenarios
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from test_migrations.py (node-rename-and-fields).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Integration test for migration 012 (node ip→hostname rename + new fields).
+# SCOPE: testcontainers-based verification of migration 012 steps.
+# KEYWORDS: migration 012, node rename, ip to hostname
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -77,13 +65,6 @@ def _columns(conn: pg8000.native.Connection, table: str) -> list[str]:
     return [r[0] for r in rows]
 
 
-# START_CONTRACT: test_migration_012_node_rename_and_fields
-#   PURPOSE: Covers all 7 Gherkin scenarios for migration 012 — ip→hostname rename, created_at/updated_at + trigger, external_id backfill for cloud nodes only, NODE_STATUS enum + status column, port NOT NULL + CHECK, jump host fields, and schema.sql snapshot update.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; creates pre-012 schema; applies schema + migrations
-#   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA
-# END_CONTRACT: test_migration_012_node_rename_and_fields
 def test_migration_012_node_rename_and_fields() -> None:
     """Migration 012: ip→hostname, audit timestamps, jump fields, external_id, NODE_STATUS, port constraints."""
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:

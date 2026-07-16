@@ -1,23 +1,11 @@
 """Custom exceptions for remote machine operations."""
-# FILE: yascheduler/infra/ssh/platform/exc.py
-# VERSION: 1.0.1
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Custom exceptions for remote machine operations.
-#   SCOPE: PlatformGuessFailedError exception.
-#   DEPENDS: none
-#   LINKS: M-PLATFORM-ADAPTERS, M-PLATFORM-EXC
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   PlatformGuessFailedError - Raised when platform detection from host string fails
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial version.
-# END_CHANGE_SUMMARY
-#
+# region MODULE_CONTRACT
+# PURPOSE: Exception types for platform detection and remote machine operations.
+# SCOPE: PlatformGuessFailedError exception class.
+# KEYWORDS: exceptions, platform detection, PlatformGuessFailedError
+# endregion MODULE_CONTRACT
+
+__all__ = ["PlatformGuessFailedError"]
 
 
 class PlatformGuessFailedError(Exception):

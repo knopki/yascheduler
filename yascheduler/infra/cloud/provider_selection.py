@@ -1,23 +1,9 @@
 """Pure function for selecting best cloud provider by priority, capacity, and platform support."""
-# FILE: yascheduler/infra/cloud/provider_selection.py
-# VERSION: 1.2.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Pure function for selecting best cloud provider by priority, capacity, and platform support.
-#   SCOPE: select_provider_pure function — adapter-internal, called only from CloudProvisionerImpl.select_provider.
-#   DEPENDS: M-CLOUD-ADAPTERS-NEW
-#   LINKS: M-CLOUD-PROVIDER-SELECTION, M-CLOUD-PROVISIONER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   select_provider_pure - Pick highest-priority provider with capacity and platform support
-#   _adapter_supports_any_platform - True iff adapter supports at least one of the requested platforms
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...); drop vestigial NONE DEBUG trace (carried no extra fields, not asserted in tests).
-#   PREVIOUS_CHANGE: v1.2.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-PROVIDER-SELECTION") at module top
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Select the most suitable cloud provider (highest priority with available capacity and compatible platform) so the allocator can decide without I/O, DB access, or provider-specific knowledge.
+# SCOPE: select_provider_pure function — adapter-internal, called only from CloudProvisionerImpl.select_provider.
+# KEYWORDS: provider selection, priority, capacity, platform, pure function
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -30,39 +16,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# START_CONTRACT: select_provider_pure
-#   PURPOSE: Pick the highest-priority provider with available capacity and platform support.
-#   INPUTS: {
-#     adapters: dict[str, CloudAdapter] - provider name -> adapter,
-#     configs: dict[str, ConfigCloud] - provider name -> config,
-#     platforms: list[str] - required platform identifiers,
-#     current_counts: dict[str, int] - provider name -> current node count (from uow.nodes.list_all)
-#   }
-#   OUTPUTS: { CloudAdapter | None - best matching provider or None }
-#   SIDE_EFFECTS: None — pure function (caller owns all I/O and DB).
-#   LINKS: M-CLOUD-ADAPTERS-NEW
-# END_CONTRACT: select_provider_pure
+__all__ = ["select_provider_pure"]
 
 
-# START_CONTRACT: _adapter_supports_any_platform
-#   PURPOSE: True iff adapter passes at least one supported_platform_check for at least one requested platform.
-#   INPUTS: {
-#     adapter: CloudAdapter - adapter with supported_platform_checks tuple,
-#     platforms: list[str] - requested platform identifiers
-#   }
-#   OUTPUTS: { bool }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS-NEW
-# END_CONTRACT: _adapter_supports_any_platform
-def _adapter_supports_any_platform(adapter: CloudAdapter, platforms: list[str]) -> bool:
-    checks = adapter.supported_platform_checks
-    for platform in platforms:
-        for check in checks:
-            if check(platform):
-                return True
-    return False
-
-
+# region FUNC_select_provider_pure
+# PURPOSE: Return the highest-priority provider with available capacity and platform support so the allocator picks cost-effectively without blocking on I/O.
+# REQUIRES: adapters and configs dicts are non-empty; platforms is a list of required platform identifiers.
+# ENSURES: Returns None when no suitable provider found; caller owns all I/O and DB.
 def select_provider_pure(
     adapters: dict[str, CloudAdapter],
     configs: dict[str, ConfigCloud],
@@ -70,7 +30,7 @@ def select_provider_pure(
     current_counts: dict[str, int],
 ) -> CloudAdapter | None:
     """Select best provider by priority, capacity, and platform support."""
-    # START_BLOCK_FILTER_SUITABLE
+    # region BLOCK_filter_suitable
     suitable: list[CloudAdapter] = []
     for name, adapter in adapters.items():
         config = configs.get(name)
@@ -97,12 +57,12 @@ def select_provider_pure(
             )
             continue
         suitable.append(adapter)
-    # END_BLOCK_FILTER_SUITABLE
+    # endregion BLOCK_filter_suitable
 
     if not suitable:
         return None
 
-    # START_BLOCK_SORT_BY_PRIORITY
+    # region BLOCK_sort_by_priority
     suitable.sort(
         key=lambda a: configs[a.name].priority,
         reverse=True,
@@ -112,5 +72,22 @@ def select_provider_pure(
         "CHOSEN",
         extra={"provider": chosen.name, "priority": configs[chosen.name].priority},
     )
-    # END_BLOCK_SORT_BY_PRIORITY
+    # endregion BLOCK_sort_by_priority
     return chosen
+
+
+# endregion FUNC_select_provider_pure
+
+
+# region FUNC__adapter_supports_any_platform
+# PURPOSE: Check whether a given adapter supports at least one of the requested platforms so the allocator can skip incompatible providers.
+def _adapter_supports_any_platform(adapter: CloudAdapter, platforms: list[str]) -> bool:
+    checks = adapter.supported_platform_checks
+    for platform in platforms:
+        for check in checks:
+            if check(platform):
+                return True
+    return False
+
+
+# endregion FUNC__adapter_supports_any_platform

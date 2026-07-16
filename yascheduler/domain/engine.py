@@ -1,26 +1,15 @@
 """Define calculation engine value objects and deploy strategy types."""
-# FILE: yascheduler/domain/engine.py
-# VERSION: 1.1.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Define calculation engine value objects and deploy strategy types.
-#   SCOPE: Engine types (Engine value object, EngineRepository collection, Deploy strategy types) and their contracts.
-#   DEPENDS: M-SHARED
-#   LINKS: M-DOMAIN-MODEL, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-SUBMIT, M-APPLICATION-ORCHESTRATOR, M-DI
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   LocalFilesDeploy - Deploy local files configuration (frozen dataclass)
-#   LocalArchiveDeploy - Deploy local archive configuration (frozen dataclass)
-#   RemoteArchiveDeploy - Deploy remote archive configuration (frozen dataclass)
-#   Deploy - Union type of all deploy configurations
-#   Engine - Calculation engine value object with spawn command, platforms, deploy strategies, validate_inputs
-#   EngineRepository - Frozen collection of engines with filter/filter_platforms/get_platform_packages
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Engine.validate_inputs takes extra: Mapping[str, object] (was ctx: TaskContext); reads the task's extra dict directly.
-#   PREVIOUS_CHANGE: v1.0.0 - Relocate Engine, Deploy*, EngineRepository from yascheduler.config to yascheduler.domain as frozen stdlib dataclasses; merge 7-field domain.model.Engine with 4 fields from config.Engine; drop UserDict inheritance, __hash__, engines_dir; INI parsing moves to entrypoints.config_parser.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Describe calculation engines and their deploy artefacts so the scheduler can match tasks to compatible machines and ship inputs deterministically.
+# SCOPE:
+# - Engine value object, EngineRepository collection, and the Deploy strategy union (LocalFilesDeploy, LocalArchiveDeploy, RemoteArchiveDeploy).
+# - NOT: INI parsing of engines (entrypoints.config_parser) or remote deployment execution (infra.ssh.operations).
+# INVARIANTS: Engines and repositories are frozen; repository keys are unique engine names.
+# RATIONALE:
+# - Q: Why are these types in the domain layer instead of in config?
+#   A: They encode business rules (platform matching, input validation) consumed by use cases; config only parses INI into them. Keeping them in domain prevents use cases from depending on the config module.
+# KEYWORDS: engine, calculation, spawn, platforms, deploy, EngineRepository, validate inputs
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -33,6 +22,15 @@ if TYPE_CHECKING:
     from pathlib import PurePath
 
 from .exceptions import MissingInputFileError
+
+__all__ = [
+    "Deploy",
+    "Engine",
+    "EngineRepository",
+    "LocalArchiveDeploy",
+    "LocalFilesDeploy",
+    "RemoteArchiveDeploy",
+]
 
 
 @dataclass(frozen=True)
@@ -63,6 +61,9 @@ Deploy = Union[
 ]
 
 
+# region CLASS_Engine
+# PURPOSE: Specify a calculation engine's spawn command, platform support, and deploy artefacts so tasks can be matched to compatible machines and provisioned reproducibly.
+# INVARIANTS: Frozen.
 @dataclass(frozen=True)
 class Engine:
     """Calculation engine specification with spawn command, platforms, deploy strategies."""
@@ -79,28 +80,26 @@ class Engine:
     check_cmd_code: int = 0
     sleep_interval: int = 10
 
-    # START_CONTRACT: Engine.validate_inputs
-    #   PURPOSE: Validate that all required input files exist in the task extra payload.
-    #   INPUTS: { extra: Mapping[str, object] - the task's extra dict (input-file payloads, file names as keys) }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: None
-    #   RAISES: MissingInputFileError - if any input_file is missing from extra
-    #   LINKS: M-DOMAIN-EXCEPTIONS: MissingInputFileError
-    # END_CONTRACT: Engine.validate_inputs
+    # region METHOD_validate_inputs
+    # PURPOSE: Verify every required engine input file is present in the task payload, failing fast before deployment.
+    # REQUIRES: extra keys are input-file names.
     def validate_inputs(self, extra: Mapping[str, object]) -> None:
         """Verify all required engine input files exist in the task extra payload."""
         for filename in self.input_files:
             if filename not in extra:
                 raise MissingInputFileError(self.name, filename)
 
+    # endregion METHOD_validate_inputs
 
+
+# endregion CLASS_Engine
+
+
+# region CLASS_EngineRepository
+# PURPOSE: Hold the set of known engines as a frozen, queryable collection so allocation and setup can filter by predicate or platform without mutating shared state.
 @dataclass(frozen=True)
 class EngineRepository:
-    """Frozen collection of engines keyed by name.
-
-    Exposes get, __getitem__, __contains__, values, filter,
-    filter_platforms, and get_platform_packages.
-    """
+    """Frozen collection of engines keyed by name."""
 
     data: Mapping[str, Engine] = field(default_factory=dict)
 
@@ -118,36 +117,32 @@ class EngineRepository:
         """Return a view of all engine values."""
         return self.data.values()
 
-    # START_CONTRACT: EngineRepository.filter
-    #   PURPOSE: Filter engines by predicate and return a new frozen repository.
-    #   INPUTS: { fn: Callable[[Engine], bool] - predicate function for filtering }
-    #   OUTPUTS: { EngineRepository - new repository with matching engines only }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-ENGINE
-    # END_CONTRACT: EngineRepository.filter
+    # region METHOD_filter
+    # PURPOSE: Return a new repository retaining only engines the predicate accepts.
     def filter(self, fn: Callable[[Engine], bool]) -> EngineRepository:
         """Filter engines by predicate and return a new frozen repository."""
         return EngineRepository(data={k: v for k, v in self.data.items() if fn(v)})
 
-    # START_CONTRACT: EngineRepository.filter_platforms
-    #   PURPOSE: Filter engines by supported platforms and return a new frozen repository.
-    #   INPUTS: { platforms: Sequence[str] - list of platform names to match against }
-    #   OUTPUTS: { EngineRepository - new repository with engines supporting at least one given platform }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-ENGINE
-    # END_CONTRACT: EngineRepository.filter_platforms
+    # endregion METHOD_filter
+
+    # region METHOD_filter_platforms
+    # PURPOSE: Narrow the repository to engines that support at least one of the given platforms.
+    # ENSURES: Result engines have non-empty platform intersection with the argument.
     def filter_platforms(self, platforms: Sequence[str]) -> EngineRepository:
         """Filter engines by supported platforms and return a new frozen repository."""
         return self.filter(lambda e: bool(set(e.platforms) & set(platforms)))
 
-    # START_CONTRACT: EngineRepository.get_platform_packages
-    #   PURPOSE: Collect the unique union of platform_packages across all engines.
-    #   INPUTS: { None }
-    #   OUTPUTS: { list[str] - unique platform packages (order-independent) }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-ENGINE
-    # END_CONTRACT: EngineRepository.get_platform_packages
+    # endregion METHOD_filter_platforms
+
+    # region METHOD_get_platform_packages
+    # PURPOSE: Gather the unique platform packages across all engines for provisioning decisions.
+    # ENSURES: Result has no duplicate entries.
     def get_platform_packages(self) -> list[str]:
         """Collect the unique union of platform_packages across all engines."""
         mapped = (e.platform_packages for e in self.values())
         return list(set(chain(*mapped)))
+
+    # endregion METHOD_get_platform_packages
+
+
+# endregion CLASS_EngineRepository

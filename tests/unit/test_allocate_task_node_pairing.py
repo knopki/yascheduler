@@ -1,22 +1,8 @@
-# FILE: tests/unit/test_allocate_task_node_pairing.py
-# VERSION: 1.3.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the task-allocated-node-id application-layer changes: _find_free_machines session↔Node pairing and _try_start_on_machine node_id logging.
-#   SCOPE: _find_free_machines returns list[tuple[MachineSession, Node]] paired by ip (dup-IP collapses to last-wins); _try_start_on_machine takes (session, node), calls task.run(node_id, remote_folder), logs node_id=%s.
-#   DEPENDS: M-APPLICATION-ALLOCATE
-#   LINKS: M-APPLICATION-ALLOCATE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestFindFreeMachinesNodePairing - _find_free_machines pairs sessions with Nodes by ip; dup-IP collapses
-#   TestTryStartOnMachineNodeIdLogging - _try_start_on_machine trace records carry node_id and hostname via getMessage() + extra-diff against native LogRecord keys
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - switch-to-standard-logging: migrate ALLOCATED assertion off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS); caplog logger name updated to module-path yascheduler.application.allocate_task.
-#   PREVIOUS_CHANGE: v1.2.0 - reform-grace-logging slice 8: migrate ALLOCATED assertion from getMessage() substring to record.block/record.fields structured fields; caplog logger name updated to yascheduler.M-APPLICATION-ALLOCATE.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the task-allocated-node-id application-layer changes: _find_free_machines session↔Node pairing and _try_start_on_machine node_id logging.
+# SCOPE: _find_free_machines returns list[tuple[MachineSession, Node]] paired by ip (dup-IP collapses to last-wins); _try_start_on_machine takes (session, node), calls task.run(node_id, remote_folder), logs node_id=%s.
+# KEYWORDS: _find_free_machines, session-node pairing, node_id logging
+# endregion MODULE_CONTRACT
 
 import logging
 import time

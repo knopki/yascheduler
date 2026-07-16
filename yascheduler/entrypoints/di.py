@@ -1,25 +1,9 @@
 """Dependency injection composition root — factories per entry point (daemon, CLI)."""
-# FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.17.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
-#   SCOPE: Factories per entry point (daemon, CLI).
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-ENTRYPOINTS-CONFIG, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY, M-SSH-KEYS, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-ENTRYPOINTS-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-KEYS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   make_daemon - Async factory creating Orchestrator with all daemon dependencies including MessageBus
-#   make_cli_deps - Sync factory creating lightweight CLIDeps for CLI commands
-#   _setup_domain_events - Create MessageBus, HTTP session and register webhook handlers
-#   CLIDeps - Lightweight dependency container for CLI submit operations
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v5.17.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v5.16.0 - remove log parameter from collaborator constructors in make_daemon; bind module-local logger = get_logger("M-DI") at module top
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Assemble all domain, application, and infrastructure collaborators into ready-to-use entry point objects (daemon Orchestrator, CLI dependencies).
+# SCOPE: Daemon orchestrator factory (make_daemon), CLI dependency container (CLIDeps + make_cli_deps), and domain event bus setup with webhook registration.
+# KEYWORDS: di, composition-root, factories, daemon, cli, dependency-injection
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -70,13 +54,8 @@ if TYPE_CHECKING:
     from .config import Config
 
 
-# START_CONTRACT: CLIDeps
-#   PURPOSE: Lightweight dependency container for CLI submit operations.
-#   INPUTS: { engines, uow_factory }
-#   OUTPUTS: { CLIDeps instance }
-#   SIDE_EFFECTS: None
-#   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-UOW
-# END_CONTRACT: CLIDeps
+# region CLASS_CLIDeps
+# PURPOSE: Lightweight dependency container for CLI submit operations — holds engines and a UoW factory.
 @dataclass
 class CLIDeps:
     """Lightweight dependency container for CLI submit operations."""
@@ -84,13 +63,8 @@ class CLIDeps:
     engines: EngineRepository
     uow_factory: Callable[[], AbstractUnitOfWork]
 
-    # START_CONTRACT: CLIDeps.submit
-    #   PURPOSE: Submit a new task via the submit_task use case.
-    #   INPUTS: { label, metadata, engine_name }
-    #   OUTPUTS: { TaskId - the generated task_id (the public Yascheduler.queue_submit_task facade extracts .value to keep the public -> int contract; yasubmit prints str(TaskId) → bare integer) }
-    #   SIDE_EFFECTS: Creates task in database.
-    #   LINKS: M-APPLICATION-SUBMIT
-    # END_CONTRACT: CLIDeps.submit
+    # region METHOD_submit
+    # PURPOSE: Submit a new task via the submit_task use case, returning the generated TaskId.
     async def submit(
         self,
         label: str,
@@ -106,14 +80,14 @@ class CLIDeps:
             self.uow_factory,
         )
 
+    # endregion METHOD_submit
 
-# START_CONTRACT: _setup_domain_events
-#   PURPOSE: Create MessageBus, HTTP client session, and register webhook handlers for all event types.
-#   INPUTS: { None }
-#   OUTPUTS: { tuple[MessageBus, aiohttp.ClientSession] - (bus, http_session) }
-#   SIDE_EFFECTS: Creates HTTP session; registers webhook_handler for each event type.
-#   LINKS: M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS
-# END_CONTRACT: _setup_domain_events
+
+# endregion CLASS_CLIDeps
+
+
+# region FUNC__setup_domain_events
+# PURPOSE: Create a MessageBus, an aiohttp client session, and register webhook handlers for all domain event types.
 def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
     bus = MessageBus()
     http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
@@ -128,13 +102,11 @@ def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
     return bus, http
 
 
-# START_CONTRACT: make_daemon
-#   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
-#   INPUTS: { config: Config, clouds: Optional[CloudProvisionerImpl] }
-#   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates UoW factory, SSH connections, and cloud provisioner.
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY, M-SSH-KEYS, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: make_daemon
+# endregion FUNC__setup_domain_events
+
+
+# region FUNC_make_daemon
+# PURPOSE: Async factory creating a fully-wired Orchestrator with all daemon dependencies (UoW, SSH, cloud, event bus).
 async def make_daemon(
     config: Config,
     *,
@@ -232,13 +204,11 @@ async def make_daemon(
         raise
 
 
-# START_CONTRACT: make_cli_deps
-#   PURPOSE: Sync factory creating lightweight CLIDeps for CLI commands (no SSH/cloud).
-#   INPUTS: { config: Config }
-#   OUTPUTS: { CLIDeps }
-#   SIDE_EFFECTS: None — no connections created until use.
-#   LINKS: M-APPLICATION-SUBMIT, M-PERSISTENCE-UOW
-# END_CONTRACT: make_cli_deps
+# endregion FUNC_make_daemon
+
+
+# region FUNC_make_cli_deps
+# PURPOSE: Sync factory creating lightweight CLIDeps for CLI commands (no SSH/cloud dependencies).
 def make_cli_deps(config: Config) -> CLIDeps:
     """Sync factory creating lightweight CLIDeps for CLI commands (no SSH/cloud)."""
     bus = MessageBus()
@@ -250,3 +220,6 @@ def make_cli_deps(config: Config) -> CLIDeps:
         engines=config.engines,
         uow_factory=_uow_factory,
     )
+
+
+# endregion FUNC_make_cli_deps

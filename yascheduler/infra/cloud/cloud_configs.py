@@ -1,29 +1,10 @@
 """Cloud provider config DTOs."""
+# region MODULE_CONTRACT
+# PURPOSE: Define per-provider configuration contracts so the provisioner can read VM parameters (image, size, credentials, limits) without knowing provider-specific DTO internals.
+# SCOPE: ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference, ConfigCloud union.
+# KEYWORDS: config, dto, azure, hetzner, upcloud, vastai, cloud config, image reference
+# endregion MODULE_CONTRACT
 
-# FILE: yascheduler/infra/cloud/cloud_configs.py
-# VERSION: 1.3.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Cloud provider config DTOs + ConfigCloud union.
-#   SCOPE: ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference, ConfigCloud union.
-#   DEPENDS: M-SHARED, M-DOMAIN-PORTS
-#   LINKS: M-CLOUD-PROTOCOLS, M-ENTRYPOINTS-CONFIG-PARSER, M-DOMAIN-PORTS, M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   AzureImageReference  - Azure image URN (publisher, offer, sku, version) with from_urn pure parser
-#   ConfigCloudAzure     - Azure cloud configuration frozen dataclass, explicitly inherits CloudConfig Protocol
-#   ConfigCloudHetzner   - Hetzner cloud configuration frozen dataclass, explicitly inherits CloudConfig Protocol
-#   ConfigCloudUpcloud   - Upcloud cloud configuration frozen dataclass, explicitly inherits CloudConfig Protocol
-#   ConfigCloudVastAI    - VastAI cloud configuration frozen dataclass, explicitly inherits CloudConfig Protocol
-#   ConfigCloud          - Union[ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI]
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Add jump_port: int = 22 field to all 4 ConfigCloud* DTOs; configurable via {prefix}_jump_port INI key. On the CloudConfig Protocol (8th field) because the cloud allocator stamps it onto Node.jump_port alongside jump_host/jump_username.
-#   PREVIOUS_CHANGE: v1.3.0 - Add package_upgrade: bool = True field to all 4 ConfigCloud* DTOs; controls the cloud-init package_upgrade flag on freshly-provisioned VMs and is read by CloudProvisionerImpl._get_cloud_config_data. Default True. Not added to the CloudConfig Protocol (infra-only consumer) nor to AzureImageReference.
-# END_CHANGE_SUMMARY
-#
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -33,6 +14,15 @@ from yascheduler.domain import CloudConfig
 
 if TYPE_CHECKING:
     from yascheduler.shared import Self
+
+__all__ = [
+    "AzureImageReference",
+    "ConfigCloud",
+    "ConfigCloudAzure",
+    "ConfigCloudHetzner",
+    "ConfigCloudUpcloud",
+    "ConfigCloudVastAI",
+]
 
 
 @dataclass(frozen=True)
@@ -44,13 +34,8 @@ class AzureImageReference:
     sku: str = "11-backports-gen2"
     version: str = "latest"
 
-    # START_CONTRACT: from_urn
-    #   PURPOSE: Create AzureImageReference from a URN string in publisher:offer:sku:version format
-    #   INPUTS: { urn: str - URN string with colon-separated image reference components }
-    #   OUTPUTS: { Self - parsed Azure image reference }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-CLOUD-CONFIGS
-    # END_CONTRACT: from_urn
+    # region METHOD_from_urn
+    # PURPOSE: Parse a publisher:offer:sku:version URN into structured fields so Azure image config is human-friendly at the INI level.
     @classmethod
     def from_urn(cls, urn: str) -> Self:
         """Create image reference from urn in format `publisher:offer:sku:version`."""
@@ -62,6 +47,8 @@ class AzureImageReference:
                 msg,
             )
         return cls(*parts)
+
+    # endregion METHOD_from_urn
 
 
 @dataclass(frozen=True)

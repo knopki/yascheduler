@@ -1,21 +1,3 @@
-# FILE: tests/unit/test_abandon_node.py
-# VERSION: 2.0.2
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup via discard_by_node).
-#   SCOPE: Happy path, non-cloud node, cloud-delete failure tolerance, DB-remove failure re-raise, no-entry no-op, ambiguous-tracker warning.
-#   DEPENDS: M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ABANDON-NODE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestAbandonNode - Happy path, non-cloud, cloud-delete failure, DB-remove failure, no-entry no-op, ambiguous-tracker warning
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.2 - switch-to-standard-logging: migrate CLOUD_DELETE_FAILED/REMOVE_FAILED/AMBIGUOUS_TRACKER assertions off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS); caplog logger name yascheduler.M-APPLICATION-ABANDON-NODE → yascheduler.application.abandon_node (×4 sites).
-#   PREVIOUS_CHANGE: v2.0.1 - Node-rename-and-fields: _cloud_node uses hostname= (was ip=), param renamed hostname.
-# END_CHANGE_SUMMARY
 """Unit tests for the abandon_node use case.
 
 Covers the six scenarios from the use-cases spec:
@@ -27,6 +9,11 @@ Covers the six scenarios from the use-cases spec:
 - No matching tracker entry -> no warning, no raise
 - Multiple tracker entries for one node -> warning logged, no raise
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup via discard_by_node).
+# SCOPE: Happy path, non-cloud node, cloud-delete failure tolerance, DB-remove failure re-raise, no-entry no-op, ambiguous-tracker warning.
+# KEYWORDS: abandon_node, discard_by_node, never-connected, cloud cleanup
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

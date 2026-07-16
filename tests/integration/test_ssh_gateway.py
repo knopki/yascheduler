@@ -1,32 +1,9 @@
-# FILE: tests/integration/test_ssh_gateway.py
-# VERSION: 1.6.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for SSHMachineRepository + SSHMachineOperations against a Docker SSH server via testcontainers.
-#   SCOPE: Connection lifecycle, command execution, SFTP upload/download, machine state transitions.
-#   DEPENDS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-DOMAIN-MODEL, M-SSH-SESSION
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-SESSION
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   ssh_container - session-scoped fixture: starts Docker SSH container, generates key pair
-#   ssh_container_2 - session-scoped fixture for the second container (multi-machine regression), yields bridge IP + internal port 2222
-#   repository - function-scoped fixture: SSHMachineRepository connected to test container
-#   task_deployer - function-scoped fixture: TaskDeployer collaborator
-#   output_downloader - function-scoped fixture: OutputDownloader collaborator
-#   occupancy_checker - function-scoped fixture: OccupancyChecker collaborator
-#   TestSSHGatewayIntegration - connection lifecycle, command exec, SFTP, state transitions
-#   TestOccupancyRunBgLeak - run_bg process lifecycle regression
-#   TestOccupancyIntegration - occupancy_check via check_pname/check_cmd against real SSH
-#   TestOccupancyRaceCondition - regression for session state sync bug
-#   TestOccupancySpawnScenario - spawn→occupancy_check flow via run_bg
-#   TestMultiMachineBgTaskLeak - real-asyncssh regression: disconnect(A) must not cancel B's monitor
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - dissolve-machine-operations-facade: replace SSHMachineOperations fixture with per-collaborator fixtures (TaskDeployer, OutputDownloader, OccupancyChecker); all pass-through calls (run, run_bg) rewritten to session.X() directly.
-#   PREVIOUS_CHANGE: v1.5.0 - simplify-cloud-connect-node-args: all repository.connect calls drop the `username=`/`port=` kwargs.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for SSHMachineRepository + SSHMachineOperations against a Docker SSH server via testcontainers.
+# SCOPE: Connection lifecycle, command execution, SFTP upload/download, machine state transitions.
+# DEPENDENCIES: USES API: testcontainers (Docker SSH server)
+# KEYWORDS: SSHMachineRepository, SFTP, Docker SSH server, machine state
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

@@ -1,23 +1,8 @@
-# FILE: tests/unit/test_cloud_config_protocol_inheritance.py
-# VERSION: 1.2.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Assert the 4 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol (D1).
-#   SCOPE: MRO + isinstance checks for the 4 DTOs; AzureImageReference negative case.
-#   DEPENDS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
-#   LINKS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_all_four_dtos_inherit_cloud_config                 - MRO check for all 4 DTOs (PEP 544-safe, no issubclass)
-#   test_isinstance_returns_true_for_each_dto               - isinstance(dto, CloudConfig) is True for each DTO
-#   test_azure_image_reference_does_not_inherit_cloud_config - AzureImageReference.__mro__ excludes CloudConfig
-#   test_cloud_config_protocol_has_jump_port                 - CloudConfig Protocol declares jump_port: int
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Add test_cloud_config_protocol_has_jump_port: CloudConfig Protocol declares jump_port: int.
-#   PREVIOUS_CHANGE: v1.1.0 - Drop test_no_issubclass_in_production_code (test-for-test's-sake: enforced PEP 544 discipline already covered by openspec/specs/cloud-config spec and runtime TypeError on any issubclass call; the test shelled out to rg, an undeclared CI dependency).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Assert the 4 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol (D1).
+# SCOPE: MRO + isinstance checks for the 4 DTOs; AzureImageReference negative case.
+# KEYWORDS: CloudConfig Protocol, MRO, isinstance, DTO inheritance
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -58,13 +43,6 @@ def test_isinstance_returns_true_for_each_dto() -> None:
         )
 
 
-# START_CONTRACT: test_cloud_config_protocol_has_jump_port
-#   PURPOSE: Verify CloudConfig Protocol declares jump_port: int as the 8th field
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-PORTS, M-CLOUD-CONFIGS
-# END_CONTRACT: test_cloud_config_protocol_has_jump_port
 def test_cloud_config_protocol_has_jump_port() -> None:
     """CloudConfig Protocol declares jump_port: int"""
     assert "jump_port" in CloudConfig.__annotations__

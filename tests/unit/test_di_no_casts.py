@@ -1,20 +1,8 @@
-# FILE: tests/unit/test_di_no_casts.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Regression test guarding against silent reintroduction of typing.cast in the composition root.
-#   SCOPE: AST-walks yascheduler/entrypoints/di.py for typing.cast imports/calls.
-#   DEPENDS: M-DI
-#   LINKS: M-DI
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_di_has_no_cast_usage - Parse di.py and assert no typing.cast usage (import, bare call, or attribute call)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Add AST-based regression test asserting no typing.cast usage in the composition root (narrow-config-clouds-type). Config.clouds is typed Sequence[ConfigCloud], so the 2 former Protocol→Union downcasts are unnecessary; this test fails the unit suite if a future change reintroduces them.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Regression test guarding against silent reintroduction of typing.cast in the composition root.
+# SCOPE: AST-walks yascheduler/entrypoints/di.py for typing.cast imports/calls.
+# KEYWORDS: typing.cast, composition root, AST walk
+# endregion MODULE_CONTRACT
 
 import ast
 import pathlib

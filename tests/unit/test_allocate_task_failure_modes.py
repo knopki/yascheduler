@@ -1,30 +1,14 @@
-# FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.7.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
-#   SCOPE: Step 1 commit failure, step 2 cleanup failure (best-effort logging), step 3 final persist failure (VM deallocate + tmp cleanup) —
-#          all verify tracker.discard via outer finally, correct exception propagation, and no leaked VM/tmp-node.
-#   DEPENDS: M-APPLICATION-ALLOCATE
-#   LINKS: M-APPLICATION-ALLOCATE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestAllocateTaskFailureModes - allocate_task hardening: step1/step2-cleanup/step3 failures all release tracker entry; step3 also verifies best-effort VM+tmp cleanup
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: [v1.6.0 - cloud-port-node-arg: step3 asserts clouds.allocate/deallocate called with Node args (was NodeId/scalars).]
-#   PREVIOUS_CHANGE: [v1.5.0 - remove-tmp-node-fake-ip: _make_uow sets uow.nodes.insert to return a tmp Node (NewNode(cloud=..., enabled=False) → Node with node_id); step2/step3 cleanup asserts remove(tmp_node_id) directly (no get lookup).]
-# END_CHANGE_SUMMARY
-#
 """Failure-mode tests for allocate_task cloud-fallback hardening.
 
 Validates that the outer try/finally with success-flag correctly releases the
 tracker entry on any unhandled exception (step 1 commit, step 2 cleanup, step
 3 final persist) while preserving it on the success path.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
+# SCOPE: Step 1 commit failure, step 2 cleanup failure (best-effort logging), step 3 final persist failure (VM deallocate + tmp cleanup) — all verify tracker.discard via outer finally, correct exception propagation, and no leaked VM/tmp-node.
+# KEYWORDS: allocate_task, cloud fallback, try/finally, VM leak
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

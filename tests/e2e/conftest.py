@@ -1,31 +1,9 @@
-# FILE: tests/e2e/conftest.py
-# VERSION: 2.6.0
-# START_MODULE_CONTRACT
-#   PURPOSE: E2E test fixtures — PostgreSQL + SSH container pool, config, schema, log capture, and UoW-based DB access.
-#   SCOPE: Session-scoped containers (postgres + ssh_pool of two), config; function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE, log_records (getMessage() + extra-diff assertions against _NATIVE_KEYS).
-#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-SSH-REPOSITORY, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
-#   LINKS: M-ENTRYPOINTS-CONFIG, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-UOW, M-APPLICATION-MESSAGE-BUS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   pytest_collection_modifyitems - auto-mark tests as "e2e"
-#   postgres_container - session-scoped PostgreSQL container
-#   _db_config - session-scoped PostgresDbConfig from container URL
-#   ssh_pool - session-scoped list of TWO SSH containers sharing ONE keypair (distinct bridge IPs, port 2222)
-#   ssh_container - thin wrapper returning ssh_pool[0] for backward compat with test_consume_retry.py
-#   e2e_config - session-scoped Config with temp dir, INI, engine script, single SSH key symlink
-#   _init_schema - session-scoped schema.sql application via apply_schema()
-#   _bus - session-scoped bare MessageBus for UoW event dispatch
-#   pg_executor - function-scoped ThreadPoolExecutor for pg8000
-#   pg_conn - function-scoped raw pg8000 connection with TRUNCATE teardown
-#   uow_factory - function-scoped factory returning PostgresUnitOfWork instances
-#   log_records - function-scoped in-memory LogCaptureHandler attached to the "yascheduler" logger at DEBUG; tests assert via record.getMessage() (former block marker) plus extra-diff {k: getattr(r,k) for k in r.__dict__ if k not in _NATIVE_KEYS}; descendant propagation from yascheduler.* logger names (logging.getLogger(__name__)) still reaches the parent
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.6.0 - switch-to-standard-logging: update log_records fixture docstring to describe getMessage() + extra-diff assertions (former block marker is now the message; structured fields are record attrs beyond _NATIVE_KEYS); descendant propagation from yascheduler.* names via logging.getLogger(__name__) unchanged.
-#   PREVIOUS_CHANGE: v2.5.0 - reform-grace-logging slice 8: update log_records fixture docstring to describe structured-field assertions (record.block/record.fields) and propagation from M-ID-namespaced loggers.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: E2E test fixtures — PostgreSQL + SSH container pool, config, schema, log capture, and UoW-based DB access.
+# SCOPE: Session-scoped containers (postgres + ssh_pool of two), config; function-scoped pg_conn/pg_executor/uow_factory with TRUNCATE, log_records (getMessage() + extra-diff assertions against _NATIVE_KEYS).
+# DEPENDENCIES: USES API: testcontainers (PostgreSQL + SSH containers)
+# KEYWORDS: e2e fixtures, SSH container pool, PostgresContainer, log capture
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -85,13 +63,6 @@ def _container_bridge_ip(container: DockerContainer) -> str:
     raise RuntimeError("could not determine container bridge IP")
 
 
-# START_CONTRACT: LogCaptureHandler
-#   PURPOSE: In-memory logging.Handler that appends every LogRecord to a list, for e2e log-grepping.
-#   INPUTS: { records: list[logging.LogRecord] - list to append to (supplied by the fixture) }
-#   OUTPUTS: { None - mutates records in place via emit }
-#   SIDE_EFFECTS: None beyond the records list append.
-#   LINKS: log_records fixture (this module)
-# END_CONTRACT: LogCaptureHandler
 class LogCaptureHandler(logging.Handler):
     def __init__(self, records: list[logging.LogRecord]) -> None:
         super().__init__(level=logging.DEBUG)
@@ -129,15 +100,12 @@ def _db_config(postgres_container: PostgresContainer) -> PostgresDbConfig:
 async def ssh_pool(
     tmp_path_factory: Any,
 ) -> AsyncGenerator[list[dict[str, Any]], None]:
-    # START_BLOCK_KEYPAIR
     key_dir = tmp_path_factory.mktemp("ssh_keys")
     key_path = key_dir / "id_rsa"
     key = asyncssh.generate_private_key("ssh-rsa")
     public_key_str = key.export_public_key("openssh").decode().strip()
     key.write_private_key(str(key_path))
-    # END_BLOCK_KEYPAIR
 
-    # START_BLOCK_START_CONTAINERS
     containers: list[DockerContainer] = []
     try:
         for _ in range(2):
@@ -174,7 +142,6 @@ async def ssh_pool(
     finally:
         for c in containers:
             c.stop()
-    # END_BLOCK_START_CONTAINERS
 
 
 @pytest.fixture(scope="session")
@@ -224,26 +191,20 @@ def e2e_config(
     )
     ini_path.write_text(ini_content)
 
-    # START_BLOCK_ENGINE_SCRIPT
     engines_dir = tmp / "data" / "engines" / "test_shell"
     engines_dir.mkdir(parents=True)
     run_sh = engines_dir / "run.sh"
     run_sh.write_text("#!/bin/sh\nsleep 3\ncat 1.input > 1.input.out\n")
     run_sh.chmod(run_sh.stat().st_mode | stat.S_IEXEC)
-    # END_BLOCK_ENGINE_SCRIPT
 
-    # START_BLOCK_SSH_KEY
     keys_dir = tmp / "data" / "keys"
     keys_dir.mkdir(parents=True)
     src = Path(str(ssh["key_path"]))
     dst = keys_dir / src.name
     dst.symlink_to(src)
-    # END_BLOCK_SSH_KEY
 
-    # START_BLOCK_ENV_CONFIG
     os.environ["YASCHEDULER_CONF_PATH"] = str(ini_path)
     return parse_config(str(ini_path))
-    # END_BLOCK_ENV_CONFIG
 
 
 @pytest.fixture(scope="session")
@@ -301,18 +262,14 @@ def uow_factory(
 
 @pytest.fixture
 def log_records() -> Generator[list[logging.LogRecord], None, None]:
-    # START_BLOCK_ATTACH_HANDLER
     logger = logging.getLogger(_YASCHEDULER_LOGGER)
     records: list[logging.LogRecord] = []
     handler = LogCaptureHandler(records)
     previous_level = logger.level
     logger.addHandler(handler)
     logger.setLevel(logging.DEBUG)
-    # END_BLOCK_ATTACH_HANDLER
     try:
         yield records
     finally:
-        # START_BLOCK_DETACH_HANDLER
         logger.removeHandler(handler)
         logger.setLevel(previous_level)
-        # END_BLOCK_DETACH_HANDLER

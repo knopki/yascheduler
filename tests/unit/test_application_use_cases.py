@@ -1,30 +1,3 @@
-# FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.9.1
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
-#   SCOPE: submit_task validation and success, allocate_task free/cloud/error paths (session-node pairing, allocate_to(node), node_id logging), deallocate_nodes disable/skip. (consume_task tests in test_consume_task.py.)
-#   DEPENDS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
-#   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestSubmitTask - submit_task: unknown engine, missing input, success path
-#   TestAllocateTask - allocate_task: unsupported engine, free machine (session-node pair, allocate_to(node), tracker.discard), cloud-fallback happy path, failure cleanup, dedup, throttle, step1/step2-cleanup/step3 hardening
-#   TestDeallocateNodes - deallocate_nodes: idle disable, non-cloud skip, returns Node objects, no-dot-filter
-#   TestDeallocateNodeBracketing - deallocate_node: disable+remove bracketing around cloud delete
-#   TestTmpCleanupByNodeId - tmp-cleanup paths call remove(tmp_node_id) directly (no get lookup); idempotent on 0-row remove
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.9.1 - switch-to-standard-logging: caplog logger name yascheduler.M-APPLICATION-DEALLOCATE → yascheduler.application.deallocate_nodes.
-#   PREVIOUS_CHANGE: v5.1.0 - ConnectedMachine-runtime-only: drop free_machine.hostname from mock (ConnectedMachine no longer carries hostname).
-#   PREVIOUS_CHANGE: v5.0.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), node.hostname→node.hostname, free_machine.hostname→free_machine.hostname, SimpleNamespace ip→hostname.
-#   PREVIOUS_CHANGE: v4.9.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); task.context.X → task.X reads; remove TaskContext import.
-#   PREVIOUS_CHANGE: v4.8.0 - cloud-port-node-arg: allocate/deallocate asserts + _persist_node_with_cleanup call use Node args (was NodeId/scalars).
-#   PREVIOUS_CHANGE: v4.7.1 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests into tests/unit/test_allocate_task_node_pairing.py (this file exceeded the 1000-line GRACE-lite hard limit after the v4.7.0 additions). The free-machine test still asserts saved_task.allocated_node_id == NodeId(1) here.
-# END_CHANGE_SUMMARY
-#
 """Unit tests for application use cases.
 
 Tests cover the 4 application use cases:
@@ -36,6 +9,11 @@ Tests cover the 4 application use cases:
 Event recording tests (TaskCreated, TaskAllocated, TaskCompleted, TaskFailed)
 are in test_application_events.py.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
+# SCOPE: submit_task validation, allocate_task free/cloud/error paths (session-node pairing, allocate_to, node_id logging), deallocate_nodes disable/skip.
+# KEYWORDS: submit_task, allocate_task, deallocate_nodes
+# endregion MODULE_CONTRACT
 
 import asyncio
 import time

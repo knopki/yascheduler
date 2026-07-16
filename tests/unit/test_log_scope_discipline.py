@@ -1,23 +1,3 @@
-# FILE: tests/unit/test_log_scope_discipline.py
-# VERSION: 4.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Guard tests for logging discipline in yascheduler package.
-#   SCOPE: Static AST-based checks: no injected logger parameter in collaborator constructors; no extra-key collisions with native LogRecord attributes in extra={...} literals.
-#   DEPENDS: none
-#   LINKS: M-LOGGING
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_no_injected_logger_in_collaborator_constructors - None of the seven collaborator classes accept a parameter named 'log' in their __init__
-#   test_no_extra_key_collision_with_native_attrs - No extra={...} literal uses a key that collides with a native LogRecord attribute
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.0.0 - Slice B: remove retired guards (M-ID validity, raw .debug(), setLoggerClass) and their meta-tests; add extra-key-collision guard test; add @pytest.mark.unit markers.
-#   PREVIOUS_CHANGE: v3.0.0 - Add test_no_injected_logger_in_collaborator_constructors guard test.
-# END_CHANGE_SUMMARY
-
 """Guard tests for logging discipline in yascheduler package.
 
 Two guard tests:
@@ -26,6 +6,11 @@ Two guard tests:
 2. test_no_extra_key_collision_with_native_attrs — no extra={...} literal in
    yascheduler/ uses a key that collides with a native LogRecord attribute.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Guard tests for logging discipline in yascheduler package.
+# SCOPE: Static AST-based checks: no injected logger parameter in collaborator constructors; no extra-key collisions with native LogRecord attributes in extra={...} literals.
+# KEYWORDS: logging discipline, injected logger, extra-key collisions
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

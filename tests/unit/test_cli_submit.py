@@ -1,28 +1,8 @@
-# FILE: tests/unit/test_cli_submit.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yasubmit submit() argparse, content validation, exit codes, helpers, and AiiDA stdout contract.
-#   SCOPE: submit() and private helpers (_existing_path, _parse_submit_args, _parse_script_metadata,
-#          _read_input_files, _build_metadata) with mocked Config/CLIDeps.
-#   DEPENDS: M-ENTRYPOINTS-CLI-SUBMIT
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestSubmitParsing - --help, no-args, missing file, extra positional, unknown flag, prog name
-#   TestSubmitHappyPath - valid script → stdout str(task_id), deps.submit call args, exit 0
-#   TestSubmitContentValidation - ENGINE missing/unknown → exit 1 + stderr, stdout empty
-#   TestSubmitWebhook - _build_metadata webhook branch (PARENT + webhook_url; PARENT absent; webhook_url None)
-#   TestSubmitHelpers - _parse_script_metadata, _read_input_files (utf-8 + base64), _build_metadata
-#   TestSubmitExitCodes - success 0, runtime error 1, argparse error 2
-#   TestSubmitArgvInjection - explicit argv list, no sys.argv patch needed
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yasubmit (entrypoints/cli/submit.py) in relocate-submit-command.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yasubmit submit() argparse, content validation, exit codes, helpers, and AiiDA stdout contract.
+# SCOPE: submit() argparse, content validation, exit codes, AiiDA stdout contract, and metadata helpers with mocked Config/CLIDeps.
+# KEYWORDS: yasubmit, submit, argparse, AiiDA stdout contract
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

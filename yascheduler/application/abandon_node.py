@@ -1,21 +1,9 @@
 """Abandon never-connected cloud node use case — VM delete + DB-row remove + discard tracker entry linked to the node."""
-# FILE: yascheduler/application/abandon_node.py
-# VERSION: 2.3.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Abandon never-connected cloud node use case — VM delete + DB-row remove + discard tracker entry linked to the node.
-#   SCOPE: Never-connected cloud node cleanup — VM delete, DB row remove, discard tracker entry by node via discard_by_node.
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ABANDON-NODE, M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   abandon_node - Best-effort cloud VM delete (clouds.deallocate(node)), remove yascheduler_nodes row, discard tracker entry by node via discard_by_node
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...).
-#   PREVIOUS_CHANGE: v2.2.0 - Split test-targeted CLOUD_DELETE_FAILED and AMBIGUOUS_TRACKER emits into log.trace + log.error/log.warning per reform-grace-logging slices 6.2-6.3.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Prevent resource leaks — orphan cloud VMs, stale DB rows, dangling tracker entries — when a provisioned node never connects, so billing stops and the scheduler does not track phantom resources.
+# SCOPE: Never-connected cloud node cleanup — cloud VM delete (best-effort), node row removal, tracker discard-by-node.
+# KEYWORDS: abandon, never-connected, cloud, cleanup, vm delete, tracker
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -32,20 +20,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["abandon_node"]
 
-# START_CONTRACT: abandon_node
-#   PURPOSE: Clean up a cloud node that never established its SSH connection and discard the tracker entry linked to the node.
-#   INPUTS: {
-#     node: Node - The never-connected node to abandon,
-#     clouds: CloudProvisioner - Cloud provider manager for VM deletion,
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     tracker: AllocationTracker - In-flight allocation tracker holding the task-to-node link
-#   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Best-effort cloud VM delete; removes node row from DB; discards tracker entries linked to the node via discard_by_node.
-#   RAISES: Re-raises any exception from uow.nodes.remove / uow.commit (caller catches to keep the worker alive). Cloud-delete failures are swallowed (logged at error) so DB cleanup still runs.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: abandon_node
+
+# region FUNC_abandon_node
+# PURPOSE: Clean up all traces of a never-connected node — best-effort cloud VM delete, DB row removal, tracker discard — so cloud billing stops and future tasks are not falsely deduped.
+# REQUIRES: node is a cloud node (cloud is not None).
+# ENSURES: Cloud VM deletion is best-effort (logged on failure, never raised); DB row removal failure re-raises; tracker entries for the node are discarded.
 async def abandon_node(
     node: Node,
     clouds: CloudProvisioner,
@@ -53,7 +34,7 @@ async def abandon_node(
     tracker: AllocationTracker,
 ) -> None:
     """Clean up a cloud node that never established its SSH connection and discard the tracker entry linked to the node."""
-    # START_BLOCK_CLOUD_DELETE
+    # region BLOCK_cloud_delete
     if node.cloud is not None:
         try:
             await clouds.deallocate(node)
@@ -68,9 +49,9 @@ async def abandon_node(
                 },
             )
             logger.exception("cloud delete failed for node %s", node.hostname)
-    # END_BLOCK_CLOUD_DELETE
+    # endregion BLOCK_cloud_delete
 
-    # START_BLOCK_REMOVE_ROW
+    # region BLOCK_remove_row
     try:
         async with uow_factory() as uow:
             await uow.nodes.remove(node.node_id)
@@ -86,9 +67,9 @@ async def abandon_node(
             node.hostname,
         )
         raise
-    # END_BLOCK_REMOVE_ROW
+    # endregion BLOCK_remove_row
 
-    # START_BLOCK_DISCARD_BY_NODE
+    # region BLOCK_discard_by_node
     removed = tracker.discard_by_node(node.node_id)
     if removed > 1:
         logger.debug(
@@ -104,4 +85,7 @@ async def abandon_node(
             node.hostname,
             removed,
         )
-    # END_BLOCK_DISCARD_BY_NODE
+    # endregion BLOCK_discard_by_node
+
+
+# endregion FUNC_abandon_node

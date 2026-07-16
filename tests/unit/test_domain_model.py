@@ -1,44 +1,8 @@
-# FILE: tests/unit/test_domain_model.py
-# VERSION: 1.8.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, Engine, Task, Node, ConnectedMachine.
-#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods (run/reject/complete/fail/abandon), ConnectedMachine state transitions, materialize_task, Task.error column format contract, public events field.
-#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_task_status_values - TO_DO=0, RUNNING=1, DONE=2, is int
-#   test_machine_state_distinct - FREE != BUSY
-#   test_process_result - construction defaults and all fields
-#   test_engine_validate_inputs - ok when files present, raises MissingInputFileError when missing
-#   test_task_construction - default TO_DO status
-#   test_task_immutability - FrozenInstanceError on mutation
-#   test_task_run - run(node_id, remote_folder) transitions TO_DO->RUNNING, sets fields, appends TaskAllocated
-#   test_task_run_on_non_todo_raises - run on non-TO_DO raises TaskNotTodoError
-#   test_task_reject - transitions TO_DO->DONE with error set, appends TaskFailed
-#   test_task_reject_on_running_raises - reject on RUNNING raises TaskNotTodoError
-#   test_task_complete - transitions RUNNING->DONE, appends TaskCompleted
-#   test_task_complete_on_todo_raises - complete on TO_DO raises TaskNotRunningError
-#   test_task_fail - transitions RUNNING->DONE with error set, appends TaskFailed
-#   test_task_fail_on_todo_raises - fail on TO_DO raises TaskNotRunningError
-#   test_task_abandon - abandon(node_id) transitions RUNNING->DONE, appends TaskAbandoned
-#   test_task_abandon_none - abandon(None) transitions RUNNING->DONE, no event emitted
-#   test_task_abandon_on_todo_raises - abandon on TO_DO raises TaskNotRunningError
-#   test_new_task_defaults - NewTask typed-field defaults, no task_id, no remote_folder, no error
-#   TestTaskErrorFormat - Task.error column format contract (bare on reject/fail, None on success)
-#   TestMaterializeTask - materialize_task adds TaskCreated event
-#   TestNodeStatus - NodeStatus is StrEnum with OTHER value, supports name lookup
-#   TestNode - Node defaults and full construction (hostname, jump_*, external_id, status, timestamps)
-#   TestNewNode - NewNode defaults, full construction, tmp-reservation defaults, no node_id
-#   TestConnectedMachine - Machine compatibility, occupy/release state transitions
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from ConnectedMachine construction; occupy() raises MachineBusyError(node_id); assert no hostname attribute on exception.
-#   PREVIOUS_CHANGE: v1.8.0 - Node-rename-and-fields: rename ip→hostname in Node/NewNode/ConnectedMachine tests; add new fields assertions (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at); add TestNodeStatus for NodeStatus enum; MachineBusyError updated to node_id+hostname.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, Engine, Task, Node, ConnectedMachine.
+# SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods (run/reject/complete/fail/abandon), ConnectedMachine state transitions, materialize_task, Task.error column format contract, public events field.
+# KEYWORDS: TaskStatus, MachineState, ConnectedMachine, Engine, Task lifecycle
+# endregion MODULE_CONTRACT
 
 import time
 from dataclasses import FrozenInstanceError
@@ -102,13 +66,6 @@ def _make_task(**overrides: object) -> Task:
     return Task(**base)  # type: ignore[arg-type]
 
 
-# START_CONTRACT: test_task_status_values
-#   PURPOSE: Verify TaskStatus enum values and int compatibility
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: TaskStatus]
-# END_CONTRACT: test_task_status_values
 class TestTaskStatus:
     def test_values(self) -> None:
         assert TaskStatus.TO_DO == 0
@@ -124,13 +81,6 @@ class TestTaskStatus:
         assert TaskStatus.DONE is TaskStatus(2)
 
 
-# START_CONTRACT: test_machine_state_distinct
-#   PURPOSE: Verify FREE and BUSY are distinct members
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: MachineState]
-# END_CONTRACT: test_machine_state_distinct
 class TestMachineState:
     def test_free_not_equal_busy(self) -> None:
         assert MachineState.FREE != MachineState.BUSY
@@ -140,13 +90,6 @@ class TestMachineState:
         assert MachineState.BUSY is MachineState(2)
 
 
-# START_CONTRACT: test_process_result
-#   PURPOSE: Verify ProcessResult dataclass default and full construction
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: ProcessResult]
-# END_CONTRACT: test_process_result
 class TestProcessResult:
     def test_defaults(self) -> None:
         r = ProcessResult(exit_code=0)
@@ -161,13 +104,6 @@ class TestProcessResult:
         assert r.stderr == "err"
 
 
-# START_CONTRACT: test_engine_validate_inputs
-#   PURPOSE: Verify Engine.validate_inputs passes when files present, fails with MissingInputFileError when missing
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Engine, MissingInputFileError]
-# END_CONTRACT: test_engine_validate_inputs
 class TestEngine:
     def test_validate_inputs_passes_when_all_present(self) -> None:
         engine = Engine(name="cp2k", spawn="cp2k", input_files=("inp", "xyz"))
@@ -185,13 +121,6 @@ class TestEngine:
         engine.validate_inputs({})  # no exception
 
 
-# START_CONTRACT: test_task
-#   PURPOSE: Verify Task construction, immutability, and lifecycle methods (run/reject/complete/fail/abandon)
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task, TaskNotTodoError, TaskNotRunningError]
-# END_CONTRACT: test_task
 class TestTask:
     def make_task(self, **overrides: object) -> Task:
         return _make_task(**overrides)
@@ -308,13 +237,6 @@ class TestTask:
         assert "1" in str(exc_info.value)
 
 
-# START_CONTRACT: test_node_status
-#   PURPOSE: Verify NodeStatus enum is StrEnum, has OTHER value, supports name lookup.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: NodeStatus]
-# END_CONTRACT: test_node_status
 class TestNodeStatus:
     def test_other_value(self) -> None:
         """NodeStatus.OTHER is defined with value 'OTHER'."""
@@ -330,13 +252,6 @@ class TestNodeStatus:
         assert NodeStatus["OTHER"] is NodeStatus.OTHER
 
 
-# START_CONTRACT: test_node
-#   PURPOSE: Verify Node dataclass defaults and full construction
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Node]
-# END_CONTRACT: test_node
 class TestNode:
     def test_defaults(self) -> None:
         node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4)
@@ -389,13 +304,6 @@ class TestNode:
         assert node.status == NodeStatus.OTHER
 
 
-# START_CONTRACT: test_node_id
-#   PURPOSE: Verify NodeId value object validation, str, equality, hashability.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: NodeId]
-# END_CONTRACT: test_node_id
 class TestNodeId:
     def test_post_init_rejects_non_positive(self) -> None:
         for bad in (0, -1, -100):
@@ -424,13 +332,6 @@ class TestNodeId:
         assert NodeId(5) != NodeId(6)
 
 
-# START_CONTRACT: test_new_node
-#   PURPOSE: Verify NewNode dataclass defaults (including ip/ncpus defaults), full construction, absence of node_id.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: NewNode]
-# END_CONTRACT: test_new_node
 class TestNewNode:
     def test_has_no_node_id_attribute(self) -> None:
         n = NewNode()
@@ -499,13 +400,6 @@ class TestNewNode:
         assert n.ncpus == 4
 
 
-# START_CONTRACT: test_connected_machine
-#   PURPOSE: Verify ConnectedMachine compatibility check, occupy, and release
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: ConnectedMachine, MachineBusyError]
-# END_CONTRACT: test_connected_machine
 class TestConnectedMachine:
     def make_machine(self, **overrides: object) -> ConnectedMachine:
         defaults: dict[str, object] = {"node_id": NodeId(1), "platform": "linux"}
@@ -553,13 +447,6 @@ class TestConnectedMachine:
         assert m.free_since is None
 
 
-# START_CONTRACT: test_error_format
-#   PURPOSE: Verify Task.error column format contract — bare on reject/fail, None on success.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task.error column format contract]
-# END_CONTRACT: test_error_format
 class TestTaskErrorFormat:
     def test_error_is_none_on_success(self) -> None:
         task = _make_task()
@@ -579,13 +466,6 @@ class TestTaskErrorFormat:
         assert failed.error == "node is gone"
 
 
-# START_CONTRACT: test_materialize_task
-#   PURPOSE: Verify materialize_task adds a TaskCreated event to a Task with events=().
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: materialize_task]
-# END_CONTRACT: test_materialize_task
 class TestMaterializeTask:
     def test_materialize_task_adds_task_created_event(self) -> None:
         task = _make_task(events=())
@@ -603,13 +483,6 @@ class TestMaterializeTask:
         assert result.remote_folder == task.remote_folder
 
 
-# START_CONTRACT: test_task_id
-#   PURPOSE: Verify TaskId value object validation, str, equality, hashability.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: TaskId]
-# END_CONTRACT: test_task_id
 class TestTaskId:
     def test_post_init_rejects_non_positive(self) -> None:
         for bad in (0, -1):
@@ -638,13 +511,6 @@ class TestTaskId:
         assert TaskId(5) != TaskId(6)
 
 
-# START_CONTRACT: test_new_task
-#   PURPOSE: Verify NewTask typed-field defaults, no task_id, no remote_folder, no error, no lifecycle methods.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: NewTask]
-# END_CONTRACT: test_new_task
 class TestNewTask:
     def test_constructs_with_defaults(self) -> None:
         nt = NewTask(label="x", engine="cp2k")

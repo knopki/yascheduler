@@ -1,30 +1,14 @@
-# FILE: tests/unit/test_cli_init.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yainit init() flag parsing, dispatch, exit codes, and service overwrite behavior.
-#   SCOPE: init() and its helpers with mocked apply_schema + filesystem.
-#   DEPENDS: M-ENTRYPOINTS-CLI-INIT
-#   LINKS: M-ENTRYPOINTS-CLI-INIT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestInitFlags - Flag parsing and dispatch (no flags, --schema, --daemon, both, --help, --bogus)
-#   TestInitErrors - Exit-code contract on DatabaseError and OSError
-#   TestServiceInstall - Service file overwrite and detection logic
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Stub apply_migrations (autouse) so _init_schema tests don't open a real DB (add-db-migrations wiring).
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --config /custom.conf passed through _init_schema(config_path) to Config.from_config_parser; defaults CONFIG_FILE/WARNING). The daemon_systemd.py / daemon_sysv.py path assertions (lines 243, 259) remain unchanged.
-# END_CHANGE_SUMMARY
-
 """Unit tests for yainit (entrypoints/cli/init.py).
 
 Covers flag parsing, dispatch, exit codes (0/1/2), service overwrite, and
 systemd-vs-sysv detection. apply_schema and the service helpers are mocked
 or injected via the public unit_file/startup_file parameters.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yainit init() flag parsing, dispatch, exit codes, and service overwrite behavior.
+# SCOPE: init() flag parsing, dispatch, exit codes, service overwrite behavior with mocked apply_schema + filesystem.
+# KEYWORDS: yainit, init, flag parsing, service overwrite, apply_schema
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

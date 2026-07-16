@@ -1,28 +1,20 @@
 """Cross-layer application settings as frozen stdlib dataclasses — local daemon config and remote SSH defaults."""
-# FILE: yascheduler/domain/settings.py
-# VERSION: 1.4.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Cross-layer application settings as frozen stdlib dataclasses — local daemon config and remote SSH defaults.
-#   SCOPE: Local and remote typed config DTOs: LocalSettings (daemon paths, webhook, concurrency limits) and RemoteDefaults (SSH paths, username, jump host); no INI parsing on the DTOs.
-#   DEPENDS: none
-#   LINKS: M-DOMAIN-PORTS, M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   LocalSettings - Frozen dataclass: daemon data paths, webhook, concurrency limits; __post_init__ validates ge(1)/ge(0)
-#   RemoteDefaults - Frozen dataclass: remote SSH paths, username, jump host, jump_port
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Add jump_port: int = 22 field to RemoteDefaults; configurable via [remote] jump_port INI key.
-#   PREVIOUS_CHANGE: v1.3.0 - Remove cloud_package_upgrade field from LocalSettings; the cloud-init package_upgrade knob is a cloud-only concern relocated to per-provider ConfigCloud* DTOs.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Carry daemon and remote-SSH defaults as validated, immutable values shared across layers without re-parsing INI at each use site.
+# SCOPE:
+# - LocalSettings (daemon data paths, webhook, concurrency limits) and RemoteDefaults (remote SSH paths, username, jump host).
+# - NOT: INI parsing (entrypoints.config_parser) or cloud-provider config (infra.cloud.cloud_configs).
+# INVARIANTS: After construction, concurrency-limit fields are >= 1, webhook_reqs_limit >= 0, and path fields are Path instances.
+# KEYWORDS: settings, config, daemon, concurrency limits, webhook, jump host, LocalSettings, RemoteDefaults
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path, PurePath
 from typing import cast
+
+__all__ = ["LocalSettings", "RemoteDefaults"]
 
 # Concurrency-limit int fields that must be >= 1 (formerly validators.ge(1)).
 _GE1_LIMIT_FIELDS = (
@@ -37,6 +29,9 @@ _GE1_LIMIT_FIELDS = (
 )
 
 
+# region CLASS_LocalSettings
+# PURPOSE: Freeze the daemon's runtime configuration (paths, webhook, concurrency limits) so it is validated once and shared safely across async components.
+# INVARIANTS: Concurrency-limit fields >= 1; webhook_reqs_limit >= 0; path fields are Path instances.
 @dataclass(frozen=True)
 class LocalSettings:
     """Local daemon settings: data paths, concurrency limits, webhook config."""
@@ -56,7 +51,7 @@ class LocalSettings:
     deallocate_limit: int = 5
     deallocate_pending: int = 1
 
-    # START_BLOCK_VALIDATE
+    # region BLOCK_validate
     def __post_init__(self) -> None:
         """Validate field constraints.
 
@@ -92,7 +87,10 @@ class LocalSettings:
                     msg = f"webhook_url must be str, got {type(value).__name__}"
                     raise ValueError(msg)
 
-    # END_BLOCK_VALIDATE
+    # endregion BLOCK_validate
+
+
+# endregion CLASS_LocalSettings
 
 
 @dataclass(frozen=True)

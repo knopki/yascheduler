@@ -1,20 +1,8 @@
-# FILE: tests/integration/test_migration_013_ncpus_nullable.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration test for migration 013 (ncpus nullable with positive CHECK).
-#   SCOPE: testcontainers-based verification of migration 013 steps.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_migration_013_ncpus_nullable - Verifies all Gherkin scenarios
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Migration 013: ncpus=0 → NULL backfill + node_ncpus_positive CHECK.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Integration test for migration 013 (ncpus nullable with positive CHECK).
+# SCOPE: testcontainers-based verification of migration 013 steps.
+# KEYWORDS: migration 013, ncpus nullable, CHECK constraint
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -63,14 +51,6 @@ def _tracker_rows(conn: pg8000.native.Connection) -> list[str]:
     return [r[0] for r in rows]
 
 
-# START_CONTRACT: test_migration_013_ncpus_nullable
-#   PURPOSE: Covers all Gherkin scenarios for migration 013 — backfill ncpus=0 to NULL,
-#            add node_ncpus_positive CHECK, reject future zero/negative writes, tracker recorded.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; creates pre-013 schema; applies schema + migrations
-#   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA
-# END_CONTRACT: test_migration_013_ncpus_nullable
 def test_migration_013_ncpus_nullable() -> None:
     """Migration 013: backfill ncpus=0 → NULL, add node_ncpus_positive CHECK."""
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:

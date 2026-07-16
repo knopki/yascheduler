@@ -1,26 +1,9 @@
 """Consume task use case — download outputs from a remote machine and finalise or defer the task."""
-# FILE: yascheduler/application/consume_task.py
-# VERSION: 6.3.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Consume task use case — download outputs from a remote machine and finalise or defer the task.
-#   SCOPE: Task consumption / finalisation lifecycle — download outputs, finalise (DONE) or defer (retry).
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-ENGINE, M-DOMAIN-MODEL, M-SSH-OPS-DOWNLOAD, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-EVENTS
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-OPS-DOWNLOAD, M-DOMAIN-ENGINE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   consume_task - Load task, download outputs, finalise (DONE) or defer (stay RUNNING)
-#   _prepare_store_folder - Create local output directory from typed Task fields
-#   _format_download_error - Format combined download errors into error string
-#   _finalize_task - Apply domain lifecycle, save via UoW, discard tracker slot; returns True
-#   _decide_finalisation - Decide finalise vs defer from (transient_errors, permanent_errors)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v6.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v6.2.0 - _decide_finalisation uses atomic Task transitions: task.fail(reason, local_folder=, remote_folder=) and task.complete(local_folder=, remote_folder=) set folders and emit TaskFailed/TaskCompleted inline. Removed with_download_results + with_event chain and the has_errors=False argument. Removed TaskCompleted/TaskFailed imports (no longer constructed here).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Reliably retrieve remote computation results and classify errors to either close the task lifecycle or retry, so transient infra failures do not prematurely terminate valid work.
+# SCOPE: Task consumption lifecycle — output download via SFTP, transient/permanent error classification, finalise with domain transitions (complete/fail), persistence, tracker slot discard.
+# KEYWORDS: consume, finalise, download, defer, retry, output, sftp
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -46,24 +29,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["consume_task"]
 
-# START_CONTRACT: _prepare_store_folder
-#   PURPOSE: Create local output directory for task file downloads.
-#   INPUTS: {
-#     task: Task - Domain task with typed fields (remote_folder, engine, local_folder),
-#     local_tasks_dir: Path - Local base directory for output storage,
-#     engines: EngineRepository - Config engine repository
-#   }
-#   OUTPUTS: { tuple[Path, list[str], str] - (store_folder, output_files, remote_folder) }
-#   SIDE_EFFECTS: Creates directory on local filesystem. Raises AssertionError when task.remote_folder is None (RUNNING-task precondition); uncaught locally, propagates to the orchestrator consumer worker's `except Exception`.
-#   LINKS: none
-# END_CONTRACT: _prepare_store_folder
+
+# region FUNC__prepare_store_folder
+# PURPOSE: Ensure the local filesystem is ready to receive remote outputs and resolve what to fetch, so the download step has a target directory and file list.
+# REQUIRES: task.remote_folder is not None (task is RUNNING).
 async def _prepare_store_folder(
     task: Task,
     local_tasks_dir: Path,
     engines: EngineRepository,
 ) -> tuple[Path, list[str], str]:
-    # START_BLOCK_CREATE_DIR
+    # region BLOCK_create_dir
     assert task.remote_folder is not None  # task is RUNNING here
     remote_folder: str = task.remote_folder
     engine = engines[task.engine]
@@ -77,10 +54,15 @@ async def _prepare_store_folder(
         None,
         partial(store_folder.mkdir, 0o777, parents=True, exist_ok=True),
     )
-    # END_BLOCK_CREATE_DIR
+    # endregion BLOCK_create_dir
     return store_folder, output_files, remote_folder
 
 
+# endregion FUNC__prepare_store_folder
+
+
+# region FUNC__format_download_error
+# PURPOSE: Produce a single actionable error message from multiple per-file download failures so operators or clients can diagnose what went wrong.
 def _format_download_error(
     combined_errors: list[tuple[str | None, Exception]],
 ) -> str:
@@ -91,20 +73,12 @@ def _format_download_error(
     return "Download error: " + ", ".join(parts)
 
 
-# START_CONTRACT: _decide_finalisation
-#   PURPOSE: Decide finalise vs defer from and apply the terminal transition. Finalise when permanent_errors non-empty OR transient_errors
-#     empty (full success, permanent-only, or mixed). Defer (return None) when transient-only.
-#   INPUTS: {
-#     task: Task - Domain task to finalise or defer,
-#     local_folder: str - Downloaded local folder (download_outputs return),
-#     remote_folder: str - Remote folder downloaded from (download_outputs return),
-#     transient_errors: list[tuple[str | None, Exception]] - Retryable download errors,
-#     permanent_errors: list[tuple[str | None, Exception]] - Non-retryable download errors,
-#     store_folder: Path - Local directory where outputs were saved
-#   }
-#   OUTPUTS: { Task | None - task with status applied and event recorded when finalising; None when deferring }
-#   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
-# END_CONTRACT: _decide_finalisation
+# endregion FUNC__format_download_error
+
+
+# region FUNC__decide_finalisation
+# PURPOSE: Decide whether to finalise (DONE) or defer (stay RUNNING) based on error types. Finalise when permanent errors exist or all succeeded; defer on transient-only.
+# ENSURES: Returns None (defer) when transient-only; Task with complete/fail applied when finalising.
 def _decide_finalisation(
     task: Task,
     local_folder: str,
@@ -113,13 +87,13 @@ def _decide_finalisation(
     permanent_errors: list[tuple[str | None, Exception]],
     store_folder: Path,
 ) -> Task | None:
-    # START_BLOCK_DECIDE
+    # region BLOCK_decide
     # Defer when transient-only: leave RUNNING, no status change, no event.
     if transient_errors and not permanent_errors:
         return None
-    # END_BLOCK_DECIDE
+    # endregion BLOCK_decide
 
-    # START_BLOCK_FINALISE
+    # region BLOCK_finalise
     # Finalise on success or any permanent error. When both lists are
     # non-empty, permanent takes priority and the task fails with a combined
     # message including both. The terminal transitions set the folders AND
@@ -140,28 +114,16 @@ def _decide_finalisation(
             local_folder=str(store_folder),
             remote_folder=final_remote_folder,
         )
-    # END_BLOCK_FINALISE
+    # endregion BLOCK_finalise
     return task
 
 
-# START_CONTRACT: _finalize_task
-#   PURPOSE: On finalise: apply domain lifecycle (complete/fail), save via UoW, record events,
-#     discard in-flight allocation slot. On defer: no side effects.
-#   INPUTS: {
-#     task: Task - Domain task to finalise,
-#     local_folder: str - Downloaded local folder (download_outputs return),
-#     remote_folder: str - Remote folder downloaded from (download_outputs return),
-#     transient_errors: list[tuple[str | None, Exception]] - Retryable download errors,
-#     permanent_errors: list[tuple[str | None, Exception]] - Non-retryable download errors,
-#     store_folder: Path - Local directory where outputs were saved,
-#     uow_factory: Callable - Factory providing AbstractUnitOfWork,
-#     tracker: AllocationTracker - In-flight allocation tracker
-#   }
-#   OUTPUTS: { bool - True when finalised (DONE applied, tracker slot discarded); False when deferred (no side effects) }
-#   SIDE_EFFECTS: On finalise: applies domain lifecycle, saves task via UoW, records TaskCompleted or
-#     TaskFailed event, discards in-flight allocation slot via tracker. On defer: none.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: _finalize_task
+# endregion FUNC__decide_finalisation
+
+
+# region FUNC__finalize_task
+# PURPOSE: On finalise: apply domain lifecycle (complete/fail), save via UoW, discard in-flight allocation slot. On defer: no side effects.
+# ENSURES: Returns True when finalised (DONE, tracker slot discarded); False when deferred (no side effects).
 async def _finalize_task(
     task: Task,
     local_folder: str,
@@ -172,7 +134,7 @@ async def _finalize_task(
     uow_factory: Callable[[], AbstractUnitOfWork],
     tracker: AllocationTracker,
 ) -> bool:
-    # START_BLOCK_DECIDE_OR_DEFER
+    # region BLOCK_decide_or_defer
     finalised_task = _decide_finalisation(
         task,
         local_folder,
@@ -188,9 +150,9 @@ async def _finalize_task(
             task.task_id,
         )
         return False
-    # END_BLOCK_DECIDE_OR_DEFER
+    # endregion BLOCK_decide_or_defer
 
-    # START_BLOCK_SET_STATUS
+    # region BLOCK_set_status
     async with uow_factory() as uow:
         await uow.tasks.save(finalised_task)
         await uow.commit()
@@ -203,25 +165,16 @@ async def _finalize_task(
     )
 
     tracker.discard(finalised_task.task_id)
-    # END_BLOCK_SET_STATUS
+    # endregion BLOCK_set_status
     return True
 
 
-# START_CONTRACT: consume_task
-#   PURPOSE: Load task by id via UoW, download outputs from remote machine, finalise or defer.
-#   INPUTS: {
-#     task_id: TaskId - ID of the task to consume,
-#     session: MachineSession - Session of the machine where the task ran,
-#     output_downloader: OutputDownloader - SSH operations for output download,
-#     engines: EngineRepository - Config engine repository,
-#     uow_factory: Callable - Factory providing AbstractUnitOfWork,
-#     local_tasks_dir: Path - Local base directory for output storage,
-#     tracker: AllocationTracker - In-flight allocation tracker
-#   }
-#   OUTPUTS: { bool - True when finalised (DONE applied, remote dir cleaned by gateway, tracker slot discarded) or task not found in DB (vacuously finalised, tracker slot discarded); False when deferred (stay RUNNING, remote dir preserved, tracker slot retained) }
-#   SIDE_EFFECTS: Downloads files via SFTP; on finalise applies domain lifecycle, saves via UoW, records events, discards tracker slot; on task-not-found discards tracker slot; on defer none.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-EVENTS, M-SSH-OPS-DOWNLOAD, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: consume_task
+# endregion FUNC__finalize_task
+
+
+# region FUNC_consume_task
+# PURPOSE: Load a RUNNING task, download its outputs from the remote machine, and finalise (DONE) or defer (stay RUNNING).
+# ENSURES: Returns True when finalised (or task gone — vacuously finalised); False when deferred.
 async def consume_task(
     task_id: TaskId,
     session: MachineSession,
@@ -268,3 +221,6 @@ async def consume_task(
         uow_factory,
         tracker,
     )
+
+
+# endregion FUNC_consume_task

@@ -1,24 +1,3 @@
-# FILE: tests/unit/test_application_events.py
-# VERSION: 1.3.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for domain event recording from application use cases.
-#   SCOPE: submit_task records TaskCreated, allocate_task records TaskFailed/TaskAllocated, consume_task records TaskCompleted/TaskFailed.
-#   DEPENDS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME
-#   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestSubmitTaskEvents - submit_task: records TaskCreated event
-#   TestAllocateTaskEvents - allocate_task: records TaskFailed (unsupported engine) and TaskAllocated (free machine) events
-#   TestConsumeTaskEvents - consume_task: records TaskCompleted (success) and TaskFailed (permanent download failure) events
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - ConnectedMachine-runtime-only: drop free_machine.hostname from mock spec (ConnectedMachine no longer carries hostname).
-#   PREVIOUS_CHANGE: v1.3.0 - drop-task-context-entity follow-up: download_outputs AsyncMock return_values updated to the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors).
-# END_CHANGE_SUMMARY
-#
 """Unit tests for domain event recording from application use cases.
 
 Tests cover:
@@ -26,6 +5,11 @@ Tests cover:
 - allocate_task records TaskFailed or TaskAllocated event
 - consume_task records TaskCompleted or TaskFailed event
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for domain event recording from application use cases.
+# SCOPE: submit_task records TaskCreated, allocate_task records TaskFailed/TaskAllocated, consume_task records TaskCompleted/TaskFailed.
+# KEYWORDS: TaskCreated, TaskFailed, TaskAllocated, TaskCompleted, event recording
+# endregion MODULE_CONTRACT
 
 import asyncio
 from collections.abc import Callable

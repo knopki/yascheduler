@@ -1,34 +1,10 @@
 """Azure cloud methods."""
-# FILE: yascheduler/infra/cloud/providers/az.py
-# VERSION: 1.13.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Azure VM creation and deletion using Azure SDK.
-#   SCOPE: Azure create/delete node functions.
-#   DEPENDS: M-CLOUD-CONFIGS, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-CONFIGS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   ID_TAG_NAME - Tag name for IP tracking
-#   RETRY_AZURE_ERRORS - Retryable Azure error types
-#   ALL_AZURE_ERRORS - All Azure error types
-#   create_nic - Create network interface for VM
-#   create_vm_params - Build VirtualMachine parameter object
-#   create_node - Create VM with NIC (internal)
-#   az_create_node - Create Azure VM (public entry point)
-#   delete_node - Delete VM and NIC (internal)
-#   az_delete_node - Delete Azure VM and NIC (public entry point)
-#   _fetch_network_resources - Fetch subnet and NSG for NIC creation
-#   _render_custom_data - Render custom_data from cloud_config with boot commands
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.13.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v1.12.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-AZ") at module top
-# END_CHANGE_SUMMARY
-#
+# region MODULE_CONTRACT
+# PURPOSE: Provision and decommission Azure VMs so the scheduler can run compute workloads on Azure through the generic CloudAdapter contract.
+# SCOPE: Azure create/delete node functions.
+# DEPENDENCIES: USES API: azure-mgmt-compute, azure-mgmt-network, azure-identity (ClientSecretCredential); WRITES: HTTP to Azure Resource Manager (VM/NIC create/delete)
+# KEYWORDS: azure, vm, create, delete, sdk, nic, network, compute
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -90,6 +66,11 @@ if TYPE_CHECKING:
         ConfigCloudAzure,
     )
 
+__all__ = [
+    "az_create_node",
+    "az_delete_node",
+]
+
 # Azure SDK is too noisy
 for logger_name in [
     "azure.core.pipeline.policies.http_logging_policy",
@@ -113,19 +94,14 @@ else:
     ALL_AZURE_ERRORS = ()
 
 
-# START_CONTRACT: _fetch_network_resources
-#   PURPOSE: Fetch subnet and NSG for NIC creation
-#   INPUTS: { cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client }
-#   OUTPUTS: { tuple - subnet and NSG }
-#   SIDE_EFFECTS: Fetches Azure network resources via API.
-#   LINKS: M-CLOUD-AZ
-# END_CONTRACT: _fetch_network_resources
+# region FUNC__fetch_network_resources
+# PURPOSE: Fetch subnet and NSG handles so NIC creation has the network topology references it needs.
 async def _fetch_network_resources(
     cfg: ConfigCloudAzure,
     client: NetworkManagementClient,
 ) -> tuple:
     """Fetch subnet and network security group for NIC creation."""
-    # START_BLOCK_FETCH_RESOURCES
+    # region BLOCK_fetch_resources
     subnet = await client.subnets.get(
         resource_group_name=cfg.resource_group,
         virtual_network_name=cfg.vnet,
@@ -134,17 +110,15 @@ async def _fetch_network_resources(
     logger.debug("FETCH_SUBNET", extra={"subnet": subnet.name})
     nsg = await client.network_security_groups.get(cfg.resource_group, cfg.nsg)
     logger.debug("FETCH_NSG", extra={"nsg": nsg.name})
-    # END_BLOCK_FETCH_RESOURCES
+    # endregion BLOCK_fetch_resources
     return subnet, nsg
 
 
-# START_CONTRACT: create_nic
-#   PURPOSE: Create network interface for VM and tag with IP address
-#   INPUTS: { cfg: ConfigCloudAzure - Azure config, client: NetworkManagementClient - Azure network client, vm_name: str - VM name }
-#   OUTPUTS: { tuple[NetworkInterface, str] - NIC and assigned IP address }
-#   SIDE_EFFECTS: Creates Azure NIC resource and tags it
-#   LINKS: M-CLOUD-AZ
-# END_CONTRACT: create_nic
+# endregion FUNC__fetch_network_resources
+
+
+# region FUNC_create_nic
+# PURPOSE: Provision a network interface in the target subnet and tag it with the VM's IP so network connectivity exists before the VM is created.
 async def create_nic(
     cfg: ConfigCloudAzure,
     client: NetworkManagementClient,
@@ -188,18 +162,16 @@ async def create_nic(
     return nic, ip_addr
 
 
-# START_CONTRACT: _render_custom_data
-#   PURPOSE: Render custom_data from cloud_config with boot commands
-#   INPUTS: { cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer (concrete infra/cloud/cloud_init.CloudInitConfig, not the domain Protocol) }
-#   OUTPUTS: { Optional[str] - base64-encoded cloud-config or None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-AZ
-# END_CONTRACT: _render_custom_data
+# endregion FUNC_create_nic
+
+
+# region FUNC__render_custom_data
+# PURPOSE: Inject cloud-config and Azure-specific boot commands so the VM self-configures on first boot before SSH becomes available.
 def _render_custom_data(
     cloud_config: CloudInitConfig | None = None,
 ) -> str | None:
     """Render cloud-config custom data with Azure-specific boot commands."""
-    # START_BLOCK_RENDER_CUSTOM_DATA
+    # region BLOCK_render_custom_data
     custom_data = None
     if cloud_config:
         my_boot_cmds = [
@@ -210,17 +182,15 @@ def _render_custom_data(
             cloud_config,
             bootcmd=(*my_boot_cmds, *cloud_config.bootcmd),
         ).render_base64()
-    # END_BLOCK_RENDER_CUSTOM_DATA
+    # endregion BLOCK_render_custom_data
     return custom_data
 
 
-# START_CONTRACT: create_vm_params
-#   PURPOSE: Build VirtualMachine parameter object with SSH key and cloud-config
-#   INPUTS: { location: str - Azure region, vm_name: str - VM name, vm_image: AzureImageReference - image reference, vm_size: str - VM size, nic: NetworkInterface - network interface, username: str - admin username, ssh_key: SSHKey - SSH key, tags: dict[str,str] - resource tags, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer (concrete infra/cloud/cloud_init.CloudInitConfig) }
-#   OUTPUTS: { VirtualMachine - Azure VirtualMachine parameters }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-AZ
-# END_CONTRACT: create_vm_params
+# endregion FUNC__render_custom_data
+
+
+# region FUNC_create_vm_params
+# PURPOSE: Assemble the full Azure VirtualMachine parameter object (OS profile, SSH key, cloud-config, disk) so the SDK call is a single clean invocation.
 def create_vm_params(
     location: str,
     vm_name: str,
@@ -269,13 +239,11 @@ def create_vm_params(
     )
 
 
-# START_CONTRACT: create_node
-#   PURPOSE: Create Azure VM with NIC, private IP, and SSH key (internal)
-#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer (concrete infra/cloud/cloud_init.CloudInitConfig) }
-#   OUTPUTS: { str - private IP address of created VM }
-#   SIDE_EFFECTS: Creates Azure VM and NIC resources
-#   LINKS: M-CLOUD-AZ, create_nic, create_vm_params
-# END_CONTRACT: create_node
+# endregion FUNC_create_vm_params
+
+
+# region FUNC_create_node
+# PURPOSE: Orchestrate NIC creation then VM provisioning so the caller gets a running VM's IP without managing intermediate resources.
 async def create_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
@@ -309,13 +277,11 @@ async def create_node(
     return ip_addr
 
 
-# START_CONTRACT: az_create_node
-#   PURPOSE: Create Azure VM with NIC (public entry point for adapter)
-#   INPUTS: { cfg: ConfigCloudAzure - Azure config, key: SSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer (concrete class; same type as create_node/_render_custom_data, so no boundary narrowing is needed) }
-#   OUTPUTS: { str - IP address of created VM }
-#   SIDE_EFFECTS: Creates Azure VM, NIC, and credentials; acquires cloud resources
-#   LINKS: M-CLOUD-AZ, create_node
-# END_CONTRACT: az_create_node
+# endregion FUNC_create_node
+
+
+# region FUNC_az_create_node
+# PURPOSE: Expose Azure VM creation through the CloudAdapter callable signature so the generic provisioner can launch Azure VMs without Azure-specific imports.
 async def az_create_node(
     cfg: ConfigCloudAzure,
     key: SSHKey,
@@ -340,13 +306,11 @@ async def az_create_node(
             return await create_node(nmc, cmc, cfg, key, cloud_config)
 
 
-# START_CONTRACT: delete_node
-#   PURPOSE: Delete Azure VM and NIC by host IP address (internal)
-#   INPUTS: { nmc: NetworkManagementClient - network client, cmc: ComputeManagementClient - compute client, cfg: ConfigCloudAzure - Azure config, host: str - IP address of VM to delete }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Deletes Azure VM and NIC resources
-#   LINKS: M-CLOUD-AZ
-# END_CONTRACT: delete_node
+# endregion FUNC_az_create_node
+
+
+# region FUNC_delete_node
+# PURPOSE: Tear down a VM and its NIC matched by IP so cloud billing stops and the resource group does not accumulate orphaned resources.
 async def delete_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
@@ -386,13 +350,11 @@ async def delete_node(
             break
 
 
-# START_CONTRACT: az_delete_node
-#   PURPOSE: Delete Azure VM and NIC by host IP (public entry point for adapter)
-#   INPUTS: { cfg: ConfigCloudAzure - Azure config, host: str - IP address of VM to delete }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates Azure credentials, deletes VM and NIC resources
-#   LINKS: M-CLOUD-AZ, delete_node
-# END_CONTRACT: az_delete_node
+# endregion FUNC_delete_node
+
+
+# region FUNC_az_delete_node
+# PURPOSE: Expose Azure VM deletion through the CloudAdapter callable signature so the generic provisioner can tear down Azure VMs without Azure-specific imports.
 async def az_delete_node(
     cfg: ConfigCloudAzure,
     host: str,
@@ -414,3 +376,6 @@ async def az_delete_node(
             ComputeManagementClient(cred, cfg.subscription_id) as cmc,
         ):
             return await delete_node(nmc, cmc, cfg, host)
+
+
+# endregion FUNC_az_delete_node

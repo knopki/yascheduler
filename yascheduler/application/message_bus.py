@@ -1,23 +1,9 @@
 """In-process message bus that dispatches domain events to registered handlers."""
-# FILE: yascheduler/application/message_bus.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: In-process message bus that dispatches domain events to registered handlers.
-#   SCOPE: MessageBus class — in-process event dispatch with type-based handler registry.
-#   DEPENDS: M-DOMAIN-EVENTS
-#   LINKS: M-DOMAIN-EVENTS, M-APPLICATION-UOW
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   MessageBus - Event dispatcher with type-based handler registry
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v1.1.0 - reform-grace-logging: bind logger via get_logger("M-APPLICATION-MESSAGE-BUS"); strip grace marker from dispatch-failure exception (pure narrative).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Decouple event emitters from handlers by routing DomainEvent instances to registered callbacks in-process.
+# SCOPE: MessageBus class — type-based handler registry and async dispatch loop with per-handler error isolation.
+# KEYWORDS: message bus, event bus, domain events, dispatch, handler
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -32,38 +18,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["MessageBus"]
 
-# START_CONTRACT: MessageBus
-#   PURPOSE: In-process event dispatcher with type-based handler registry.
-#   INPUTS: { None - no constructor parameters }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Handler invocation via dispatch.
-#   LINKS: M-DOMAIN-EVENTS
-# END_CONTRACT: MessageBus
+
+# region CLASS_MessageBus
+# PURPOSE: Route domain events to registered handlers with per-handler error isolation so one failing handler does not block others.
 class MessageBus:
     """In-process event dispatcher with type-based handler registry."""
 
     def __init__(self) -> None:
         self._handlers: dict[type[DomainEvent], list[Callable[[DomainEvent], Any]]] = {}
 
-    # START_CONTRACT: MessageBus.register
-    #   PURPOSE: Register a handler callable for a specific event type.
-    #   INPUTS: { event_type: type, handler: Callable }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: None — in-memory only.
-    #   LINKS: M-DOMAIN-EVENTS
-    # END_CONTRACT: MessageBus.register
+    # region METHOD_register
+    # PURPOSE: Subscribe a handler to an event type so dispatch() can invoke it when events of that type are published.
     def register(self, event_type: type, handler: Callable) -> None:
         """Register a handler callable for a specific event type."""
         self._handlers.setdefault(event_type, []).append(handler)
 
-    # START_CONTRACT: MessageBus.dispatch
-    #   PURPOSE: Dispatch a sequence of domain events to their registered handlers.
-    #   INPUTS: { events: Sequence[DomainEvent] }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Invokes registered handlers (their own side effects).
-    #   LINKS: M-DOMAIN-EVENTS
-    # END_CONTRACT: MessageBus.dispatch
+    # endregion METHOD_register
+
+    # region METHOD_dispatch
+    # PURPOSE: Dispatch a sequence of domain events to their registered handlers, catching and logging per-handler failures.
     async def dispatch(self, events: Sequence[DomainEvent]) -> None:
         """Dispatch a sequence of domain events to their registered handlers."""
         for event in events:
@@ -78,3 +53,8 @@ class MessageBus:
                         getattr(handler, "__name__", handler),
                         type(event).__name__,
                     )
+
+    # endregion METHOD_dispatch
+
+
+# endregion CLASS_MessageBus

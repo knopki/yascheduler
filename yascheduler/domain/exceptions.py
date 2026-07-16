@@ -1,35 +1,15 @@
 """Domain exception hierarchy for business-level error handling."""
-# FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.12.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Domain exception hierarchy for business-level error handling.
-#   SCOPE: Domain error hierarchy: DomainError base class and sub-hierarchies for validation, task lifecycle, machine state, scheduling, and cloud provider errors.
-#   DEPENDS: none
-#   LINKS: M-DOMAIN-MODEL
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   DomainError - Base class for all domain exceptions
-#   ValidationError - Input validation errors
-#   UnsupportedEngineError - Unknown calculation engine requested
-#   MissingInputFileError - Required engine input file not provided
-#   TaskError - Task lifecycle errors
-#   TaskNotTodoError - Task not in TODO status
-#   TaskNotRunningError - Task not in RUNNING status
-#   MachineBusyError - Operation attempted on a busy machine
-#   MachineConnectionError - SSH connection failure carrying node_id, hostname, and reason
-#   SchedulingError - Scheduling/allocation errors
-#   NoCompatibleNodeError - No matching node found for task
-#   CloudCapacityExhaustedError - Cloud provider at capacity
-#   CloudError - Cloud provider operational errors
-#   CloudAllocateError - Cloud node allocation error
-#   CloudSetupError - Cloud node setup error
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.13.0 - ConnectedMachine-runtime-only: MachineBusyError(node_id) — drop hostname param. MachineConnectionError UNCHANGED.
-#   PREVIOUS_CHANGE: v1.12.0 - MachineBusyError/MachineConnectionError gain node_id first arg, hostname replaces ip. MachineBusyError(node_id, hostname), MachineConnectionError(node_id, hostname, reason). Node-rename-and-fields change.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Give the scheduler one typed error vocabulary so callers catch specific business failures instead of parsing messages.
+# SCOPE:
+# - DomainError root plus validation, task-lifecycle, machine-state, scheduling, and cloud sub-hierarchies.
+# - NOT: error rendering, exit codes, or retry policy.
+# INVARIANTS: Every domain error subclasses DomainError; messages are stable and human-readable.
+# RATIONALE:
+# - Q: Why is CloudCapacityExhaustedError under SchedulingError, not CloudError?
+#   A: Capacity planning is a domain scheduling rule (no provider can serve the request), whereas CloudError covers operational provider failures (VM creation, SSH, setup). Keeping them apart lets the allocator retry/throttle differently from handling provider outages.
+# KEYWORDS: domain error, exception, validation, task lifecycle, machine busy, scheduling, cloud error
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -37,6 +17,24 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from yascheduler.domain.model import NodeId, TaskId
+
+__all__ = [
+    "CloudAllocateError",
+    "CloudCapacityExhaustedError",
+    "CloudError",
+    "CloudSetupError",
+    "DomainError",
+    "MachineBusyError",
+    "MachineConnectionError",
+    "MissingInputFileError",
+    "NoCompatibleNodeError",
+    "SchedulingError",
+    "TaskError",
+    "TaskNotRunningError",
+    "TaskNotTodoError",
+    "UnsupportedEngineError",
+    "ValidationError",
+]
 
 
 class DomainError(Exception):

@@ -1,24 +1,8 @@
-# FILE: tests/unit/test_compat.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yascheduler.shared.compat version-branch re-exports.
-#   SCOPE: StrEnum, Self, Unpack importability and __all__ membership.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_strenum_is_importable - StrEnum is importable from shared.compat on any supported Python version
-#   test_strenum_in_all - StrEnum is listed in compat.__all__
-#   test_self_in_all - Self is in __all__
-#   test_unpack_in_all - Unpack is in __all__
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial: StrEnum re-export tests for node-rename-and-fields change.
-#   PREVIOUS_CHANGE: N/A
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yascheduler.shared.compat version-branch re-exports.
+# SCOPE: StrEnum, Self, Unpack importability and __all__ membership.
+# KEYWORDS: StrEnum, Self, Unpack, re-exports, Python compat
+# endregion MODULE_CONTRACT
 
 from yascheduler.shared import compat
 

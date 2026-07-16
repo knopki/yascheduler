@@ -1,23 +1,3 @@
-# FILE: tests/unit/test_consume_task.py
-# VERSION: 2.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for consume_task finalise/defer branches and task-not-found path.
-#   SCOPE: Success (True), permanent-only (True, DONE+error), transient-only (False, deferred),
-#          mixed permanent+transient (True, DONE+error with combined msg), task-not-found (True, tracker discarded).
-#   DEPENDS: M-APPLICATION-CONSUME
-#   LINKS: M-APPLICATION-CONSUME
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestConsumeTask - consume_task: success, permanent-only, transient-only defer, mixed permanent priority, task-not-found
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.2.0 - drop-task-context-entity: AsyncMock return_values updated to the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors).
-#   PREVIOUS_CHANGE: v2.1.0 - drop-task-context-entity: task.context.error → task.error.
-# END_CHANGE_SUMMARY
-#
 """Unit tests for consume_task finalise/defer branches.
 
 Covers the four finalisation branches (success, permanent-only, transient-only
@@ -25,6 +5,11 @@ defer, mixed permanent-priority) plus the task-not-found vacuous-finalisation
 path. The `running_task` and `mock_engine_repo` fixtures come from
 `tests/unit/conftest.py`.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for consume_task finalise/defer branches and task-not-found path.
+# SCOPE: Success (True), permanent-only (True, DONE+error), transient-only (False, deferred), mixed permanent+transient (True, DONE+error with combined msg), task-not-found (True, tracker discarded).
+# KEYWORDS: consume_task, finalise, defer, permanent error, transient
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

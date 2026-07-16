@@ -1,25 +1,16 @@
 """Clouds helper utilities."""
-# FILE: yascheduler/infra/cloud/utils.py
-# VERSION: 1.1.1
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Cloud helper: random name generation.
-#   SCOPE: Random naming utility.
-#   DEPENDS: none
-#   LINKS: M-CLOUD-PROVISIONER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   get_rnd_name - Create random string with prefix
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
-#   PREVIOUS_CHANGE: v1.1.0 - Move get_key_name to ssh_keys.py.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Generate unique resource names (VMs, NICs, SSH keys) so cloud providers that require distinct identifiers never collide within a project.
+# SCOPE: Random naming utility.
+# KEYWORDS: random, name generation, utility
+# endregion MODULE_CONTRACT
 
 import random
 import string
+
+__all__ = [
+    "get_rnd_name",
+]
 
 
 def get_rnd_name(prefix: str) -> str:

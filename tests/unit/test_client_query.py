@@ -1,29 +1,3 @@
-# FILE: tests/unit/test_client_query.py
-# VERSION: 1.3.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for Yascheduler queue-query methods via the deps_factory constructor seam.
-#   SCOPE: status/jobs dispatch, mutual-exclusivity ValueError, empty-in empty-out, 5-key dict shape with nested node, node object for allocated/unallocated, factory-per-call.
-#   DEPENDS: M-ENTRYPOINTS-CLIENT, M-APPLICATION-QUERY-TASKS, M-DOMAIN-MODEL
-#   LINKS: M-ENTRYPOINTS-CLIENT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   FakeTaskRepository - In-memory task repo capturing list_by_status/list_by_jobs calls
-#   FakeNodeRepository - In-memory node repo returning Nodes for allocated tasks
-#   FakeUnitOfWork - In-memory UoW exposing FakeTaskRepository + FakeNodeRepository
-#   FakeCLIDeps - Lightweight CLIDeps stub exposing uow_factory only
-#   TestClientQueryDispatch - 7 testing-unit scenarios via deps_factory
-#   TestDepsFactoryInvocation - Factory invoked once per queue_get_tasks_async call (no caching)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Node-rename-and-fields: Node kwargs ip→hostname; update expected node dict assertions with new fields (hostname, jump_host, jump_port, jump_username, external_id, status, created_at, updated_at).
-#   PREVIOUS_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: update EXPECTED_KEYS to 5-key set (task_id, label, status, metadata, node); add FakeNodeRepository; update FakeUnitOfWork with .nodes; _make_task uses allocated_node_id instead of allocated_ip; rename ip/cloud assertions to node assertions; add test_node_object_for_allocated_task, test_node_is_null_for_unallocated_task, test_flat_ip_and_cloud_keys_absent.
-#   PREVIOUS_CHANGE: v1.0.2 - Migrate import/patch paths from yascheduler.client to yascheduler.entrypoints.client.
-# END_CHANGE_SUMMARY
-
 """Unit tests for Yascheduler queue-query methods.
 
 Exercises the post-swap implementation via the `deps_factory` constructor
@@ -31,6 +5,11 @@ seam: a `FakeCLIDeps`-returning factory whose `uow_factory()` returns a
 `FakeUnitOfWork` carrying a `FakeTaskRepository`. The seam keeps these
 tests stable across future refactors of the query body.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for Yascheduler queue-query methods via the deps_factory constructor seam.
+# SCOPE: status/jobs dispatch, mutual-exclusivity ValueError, empty-in empty-out, 5-key dict shape with nested node, node object for allocated/unallocated, factory-per-call.
+# KEYWORDS: Yascheduler queue query, status/jobs dispatch, dict shape
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

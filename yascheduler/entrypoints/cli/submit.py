@@ -1,27 +1,9 @@
-# FILE: yascheduler/entrypoints/cli/submit.py
-# VERSION: 1.2.0
-# START_MODULE_CONTRACT
-#   PURPOSE: yasubmit CLI command — parse AiiDA script, submit task via DI.
-#   SCOPE: submit command — parse AiiDA script and submit task via DI.
-#   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG, M-DOMAIN-ENGINE, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-DI, M-DOMAIN-ENGINE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   submit - Sync entry point: asyncio.run(_submit_async(argv))
-#   _submit_async - Parse AiiDA script, build metadata, submit task via DI; exit 0/1/2
-#   _parse_submit_args - argparse → Namespace (--config/--log-level + positional script)
-#   _parse_script_metadata - Parse key=value pairs from script text
-#   _read_input_files - Read engine input files from disk
-#   _build_metadata - Assemble task metadata dict with webhook branch
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.1 - Drop `import os`; use pathlib.Path for cwd + file reads (PTH109, PTH123); _read_input_files/_build_metadata accept str|Path.
-#   PREVIOUS_CHANGE: v1.2.0 - Runtime import Engine from yascheduler.domain (Config stays from yascheduler.config).
-# END_CHANGE_SUMMARY
-
 """yasubmit CLI command — parse AiiDA script and submit task via DI."""
+# region MODULE_CONTRACT
+# PURPOSE: yasubmit CLI command — parse an AiiDA submission script, read input files, and submit a task via the DI layer.
+# SCOPE: submit command — parse AiiDA script and submit task via DI.
+# KEYWORDS: submit, cli, aiida, script, task
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -68,9 +50,9 @@ def _parse_submit_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("script", type=existing_path)
     add_config_arg(parser)
     add_log_level_arg(parser, default="WARNING")
-    # START_BLOCK_PARSE_ARGS
+    # region BLOCK_parse_args
     return parser.parse_args(argv)
-    # END_BLOCK_PARSE_ARGS
+    # endregion BLOCK_parse_args
 
 
 def _parse_script_metadata(script_text: str) -> dict[str, str]:
@@ -101,7 +83,7 @@ def _build_metadata(
     config: Config,
     local_folder: str | Path,
 ) -> dict[str, Any]:
-    # START_BLOCK_BUILD_METADATA
+    # region BLOCK_build_metadata
     metadata: dict[str, Any] = {"local_folder": str(local_folder)}
     engine = config.engines.get(script_params.get("ENGINE", ""))
     if engine is not None:
@@ -109,24 +91,17 @@ def _build_metadata(
     if "PARENT" in script_params and config.local.webhook_url:
         metadata["webhook_url"] = config.local.webhook_url
         metadata["webhook_custom_params"] = {"parent": script_params["PARENT"]}
-    # END_BLOCK_BUILD_METADATA
+    # endregion BLOCK_build_metadata
     return metadata
 
 
-# START_CONTRACT: _submit_async
-#   PURPOSE: Parse AiiDA script file and submit a task via CLIDeps; exit 0 on success, 1 on runtime error, 2 on argparse error.
-#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
-#   OUTPUTS: { None - prints str(task_id) to stdout on success, Error: ... to stderr on failure, calls sys.exit(1) on failure }
-#   SIDE_EFFECTS: Reads script + input files from disk, creates DB task via deps.submit, may call sys.exit.
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-DI
-# END_CONTRACT: _submit_async
+# region FUNC__submit_async
+# PURPOSE: Parse AiiDA script file and submit a task via CLIDeps; exit 0 on success, 1 on runtime error, 2 on argparse error.
 async def _submit_async(argv: list[str] | None) -> None:
-    # START_BLOCK_PARSE_ARGS
     args = _parse_submit_args(argv)
     script_file: Path = args.script
-    # END_BLOCK_PARSE_ARGS
 
-    # START_BLOCK_HANDLE_FAILURE
+    # region BLOCK_handle_failure
     try:
         logging.captureWarnings(True)
         log = logging.getLogger()
@@ -134,46 +109,46 @@ async def _submit_async(argv: list[str] | None) -> None:
         if not log.handlers:
             log.addHandler(logging.StreamHandler(sys.stderr))
 
-        # START_BLOCK_CONFIGURE
+        # region BLOCK_configure
         config = parse_config(args.config)
         deps = make_cli_deps(config)
-        # END_BLOCK_CONFIGURE
+        # endregion BLOCK_configure
 
         script_params = _parse_script_metadata(script_file.read_text())  # noqa: ASYNC240
         label = script_params.get("LABEL", "AiiDA job")
 
-        # START_BLOCK_VALIDATE_CONTENT
+        # region BLOCK_validate_content
         engine_name = script_params.get("ENGINE")
         if not engine_name:
             raise EngineNotDefinedError  # noqa: TRY301
         engine = config.engines.get(engine_name)
         if not engine:
             raise EngineNotSupportedError(engine_name)  # noqa: TRY301
-        # END_BLOCK_VALIDATE_CONTENT
+        # endregion BLOCK_validate_content
 
         metadata = _build_metadata(script_params, config, Path.cwd())
 
-        # START_BLOCK_SUBMIT
+        # region BLOCK_submit
         task_id = await deps.submit(label, dict(metadata), engine.name)
         sys.stdout.write(f"{task_id!s}\n")
-        # END_BLOCK_SUBMIT
+        # endregion BLOCK_submit
     except Exception as e:
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
-    # END_BLOCK_HANDLE_FAILURE
+    # endregion BLOCK_handle_failure
 
 
-# START_CONTRACT: submit
-#   PURPOSE: Sync entry point — run _submit_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
-#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
-#   OUTPUTS: { None - delegates to asyncio.run }
-#   SIDE_EFFECTS: Starts a fresh event loop via asyncio.run.
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
-# END_CONTRACT: submit
+# endregion FUNC__submit_async
+
+
+# region FUNC_submit
+# PURPOSE: Sync entry point — run _submit_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
 def submit(argv: list[str] | None = None) -> None:
     """Sync entry point — runs _submit_async via asyncio.run."""
     asyncio.run(_submit_async(argv))
 
+
+# endregion FUNC_submit
 
 if __name__ == "__main__":
     submit()

@@ -1,33 +1,10 @@
-# FILE: yascheduler/infra/cloud/providers/vastai.py
-# VERSION: 1.10.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: VastAI GPU marketplace instance creation and deletion via REST API.
-#   SCOPE: VastAI create/delete node functions.
-#   DEPENDS: M-CLOUD-CONFIGS, M-CLOUD-PROTOCOLS
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-CONFIGS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   BASE_URL - VastAI API base URL
-#   _get_headers - Build auth headers for VastAI API
-#   _api_request - Make authenticated API request with error handling
-#   _search_offers - Search available GPU offers matching criteria
-#   _create_instance - Create VastAI instance from an offer
-#   _get_instance_info - Get instance status/info by ID
-#   _find_instance_by_ip - Find instance by public IP address
-#   _delete_instance - Delete VastAI instance by ID
-#   vastai_create_node - Create VastAI node (public entry point)
-#   vastai_delete_node - Delete VastAI node by IP (public entry point)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.10.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v1.9.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-VASTAI") at module top
-# END_CHANGE_SUMMARY
-
 """VastAI cloud methods."""
+# region MODULE_CONTRACT
+# PURPOSE: Provision and decommission GPU instances on the VastAI marketplace so the scheduler can run GPU-accelerated workloads through the generic CloudAdapter contract.
+# SCOPE: VastAI create/delete node functions.
+# DEPENDENCIES: USES API: aiohttp (HTTP client); WRITES: HTTP GET/PUT/DELETE to console.vast.ai/api/v0
+# KEYWORDS: vastai, gpu, instance, create, delete, rest api, marketplace
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -48,6 +25,11 @@ if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
 
     from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudVastAI
+
+__all__ = [
+    "vastai_create_node",
+    "vastai_delete_node",
+]
 
 BASE_URL = "https://console.vast.ai/api/v0"
 
@@ -113,13 +95,8 @@ def _get_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
 
-# START_CONTRACT: _api_request
-#   PURPOSE: Execute authenticated HTTP request to VastAI API with error handling
-#   INPUTS: { session: aiohttp.ClientSession - HTTP session, method: str - HTTP method, url: str - request URL, api_key: str - API key, **kwargs: Any - additional request params }
-#   OUTPUTS: { dict[str, Any] - parsed JSON response }
-#   SIDE_EFFECTS: Makes HTTP request to VastAI API.
-#   LINKS: M-CLOUD-VASTAI
-# END_CONTRACT: _api_request
+# region FUNC__api_request
+# PURPOSE: Execute an authenticated HTTP request to the VastAI API with typed error wrapping so callers get consistent error handling regardless of the endpoint.
 async def _api_request(
     session: aiohttp.ClientSession,
     method: str,
@@ -143,13 +120,11 @@ async def _api_request(
         return await resp.json()
 
 
-# START_CONTRACT: _search_offers
-#   PURPOSE: Search VastAI marketplace for available GPU offers matching criteria
-#   INPUTS: { session: aiohttp.ClientSession, api_key: str, min_vram_mb: int, num_gpus: int, max_price: float }
-#   OUTPUTS: { list[dict[str, Any]] - available offers }
-#   SIDE_EFFECTS: Makes HTTP request to VastAI API.
-#   LINKS: M-CLOUD-VASTAI
-# END_CONTRACT: _search_offers
+# endregion FUNC__api_request
+
+
+# region FUNC__search_offers
+# PURPOSE: Query the VastAI marketplace for GPU offers matching VRAM, GPU count, and price criteria so the cheapest suitable instance is selected for provisioning.
 async def _search_offers(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -179,13 +154,11 @@ async def _search_offers(
     return data.get("offers", [])
 
 
-# START_CONTRACT: _create_instance
-#   PURPOSE: Create a VastAI instance from a selected offer
-#   INPUTS: { session, api_key, offer_id, image, disk_gb, onstart_script, docker_options, env }
-#   OUTPUTS: { dict[str, Any] - creation response }
-#   SIDE_EFFECTS: Creates cloud instance
-#   LINKS: M-CLOUD-VASTAI
-# END_CONTRACT: _create_instance
+# endregion FUNC__search_offers
+
+
+# region FUNC__create_instance
+# PURPOSE: Create a VastAI instance from a selected marketplace offer so the scheduler gets a GPU compute node.
 async def _create_instance(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -213,6 +186,9 @@ async def _create_instance(
         api_key,
         json=payload,
     )
+
+
+# endregion FUNC__create_instance
 
 
 async def _get_instance_info(
@@ -264,13 +240,8 @@ async def _delete_instance(
             raise _VastDeleteApiError(instance_id, resp.status, resp.reason, text)
 
 
-# START_CONTRACT: vastai_create_node
-#   PURPOSE: Create VastAI instance from cheapest matching offer and wait for readiness
-#   INPUTS: { cfg: ConfigCloudVastAI, key: SSHKey, cloud_config: Optional[CloudInitConfig] }
-#   OUTPUTS: { str - IP address of the running instance }
-#   SIDE_EFFECTS: Creates cloud instance; polls until running or timeout
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
-# END_CONTRACT: vastai_create_node
+# region FUNC_vastai_create_node
+# PURPOSE: Pick the cheapest matching GPU offer, create an instance, and poll until it is running so the provisioner gets a usable IP without manual monitoring.
 async def vastai_create_node(
     cfg: ConfigCloudVastAI,
     key: SSHKey,  # noqa: ARG001
@@ -329,13 +300,11 @@ async def vastai_create_node(
         raise _VastInstanceTimeoutError(instance_id, max_wait)
 
 
-# START_CONTRACT: vastai_delete_node
-#   PURPOSE: Delete VastAI instance by its IP address
-#   INPUTS: { cfg: ConfigCloudVastAI, host: str }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Deletes cloud instance
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
-# END_CONTRACT: vastai_delete_node
+# endregion FUNC_vastai_create_node
+
+
+# region FUNC_vastai_delete_node
+# PURPOSE: Tear down a VastAI GPU instance by IP so billing stops and the GPU slot returns to the marketplace.
 async def vastai_delete_node(
     cfg: ConfigCloudVastAI,
     host: str,
@@ -351,3 +320,6 @@ async def vastai_delete_node(
             logger.info("Deleted VastAI instance %s", instance_id)
         else:
             logger.warning("No VastAI instance found with IP %s", host)
+
+
+# endregion FUNC_vastai_delete_node

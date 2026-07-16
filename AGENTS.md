@@ -1,37 +1,29 @@
 # AGENTS.md
 
-## Project
-
-`yascheduler` schedules scientific calculation jobs on SSH machines and
-cloud-created nodes. It provides a daemon, CLI tools, a Python client, and an
-AiiDA scheduler plugin.
-
-## Core Flow
-
-1. A client or `yasubmit` creates a DB task with status `TO_DO`.
-2. The daemon connects enabled nodes from `yascheduler_nodes`.
-3. The allocator picks a compatible free node or requests a cloud node.
-4. Inputs are uploaded, `spawn` starts remotely, and the task is `RUNNING`.
-5. The daemon detects completion, downloads outputs, and marks `DONE`.
-6. Idle cloud nodes are disabled and deleted after provider tolerance.
+<!-- #region SECTION_Dev_Rules -->
 
 ## Development Rules
 
-- Follow the methodology of GRACE-lite and OpenSpec.
-- Public interface stability: CLI commands (`yasubmit`, `yastatus`, `yanodes`,
-  `yasetnode`, `yainit`, `yascheduler`), `class Yascheduler` public API, INI
-  config format (including `[engine.*]` sections and `%(key)s` interpolation),
-  DB schema (`schema.sql` — schema changes MUST include migrations), AiiDA
-  scheduler entrypoint.
-- Do not hand-edit `pyproject.toml` version; release automation owns it.
-- Python minimum is `>=3.9` in `pyproject.toml`.
-- Do not add new dependencies without declaring them in a change proposal with
-  rationale.
+- Follow the OpenSpec, YAGNI, DRY, KISS, SOLID principles.
+- Top-down approach: Start with requirements and a bird's-eye view plan. Define
+  module contracts with purpose and boundaries before any code. Specify
+  contracts for public classes, methods, and functions. Create stubs. Only then
+  write code inside the contracted regions.
+- Public interface stability: CLI commands, public API, INI config format, DB
+  schema. Schema changes MUST include migrations.
+- NEVER modify `pyproject.toml` version; release automation owns it.
+- Target Python `>=3.9`.
+- To add new dependencies: FIRST declare them in an OpenSpec change proposal
+  with rationale.
 - Maintain compatibility with both `pip` and `uv`. Use only PEP 621 standard
   fields in `pyproject.toml`.
 - Prefer minimal changes over broad refactors.
 - Do not add compatibility layers without a concrete need.
-- Use Conventional Commits if asked to commit.
+- If a commit is required, format the message according to Conventional Commits.
+- Every module should export only the public API via `__all__`.
+
+<!-- #endregion SECTION_Dev_Rules -->
+<!-- #region SECTION_OpenSpec_Rule -->
 
 ## OpenSpec Rule
 
@@ -44,35 +36,8 @@ implementation.
 
 If the user requests changes outside the OpenSpec workflow, offer to use
 OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
-
-- `openspec/specs/cli` — the six CLI command entry points, the three daemon
-  launchers, the shared argparse helpers, and the async daemon core
-- `openspec/specs/cloud` — the `CloudConfig` Protocol, `ConfigCloud*` DTOs, the
-  per-prefix parser registry, provider VM lifecycle modules, and
-  `CloudProvisionerImpl`
-- `openspec/specs/config-value-objects` — frozen
-  `LocalSettings`/`RemoteDefaults`/`PostgresDbConfig`/`Config` dataclasses and
-  the composition-root-only `Config` consumption rule
-- `openspec/specs/db-migrations`
-- `openspec/specs/dependency-injection`
-- `openspec/specs/domain-entities`
-- `openspec/specs/domain-events-and-dispatch` — domain event types, the
-  `MessageBus`, UoW collect/publish hooks, and the `webhook_handler` adapter
-- `openspec/specs/domain-exceptions`
-- `openspec/specs/domain-ports`
-- `openspec/specs/e2e-testing`
-- `openspec/specs/logging`
-- `openspec/specs/orchestrator`
-- `openspec/specs/package-facades`
-- `openspec/specs/postgres-persistence` — `PostgresUnitOfWork`,
-  `PostgresTaskRepository`/`PostgresNodeRepository`, the SQL file layout and
-  `load_query` caching, and the `TaskRowNotFoundError`/
-  `UnitOfWorkNotInitializedError` persistence exceptions
-- `openspec/specs/postgres-schema-apply`
-- `openspec/specs/ssh-infrastructure`
-- `openspec/specs/test-db-integration`
-- `openspec/specs/testing-unit`
-- `openspec/specs/use-cases`
+<!-- #endregion SECTION_OpenSpec_Rule -->
+<!-- #region SECTION_Verification -->
 
 ## Verification
 
@@ -80,134 +45,30 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
   test happy paths first, then meaningful edge cases.
 - For changes touching DB queries, node lifecycle, SSH interaction, or
   orchestrator flow, also add or update integration/e2e tests per the relevant
-  OpenSpec specs (`test-db-integration`, `e2e-testing`).
+  OpenSpec specs.
 - Run tests: `uv run pytest -m unit`, `uv run pytest -m integration`, `uv run
-pytest -m e2e` (don't check for docker existence - just run).
+pytest -m e2e`. Assume Docker is available and running, no pre-flight checks.
 - Static checks: `uv run zuban check`, `uv run ruff check .`, `uv run ruff
 format --check .`, `uv run lint-imports`
 - Spec validation: `openspec validate --all --json` must pass after creating a
-  change proposal and after any modification to `openspec/specs/` (on
-  archive/sync too).
-- Validate GRACE-lite must pass after any code modification session.
+  change proposal and after any modification to `openspec/specs/`, and also
+  after archiving or syncing changes.
 - Use testcontainers for integration and e2e tests (PostgreSQL, SSH). Avoid only
   uncontrolled production resources (real cloud accounts, production DBs, live
   SSH servers) unless explicitly requested and configured.
 
-<!-- START_GRACE-lite -->
-
-## GRACE-lite: Graph-RAG Anchored Code Engineering
-
-GRACE-lite: code methodology. **Semantic markup** (contracts, anchors) +
-**knowledge graph** (`docs/knowledge-graph.xml`) + **structured logging** =
-machine-navigable code. Self-similar markup: MODULE_CONTRACT → function
-contract → block anchors. Each level narrows ambiguity. Same markup serves
-generation (top-down template) and navigation (bottom-up index).
-
-### Core Principles
-
-**1. Contract-First.** Create/update MODULE_CONTRACT before code. Requirements,
-architecture, or verification unclear → write contract first. Contract =
-intent, code = implementation.
-
-**2. Semantic Markup Is Navigation.** `START_*/END_*` = semantic coordinates
-for 1-2 hop navigation. Not documentation. Unique, paired.
-
-**3. Knowledge Graph Is Always Current.** `docs/knowledge-graph.xml` = project
-map. Update in same change when structure, API, or dependencies change. Graph
-compresses structure for fragment-based reading.
-
-**4. Governed Autonomy.** Contracts/plans/graph = WHAT. Agents choose HOW
-within boundaries.
-
-**5. Proportional Markup.** Core logic → full contracts. Trivial helpers →
-none. Unnecessary anchors = noise. Over-markup degrades navigation.
-
-Paired anchors set expectations before implementation. Contract-first: decide
-intent → generate. Self-similar markup: MODULE_CONTRACT → function contract →
-block anchors. Each level restricts ambiguity below. Code markup only.
-
-### Navigation Order (mandatory)
-
-Navigate: **1)** `docs/knowledge-graph.xml` (shared truth) → **2)** file-local
-markers (`START_MODULE_CONTRACT`, `START_MODULE_MAP`, `START_CHANGE_SUMMARY`,
-`START_CONTRACT:`, `START_BLOCK_`) → **3)** full file reads after narrowing to
-module/file/block.
-
-Anchor-based path exists → use it. No linear reads.
-
-- `M-<ID>` — module record in `docs/knowledge-graph.xml`
-- `CrossLink` — cross-module graph edges
-- `LINKS:` + module ID — implementation files in `yascheduler/` and `tests/`
-- `START_MODULE_CONTRACT` / `START_CONTRACT:` — file-local contracts
-- `START_BLOCK_` — logic slices within functions
-- `START_CHANGE_SUMMARY` — recent local rationale
-- No line-number targeting. Use block/contract anchors.
-
-### Semantic Markup Reference
-
-#### Module Level (required on every governed file)
-
-```python
-# FILE: path/to/file.ext
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: [What this module does - one sentence]
-#   SCOPE: [What operations are included]
-#   DEPENDS: [M-ID dependencies or "none"]
-#   LINKS: [Knowledge graph references]
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   exportedSymbol - one-line description
-# END_MODULE_MAP
-```
-
-#### Function Level
-
-Required: core business logic, exported functions, public methods,
-graph-relevant callables. Optional: private helpers, trivial accessors. Place
-above function signature.
-
-```python
-# START_CONTRACT: functionName
-#   PURPOSE: [What it does]
-#   INPUTS: { paramName: Type - description } | { None }
-#   OUTPUTS: { ReturnType - description } | { None - no return value }
-#   SIDE_EFFECTS: None | description of external state changes
-#   LINKS: [Related modules/functions; M-*, fn-*, type-*, class-*, etc]
-# END_CONTRACT: functionName
-```
-
-#### Code Block Level (required)
-
-```python
-# START_BLOCK_VALIDATE_INPUT
-# ... code ...
-# END_BLOCK_VALIDATE_INPUT
-```
-
-Block names = **logical purpose** (`VALIDATE_INPUT`, `COLLECT_RESULTS`), not
-implementation details.
-
-#### Change Tracking (required)
-
-```python
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: [v1.2.0 - What changed and why]
-#   PREVIOUS_CHANGE: [v1.1.0 - What changed and why]
-# END_CHANGE_SUMMARY
-```
+<!-- #region SECTION_Logging -->
 
 ### Logging & Verification
 
 Structured logs = primary observability. Block boundary log entries declare
 what code assumes at that point. Runtime behavior traceable back to contract.
 
-**Trace method.** Governed functions emit `logger.debug("BLOCK", extra={"k": v,
-...})` at block boundaries. The positional block marker is the debug message;
-structured fields are the flat `extra` dict (no nested sentinel, no wrapper
-function). Structured fields preferred; redact secrets. Missing anchors on
-critical branches = verification defect.
+**Trace method.** Emit `logger.debug("BLOCK", extra={"k": v, ...})` at block
+boundaries. The positional block marker is the debug message; structured fields
+are the flat `extra` dict (no nested sentinel, no wrapper function). Structured
+fields preferred; redact secrets. Missing trace logging on critical branches =
+verification defect.
 
 **Logger binding.** Modules bind loggers via stdlib:
 
@@ -216,98 +77,70 @@ import logging
 logger = logging.getLogger(__name__)
 ```
 
-**Module-local logger names.** Logger names are
-`yascheduler.<dotted.module.path>` produced naturally by
-`logging.getLogger(__name__)`.
+**Module-local logger names.** Modules obtain a logger via
+logging.getLogger(**name**), which yields names like
+`yascheduler.<dotted.module.path>`.
 
 **Record contract for tests.** Trace records expose `getMessage()` and
-structured fields as record attributes. Tests assert the block marker via
-`r.getMessage() == "BLOCK"` and read fields via the shared helper
-`extra_fields(r)`.
+structured fields as record attributes. Tests assert the block marker and extra
+fields.
 
 **Tests:** deterministic assertions first. Trace/log assertions when trajectory
-matters. Module-local tests stay close to module. Test files may carry
-MODULE_CONTRACT, MODULE_MAP, semantic blocks, CHANGE_SUMMARY when substantial.
-Update tests when log markers change intentionally.
+matters. Module-local tests stay close to module. Update tests when log markers
+change intentionally.
 
-### Knowledge Graph (`docs/knowledge-graph.xml`)
+<!-- #endregion SECTION_Logging -->
+<!-- #endregion SECTION_Verification -->
+<!-- #region SECTION_Project -->
 
-Root: `<KnowledgeGraph>`. Child: `<Project NAME="..." VERSION="...">`.
-Required children: `<keywords>`, `<annotation>`. Optional: `M-*`,
-`DF-*`, `CrossLink`.
+## Project
 
-#### M-{NAME} Module Element
+`yascheduler` schedules scientific calculation jobs on SSH machines and
+cloud-created nodes. It provides a daemon, CLI tools, a Python client, and an
+AiiDA scheduler plugin.
 
-Each governed module uses unique `M-{DOMAIN}` ID as XML tag:
+### Core Flow
 
-```xml
-<M-DOMAIN NAME="Human name" TYPE="CORE_LOGIC" STATUS="planned">
-  <purpose>One-line purpose</purpose>
-  <path>src/relative/path.py</path>
-  <depends>M-OTHER, M-THIRD or None</depends>
-  <annotations>
-    <fn-name PURPOSE="Function purpose" />
-    <class-Name PURPOSE="Class purpose" />
-    <type-Name PURPOSE="Type description" />
-    <export-name PURPOSE="Public export" />
-    <const-NAME PURPOSE="Constant purpose" />
-  </annotations>
-</M-DOMAIN>
+1. A client or `yasubmit` creates a DB task with status `TO_DO`.
+2. The daemon connects enabled nodes from `yascheduler_nodes`.
+3. The allocator picks a compatible free node or requests a cloud node.
+4. Inputs are uploaded, `spawn` starts remotely, and the task is `RUNNING`.
+5. The daemon detects completion, downloads outputs, and marks `DONE`.
+6. Idle cloud nodes are disabled and deleted after provider tolerance.
+
+### Structure
+
+Hexagonal architecture:
+domain (no external deps) <- application <- infra <- entrypoints.
+
+```txt
+yascheduler/
+├── entrypoints/  # drivers: cli, entrypoints, public API, DI
+├── infra/        # driven: PSQL schema, UoW, ssh, cloud adapters, webhooks
+├── application/  # use cases, orchestrator, message bus
+├── domain/       # entities, ports, events, exceptions
+└── shared/       # shared kernel
 ```
 
-Required: `<purpose>`, `<path>`, `<depends>`. Optional: `<annotations>`.
-TYPE: `ENTRY_POINT` | `CORE_LOGIC` | `DATA_LAYER` | `UI_COMPONENT` |
-`UTILITY` | `INTEGRATION`. STATUS: `planned` → `partial` → `implemented`.
-Test modules stay out of graph.
-Annotation prefixes: `fn-`, `class-`, `type-`, `export-`, `const-`. Each
-MUST have PURPOSE attribute.
+<!-- #endregion SECTION_Project -->
+<!-- #region RULES_REPEATED -->
 
-#### DF-{NAME} Data Flow Element
-
-```xml
-<DF-PROCESS NAME="Process request">M-API -> M-CONTENT -> M-STORAGE</DF-PROCESS>
-<DF-STREAM NAME="Parallel paths">M-API -> M-STREAMING; M-DWEETS -> M-STREAMING</DF-STREAM>
-```
-
-Separators: `->` sequential, `;` parallel/independent, `/` alternatives.
-Tag = `DF-<NAME>`, `NAME` attribute required.
-
-#### CrossLink: Cross-module Link
-
-```xml
-<CrossLink from="M-API" to="M-CONTENT" relation="delegates parsing" />
-```
-
-`from`/`to` must reference existing M-IDs. `relation` = free-form prose.
-
-### Rules for Modifications
-
-Before code: read `docs/knowledge-graph.xml` → file's `MODULE_CONTRACT`.
-
-1. New files → MODULE_CONTRACT + MODULE_MAP + CHANGE_SUMMARY on creation.
-   Existing files: bring to standard when substantively edited; internal
-   markup progressively.
-2. After editing: update `MODULE_MAP` if public surface changed; add/update
-   `CHANGE_SUMMARY` entry.
-3. Update `docs/knowledge-graph.xml` in same change: module added/removed →
-   `M-` entry; public API changed → `<annotations>`; dependencies changed →
-   `<depends>` + `<CrossLink>`. Private-only changes → no graph update.
-4. Never remove semantic markup anchors unless intentionally replacing them.
-
-### Size Limits
-
-Size limits: source file 500 soft/1000 hard, function+contract 60, semantic
-block 50. Exceed → evaluate splitting.
-
-### Validation
-
-Run validation before considering work complete.
-
-```bash
-python3 scripts/grace_check.py              # XML + source checks
-python3 scripts/grace_check.py --json       # Machine-readable
-```
-
-Exit 0 = ok, 1 = errors, 2 = usage.
-
-<!-- END_GRACE-lite -->
+<critical_rules>
+<rule>Follow OpenSpec, YAGNI, DRY, KISS, SOLID</rule>
+<rule>Top-down: requirements → module contract → contracts → stubs → code</rule>
+<rule>Stable public interfaces; DB schema changes require migrations</rule>
+<rule>pip+uv compatible</rule>
+<rule>Minimal changes; NEVER compatibility layers without concrete need</rule>
+<rule>Conventional Commits when committing</rule>
+<rule>Consult openspec/specs, update specs; use openspec/changes for proposals</rule>
+<rule>Offer /opsx-propose if outside OpenSpec, NEVER block requested work</rule>
+<rule>Unit tests for core logic; integration/e2e tests for DB, SSH</rule>
+<rule>Run: uv run pytest -m unit / -m integration / -m e2e (assume Docker running)</rule>
+<rule>Static checks: uv run zuban check, ruff check, ruff format --check, lint-imports</rule>
+<rule>openspec validate --all --json must pass after any spec changes</rule>
+<rule>Use testcontainers; avoid real production resources unless explicitly configured</rule>
+<rule>Structured logging: `logger.debug("BLOCK", extra={...});`,
+test log records.</rule>
+<rule>Hexagonal architecture; adhere to yascheduler/ structure</rule>
+</critical_rules>
+<!-- #endregion RULES_REPEATED -->

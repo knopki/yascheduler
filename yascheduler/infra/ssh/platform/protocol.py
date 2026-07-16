@@ -1,35 +1,13 @@
 """Protocol definitions for process info, SSH checks, and adapters."""
-# FILE: yascheduler/infra/ssh/platform/protocol.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Protocol definitions for process info, SSH checks, and adapters.
-#   SCOPE: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc, ProcessInfo, SSHCheck, QuoteCallable, RunCallable, RunBgCallable, OuterRunCallable, GetCPUCoresCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable protocols and type aliases.
-#   DEPENDS: M-DOMAIN-ENGINE
-#   LINKS: M-PLATFORM-ADAPTERS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   SFTPRetryExc             - Tuple of retriable SFTP exception types.
-#   SSHRetryExc              - Tuple of retriable SSH exception types.
-#   AllSSHRetryExc           - Union of SSHRetryExc and SFTPRetryExc.
-#   ProcessInfo              - Frozen dataclass holding pid, name, command.
-#   SSHCheck                 - Callable alias: async SSH connection health check.
-#   QuoteCallable            - Callable alias: string quoting function.
-#   RunCallable              - Protocol: run a command via SSH and return completed process.
-#   RunBgCallable            - Protocol: run a command in background via SSH.
-#   OuterRunCallable         - Protocol: curried run callable with pre-bound conn/quote.
-#   GetCPUCoresCallable      - Callable alias: async CPU core count retrieval.
-#   ListProcessesCallable    - Protocol: async generator listing running processes.
-#   PgrepCallable            - Protocol: async generator filtering processes by pattern.
-#   SetupNodeCallable        - Protocol: async node setup (engines, dirs).
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.4.0 - Drop `log` parameter from SetupNodeCallable (platform functions now bind a module-global logger).
-#   PREVIOUS_CHANGE: v1.3.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Type aliases, exception tuples, and callable protocols for SSH remote machine operations.
+# SCOPE:
+# - Exception tuples: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc
+# - Data class: ProcessInfo
+# - Protocols: RunCallable, RunBgCallable, OuterRunCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable
+# - Callable aliases: SSHCheck, QuoteCallable, GetCPUCoresCallable
+# KEYWORDS: protocol, type aliases, ssh, sftp, exceptions, callables
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -71,6 +49,22 @@ if TYPE_CHECKING:
     from asyncssh.process import SSHClientProcess, SSHCompletedProcess
 
     from yascheduler.domain import EngineRepository
+
+__all__ = [
+    "AllSSHRetryExc",
+    "GetCPUCoresCallable",
+    "ListProcessesCallable",
+    "OuterRunCallable",
+    "PgrepCallable",
+    "ProcessInfo",
+    "QuoteCallable",
+    "RunBgCallable",
+    "RunCallable",
+    "SFTPRetryExc",
+    "SSHCheck",
+    "SSHRetryExc",
+    "SetupNodeCallable",
+]
 
 SFTPRetryExc = (
     asyncio.TimeoutError,

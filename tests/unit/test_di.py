@@ -1,23 +1,8 @@
-# FILE: tests/unit/test_di.py
-# VERSION: 2.5.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for di.py — dependency injection composition root.
-#   SCOPE: CLIDeps dataclass, make_cli_deps, make_daemon factories.
-#   DEPENDS: M-DI, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-DB, M-CLOUD-PROVISIONER
-#   LINKS: M-DI, M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestCLIDeps - CLIDeps dataclass: constructor, submit
-#   TestMakeCliDeps - make_cli_deps factory for CLI dependencies
-#   TestMakeDaemon - make_daemon factory: no DB, AllocationTracker, allocation_lock, active_clouds; active_clouds filter applies on pre-built-clouds path too
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.5.0 - Tighten test_creates_dependencies_no_db to assert exactly one SSHMachineGateway and that the same instance is shared by CloudProvisionerImpl.machine_gateway and Orchestrator.gateway; patch SSHMachineGateway in test_uses_provided_clouds and assert the pre-built-clouds path keeps its own gateway (share-ssh-gateway).
-#   PREVIOUS_CHANGE: v2.4.0 - Migrate imports: ConfigDb→PostgresDbConfig, ConfigLocal→LocalSettings, ConfigRemote→RemoteDefaults; make_daemon no longer passes config=config, assertions updated to local_settings/remote_defaults (config-aggregate-to-entrypoints / P4).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for di.py — dependency injection composition root.
+# SCOPE: CLIDeps dataclass, make_cli_deps, make_daemon factories.
+# KEYWORDS: dependency injection, CLIDeps, make_cli_deps, make_daemon
+# endregion MODULE_CONTRACT
 
 import asyncio
 from collections.abc import Iterator

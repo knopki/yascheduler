@@ -1,22 +1,9 @@
 """Read-only task query by statuses or job IDs."""
-# FILE: yascheduler/application/query_tasks.py
-# VERSION: 1.2.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Read-only task query by statuses or job IDs.
-#   SCOPE: Read-only task query by statuses XOR job IDs within a single UoW; returns tasks alongside their allocated nodes.
-#   DEPENDS: M-DOMAIN-MODEL, M-APPLICATION-UOW
-#   LINKS: M-DOMAIN-MODEL, M-APPLICATION-UOW, M-ENTRYPOINTS-CLIENT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   query_tasks - Read-only task query by statuses XOR job IDs within a single UoW; returns (tasks, nodes_by_id)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.3.0 - Remove vestigial EMPTY_DISPATCH DEBUG trace (carried no extra fields, not asserted in tests) along with the now-unused logger binding and logging import; the module no longer logs.
-#   PREVIOUS_CHANGE: v1.2.0 - Return type widens to tuple[list[Task], dict[NodeId, Node]]; batch-load nodes via uow.nodes.get_by_ids.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Provide a read-only snapshot of tasks and their allocated nodes so CLI and API consumers can display scheduler state without side effects.
+# SCOPE: query_tasks use case — status-based or job-ID-based lookup with batch node loading.
+# KEYWORDS: query, tasks, status, jobs, read-only, list
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -29,43 +16,37 @@ if TYPE_CHECKING:
 
     from .uow import AbstractUnitOfWork
 
+__all__ = ["query_tasks"]
 
-# START_CONTRACT: query_tasks
-#   PURPOSE: Read-only task query by statuses XOR job IDs within a single UoW; returns tasks alongside their allocated nodes.
-#   INPUTS: {
-#     jobs: Sequence[TaskId] | None - Job IDs to query (mutually exclusive with statuses),
-#     statuses: Sequence[TaskStatus] | None - Statuses to query (mutually exclusive with jobs),
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory for DB access
-#   }
-#   OUTPUTS: { tuple[list[Task], dict[NodeId, Node]] - Matching tasks and their allocated nodes keyed by node_id; ([], {}) if neither filter is non-empty }
-#   SIDE_EFFECTS: None — read-only.
-#   RAISES: ValueError - if both jobs and statuses are non-empty (mutually exclusive)
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL
-# END_CONTRACT: query_tasks
+
+# region FUNC_query_tasks
+# PURPOSE: Let CLI/API consumers filter tasks by status or job ID in a single DB round trip, so they can build dashboards or check completion without unnecessary queries.
+# REQUIRES: jobs and statuses are mutually exclusive (ValueError raised if both non-empty).
+# ENSURES: Returns ([], {}) when neither filter is provided; tasks are read-only, no side effects.
 async def query_tasks(
     jobs: Sequence[TaskId] | None,
     statuses: Sequence[TaskStatus] | None,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> tuple[list[Task], dict[NodeId, Node]]:
     """Read-only task query by statuses XOR job IDs within a single UoW; returns tasks alongside their allocated nodes."""
-    # START_BLOCK_VALIDATE_INPUT
+    # region BLOCK_validate_input
     if jobs and statuses:
         msg = "jobs and statuses are mutually exclusive"
         raise ValueError(msg)
-    # END_BLOCK_VALIDATE_INPUT
+    # endregion BLOCK_validate_input
 
-    # START_BLOCK_EMPTY_DISPATCH
+    # region BLOCK_empty_dispatch
     if not statuses and not jobs:
         return [], {}
-    # END_BLOCK_EMPTY_DISPATCH
+    # endregion BLOCK_empty_dispatch
 
-    # START_BLOCK_QUERY
+    # region BLOCK_query
     async with uow_factory() as uow:
         if statuses:
             tasks = await uow.tasks.list_by_status(set(statuses))
         else:
             tasks = await uow.tasks.list_by_jobs(list(jobs or []))
-        # START_BLOCK_BATCH_LOAD_NODES
+        # region BLOCK_batch_load_nodes
         node_ids = [
             t.allocated_node_id for t in tasks if t.allocated_node_id is not None
         ]
@@ -80,6 +61,9 @@ async def query_tasks(
             nodes_by_id = await uow.nodes.get_by_ids(distinct_node_ids)
         else:
             nodes_by_id = {}
-        # END_BLOCK_BATCH_LOAD_NODES
+        # endregion BLOCK_batch_load_nodes
     return tasks, nodes_by_id
-    # END_BLOCK_QUERY
+    # endregion BLOCK_query
+
+
+# endregion FUNC_query_tasks

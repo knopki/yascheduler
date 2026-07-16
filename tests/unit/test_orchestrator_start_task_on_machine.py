@@ -1,21 +1,3 @@
-# FILE: tests/unit/test_orchestrator_start_task_on_machine.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for Orchestrator._start_task_on_machine ncpus resolution.
-#   SCOPE: Explicit None-check ncpus resolution: static value, None fallback, absent node fallback.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR
-#   LINKS: M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestStartTaskOnMachine - _start_task_on_machine ncpus resolution via explicit None-check
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - node-ncpus-as-config slice 5: extracted from test_application_orchestrator.py to stay under 1000-line limit.
-# END_CHANGE_SUMMARY
-#
 """Unit tests for Orchestrator._start_task_on_machine ncpus resolution.
 
 Tests cover:
@@ -23,6 +5,11 @@ Tests cover:
 - Node.ncpus is None -> session.get_cpu_cores() called, result flows to deployer
 - Node absent (get_by_id returns None) -> session.get_cpu_cores() called
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for Orchestrator._start_task_on_machine ncpus resolution.
+# SCOPE: Explicit None-check ncpus resolution: static value, None fallback, absent node fallback.
+# KEYWORDS: _start_task_on_machine, ncpus resolution, None fallback
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

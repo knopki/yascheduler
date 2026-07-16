@@ -1,22 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway_retry_rollback.py
-# VERSION: 2.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for non-idempotent retry removal (run_bg/upload/download single-attempt) and start_task_on_machine BUSY rollback.
-#   SCOPE: run_bg/upload/download no longer retry on transient SSH/SFTP errors; start_task_on_machine rolls back gateway BUSY on upload/spawn/Cancelled/unexpected-state/concurrent-disconnect failures.
-#   DEPENDS: M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-DOMAIN-MODEL
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestNonIdempotentRetry - run_bg / upload / download SHALL NOT retry on transient errors
-#   TestStartTaskRollback - start_task_on_machine rolls back gateway BUSY on deploy/spawn failure
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - dissolve-machine-operations-facade: SSHMachineOperations deleted; tests use TaskDeployer directly.
-#   PREVIOUS_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for non-idempotent retry removal (run_bg/upload/download single-attempt) and start_task_on_machine BUSY rollback.
+# SCOPE: run_bg/upload/download no longer retry on transient SSH/SFTP errors; start_task_on_machine rolls back gateway BUSY on upload/spawn/Cancelled/unexpected-state/concurrent-disconnect failures.
+# KEYWORDS: non-idempotent retry, BUSY rollback, start_task_on_machine
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

@@ -1,22 +1,8 @@
-# FILE: tests/unit/test_message_bus.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the MessageBus event dispatcher.
-#   SCOPE: register, dispatch, multiple handlers, partial-wrapped handlers.
-#   DEPENDS: M-DOMAIN-EVENTS, M-APPLICATION-MESSAGE_BUS
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestMessageBus - dispatch to single/multiple handlers, no-op on missing, partial handler
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.0.1 - Import Self from yascheduler.shared facade (shared-kernel-extraction).
-#   PREVIOUS_CHANGE: v1.0.0 - MessageBus unit tests.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the MessageBus event dispatcher.
+# SCOPE: register, dispatch, multiple handlers, partial-wrapped handlers.
+# KEYWORDS: MessageBus, dispatch, handler registration, partial handlers
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

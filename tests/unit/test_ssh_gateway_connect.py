@@ -1,28 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway_connect.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineRepository.connect two-method pattern and error translation.
-#   SCOPE: Transaction of asyncssh.misc.Error → MachineConnectionError,
-#     OSError → MachineConnectionError, and successful return of a MachineSession.
-#   DEPENDS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS, M-SSH-SESSION
-#   LINKS: M-SSH-REPOSITORY
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   repository - SSHMachineRepository fixture
-#   mock_conn - Mock SSHClientConnection fixture
-#   mock_adapter - Mock RemoteMachineAdapter fixture
-#   test_connect_translates_asyncssh_error - asyncssh.misc.Error → MachineConnectionError with ip and cause
-#   test_connect_translates_oserror - OSError → MachineConnectionError with ip
-#   test_connect_returns_session_on_success - Successful connect returns MachineSession
-#   test_connect_primes_session_cache - connect primes the session CPU cache
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - node-ncpus-as-config slice 4: add test_connect_primes_session_cache + fixtures (repository, mock_conn, mock_adapter).
-#   PREVIOUS_CHANGE: v1.3.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), exc.ip→exc.hostname, _make_state(ip=…)→_make_state(hostname=…), result.hostname→result.hostname.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for SSHMachineRepository.connect two-method pattern and error translation.
+# SCOPE: Transaction of asyncssh.misc.Error → MachineConnectionError, OSError → MachineConnectionError, and successful return of a MachineSession.
+# KEYWORDS: SSHMachineRepository.connect, MachineConnectionError, error translation
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -86,13 +66,6 @@ def mock_adapter() -> MagicMock:
     return adapter
 
 
-# START_CONTRACT: test_connect_translates_asyncssh_error
-#   PURPOSE: Verify _connect_impl raising asyncssh.misc.Error raises MachineConnectionError with correct ip and cause.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS
-# END_CONTRACT: test_connect_translates_asyncssh_error
 @pytest.mark.asyncio
 async def test_connect_translates_asyncssh_error() -> None:
     gw = SSHMachineRepository()
@@ -112,13 +85,6 @@ async def test_connect_translates_asyncssh_error() -> None:
     assert isinstance(exc_info.value.__cause__, asyncssh.misc.Error)
 
 
-# START_CONTRACT: test_connect_translates_oserror
-#   PURPOSE: Verify _connect_impl raising OSError raises MachineConnectionError with ip.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS
-# END_CONTRACT: test_connect_translates_oserror
 @pytest.mark.asyncio
 async def test_connect_translates_oserror() -> None:
     gw = SSHMachineRepository()
@@ -136,13 +102,6 @@ async def test_connect_translates_oserror() -> None:
     assert "refused" in exc_info.value.reason
 
 
-# START_CONTRACT: test_connect_returns_session_on_success
-#   PURPOSE: Verify connect returns the MachineSession produced by _connect_impl unchanged.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
-# END_CONTRACT: test_connect_returns_session_on_success
 @pytest.mark.asyncio
 async def test_connect_returns_session_on_success() -> None:
     gw = SSHMachineRepository()
@@ -161,13 +120,6 @@ async def test_connect_returns_session_on_success() -> None:
     assert isinstance(result, type(session))
 
 
-# START_CONTRACT: test_connect_primes_session_cache
-#   PURPOSE: Verify connect primes the session CPU cache so first get_cpu_cores returns cached value.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
-# END_CONTRACT: test_connect_primes_session_cache
 @pytest.mark.asyncio
 async def test_connect_primes_session_cache(
     repository: SSHMachineRepository,

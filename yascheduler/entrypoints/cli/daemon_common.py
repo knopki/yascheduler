@@ -1,22 +1,9 @@
 """Shared daemon core — configure_logger and run_daemon, consumed by all three daemon entry points (daemonize, daemon_systemd, daemon_sysv)."""
-# FILE: yascheduler/entrypoints/cli/daemon_common.py
-# VERSION: 1.3.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Shared daemon core — configure_logger and run_daemon, consumed by all three daemon entry points (daemonize, daemon_systemd, daemon_sysv).
-#   SCOPE: Root-logger configuration and async daemon runtime (make_daemon + signal handlers + try/finally cleanup).
-#   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG-PARSER, M-APPLICATION-ORCHESTRATOR
-#   LINKS: M-DAEMON-COMMON
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   configure_logger - Configure the ROOT logger: stderr StreamHandler always + FileHandler when set; backoff/asyncssh → ERROR; captureWarnings(True).
-#   run_daemon - Async daemon core: await make_daemon, register SIGTERM/SIGINT handlers on the running loop, await orch.start() under try/finally so orch.stop() runs on every exit path.
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Wire LogFormatter onto both stderr StreamHandler and FileHandler in configure_logger (reform-grace-logging).
-#   PREVIOUS_CHANGE: v1.2.0 - Remove logger arg from make_daemon call (make_daemon creates its own YaLogger internally).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Provide shared daemon configuration and runtime helpers — configure_logger and run_daemon — consumed by all three daemon entry points.
+# SCOPE: Root-logger configuration and async daemon core lifecycle — orchestrator startup, signal handling, and cleanup.
+# KEYWORDS: daemon, logger, signal, orchestration, common
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -37,16 +24,11 @@ if TYPE_CHECKING:
     from yascheduler.entrypoints import Config
 
 
-# START_CONTRACT: configure_logger
-#   PURPOSE: Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers).
-#   INPUTS: { log_file: str | Path | None - log file path or None (stderr only), level: int - root logger level (e.g. logging.INFO) }
-#   OUTPUTS: { logging.Logger - the configured root logger }
-#   SIDE_EFFECTS: Adds StreamHandler(sys.stderr) to root logger (always); adds FileHandler(log_file) when log_file is not None; wires a single LogFormatter onto both handlers (trace records render [M-ID][funcName][BLOCK] kv; user-facing records render plain narrative); sets backoff/asyncssh to ERROR; calls logging.captureWarnings(True).
-#   LINKS: M-DAEMON-COMMON
-# END_CONTRACT: configure_logger
+# region FUNC_configure_logger
+# PURPOSE: Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers).
 def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
     """Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers)."""
-    # START_BLOCK_ROOT_HANDLERS
+    # region BLOCK_root_handlers
     root = logging.getLogger()
     root.setLevel(level)
     # Always log to stderr; systemd captures it into journald, sysv uses the file below.
@@ -58,36 +40,34 @@ def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
         fh = logging.FileHandler(log_file)
         fh.setFormatter(formatter)
         root.addHandler(fh)
-    # END_BLOCK_ROOT_HANDLERS
+    # endregion BLOCK_root_handlers
 
-    # START_BLOCK_SUPPRESS_NOISY_THIRD_PARTY
+    # region BLOCK_suppress_noisy_third_party
     # backoff retries and asyncssh key-exchange chatter are noisy below ERROR; let them
     # propagate to the root handlers but suppress their DEBUG/INFO/WARNING output.
     logging.getLogger("backoff").setLevel(logging.ERROR)
     logging.getLogger("asyncssh").setLevel(logging.ERROR)
-    # END_BLOCK_SUPPRESS_NOISY_THIRD_PARTY
+    # endregion BLOCK_suppress_noisy_third_party
 
-    # START_BLOCK_CAPTURE_WARNINGS
+    # region BLOCK_capture_warnings
     logging.captureWarnings(True)
-    # END_BLOCK_CAPTURE_WARNINGS
+    # endregion BLOCK_capture_warnings
 
     return root
 
 
-# START_CONTRACT: run_daemon
-#   PURPOSE: Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator.
-#   INPUTS: { config: Config - daemon configuration, logger: logging.Logger - root logger for signal-handler messages }
-#   OUTPUTS: { None - runs the event loop until stopped }
-#   SIDE_EFFECTS: Builds Orchestrator, registers SIGTERM/SIGINT handlers, runs orch.start() with try/finally cleanup.
-#   LINKS: M-DAEMON-COMMON, M-DI, M-APPLICATION-ORCHESTRATOR
-# END_CONTRACT: run_daemon
+# endregion FUNC_configure_logger
+
+
+# region FUNC_run_daemon
+# PURPOSE: Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator.
 async def run_daemon(config: Config, logger: logging.Logger) -> None:
     """Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator."""
-    # START_BUILD_ORCHESTRATOR
+    # region BLOCK_build_orchestrator
     orch = await make_daemon(config)
-    # END_BUILD_ORCHESTRATOR
+    # endregion BLOCK_build_orchestrator
 
-    # START_BLOCK_REGISTER_SIGNAL_HANDLERS
+    # region BLOCK_register_signal_handlers
     loop = asyncio.get_running_loop()
     current_task = asyncio.current_task()
     shielded: Sequence[asyncio.Task[Any]] = (
@@ -125,11 +105,14 @@ async def run_daemon(config: Config, logger: logging.Logger) -> None:
             return handler
 
         loop.add_signal_handler(sig, _make_handler(sig))
-    # END_BLOCK_REGISTER_SIGNAL_HANDLERS
+    # endregion BLOCK_register_signal_handlers
 
-    # START_BLOCK_RUN_ORCHESTRATOR_WITH_CLEANUP
+    # region BLOCK_run_orchestrator_with_cleanup
     try:
         await orch.start()
     finally:
         await orch.stop()
-    # END_BLOCK_RUN_ORCHESTRATOR_WITH_CLEANUP
+    # endregion BLOCK_run_orchestrator_with_cleanup
+
+
+# endregion FUNC_run_daemon

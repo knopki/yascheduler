@@ -1,22 +1,10 @@
 """Synchronous, transactional application of schema.sql via pg8000."""
-# FILE: yascheduler/infra/persistence/postgres_schema.py
-# VERSION: 1.0.1
-# START_MODULE_CONTRACT
-#   PURPOSE: Synchronous, transactional application of schema.sql via pg8000.
-#   SCOPE: One-shot schema.sql application via pg8000 for CLI init and test fixtures.
-#   DEPENDS: M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG
-#   LINKS: M-PERSISTENCE, M-CLI-COMMANDS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   apply_schema - apply schema.sql in a BEGIN/COMMIT transaction, rollback on failure
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.1.0 - Remove vestigial block-boundary DEBUG traces (OPEN_CONNECTION/APPLY_SCHEMA/HANDLE_EXISTING/ROLLBACK/CLOSE — carried no extra fields, not asserted in tests) and the now-unused logger binding/logging import; the module no longer logs.
-#   PREVIOUS_CHANGE: v1.1.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Bootstrap the database schema from scratch (fresh database, test fixtures, CI) in a single transactional apply — idempotent so repeated invocation does not corrupt existing databases.
+# SCOPE: One-shot schema.sql application via pg8000 for CLI init and test fixtures.
+# DEPENDENCIES: USES API: pg8000.Connection, READS: schema.sql via sql_loader
+# KEYWORDS: schema, apply, postgres, ddl
+# endregion MODULE_CONTRACT
 
 import contextlib
 
@@ -26,19 +14,16 @@ from pg8000.native import Connection
 from .db_config import PostgresDbConfig
 from .sql_loader import load_query
 
+__all__ = ["apply_schema"]
 
-# START_CONTRACT: apply_schema
-#   PURPOSE: Apply schema.sql to a PostgreSQL database in a single transaction.
-#   INPUTS: { config: PostgresDbConfig - database connection parameters }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates tables; opens/closes a pg8000 connection; prints on "already exists".
-#   LINKS: M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG, pg8000.native.Connection
-# END_CONTRACT: apply_schema
+
+# region FUNC_apply_schema
+# PURPOSE: Bootstrap the database from scratch — apply all DDL in one transaction so CI, test fixtures, and fresh deployments start with a consistent schema without manual setup.
 def apply_schema(config: PostgresDbConfig) -> None:
     """Apply schema."""
     conn: Connection | None = None
     try:
-        # START_BLOCK_OPEN_CONNECTION
+        # region BLOCK_open_connection
         conn = Connection(
             user=config.user,
             host=config.host,
@@ -46,35 +31,38 @@ def apply_schema(config: PostgresDbConfig) -> None:
             port=config.port,
             password=config.password,
         )
-        # END_BLOCK_OPEN_CONNECTION
+        # endregion BLOCK_open_connection
 
-        # START_BLOCK_APPLY_SCHEMA
+        # region BLOCK_apply_schema
         schema_sql = load_query("schema")
         conn.run("BEGIN")
         conn.run(schema_sql)
         conn.run("COMMIT")
-        # END_BLOCK_APPLY_SCHEMA
+        # endregion BLOCK_apply_schema
 
     except DatabaseError as e:
-        # START_BLOCK_HANDLE_EXISTING
+        # region BLOCK_handle_existing
         if conn is not None:
             with contextlib.suppress(Exception):
                 conn.run("ROLLBACK")
         if "already exists" in str(e.args[0]):
             pass
         raise
-        # END_BLOCK_HANDLE_EXISTING
+        # endregion BLOCK_handle_existing
 
     except BaseException:
-        # START_BLOCK_ROLLBACK
+        # region BLOCK_rollback
         if conn is not None:
             with contextlib.suppress(Exception):
                 conn.run("ROLLBACK")
         raise
-        # END_BLOCK_ROLLBACK
+        # endregion BLOCK_rollback
 
     finally:
-        # START_BLOCK_CLOSE
+        # region BLOCK_close
         if conn is not None:
             conn.close()
-        # END_BLOCK_CLOSE
+        # endregion BLOCK_close
+
+
+# endregion FUNC_apply_schema

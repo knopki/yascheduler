@@ -1,27 +1,12 @@
 """Domain events for task lifecycle transitions."""
-# FILE: yascheduler/domain/events.py
-# VERSION: 1.4.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Domain events for task lifecycle transitions.
-#   SCOPE: Lifecycle event types (DomainEvent base, TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned) and the Event union.
-#   DEPENDS: none
-#   LINKS: M-DOMAIN-MODEL
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   DomainEvent - Base frozen dataclass with task_id (TaskId), webhook_url, webhook_custom_params (all required)
-#   TaskCreated - Task submitted event with engine_name
-#   TaskAllocated - Task assigned to node with node_id (NodeId) and engine_name
-#   TaskCompleted - Task finished with local_folder
-#   TaskFailed - Task failed with reason
-#   TaskAbandoned - Task abandoned on lost node with node_id (NodeId)
-#   Event - Union type alias of all event types
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - Remove TaskCompleted.has_errors (unused; every complete path was a success, errors go through fail -> TaskFailed). Webhook wire format unaffected (webhook_handler does not read has_errors).
-#   PREVIOUS_CHANGE: v1.3.0 - TaskAllocated and TaskAbandoned replace node_ip: str with node_id: NodeId (the node identity, not the transport address). NodeId imported under TYPE_CHECKING alongside TaskId.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Record task lifecycle transitions as immutable values so the UoW can dispatch webhooks/handlers without re-querying aggregates.
+# SCOPE:
+# - DomainEvent base + TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned, and the Event union alias.
+# - NOT: event dispatch (application.message_bus) or webhook wire format (infra.notifier).
+# INVARIANTS: Every event is frozen; task_id is always present.
+# KEYWORDS: domain event, lifecycle, webhook, TaskCreated, TaskAllocated, TaskCompleted, TaskFailed, TaskAbandoned
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -30,6 +15,16 @@ from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from .model import NodeId, TaskId
+
+__all__ = [
+    "DomainEvent",
+    "Event",
+    "TaskAbandoned",
+    "TaskAllocated",
+    "TaskCompleted",
+    "TaskCreated",
+    "TaskFailed",
+]
 
 
 @dataclass(frozen=True)

@@ -1,28 +1,14 @@
-# FILE: tests/unit/test_cli_smoke.py
-# VERSION: 2.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: CLI smoke tests — verify all six CLI entry points are importable, structurally correct, and reference their expected DI factory.
-#   SCOPE: Import-level smoke tests: no real DB/SSH needed, just verify function existence, no __wrapped__ attribute, and the expected factory is referenced in source (make_daemon for daemonize, make_cli_deps for the four CLI commands, apply_schema/Config.from_config_parser for init).
-#   DEPENDS: M-CLI-COMMANDS, M-ENTRYPOINTS-CLI-INIT, M-ENTRYPOINTS-CLI-SHOW-NODES, M-ENTRYPOINTS-CLI-SUBMIT, M-ENTRYPOINTS-CLI-MANAGE-NODE, M-ENTRYPOINTS-CLI-CHECK-STATUS
-#   LINKS: M-CLI-COMMANDS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestCLIFunctions - One smoke test per entry point (daemonize, init, show_nodes, submit, manage_node, check_status)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - consolidate-daemon-entrypoints: restructured into 6 smoke tests (one per entry point); each asserts callable(f), not hasattr(f, "__wrapped__"), and that source references the expected factory (make_daemon for daemonize, make_cli_deps for the four CLI commands, apply_schema/Config.from_config_parser for init); daemonize now imported from entrypoints/cli/daemonize (infra/cli liquidated).
-#   PREVIOUS_CHANGE: v1.7.0 - Drop test_check_status_function_exists (check_status moved to entrypoints/cli/check_status.py in relocate-check-status-command; covered by tests/unit/test_cli_check_status.py).
-# END_CHANGE_SUMMARY
-
 """CLI smoke tests: verify all six CLI entry points are importable and structurally correct.
 
 Import-level smoke tests — verify that importing and inspecting each CLI entry point
 doesn't crash (no real DB/SSH needed). Each entry point must be a plain synchronous
 function (no @to_sync __wrapped__ attribute) and reference its expected DI factory.
 """
+# region MODULE_CONTRACT
+# PURPOSE: CLI smoke tests — verify all six CLI entry points are importable, structurally correct, and reference their expected DI factory.
+# SCOPE: Import-level smoke tests: no real DB/SSH needed, just verify function existence, no __wrapped__ attribute, and the expected factory is referenced in source (make_daemon for daemonize, make_cli_deps for the four CLI commands, apply_schema/Config.from_config_parser for init).
+# KEYWORDS: CLI smoke, importable, entry points, DI factory
+# endregion MODULE_CONTRACT
 
 import inspect
 

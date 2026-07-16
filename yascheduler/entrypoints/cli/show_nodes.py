@@ -1,29 +1,9 @@
 """yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output."""
-# FILE: yascheduler/entrypoints/cli/show_nodes.py
-# VERSION: 1.5.0
-# START_MODULE_CONTRACT
-#   PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags and table/JSON output.
-#   SCOPE: show_nodes command — list nodes and running tasks.
-#   DEPENDS: M-DI, M-ENTRYPOINTS-CONFIG, M-DOMAIN-MODEL, M-SHARED, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES, M-APPLICATION-UOW
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   show_nodes - Sync entry point: asyncio.run(_show_nodes_async(argv))
-#   _show_nodes_async - Parse flags, read nodes+tasks, filter, render, print; exit 0/1/2
-#   _parse_nodes_args - Parse yanodes argparse flags
-#   _fetch_nodes_view - Read nodes+tasks within one UoW, join in memory
-#   _filter_rows - AND-compose active filters
-#   _render_nodes_table - Fixed-width text table renderer
-#   _render_nodes_json - Raw-domain-values JSON renderer
-#   _NodeView - Private CLI-only node+task projection DTO
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.5.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v1.6.0 - _NodeView.ncpus widens to int | None; table renderer maps None (and legacy 0) to "MAX"; JSON schema docstring updated to int | null.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: yanodes CLI command — list nodes and their running tasks with filter flags (enabled/disabled/busy/free/cloud/no-cloud) and table/JSON output.
+# SCOPE: show_nodes command — list nodes with filter flags (enabled/disabled, busy/free, cloud/no-cloud) and table/JSON output.
+# KEYWORDS: nodes, cli, list, filter, table, json
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -117,27 +97,20 @@ def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     add_config_arg(parser)
     add_log_level_arg(parser, default="WARNING")
-    # START_BLOCK_PARSE_ARGS
+    # region BLOCK_parse_args
     return parser.parse_args(argv)
-    # END_BLOCK_PARSE_ARGS
+    # endregion BLOCK_parse_args
 
 
-# START_CONTRACT: _fetch_nodes_view
-#   PURPOSE: Read nodes and running tasks within one UoW and join them in memory into a list of _NodeView.
-#   INPUTS: { uow: AbstractUnitOfWork - open UoW }
-#   OUTPUTS: { list[_NodeView] - one per node, in list_all() order }
-#   SIDE_EFFECTS: Reads nodes and tasks from DB within one UoW.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL
-#   NOTE: Promotion to application/query_nodes.py awaits a second consumer; today the daemon tracks
-#         occupancy via ConnectedMachine/AllocationTracker and the client does not query nodes.
-# END_CONTRACT: _fetch_nodes_view
+# region FUNC__fetch_nodes_view
+# PURPOSE: Read nodes and running tasks within one UoW and join them in memory into a list of _NodeView.
 async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
-    # START_BLOCK_READ_NODES
+    # region BLOCK_read_nodes
     logger.debug("READ", extra={"detail": "nodes and running tasks"})
     tasks = await uow.tasks.list_by_status(statuses={TaskStatus.RUNNING})
     nodes = await uow.nodes.list_all()
-    # END_BLOCK_READ_NODES
-    # START_BLOCK_JOIN
+    # endregion BLOCK_read_nodes
+    # region BLOCK_join
     # Single pass O(m) build; the one-RUNNING-task-per-node invariant means a later task
     # on the same node would overwrite, but the invariant forbids that. If it ever relaxes,
     # this becomes a dict[NodeId, list[Task]] and the row/object shape changes together.
@@ -167,12 +140,15 @@ async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
                 label=task.label if task else None,
             ),
         )
-    # END_BLOCK_JOIN
+    # endregion BLOCK_join
     return rows
 
 
+# endregion FUNC__fetch_nodes_view
+
+
 def _filter_rows(rows: list[_NodeView], args: argparse.Namespace) -> list[_NodeView]:
-    # START_BLOCK_FILTER
+    # region BLOCK_filter
     predicates: list[Callable[[_NodeView], bool]] = []
     if args.enabled and not args.disabled:
         predicates.append(lambda r: r.enabled is True)
@@ -187,18 +163,13 @@ def _filter_rows(rows: list[_NodeView], args: argparse.Namespace) -> list[_NodeV
     if args.no_cloud and args.cloud is None:
         predicates.append(lambda r: r.cloud is None)
     return [r for r in rows if all(pred(r) for pred in predicates)]
-    # END_BLOCK_FILTER
+    # endregion BLOCK_filter
 
 
-# START_CONTRACT: _render_nodes_table
-#   PURPOSE: Render rows as a fixed-width text table with display transformations.
-#   INPUTS: { rows: list[_NodeView] }
-#   OUTPUTS: { str - table text with header + one row per node }
-#   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
-# END_CONTRACT: _render_nodes_table
+# region FUNC__render_nodes_table
+# PURPOSE: Render rows as a fixed-width text table with display transformations.
 def _render_nodes_table(rows: list[_NodeView]) -> str:
-    # START_BLOCK_RENDER_TABLE
+    # region BLOCK_render_table
     headers = [
         "NODE_ID",
         "HOSTNAME",
@@ -233,18 +204,16 @@ def _render_nodes_table(rows: list[_NodeView]) -> str:
         for line in all_rows
     ]
     return "\n".join(lines)
-    # END_BLOCK_RENDER_TABLE
+    # endregion BLOCK_render_table
 
 
-# START_CONTRACT: _render_nodes_json
-#   PURPOSE: Render rows as a JSON list of objects with raw domain values (no display transformations).
-#   INPUTS: { rows: list[_NodeView] }
-#   OUTPUTS: { str - JSON text }
-#   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
-# END_CONTRACT: _render_nodes_json
+# endregion FUNC__render_nodes_table
+
+
+# region FUNC__render_nodes_json
+# PURPOSE: Render rows as a JSON list of objects with raw domain values (no display transformations).
 def _render_nodes_json(rows: list[_NodeView]) -> str:
-    # START_BLOCK_RENDER_JSON
+    # region BLOCK_render_json
     objects = [
         {
             "node_id": r.node_id.value,
@@ -269,30 +238,28 @@ def _render_nodes_json(rows: list[_NodeView]) -> str:
         for r in rows
     ]
     return json.dumps(objects, indent=2)
-    # END_BLOCK_RENDER_JSON
+    # endregion BLOCK_render_json
 
 
-# START_CONTRACT: _show_nodes_async
-#   PURPOSE: Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2.
-#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
-#   OUTPUTS: None - prints to stdout, calls sys.exit on failure.
-#   SIDE_EFFECTS: Opens a UoW for reading, prints output, may call sys.exit(1).
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES, M-DI, M-APPLICATION-UOW
-# END_CONTRACT: _show_nodes_async
+# endregion FUNC__render_nodes_json
+
+
+# region FUNC__show_nodes_async
+# PURPOSE: Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2.
 async def _show_nodes_async(argv: list[str] | None) -> None:
     args = _parse_nodes_args(argv)
-    # START_BLOCK_HANDLE_FAILURE
+    # region BLOCK_handle_failure
     try:
-        # START_BLOCK_CONFIGURE_LOGGER
+        # region BLOCK_configure_logger
         root = logging.getLogger()
         root.setLevel(logging.getLevelName(args.log_level))
         if not root.handlers:
             root.addHandler(logging.StreamHandler(sys.stderr))
-        # END_BLOCK_CONFIGURE_LOGGER
+        # endregion BLOCK_configure_logger
 
         config = parse_config(args.config)
         deps = make_cli_deps(config)
-        # START_BLOCK_ORCHESTRATE
+        # region BLOCK_orchestrate
         async with deps.uow_factory() as uow:
             rows = await _fetch_nodes_view(uow)
         rows = _filter_rows(rows, args)
@@ -300,24 +267,24 @@ async def _show_nodes_async(argv: list[str] | None) -> None:
             sys.stdout.write(f"{_render_nodes_json(rows)}\n")
         else:
             sys.stdout.write(f"{_render_nodes_table(rows)}\n")
-        # END_BLOCK_ORCHESTRATE
+        # endregion BLOCK_orchestrate
     except Exception as e:
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
-    # END_BLOCK_HANDLE_FAILURE
+    # endregion BLOCK_handle_failure
 
 
-# START_CONTRACT: show_nodes
-#   PURPOSE: Sync entry point — run _show_nodes_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
-#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
-#   OUTPUTS: { None - delegates to asyncio.run }
-#   SIDE_EFFECTS: Starts a fresh event loop via asyncio.run.
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
-# END_CONTRACT: show_nodes
+# endregion FUNC__show_nodes_async
+
+
+# region FUNC_show_nodes
+# PURPOSE: Sync entry point — run _show_nodes_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
 def show_nodes(argv: list[str] | None = None) -> None:
     """Sync entry point — run _show_nodes_async via asyncio."""
     asyncio.run(_show_nodes_async(argv))
 
+
+# endregion FUNC_show_nodes
 
 if __name__ == "__main__":
     show_nodes()

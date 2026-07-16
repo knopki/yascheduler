@@ -1,30 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway_write_remote_file.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for _write_remote_file exception contract (fix-write-remote-file-swallow).
-#   SCOPE: Non-SFTP exception propagates (not swallowed); asyncssh.misc.Error logged with
-#     structured code/reason and re-raised; start_task_on_machine aborts spawn on upload failure;
-#     successful write returns normally and the per-file loop continues.
-#   DEPENDS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-DOMAIN-MODEL
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestWriteRemoteFilePropagation - non-SFTP and SFTP exceptions propagate per the spec contract
-#   TestStartTaskAbortOnUploadFailure - upload failure aborts spawn (no _exec_spawn_command)
-#   TestSuccessfulWrite - success path returns normally and the loop continues
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: repository._machines → repository._sessions; start_task_on_machine takes session (was machine); _upload_task_data takes session (was ip); _make_sftp_state returns SSHMachineSession; wiring on session._conn (was state.conn).
-#   PREVIOUS_CHANGE: v1.0.1 - Add test_open_failure_propagates covering a non-SFTP exception raised by sftp.open() (same try block as f.write; gap surfaced by the bug-hunt review of v1.0.0). Helper _make_sftp_state gains an open_side_effect parameter.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for fix-write-remote-file-swallow: non-SFTP exception
-#     propagation through _write_remote_file / _upload_task_data; asyncssh.misc.Error structured
-#     log + re-raise; start_task_on_machine abort contract (spawn not called on upload failure);
-#     successful write + loop continuation.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for _write_remote_file exception contract (fix-write-remote-file-swallow).
+# SCOPE: Non-SFTP exception propagates (not swallowed); asyncssh.misc.Error logged with structured code/reason and re-raised; start_task_on_machine aborts spawn on upload failure; successful write returns normally and the per-file loop continues.
+# KEYWORDS: _write_remote_file, exception contract, spawn abort
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

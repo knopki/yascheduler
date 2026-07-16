@@ -1,21 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway_operations.py
-# VERSION: 2.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for OccupancyChecker — occupancy check via pgrep/check_cmd, start_occupancy_check background task.
-#   SCOPE: occupancy_check via pgrep/check_cmd, start_occupancy_check background task.
-#   DEPENDS: M-SSH-OPS-OCCUPANCY, M-SSH-SESSION
-#   LINKS: M-SSH-OPS-OCCUPANCY, M-SSH-SESSION
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestOccupancy - occupancy_check via pgrep/check_cmd, start_occupancy_check background task
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - dissolve-machine-operations-facade: SSHMachineOperations deleted; tests use OccupancyChecker directly.
-#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: operations facade takes session instead of ip/machine. Removed pgrep/list_processes/unknown-IP tests (those primitives now live on the session and the facade no longer IP-keys). start_occupancy_check patch target moves from repository.asyncio.sleep to session.asyncio.sleep; monitor task accessed via session._monitor_task.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for OccupancyChecker — occupancy check via pgrep/check_cmd, start_occupancy_check background task.
+# SCOPE: occupancy_check via pgrep/check_cmd, start_occupancy_check background task.
+# KEYWORDS: OccupancyChecker, pgrep, check_cmd, occupancy check
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

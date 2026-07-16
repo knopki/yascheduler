@@ -1,27 +1,3 @@
-# FILE: tests/integration/test_task_status_field_check.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for the task_status_field_invariants CHECK constraint on yascheduler_tasks against real PostgreSQL.
-#   SCOPE: CHECK rejects forbidden INSERT (TO_DO + allocated_node_id), forbidden UPDATE (RUNNING → allocated_node_id NULL), TO_DO + error, RUNNING + NULL remote_folder; bare DELETE FROM yascheduler_nodes on a node with a RUNNING task is rejected (ON DELETE SET NULL cascade violates the RUNNING row); the hard-remove path (update_status DONE then nodes.remove) succeeds.
-#   DEPENDS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-UOW, M-DOMAIN-MODEL
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-UOW
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_check_rejects_todo_with_allocated_node_id - INSERT TO_DO + allocated_node_id raises a CHECK violation referencing task_status_field_invariants
-#   test_check_rejects_running_allocated_node_id_null - UPDATE RUNNING SET allocated_node_id = NULL raises a CHECK violation
-#   test_check_rejects_todo_with_error - INSERT TO_DO + error raises a CHECK violation
-#   test_check_rejects_running_with_null_remote_folder - INSERT RUNNING + allocated_node_id + remote_folder=NULL raises a CHECK violation
-#   test_check_rejects_bare_node_delete_with_running_task - DELETE FROM yascheduler_nodes on a node with a RUNNING task is rejected; both rows remain
-#   test_hard_remove_path_succeeds_with_running_task - update_status(DONE) then nodes.remove succeeds when the node has a RUNNING task (rows are DONE before the FK cascade fires)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - node-rename-and-fields: _insert_node uses hostname column (migration 012 renamed ip→hostname).
-#   PREVIOUS_CHANGE: v1.0.0 - task-status-field-invariants: initial CHECK-rejection integration tests (forbidden INSERT/UPDATE, TO_DO+error, RUNNING+NULL remote_folder, bare node DELETE rejected, hard-remove path succeeds).
-# END_CHANGE_SUMMARY
-
 """Integration tests for the task_status_field_invariants CHECK constraint.
 
 Covers the spec scenarios in
@@ -36,6 +12,11 @@ openspec/changes/task-status-field-invariants/specs/db-migrations/spec.md:
 * the hard-remove path (update_status DONE then nodes.remove) succeeds
   because the rows are DONE by the time the FK cascade fires
 """
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for the task_status_field_invariants CHECK constraint on yascheduler_tasks against real PostgreSQL.
+# SCOPE: CHECK rejects forbidden INSERT (TO_DO + allocated_node_id), forbidden UPDATE (RUNNING → allocated_node_id NULL), TO_DO + error, RUNNING + NULL remote_folder; bare DELETE FROM yascheduler_nodes on a node with a RUNNING task is rejected (ON DELETE SET NULL cascade violates the RUNNING row); the hard-remove path (update_status DONE then nodes.remove) succeeds.
+# KEYWORDS: CHECK constraint, task_status_field_invariants, ON DELETE SET NULL
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -74,13 +55,6 @@ def _insert_node(conn: pg8000.native.Connection, hostname: str = "10.0.0.1") -> 
     return int(rows[0][0])
 
 
-# START_CONTRACT: test_check_rejects_todo_with_allocated_node_id
-#   PURPOSE: Assert the CHECK rejects an INSERT of TO_DO + allocated_node_id (TO_DO requires allocated_node_id IS NULL).
-#   INPUTS: { pg_conn: pg8000 connection }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Inserts a node (to satisfy the FK) then a forbidden task row; expects a CHECK violation.
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_check_rejects_todo_with_allocated_node_id
 async def test_check_rejects_todo_with_allocated_node_id(
     pg_conn: pg8000.native.Connection,
 ) -> None:
@@ -95,13 +69,6 @@ async def test_check_rejects_todo_with_allocated_node_id(
     assert _CONSTRAINT in str(excinfo.value), str(excinfo.value)
 
 
-# START_CONTRACT: test_check_rejects_running_allocated_node_id_null
-#   PURPOSE: Assert the CHECK rejects UPDATE RUNNING SET allocated_node_id = NULL (RUNNING requires allocated_node_id IS NOT NULL).
-#   INPUTS: { pg_conn: pg8000 connection }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Inserts a node + a valid RUNNING task; attempts a forbidden UPDATE; expects a CHECK violation.
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_check_rejects_running_allocated_node_id_null
 async def test_check_rejects_running_allocated_node_id_null(
     pg_conn: pg8000.native.Connection,
 ) -> None:
@@ -120,13 +87,6 @@ async def test_check_rejects_running_allocated_node_id_null(
     assert _CONSTRAINT in str(excinfo.value), str(excinfo.value)
 
 
-# START_CONTRACT: test_check_rejects_todo_with_error
-#   PURPOSE: Assert the CHECK rejects an INSERT of TO_DO + error (TO_DO requires error IS NULL).
-#   INPUTS: { pg_conn: pg8000 connection }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Inserts a forbidden task row; expects a CHECK violation.
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_check_rejects_todo_with_error
 async def test_check_rejects_todo_with_error(
     pg_conn: pg8000.native.Connection,
 ) -> None:
@@ -139,13 +99,6 @@ async def test_check_rejects_todo_with_error(
     assert _CONSTRAINT in str(excinfo.value), str(excinfo.value)
 
 
-# START_CONTRACT: test_check_rejects_running_with_null_remote_folder
-#   PURPOSE: Assert the CHECK rejects an INSERT of RUNNING + allocated_node_id + remote_folder=NULL (RUNNING requires remote_folder IS NOT NULL).
-#   INPUTS: { pg_conn: pg8000 connection }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Inserts a node + a forbidden RUNNING task row; expects a CHECK violation.
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_check_rejects_running_with_null_remote_folder
 async def test_check_rejects_running_with_null_remote_folder(
     pg_conn: pg8000.native.Connection,
 ) -> None:
@@ -160,13 +113,6 @@ async def test_check_rejects_running_with_null_remote_folder(
     assert _CONSTRAINT in str(excinfo.value), str(excinfo.value)
 
 
-# START_CONTRACT: test_check_rejects_bare_node_delete_with_running_task
-#   PURPOSE: Assert a bare DELETE FROM yascheduler_nodes on a node with a RUNNING task is rejected by the CHECK (the ON DELETE SET NULL cascade would NULL the RUNNING row's allocated_node_id). Both rows remain after the rejected DELETE.
-#   INPUTS: { pg_conn: pg8000 connection }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Inserts a node + a RUNNING task referencing it; attempts a bare node DELETE; expects a CHECK violation; verifies both rows remain.
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_check_rejects_bare_node_delete_with_running_task
 async def test_check_rejects_bare_node_delete_with_running_task(
     pg_conn: pg8000.native.Connection,
 ) -> None:
@@ -203,13 +149,6 @@ async def test_check_rejects_bare_node_delete_with_running_task(
     assert task_row[0][2] == node_id
 
 
-# START_CONTRACT: test_hard_remove_path_succeeds_with_running_task
-#   PURPOSE: Assert the hard-remove path (update_status DONE then nodes.remove) succeeds without CHECK violation when the node has a RUNNING task — the rows are DONE before the FK cascade fires.
-#   INPUTS: { uow_factory: Callable[[], PostgresUnitOfWork] }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Inserts a node + a RUNNING task; runs update_status(DONE) then nodes.remove(node_id); verifies the node is gone and the task is DONE with allocated_node_id NULL.
-#   LINKS: M-PERSISTENCE-UOW, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_hard_remove_path_succeeds_with_running_task
 async def test_hard_remove_path_succeeds_with_running_task(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:

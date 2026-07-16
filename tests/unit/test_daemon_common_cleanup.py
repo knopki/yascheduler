@@ -1,27 +1,9 @@
-# FILE: tests/unit/test_daemon_common_cleanup.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for run_daemon's try/finally cleanup guarantee (fix-daemon-resource-leak-on-start-return).
-#   SCOPE: orch.stop() runs on every exit path — normal start() return, start() raising, signal-then-finally no-op,
-#          and make_daemon success + start() raising still cleans up early bg jobs. make_daemon is mocked.
-#   DEPENDS: M-DAEMON-COMMON
-#   LINKS: M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_real_orchestrator - Build a real Orchestrator with mocked deps + injectable start/http_session
-#   _capture_signal_handlers - override loop.add_signal_handler to record SIGTERM/SIGINT handler callables
-#   TestStartReturnsNormallyCallsStop - start() returns normally -> finally calls stop() once
-#   TestStartRaisesStillCallsStop - start() raises -> finally still calls stop(), exception propagates
-#   TestSignalHandlerThenFinallyIsNoop - signal handler runs stop() first; finally's stop() is a no-op
-#   TestMakeDaemonStartRaisesCleansEarlyJobs - finally's stop() cancels early bg jobs + closes http_session
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for run_daemon try/finally cleanup guarantee (fix-daemon-resource-leak-on-start-return).
-# END_CHANGE_SUMMARY
 """Unit tests for run_daemon's try/finally cleanup guarantee."""
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for run_daemon's try/finally cleanup guarantee (fix-daemon-resource-leak-on-start-return).
+# SCOPE: orch.stop() runs on every exit path — normal start() return, start() raising, signal-then-finally no-op, and make_daemon success + start() raising still cleans up early bg jobs. make_daemon is mocked.
+# KEYWORDS: run_daemon, try/finally, orch.stop, cleanup guarantee
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -186,7 +168,6 @@ class TestStartRaisesStillCallsStop:
 
 class TestSignalHandlerThenFinallyIsNoop:
     async def test_signal_handler_then_finally_is_noop(self) -> None:
-        # START_BLOCK_TEST_SIGNAL_HANDLER_THEN_FINALLY_IS_NOOP
         # Use a real Orchestrator so its _stopped guard makes the second
         # stop() call a genuine no-op (rather than a hand-rolled simulation).
         clouds_stop = AsyncMock()
@@ -231,7 +212,6 @@ class TestSignalHandlerThenFinallyIsNoop:
         disconnect_all.assert_awaited_once()
         assert orch._stopped is True
         assert orch._http_session is None
-        # END_BLOCK_TEST_SIGNAL_HANDLER_THEN_FINALLY_IS_NOOP
 
 
 # =============================================================================
@@ -241,7 +221,6 @@ class TestSignalHandlerThenFinallyIsNoop:
 
 class TestMakeDaemonStartRaisesCleansEarlyJobs:
     async def test_make_daemon_success_start_raises_cleans_early_jobs(self) -> None:
-        # START_BLOCK_TEST_MAKE_DAEMON_SUCCESS_START_RAISES_CLEANS_EARLY_JOBS
         # Real Orchestrator: start() raises after an early bg job is registered,
         # and the finally's stop() must cancel that job and close http_session.
         clouds_stop = AsyncMock()
@@ -276,4 +255,3 @@ class TestMakeDaemonStartRaisesCleansEarlyJobs:
         http_session.close.assert_awaited_once()
         clouds_stop.assert_awaited_once()
         disconnect_all.assert_awaited_once()
-        # END_BLOCK_TEST_MAKE_DAEMON_SUCCESS_START_RAISES_CLEANS_EARLY_JOBS

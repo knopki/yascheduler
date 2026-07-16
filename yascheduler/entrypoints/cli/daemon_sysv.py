@@ -1,23 +1,11 @@
 #!/usr/bin/env python
 """Yascheduler SysV init daemon entry point (detached via python-daemon)."""
-# FILE: yascheduler/entrypoints/cli/daemon_sysv.py
-# VERSION: 2.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: SysV init service entry point for the scheduler daemon — runs detached via python-daemon with PID file management.
-#   SCOPE: SysV daemon launcher with DaemonContext and PID file management.
-#   DEPENDS: M-DAEMON-COMMON, M-ENTRYPOINTS-CLI-ARGS, M-ENTRYPOINTS-CONFIG-PARSER, M-ENTRYPOINTS
-#   LINKS: M-DAEMON-SYSV, M-DAEMON-COMMON
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   main - Thin sync entry point: parse args, open DaemonContext, inside it configure logger + load Config + asyncio.run(run_daemon); exit 0/1/2
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.1.0 - Import LOG_FILE/PID_FILE from yascheduler.entrypoints facade instead of yascheduler.shared.
-#   PREVIOUS_CHANGE: v2.0.0 - Reimplemented as a thin entry point: builds its own argparse parser via args.py helpers; delegates to daemon_common.run_daemon; DaemonContext working_directory="/" (was os.path.dirname(__file__) — bug D); configure_logger called INSIDE the context so FileHandler opens the daemon's fd; uniform 0/1/2 exit-code contract; fixes the -l short-flag collision (each launcher parses once, no sys.argv re-parse).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: SysV init service entry point for the scheduler daemon — runs detached via python-daemon with PID file management.
+# SCOPE: SysV daemon launcher with DaemonContext and PID file management.
+# INVARIANTS: Executable file with shebang.
+# KEYWORDS: sysv, daemon, entrypoint, detached, pidfile
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -36,16 +24,11 @@ from .args import add_config_arg, add_log_level_arg
 from .daemon_common import configure_logger, run_daemon
 
 
-# START_CONTRACT: main
-#   PURPOSE: Start the daemon detached via python-daemon with PID file management; exit 0/1/2.
-#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv }
-#   OUTPUTS: { None - runs the event loop until stopped; prints Error: ... to stderr and calls sys.exit(1) on runtime failure }
-#   SIDE_EFFECTS: Parses argv, opens DaemonContext, configures logger, loads Config, runs async daemon core; may call sys.exit(1).
-#   LINKS: M-DAEMON-SYSV, M-DAEMON-COMMON
-# END_CONTRACT: main
+# region FUNC_main
+# PURPOSE: Start the daemon detached via python-daemon with PID file management; exit 0/1/2.
 def main(argv: list[str] | None = None) -> None:
     """Start the daemon detached via python-daemon with PID file management; exit 0/1/2."""
-    # START_BLOCK_PARSE_ARGS
+    # region BLOCK_parse_args
     parser = argparse.ArgumentParser(
         prog="yascheduler",
         description="Start the yascheduler daemon (SysV init)",
@@ -68,11 +51,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Path to the PID file (default: %(default)s)",
     )
     args = parser.parse_args(argv)
-    # END_BLOCK_PARSE_ARGS
+    # endregion BLOCK_parse_args
 
-    # START_BLOCK_HANDLE_FAILURE
+    # region BLOCK_handle_failure
     try:
-        # START_BLOCK_DAEMON_CONTEXT
+        # region BLOCK_daemon_context
         # working_directory="/" is the python-daemon default and the convention for
         # system daemons; the previous os.path.dirname(__file__) made relative paths
         # resolve against an unreadable CWD (bug D).
@@ -89,14 +72,16 @@ def main(argv: list[str] | None = None) -> None:
             )
             config = parse_config(args.config)
             asyncio.run(run_daemon(config, logger))
-        # END_BLOCK_DAEMON_CONTEXT
+        # endregion BLOCK_daemon_context
     except SystemExit:
         raise
     except Exception as e:
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
-    # END_BLOCK_HANDLE_FAILURE
+    # endregion BLOCK_handle_failure
 
+
+# endregion FUNC_main
 
 if __name__ == "__main__":
     main()

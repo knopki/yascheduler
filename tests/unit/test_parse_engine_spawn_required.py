@@ -1,21 +1,8 @@
-# FILE: tests/unit/test_parse_engine_spawn_required.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Assert parse_engine_section raises ValueError (not AttributeError) when spawn is missing (D2).
-#   SCOPE: Missing-spawn ValueError hoist; spawn-present happy path.
-#   DEPENDS: M-ENTRYPOINTS-CONFIG-PARSER, M-DOMAIN-ENGINE
-#   LINKS: M-ENTRYPOINTS-CONFIG-PARSER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_parse_engine_section_raises_value_error_on_missing_spawn  - missing spawn → ValueError naming the engine
-#   test_parse_engine_section_does_not_raise_when_spawn_present    - spawn present → Engine.spawn == the value
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Assert missing-spawn raises ValueError (not AttributeError) from the hoisted check in parse_engine_section (resolve-type-bridge-debt / D2).
-#   PREVIOUS_CHANGE: none
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Assert parse_engine_section raises ValueError (not AttributeError) when spawn is missing (D2).
+# SCOPE: Missing-spawn ValueError hoist; spawn-present happy path.
+# KEYWORDS: parse_engine_section, spawn, ValueError, AttributeError
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

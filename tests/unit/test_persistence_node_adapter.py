@@ -1,22 +1,8 @@
-# FILE: tests/unit/test_persistence_node_adapter.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for PostgresNodeRepository CRUD via mocked _run.
-#   SCOPE: Fake _run-based test doubles; node get, insert, update, enable/disable/remove.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_node_row - build a fake _run row dict for a Node with sensible defaults
-#   TestPostgresNodeRepository - node CRUD via mocked _run; includes ncpus-None round-trip tests
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Node-ncpus-as-config: rename test_get_with_zero_ncpus→test_get_handles_null_ncpus (asserts is None); add test_get_handles_positive_ncpus_unchanged, test_insert_with_none_ncpus_returns_none.
-#   PREVIOUS_CHANGE: v1.0.0 - Extracted from test_persistence_adapter.py (GRACE-lite 1000-line limit compliance).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for PostgresNodeRepository CRUD via mocked _run.
+# SCOPE: PostgresNodeRepository CRUD via mocked _run fake — get, insert, update, enable/disable/remove.
+# KEYWORDS: PostgresNodeRepository, CRUD, fake _run
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

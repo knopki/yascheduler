@@ -1,28 +1,9 @@
-# FILE: tests/unit/test_orchestrator_producer_resilience.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for orchestrator producer/stats error resilience (fix-orchestrator-producer-silent-death).
-#   SCOPE: producer Exception → loop continues; producer CancelledError → graceful-drain path preserved;
-#          worker registration in self._bg_jobs; stop() cancels workers; double-cancel idempotent;
-#          _print_stats Exception → loop continues; _print_stats CancelledError → propagates.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR
-#   LINKS: M-QUEUE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestProducerResilience - producer Exception is logged and the loop retries next tick
-#   TestCancelledErrorDrain - producer CancelledError reaches the graceful-drain path
-#   TestWorkerRegistration - workers are registered in self._bg_jobs and cancelled by stop()
-#   TestStatsResilience - _print_stats transient errors are logged and the loop continues; CancelledError propagates
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - switch-to-standard-logging: migrate PRODUCER_ERROR/ERROR assertions off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS).
-#   PREVIOUS_CHANGE: v1.0.1 - test_producer_exception_continues_loop: explicitly cancel+await the worker registered in _bg_jobs after the producer loop exits via cancellation_event (normal exit does NOT run the `except CancelledError` drain, so the worker would otherwise remain blocked on queue.get() and emit a PytestUnraisableExceptionWarning "Event loop is closed" at teardown). Matches the explicit-cancel pattern already used in test_workers_registered_in_bg_jobs.
-# END_CHANGE_SUMMARY
-#
 """Unit tests for orchestrator producer and stats error resilience."""
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for orchestrator producer/stats error resilience (fix-orchestrator-producer-silent-death).
+# SCOPE: producer Exception → loop continues; producer CancelledError → graceful-drain path preserved; worker registration in self._bg_jobs; stop() cancels workers; double-cancel idempotent; _print_stats Exception → loop continues; _print_stats CancelledError → propagates.
+# KEYWORDS: producer resilience, CancelledError, _bg_jobs, _print_stats
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

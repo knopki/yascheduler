@@ -1,25 +1,12 @@
 """SSHMachineRepository — connected-machine collection: registration, lifecycle, queries."""
-# FILE: yascheduler/infra/ssh/repository.py
-# VERSION: 2.5.0
-# START_MODULE_CONTRACT
-#   PURPOSE: SSHMachineRepository — connected-machine collection: registration, lifecycle, queries. True collection only — no state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession).
-#   SCOPE: SSHMachineRepository: connected-machine collection lifecycle, keyed by NodeId; connection-building helpers.
-#   DEPENDS: M-DOMAIN, M-DOMAIN-EXCEPTIONS, M-PLATFORM, M-SSH-SESSION
-#   LINKS: M-SSH-REPOSITORY
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   MySSHClient - Insecure SSH client that trusts all host keys (connection-building bit; stays)
-#   DEFAULT_CONN_OPTS - Default SSH connection options (connection-building bit; stays)
-#   _build_tunnel_options - Build SSHClientConnectionOptions from node.jump_* , or None when node.jump_host is None
-#   SSHMachineRepository - Concrete MachineRepository port implementation owning _sessions: dict[NodeId, SSHMachineSession] keyed by NodeId; connect(node)/disconnect(node_id)/get_session(node_id)/contains(node_id); delegates teardown to session._close()
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v2.5.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v2.4.0 - remove log parameter from __init__/signatures; bind module-local logger = get_logger("M-SSH-REPOSITORY") at module top
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: SSHMachineRepository — connected-machine collection keyed by NodeId. True collection only: lifecycle + queries. No state transitions, no accessor getters, no monitor mechanism (all moved to SSHMachineSession).
+# SCOPE:
+# - SSHMachineRepository: connected-machine collection lifecycle, connection-building helpers.
+# - MySSHClient, DEFAULT_CONN_OPTS, _build_tunnel_options connection-building bits.
+# DEPENDENCIES: USES API: asyncssh (SSHClient, connection, options), backoff (retry decorator)
+# KEYWORDS: repository, ssh, machine, collection, lifecycle, SSHMachineRepository
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -50,6 +37,12 @@ if TYPE_CHECKING:
     from pathlib import PurePath
 
     from asyncssh.public_key import SSHKey
+
+__all__ = [
+    "DEFAULT_CONN_OPTS",
+    "MySSHClient",
+    "SSHMachineRepository",
+]
 
 
 class MySSHClient(SSHClient):
@@ -98,10 +91,8 @@ def _build_tunnel_options(
     )
 
 
-# START_CONTRACT: SSHMachineRepository
-#   PURPOSE: Concrete MachineRepository — connected-machine collection. Owns _sessions: dict[NodeId, SSHMachineSession] keyed by NodeId. True collection only: lifecycle + queries. Delegates per-session teardown to session._close(). No state transitions, no accessor getters, no monitor mechanism — all on SSHMachineSession.
-#   LINKS: M-SSH-REPOSITORY, M-DOMAIN-PORTS, M-SSH-SESSION
-# END_CONTRACT: SSHMachineRepository
+# region CLASS_SSHMachineRepository
+# PURPOSE: Concrete MachineRepository — connected-machine collection keyed by NodeId. True collection only: lifecycle + queries.
 class SSHMachineRepository:
     """SSHMachineRepository implementing the MachineRepository Protocol.
 
@@ -120,12 +111,9 @@ class SSHMachineRepository:
 
     # ---- Connection lifecycle ----
 
-    # START_CONTRACT: SSHMachineRepository._open_connection
-    #   PURPOSE: Build SSH options and open connection..
-    #   INPUTS: { hostname, username, client_keys, *, port, connect_timeout, tunnel_opts: SSHClientConnectionOptions | None - pre-built tunnel options from _build_tunnel_options }
-    #   SIDE_EFFECTS: Opens SSH connection.
-    #   LINKS: M-SSH-REPOSITORY
-    # END_CONTRACT: SSHMachineRepository._open_connection
+    # region METHOD__open_connection
+    # PURPOSE: Build SSH options and open connection.
+    @my_backoff_exc()
     async def _open_connection(
         self,
         hostname: str,
@@ -136,7 +124,7 @@ class SSHMachineRepository:
         connect_timeout: int | None = None,
         tunnel_opts: SSHClientConnectionOptions | None = None,
     ) -> tuple[SSHClientConnection, SSHClientConnectionOptions]:
-        # START_BLOCK_BUILD_OPTS
+        # region BLOCK_build_opts
         conn_opts = SSHClientConnectionOptions(
             options=DEFAULT_CONN_OPTS,
             host=hostname,
@@ -147,8 +135,8 @@ class SSHMachineRepository:
             ignore_encrypted=True,
             connect_timeout=connect_timeout,
         )
-        # END_BLOCK_BUILD_OPTS
-        # START_BLOCK_CONNECT
+        # endregion BLOCK_build_opts
+        # region BLOCK_connect
         logger.debug(
             "CONNECT",
             extra={
@@ -164,16 +152,13 @@ class SSHMachineRepository:
             config=[],
             known_hosts=None,
         )
-        # END_BLOCK_CONNECT
+        # endregion BLOCK_connect
         return conn, conn_opts
 
-    # START_CONTRACT: SSHMachineRepository.connect
-    #   PURPOSE: Open an SSH connection and register a MachineSession under node.node_id; translates transport errors into MachineConnectionError.
-    #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir }
-    #   OUTPUTS: { MachineSession - the newly constructed and registered session }
-    #   SIDE_EFFECTS: Opens an SSH connection to node.hostname; registers a MachineSession in _sessions[node.node_id].
-    #   LINKS: M-SSH-REPOSITORY, M-DOMAIN-EXCEPTIONS, M-SSH-SESSION
-    # END_CONTRACT: SSHMachineRepository.connect
+    # endregion METHOD__open_connection
+
+    # region METHOD_connect
+    # PURPOSE: Open an SSH connection and register a MachineSession under node.node_id; translates transport errors into MachineConnectionError.
     async def connect(
         self,
         node: Node,
@@ -204,13 +189,10 @@ class SSHMachineRepository:
         except (asyncssh.misc.Error, OSError) as err:
             raise MachineConnectionError(node.node_id, node.hostname, str(err)) from err
 
-    # START_CONTRACT: SSHMachineRepository._connect_impl
-    #   PURPOSE: Inner connection implementation with backoff retry on SSHRetryExc; constructs and registers the MachineSession.
-    #   INPUTS: { node: Node, client_keys, *, connect_timeout, data_dir, engines_dir, tasks_dir }
-    #   OUTPUTS: { SSHMachineSession - the newly constructed and registered session }
-    #   SIDE_EFFECTS: Opens an SSH connection to node.hostname (login user node.username, port node.port); reads ncpus via adapter.get_cpu_cores and logs it; primes session._cached_ncpus with the discovered value; registers a MachineSession in _sessions[node.node_id].
-    #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
-    # END_CONTRACT: SSHMachineRepository._connect_impl
+    # endregion METHOD_connect
+
+    # region METHOD__connect_impl
+    # PURPOSE: Inner connection implementation with backoff retry on SSHRetryExc; constructs and registers the MachineSession.
     @my_backoff_exc()
     async def _connect_impl(
         self,
@@ -223,9 +205,9 @@ class SSHMachineRepository:
         tasks_dir: PurePath | None = None,
     ) -> MachineSession:
         """Open SSH connection, detect platform, construct SSHMachineSession (inner impl with backoff)."""
-        # START_BLOCK_BUILD_TUNNEL
+        # region BLOCK_build_tunnel
         tunnel_opts = _build_tunnel_options(node, client_keys, connect_timeout)
-        # END_BLOCK_BUILD_TUNNEL
+        # endregion BLOCK_build_tunnel
         conn, conn_opts = await self._open_connection(
             node.hostname,
             node.username,
@@ -234,17 +216,17 @@ class SSHMachineRepository:
             connect_timeout=connect_timeout,
             tunnel_opts=tunnel_opts,
         )
-        # START_BLOCK_DETECT
+        # region BLOCK_detect
         adapter, platforms = await _detect_platform(conn, ADAPTERS)
         logger.debug(
             "DETECT",
             extra={"platform": adapter.platform, "hostname": node.hostname},
         )
-        # END_BLOCK_DETECT
-        # START_BLOCK_PATHS
+        # endregion BLOCK_detect
+        # region BLOCK_paths
         rd, re, rt = _init_paths(adapter, data_dir, engines_dir, tasks_dir)
-        # END_BLOCK_PATHS
-        # START_BLOCK_CREATE_MACHINE
+        # endregion BLOCK_paths
+        # region BLOCK_create_machine
         ncpus = await adapter.get_cpu_cores(make_run_fn(conn, adapter))
         logger.debug("CPUS", extra={"hostname": node.hostname, "ncpus": ncpus})
         logger.info("connected to %s (%d CPUs)", node.hostname, ncpus)
@@ -254,8 +236,8 @@ class SSHMachineRepository:
             state=MachineState.FREE,
             free_since=time.monotonic(),
         )
-        # END_BLOCK_CREATE_MACHINE
-        # START_BLOCK_CREATE_SESSION
+        # endregion BLOCK_create_machine
+        # region BLOCK_create_session
         session = SSHMachineSession(
             hostname=node.hostname,
             conn=conn,
@@ -269,45 +251,39 @@ class SSHMachineRepository:
         )
         session._prime_ncpus_cache(ncpus)  # noqa: SLF001
         self._sessions[node.node_id] = session
-        # END_BLOCK_CREATE_SESSION
+        # endregion BLOCK_create_session
         return session
 
-    # START_CONTRACT: SSHMachineRepository.disconnect
-    #   PURPOSE: Close SSH for node_id and tear down its session. Pops _sessions[node_id] BEFORE awaiting session._close() (pop-before-await ordering preserves the disconnect-scope isolation invariant: a re-entry race cannot re-insert the cancelled task because the session is no longer reachable via the collection).
-    #   INPUTS: { node_id: NodeId - the node whose session to disconnect }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Pops _sessions[node_id] (early return if absent), then awaits session._close() which marks the session closed synchronously, cancels the session's own monitor task, awaits the cancellation, and closes the SSH connection. SHALL NOT touch any other session's monitor.
-    #   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
-    # END_CONTRACT: SSHMachineRepository.disconnect
+    # endregion METHOD__connect_impl
+
+    # region METHOD_disconnect
+    # PURPOSE: Close SSH for node_id and tear down its session. Pops _sessions[node_id] BEFORE awaiting session._close() (pop-before-await ordering preserves disconnect-scope isolation invariant).
     async def disconnect(self, node_id: NodeId) -> None:
         """Pop the session for node_id and delegate teardown to session._close()."""
-        # START_BLOCK_POP_SESSION
+        # region BLOCK_pop_session
         # Pop BEFORE await so a re-entry race cannot re-insert the cancelled task.
         session = self._sessions.pop(node_id, None)
         if session is None:
             return
-        # END_BLOCK_POP_SESSION
-        # START_BLOCK_DELEGATE_CLOSE
+        # endregion BLOCK_pop_session
+        # region BLOCK_delegate_close
         # session._close() sets is_closed=True synchronously before its first await.
         await session._close()  # noqa: SLF001
-        # END_BLOCK_DELEGATE_CLOSE
+        # endregion BLOCK_delegate_close
 
-    # START_CONTRACT: SSHMachineRepository.disconnect_all
-    #   PURPOSE: Disconnect all sessions (iterates a snapshot of NodeId keys).
-    #   LINKS: M-SSH-REPOSITORY
-    # END_CONTRACT: SSHMachineRepository.disconnect_all
+    # endregion METHOD_disconnect
+
+    # region METHOD_disconnect_all
+    # PURPOSE: Disconnect all sessions (iterates a snapshot of NodeId keys).
     async def disconnect_all(self) -> None:
         """Close all sessions."""
         for node_id in list(self._sessions):
             await self.disconnect(node_id)
 
-    # START_CONTRACT: SSHMachineRepository.list_free
-    #   PURPOSE: Return FREE sessions filtered by platform, oldest first by session.machine.free_since.
-    #   INPUTS: { platforms: list[str] | None - optional platform filter }
-    #   OUTPUTS: { list[MachineSession] - FREE sessions, oldest-first }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-SSH-REPOSITORY, M-DOMAIN-PORTS, M-SSH-SESSION
-    # END_CONTRACT: SSHMachineRepository.list_free
+    # endregion METHOD_disconnect_all
+
+    # region METHOD_list_free
+    # PURPOSE: Return FREE sessions filtered by platform, oldest first by session.machine.free_since.
     def list_free(self, platforms: list[str] | None) -> list[MachineSession]:
         """Return FREE sessions, optionally filtered by platform."""
         result: list[MachineSession] = []
@@ -321,27 +297,23 @@ class SSHMachineRepository:
         result.sort(key=lambda s: s.machine.free_since or 0.0)
         return result
 
-    # START_CONTRACT: SSHMachineRepository.list_connected
-    #   PURPOSE: Return all registered sessions (port contract).
-    #   INPUTS: { None }
-    #   OUTPUTS: { list[MachineSession] }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-SSH-REPOSITORY, M-DOMAIN-PORTS, M-SSH-SESSION
-    # END_CONTRACT: SSHMachineRepository.list_connected
+    # endregion METHOD_list_free
+
+    # region METHOD_list_connected
+    # PURPOSE: Return all registered sessions (port contract).
     def list_connected(self) -> list[MachineSession]:
         """Return all registered sessions."""
         return list(self._sessions.values())
 
-    # START_CONTRACT: SSHMachineRepository.get_session
-    #   PURPOSE: Return the live session for node_id, or None (port contract). Callers use this per-tick to resolve a session before calling an operations method.
-    #   INPUTS: { node_id: NodeId }
-    #   OUTPUTS: { MachineSession | None }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-SSH-REPOSITORY, M-DOMAIN-PORTS, M-SSH-SESSION
-    # END_CONTRACT: SSHMachineRepository.get_session
+    # endregion METHOD_list_connected
+
+    # region METHOD_get_session
+    # PURPOSE: Return the live session for node_id, or None (port contract).
     def get_session(self, node_id: NodeId) -> MachineSession | None:
         """Return the live session for node_id, or None (after disconnect)."""
         return self._sessions.get(node_id)
+
+    # endregion METHOD_get_session
 
     def contains(self, node_id: NodeId) -> bool:
         """Return True if node_id has an active session."""
@@ -352,3 +324,6 @@ class SSHMachineRepository:
 
     def __len__(self) -> int:
         return len(self._sessions)
+
+
+# endregion CLASS_SSHMachineRepository

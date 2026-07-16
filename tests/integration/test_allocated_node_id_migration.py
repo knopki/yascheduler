@@ -1,32 +1,3 @@
-# FILE: tests/integration/test_allocated_node_id_migration.py
-# VERSION: 1.3.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for migration 004 (add-allocated-node-id) and the schema.sql snapshot against real PostgreSQL via testcontainers.
-#   SCOPE: migration 004 adds nullable allocated_node_id column with FK ON DELETE SET NULL; backfills existing tasks by joining ip; leaves unallocated (ip IS NULL) tasks NULL; FK nulls allocated_node_id on node delete (allocated_ip dropped by migration 009); fresh DB seeds to 013; schema.sql CREATE TABLE includes the column.
-#   DEPENDS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SQLLOADER
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SQLLOADER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_config - build PostgresDbConfig from a PostgresContainer connection URL
-#   _connect - open a raw pg8000 connection
-#   _tracker_rows - read migration_id rows from yascheduler_migrations
-#   _columns - read column names of a table
-#   _fk_on_delete_action - return the ON DELETE action for the allocated_node_id FK
-#   test_migration_004_adds_allocated_node_id_column - fresh DB has the column, nullable, FK ON DELETE SET NULL
-#   test_migration_004_backfills_existing_tasks - migration 004 backfills allocated_node_id by joining ip
-#   test_migration_004_leaves_unallocated_tasks_null - ip IS NULL tasks stay NULL
-#   test_fk_on_delete_set_null - deleting a node nulls the task's allocated_node_id (row preserved, no allocated_ip)
-#   test_fresh_db_seeds_to_013 - fresh DB seeds yascheduler_migrations to '013'; apply_migrations skips 013
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - node-ncpus-as-config: bump seed/tracker assertions '012'→'013' (schema.sql last_migration bumped to '013' by migration 013); rename test_fresh_db_seeds_to_012→test_fresh_db_seeds_to_013 with '013' assertions; add '013' to test_migration_004_backfills_existing_tasks tracker assertion.
-#   PREVIOUS_CHANGE: v1.6.0 - node-rename-and-fields: update SQL ip→hostname (migration 012) in test_fk_on_delete_set_null; add '012' to tracker assertion in test_migration_004_backfills_existing_tasks; rename test_fresh_db_seeds_to_011→test_fresh_db_seeds_to_012 with '012' assertions.
-#   PREVIOUS_CHANGE: v1.5.0 - task-status-field-invariants: fresh DB seeds to '011' (migration 011 adds task_status_field_invariants CHECK); tracker list assertions append '011'; test_fresh_db_seeds_to_010 renamed to test_fresh_db_seeds_to_011; test_fk_on_delete_set_null raw INSERT sets remote_folder so the RUNNING row satisfies the CHECK.
-# END_CHANGE_SUMMARY
-
 """Integration tests for migration 004 (add-allocated-node-id) via testcontainers.
 
 Covers the spec scenarios in
@@ -40,6 +11,12 @@ specs/postgres-schema-apply/spec.md:
   (the task row is preserved; allocated_ip column is dropped by migration 009)
 * a fresh DB seeds yascheduler_migrations to '013' and apply_migrations skips 013
 """
+
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for migration 004 (add-allocated-node-id) and the schema.sql snapshot against real PostgreSQL via testcontainers.
+# SCOPE: migration 004 adds nullable allocated_node_id column with FK ON DELETE SET NULL; backfills existing tasks by joining ip; leaves unallocated (ip IS NULL) tasks NULL; FK nulls allocated_node_id on node delete (allocated_ip dropped by migration 009); fresh DB seeds to 013; schema.sql CREATE TABLE includes the column.
+# KEYWORDS: migration 004, allocated_node_id, backfill, FK
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -123,13 +100,6 @@ def _fk_on_delete_action(conn: pg8000.native.Connection) -> str:
     return rows[0][0] if rows else ""
 
 
-# START_CONTRACT: test_migration_004_adds_allocated_node_id_column
-#   PURPOSE: On a fresh DB, apply_schema + apply_migrations yields a nullable allocated_node_id column with FK ON DELETE SET NULL.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_migration_004_adds_allocated_node_id_column
 def test_migration_004_adds_allocated_node_id_column() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
@@ -157,13 +127,6 @@ def test_migration_004_adds_allocated_node_id_column() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_migration_004_backfills_existing_tasks
-#   PURPOSE: migration 004 backfills allocated_node_id by joining yascheduler_nodes.ip = yascheduler_tasks.ip.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; seeds a legacy DB at migration 003 with tasks + nodes; applies migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_migration_004_backfills_existing_tasks
 def test_migration_004_backfills_existing_tasks() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
@@ -247,13 +210,6 @@ def test_migration_004_backfills_existing_tasks() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_migration_004_leaves_unallocated_tasks_null
-#   PURPOSE: migration 004 does not touch tasks with ip IS NULL (allocated_node_id stays NULL).
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; seeds a legacy DB at 003 with an unallocated task; applies migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_migration_004_leaves_unallocated_tasks_null
 def test_migration_004_leaves_unallocated_tasks_null() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
@@ -305,13 +261,6 @@ def test_migration_004_leaves_unallocated_tasks_null() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_fk_on_delete_set_null
-#   PURPOSE: Deleting a node nulls a DONE task's allocated_node_id; the task row is preserved. (A RUNNING task's DELETE is now rejected by the task_status_field_invariants CHECK — see test_task_status_field_check for that scenario.)
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations; inserts a node + a DONE task referencing it; deletes the node
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_fk_on_delete_set_null
 def test_fk_on_delete_set_null() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
@@ -360,13 +309,6 @@ def test_fk_on_delete_set_null() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_fresh_db_seeds_to_013
-#   PURPOSE: On a fresh DB, apply_schema seeds yascheduler_migrations to '013'; apply_migrations skips 013 (already seeded).
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_fresh_db_seeds_to_013
 def test_fresh_db_seeds_to_013() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)

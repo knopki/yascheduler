@@ -1,42 +1,9 @@
-# FILE: tests/integration/test_persistence_adapter.py
-# VERSION: 1.5.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
-#   SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-UOW, M-INFRA-DB-CONFIG
-#   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-UOW
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_repo_task_insert_and_get - round-trip insert + get with typed fields and JSONB extra
-#   test_repo_task_get_none - get() returns None for non-existent task
-#   test_repo_task_save_updates - save() updates existing task fields via update_by_id
-#   test_repo_task_list_by_status - list_by_status filtering
-#   test_repo_task_count_by_status - count_by_status aggregates
-#   test_repo_task_update_status_atomic - update_status only changes status
-#   test_repo_node_crud - full node lifecycle: add, get, enable, disable, remove
-#   test_repo_node_list_filters - list_enabled / list_disabled subsets
-#   test_repo_node_update - update persists all mutable node fields
-#   test_repo_node_tmp_via_insert - insert(NewNode(cloud=..., enabled=False)) inserts a tmp row carrying ip="" and node_id
-#   test_repo_node_count - count_by_cloud and count_by_status aggregates
-#   test_repo_node_get_by_ips - batch get_by_ips returns matching nodes
-#   test_repo_node_get_by_id - get_by_id lookup by primary key
-#   test_repo_node_list_all_ordered_by_node_id - list_all ordering by node_id
-#   test_uow_integration - UoW creates repos, commit persists, exit closes
-#   test_uow_rollback_integration - rollback discards uncommitted changes on exception
-#   test_repo_task_insert_returns_created_updated_at - insert returns Task with created_at/updated_at set
-#   test_repo_task_save_triggers_updated_at - save (UPDATE) triggers updated_at to advance
-#   test_repo_task_list_by_status_enum_cast - list_by_status with cast(:statuses AS task_status[]) works
-#   test_repo_task_count_by_status_name_lookup - count_by_status returns keys via name lookup
-#   test_repo_task_list_ids_by_node_id_and_status - list_ids_by_node_id_and_status filters correctly
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - refactor-task-state-transitions: replace allocate_to/mark_running/with_remote_folder chains with task.run(node_id, remote_folder); replace with_remote_folder with replace for test-only fixture construction.
-#   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields (no TaskContext); context.X reads → task.X; TaskContext import removed.
-# END_CHANGE_SUMMARY
-
 """Integration tests for persistence adapter repositories and Unit of Work."""
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for persistence adapter against real PostgreSQL via testcontainers.
+# SCOPE: PostgresTaskRepository CRUD, PostgresNodeRepository CRUD, PostgresUnitOfWork commit/rollback.
+# KEYWORDS: PostgresTaskRepository, PostgresNodeRepository, commit, rollback
+# endregion MODULE_CONTRACT
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -67,13 +34,6 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 # ====================================================================
 
 
-# START_CONTRACT: test_repo_task_insert_and_get
-#   PURPOSE: Verify round-trip insert -> get with all typed fields including JSONB extra roundtrip.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.get
-# END_CONTRACT: test_repo_task_insert_and_get
 async def test_repo_task_insert_and_get(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -113,13 +73,6 @@ async def test_repo_task_insert_and_get(
     assert retrieved.extra["param"] == 42
 
 
-# START_CONTRACT: test_repo_task_get_none
-#   PURPOSE: Verify get() returns None for non-existent task.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.get
-# END_CONTRACT: test_repo_task_get_none
 async def test_repo_task_get_none(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -129,13 +82,6 @@ async def test_repo_task_get_none(
     assert await repo.get(TaskId(99999)) is None
 
 
-# START_CONTRACT: test_repo_task_save_updates
-#   PURPOSE: Verify save() updates an existing task's fields via update_by_id.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.save, PostgresTaskRepository.get
-# END_CONTRACT: test_repo_task_save_updates
 async def test_repo_task_save_updates(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -159,13 +105,6 @@ async def test_repo_task_save_updates(
     assert retrieved.status == DomainTaskStatus.RUNNING
 
 
-# START_CONTRACT: test_repo_task_list_by_status
-#   PURPOSE: Verify list_by_status returns only tasks with the given statuses.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.list_by_status
-# END_CONTRACT: test_repo_task_list_by_status
 async def test_repo_task_list_by_status(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -190,13 +129,6 @@ async def test_repo_task_list_by_status(
     assert running[0].task_id == t2_id
 
 
-# START_CONTRACT: test_repo_task_count_by_status
-#   PURPOSE: Verify count_by_status returns correct aggregates.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.count_by_status
-# END_CONTRACT: test_repo_task_count_by_status
 async def test_repo_task_count_by_status(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -213,13 +145,6 @@ async def test_repo_task_count_by_status(
     assert counts.get(DomainTaskStatus.DONE) == 1
 
 
-# START_CONTRACT: test_repo_task_update_status_atomic
-#   PURPOSE: Verify update_status only changes status, preserving other fields.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.update_status
-# END_CONTRACT: test_repo_task_update_status_atomic
 async def test_repo_task_update_status_atomic(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -243,13 +168,6 @@ async def test_repo_task_update_status_atomic(
     assert retrieved.label == "keep-label"
 
 
-# START_CONTRACT: test_repo_task_insert_returns_created_updated_at
-#   PURPOSE: Verify insert returns a Task with created_at and updated_at set.
-#   INPUTS: { pg_conn, pg_executor }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.insert
-# END_CONTRACT: test_repo_task_insert_returns_created_updated_at
 async def test_repo_task_insert_returns_created_updated_at(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -262,13 +180,6 @@ async def test_repo_task_insert_returns_created_updated_at(
     assert task.created_at <= task.updated_at
 
 
-# START_CONTRACT: test_repo_task_save_triggers_updated_at
-#   PURPOSE: Verify save (UPDATE) triggers the touch trigger, advancing updated_at while preserving created_at.
-#   INPUTS: { pg_conn, pg_executor }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.insert, PostgresTaskRepository.save
-# END_CONTRACT: test_repo_task_save_triggers_updated_at
 async def test_repo_task_save_triggers_updated_at(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -295,13 +206,6 @@ async def test_repo_task_save_triggers_updated_at(
     assert retrieved.updated_at > updated_before
 
 
-# START_CONTRACT: test_repo_task_list_by_status_enum_cast
-#   PURPOSE: Verify list_by_status with cast(:statuses AS task_status[]) works.
-#   INPUTS: { pg_conn, pg_executor }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.list_by_status
-# END_CONTRACT: test_repo_task_list_by_status_enum_cast
 async def test_repo_task_list_by_status_enum_cast(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -317,13 +221,6 @@ async def test_repo_task_list_by_status_enum_cast(
     assert todos[0].task_id == t1.task_id
 
 
-# START_CONTRACT: test_repo_task_count_by_status_name_lookup
-#   PURPOSE: Verify count_by_status returns keys via TaskStatus name lookup.
-#   INPUTS: { pg_conn, pg_executor }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresTaskRepository.count_by_status
-# END_CONTRACT: test_repo_task_count_by_status_name_lookup
 async def test_repo_task_count_by_status_name_lookup(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -341,13 +238,6 @@ async def test_repo_task_count_by_status_name_lookup(
     assert counts[DomainTaskStatus.DONE] == 1
 
 
-# START_CONTRACT: test_repo_task_list_ids_by_node_id_and_status
-#   PURPOSE: Verify list_ids_by_node_id_and_status filters by allocated_node_id and status.
-#   INPUTS: { pg_conn, pg_executor }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Inserts a node + tasks with allocated_node_id
-#   LINKS: PostgresTaskRepository.list_ids_by_node_id_and_status, PostgresNodeRepository.insert
-# END_CONTRACT: test_repo_task_list_ids_by_node_id_and_status
 async def test_repo_task_list_ids_by_node_id_and_status(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -391,13 +281,6 @@ async def test_repo_task_list_ids_by_node_id_and_status(
 # ====================================================================
 
 
-# START_CONTRACT: test_repo_node_crud
-#   PURPOSE: Verify full node CRUD lifecycle: add, get, enable, disable, remove.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.add, get, enable, disable, remove
-# END_CONTRACT: test_repo_node_crud
 async def test_repo_node_crud(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -442,13 +325,6 @@ async def test_repo_node_crud(
     assert await repo.get_by_id(persisted.node_id) is None
 
 
-# START_CONTRACT: test_repo_node_list_filters
-#   PURPOSE: Verify list_enabled and list_disabled return correct subsets.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.list_enabled, list_disabled, list_all
-# END_CONTRACT: test_repo_node_list_filters
 async def test_repo_node_list_filters(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -467,13 +343,6 @@ async def test_repo_node_list_filters(
     assert len(all_nodes) == 2
 
 
-# START_CONTRACT: test_repo_node_update
-#   PURPOSE: Verify update() persists all mutable node fields.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.update
-# END_CONTRACT: test_repo_node_update
 async def test_repo_node_update(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -509,13 +378,6 @@ async def test_repo_node_update(
     assert n.port == 2222
 
 
-# START_CONTRACT: test_repo_node_tmp_via_insert
-#   PURPOSE: Verify insert(NewNode(cloud=..., enabled=False)) inserts a tmp row carrying ip="" sentinel and node_id (add_tmp abolished).
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.insert
-# END_CONTRACT: test_repo_node_tmp_via_insert
 async def test_repo_node_tmp_via_insert(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -533,13 +395,6 @@ async def test_repo_node_tmp_via_insert(
     assert node.port == 22
 
 
-# START_CONTRACT: test_repo_node_count
-#   PURPOSE: Verify count_by_cloud and count_by_status return correct aggregates.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.count_by_cloud, count_by_status
-# END_CONTRACT: test_repo_node_count
 async def test_repo_node_count(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -561,13 +416,6 @@ async def test_repo_node_count(
     assert statuses[False] == 1
 
 
-# START_CONTRACT: test_repo_node_get_by_ids
-#   PURPOSE: Verify batch get_by_ids returns all matching nodes keyed by NodeId.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.get_by_ids
-# END_CONTRACT: test_repo_node_get_by_ids
 async def test_repo_node_get_by_ids(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -585,13 +433,6 @@ async def test_repo_node_get_by_ids(
     assert NodeId(99999) not in nodes
 
 
-# START_CONTRACT: test_repo_node_get_by_id
-#   PURPOSE: Verify get_by_id lookup by primary key, including None for non-existing id.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.get_by_id
-# END_CONTRACT: test_repo_node_get_by_id
 async def test_repo_node_get_by_id(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -622,13 +463,6 @@ async def test_repo_node_get_by_ids_empty(
     assert await repo.get_by_ids([]) == {}
 
 
-# START_CONTRACT: test_repo_node_list_all_ordered_by_node_id
-#   PURPOSE: Verify list_all returns nodes sorted by node_id ascending.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: PostgresNodeRepository.list_all
-# END_CONTRACT: test_repo_node_list_all_ordered_by_node_id
 async def test_repo_node_list_all_ordered_by_node_id(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
@@ -649,13 +483,6 @@ async def test_repo_node_list_all_ordered_by_node_id(
 # ====================================================================
 
 
-# START_CONTRACT: test_uow_integration
-#   PURPOSE: Verify UoW creates repos and allows commit.
-#   INPUTS: { _db_config: PostgresDbConfig - session database config, _init_schema: None - schema initialized }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: Creates and closes pg8000 connections; commits a node insert.
-#   LINKS: PostgresUnitOfWork
-# END_CONTRACT: test_uow_integration
 async def test_uow_integration(
     _db_config: PostgresDbConfig,
     _init_schema: None,
@@ -681,13 +508,6 @@ async def test_uow_integration(
         assert retrieved.hostname == "10.0.0.50"
 
 
-# START_CONTRACT: test_uow_rollback_integration
-#   PURPOSE: Verify rollback on exception discards uncommitted changes.
-#   INPUTS: { _db_config: PostgresDbConfig - session database config, _init_schema: None - schema initialized }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: Creates and closes pg8000 connections; rolls back on exception.
-#   LINKS: PostgresUnitOfWork
-# END_CONTRACT: test_uow_rollback_integration
 async def test_uow_rollback_integration(
     _db_config: PostgresDbConfig,
     _init_schema: None,

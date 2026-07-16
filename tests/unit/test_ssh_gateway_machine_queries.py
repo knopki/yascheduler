@@ -1,24 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway_machine_queries.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineRepository session-query methods.
-#   SCOPE: get_session (public port), list_connected.
-#   DEPENDS: M-SSH-REPOSITORY, M-SSH-SESSION
-#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_mock_adapter - Build a mock RemoteMachineAdapter
-#   _make_mock_connection - Build a mock (conn, conn_opts) tuple
-#   _make_session - Build a fully-mocked SSHMachineSession (bypasses connect)
-#   TestMachineQueries - get_session public, list_connected
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_session's ConnectedMachine construction.
-#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle: rename _get_machine_state → get_session; build SSHMachineSession instead of _MachineState; repository._machines → repository._sessions; assertions read session.machine.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for SSHMachineRepository session-query methods.
+# SCOPE: get_session (public port), list_connected.
+# KEYWORDS: get_session, list_connected, session query
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

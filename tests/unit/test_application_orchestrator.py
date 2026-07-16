@@ -1,37 +1,3 @@
-# FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.12.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
-#   SCOPE: Constructor queue initialization, start/stop lifecycle, cancellation propagation, concurrency limits,
-#          _clouds_get_capacity inline UoW arithmetic, constructor stores allocation_tracker/active_clouds/allocation_lock,
-#          _deallocator_consumer passes uow_factory to deallocate_node, _allocator_consumer swallows exceptions,
-#          _task_consumer_consumer conditional _occupancy_started discard on consume_task bool, in-flight _consuming guard.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR
-#   LINKS: M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_task - build a Task with sensible default typed fields; overrides win
-#   TestOrchestratorLifecycle - Lifecycle: constructor queues, start tasks, stop cleanup, cancellation, limits
-#   TestOrchestratorTaskAbandoned - TaskAbandoned event recorded when machine is gone
-#   TestCloudsGetCapacity - _clouds_get_capacity inline UoW arithmetic over active_clouds
-#   TestOrchestratorConstructor - Constructor stores allocation_tracker, active_clouds, allocation_lock; no _adapters/_configs
-#   TestDeallocatorConsumer - _deallocator_consumer takes Node from msg.payload (no UoW lookup); does not duplicate SSH teardown; logs node_id+ip on error; queue dedups on NodeId not ip
-#   TestAllocatorConsumer - _allocator_consumer swallows allocate_task exceptions to keep worker alive
-#   TestConsumeConditionalDiscard - _task_consumer_consumer discards _occupancy_started only when consume_task returns True
-#   TestConsumeInFlightGuard - producer skips in-flight task ids; consumer adds/discards around consume_task await
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.13.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from all 5 ConnectedMachine constructions in consume-guard tests.
-#   PREVIOUS_CHANGE: v1.12.0 - Node-rename-and-fields: Node kwargs ip→hostname; ConnectedMachine kwargs ip→hostname.
-#   PREVIOUS_CHANGE: v1.11.0 - extract _make_task helper to collapse repeated Task(...) constructions (GRACE-lite 1000-line limit compliance).
-#   PREVIOUS_CHANGE: v1.10.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); task.context.error → task.error; remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.8.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
-#   PREVIOUS_CHANGE: v1.6.1 - add-node-id-identity test update: prepend node_id=NodeId(<n>) to all Node(...) constructions and add NodeId to 3 local imports.
-# END_CHANGE_SUMMARY
-#
 """Unit tests for Orchestrator lifecycle management.
 
 Tests cover:
@@ -45,6 +11,11 @@ Tests cover:
 - _deallocator_consumer calls deallocate_node with uow_factory
 - TaskAbandoned event recorded when machine is gone
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
+# SCOPE: Constructor queue initialization, start/stop lifecycle, cancellation propagation, concurrency limits, _clouds_get_capacity inline UoW arithmetic, constructor stores allocation_tracker/active_clouds/allocation_lock, _deallocator_consumer passes uow_factory to deallocate_node, _allocator_consumer swallows exceptions, _task_consumer_consumer conditional _occupancy_started discard on consume_task bool, in-flight _consuming guard.
+# KEYWORDS: Orchestrator, lifecycle, concurrency limits, cancellation
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

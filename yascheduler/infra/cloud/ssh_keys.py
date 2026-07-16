@@ -1,24 +1,10 @@
 """SSH key management for cloud provisioning."""
-# FILE: yascheduler/infra/cloud/ssh_keys.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: SSH key generation, loading, and name extraction for cloud provisioning.
-#   SCOPE: Load existing SSH key from keys_dir, generate new one if none found, extract key name.
-#   DEPENDS: none
-#   LINKS: M-CLOUD-PROVISIONER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   get_or_create_ssh_key  # Load existing SSH key or generate a new one
-#   get_key_name           # Get SSHKey's name
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v1.1.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-SSH-KEYS") at module top
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Ensure a valid SSH key exists (load existing or generate new) so cloud VM allocations never fail on missing credentials and key names are consistently formatted for provider APIs.
+# SCOPE: Load existing SSH key from keys_dir, generate new one if none found, extract key name.
+# DEPENDENCIES: USES API: asyncssh for key generation and serialization; READS: private key files from keys_dir; WRITES: private key file to keys_dir
+# KEYWORDS: ssh key, generate, load, key name, cloud provisioning
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -31,18 +17,19 @@ from .utils import get_rnd_name
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "get_key_name",
+    "get_or_create_ssh_key",
+]
 
-# START_CONTRACT: get_or_create_ssh_key
-#   PURPOSE: Load existing SSH key from keys_dir or generate a new one if none found.
-#   INPUTS: { keys_dir: Path - directory to scan for existing keys / write new key }
-#   OUTPUTS: { SSHKey - loaded or freshly generated SSH key }
-#   SIDE_EFFECTS: May write a new private key file to keys_dir if no existing key found.
-#   LINKS: M-CLOUD-PROVISIONER
-# END_CONTRACT: get_or_create_ssh_key
+
+# region FUNC_get_or_create_ssh_key
+# PURPOSE: Load an existing SSH key from disk or generate a fresh one so cloud VM creation always has credentials available without manual key setup.
+# ENSURES: May write a new private key file to keys_dir if no existing key found.
 def get_or_create_ssh_key(keys_dir: Path) -> SSHKey:
     """Load existing SSH key or generate a new one."""
     prefix = "yakey"
-    # START_BLOCK_LOAD_EXISTING
+    # region BLOCK_load_existing
     for filepath in keys_dir.iterdir():
         if not filepath.name.startswith(prefix) or not filepath.is_file():
             continue
@@ -56,9 +43,9 @@ def get_or_create_ssh_key(keys_dir: Path) -> SSHKey:
             },
         )
         return ssh_key
-    # END_BLOCK_LOAD_EXISTING
+    # endregion BLOCK_load_existing
 
-    # START_BLOCK_GENERATE_NEW
+    # region BLOCK_generate_new
     key_name = get_rnd_name(prefix)
     filepath = keys_dir / key_name
     ssh_key = generate_private_key(alg_name="ssh-rsa", comment=key_name)
@@ -70,16 +57,16 @@ def get_or_create_ssh_key(keys_dir: Path) -> SSHKey:
         key_name,
         ssh_key.get_fingerprint("md5"),
     )
-    # END_BLOCK_GENERATE_NEW
+    # endregion BLOCK_generate_new
     return ssh_key
 
 
-# START_CONTRACT: get_key_name
-#   PURPOSE: Extract a human-readable name from an SSHKey instance.
-#   INPUTS: { key: SSHKey - the SSH key to extract name from }
-#   OUTPUTS: { str - filename, comment, or fingerprint (last resort) }
-#   LINKS: M-CLOUD-PROVISIONER
-# END_CONTRACT: get_key_name
+# endregion FUNC_get_or_create_ssh_key
+
+
+# region FUNC_get_key_name
+# PURPOSE: Extract a human-readable label from an SSHKey so cloud provider APIs (Hetzner, Azure) can register it with a consistent name.
+# ENSURES: Returns filename, comment, or fingerprint (last resort).
 def get_key_name(key: SSHKey) -> str:
     """Get SSHKey's name."""
     fname_opt = key.get_filename()
@@ -88,3 +75,6 @@ def get_key_name(key: SSHKey) -> str:
         key_filename = PurePath(key_filename).name
     key_fingerprint = key.get_fingerprint("md5").split(":", maxsplit=1)[1]
     return key_filename or key.get_comment() or key_fingerprint
+
+
+# endregion FUNC_get_key_name

@@ -1,21 +1,9 @@
 """Pure closure binding conn + adapter.quote into an OuterRunCallable for adapter.get_cpu_cores / setup_node."""
-# FILE: yascheduler/infra/ssh/platform/run_fn.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Pure closure binding conn + adapter.quote into an OuterRunCallable for adapter.get_cpu_cores / setup_node.
-#   SCOPE: make_run_fn factory.
-#   DEPENDS: M-PLATFORM-PROTOCOL
-#   LINKS: M-PLATFORM-PROTOCOL
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   make_run_fn - Build OuterRunCallable with pre-bound conn and adapter.quote.
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from gateway._make_run_fn; renamed to public make_run_fn, behavior unchanged. Both repository.connect and operations.base now import it from here instead of through the gateway class.
-#   PREVIOUS_CHANGE: none
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Produce an OuterRunCallable with pre-bound conn and quote for adapter methods that need a run callable.
+# SCOPE: make_run_fn factory — pure closure, no side effects.
+# KEYWORDS: run_fn, closure, OuterRunCallable, make_run_fn
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -28,14 +16,11 @@ if TYPE_CHECKING:
     from .adapters import RemoteMachineAdapter
     from .protocol import OuterRunCallable
 
+__all__ = ["make_run_fn"]
 
-# START_CONTRACT: make_run_fn
-#   PURPOSE: Build OuterRunCallable with pre-bound conn and adapter.quote.
-#   INPUTS: { conn: SSHClientConnection, adapter: RemoteMachineAdapter }
-#   OUTPUTS: { OuterRunCallable - async callable bound to conn + adapter.quote }
-#   SIDE_EFFECTS: None — pure closure.
-#   LINKS: M-PLATFORM-PROTOCOL
-# END_CONTRACT: make_run_fn
+
+# region FUNC_make_run_fn
+# PURPOSE: Build OuterRunCallable with pre-bound conn and adapter.quote.
 def make_run_fn(
     conn: SSHClientConnection,
     adapter: RemoteMachineAdapter,
@@ -57,3 +42,6 @@ def make_run_fn(
         )
 
     return _run_fn
+
+
+# endregion FUNC_make_run_fn

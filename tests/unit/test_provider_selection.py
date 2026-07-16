@@ -1,21 +1,8 @@
-# FILE: tests/unit/test_provider_selection.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for select_provider_pure — pure cloud provider selection.
-#   SCOPE: select_provider_pure priority/capacity/platform-support behavior.
-#   DEPENDS: M-CLOUD-PROVIDER-SELECTION
-#   LINKS: M-CLOUD-PROVIDER-SELECTION
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestSelectProviderPure - Tests for priority, capacity, platform support, edge cases
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial test suite for select_provider_pure (cloud-provisioner-pure).
-#   PREVIOUS_CHANGE: none
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for select_provider_pure — pure cloud provider selection.
+# SCOPE: select_provider_pure priority/capacity/platform-support behavior.
+# KEYWORDS: select_provider_pure, provider selection, priority, capacity
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

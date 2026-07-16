@@ -1,15 +1,3 @@
-# FILE: tests/integration/__init__.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration test suite package.
-#   SCOPE: Package marker.
-#   DEPENDS: none
-#   LINKS: none
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial GRACE-lite markup.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Integration test suite package.
+# endregion MODULE_CONTRACT

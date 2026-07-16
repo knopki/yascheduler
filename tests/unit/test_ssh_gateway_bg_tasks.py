@@ -1,24 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway_bg_tasks.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineRepository background-task (monitor mechanism) keying and disconnect scoping.
-#   SCOPE: _bg_tasks dict keying by IP, disconnect scope isolation, re-registration replacement.
-#   DEPENDS: M-SSH-REPOSITORY, M-DOMAIN-MODEL
-#   LINKS: M-SSH-REPOSITORY
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_mock_adapter - Build a mock RemoteMachineAdapter
-#   _make_mock_connection - Build a mock (conn, conn_opts) tuple
-#   _make_state - Build a fully-mocked SSHMachineSession (bypasses connect)
-#   TestBgTaskScoping - disconnect scope isolation and re-registration regression tests
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_session's ConnectedMachine construction.
-#   PREVIOUS_CHANGE: v1.1.0 - session-based-machine-handle section 7.4: _machines → _sessions, _MachineState → SSHMachineSession, _monitors dict → per-session _monitor_task, start_occupancy_check(ip,…) → start_occupancy_check(session,…), disconnect pops _sessions before _close (pop-before-await). dataclasses.replace → session.release().
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for SSHMachineRepository background-task (monitor mechanism) keying and disconnect scoping.
+# SCOPE: _bg_tasks dict keying by IP, disconnect scope isolation, re-registration replacement.
+# KEYWORDS: background tasks, keying, disconnect scoping
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

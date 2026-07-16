@@ -1,24 +1,9 @@
-# FILE: tests/integration/test_postgres_schema.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for apply_schema() against real PostgreSQL via testcontainers.
-#   SCOPE: Schema application, idempotency error, connection lifecycle.
-#   DEPENDS: M-PERSISTENCE-SCHEMA, M-INFRA-DB-CONFIG
-#   LINKS: M-PERSISTENCE-SCHEMA
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_apply_schema_succeeds - schema applies cleanly on empty database
-#   test_apply_schema_tables_exist - tables are queryable after apply_schema
-#   test_apply_schema_raises_on_existing - DatabaseError on duplicate application
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial integration tests for apply_schema().
-# END_CHANGE_SUMMARY
-
 """Integration tests for apply_schema() against real PostgreSQL."""
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for apply_schema() against real PostgreSQL via testcontainers.
+# SCOPE: Schema application, idempotency error, connection lifecycle.
+# KEYWORDS: apply_schema, idempotency, connection lifecycle
+# endregion MODULE_CONTRACT
 
 from urllib.parse import urlparse
 
@@ -41,26 +26,12 @@ def _make_config(pg: PostgresContainer) -> PostgresDbConfig:
     )
 
 
-# START_CONTRACT: test_apply_schema_succeeds
-#   PURPOSE: Verify apply_schema() succeeds against an empty PostgreSQL database.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: Creates tables in testcontainers PostgreSQL
-#   LINKS: M-PERSISTENCE-SCHEMA
-# END_CONTRACT: test_apply_schema_succeeds
 def test_apply_schema_succeeds() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
         apply_schema(config)
 
 
-# START_CONTRACT: test_apply_schema_tables_exist
-#   PURPOSE: Verify tables are queryable after apply_schema().
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: Creates tables in testcontainers PostgreSQL
-#   LINKS: M-PERSISTENCE-SCHEMA
-# END_CONTRACT: test_apply_schema_tables_exist
 def test_apply_schema_tables_exist() -> None:
     from pg8000.native import Connection
 
@@ -80,15 +51,6 @@ def test_apply_schema_tables_exist() -> None:
         assert rows[0][0] == 0
 
 
-# START_CONTRACT: test_apply_schema_raises_on_existing
-#   PURPOSE: Verify apply_schema() raises DatabaseError and prints message when tables exist.
-#            Uses monkeypatch to replace schema SQL with non-IF-NOT-EXISTS version to trigger
-#            the error path, since production schema.sql uses IF NOT EXISTS.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: Creates tables in testcontainers PostgreSQL
-#   LINKS: M-PERSISTENCE-SCHEMA
-# END_CONTRACT: test_apply_schema_raises_on_existing
 def test_apply_schema_raises_on_existing(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -124,14 +86,6 @@ def test_apply_schema_raises_on_existing(
         assert "Database already initialized!" in captured.out
 
 
-# START_CONTRACT: test_apply_schema_has_node_ncpus_positive_check
-#   PURPOSE: Verify that a fresh-database bootstrap includes the node_ncpus_positive CHECK
-#            and ncpus is declared as nullable SMALLINT DEFAULT NULL.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: Creates tables in testcontainers PostgreSQL
-#   LINKS: M-PERSISTENCE-SCHEMA
-# END_CONTRACT: test_apply_schema_has_node_ncpus_positive_check
 def test_apply_schema_has_node_ncpus_positive_check() -> None:
     from pg8000.native import Connection
 

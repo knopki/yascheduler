@@ -1,28 +1,8 @@
-# FILE: tests/unit/test_log.py
-# VERSION: 2.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for LogFormatter in yascheduler.shared.log.
-#   SCOPE: LogFormatter extra-diff discriminator rendering; introspection-derived _NATIVE_KEYS; _PACKAGE derivation; single-formatter-both-handlers wiring.
-#   DEPENDS: none
-#   LINKS: M-LOGGING
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_trace_record_renders_with_module_funcname_lineno_message_and_sorted_fields - Gherkin scenario: trace record renders
-#   test_trace_fields_sorted_alphabetically - Gherkin scenario: deterministic field order
-#   test_debug_without_extra_renders_regular - Gherkin scenario: DEBUG w/o extra is narrative
-#   test_out_of_package_debug_with_extra_renders_regular - Gherkin scenario: third-party logger excluded
-#   test_info_warn_error_renders_regular - Gherkin scenario: INFO/WARN/ERROR narrative
-#   test_native_keys_derived_by_introspection - Gherkin scenario: _NATIVE_KEYS introspection
-#   test_package_prefix_derived_from_name - Gherkin scenario: _PACKAGE from __name__
-#   test_single_formatter_serves_both_handlers - Gherkin scenario: single formatter both handlers
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.0.0 - Rewrite around LogFormatter and extra-diff discriminator; remove YaLogger/get_logger/trace tests.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial: YaLogger and LogFormatter unit tests.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for LogFormatter in yascheduler.shared.log.
+# SCOPE: LogFormatter extra-diff discriminator rendering; introspection-derived _NATIVE_KEYS; _PACKAGE derivation; single-formatter-both-handlers wiring.
+# KEYWORDS: LogFormatter, extra-diff, _NATIVE_KEYS, structured logging
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

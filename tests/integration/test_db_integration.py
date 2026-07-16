@@ -1,38 +1,9 @@
-# FILE: tests/integration/test_db_integration.py
-# VERSION: 2.5.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
-#   SCOPE: Node CRUD, Task CRUD with flat typed fields + JSONB extra, status transitions, UoW-based composition queries (list_by_jobs, get_by_ids), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
-#   DEPENDS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL, M-CONFIG-DB
-#   LINKS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_add_and_get_node - round-trip add + get via Node domain object
-#   test_get_all_nodes_filtering - list_all, list_enabled, list_disabled
-#   test_has_node - existing and non-existing IP
-#   test_enable_disable_node - toggling enabled status via repo
-#   test_remove_node - node removed after removal
-#   test_count_aggregations - count_by_cloud, count_by_status
-#   test_add_and_get_task - round-trip insert + get with typed fields and JSONB extra
-#   test_task_lifecycle - insert -> run(node_id, remote_folder) -> DONE with complete (preserves allocated_node_id)
-#   test_set_task_error - with and without error message (typed error field)
-#   test_get_tasks_by_status - filtering across statuses
-#   test_get_tasks_by_jobs - array parameter with unnest
-#   test_get_task_ids_by_node_id_and_status - filtered by node_id and status
-#   test_get_tasks_with_cloud_by_id_status - in-test composition: list_by_jobs + get_by_ips
-#   test_tmp_node_lifecycle_via_insert - tmp-node inserted via insert(NewNode(cloud=..., enabled=False)) carries ip="", enabled=False, node_id; remove cleans up
-#   test_migration_003_backfills_prov_ips_and_drops_unique - migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key; pre-creates yascheduler_tasks at 002-era schema so 004 ALTER is valid
-#   test_list_filters_empty_ip_in_sql - list_enabled/list_disabled exclude ip='' rows at the SQL layer (no python post-filter)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.8.0 - node-rename-and-fields: update SQL ip→hostname (migration 012) in test_migration_003_backfills_prov_ips_and_drops_unique.
-#   PREVIOUS_CHANGE: v2.7.0 - refactor-task-state-transitions: replace allocate_to/mark_running/with_remote_folder chains with task.run(node_id, remote_folder); replace with_download_results(...).complete() with task.complete(local_folder=, remote_folder=).
-# END_CHANGE_SUMMARY
-
 """Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL."""
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
+# SCOPE: Node CRUD, Task CRUD with flat typed fields + JSONB extra, status transitions, UoW-based composition queries (list_by_jobs, get_by_ids), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
+# KEYWORDS: PostgresUnitOfWork, Node CRUD, Task CRUD, JSONB, migration
+# endregion MODULE_CONTRACT
 
 from collections.abc import Callable
 
@@ -51,13 +22,6 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 # ---------------------------------------------------------------------------
 
 
-# START_CONTRACT: test_add_and_get_node
-#   PURPOSE: Verify Node add + get round-trip with all fields via UoW.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_add_and_get_node
 async def test_add_and_get_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Insert a node and retrieve it; verify all fields match."""
     new_node = NewNode(
@@ -93,13 +57,6 @@ async def test_add_and_get_node(uow_factory: Callable[[], PostgresUnitOfWork]) -
         assert retrieved.enabled is True
 
 
-# START_CONTRACT: test_get_all_nodes_filtering
-#   PURPOSE: Verify list_all, list_enabled, list_disabled filtering via UoW.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_all_nodes_filtering
 async def test_get_all_nodes_filtering(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -122,13 +79,6 @@ async def test_get_all_nodes_filtering(
         assert disabled[0].hostname == "10.0.0.2"
 
 
-# START_CONTRACT: test_has_node
-#   PURPOSE: Verify get() returns node for existing IP and None for non-existing.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_has_node
 async def test_has_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Check has_node for existing and non-existing IPs."""
     async with uow_factory() as uow:
@@ -140,13 +90,6 @@ async def test_has_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
         assert await uow.nodes.get_by_id(NodeId(99999)) is None
 
 
-# START_CONTRACT: test_enable_disable_node
-#   PURPOSE: Verify enable/disable toggle the enabled flag via repo.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_enable_disable_node
 async def test_enable_disable_node(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -176,13 +119,6 @@ async def test_enable_disable_node(
         assert fetched.enabled is False
 
 
-# START_CONTRACT: test_remove_node
-#   PURPOSE: Verify remove deletes the node; get returns None after removal.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_remove_node
 async def test_remove_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Remove a node and verify it is gone."""
     async with uow_factory() as uow:
@@ -198,13 +134,6 @@ async def test_remove_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> Non
         assert await uow.nodes.get_by_id(node.node_id) is None
 
 
-# START_CONTRACT: test_count_aggregations
-#   PURPOSE: Verify count_by_cloud and count_by_status aggregation via repo.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_count_aggregations
 async def test_count_aggregations(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -235,13 +164,6 @@ async def test_count_aggregations(
 # ---------------------------------------------------------------------------
 
 
-# START_CONTRACT: test_add_and_get_task
-#   PURPOSE: Verify Task insert + get round-trip including typed fields and JSONB extra via UoW.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_add_and_get_task
 async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Add a task and retrieve it; verify all fields including typed fields and JSONB extra."""
     async with uow_factory() as uow:
@@ -284,13 +206,6 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
         assert retrieved.extra == {"param": 42}
 
 
-# START_CONTRACT: test_task_lifecycle
-#   PURPOSE: Verify full task lifecycle: insert -> run -> DONE with complete.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_task_lifecycle
 async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Walk a task through TO_DO -> RUNNING -> DONE and verify each step."""
     async with uow_factory() as uow:
@@ -343,13 +258,6 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         assert done.allocated_node_id == node_id
 
 
-# START_CONTRACT: test_set_task_error
-#   PURPOSE: Verify setting task error embeds error in typed error field; without error extra is preserved.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_set_task_error
 async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """set_task_error embeds error in typed error field; without error extra is preserved."""
     # With error message
@@ -412,13 +320,6 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         assert t2.extra == {"only": "meta"}
 
 
-# START_CONTRACT: test_get_tasks_by_status
-#   PURPOSE: Verify list_by_status filters correctly by status values.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_tasks_by_status
 async def test_get_tasks_by_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -464,13 +365,6 @@ async def test_get_tasks_by_status(
         assert len(multi) == 2
 
 
-# START_CONTRACT: test_get_tasks_by_jobs
-#   PURPOSE: Verify list_by_jobs uses unnest to filter by task IDs array.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_tasks_by_jobs
 async def test_get_tasks_by_jobs(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Retrieve tasks by array of IDs; only requested IDs returned."""
     async with uow_factory() as uow:
@@ -486,13 +380,6 @@ async def test_get_tasks_by_jobs(uow_factory: Callable[[], PostgresUnitOfWork]) 
         assert ids == {t1.task_id, t3.task_id}
 
 
-# START_CONTRACT: test_get_task_ids_by_node_id_and_status
-#   PURPOSE: Verify filtering task IDs by node_id and status.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_task_ids_by_node_id_and_status
 async def test_get_task_ids_by_node_id_and_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -534,13 +421,6 @@ async def test_get_task_ids_by_node_id_and_status(
         assert ids == [t1.task_id]
 
 
-# START_CONTRACT: test_get_tasks_with_cloud_by_id_status
-#   PURPOSE: Verify in-test composition of list_by_jobs + get_by_ips for cloud attribute.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_get_tasks_with_cloud_by_id_status
 async def test_get_tasks_with_cloud_by_id_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -586,13 +466,6 @@ async def test_get_tasks_with_cloud_by_id_status(
 # ---------------------------------------------------------------------------
 
 
-# START_CONTRACT: test_tmp_node_lifecycle_via_insert
-#   PURPOSE: Verify insert(NewNode(cloud=..., enabled=False)) creates a tmp-node row with ip="" sentinel and enabled=False, returning a Node carrying node_id; remove(node_id) cleans up.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_tmp_node_lifecycle_via_insert
 async def test_tmp_node_lifecycle_via_insert(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -626,13 +499,6 @@ async def test_tmp_node_lifecycle_via_insert(
         assert all(n.node_id != node.node_id for n in all_nodes)
 
 
-# START_CONTRACT: test_migration_003_backfills_prov_ips_and_drops_unique
-#   PURPOSE: Verify migration 003 backfills prov... → '' and drops the yascheduler_nodes_ip_key UNIQUE constraint (duplicate real ip insert succeeds post-migration).
-#   INPUTS: { None - starts its own PostgresContainer }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; seeds a prov... row; applies schema + migrations (003 backfills + drops constraint)
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_migration_003_backfills_prov_ips_and_drops_unique
 async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
     """Migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key."""
     from urllib.parse import urlparse
@@ -739,13 +605,6 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_list_filters_empty_ip_in_sql
-#   PURPOSE: Verify list_enabled returns only enabled rows (no python post-filter) and list_disabled excludes ip='' rows at the SQL layer (no python post-filter).
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_list_filters_empty_ip_in_sql
 async def test_list_filters_empty_ip_in_sql(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:

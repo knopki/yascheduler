@@ -1,28 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway.py
-# VERSION: 1.5.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineRepository + SSHMachineSession — connection lifecycle, command execution via session, SFTP via session, machine state via session, repository collection semantics.
-#   SCOPE: SSHMachineRepository + SSHMachineSession with asyncssh fully mocked. No real SSH, SFTP, or platform detection.
-#   DEPENDS: M-SSH-REPOSITORY, M-SSH-SESSION, M-DOMAIN-MODEL, M-PLATFORM-PROTOCOL
-#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _AsyncIter - Simple async iterator from a list (avoids aclose warnings)
-#   _make_mock_adapter - Build a mock RemoteMachineAdapter with async stubs
-#   _make_mock_connection - Build a mock (conn, conn_opts) tuple with SFTP ctx
-#   _make_state - Build a fully-mocked SSHMachineSession (bypasses connect); name kept for import-compat with sibling test modules
-#   TestConnectionLifecycle - connect / disconnect / disconnect_all
-#   TestListFree - list_free filtering by state and platform (returns sessions)
-#   TestSessionFileTransfer - session.upload / session.open_sftp
-#   TestRepositoryCollection - contains, len, get_session
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - switch-to-standard-logging: migrate CPUS assertion off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS); caplog logger name yascheduler.M-SSH-REPOSITORY → yascheduler.infra.ssh.repository.
-#   PREVIOUS_CHANGE: v1.4.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from _make_state and list_free ConnectedMachine constructions; add test_connect_logs_cpu_count_at_discovery_site caplog test for CPU-count log at discovery site (not in setup_node).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for SSHMachineRepository + SSHMachineSession — connection lifecycle, command execution via session, SFTP via session, machine state via session, repository collection semantics.
+# SCOPE: SSHMachineRepository + SSHMachineSession with asyncssh fully mocked. No real SSH, SFTP, or platform detection.
+# KEYWORDS: SSHMachineRepository, SSHMachineSession, asyncssh mock
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

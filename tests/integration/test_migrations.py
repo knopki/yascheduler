@@ -1,36 +1,3 @@
-# FILE: tests/integration/test_migrations.py
-# VERSION: 1.6.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for the migration runner against real PostgreSQL via testcontainers.
-#   SCOPE: Fresh/legacy/modern DB cohorts; .py best-effort reopen; .sql failure rollback; migration 002 backfills node_id SERIAL; migration 010 extracts typed columns from metadata JSONB; migration 011 adds task_status_field_invariants CHECK.
-#   DEPENDS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATION-BASE
-#   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_config - build PostgresDbConfig from a PostgresContainer connection URL
-#   _tracker_rows - read migration_id rows from yascheduler_migrations within a rolled-back read
-#   _columns - read column names of a table within a rolled-back read
-#   test_fresh_db_seeds_last_and_skips_migrations - fresh DB seeded to last_migration; apply_migrations no-op
-#   test_legacy_db_runs_all_migrations - legacy DB (nodes, no tracker) runs all migrations
-#   test_modern_db_skips_bootstrap_and_applies_only_pending - modern DB applies only prefix_id > last
-#   test_py_migration_best_effort_reopen - .py migration closing its txn is still recorded
-#   test_sql_migration_failure_rolls_back_and_not_recorded - .sql failure rolls back, not recorded
-#   test_migration_002_adds_node_id_on_legacy_db - migration 002 backfills node_id SERIAL PRIMARY KEY on a legacy-style DB
-#   test_migration_005_converts_serial_to_identity - migration 005 converts SERIAL PKs to GENERATED ALWAYS AS IDENTITY and seeds above MAX
-#   test_legacy_db_at_005_applies_006_010 - legacy DB at 005: label→title, created_at/updated_at, trigger advances updated_at, status→task_status enum, ip dropped; migration 010 extracts typed columns from metadata
-#   test_fresh_db_full_shape - fresh DB: task_status enum, trigger, title/status enum/created_at/updated_at columns, typed columns (engine/extra/remote_folder/local_folder/webhook_url/error/webhook_custom_params), no ip, seeds '012'
-#   test_migration_008_fails_on_out_of_range_status - migration 008 rolls back when a row has status=3 (out of enum range)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Extracted test_migration_012_node_rename_and_fields to test_migration_012_node_rename.py (GRACE-lite 1000-line limit compliance).
-#   PREVIOUS_CHANGE: v1.8.1 - fix: update seed/tracker assertions from '011' to '012' (schema.sql last_migration bumped to '012'); renumber synthetic migration files 012→013 to avoid collision with real migration 012.
-#   PREVIOUS_CHANGE: v1.8.0 - node-rename-and-fields: migration 012 renames ip→hostname, adds audit timestamps + trigger, jump fields, external_id backfill, NODE_STATUS + status, port constraints; fresh DB seeds to '012'; tracker assertions append '012'; schema.sql snapshot updated; test_migration_012_node_rename_and_fields covers all 7 Gherkin scenarios.
-#   PREVIOUS_CHANGE: v1.7.0 - task-status-field-invariants: fresh DB seeds to '011' (migration 011 adds task_status_field_invariants CHECK); tracker assertions append '011'; synthetic migrations renumbered 011_*→012_* (collision with real 011); legacy/modern DBs now apply 001-011; test_legacy_db_at_005_applies_006_010 trigger UPDATE uses a real RUNNING row (allocated_node_id + remote_folder set) so the CHECK does not reject the status transition.
-# END_CHANGE_SUMMARY
-
 """Integration tests for the migration runner against real PostgreSQL.
 
 Each test starts a fresh PostgresContainer so the three DB cohorts (fresh,
@@ -38,6 +5,11 @@ legacy, modern) can be set up independently. Tests 7.4/7.5 use a temp
 migrations directory so synthetic migration files do not pollute the real
 ``sql/migrations/`` shipped with the package.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for the migration runner against real PostgreSQL via testcontainers.
+# SCOPE: Fresh/legacy/modern DB cohorts; .py best-effort reopen; .sql failure rollback; migration 002 backfills node_id SERIAL; migration 010 extracts typed columns from metadata JSONB; migration 011 adds task_status_field_invariants CHECK.
+# KEYWORDS: migration runner, backfill, typed columns, JSONB extract
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -113,13 +85,6 @@ def _table_exists(conn: pg8000.native.Connection, table: str) -> bool:
     return rows[0][0] is not None
 
 
-# START_CONTRACT: test_fresh_db_seeds_last_and_skips_migrations
-#   PURPOSE: On a fresh DB, apply_schema seeds the tracker to last_migration; apply_migrations applies nothing further.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_fresh_db_seeds_last_and_skips_migrations
 def test_fresh_db_seeds_last_and_skips_migrations() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
@@ -144,13 +109,6 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_legacy_db_runs_all_migrations
-#   PURPOSE: On a legacy DB (yascheduler_nodes present, no tracker), apply_schema creates an empty tracker; apply_migrations runs all migrations.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_legacy_db_runs_all_migrations
 def test_legacy_db_runs_all_migrations() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
@@ -209,13 +167,6 @@ def test_legacy_db_runs_all_migrations() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_modern_db_skips_bootstrap_and_applies_only_pending
-#   PURPOSE: On a modern DB (tracker + nodes, MAX='000'), apply_schema is a no-op and apply_migrations applies only prefix_id > '000' (i.e. '001').
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_modern_db_skips_bootstrap_and_applies_only_pending
 def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
         config = _make_config(pg)
@@ -277,13 +228,6 @@ def test_modern_db_skips_bootstrap_and_applies_only_pending() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_py_migration_best_effort_reopen
-#   PURPOSE: A .py migration that closes its transaction via self.commit() is still recorded; its work is committed.
-#   INPUTS: { tmp_path: Path, monkeypatch }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + a synthetic migration from a temp dir
-#   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-MIGRATION-BASE
-# END_CONTRACT: test_py_migration_best_effort_reopen
 def test_py_migration_best_effort_reopen(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -315,13 +259,6 @@ def test_py_migration_best_effort_reopen(
             conn.close()
 
 
-# START_CONTRACT: test_sql_migration_failure_rolls_back_and_not_recorded
-#   PURPOSE: A failing .sql migration rolls back (no partial table) and is not recorded in the tracker.
-#   INPUTS: { tmp_path: Path, monkeypatch }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + a synthetic failing migration from a temp dir
-#   LINKS: M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_sql_migration_failure_rolls_back_and_not_recorded
 def test_sql_migration_failure_rolls_back_and_not_recorded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -351,13 +288,6 @@ def test_sql_migration_failure_rolls_back_and_not_recorded(
             conn.close()
 
 
-# START_CONTRACT: test_migration_002_adds_node_id_on_legacy_db
-#   PURPOSE: Confirm migration 002 backfills node_id SERIAL PRIMARY KEY on a legacy-style DB (yascheduler_nodes present, no node_id column, no tracker).
-#   INPUTS: { None - starts its own PostgresContainer }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; creates a legacy yascheduler_nodes WITHOUT node_id and inserts rows; applies schema (no-op on existing table) + migrations (002 adds node_id).
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_migration_002_adds_node_id_on_legacy_db
 def test_migration_002_adds_node_id_on_legacy_db() -> None:
     """Migration 002 adds node_id SERIAL PRIMARY KEY and backfills existing rows with sequential ids."""
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
@@ -431,13 +361,6 @@ def test_migration_002_adds_node_id_on_legacy_db() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_migration_005_converts_serial_to_identity
-#   PURPOSE: migration 005 converts SERIAL PKs to GENERATED ALWAYS AS IDENTITY on a pre-005 DB, seeding the identity sequence above MAX so the next insert does not collide.
-#   INPUTS: { None - starts its own PostgresContainer }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; creates pre-005 tables with SERIAL PKs + a row; seeds tracker to '004'; applies schema + migrations (005); asserts identity columns + non-colliding inserts.
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_migration_005_converts_serial_to_identity
 def test_migration_005_converts_serial_to_identity() -> None:
     """Migration 005 converts SERIAL PRIMARY KEY to GENERATED ALWAYS AS IDENTITY."""
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
@@ -554,13 +477,6 @@ def test_migration_005_converts_serial_to_identity() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_legacy_db_at_005_applies_006_010
-#   PURPOSE: On a legacy DB at migration 005, apply_migrations runs 006-010; assert label→title rename, created_at/updated_at, trigger, status enum, ip dropped; migration 010 extracts typed columns from metadata.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; legacy seed at 005; applies migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_legacy_db_at_005_applies_006_010
 def test_legacy_db_at_005_applies_006_010() -> None:
     """Legacy DB at migration 005: migrations 006-010 produce the final schema shape."""
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
@@ -731,13 +647,6 @@ def test_legacy_db_at_005_applies_006_010() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_fresh_db_full_shape
-#   PURPOSE: On a fresh DB, apply_schema creates the final schema shape; apply_migrations is a no-op.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; applies schema + migrations
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_fresh_db_full_shape
 def test_fresh_db_full_shape() -> None:
     """Fresh DB: apply_schema produces final shape; apply_migrations is no-op."""
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
@@ -801,13 +710,6 @@ def test_fresh_db_full_shape() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_migration_008_fails_on_out_of_range_status
-#   PURPOSE: On a legacy DB at 007 with a row status=3, migration 008 fails (USING CASE maps 3→NULL, NOT NULL violates), rolls back.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; seeds legacy DB with bad row; applies migrations; asserts rollback.
-#   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA
-# END_CONTRACT: test_migration_008_fails_on_out_of_range_status
 def test_migration_008_fails_on_out_of_range_status() -> None:
     """Migration 008 fails (rolls back) when a row has out-of-range status (e.g. 3)."""
     with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:

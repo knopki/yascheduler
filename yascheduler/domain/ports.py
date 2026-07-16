@@ -1,26 +1,12 @@
 """Domain port interfaces: abstract contracts for persistence, machine collection/sessions, and cloud provisioning."""
-# FILE: yascheduler/domain/ports.py
-# VERSION: 2.22.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Domain port interfaces: abstract contracts for persistence, machine collection/sessions, and cloud provisioning.
-#   SCOPE: Protocol-based port interfaces for persistence (TaskRepository, NodeRepository), machine collection/sessions (MachineRepository, MachineSession), and cloud provisioning (CloudConfig, CloudProvisioner).
-#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-ENGINE
-#   LINKS: M-DOMAIN-MODEL, M-PERSISTENCE-POSTGRES, M-CLOUD-CONFIGS, M-APPLICATION-DEALLOCATE, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TaskRepository - Async port for task persistence
-#   NodeRepository - Async port for node persistence
-#   CloudConfig - Structural Protocol for cloud provider config
-#   MachineRepository - Async port for the connected-machine collection
-#   MachineSession - Connected-machine entity handle
-#   CloudProvisioner - Async port for cloud node provisioning
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.24.0 - Add jump_port: int as 8th field on CloudConfig Protocol (alongside jump_host/jump_username).
-#   PREVIOUS_CHANGE: v2.23.0 - node-owns-connection-identity: drop jump_host/jump_username from MachineRepository.connect signature.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Define the abstract ports the domain requires so use cases stay decoupled from concrete persistence, SSH, and cloud adapters.
+# SCOPE:
+# - Protocol ports — TaskRepository, NodeRepository, MachineRepository, MachineSession, CloudConfig, CloudProvisioner.
+# - NOT: concrete implementations (infra.*) or use-case orchestration (application.*).
+# INVARIANTS: All ports are typing.Protocol; methods are async unless noted; runtime_checkable where isinstance selection is required.
+# KEYWORDS: port, protocol, repository, persistence, machine session, cloud provisioner, CloudConfig, MachineRepository
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -47,7 +33,18 @@ if TYPE_CHECKING:
         TaskStatus,
     )
 
+__all__ = [
+    "CloudConfig",
+    "CloudProvisioner",
+    "MachineRepository",
+    "MachineSession",
+    "NodeRepository",
+    "TaskRepository",
+]
 
+
+# region CLASS_TaskRepository
+# PURPOSE: Abstract task persistence so use cases stay agnostic to the SQL layer.
 @runtime_checkable
 class TaskRepository(Protocol):
     """Async port for task persistence."""
@@ -94,6 +91,11 @@ class TaskRepository(Protocol):
         ...
 
 
+# endregion CLASS_TaskRepository
+
+
+# region CLASS_NodeRepository
+# PURPOSE: Abstract node persistence so use cases stay agnostic to the SQL layer.
 @runtime_checkable
 class NodeRepository(Protocol):
     """Async port for node persistence."""
@@ -143,10 +145,12 @@ class NodeRepository(Protocol):
         ...
 
 
-# START_CONTRACT: CloudConfig
-#   PURPOSE: Structural contract for cloud provider config.
-#   LINKS: M-DOMAIN-PORTS, M-CLOUD-CONFIGS, M-APPLICATION-DEALLOCATE, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
-# END_CONTRACT: CloudConfig
+# endregion CLASS_NodeRepository
+
+
+# region CLASS_CloudConfig
+# PURPOSE: Pin the minimal config surface application consumers read from a cloud provider, so providers stay substitutable as long as they expose these fields.
+# INVARIANTS: Satisfied structurally (PEP 544) by every ConfigCloud* DTO in infra.cloud.cloud_configs.
 @runtime_checkable
 class CloudConfig(Protocol):
     """Cloud provider config contract — minimal surface application consumers read.
@@ -166,16 +170,12 @@ class CloudConfig(Protocol):
     jump_port: int
 
 
-# START_CONTRACT: MachineSession
-#   PURPOSE: Connected-machine entity handle — identity, state transitions, connect-time config,
-#     adapter-derived accessors, base SSH primitives, and the per-session monitor mechanism.
-#     What MachineRepository hands out and tracks by NodeId; what collaborators
-#     (TaskDeployer/OutputDownloader/OccupancyChecker) operate on per call.
-#   INPUTS: { None - Protocol defines surface only }
-#   OUTPUTS: { None - Protocol defines surface only }
-#   SIDE_EFFECTS: None at Protocol level; implementations own connection teardown via _close (private to concrete class)
-#   LINKS: M-DOMAIN-PORTS, M-SSH-SESSION, M-SSH-REPOSITORY, M-SSH-OPS-DEPLOY, M-SSH-OPS-DOWNLOAD, M-SSH-OPS-OCCUPANCY
-# END_CONTRACT: MachineSession
+# endregion CLASS_CloudConfig
+
+
+# region CLASS_MachineSession
+# PURPOSE: Model the connected-machine handle collaborators operate on per call — identity, state transitions, connect-time config, SSH primitives, and the monitor mechanism — decoupled from collection lifecycle.
+# INVARIANTS: Methods are async unless noted; implementations own connection teardown (_close is private to the concrete class).
 @runtime_checkable
 class MachineSession(Protocol):
     """Connected-machine entity handle — identity, state transitions.
@@ -314,6 +314,11 @@ class MachineSession(Protocol):
         ...
 
 
+# endregion CLASS_MachineSession
+
+
+# region CLASS_MachineRepository
+# PURPOSE: Abstract the connected-machine collection — connect/disconnect lifecycle and queries — so use cases do not depend on a specific SSH session store.
 @runtime_checkable
 class MachineRepository(Protocol):
     """Connected-machine collection — lifecycle and queries."""
@@ -362,6 +367,11 @@ class MachineRepository(Protocol):
     def __contains__(self, node_id: NodeId) -> bool: ...
 
 
+# endregion CLASS_MachineRepository
+
+
+# region CLASS_CloudProvisioner
+# PURPOSE: Abstract cloud VM provisioning so the orchestrator can allocate/deallocate capacity without binding to a specific provider SDK.
 @runtime_checkable
 class CloudProvisioner(Protocol):
     """Cloud VM provisioning port. ``allocate``/``deallocate`` are async.
@@ -389,3 +399,6 @@ class CloudProvisioner(Protocol):
     async def stop(self) -> None:
         """Shut down all cloud provider sessions."""
         ...
+
+
+# endregion CLASS_CloudProvisioner

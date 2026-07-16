@@ -1,43 +1,9 @@
 """INI config parsing — adapter between ConfigParser and domain/infra types."""
-# FILE: yascheduler/entrypoints/config_parser.py
-# VERSION: 1.7.0
-# START_MODULE_CONTRACT
-#   PURPOSE: INI config parsing — adapter between ConfigParser and domain/infra types.
-#   SCOPE: Per-section INI parsers and the parse_config assembly.
-#   DEPENDS: M-DOMAIN-ENGINE, M-CLOUD-CONFIGS, M-DOMAIN-PORTS, M-DOMAIN-SETTINGS, M-INFRA-DB-CONFIG, M-ENTRYPOINTS-CONFIG
-#   LINKS: M-DI, M-ENTRYPOINTS-CONFIG
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   parse_config - Read INI, parse all sections, return frozen Config aggregate
-#   _parse_db_section - Build PostgresDbConfig from [db] INI section
-#   _db_valid_fields - Valid INI keys for [db] section
-#   _parse_local_section - Build LocalSettings from [local] INI section
-#   _local_valid_fields - Valid INI keys for [local] section
-#   _parse_remote_section - Build RemoteDefaults from [remote] INI section
-#   _remote_valid_fields - Valid INI keys for [remote] section
-#   parse_engine_section - Build frozen Engine from [engine.*] INI section
-#   parse_engines - Build EngineRepository from all [engine.*] sections
-#   engine_valid_fields - Valid INI keys for [engine.*] section
-#   parse_cloud_section - Dispatch [clouds] sub-section to per-prefix parser
-#   parse_clouds - Build list of ConfigCloud DTOs from [clouds] section
-#   cloud_valid_fields - Valid INI keys for a given cloud prefix
-#   CLOUD_CONFIG_PARSERS - Registry: provider prefix → per-prefix parser callable
-#   _check_spawn - Validate spawn template placeholders
-#   _check_check_ - Require check_cmd or check_pname
-#   _check_at_least_one_elem - Require non-empty sequence fields
-#   _check_az_user - Reject username="root" for Azure
-#   _fmt_key - Format `{prefix}_{name}` INI key
-#   _parse_azure_section - Build ConfigCloudAzure from [clouds] section
-#   _parse_hetzner_section - Build ConfigCloudHetzner from [clouds] section
-#   _parse_upcloud_section - Build ConfigCloudUpcloud from [clouds] section
-#   _parse_vastai_section - Build ConfigCloudVastAI from [clouds] section
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - Add {prefix}_jump_port parsing with range validation (1-65535) to all four per-prefix cloud parsers (_parse_azure_section, _parse_hetzner_section, _parse_upcloud_section, _parse_vastai_section). jump_port auto-registers via DTO field introspection (no _CLOUD_FIELD_RULES change needed).
-#   PREVIOUS_CHANGE: v1.6.0 - _parse_remote_section reads optional [remote] jump_port key (getint, fallback 22) with range validation 1-65535.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Parse INI config files into frozen domain/infra configuration objects — the adapter between ConfigParser and the application's typed configuration model.
+# SCOPE: INI config parsing — engine sections, cloud provider sections, DB config, local/remote settings, and the top-level parse_config assembly.
+# KEYWORDS: config, ini, parser, engine, cloud, database, settings
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -108,15 +74,10 @@ def _check_port(name: str, value: int) -> int:
     return value
 
 
-# START_CONTRACT: engine_valid_fields
-#   PURPOSE: Return valid INI keys for an [engine.*] section (dataclass fields + deploy aliases, excluding name and deployable).
-#   INPUTS: { None }
-#   OUTPUTS: { Sequence[str] - list of valid config keys }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-ENGINE, M-ENTRYPOINTS-CONFIG
-# END_CONTRACT: engine_valid_fields
+# region FUNC_engine_valid_fields
+# PURPOSE: Return valid INI keys for an [engine.*] section (dataclass fields + deploy aliases, excluding name and deployable).
 def engine_valid_fields() -> Sequence[str]:
-    """Return valid INI keys for an [engine."""
+    """Return valid INI keys for an [engine.*] section."""
     exclude_names = ["name", "deployable"]
     include_names = [
         "deploy_local_files",
@@ -128,16 +89,13 @@ def engine_valid_fields() -> Sequence[str]:
     ] + include_names
 
 
-# START_CONTRACT: parse_engine_section
-#   PURPOSE: Build a frozen Engine from a single [engine.*] INI section.
-#   INPUTS: { sec: SectionProxy - config parser section with engine keys, engines_dir: PurePath - engines directory for resolving deploy paths }
-#   OUTPUTS: { Engine - frozen engine value object }
-#   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys.
-#   RAISES: ValueError - on invalid spawn placeholders, missing check methods, or empty input_files/output_files (parser-side validators)
-#   LINKS: M-DOMAIN-ENGINE, M-ENTRYPOINTS-CONFIG
-# END_CONTRACT: parse_engine_section
+# endregion FUNC_engine_valid_fields
+
+
+# region FUNC_parse_engine_section
+# PURPOSE: Build a frozen Engine from a single [engine.*] INI section, validating spawn placeholders, check methods, and required file lists.
 def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
-    """Build a frozen Engine from a single [engine."""
+    """Build a frozen Engine from a single [engine.*] section."""
     warn_unknown_fields(engine_valid_fields(), sec)
 
     def gettuple(key: str) -> tuple[str, ...]:
@@ -180,25 +138,22 @@ def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
         platform_packages=gettuple("platform_packages"),
     )
 
-    # START_BLOCK_VALIDATE_ENGINE
+    # region BLOCK_validate_engine
     _check_spawn(engine, engine.spawn)
     _check_check_(engine)
     _check_at_least_one_elem(engine, "input_files", engine.input_files)
     _check_at_least_one_elem(engine, "output_files", engine.output_files)
-    # END_BLOCK_VALIDATE_ENGINE
+    # endregion BLOCK_validate_engine
     return engine
 
 
-# START_CONTRACT: parse_engines
-#   PURPOSE: Parse all engine.* sections from an INI config into an EngineRepository.
-#   INPUTS: { cfg: ConfigParser - parsed INI config, engines_dir: PurePath - engines directory path }
-#   OUTPUTS: { EngineRepository - frozen repository populated with engines from config }
-#   SIDE_EFFECTS: None
-#   RAISES: ValueError - propagated from parse_engine_section validators
-#   LINKS: M-DOMAIN-ENGINE, M-ENTRYPOINTS-CONFIG
-# END_CONTRACT: parse_engines
+# endregion FUNC_parse_engine_section
+
+
+# region FUNC_parse_engines
+# PURPOSE: Parse all engine.* sections from an INI config into an EngineRepository.
 def parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository:
-    """Parse all engine."""
+    """Parse all engine.* sections from an INI config into an EngineRepository."""
     snames = filter(lambda x: x.startswith("engine."), cfg.sections())
     data: dict[str, Engine] = {}
     for sname in snames:
@@ -206,6 +161,8 @@ def parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository:
         data[engine.name] = engine
     return EngineRepository(data=data)
 
+
+# endregion FUNC_parse_engines
 
 # ============================================================================
 # Cloud config parsers
@@ -222,10 +179,7 @@ def _fmt_key(prefix: str, name: str) -> str:
     return f"{prefix}_{name}"
 
 
-# Per-prefix valid-field tables. Excludes are the dataclass fields not surfaced as
-# INI keys (prefix is a class attr, not a field; username/jump_username surface via
-# user/jump_user aliases); provider-specific includes add the INI aliases (e.g. az
-# uses `image` for vm_image and `size` for vm_size).
+# Per-prefix valid-field tables.
 _AZ_EXCLUDES = {"prefix", "username", "jump_username", "vm_image", "vm_size"}
 _AZ_INCLUDES = ["user", "jump_user", "image", "size"]
 _HETZNER_EXCLUDES = {"prefix", "username", "jump_username"}
@@ -236,14 +190,8 @@ _VASTAI_EXCLUDES = {"prefix", "username", "jump_username", "env"}
 _VASTAI_INCLUDES = ["user", "jump_user"]
 
 
-# START_CONTRACT: cloud_valid_fields
-#   PURPOSE: Return valid INI keys for a [clouds] sub-section keyed by a cloud provider prefix.
-#   INPUTS: { prefix: str - provider prefix (az/hetzner/upcloud/vastai) }
-#   OUTPUTS: { Sequence[str] - list of `{prefix}_{field_or_alias}` keys }
-#   SIDE_EFFECTS: None
-#   RAISES: KeyError - if prefix is not in CLOUD_CONFIG_PARSERS (unknown provider)
-#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: cloud_valid_fields
+# region FUNC_cloud_valid_fields
+# PURPOSE: Return valid INI keys for a [clouds] sub-section keyed by a cloud provider prefix.
 def cloud_valid_fields(prefix: str) -> Sequence[str]:
     """Return valid INI keys for a [clouds] sub-section keyed by a cloud provider prefix."""
     exclude_names, include_names = _CLOUD_FIELD_RULES[prefix]
@@ -257,14 +205,11 @@ def cloud_valid_fields(prefix: str) -> Sequence[str]:
     ]
 
 
-# START_CONTRACT: _parse_azure_section
-#   PURPOSE: Build ConfigCloudAzure from a [clouds] INI section.
-#   INPUTS: { sec: SectionProxy - [clouds] config parser section with az_* prefixed keys }
-#   OUTPUTS: { ConfigCloudAzure - frozen Azure cloud configuration }
-#   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys across all 4 providers' valid fields.
-#   RAISES: ValueError - if username == "root" (parser-side _check_az_user) or AzureImageReference.from_urn fails on a malformed az_image URN or jump_port < 1 or > 65535
-#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _parse_azure_section
+# endregion FUNC_cloud_valid_fields
+
+
+# region FUNC__parse_azure_section
+# PURPOSE: Build ConfigCloudAzure from a [clouds] INI section.
 def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
     prefix = "az"
     fmt = partial(_fmt_key, prefix)
@@ -311,14 +256,11 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
     )
 
 
-# START_CONTRACT: _parse_hetzner_section
-#   PURPOSE: Build ConfigCloudHetzner from a [clouds] INI section.
-#   INPUTS: { sec: SectionProxy - [clouds] config parser section with hetzner_* prefixed keys }
-#   OUTPUTS: { ConfigCloudHetzner - frozen Hetzner cloud configuration }
-#   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys across all 4 providers' valid fields.
-#   RAISES: ValueError - if max_nodes < 0 or idle_tolerance < 1 or jump_port < 1 or > 65535
-#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _parse_hetzner_section
+# endregion FUNC__parse_azure_section
+
+
+# region FUNC__parse_hetzner_section
+# PURPOSE: Build ConfigCloudHetzner from a [clouds] INI section.
 def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
     prefix = "hetzner"
     fmt = partial(_fmt_key, prefix)
@@ -355,14 +297,11 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
     )
 
 
-# START_CONTRACT: _parse_upcloud_section
-#   PURPOSE: Build ConfigCloudUpcloud from a [clouds] INI section.
-#   INPUTS: { sec: SectionProxy - [clouds] config parser section with upcloud_* prefixed keys }
-#   OUTPUTS: { ConfigCloudUpcloud - frozen Upcloud cloud configuration }
-#   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys across all 4 providers' valid fields.
-#   RAISES: ValueError - if max_nodes < 0 or idle_tolerance < 1 or jump_port < 1 or > 65535
-#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _parse_upcloud_section
+# endregion FUNC__parse_hetzner_section
+
+
+# region FUNC__parse_upcloud_section
+# PURPOSE: Build ConfigCloudUpcloud from a [clouds] INI section.
 def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
     prefix = "upcloud"
     fmt = partial(_fmt_key, prefix)
@@ -397,14 +336,11 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
     )
 
 
-# START_CONTRACT: _parse_vastai_section
-#   PURPOSE: Build ConfigCloudVastAI from a [clouds] INI section.
-#   INPUTS: { sec: SectionProxy - [clouds] config parser section with vastai_* prefixed keys }
-#   OUTPUTS: { ConfigCloudVastAI - frozen VastAI cloud configuration }
-#   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys across all 4 providers' valid fields.
-#   RAISES: ValueError - if disk_gb/min_vram_mb/num_gpus < 1, max_price_per_hr/max_nodes < 0, or idle_tolerance < 1 or jump_port < 1 or > 65535
-#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _parse_vastai_section
+# endregion FUNC__parse_upcloud_section
+
+
+# region FUNC__parse_vastai_section
+# PURPOSE: Build ConfigCloudVastAI from a [clouds] INI section.
 def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
     prefix = "vastai"
     fmt = partial(_fmt_key, prefix)
@@ -465,12 +401,10 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
     )
 
 
+# endregion FUNC__parse_vastai_section
+
+
 # Open/closed registry: adding a provider = one parser function + one entry here.
-# The aggregate root (Config.from_config_parser) iterates this registry via
-# parse_clouds and never hardcodes the variant list.
-# Typed against the ConfigCloud Union (the concrete DTOs the parsers return);
-# application-layer consumers type against the domain CloudConfig Protocol and
-# the DTOs satisfy both structurally.
 CLOUD_CONFIG_PARSERS: dict[str, Callable[[SectionProxy], ConfigCloud]] = {
     "az": _parse_azure_section,
     "hetzner": _parse_hetzner_section,
@@ -478,9 +412,6 @@ CLOUD_CONFIG_PARSERS: dict[str, Callable[[SectionProxy], ConfigCloud]] = {
     "vastai": _parse_vastai_section,
 }
 
-# Mapping prefix -> (dataclass, exclude_names, include_names) used by
-# cloud_valid_fields. Kept as module-level constants so the parser functions and
-# the registry reference the same DTO classes.
 _CLOUD_DTO_BY_PREFIX: dict[str, type] = {
     "az": ConfigCloudAzure,
     "hetzner": ConfigCloudHetzner,
@@ -494,9 +425,6 @@ _CLOUD_FIELD_RULES: dict[str, tuple[set[str], list[str]]] = {
     "vastai": (_VASTAI_EXCLUDES, _VASTAI_INCLUDES),
 }
 
-# Union of all providers' valid INI keys — passed to warn_unknown_fields so a key
-# belonging to any provider prefix does not warn (the [clouds] section is shared
-# across all providers, unlike [engine.*] which is per-engine).
 _ALL_CLOUD_VALID_FIELDS: list[str] = [
     *cloud_valid_fields("az"),
     *cloud_valid_fields("hetzner"),
@@ -505,28 +433,20 @@ _ALL_CLOUD_VALID_FIELDS: list[str] = [
 ]
 
 
-# START_CONTRACT: parse_cloud_section
-#   PURPOSE: Dispatch a [clouds] sub-section to its per-prefix parser via the registry.
-#   INPUTS: { sec: SectionProxy - [clouds] config parser section, prefix: str - provider prefix }
-#   OUTPUTS: { ConfigCloud - frozen cloud provider config DTO }
-#   SIDE_EFFECTS: None (warn_unknown_fields runs inside the per-prefix parser)
-#   RAISES: KeyError - if prefix is not in CLOUD_CONFIG_PARSERS (unknown provider)
-#   LINKS: M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: parse_cloud_section
+# region FUNC_parse_cloud_section
+# PURPOSE: Dispatch a [clouds] sub-section to its per-prefix parser via the registry.
 def parse_cloud_section(sec: SectionProxy, prefix: str) -> ConfigCloud:
     """Dispatch a [clouds] sub-section to its per-prefix parser via the registry."""
     return CLOUD_CONFIG_PARSERS[prefix](sec)
 
 
-# START_CONTRACT: parse_clouds
-#   PURPOSE: Build the list of ConfigCloud DTOs from a [clouds] section, inheriting remote.username for missing prefix users.
-#   INPUTS: { cfg: ConfigParser - parsed INI config with a [clouds] section, remote: RemoteDefaults - remote defaults (username inherited) }
-#   OUTPUTS: { list[ConfigCloud] - one DTO per provider prefix present in [clouds] options }
-#   SIDE_EFFECTS: Mutates cfg["clouds"] to inject `{prefix}_user = remote.username` for any prefix whose user key is absent.
-#   LINKS: M-CLOUD-CONFIGS, M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: parse_clouds
+# endregion FUNC_parse_cloud_section
+
+
+# region FUNC_parse_clouds
+# PURPOSE: Build the list of ConfigCloud DTOs from a [clouds] section, inheriting remote.username for missing prefix users.
 def parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[ConfigCloud]:
-    """Build the list of ConfigCloud DTOs from a [clouds] section, inheriting remote."""
+    """Build the list of ConfigCloud DTOs from a [clouds] section, inheriting remote.username for missing prefix users."""
     if not cfg.has_section("clouds"):
         cfg.add_section("clouds")
     sec = cfg["clouds"]
@@ -549,9 +469,10 @@ def parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[ConfigCloud]
     ]
 
 
+# endregion FUNC_parse_clouds
+
 # ============================================================================
 # db / local / remote section parsers + parse_config assembly
-# (composition-root config aggregate)
 # ============================================================================
 
 
@@ -559,13 +480,8 @@ def _db_valid_fields() -> Sequence[str]:
     return [f.name for f in dataclasses.fields(PostgresDbConfig)]
 
 
-# START_CONTRACT: _parse_db_section
-#   PURPOSE: Build a frozen PostgresDbConfig from a [db] INI section.
-#   INPUTS: { sec: SectionProxy - config parser section with db config keys }
-#   OUTPUTS: { PostgresDbConfig - frozen database connection configuration }
-#   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys.
-#   LINKS: M-INFRA-DB-CONFIG, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _parse_db_section
+# region FUNC__parse_db_section
+# PURPOSE: Build a frozen PostgresDbConfig from a [db] INI section.
 def _parse_db_section(sec: SectionProxy) -> PostgresDbConfig:
     warn_unknown_fields(_db_valid_fields(), sec)
     return PostgresDbConfig(
@@ -577,23 +493,18 @@ def _parse_db_section(sec: SectionProxy) -> PostgresDbConfig:
     )
 
 
+# endregion FUNC__parse_db_section
+
+
 def _local_valid_fields() -> Sequence[str]:
     return [f.name for f in dataclasses.fields(LocalSettings)]
 
 
-# START_CONTRACT: _parse_local_section
-#   PURPOSE: Build a frozen LocalSettings from a [local] INI section.
-#   INPUTS: { sec: SectionProxy - config parser section with local config keys }
-#   OUTPUTS: { LocalSettings - frozen local daemon settings }
-#   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys.
-#   LINKS: M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _parse_local_section
+# region FUNC__parse_local_section
+# PURPOSE: Build a frozen LocalSettings from a [local] INI section.
 def _parse_local_section(sec: SectionProxy) -> LocalSettings:
     warn_unknown_fields(_local_valid_fields(), sec)
     data_dir = Path(sec.get("data_dir", "./data")).resolve()
-    # sec.getint(...) returns None when the key is absent; _int_or_default
-    # coerces None back to the dataclass default (matching the former
-    # converters.default_if_none) without falsy-coercing a legitimate 0.
     return LocalSettings(
         data_dir=data_dir,
         tasks_dir=Path(sec.get("tasks_dir", str(data_dir / "tasks"))).resolve(),
@@ -633,6 +544,9 @@ def _parse_local_section(sec: SectionProxy) -> LocalSettings:
     )
 
 
+# endregion FUNC__parse_local_section
+
+
 def _remote_valid_fields() -> Sequence[str]:
     exclude_names = ["username", "jump_username"]
     include_names = ["user", "jump_user"]
@@ -643,14 +557,8 @@ def _remote_valid_fields() -> Sequence[str]:
     ] + include_names
 
 
-# START_CONTRACT: _parse_remote_section
-#   PURPOSE: Build a frozen RemoteDefaults from a [remote] INI section.
-#   INPUTS: { sec: SectionProxy - config parser section with remote config keys }
-#   OUTPUTS: { RemoteDefaults - frozen remote machine defaults }
-#   SIDE_EFFECTS: Emits ConfigWarning via warn_unknown_fields for unknown keys.
-#   RAISES: ValueError - if jump_port < 1 or > 65535
-#   LINKS: M-DOMAIN-SETTINGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: _parse_remote_section
+# region FUNC__parse_remote_section
+# PURPOSE: Build a frozen RemoteDefaults from a [remote] INI section.
 def _parse_remote_section(sec: SectionProxy) -> RemoteDefaults:
     warn_unknown_fields(_remote_valid_fields(), sec)
     data_dir = PurePath(sec.get("data_dir", "./data"))
@@ -668,13 +576,11 @@ def _parse_remote_section(sec: SectionProxy) -> RemoteDefaults:
     )
 
 
-# START_CONTRACT: parse_config
-#   PURPOSE: Read an INI file, parse each section via per-section parser functions, and return a frozen Config aggregate.
-#   INPUTS: { path: str | bytes | PurePath - path or contents of INI config file }
-#   OUTPUTS: { Config - fully populated frozen configuration object }
-#   SIDE_EFFECTS: Reads from filesystem when path is a path; mutates the in-memory ConfigParser to add missing [db]/[local]/[remote]/[clouds] sections and to inherit remote.username into [clouds].
-#   LINKS: M-ENTRYPOINTS-CONFIG, M-INFRA-DB-CONFIG, M-DOMAIN-SETTINGS, M-DOMAIN-ENGINE, M-CLOUD-CONFIGS, M-ENTRYPOINTS-CONFIG-PARSER
-# END_CONTRACT: parse_config
+# endregion FUNC__parse_remote_section
+
+
+# region FUNC_parse_config
+# PURPOSE: Read an INI file, parse each section via per-section parser functions, and return a frozen Config aggregate.
 def parse_config(path: str | bytes | PurePath) -> Config:
     """Parse an INI config file (path or contents) into a frozen Config aggregate."""
     cfg = ConfigParser()
@@ -695,3 +601,6 @@ def parse_config(path: str | bytes | PurePath) -> Config:
         clouds=clouds,
         engines=parse_engines(cfg, local.engines_dir),
     )
+
+
+# endregion FUNC_parse_config

@@ -1,32 +1,8 @@
-# FILE: tests/unit/test_persistence_adapter.py
-# VERSION: 1.12.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yascheduler.infra.persistence.
-#   SCOPE: load_query file-reading and caching behaviour; PostgresUnitOfWork lifecycle; PostgresTaskRepository and PostgresNodeRepository CRUD via fake _run.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_task_row - build a fake _run row dict for a Task with sensible defaults
-#   test_load_query_first_call_reads_file - verify disk read on first access
-#   test_load_query_second_call_uses_cache - verify cached result (no re-read)
-#   test_uow_enter_creates_repositories - verify __aenter__ sets tasks and nodes
-#   test_uow_commit_called - verify commit delegates to connection
-#   test_uow_rollback_on_exception - verify exception triggers rollback
-#   test_uow_closes_connection - verify connection.close is called on exit
-#   TestPostgresTaskRepository - task CRUD via mocked _run
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.12.0 - Extracted TestPostgresNodeRepository + _make_node_row to test_persistence_node_adapter.py (GRACE-lite 1000-line limit compliance).
-#   PREVIOUS_CHANGE: v1.11.0 - Node-rename-and-fields: add _make_node_row helper; update all node mock row dicts with new fields (created_at, updated_at, jump_host, jump_port, jump_username, external_id, status).
-#   PREVIOUS_CHANGE: v1.10.0 - extract _make_task_row helper to collapse repeated 12-column row dicts (GRACE-lite 1000-line limit compliance).
-#   PREVIOUS_CHANGE: v1.9.0 - drop-task-context-entity: update mock row data (flat columns, no metadata JSON); task.context.X → task.X reads; Task/NewTask construction with flat fields; remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.8.1 - task-allocated-node-id: extract allocated_node_id bind/read tests + SQL-content tests into tests/unit/test_persistence_allocated_node_id.py (this file exceeded the 1000-line GRACE-lite hard limit after the v1.8.0 additions).
-#   PREVIOUS_CHANGE: v1.8.0 - task-allocated-node-id: add test_row_to_task_reads_allocated_node_id, test_row_to_task_handles_null_allocated_node_id, test_insert_binds_allocated_node_id, test_save_binds_allocated_node_id, test_save_binds_null_allocated_node_id, and TestTaskSqlIncludesAllocatedNodeId (verifies insert/update_by_id/get_by_id/list_by_status/list_by_jobs SQL files include allocated_node_id; update_status/get_ids_by_ip_and_status/count_by_status do NOT).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yascheduler.infra.persistence.
+# SCOPE: load_query file-reading and caching behaviour; PostgresUnitOfWork lifecycle; PostgresTaskRepository and PostgresNodeRepository CRUD via fake _run.
+# KEYWORDS: load_query, PostgresUnitOfWork, CRUD, fake _run
+# endregion MODULE_CONTRACT
 
 import json
 from pathlib import Path
@@ -75,14 +51,6 @@ def _make_task_row(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-# START_CONTRACT: test_load_query_first_call_reads_file
-#   PURPOSE: Verify that the first call to load_query reads the file from disk
-#            and returns its contents unchanged.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Creates a temporary .sql file in the persistence sql/ tree.
-#   LINKS: load_query
-# END_CONTRACT: test_load_query_first_call_reads_file
 @pytest.mark.unit
 def test_load_query_first_call_reads_file(
     tmp_path: Path,
@@ -106,14 +74,6 @@ def test_load_query_first_call_reads_file(
     assert load_query("task/get_by_id") == "SELECT * FROM tasks WHERE id = :task_id"
 
 
-# START_CONTRACT: test_load_query_second_call_uses_cache
-#   PURPOSE: Verify that a second call does not re-read the file by checking
-#            that mutating the file between calls does not change the result.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None
-#   LINKS: load_query
-# END_CONTRACT: test_load_query_second_call_uses_cache
 @pytest.mark.unit
 def test_load_query_second_call_uses_cache(
     tmp_path: Path,
@@ -142,13 +102,6 @@ def test_load_query_second_call_uses_cache(
     assert result_b != "SELECT 1"
 
 
-# START_CONTRACT: test_uow_enter_creates_repositories
-#   PURPOSE: Verify that async enter creates task and node repositories.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork, PostgresTaskRepository, PostgresNodeRepository
-# END_CONTRACT: test_uow_enter_creates_repositories
 async def test_uow_enter_creates_repositories(mocker: MockerFixture) -> None:
     """__aenter__ instantiates both task and node repositories."""
     mock_conn = mocker.MagicMock()
@@ -165,13 +118,6 @@ async def test_uow_enter_creates_repositories(mocker: MockerFixture) -> None:
         assert isinstance(uow.nodes, PostgresNodeRepository)
 
 
-# START_CONTRACT: test_collect_events_preserves_shared_list
-#   PURPOSE: Verify collect_events mutates in place so repo._saved_tasks and uow._saved_tasks are the same list.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.collect_events
-# END_CONTRACT: test_collect_events_preserves_shared_list
 async def test_collect_events_preserves_shared_list(mocker: MockerFixture) -> None:
     """collect_events preserves shared list reference between UoW and repo."""
     mock_conn = mocker.MagicMock()
@@ -189,13 +135,6 @@ async def test_collect_events_preserves_shared_list(mocker: MockerFixture) -> No
         assert uow.tasks._saved_tasks is uow._saved_tasks
 
 
-# START_CONTRACT: test_uow_commit_called
-#   PURPOSE: Verify commit delegates to pg8000 connection.run("COMMIT").
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.commit
-# END_CONTRACT: test_uow_commit_called
 async def test_uow_commit_called(mocker: MockerFixture) -> None:
     """commit() calls connection.run('COMMIT')."""
     mock_conn = mocker.MagicMock()
@@ -213,13 +152,6 @@ async def test_uow_commit_called(mocker: MockerFixture) -> None:
     mock_conn.run.assert_any_call("COMMIT")
 
 
-# START_CONTRACT: test_uow_rollback_on_exception
-#   PURPOSE: Verify that a context body exception triggers rollback and close.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.rollback
-# END_CONTRACT: test_uow_rollback_on_exception
 async def test_uow_rollback_on_exception(mocker: MockerFixture) -> None:
     """Exception inside context triggers rollback and closes connection."""
     mock_conn = mocker.MagicMock()
@@ -239,13 +171,6 @@ async def test_uow_rollback_on_exception(mocker: MockerFixture) -> None:
     mock_conn.close.assert_called_once()
 
 
-# START_CONTRACT: test_uow_closes_connection
-#   PURPOSE: Verify connection.close() is called on normal exit.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.__aexit__
-# END_CONTRACT: test_uow_closes_connection
 async def test_uow_closes_connection(mocker: MockerFixture) -> None:
     """connection.close() is called on normal exit."""
     mock_conn = mocker.MagicMock()
@@ -263,13 +188,6 @@ async def test_uow_closes_connection(mocker: MockerFixture) -> None:
     mock_conn.close.assert_called_once()
 
 
-# START_CONTRACT: test_uow_commit_after_exit_raises
-#   PURPOSE: commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.commit, PostgresUnitOfWork._require_conn
-# END_CONTRACT: test_uow_commit_after_exit_raises
 async def test_uow_commit_after_exit_raises(mocker: MockerFixture) -> None:
     """commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block."""
     mock_conn = mocker.MagicMock()
@@ -291,13 +209,6 @@ async def test_uow_commit_after_exit_raises(mocker: MockerFixture) -> None:
         await uow.commit()
 
 
-# START_CONTRACT: test_uow_double_commit
-#   PURPOSE: Second commit within the same context is accepted by pg8000 (idempotent).
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.commit
-# END_CONTRACT: test_uow_double_commit
 async def test_uow_double_commit(mocker: MockerFixture) -> None:
     """Second commit within the same context is accepted by pg8000 (idempotent)."""
     mock_conn = mocker.MagicMock()

@@ -1,27 +1,8 @@
-# FILE: tests/unit/test_webhook_handler.py
-# VERSION: 1.5.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Tests for the webhook notification handler.
-#   SCOPE: Unit tests for webhook_handler event dispatch, _send_webhook, and WebhookPayload construction.
-#   DEPENDS: M-NOTIFIER-WEBHOOK
-#   LINKS: M-NOTIFIER-WEBHOOK
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _call - Helper to invoke webhook_handler with mocked HTTP session
-#   test_event_dispatches_correct_status - Parametrized: each event type maps to correct TaskStatus in webhook payload
-#   test_skip_when_no_webhook_url - Handler returns early when webhook_url is None
-#   test_custom_params_forwarded - WebhookPayload carries webhook_custom_params through
-#   test_send_error_logged_not_raised - Non-ok HTTP response logs warning without raising; asserts on log and return value
-#   test_send_webhook_retries_on_client_error - ClientError triggers backoff retry; _send_webhook succeeds on second attempt
-#   test_webhookpayload_construction - WebhookPayload construction with explicit custom_params (relocated from test_scheduler.py)
-#   test_webhookpayload_default_custom_params - WebhookPayload default custom_params is empty dict when not provided (relocated from test_scheduler.py)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - switch-to-standard-logging: migrate RETRY assertion off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS).
-#   PREVIOUS_CHANGE: v1.4.0 - Relocate TestWebhookPayload (construction/default custom_params) from tests/unit/test_scheduler.py prior to scheduler.py deletion.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Tests for the webhook notification handler.
+# SCOPE: Unit tests for webhook_handler event dispatch, _send_webhook, and WebhookPayload construction.
+# KEYWORDS: webhook handler, _send_webhook, WebhookPayload
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -51,16 +32,6 @@ from yascheduler.infra.notifier.webhook import WebhookPayload, webhook_handler
 URL = "https://example.com/hook"
 
 
-# START_CONTRACT: _fast_backoff
-#   PURPOSE: Make backoff.on_exception retries instant and terminate fast in tests.
-#   INPUTS: { monkeypatch: pytest.MonkeyPatch }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Replaces asyncio.sleep with a no-op AsyncMock; fast-forwards
-#     datetime.now() after the first iteration so backoff's max_time=60 check
-#     trips quickly for persistent errors (which would otherwise loop ~forever
-#     once sleeps are removed, until the fibonacci value overflows float).
-#   LINKS: M-NOTIFIER-WEBHOOK, fn-_send_webhook
-# END_CONTRACT: _fast_backoff
 @pytest.fixture(autouse=True)
 def _fast_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
@@ -227,23 +198,11 @@ async def test_send_webhook_retries_on_client_error(
 class TestWebhookPayload:
     """Tests for WebhookPayload dataclass (relocated from tests/unit/test_scheduler.py)."""
 
-    # START_CONTRACT: test_webhookpayload_construction
-    #   PURPOSE: Verify WebhookPayload construction with explicit custom_params
-    #   INPUTS: { None }
-    #   OUTPUTS: { None - assertions on task_id, status, custom_params fields }
-    # END_CONTRACT: test_webhookpayload_construction
-
     def test_webhookpayload_construction(self) -> None:
         payload = WebhookPayload(task_id=1, status=0, custom_params={"k": "v"})
         assert payload.task_id == 1
         assert payload.status == 0
         assert payload.custom_params == {"k": "v"}
-
-    # START_CONTRACT: test_webhookpayload_default_custom_params
-    #   PURPOSE: Verify WebhookPayload default custom_params is empty dict when not provided
-    #   INPUTS: { None }
-    #   OUTPUTS: { None - assertion on default custom_params value }
-    # END_CONTRACT: test_webhookpayload_default_custom_params
 
     def test_webhookpayload_default_custom_params(self) -> None:
         payload = WebhookPayload(task_id=42, status=1)

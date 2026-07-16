@@ -1,25 +1,9 @@
-# FILE: tests/unit/test_orchestrator_consumer_resilience.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for orchestrator consumer-worker error resilience (fix-save-silent-zero-rows).
-#   SCOPE: consumer Exception → logged and worker continues processing subsequent messages;
-#          consumer CancelledError → propagates past `except Exception` to the graceful-drain path.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR
-#   LINKS: M-QUEUE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestConsumerResilience - consumer Exception is logged and the worker continues the loop
-#   TestConsumerCancelledErrorDrain - consumer CancelledError reaches the graceful-drain path
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - switch-to-standard-logging: migrate CONSUMER_ERROR assertion off record.block onto getMessage().
-#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for orchestrator consumer-worker resilience (fix-save-silent-zero-rows).
-# END_CHANGE_SUMMARY
-
 """Unit tests for orchestrator consumer-worker error resilience."""
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for orchestrator consumer-worker error resilience (fix-save-silent-zero-rows).
+# SCOPE: consumer Exception → logged and worker continues processing subsequent messages; consumer CancelledError → propagates past `except Exception` to the graceful-drain path.
+# KEYWORDS: consumer resilience, CancelledError, error recovery
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

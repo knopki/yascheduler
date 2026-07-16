@@ -1,28 +1,8 @@
-# FILE: tests/unit/test_cli_show_nodes.py
-# VERSION: 1.4.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yanodes show_nodes() flag parsing, filtering, table/JSON rendering, and exit codes.
-#   SCOPE: show_nodes() and private helpers with mocked Config/CLIDeps/UoW.
-#   DEPENDS: M-ENTRYPOINTS-CLI-SHOW-NODES
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestShowNodesParsing - --help, unknown flag, --cloud/--no-cloud mutex
-#   TestShowNodesRendering - default table, display transformations, JSON raw values, empty results
-#   TestShowNodesFiltering - enabled/disabled, busy/free, cloud exact, no-cloud, AND composition, subset=default
-#   TestShowNodesOrder - list_all() order preserved
-#   TestShowNodesErrors - exit 1 on DB error and config error
-#   TestShowNodesStructure - no external deps (rich/tabulate), O(n+m) join invariant
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), JSON key "ip"→"hostname", table header IP→HOSTNAME, _NodeView(ip=…)→_NodeView(hostname=…), add new field assertions (jump_host, jump_port, jump_username, external_id, status, created_at, updated_at).
-#   PREVIOUS_CHANGE: v1.4.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: remove allocated_ip from make_task helper, drop ip= kwarg from all call sites
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yanodes show_nodes() flag parsing, filtering, table/JSON rendering, and exit codes.
+# SCOPE: show_nodes() flag parsing, filtering, table/JSON rendering, exit codes with mocked Config/CLIDeps/UoW.
+# KEYWORDS: yanodes, show_nodes, filtering, table/JSON rendering
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

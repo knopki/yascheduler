@@ -1,32 +1,10 @@
 """Cloud adapters."""
-# FILE: yascheduler/infra/cloud/adapters.py
-# VERSION: 1.4.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Mapping of cloud config types to create/delete callables.
-#   SCOPE: Adapter registry mapping provider config classes to their operations.
-#   DEPENDS: M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDERS
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDERS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   CloudAdapter                # Generic[TConfigCloud_co] - Frozen dataclass wrapping create/delete callables + platform checks
-#   can_debian_buster           # (platform: str) -> bool
-#   can_debian_bullseye         # (platform: str) -> bool
-#   can_win10                   # (platform: str) -> bool
-#   can_win11                   # (platform: str) -> bool
-#   get_azure_adapter           # (name: str) -> CloudAdapter
-#   get_hetzner_adapter         # (name: str) -> CloudAdapter
-#   get_upcloud_adapter         # (name: str) -> CloudAdapter
-#   get_vastai_adapter          # (name: str) -> CloudAdapter
-#   CLOUD_ADAPTER_GETTERS       # Registry mapping cloud prefix to adapter factory
-#   resolve_adapter             # Look up cloud adapter by prefix from registry (public; consumed by composition root)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.4.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v1.3.0 - remove log parameter from function signatures; bind module-local logger = get_logger("M-CLOUD-ADAPTERS") at module top
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Bind provider-specific create/delete operations to their config types so the allocator can resolve the right adapter at runtime without knowing provider internals.
+# SCOPE: Adapter registry mapping provider config classes to their operations.
+# DEPENDENCIES: LOADS: provider modules (az, hetzner, upcloud, vastai) lazily via inline import inside getter functions
+# KEYWORDS: cloud adapter, registry, create, delete, platform check, azure, hetzner, upcloud, vastai
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -47,6 +25,16 @@ from .protocols import (
 )
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "CLOUD_ADAPTER_GETTERS",
+    "CloudAdapter",
+    "get_azure_adapter",
+    "get_hetzner_adapter",
+    "get_upcloud_adapter",
+    "get_vastai_adapter",
+    "resolve_adapter",
+]
 
 
 def can_debian_buster(platform: str) -> bool:
@@ -89,13 +77,8 @@ def can_win11(platform: str) -> bool:
     return platform in ["windows-11", "windows"]
 
 
-# START_CONTRACT: CloudAdapter.__init__
-#   PURPOSE: Initialize cloud adapter with provider ops, platform checks, and concurrency limits
-#   INPUTS: { name: str - provider name, supported_platform_checks: tuple[SupportedPlatformChecker, ...] - platform check functions, create_node: CreateNodeCallable - create function, delete_node: DeleteNodeCallable - delete function, op_limit: int - concurrent operation limit (default 1), create_node_conn_timeout: int - SSH connect timeout in s (default 10), create_node_timeout: int - total node creation timeout in s (default 300) }
-#   OUTPUTS: { CloudAdapter - frozen adapter instance }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS
-# END_CONTRACT: CloudAdapter.__init__
+# region CLASS_CloudAdapter
+# PURPOSE: Wrap a provider's identity (name, platform checks, create/delete callables, concurrency limit) so the provisioner can drive every provider through one uniform interface.
 @dataclass(frozen=True)
 class CloudAdapter(Generic[TConfigCloud_co]):
     """Cloud adapter."""
@@ -118,13 +101,11 @@ class CloudAdapter(Generic[TConfigCloud_co]):
         return asyncio.Semaphore(self.op_limit)
 
 
-# START_CONTRACT: get_azure_adapter
-#   PURPOSE: Create CloudAdapter for Azure with Bullseye/Windows 11 platform support
-#   INPUTS: { name: str - cloud provider name }
-#   OUTPUTS: { CloudAdapter - configured Azure cloud adapter }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-AZ
-# END_CONTRACT: get_azure_adapter
+# endregion CLASS_CloudAdapter
+
+
+# region FUNC_get_azure_adapter
+# PURPOSE: Wire Azure SDK create/delete to a CloudAdapter so the provisioner can launch and terminate Azure VMs through the generic adapter interface.
 def get_azure_adapter(name: str) -> CloudAdapter:
     """Create CloudAdapter for Azure with Bullseye/Windows 11 platform support."""
     from .providers.az import az_create_node, az_delete_node  # noqa: PLC0415
@@ -138,13 +119,11 @@ def get_azure_adapter(name: str) -> CloudAdapter:
     )
 
 
-# START_CONTRACT: get_hetzner_adapter
-#   PURPOSE: Create CloudAdapter for Hetzner with Trixie platform support
-#   INPUTS: { name: str - cloud provider name }
-#   OUTPUTS: { CloudAdapter - configured Hetzner cloud adapter }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-HETZNER
-# END_CONTRACT: get_hetzner_adapter
+# endregion FUNC_get_azure_adapter
+
+
+# region FUNC_get_hetzner_adapter
+# PURPOSE: Wire Hetzner SDK create/delete to a CloudAdapter so the provisioner can launch and terminate Hetzner servers through the generic adapter interface.
 def get_hetzner_adapter(name: str) -> CloudAdapter:
     """Create CloudAdapter for Hetzner with Trixie platform support."""
     from .providers.hetzner import (  # noqa: PLC0415
@@ -166,13 +145,11 @@ def get_hetzner_adapter(name: str) -> CloudAdapter:
     )
 
 
-# START_CONTRACT: get_upcloud_adapter
-#   PURPOSE: Create CloudAdapter for UpCloud with Buster platform support, single op limit
-#   INPUTS: { name: str - cloud provider name }
-#   OUTPUTS: { CloudAdapter - configured UpCloud cloud adapter }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-UPCLOUD
-# END_CONTRACT: get_upcloud_adapter
+# endregion FUNC_get_hetzner_adapter
+
+
+# region FUNC_get_upcloud_adapter
+# PURPOSE: Wire UpCloud SDK create/delete to a CloudAdapter so the provisioner can launch and terminate UpCloud servers through the generic adapter interface.
 def get_upcloud_adapter(name: str) -> CloudAdapter:
     """Create CloudAdapter for UpCloud with Buster platform support, single op limit."""
     from .providers.upcloud import (  # noqa: PLC0415
@@ -189,13 +166,11 @@ def get_upcloud_adapter(name: str) -> CloudAdapter:
     )
 
 
-# START_CONTRACT: get_vastai_adapter
-#   PURPOSE: Create CloudAdapter for VastAI with Bullseye platform support, single op limit
-#   INPUTS: { name: str - cloud provider name }
-#   OUTPUTS: { CloudAdapter - configured VastAI cloud adapter }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
-# END_CONTRACT: get_vastai_adapter
+# endregion FUNC_get_upcloud_adapter
+
+
+# region FUNC_get_vastai_adapter
+# PURPOSE: Wire VastAI SDK create/delete to a CloudAdapter so the provisioner can launch and terminate VastAI instances through the generic adapter interface.
 def get_vastai_adapter(name: str) -> CloudAdapter:
     """Create CloudAdapter for VastAI with Bullseye platform support, single op limit."""
     from .providers.vastai import (  # noqa: PLC0415
@@ -217,6 +192,9 @@ def get_vastai_adapter(name: str) -> CloudAdapter:
     )
 
 
+# endregion FUNC_get_vastai_adapter
+
+
 CLOUD_ADAPTER_GETTERS = {
     "az": get_azure_adapter,
     "hetzner": get_hetzner_adapter,
@@ -225,13 +203,9 @@ CLOUD_ADAPTER_GETTERS = {
 }
 
 
-# START_CONTRACT: resolve_adapter
-#   PURPOSE: Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry
-#   INPUTS: { cfg: ConfigCloud - cloud provider config with prefix }
-#   OUTPUTS: { Optional[CloudAdapter] - resolved adapter or None if prefix unknown or deps missing }
-#   SIDE_EFFECTS: Logs error on ImportError
-#   LINKS: M-CLOUD-ADAPTERS
-# END_CONTRACT: resolve_adapter
+# region FUNC_resolve_adapter
+# PURPOSE: Map a config's provider prefix to the matching CloudAdapter getter so the allocator resolves the right adapter at runtime without a hard-coded switch.
+# ENSURES: Returns None if prefix unknown or deps not installed (logs on ImportError).
 def resolve_adapter(cfg: ConfigCloud) -> CloudAdapter | None:
     """Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry."""
     try:
@@ -245,3 +219,6 @@ def resolve_adapter(cfg: ConfigCloud) -> CloudAdapter | None:
             cfg.prefix,
         )
         return None
+
+
+# endregion FUNC_resolve_adapter

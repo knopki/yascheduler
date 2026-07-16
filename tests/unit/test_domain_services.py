@@ -1,26 +1,8 @@
-# FILE: tests/unit/test_domain_services.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for domain services: match_task_to_node.
-#   SCOPE: Test allocation logic: compatible machines, busy filtering, empty lists, ordering.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_match_found - One compatible FREE machine returns it
-#   test_no_compatible_machine - Zero machines matching platform returns None
-#   test_all_busy_machines - All machines BUSY returns None
-#   test_empty_list - Empty free_machines returns None
-#   test_multiple_compatible_returns_first - Returns first compatible, not second
-#   test_multiple_machines_skips_busy - Skips BUSY, returns first FREE compatible
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from all 8 ConnectedMachine constructions.
-#   PREVIOUS_CHANGE: v1.1.0 - drop-task-context-entity: replace TaskContext with flat Task fields; remove TaskContext imports.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for domain services: match_task_to_node.
+# SCOPE: Test allocation logic: compatible machines, busy filtering, empty lists, ordering.
+# KEYWORDS: match_task_to_node, allocation logic, compatible machines
+# endregion MODULE_CONTRACT
 
 from datetime import datetime
 
@@ -52,13 +34,6 @@ def _make_task(task_id: int = 1) -> Task:
     )
 
 
-# START_CONTRACT: test_match_found
-#   PURPOSE: When one compatible FREE machine is available, return it.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_match_found
 def test_match_found() -> None:
     task = _make_task()
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -67,13 +42,6 @@ def test_match_found() -> None:
     assert result is m1
 
 
-# START_CONTRACT: test_no_compatible_machine
-#   PURPOSE: When no machine's platform matches the engine platforms, return None.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_no_compatible_machine
 def test_no_compatible_machine() -> None:
     task = _make_task()
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -82,13 +50,6 @@ def test_no_compatible_machine() -> None:
     assert result is None
 
 
-# START_CONTRACT: test_all_busy_machines
-#   PURPOSE: When all machines have state=BUSY, return None (is_compatible filters them out).
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_all_busy_machines
 def test_all_busy_machines() -> None:
     task = _make_task()
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -106,13 +67,6 @@ def test_all_busy_machines() -> None:
     assert result is None
 
 
-# START_CONTRACT: test_empty_list
-#   PURPOSE: When free_machines is empty, return None.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_empty_list
 def test_empty_list() -> None:
     task = _make_task()
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -120,13 +74,6 @@ def test_empty_list() -> None:
     assert result is None
 
 
-# START_CONTRACT: test_multiple_compatible_returns_first
-#   PURPOSE: When multiple machines are FREE and compatible, ensure the first one is returned, not the second.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_multiple_compatible_returns_first
 def test_multiple_compatible_returns_first() -> None:
     task = _make_task()
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))
@@ -137,13 +84,6 @@ def test_multiple_compatible_returns_first() -> None:
     assert result is not m2
 
 
-# START_CONTRACT: test_multiple_machines_skips_busy
-#   PURPOSE: When first machine is BUSY and second is FREE+compatible, skip the busy one and return the second.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_multiple_machines_skips_busy
 def test_multiple_machines_skips_busy() -> None:
     task = _make_task()
     engine = Engine(name="fleur", spawn="fleur_MPI", platforms=("linux",))

@@ -1,33 +1,8 @@
-# FILE: tests/unit/test_cloud_alloc_session_lifecycle.py
-# VERSION: 1.5.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Regression-guard the four fixes in fix-cloud-alloc-session-lifecycle (DB-enabled free-machine gate, setup-failure disconnect, per-session loop isolation, stdout in cloud-init error).
-#   SCOPE: Fix A (setup-in-flight / disabled-but-connected / enabled / concurrent pile-on via timing-aware fakes through allocate_task),
-#          Fix B (CloudSetupError + generic exception + never-connected + success-no-disconnect via real CloudProvisionerImpl.allocate),
-#          Fix C (stale session isolated, cloud branch reachable via allocate_task),
-#          Fix D (cloud-init message contains stdout; timeout message unchanged via real CloudProvisionerImpl._setup_vm).
-#   DEPENDS: M-APPLICATION-ALLOCATE, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-PERSISTENCE-UOW
-#   LINKS: M-APPLICATION-ALLOCATE, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   FakeMachineSession        - Minimal MachineSession handle carrying ip + ConnectedMachine snapshot
-#   FakeMachineRepository     - In-memory repository mirroring SSHMachineRepository connect-before-return / disconnect / list_free semantics
-#   _FakeNodeRepo / _FakeTaskRepo / FakeUnitOfWork - Shared-store in-memory UoW tracking tasks and nodes
-#   FakeCloudProvisioner      - CloudProvisioner fake reproducing connect-before-enable timing for allocator tests
-#   _make_real_adapter_config - Mock CloudAdapter + ConfigCloud pair for real CloudProvisionerImpl tests
-#   _make_real_provisioner    - Construct a real CloudProvisionerImpl wired to a FakeMachineRepository
-#   TestFixA                  - DB-enabled free-machine gate (4 scenarios)
-#   TestFixB                  - Setup-failure disconnect via real CloudProvisionerImpl.allocate (4 scenarios)
-#   TestFixC                  - Per-session loop isolation (2 scenarios)
-#   TestFixD                  - stdout in cloud-init error message (2 scenarios)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - ConnectedMachine-runtime-only: drop hostname/ncpus from FakeMachineSession.__init__ ConnectedMachine construction.
-#   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Regression-guard the four fixes in fix-cloud-alloc-session-lifecycle (DB-enabled free-machine gate, setup-failure disconnect, per-session loop isolation, stdout in cloud-init error).
+# SCOPE: Fix A (setup-in-flight / disabled-but-connected / enabled / concurrent pile-on via timing-aware fakes through allocate_task), Fix B (CloudSetupError + generic exception + never-connected + success-no-disconnect via real CloudProvisionerImpl.allocate), Fix C (stale session isolated, cloud branch reachable via allocate_task), Fix D (cloud-init message contains stdout; timeout message unchanged via real CloudProvisionerImpl._setup_vm).
+# KEYWORDS: cloud alloc session, setup-in-flight, disconnect, isolation
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

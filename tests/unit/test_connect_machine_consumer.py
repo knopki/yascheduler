@@ -1,24 +1,3 @@
-# FILE: tests/unit/test_connect_machine_consumer.py
-# VERSION: 1.5.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for Orchestrator._connect_machine_consumer never-connected-node grace timer + abandon dispatch.
-#   SCOPE: Failure-within-grace retries, failure-past-grace abandons, success resets timer, unknown-cloud fallback, abandon-failed isolation, daemon-restart reset, _connect_grace_for pure helper, producer yields static nodes (cloud is None); static nodes retried without abandon.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE, M-DOMAIN-PORTS, M-CLOUD-CONFIGS
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ABANDON-NODE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestConnectMachineConsumerGraceTimer - Within-grace retries, past-grace abandons, success resets, abandon-failed isolation
-#   TestConnectGraceFor - _connect_grace_for pure helper: per-cloud lookup + 120s fallback
-#   TestDaemonRestartResetsFailureTimers - Fresh Orchestrator has empty _connect_failures
-#   TestConnectMachineProducerYieldsStaticNodes - cloud=None nodes ARE yielded to the consumer; static node failures retried without abandon (consumer-side guard before grace-check)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - switch-to-standard-logging: migrate CONNECT_RETRY_STATIC assertion off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS).
-#   PREVIOUS_CHANGE: v1.4.0 - node-owns-connection-identity slice 2: removed cloud-prefix-resolution setup (cfg_cloud.jump_host/jump_username) from all tests; added TestConnectNewNode class with acceptance tests verifying connect call shape without jump kwargs and no inline resolution loop.
-# END_CHANGE_SUMMARY
 """Unit tests for Orchestrator._connect_machine_consumer grace timer + abandon dispatch.
 
 Covers the in-memory per-IP connect-failure timer introduced by the
@@ -33,6 +12,11 @@ fix-never-connected-node-leak change:
 - Producer yields static (cloud=None) nodes; static node failures retry
   without abandon (consumer-side guard before the grace-check)
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for Orchestrator._connect_machine_consumer never-connected-node grace timer + abandon dispatch.
+# SCOPE: Failure-within-grace retries, failure-past-grace abandons, success resets timer, unknown-cloud fallback, abandon-failed isolation, daemon-restart reset, _connect_grace_for pure helper, producer yields static nodes (cloud is None); static nodes retried without abandon.
+# KEYWORDS: _connect_machine_consumer, grace timer, abandon dispatch
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

@@ -1,32 +1,10 @@
 """Apply pending database schema/data migrations in forward-only order."""
-# FILE: yascheduler/infra/persistence/postgres_migrations.py
-# VERSION: 1.3.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Apply pending database schema/data migrations in forward-only order.
-#   SCOPE: Forward-only DDL/DML migration application over sql/migrations/ via one pg8000 connection, one transaction per migration, with yascheduler_migrations tracker recording.
-#   DEPENDS: M-INFRA-DB-CONFIG, M-PERSISTENCE-MIGRATION-BASE
-#   LINKS: M-PERSISTENCE, M-PERSISTENCE-SCHEMA, M-ENTRYPOINTS-CLI-INIT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   apply_migrations - apply pending migrations from sql/migrations/ to the DB behind config
-#   _prefix_id - prefix token of a migration filename
-#   _scan_migrations - sorted list of *.sql + *.py files under _MIGRATIONS_DIR
-#   _last_applied - MAX(migration_id) from yascheduler_migrations, or None
-#   _pending - filter scanned files to prefix_id > last
-#   _one_migration_subclass - the single Migration subclass defined in a .py module
-#   _apply_sql_migration - apply a .sql migration in one transaction
-#   _apply_py_migration - apply a .py migration (Migration subclass) in one transaction
-#   _record_py_tracker - record a .py migration in the tracker (reopen txn on transient error)
-#   _rollback - best-effort ROLLBACK wrapper
-#   _MIGRATIONS_DIR - path to the bundled sql/migrations/ directory
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v1.3.0 - _apply_py_migration: move spec/loader load+check before conn.run("BEGIN") (ruff TRY301); it needs no open transaction and its failure must not trigger ROLLBACK on a never-begun txn.
-#   PREVIOUS_CHANGE: v1.2.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...); drop vestigial OPEN_CONNECTION/CLOSE DEBUG traces (carried no extra fields, not asserted in tests).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Evolve the database schema and data forward in production — one migration per tracker-recorded transaction — so the team makes incremental, replayable changes without manual DDL scripting.
+# SCOPE: Forward-only DDL/DML migration application over sql/migrations/ via one pg8000 connection, one transaction per migration, with yascheduler_migrations tracker recording.
+# DEPENDENCIES: USES API: pg8000.Connection, READS: migration files (.sql, .py) from sql/migrations/, LOADS: Python migration modules dynamically via importlib
+# KEYWORDS: migration, apply, database, dml, ddl
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -49,6 +27,8 @@ if TYPE_CHECKING:
 
     from .db_config import PostgresDbConfig
 
+__all__ = ["apply_migrations"]
+
 _MIGRATIONS_DIR = Path(__file__).parent / "sql" / "migrations"
 
 
@@ -56,25 +36,19 @@ def _prefix_id(filename: Path) -> str:
     return filename.name.split("_", 1)[0]
 
 
-# START_CONTRACT: _scan_migrations
-#   PURPOSE: List all .sql and .py migration files under _MIGRATIONS_DIR, sorted by filename (string sort).
-#   INPUTS: { None }
-#   OUTPUTS: { list[Path] - sorted migration file paths }
-#   SIDE_EFFECTS: Reads the _MIGRATIONS_DIR directory.
-#   LINKS: _prefix_id, apply_migrations
-# END_CONTRACT: _scan_migrations
+# region FUNC__scan_migrations
+# PURPOSE: Discover all available migration files so the runner can determine which ones need applying, in filename order.
 def _scan_migrations() -> list[Path]:
     files = list(_MIGRATIONS_DIR.glob("*.sql")) + list(_MIGRATIONS_DIR.glob("*.py"))
     return sorted(files, key=lambda f: f.name)
 
 
-# START_CONTRACT: _last_applied
-#   PURPOSE: Read the highest recorded migration_id from yascheduler_migrations; None means "apply all".
-#   INPUTS: { conn: Connection - open pg8000 native connection }
-#   OUTPUTS: { str | None - MAX(migration_id), or None when the tracker is empty or (defensively) absent }
-#   SIDE_EFFECTS: Reads the yascheduler_migrations table.
-#   LINKS: apply_migrations, M-PERSISTENCE-SCHEMA (tracker created by the schema DO block)
-# END_CONTRACT: _last_applied
+# endregion FUNC__scan_migrations
+
+
+# region FUNC__last_applied
+# PURPOSE: Determine the last successfully applied migration so the runner applies only newer files and avoids re-executing already-recorded steps.
+# ENSURES: Returns None when the tracker table is empty or absent (defensive — apply_schema is contractually run first).
 def _last_applied(conn: Connection) -> str | None:
     try:
         rows = conn.run("SELECT MAX(migration_id) FROM yascheduler_migrations")
@@ -87,27 +61,22 @@ def _last_applied(conn: Connection) -> str | None:
     return str(rows[0][0])
 
 
-# START_CONTRACT: _pending
-#   PURPOSE: Filter scanned migration files to those whose prefix_id is greater than last, preserving sorted order.
-#   INPUTS: { last: str | None - last applied prefix_id (None → all files pending), files: list[Path] - scanned files (assumed sorted by filename) }
-#   OUTPUTS: { list[Path] - pending files in the input order }
-#   SIDE_EFFECTS: None
-#   LINKS: _prefix_id, apply_migrations
-# END_CONTRACT: _pending
+# endregion FUNC__last_applied
+
+
+# region FUNC__pending
+# PURPOSE: Compute the set of not-yet-applied migrations so the runner applies only what is needed, preserving chronological order.
 def _pending(last: str | None, files: list[Path]) -> list[Path]:
     if last is None:
         return list(files)
     return [f for f in files if _prefix_id(f) > last]
 
 
-# START_CONTRACT: _one_migration_subclass
-#   PURPOSE: Discover exactly one Migration subclass defined in the given module; fail loudly on 0 or >1.
-#   INPUTS: { module: ModuleType - a freshly loaded .py migration module }
-#   OUTPUTS: { type[Migration] - the single Migration subclass defined in the module }
-#   SIDE_EFFECTS: None
-#   RAISES: { RuntimeError - when the count of Migration subclasses defined in the module is not exactly 1 }
-#   LINKS: _apply_py_migration, M-PERSISTENCE-MIGRATION-BASE
-# END_CONTRACT: _one_migration_subclass
+# endregion FUNC__pending
+
+
+# region FUNC__one_migration_subclass
+# PURPOSE: Extract the single Migration subclass from a .py migration file so the runner can call migrate() — fails loud on ambiguous or empty files to prevent silent skips.
 def _one_migration_subclass(module: ModuleType) -> type[Migration]:
     candidates = [
         cls
@@ -125,24 +94,22 @@ def _one_migration_subclass(module: ModuleType) -> type[Migration]:
     return candidates[0]
 
 
+# endregion FUNC__one_migration_subclass
+
+
 def _rollback(conn: Connection) -> None:
-    # START_BLOCK_ROLLBACK
+    # region BLOCK_rollback
     with contextlib.suppress(Exception):
         conn.run("ROLLBACK")
-    # END_BLOCK_ROLLBACK
+    # endregion BLOCK_rollback
 
 
-# START_CONTRACT: _apply_sql_migration
-#   PURPOSE: Apply a .sql migration in one transaction: BEGIN → run full SQL text (multi-statement) → INSERT tracker → COMMIT; ROLLBACK and re-raise on any error.
-#   INPUTS: { conn: Connection - open pg8000 native connection, path: Path - .sql migration file, prefix_id: str - the migration's prefix_id }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Runs the migration's DDL/DML; inserts a row into yascheduler_migrations; opens/closes one transaction
-#   LINKS: apply_migrations
-# END_CONTRACT: _apply_sql_migration
+# region FUNC__apply_sql_migration
+# PURPOSE: Execute a .sql migration file atomically and record it in the tracker so the schema evolves safely and re-runs are prevented.
 def _apply_sql_migration(conn: Connection, path: Path, prefix_id: str) -> None:
     conn.run("BEGIN")
     try:
-        # START_BLOCK_APPLY_SQL
+        # region BLOCK_apply_sql
         conn.run(path.read_text())
         conn.run(
             "INSERT INTO yascheduler_migrations (migration_id) VALUES (:p)",
@@ -150,21 +117,19 @@ def _apply_sql_migration(conn: Connection, path: Path, prefix_id: str) -> None:
         )
         conn.run("COMMIT")
         logger.debug("APPLY_SQL", extra={"prefix": prefix_id})
-        # END_BLOCK_APPLY_SQL
+        # endregion BLOCK_apply_sql
     except Exception:
         _rollback(conn)
         raise
 
 
-# START_CONTRACT: _record_py_tracker
-#   PURPOSE: Record a .py migration in yascheduler_migrations after migrate() returns, honoring the best-effort atomic contract.
-#   INPUTS: { conn: Connection - open pg8000 native connection (transaction may or may not be open), prefix_id: str - the migration's prefix_id }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: INSERTs a tracker row and COMMITs; may reopen a fresh transaction on a transient DatabaseError
-#   LINKS: _apply_py_migration
-# END_CONTRACT: _record_py_tracker
+# endregion FUNC__apply_sql_migration
+
+
+# region FUNC__record_py_tracker
+# PURPOSE: Persist the tracker record for a .py migration after migrate() succeeds so the same step is never re-applied, even if the runner crashes after the SQL landed.
 def _record_py_tracker(conn: Connection, prefix_id: str) -> None:
-    # START_BLOCK_TRACKER_RECORD
+    # region BLOCK_tracker_record
     # pg8000 native AUTOCOMMITS statements issued outside an open
     # transaction, and a bare COMMIT with no open transaction is a no-op
     # warning rather than an error. Consequently, when migrate() closed the
@@ -193,16 +158,14 @@ def _record_py_tracker(conn: Connection, prefix_id: str) -> None:
         )
         conn.run("COMMIT")
     logger.debug("TRACKER_RECORD", extra={"prefix": prefix_id})
-    # END_BLOCK_TRACKER_RECORD
+    # endregion BLOCK_tracker_record
 
 
-# START_CONTRACT: _apply_py_migration
-#   PURPOSE: Apply a .py migration in one transaction: BEGIN → load module → instantiate the single Migration subclass → migrate() → best-effort tracker record; ROLLBACK and re-raise on any error.
-#   INPUTS: { conn: Connection - open pg8000 native connection, path: Path - .py migration file, prefix_id: str - the migration's prefix_id (also used as the module name), config: PostgresDbConfig }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Loads and executes a .py module; the migration runs DDL/DML via the injected conn; inserts a row into yascheduler_migrations
-#   LINKS: _one_migration_subclass, _record_py_tracker, apply_migrations, M-PERSISTENCE-MIGRATION-BASE
-# END_CONTRACT: _apply_py_migration
+# endregion FUNC__record_py_tracker
+
+
+# region FUNC__apply_py_migration
+# PURPOSE: Execute a Python migration step inside a transaction — load the module, call migrate(), and record the tracker — so complex DDL/DML logic runs safely and is never re-applied.
 def _apply_py_migration(
     conn: Connection,
     path: Path,
@@ -215,13 +178,13 @@ def _apply_py_migration(
         raise RuntimeError(msg)
     conn.run("BEGIN")
     try:
-        # START_BLOCK_APPLY_PY
+        # region BLOCK_apply_py
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         klass = _one_migration_subclass(module)
         migration = klass(config, conn, logger)
         migration.migrate()
-        # END_BLOCK_APPLY_PY
+        # endregion BLOCK_apply_py
 
         _record_py_tracker(conn, prefix_id)
     except Exception:
@@ -229,18 +192,16 @@ def _apply_py_migration(
         raise
 
 
-# START_CONTRACT: apply_migrations
-#   PURPOSE: Apply pending migrations from sql/migrations/ to the DB described by config, each in its own transaction.
-#   INPUTS: { config: PostgresDbConfig - database connection parameters }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Runs DDL/DML per pending migration; writes to yascheduler_migrations; opens/closes one pg8000 connection (and one transaction per pending migration)
-#   LINKS: M-PERSISTENCE-MIGRATIONS, M-PERSISTENCE-SCHEMA
-# END_CONTRACT: apply_migrations
+# endregion FUNC__apply_py_migration
+
+
+# region FUNC_apply_migrations
+# PURPOSE: Apply all pending schema/data migrations in forward order so the database is up-to-date on every deployment without manual SQL intervention.
 def apply_migrations(config: PostgresDbConfig) -> None:
     """Apply pending migrations from sql/migrations/ to the DB described by config, each in its own transaction."""
     conn: Connection | None = None
     try:
-        # START_BLOCK_OPEN_CONNECTION
+        # region BLOCK_open_connection
         conn = Connection(
             user=config.user,
             host=config.host,
@@ -248,16 +209,16 @@ def apply_migrations(config: PostgresDbConfig) -> None:
             port=config.port,
             password=config.password,
         )
-        # END_BLOCK_OPEN_CONNECTION
+        # endregion BLOCK_open_connection
 
-        # START_BLOCK_READ_LAST
+        # region BLOCK_read_last
         last = _last_applied(conn)
         files = _scan_migrations()
         pending = _pending(last, files)
         logger.debug("READ_LAST", extra={"last": last, "pending": len(pending)})
-        # END_BLOCK_READ_LAST
+        # endregion BLOCK_read_last
 
-        # START_BLOCK_APPLY_PENDING
+        # region BLOCK_apply_pending
         for path in pending:
             pid = _prefix_id(path)
             if path.suffix == ".sql":
@@ -265,9 +226,12 @@ def apply_migrations(config: PostgresDbConfig) -> None:
             else:
                 _apply_py_migration(conn, path, pid, config)
             logger.debug("APPLY_PENDING", extra={"prefix": pid})
-        # END_BLOCK_APPLY_PENDING
+        # endregion BLOCK_apply_pending
     finally:
-        # START_BLOCK_CLOSE
+        # region BLOCK_close
         if conn is not None:
             conn.close()
-        # END_BLOCK_CLOSE
+        # endregion BLOCK_close
+
+
+# endregion FUNC_apply_migrations

@@ -1,20 +1,8 @@
-# FILE: tests/unit/test_hetzner_ssh_key.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for hetzner.get_ssh_key_id duplicate-key recovery (uniqueness_error code path).
-#   SCOPE: get_ssh_key_id with mocked hcloud client and APIException; no network.
-#   DEPENDS: M-CLOUD-PROVIDER-HETZNER
-#   LINKS: M-CLOUD-PROVIDER-HETZNER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestGetSshKeyIdUniqueness - create() duplicate-key recovery branches
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - fix-hetzner-ssh-key-uniqueness: cover the recovery branch in get_ssh_key_id triggered by Hetzner's `uniqueness_error` API code (wording "SSH key not unique"), which the legacy "already" substring match failed to detect.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for hetzner.get_ssh_key_id duplicate-key recovery (uniqueness_error code path).
+# SCOPE: get_ssh_key_id with mocked hcloud client and APIException; no network.
+# KEYWORDS: get_ssh_key_id, duplicate-key recovery, hcloud API
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

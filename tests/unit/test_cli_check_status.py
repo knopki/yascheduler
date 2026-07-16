@@ -1,28 +1,8 @@
-# FILE: tests/unit/test_cli_check_status.py
-# VERSION: 2.3.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yastatus check_status() — parsing, renderers, exit codes, view-mode SSH.
-#   SCOPE: check_status() and private helpers with mocked Config/CLIDeps/UoW/SSHMachineGateway.
-#   DEPENDS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestCheckStatusParsing - flag parsing and mutex
-#   TestCheckStatusAiiDAContract - golden AiiDA-compat regression
-#   TestCheckStatusDefault - default listing and -j filter
-#   TestCheckStatusInfo - -i tab-separated renderer
-#   TestCheckStatusJson - --json raw values, null placement, composition
-#   TestCheckStatusExitCodes - exit 0/1/2
-#   TestCheckStatusArgvInjection - argv threading
-#   TestCheckStatusViewAcceptance - 3 Gherkin scenarios (node-owns-connection-identity)
-#   TestCheckStatusViewHappyPath - -v SSH + lazy nodes lookup
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.5.0 - node-owns-connection-identity: _resolve_conn_params / _ConnParams deleted; connect drops jump kwargs.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yastatus check_status() — parsing, renderers, exit codes, view-mode SSH.
+# SCOPE: check_status() parsing, renderers, exit codes, view-mode SSH with mocked Config/CLIDeps/UoW/SSHMachineGateway.
+# KEYWORDS: check_status, renderers, exit codes, SSH view-mode
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

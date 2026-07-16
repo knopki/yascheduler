@@ -1,29 +1,8 @@
-# FILE: tests/unit/test_cloud_provisioner_impl.py
-# VERSION: 2.14.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
-#   SCOPE: CloudProvisionerImpl with all provider SDKs and SSHMachineGateway mocked (no DB).
-#   DEPENDS: M-CLOUD-PROVISIONER, M-DOMAIN-PORTS, M-CLOUD-ADAPTERS-NEW
-#   LINKS: M-CLOUD-PROVISIONER, M-CLOUD-ADAPTERS-NEW
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestBool - __bool__ reflects adapter presence
-#   TestAllocate - allocate happy path, no provider, create_node failure, setup failure, jump-leg resolution (cloud-wins, fallback, no-mixing)
-#   TestDeallocate - happy path, unsupported cloud, no config, no-cloud no-op
-#   TestStop - stop drains machine_gateway via disconnect_all (happy path + idempotency)
-#   TestIsPlatformSupported - _is_platform_supported edge cases
-#   TestSshKeyGeneration - get_or_create_ssh_key file ops
-#   TestCloudConfigGeneration - cloud-config building with engine packages
-#   TestSelectProvider - select_provider sync port: capacity, platform, throttle
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.14.0 - Add jump_port test coverage: test_setup_vm_does_not_mix_cloud_jump_host_with_remote_jump_port (no-mixing); 3 existing tests (cloud-wins, fallback, regression) extended with jump_port assertions.
-#   PREVIOUS_CHANGE: v2.13.0 - node-ncpus-as-config: extract ncpus-related allocate tests to test_cloud_provisioner_ncpus.py (file over 1000-line hard limit); _tmp_node ncpus=0→None; happy-path asserts ncpus is None.
-# END_CHANGE_SUMMARY
-
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for CloudProvisionerImpl — allocate, deallocate, select_provider.
+# SCOPE: CloudProvisionerImpl with all provider SDKs and SSHMachineGateway mocked (no DB).
+# KEYWORDS: CloudProvisionerImpl, allocate, deallocate, select_provider
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

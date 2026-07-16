@@ -1,22 +1,8 @@
-# FILE: tests/e2e/test_consume_retry.py
-# VERSION: 1.6.0
-# START_MODULE_CONTRACT
-#   PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
-#   SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-CONSUME, M-SSH-OPS-DOWNLOAD, M-PERSISTENCE-UOW, M-DOMAIN-MODEL
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-CONSUME, M-SSH-OPS-DOWNLOAD, M-PERSISTENCE-UOW
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_consume_retry_then_success - First download_outputs returns transient errors -> stays RUNNING; second succeeds -> DONE, rmtree ran
-#   test_consume_permanent_marks_done_with_error - download_outputs returns permanent errors -> DONE+error, rmtree ran
-#   test_consume_transient_preserves_remote_dir_regression - On transient errors the remote dir still exists after consume_task returns False
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.6.0 - switch-to-standard-logging: migrate test-file logger binding from get_logger("M-TEST") to logging.getLogger(__name__); remove yascheduler.shared.get_logger import.
-#   PREVIOUS_CHANGE: v1.5.0 - drop-task-context-entity follow-up: wrappers return the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors); empty strings for the unused local/remote paths in the synthetic failure paths.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
+# SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
+# KEYWORDS: consume_task, retry, permanent error, data loss, e2e
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

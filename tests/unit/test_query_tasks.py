@@ -1,25 +1,8 @@
-# FILE: tests/unit/test_query_tasks.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the query_tasks use case (7 QueryTasks scenarios + node batch-load).
-#   SCOPE: status dispatch, jobs dispatch, both-supplied ValueError, neither empty, read-only no commit, all-unallocated nodes empty, distinct node ids batch-loaded once, status with node loading.
-#   DEPENDS: M-APPLICATION-QUERY-TASKS
-#   LINKS: M-APPLICATION-QUERY-TASKS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   FakeTaskRepository - In-memory task repo capturing list_by_status/list_by_jobs calls
-#   FakeNodeRepository - In-memory node repo capturing get_by_ids calls, returning stored nodes
-#   FakeUnitOfWork - In-memory UoW exposing FakeTaskRepository + FakeNodeRepository, tracking commit calls
-#   TestQueryTasks - 7 QueryTasks spec scenarios against fakes
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: add FakeNodeRepository with get_by_ids; update FakeUnitOfWork to expose .nodes; fix assertions for tuple (tasks, nodes_by_id) return; add test_all_unallocated_returns_empty_nodes, test_distinct_allocated_node_ids_batch_loaded_once, test_query_by_statuses_loads_nodes.
-#   PREVIOUS_CHANGE: [v1.0.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in FakeTaskRepository signatures).]
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the query_tasks use case (7 QueryTasks scenarios + node batch-load).
+# SCOPE: status dispatch, jobs dispatch, both-supplied ValueError, neither empty, read-only no commit, all-unallocated nodes empty, distinct node ids batch-loaded once, status with node loading.
+# KEYWORDS: query_tasks, status dispatch, jobs dispatch, node batch-load
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

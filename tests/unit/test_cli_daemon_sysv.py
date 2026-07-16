@@ -1,21 +1,8 @@
-# FILE: tests/unit/test_cli_daemon_sysv.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_sysv.py — argparse, short flags, DaemonContext construction, configure_logger ordering.
-#   SCOPE: main() argparse behavior (--help, -p/-l short flags, --log-level long-only, defaults) and DaemonContext wiring with mocked daemon module.
-#   DEPENDS: M-DAEMON-SYSV
-#   LINKS: M-DAEMON-SYSV, M-DAEMON-COMMON
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestDaemonSysvParsing - --help exit 0; -p/-l short flags; --log-level long-only no collision; defaults LOG_FILE/PID_FILE
-#   TestDaemonSysvContext - DaemonContext working_directory="/"; configure_logger called INSIDE the context
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for relocated daemon_sysv (consolidate-daemon-entrypoints).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_sysv.py — argparse, short flags, DaemonContext construction, configure_logger ordering.
+# SCOPE: main() argparse behavior (--help, -p/-l short flags, --log-level long-only, defaults) and DaemonContext wiring with mocked daemon module.
+# KEYWORDS: daemon_sysv, DaemonContext, short flags, configure_logger
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

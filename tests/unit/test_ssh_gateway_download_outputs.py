@@ -1,29 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway_download_outputs.py
-# VERSION: 1.4.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineOperations.download_outputs classification + conditional rmtree.
-#   SCOPE: Success path, per-file permanent error, per-file transient error, session-level error, rmtree gating, per-file SFTP isolation, task_id log correlation.
-#   DEPENDS: M-SSH-OPS-DOWNLOAD, M-SSH-SESSION
-#   LINKS: M-SSH-OPS-DOWNLOAD, M-SSH-SESSION
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_session_with_sftp - Build an SSHMachineSession whose _conn.start_sftp_client yields a configured sftp mock
-#   test_download_outputs_success - All files download OK; returns (local_folder, remote_folder, [], []); rmtree called
-#   test_download_outputs_per_file_permanent_error - Per-file OSError caught; classified permanent; rmtree NOT called (conservative gate)
-#   test_download_outputs_per_file_transient_error - Per-file SFTPFailure (SFTPRetryExc) caught; classified transient; rmtree NOT called
-#   test_download_outputs_session_error - Session-level failure caught; returned in transient_errors; rmtree NOT called
-#   test_download_outputs_task_id_in_signature - task_id param accepted for log correlation
-#   test_download_outputs_rmtree_only_on_full_success - rmtree called only when both error lists empty
-#   test_download_outputs_per_file_sftp_isolation - dropped client on file 2 does not fail-fast file 3
-#   test_download_outputs_session_level_failure_transient - open_sftp failure -> session-level transient
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: tests unpack the new 4-tuple return (local_folder, remote_folder, transient_errors, permanent_errors); drop meta_add list-of-pairs assertions.
-#   PREVIOUS_CHANGE: v1.3.0 - session-based-machine-handle: download_outputs now takes a session param (was ip). Tests build a real SSHMachineSession via _make_state and wire sftp mocks on session._conn.start_sftp_client (was operations.get_sftp / repository.get_path monkey-patches). session.path replaces repository.get_path.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for SSHMachineOperations.download_outputs classification + conditional rmtree.
+# SCOPE: Success path, per-file permanent error, per-file transient error, session-level error, rmtree gating, per-file SFTP isolation, task_id log correlation.
+# KEYWORDS: download_outputs, rmtree gating, SFTP isolation
+# endregion MODULE_CONTRACT
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager

@@ -1,24 +1,9 @@
-# FILE: tests/integration/test_task_row_not_found.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for TaskRowNotFoundError raised by PostgresTaskRepository.save/update_status on 0-row UPDATE.
-#   SCOPE: save() with non-existent task_id raises and does not append to _saved_tasks; update_status() with non-existent task_id raises.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-EXCEPTIONS, M-PERSISTENCE-UOW, M-DOMAIN-MODEL
-#   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-EXCEPTIONS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_save_nonexistent_task_raises - save() on a non-existent task_id raises TaskRowNotFoundError and skips _saved_tasks append
-#   test_update_status_nonexistent_task_raises - update_status() on a non-existent task_id raises TaskRowNotFoundError
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: Task construction uses flat typed fields (engine=...) instead of context=TaskContext(...); TaskContext import removed.
-#   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: removed allocated_ip kwarg from Task constructor (field removed from Task entity).
-# END_CHANGE_SUMMARY
-
 """Integration tests for TaskRowNotFoundError on 0-row UPDATE outcomes."""
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for TaskRowNotFoundError raised by PostgresTaskRepository.save/update_status on 0-row UPDATE.
+# SCOPE: save() with non-existent task_id raises and does not append to _saved_tasks; update_status() with non-existent task_id raises.
+# KEYWORDS: TaskRowNotFoundError, PostgresTaskRepository, 0-row UPDATE
+# endregion MODULE_CONTRACT
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -33,13 +18,6 @@ from yascheduler.infra.persistence.postgres import PostgresTaskRepository
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
 
-# START_CONTRACT: test_save_nonexistent_task_raises
-#   PURPOSE: Verify save() raises TaskRowNotFoundError on a non-existent task_id and does not append to _saved_tasks.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-EXCEPTIONS
-# END_CONTRACT: test_save_nonexistent_task_raises
 async def test_save_nonexistent_task_raises(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -65,13 +43,6 @@ async def test_save_nonexistent_task_raises(
         )
 
 
-# START_CONTRACT: test_update_status_nonexistent_task_raises
-#   PURPOSE: Verify update_status() raises TaskRowNotFoundError on a non-existent task_id.
-#   INPUTS: { pg_conn: pg8000 connection, pg_executor: thread pool executor }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-EXCEPTIONS
-# END_CONTRACT: test_update_status_nonexistent_task_raises
 async def test_update_status_nonexistent_task_raises(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,

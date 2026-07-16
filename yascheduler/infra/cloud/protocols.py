@@ -1,27 +1,9 @@
 """Cloud protocols."""
-# FILE: yascheduler/infra/cloud/protocols.py
-# VERSION: 1.4.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Protocol definitions for node creation and deletion callables.
-#   SCOPE: CreateNodeCallable, DeleteNodeCallable, SupportedPlatformChecker, TypeVars.
-#   DEPENDS: M-CLOUD-CONFIGS, M-CLOUD-INIT
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROTOCOLS, M-CLOUD-CONFIGS, M-CLOUD-INIT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   CreateNodeCallable - Create node in the cloud protocol
-#   DeleteNodeCallable - Delete node in the cloud protocol
-#   SupportedPlatformChecker - platform name validator
-#   TConfigCloud_inv - contravariant cloud config TypeVar
-#   TConfigCloud_co - covariant cloud config TypeVar
-#   TConfigCloud_contra - contravariant cloud config TypeVar
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - remove log parameter from Protocol signatures; bind module-local logger = get_logger("M-CLOUD-PROTOCOLS") at module top
-#   PREVIOUS_CHANGE: v1.3.0 - Delete PCloudConfig Protocol (single-implementer, zero runtime dispatch; collapsed into concrete CloudInitConfig) and CloudCapacity dataclass (dead code; last consumer removed); retype CreateNodeCallable.__call__ cloud_config param Optional[PCloudConfig] → Optional[CloudInitConfig].
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Define typed callable contracts for node create/delete so provider implementations are type-checked against a standard interface and the adapter layer stays provider-agnostic.
+# SCOPE: CreateNodeCallable, DeleteNodeCallable, SupportedPlatformChecker, TypeVars.
+# KEYWORDS: protocol, callable, create node, delete node, typevar, platform checker
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -35,6 +17,15 @@ if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
 
     from .cloud_init import CloudInitConfig
+
+__all__ = [
+    "CreateNodeCallable",
+    "DeleteNodeCallable",
+    "SupportedPlatformChecker",
+    "TConfigCloud_co",
+    "TConfigCloud_contra",
+    "TConfigCloud_inv",
+]
 
 SupportedPlatformChecker = Callable[[str], bool]
 

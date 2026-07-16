@@ -1,21 +1,8 @@
-# FILE: tests/e2e/test_full_cycle.py
-# VERSION: 2.3.0
-# START_MODULE_CONTRACT
-#   PURPOSE: E2E test exercising full scheduler lifecycle via real entrypoint code paths across two SSH nodes.
-#   SCOPE: Start daemon → submit 4 jobs via _submit_async → assert TO_DO → add 2 nodes via _manage_node_async → poll until DONE → assert outputs, distribution, logs → soft-remove both nodes.
-#   DEPENDS: M-ENTRYPOINTS-CLI-SUBMIT, M-ENTRYPOINTS-CLI-MANAGE-NODE, M-APPLICATION-ORCHESTRATOR, M-DI, M-PERSISTENCE-UOW, M-DOMAIN-MODEL, M-APPLICATION-ALLOCATE
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT, M-ENTRYPOINTS-CLI-MANAGE-NODE, M-APPLICATION-ORCHESTRATOR, M-APPLICATION-ALLOCATE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_full_cycle - Multi-node entrypoint-driven full lifecycle: 4 jobs across 2 SSH containers
-#   _assert_allocation_logs - Assert ALLOCATED trace records via getMessage() + extra-diff against _NATIVE_KEYS
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.3.0 - switch-to-standard-logging: migrate _assert_allocation_logs off record.block/record.fields onto getMessage() + extra-diff (_NATIVE_KEYS from yascheduler.shared.log).
-#   PREVIOUS_CHANGE: v2.2.0 - reform-grace-logging slice 8: migrate _assert_allocation_logs from getMessage() substring matching to record.block/record.fields structured fields; remove _ALLOCATED_MARKER constant; remove import re.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: E2E test exercising full scheduler lifecycle via real entrypoint code paths across two SSH nodes.
+# SCOPE: Start daemon → submit 4 jobs via _submit_async → assert TO_DO → add 2 nodes via _manage_node_async → poll until DONE → assert outputs, distribution, logs → soft-remove both nodes.
+# KEYWORDS: e2e, full lifecycle, SSH nodes, scheduler daemon
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -62,14 +49,11 @@ async def test_full_cycle(
     ip_a = ssh_pool[0]["host"]
     ip_b = ssh_pool[1]["host"]
 
-    # START_BLOCK_START_DAEMON
     orchestrator = await make_daemon(config)
     orch_task = asyncio.create_task(orchestrator.start())
-    # END_BLOCK_START_DAEMON
 
     task_ids: list[int] = []
     try:
-        # START_BLOCK_SUBMIT_JOBS
         task_ids = await _submit_four_jobs(
             config,
             ini_path,
@@ -77,23 +61,17 @@ async def test_full_cycle(
             tmp_path,
             capfd,
         )
-        # END_BLOCK_SUBMIT_JOBS
 
-        # START_BLOCK_ASSERT_QUEUED
         await _assert_all_status(
             uow_factory,
             task_ids,
             DomainTaskStatus.TO_DO,
             "after submit, before nodes",
         )
-        # END_BLOCK_ASSERT_QUEUED
 
-        # START_BLOCK_ADD_NODES
         await _add_nodes(ssh_pool, ini_path)
         await _assert_nodes_present(uow_factory, {ip_a, ip_b})
-        # END_BLOCK_ADD_NODES
 
-        # START_BLOCK_WAIT_COMPLETION
         seen_running = await _wait_all_done(uow_factory, task_ids)
         # Assert every task passed through RUNNING (lifecycle: TO_DO -> RUNNING -> DONE).
         # The test_shell engine sleeps 3s, so each task is RUNNING for >=3s;
@@ -108,9 +86,7 @@ async def test_full_cycle(
             f"RUNNING allocated_ips={set(seen_running.values())} "
             f"not subset of {{{ip_a}, {ip_b}}}"
         )
-        # END_BLOCK_WAIT_COMPLETION
 
-        # START_BLOCK_VERIFY_OUTPUTS
         tasks = await _read_tasks(uow_factory, task_ids)
         assert len(task_ids) == len(tasks), (
             f"length mismatch: task_ids={len(task_ids)} tasks={len(tasks)}"
@@ -136,9 +112,7 @@ async def test_full_cycle(
             assert isinstance(task.updated_at, datetime), (
                 f"task {tid} updated_at={task.updated_at!r} is not datetime"
             )
-        # END_BLOCK_VERIFY_OUTPUTS
 
-        # START_BLOCK_ASSERT_DISTRIBUTION
         async with uow_factory() as uow:
             node_ids = [
                 t.allocated_node_id
@@ -169,35 +143,20 @@ async def test_full_cycle(
             assert count < len(task_ids), (
                 f"node {ip} received all {len(task_ids)} tasks — monopoly rejected"
             )
-        # END_BLOCK_ASSERT_DISTRIBUTION
 
-        # START_BLOCK_ASSERT_LOGS
         _assert_allocation_logs(log_records, task_ids, {ip_a, ip_b})
-        # END_BLOCK_ASSERT_LOGS
 
-        # START_BLOCK_SOFT_REMOVE_NODES
         await _remove_nodes_soft(ssh_pool, ini_path)
         await _assert_nodes_present(uow_factory, set())
-        # END_BLOCK_SOFT_REMOVE_NODES
 
     finally:
-        # START_BLOCK_STOP_DAEMON
         await orchestrator.stop()
         try:
             await asyncio.wait_for(orch_task, timeout=10)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             orch_task.cancel()
-        # END_BLOCK_STOP_DAEMON
 
 
-# START_CONTRACT: _ini_path_from_env
-#   PURPOSE: Read the INI path the session-scoped e2e_config fixture published via YASCHEDULER_CONF_PATH.
-#   INPUTS: { None }
-#   OUTPUTS: { str - absolute INI path set by conftest.e2e_config }
-#   SIDE_EFFECTS: None
-#   RAISES: RuntimeError - if the env var is unset (fixture ordering bug)
-#   LINKS: e2e_config fixture (tests/e2e/conftest.py)
-# END_CONTRACT: _ini_path_from_env
 def _ini_path_from_env() -> str:
     path = os.environ.get("YASCHEDULER_CONF_PATH")
     if not path:
@@ -207,19 +166,6 @@ def _ini_path_from_env() -> str:
     return path
 
 
-# START_CONTRACT: _submit_four_jobs
-#   PURPOSE: Submit four tasks via _submit_async, one per temp CWD holding a distinct 1.input payload; capture each task_id from stdout.
-#   INPUTS: {
-#     config: Config - parsed e2e config (unused directly, kept for future engine introspection),
-#     ini_path: str - INI path to pass as --config,
-#     monkeypatch: pytest.MonkeyPatch - per-call chdir isolation,
-#     tmp_path: Path - base temp dir for per-job CWDs,
-#     capfd: pytest.CaptureFixture - captures _submit_async's print(str(task_id))
-#   }
-#   OUTPUTS: { list[int] - four positive task_ids in submission order }
-#   SIDE_EFFECTS: Creates per-job temp CWDs with 1.input; chdir's into each during _submit_async; writes per-job script files.
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
-# END_CONTRACT: _submit_four_jobs
 async def _submit_four_jobs(
     config: Config,
     ini_path: str,
@@ -250,18 +196,6 @@ async def _submit_four_jobs(
     return task_ids
 
 
-# START_CONTRACT: _assert_all_status
-#   PURPOSE: Read all tasks by id and assert each has the expected status, with a context label for failure messages.
-#   INPUTS: {
-#     uow_factory: Callable[[], PostgresUnitOfWork],
-#     task_ids: list[int],
-#     expected: DomainTaskStatus,
-#     label: str - human context for the assertion
-#   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None — read-only UoW.
-#   LINKS: M-PERSISTENCE-UOW
-# END_CONTRACT: _assert_all_status
 async def _assert_all_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
     task_ids: list[int],
@@ -277,25 +211,11 @@ async def _assert_all_status(
             )
 
 
-# START_CONTRACT: _add_nodes
-#   PURPOSE: Add both ssh_pool nodes via _manage_node_async([host:port, --config, ini]), exercising the real _add_node path.
-#   INPUTS: { ssh_pool: list[dict] - two entries (host=bridge IP, port=2222), ini_path: str }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Per entry: SSH connect + setup_node + uow.nodes.add + commit + disconnect.
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
-# END_CONTRACT: _add_nodes
 async def _add_nodes(ssh_pool: list[dict[str, Any]], ini_path: str) -> None:
     for entry in ssh_pool:
         await _manage_node_async([_host_spec(entry), "--config", ini_path])
 
 
-# START_CONTRACT: _assert_nodes_present
-#   PURPOSE: Assert the DB node row IPs exactly match the expected set.
-#   INPUTS: { uow_factory, expected_ips: set[str] - empty set asserts no nodes }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None — read-only UoW.
-#   LINKS: M-PERSISTENCE-UOW
-# END_CONTRACT: _assert_nodes_present
 async def _assert_nodes_present(
     uow_factory: Callable[[], PostgresUnitOfWork],
     expected_ips: set[str],
@@ -306,13 +226,6 @@ async def _assert_nodes_present(
     assert actual == expected_ips, f"node IPs={actual}, expected={expected_ips}"
 
 
-# START_CONTRACT: _wait_all_done
-#   PURPOSE: Poll the DB until all task_ids reach DONE or the timeout elapses; collect RUNNING snapshots; fail the test on timeout.
-#   INPUTS: { uow_factory, task_ids: list[int] }
-#   OUTPUTS: { dict[int, str] - task_id -> node.hostname for every task observed RUNNING }
-#   SIDE_EFFECTS: None — read-only polls.
-#   LINKS: M-PERSISTENCE-UOW
-# END_CONTRACT: _wait_all_done
 async def _wait_all_done(
     uow_factory: Callable[[], PostgresUnitOfWork],
     task_ids: list[int],
@@ -338,13 +251,6 @@ async def _wait_all_done(
     )
 
 
-# START_CONTRACT: _read_tasks
-#   PURPOSE: Read all tasks by id in a single UoW, returning the list (may contain None if a row vanished).
-#   INPUTS: { uow_factory, task_ids: list[int] }
-#   OUTPUTS: { list[Task | None] - parallel to task_ids }
-#   SIDE_EFFECTS: None — read-only UoW.
-#   LINKS: M-PERSISTENCE-UOW
-# END_CONTRACT: _read_tasks
 async def _read_tasks(
     uow_factory: Callable[[], PostgresUnitOfWork],
     task_ids: list[int],
@@ -354,13 +260,6 @@ async def _read_tasks(
     return tasks
 
 
-# START_CONTRACT: _assert_allocation_logs
-#   PURPOSE: Assert one ALLOCATED trace record per task_id and that both node hostnames appear among the logged hostname= values. Uses getMessage() (former block marker is now the message) plus extra-diff against _NATIVE_KEYS, not record.block/record.fields.
-#   INPUTS: { records: list[LogRecord], task_ids: set[int] (coerced from list), expected_ips: set[str] }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None — pure assertion over captured records.
-#   LINKS: M-APPLICATION-ALLOCATE
-# END_CONTRACT: _assert_allocation_logs
 def _assert_allocation_logs(
     records: list[logging.LogRecord],
     task_ids: list[int],
@@ -389,13 +288,6 @@ def _assert_allocation_logs(
     )
 
 
-# START_CONTRACT: _remove_nodes_soft
-#   PURPOSE: Soft-remove both ssh_pool nodes via _manage_node_async([host:port, --remove-soft, --config, ini]).
-#   INPUTS: { ssh_pool: list[dict], ini_path: str }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Per entry: _remove_node_soft queries RUNNING tasks for the ip (empty in the happy path) and removes the node row.
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
-# END_CONTRACT: _remove_nodes_soft
 async def _remove_nodes_soft(
     ssh_pool: list[dict[str, Any]],
     ini_path: str,
@@ -406,13 +298,6 @@ async def _remove_nodes_soft(
         )
 
 
-# START_CONTRACT: _host_spec
-#   PURPOSE: Render an ssh_pool entry as the yasetnode positional [user@]host[:port] grammar.
-#   INPUTS: { entry: dict - has 'host', 'port', 'username' }
-#   OUTPUTS: { str - e.g. "10.88.0.165:2222" (port always included; username inherited from INI [remote]) }
-#   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
-# END_CONTRACT: _host_spec
 def _host_spec(entry: dict[str, Any]) -> str:
     # Username is inherited from [remote] in the INI; omit it from the spec so
     # _add_node resolves spec.username from config.remote.username.

@@ -1,24 +1,8 @@
-# FILE: tests/unit/test_domain_events.py
-# VERSION: 1.4.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for domain events and Task aggregate event support.
-#   SCOPE: Event construction, immutability, Event union type, TaskCompleted has_errors removed, materialize_task attaches TaskCreated.
-#   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestDomainEvents - Construction, immutability, union type for all event types
-#   TestTaskCompletedNoHasErrors - TaskCompleted has no has_errors field
-#   TestMaterializeTask - materialize_task attaches TaskCreated event
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
-#   PREVIOUS_CHANGE: v1.2.0 - Add TestTaskWithEvent suite for task.with_event factory (task-with-event).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for domain events and Task aggregate event support.
+# SCOPE: Event construction, immutability, Event union type, TaskCompleted has_errors removed, materialize_task attaches TaskCreated.
+# KEYWORDS: domain events, Task aggregate, immutability, materialize_task
+# endregion MODULE_CONTRACT
 
 from dataclasses import FrozenInstanceError
 

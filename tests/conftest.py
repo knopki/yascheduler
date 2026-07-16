@@ -1,21 +1,8 @@
-# FILE: tests/conftest.py
-# VERSION: 1.1.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Shared pytest fixtures and a collection-time Python 3.9 compatibility guard for the yascheduler test suite.
-#   SCOPE: anyio backend fixture; pytest_configure hook that scans yascheduler/ and tests/ for PEP 604 union annotations without `from __future__ import annotations`.
-#   DEPENDS: none
-#   LINKS: none
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   anyio_backend - returns "asyncio" for pytest-anyio compatibility
-#   pytest_configure - scans yascheduler/ + tests/ for py3.9-incompatible PEP 604 annotations; pytest.exit(1) on any violation
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Added pytest_configure guard: fails collection (exit 1) if any module under yascheduler/ or tests/ uses PEP 604 `X | Y` annotations without `from __future__ import annotations` (import-time crash on Python 3.9). Bypass via YASCHEDULER_SKIP_PY39_GUARD=1.
-#   PREVIOUS_CHANGE: v1.0.0 - Initial test infrastructure: shared fixtures.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Shared pytest fixtures and a collection-time Python 3.9 compatibility guard for the yascheduler test suite.
+# SCOPE: anyio backend fixture; pytest_configure hook that scans yascheduler/ and tests/ for PEP 604 union annotations without `from __future__ import annotations`.
+# KEYWORDS: pytest fixtures, anyio, Python 3.9, annotation guard
+# endregion MODULE_CONTRACT
 
 import os
 from pathlib import Path

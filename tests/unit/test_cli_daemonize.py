@@ -1,22 +1,8 @@
-# FILE: tests/unit/test_cli_daemonize.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemonize.py — argparse, exit codes, argv injection, runtime-error path with mocked daemon core.
-#   SCOPE: daemonize() argparse behavior (--help/--bogus/--config/--log-level/--log-file defaults, -l short alias) and the runtime-error → exit 1 path; make_daemon mocked, no real DB/SSH.
-#   DEPENDS: M-CLI-COMMANDS
-#   LINKS: M-CLI-COMMANDS, M-DAEMON-COMMON
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestDaemonizeParsing - --help exit 0 (prog=yascheduler), --bogus exit 2, --config /nonexistent exit 2, defaults, -l short alias
-#   TestDaemonizeRuntime - make_daemon raising → exit 1 with Error: on stderr; argv injection
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - restore--log-level-short-flag: added test_log_level_short_alias_parses (yascheduler -l DEBUG works again).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial tests for relocated daemonize (consolidate-daemon-entrypoints).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemonize.py — argparse, exit codes, argv injection, runtime-error path with mocked daemon core.
+# SCOPE: daemonize() argparse behavior (--help/--bogus/--config/--log-level/--log-file defaults, -l short alias) and the runtime-error → exit 1 path; make_daemon mocked, no real DB/SSH.
+# KEYWORDS: daemonize, argparse, argv injection, runtime error
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 

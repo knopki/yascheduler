@@ -1,22 +1,9 @@
 """Cloud-init user-data renderer module."""
-# FILE: yascheduler/infra/cloud/cloud_init.py
-# VERSION: 1.4.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: CloudInitConfig — concrete cloud-init user-data renderer.
-#   SCOPE: CloudInitConfig frozen dataclass (bootcmd, package_upgrade, packages, render, render_base64).
-#   DEPENDS: none
-#   LINKS: M-CLOUD-INIT, M-CLOUD-PROVISIONER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   CloudInitConfig - Frozen dataclass; concrete cloud-init user-data renderer
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - render() omits empty list-valued fields (bootcmd, packages). cloud-init's cloud-config schema enforces minItems: 1 on both, so emitting "bootcmd": [] / "packages": [] failed validation ("... is too short") and made cloud-init exit 2 — which surfaced as SETUP_FAILED + VM deletion on every cloud allocation when no engine platform_packages matched. package_upgrade (bool) is always kept.
-#   PREVIOUS_CHANGE: v1.3.0 - Rename file cloud_config.py → cloud_init.py and class CloudConfig → CloudInitConfig; drop PCloudConfig base class (Protocol removed); disambiguate from the ConfigCloud* provider-config DTOs in cloud_configs.py and from the domain CloudConfig Protocol in domain/ports.py.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Render cloud-init user-data as base64 so cloud VMs boot with correct packages and boot commands without manual setup.
+# SCOPE: CloudInitConfig frozen dataclass (bootcmd, package_upgrade, packages, render, render_base64).
+# KEYWORDS: cloud-init, user-data, renderer, base64, bootcmd, packages
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -24,7 +11,11 @@ import base64
 import json
 from dataclasses import asdict, dataclass, field
 
+__all__ = ["CloudInitConfig"]
 
+
+# region CLASS_CloudInitConfig
+# PURPOSE: Render cloud-init user-data as base64 so cloud VMs boot with correct packages and boot commands without manual setup.
 @dataclass(frozen=True)
 class CloudInitConfig:
     """Cloud-init user-data renderer (base64 for cloud providers)."""
@@ -33,6 +24,8 @@ class CloudInitConfig:
     package_upgrade: bool = field(default=False)
     packages: list[str] = field(default_factory=list)
 
+    # region METHOD_render
+    # PURPOSE: Serialize the config to JSON and strip empty sequences so cloud-init schema validation does not reject the user-data (minItems requirement).
     def render(self) -> str:
         """Render to user-data format."""
         # cloud-init's cloud-config schema enforces minItems: 1 on bootcmd
@@ -49,6 +42,15 @@ class CloudInitConfig:
         }
         return "#cloud-config\n" + json.dumps(data)
 
+    # endregion METHOD_render
+
+    # region METHOD_render_base64
+    # PURPOSE: Encode user-data as base64 so it satisfies cloud provider APIs (Azure, Hetzner) that require base64-encoded custom data at VM creation.
     def render_base64(self) -> str:
         """Render to user-data format as base64 string."""
         return base64.b64encode(self.render().encode()).decode()
+
+    # endregion METHOD_render_base64
+
+
+# endregion CLASS_CloudInitConfig

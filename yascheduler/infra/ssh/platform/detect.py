@@ -1,22 +1,10 @@
 """Platform detection — run adapter checks on a connected host, return first match and all matched platforms."""
-# FILE: yascheduler/infra/ssh/platform/detect.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Platform detection — run adapter checks on a connected host, return first match and all matched platforms.
-#   SCOPE: _detect_platform + MAX_SESSIONS.
-#   DEPENDS: M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL, M-PLATFORM-EXC
-#   LINKS: M-PLATFORM-ADAPTERS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   MAX_SESSIONS - Default MaxSessions on OpenSSH server (10); bounds detection concurrency.
-#   _detect_platform - Run adapter checks on connected host, return first match and all matched platforms.
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py; _detect_platform + MAX_SESSIONS moved verbatim, no behavioral change.
-#   PREVIOUS_CHANGE: none
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Run adapter checks on a connected host, return first matching adapter and all matched platform tags.
+# SCOPE: Platform detection by running each adapter's check sequence against the remote host.
+# DEPENDENCIES: USES API: asyncstdlib (aall, amap)
+# KEYWORDS: platform detection, adapter, detect, remote, checks
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -36,14 +24,14 @@ if TYPE_CHECKING:
     from .adapters import RemoteMachineAdapter
     from .protocol import SSHCheck
 
+__all__ = ["MAX_SESSIONS", "_detect_platform"]
+
 MAX_SESSIONS = 10  # default MaxSessions on OpenSSH server
 
 
-# START_CONTRACT: _detect_platform
-#   PURPOSE: Run adapter checks on connected host, return first match and all matched platforms
-#   SIDE_EFFECTS: Runs check commands on remote host
-#   LINKS: M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL
-# END_CONTRACT: _detect_platform
+# region FUNC__detect_platform
+# PURPOSE: Run adapter checks on connected host, return first match and all matched platforms.
+# ENSURES: Raises PlatformGuessFailedError if no adapter matches.
 async def _detect_platform(
     conn: SSHClientConnection,
     adapters: Sequence[RemoteMachineAdapter],
@@ -67,3 +55,6 @@ async def _detect_platform(
     if not adapter:
         raise PlatformGuessFailedError
     return adapter, platforms
+
+
+# endregion FUNC__detect_platform

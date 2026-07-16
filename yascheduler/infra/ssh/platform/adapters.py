@@ -1,31 +1,13 @@
 """Platform-specific adapter registry mapping OS identifiers to adapter instances."""
-#
-# FILE: yascheduler/infra/ssh/platform/adapters.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Platform-specific adapter registry mapping OS identifiers to adapter instances.
-#   SCOPE: RemoteMachineAdapter dataclass and platform adapter instances.
-#   DEPENDS: M-PLATFORM-PROTOCOL, M-PLATFORM-CHECKS, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS, M-PLATFORM-COMMON
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-PLATFORM-CHECKS, M-PLATFORM-LINUX, M-PLATFORM-WINDOWS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   RemoteMachineAdapter - Frozen dataclass holding platform-specific callables and check sequences
-#   linux_adapter - Generic Linux adapter instance
-#   debian_like_adapter - Debian-like variant evolved from linux_adapter
-#   debian_adapter - Generic Debian variant evolved from debian_like_adapter
-#   debian_10_adapter .. debian_15_adapter - Version-specific Debian adapters
-#   darwin_adapter - Darwin/macOS adapter instance
-#   windows_adapter - Generic Windows adapter instance
-#   windows7_adapter .. windows12_adapter - Version-specific Windows adapters
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Migrated RemoteMachineAdapter from attrs.define/evolve/field to stdlib dataclasses.dataclass/replace/field; no behavioral change.
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/; no behavioral change.
-# END_CHANGE_SUMMARY
-#
+# region MODULE_CONTRACT
+# PURPOSE: Frozen adapter instances for each supported OS variant, holding platform-specific callables and check sequences.
+# SCOPE:
+# - RemoteMachineAdapter frozen dataclass
+# - linux_adapter, debian_like_adapter, debian_adapter, debian_10..15_adapter, darwin_adapter
+# - windows_adapter, windows7..12_adapter
+# - All adapters are built from .common, .linux, .windows implementations
+# KEYWORDS: adapters, platform, linux, windows, darwin, debian, registry
+# endregion MODULE_CONTRACT
 
 import shlex
 from collections.abc import Sequence
@@ -77,10 +59,30 @@ from .windows import (
     windows_setup_node,
 )
 
+__all__ = [
+    "RemoteMachineAdapter",
+    "darwin_adapter",
+    "debian_10_adapter",
+    "debian_11_adapter",
+    "debian_12_adapter",
+    "debian_13_adapter",
+    "debian_14_adapter",
+    "debian_15_adapter",
+    "debian_adapter",
+    "debian_like_adapter",
+    "linux_adapter",
+    "windows7_adapter",
+    "windows8_adapter",
+    "windows10_adapter",
+    "windows11_adapter",
+    "windows12_adapter",
+    "windows_adapter",
+]
+
 
 @dataclass(frozen=True)
 class RemoteMachineAdapter:
-    """Remote machine adapter."""
+    """Remote machine adapter — frozen data class holding platform-specific callables and check sequence."""
 
     platform: str
     path: type[PurePath]
@@ -130,7 +132,7 @@ debian_10_adapter = replace(
 
 debian_11_adapter = replace(
     debian_adapter,
-    platform="debian-13",
+    platform="debian-11",
     checks=(*debian_adapter.checks, check_is_debian_11),
 )
 

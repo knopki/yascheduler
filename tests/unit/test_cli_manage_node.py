@@ -1,29 +1,8 @@
-# FILE: tests/unit/test_cli_manage_node.py
-# VERSION: 1.3.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yasetnode manage_node() host-spec grammar, argparse, exit codes, helpers, and add/remove paths.
-#   SCOPE: manage_node() and private helpers (_parse_host_spec, _parse_node_args, _remove_node_hard,
-#          _remove_node_soft, _add_node, HostSpec) with mocked Config/CLIDeps/UoW/SSHMachineGateway.
-#   DEPENDS: M-ENTRYPOINTS-CLI-MANAGE-NODE
-#   LINKS: M-ENTRYPOINTS-CLI-MANAGE-NODE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestHostSpecParsing - _parse_host_spec: IPv4, user@, :port, ~ncpus, IPv6 brackets, rejections, defaults
-#   TestManageNodeArgparse - prog, --help, missing host, unknown flag, mutex group, skip-setup × remove, value form
-#   TestManageNodeAddPath - happy path, --skip-setup, resource-leak fix, already-in-DB, Node construction
-#   TestManageNodeRemovePath - remove-hard, remove-soft with/without tasks, nonexistent, prints-after-commit
-#   TestManageNodeExitCodesAndChannels - 0 success, 1 SSH/DB/config failure, stderr Error:, logging setup
-#   TestParseNodeTarget - _parse_node_target: digit→NodeId, non-digit→HostSpec, zero→ValueError, negative→host_spec
-#   TestManageNodeIdPath - add-by-id→exit2, remove-by-id resolves via get_by_id, unknown id→exit1
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Add jump_port test coverage: test_add_uses_default_jump_port_when_key_absent, test_add_stamps_jump_from_config_remote extended.
-#   PREVIOUS_CHANGE: v1.4.0 - node-rename-and-fields: Node(hostname=…)→Node(hostname=…), added_node.hostname→added_node.hostname, make_mock_uow Node(hostname=…)→Node(hostname=…).
-#   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: rename list_ids_by_ip_and_status→list_ids_by_node_id_and_status in mock setup
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yasetnode manage_node() host-spec grammar, argparse, exit codes, helpers, and add/remove paths.
+# SCOPE: manage_node() host-spec grammar, argparse, exit codes, add/remove paths with mocked Config/CLIDeps/UoW/SSHMachineGateway.
+# KEYWORDS: yasetnode, manage_node, host-spec grammar, add/remove
+# endregion MODULE_CONTRACT
 
 import argparse
 import importlib

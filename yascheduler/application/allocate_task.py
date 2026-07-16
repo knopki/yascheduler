@@ -1,32 +1,9 @@
 """Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning."""
-# FILE: yascheduler/application/allocate_task.py
-# VERSION: 5.24.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Allocate task use case — match a TO_DO task to a free machine or request cloud provisioning.
-#   SCOPE: Task-to-machine allocation with cloud fallback — free machine search, cloud provisioning, tmp-node lifecycle, and persistence.
-#   DEPENDS: M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER, M-DOMAIN-ENGINE, M-DOMAIN-EVENTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-APPLICATION-UOW, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-APPLICATION-ALLOCATION-TRACKER, M-DOMAIN-ENGINE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   allocate_task - Assign a TO_DO task to a free machine or request cloud node
-#   _validate_engine - Validate task engine is configured and supported
-#   _allocate_free_machine - Find free machine and start task on it
-#   _find_free_machines - Find free compatible machines for task allocation
-#   _try_start_on_machine - Attempt to start a task on a specific (session, node) pair
-#   _count_nodes_by_cloud - Count nodes by cloud prefix (shared with orchestrator)
-#   _TmpSelection - NamedTuple(name: str, node: Node) for tmp-node handle
-#   _select_and_insert_tmp - Under lock, select provider and insert tmp-node
-#   _cleanup_tmp_node_best_effort - Best-effort tmp-node removal by NodeId
-#   _allocate_cloud_node - Call clouds.allocate; cleanup tmp-node on failure
-#   _persist_node_with_cleanup - Persist final node; cleanup VM on failure
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-
-#   LAST_CHANGE: v5.24.0 - Migrate logger binding from get_logger("M-...") to logging.getLogger(__name__); trace() → debug(msg, extra=...)
-#   PREVIOUS_CHANGE: v5.24.0 - Rewrite TMP_CLEANUP_FAILED/CLOUD_FAILED/PERSIST_FAILED/DEALLOC_FAILED/NO_PLATFORM to pure narrative (no grace markers) per reform-grace-logging slice 7.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Keep tasks moving from TO_DO to RUNNING by finding any eligible compute — free machine first, cloud fallback — so the backlog does not stall.
+# SCOPE: Task-to-machine allocation with cloud fallback — free machine search, cloud provisioning, tmp-node lifecycle, and persistence under a critical section.
+# KEYWORDS: allocate, task, machine, cloud, provisioning, tmp-node, critical section
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -61,29 +38,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["allocate_task"]
+
 
 class _TmpSelection(NamedTuple):
     name: str
     node: Node
 
 
-# START_CONTRACT: _validate_engine
-#   PURPOSE: Validate that the task's engine is configured and supported.
-#   INPUTS: {
-#     task: Task - The task to validate,
-#     engines: EngineRepository - Config engine repository,
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
-#   }
-#   OUTPUTS: { Engine | None - The resolved engine, or None if invalid }
-#   SIDE_EFFECTS: On unsupported engine, transitions task via reject() , saves, and commits.
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS
-# END_CONTRACT: _validate_engine
+# region FUNC__validate_engine
+# PURPOSE: Reject tasks with unknown engines early so they do not consume resources on an allocation attempt that can never succeed.
+# ENSURES: Returns the resolved Engine on success; on unsupported engine, transitions task via reject(), saves/commits via UoW, returns None.
 async def _validate_engine(
     task: Task,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> Engine | None:
-    # START_BLOCK_VALIDATE_ENGINE
+    # region BLOCK_validate_engine
     engine_name: str | None = task.engine
     engine = engines.get(engine_name) if engine_name else None
     if engine is None:
@@ -97,27 +68,16 @@ async def _validate_engine(
             await uow.tasks.save(task)
             await uow.commit()
         return None
-    # END_BLOCK_VALIDATE_ENGINE
+    # endregion BLOCK_validate_engine
     return engine
 
 
-# START_CONTRACT: _try_start_on_machine
-#   PURPOSE: Attempt to start a task on a specific (session, node) pair.
-#   INPUTS: {
-#     session: MachineSession - The machine session to try,
-#     node: Node - The Node paired with the session,
-#     engine: Engine - The resolved engine config,
-#     task: Task - The task to allocate,
-#     occupancy_checker: OccupancyChecker - SSH operations for occupancy checks,
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]] - Upload+spawn callback,
-#     tracker: AllocationTracker - In-flight cloud allocation tracker,
-#     remote_tasks_dir - Remote base directory for task folders
-#   }
-#   OUTPUTS: { bool }
-#   SIDE_EFFECTS: starts occupancy check, saves, commits
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-OPS-OCCUPANCY, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: _try_start_on_machine
+# endregion FUNC__validate_engine
+
+
+# region FUNC__try_start_on_machine
+# PURPOSE: Complete the full RUNNING transition for a task on a specific machine — occupy the slot, upload inputs, spawn the job, persist the state change, and release the tracker guard.
+# ENSURES: On success: task is RUNNING in DB, occupancy check started, tracker slot discarded. On failure returns False without side effects.
 async def _try_start_on_machine(
     session: MachineSession,
     node: Node,
@@ -158,23 +118,18 @@ async def _try_start_on_machine(
     return True
 
 
-# START_CONTRACT: _find_free_machines
-#   PURPOSE: Find free compatible machines eligible for task allocation, paired with their Node (matched by node_id).
-#   INPUTS: {
-#     engine: Engine - The resolved engine config,
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     repository: MachineRepository - SSH repository with connected machines
-#   }
-#   OUTPUTS: { list[tuple[MachineSession, Node]] - Free sessions paired with their matching Node }
-#   SIDE_EFFECTS: Reads running tasks and enabled nodes from DB.
-#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-PERSISTENCE-UOW
-# END_CONTRACT: _find_free_machines
+# endregion FUNC__try_start_on_machine
+
+
+# region FUNC__find_free_machines
+# PURPOSE: Enumerate all viable machine-task pairs so the allocator can iterate them without redundant lookups.
+# ENSURES: Returns list of (session, node) pairs for machines that are free, compatible, not already running a task, and present in the enabled-nodes DB view.
 async def _find_free_machines(
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
     repository: MachineRepository,
 ) -> list[tuple[MachineSession, Node]]:
-    # START_BLOCK_FIND_FREE_MACHINES
+    # region BLOCK_find_free_machines
     async with uow_factory() as uow:
         running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
         enabled_nodes = await uow.nodes.list_enabled()
@@ -185,17 +140,15 @@ async def _find_free_machines(
         for s in repository.list_free(platforms=list(engine.platforms))
         if s.machine.node_id in nodes_by_id and s.machine.node_id not in busy_node_ids
     ]
-    # END_BLOCK_FIND_FREE_MACHINES
+    # endregion BLOCK_find_free_machines
 
 
-# START_CONTRACT: _allocate_free_machine
-#   PURPOSE: Find a free compatible machine and start the task on it.
-#   INPUTS: { task: Task, engine: Engine, uow_factory: Callable, repository: MachineRepository, occupancy_checker: OccupancyChecker,
-#     start_task_on_machine: Callable, tracker: AllocationTracker, remote_tasks_dir: PurePath }
-#   OUTPUTS: { bool - True if allocated to a machine, False if not }
-#   SIDE_EFFECTS: Transitions task via run(node.node_id, remote_folder) on the first successful pair, starts occupancy check, saves, commits, discards tracker slot. Iterates (session, node) pairs from _find_free_machines; per-pair failures isolated and logged.
-#   LINKS: M-DOMAIN-MODEL, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: _allocate_free_machine
+# endregion FUNC__find_free_machines
+
+
+# region FUNC__allocate_free_machine
+# PURPOSE: Try every eligible free machine until one succeeds or all are exhausted, so a single stale session does not block the cloud-provisioning path.
+# ENSURES: Returns True if allocated to a machine; False if no candidate succeeded. Per-pair failures are logged but do not abort the loop.
 async def _allocate_free_machine(
     task: Task,
     engine: Engine,
@@ -208,9 +161,9 @@ async def _allocate_free_machine(
 ) -> bool:
     free_sessions = await _find_free_machines(engine, uow_factory, repository)
 
-    # START_BLOCK_ALLOCATE_MACHINE
+    # region BLOCK_allocate_machine
     for session, node in free_sessions:
-        # START_BLOCK_TRY_START_ISOLATED
+        # region BLOCK_try_start_isolated
         # Defense-in-depth: a single stale or transiently-unreachable session
         # must not abort the loop and starve the cloud-provisioning branch.
         # No repository.disconnect here — a transient SSH failure does not
@@ -240,10 +193,13 @@ async def _allocate_free_machine(
                 },
             )
             continue
-        # END_BLOCK_TRY_START_ISOLATED
-    # END_BLOCK_ALLOCATE_MACHINE
+        # endregion BLOCK_try_start_isolated
+    # endregion BLOCK_allocate_machine
 
     return False
+
+
+# endregion FUNC__allocate_free_machine
 
 
 def _count_nodes_by_cloud(nodes: Sequence[Node]) -> dict[str, int]:
@@ -254,25 +210,16 @@ def _count_nodes_by_cloud(nodes: Sequence[Node]) -> dict[str, int]:
     return counts
 
 
-# START_CONTRACT: _select_and_insert_tmp
-#   PURPOSE: Under allocation_lock, compute provider capacity, call select_provider port, and insert tmp-node via insert(NewNode(cloud=..., enabled=False)) in a single UoW committed before lock release.
-#   INPUTS: {
-#     clouds: CloudProvisioner - Cloud port (select_provider called sync),
-#     engine: Engine - Resolved engine config (source of platforms),
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     allocation_lock: asyncio.Lock - Critical-section lock
-#   }
-#   OUTPUTS: { _TmpSelection | None - selected provider name + tmp-node Node (the row committed by insert), or None if no provider available }
-#   SIDE_EFFECTS: Reads uow.nodes.list_all, inserts tmp-node via uow.nodes.insert(NewNode(cloud=..., enabled=False)), commits under lock. Concurrent selectors observe the tmp-node after lock release.
-#   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
-# END_CONTRACT: _select_and_insert_tmp
+# region FUNC__select_and_insert_tmp
+# PURPOSE: Reserve a cloud capacity slot atomically so concurrent allocators see the committed tmp-node and do not overshoot max_nodes.
+# ENSURES: Returns _TmpSelection (provider name + tmp-node) on success; None if no provider is available. The tmp-node row is committed before the lock is released.
 async def _select_and_insert_tmp(
     clouds: CloudProvisioner,
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
     allocation_lock: asyncio.Lock,
 ) -> _TmpSelection | None:
-    # START_BLOCK_CAPACITY_AND_SELECT
+    # region BLOCK_capacity_and_select
     async with allocation_lock, uow_factory() as uow:
         nodes = await uow.nodes.list_all()
         counts = _count_nodes_by_cloud(nodes)
@@ -284,28 +231,22 @@ async def _select_and_insert_tmp(
         )
         await uow.commit()
         return _TmpSelection(name=selected_name, node=tmp_node)
-    # END_BLOCK_CAPACITY_AND_SELECT
+    # endregion BLOCK_capacity_and_select
 
 
-# START_CONTRACT: _cleanup_tmp_node_best_effort
-#   PURPOSE: Best-effort tmp-node removal by NodeId; logs failures, never raises.
-#   INPUTS: {
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     tmp_node_id: NodeId - The tmp-node's primary key (from insert's RETURNING node_id),
-#     task_id: TaskId - For log correlation,
-#     context: str - Why cleanup is running (e.g. "cloud-alloc-failed")
-#   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens UoW, removes tmp-node by node_id, commits. Failures logged only — never re-raised.
-#   LINKS: M-APPLICATION-UOW
-# END_CONTRACT: _cleanup_tmp_node_best_effort
+# endregion FUNC__select_and_insert_tmp
+
+
+# region FUNC__cleanup_tmp_node_best_effort
+# PURPOSE: Best-effort tmp-node removal by NodeId; logs failures, never raises.
+# ENSURES: Always completes without raising; failures are logged at exception level.
 async def _cleanup_tmp_node_best_effort(
     uow_factory: Callable[[], AbstractUnitOfWork],
     tmp_node_id: NodeId,
     task_id: TaskId,
     context: str,
 ) -> None:
-    # START_BLOCK_BEST_EFFORT_TMP_CLEANUP
+    # region BLOCK_best_effort_tmp_cleanup
     try:
         async with uow_factory() as uow:
             await uow.nodes.remove(tmp_node_id)
@@ -317,23 +258,15 @@ async def _cleanup_tmp_node_best_effort(
             context,
             tmp_node_id,
         )
-    # END_BLOCK_BEST_EFFORT_TMP_CLEANUP
+    # endregion BLOCK_best_effort_tmp_cleanup
 
 
-# START_CONTRACT: _allocate_cloud_node
-#   PURPOSE: Call clouds.allocate(provider, node); on failure run best-effort tmp-node cleanup then re-raise so the caller sees the original cloud-allocation error.
-#   INPUTS: {
-#     clouds: CloudProvisioner - Cloud port (allocate),
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory (for cleanup),
-#     selected_name: str - Provider name to allocate,
-#     tmp_node: Node - tmp-node committed by _select_and_insert_tmp (its node_id is reused as the real node identity),
-#     task_id: TaskId - For log correlation
-#   }
-#   OUTPUTS: { Node - The provisioned cloud node (node_id == tmp_node.node_id, enabled=True, real ip, ncpus); NOT yet flipped to enabled=TRUE in DB — the caller's update step does that }
-#   SIDE_EFFECTS: Calls clouds.allocate(provider, tmp_node). On failure removes tmp-node by node_id (best-effort, logged not raised).
-#   RAISES: { Exception - Original cloud-allocation exception, never a cleanup exception }
-#   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
-# END_CONTRACT: _allocate_cloud_node
+# endregion FUNC__cleanup_tmp_node_best_effort
+
+
+# region FUNC__allocate_cloud_node
+# PURPOSE: Provision the cloud VM and on failure clean up the tmp-node so the capacity slot is released and the error propagates for proper tracking.
+# ENSURES: On success returns the provisioned Node; on failure cleans up tmp-node best-effort and re-raises (never masks with cleanup exception).
 async def _allocate_cloud_node(
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
@@ -341,7 +274,7 @@ async def _allocate_cloud_node(
     tmp_node: Node,
     task_id: TaskId,
 ) -> Node:
-    # START_BLOCK_CLOUD_ALLOCATE
+    # region BLOCK_cloud_allocate
     try:
         node = await clouds.allocate(selected_name, tmp_node)
     except Exception:
@@ -355,24 +288,16 @@ async def _allocate_cloud_node(
             "cloud-alloc-failed",
         )
         raise
-    # END_BLOCK_CLOUD_ALLOCATE
+    # endregion BLOCK_cloud_allocate
     return node
 
 
-# START_CONTRACT: _persist_node_with_cleanup
-#   PURPOSE: Persist the final node via a single uow.nodes.update(node) (flipping enabled=TRUE, setting ip/ncpus); on failure best-effort delete the billable orphan VM and remove the tmp-node, then re-raise the original persist error.
-#   INPUTS: {
-#     node: Node - Provisioned node (node_id == tmp_node.node_id, enabled=True, real ip, ncpus),
-#     clouds: CloudProvisioner - Cloud port (deallocate on persist failure),
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     tmp_node_id: NodeId - tmp-node primary key (== node.node_id; for cleanup),
-#     task_id: TaskId - For log correlation
-#   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Opens UoW, calls uow.nodes.update(node), commits. On failure: best-effort clouds.deallocate(node) + tmp-node cleanup, then re-raises.
-#   RAISES: { Exception - Original persist exception, never a cleanup exception }
-#   LINKS: M-CLOUD-PROVISIONER, M-APPLICATION-UOW, M-DOMAIN-MODEL
-# END_CONTRACT: _persist_node_with_cleanup
+# endregion FUNC__allocate_cloud_node
+
+
+# region FUNC__persist_node_with_cleanup
+# PURPOSE: Save the provisioned node's real details (IP, ncpus) and on failure delete the billable orphan VM immediately, so cloud costs are not incurred for nodes the scheduler cannot use.
+# ENSURES: On success the node is committed (enabled=True, real ip, ncpus); on failure deallocates the VM (best-effort), cleans up tmp-node, and re-raises.
 async def _persist_node_with_cleanup(
     node: Node,
     clouds: CloudProvisioner,
@@ -380,7 +305,7 @@ async def _persist_node_with_cleanup(
     tmp_node_id: NodeId,
     task_id: TaskId,
 ) -> None:
-    # START_BLOCK_FINAL_PERSIST
+    # region BLOCK_final_persist
     try:
         async with uow_factory() as uow:
             await uow.nodes.update(node)
@@ -411,7 +336,7 @@ async def _persist_node_with_cleanup(
             "persist-failed",
         )
         raise
-    # END_BLOCK_FINAL_PERSIST
+    # endregion BLOCK_final_persist
 
     logger.debug(
         "CLOUD_DONE",
@@ -419,23 +344,12 @@ async def _persist_node_with_cleanup(
     )
 
 
-# START_CONTRACT: allocate_task
-#   PURPOSE: Match a TO_DO task to a free compatible machine or request cloud allocation.
-#   INPUTS: {
-#     task_id: TaskId - The task id to allocate,
-#     engines: EngineRepository - Config engine repository,
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     repository: MachineRepository, occupancy_checker: OccupancyChecker - SSH gateway with connected machines,
-#     clouds: CloudProvisioner - Cloud provider port,
-#     start_task_on_machine: Callable - Callback to upload+spawn on remote machine,
-#     tracker: AllocationTracker - In-flight cloud allocation tracker,
-#     allocation_lock: asyncio.Lock - Lock for critical section coordination,
-#     remote_tasks_dir: PurePath - Remote base directory for task folders
-#   }
-#   OUTPUTS: { bool - True if allocated to a machine, False if cloud requested or error }
-#   SIDE_EFFECTS: May update task status in DB, start occupancy check, record events (TaskAllocated/TaskFailed), tracker.add/set_node/discard, tmp-node insertion, cloud allocation. On failure best-effort cleanup of VM and tmp-node.
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-EVENTS, M-SSH-REPOSITORY, M-SSH-OPS-OCCUPANCY, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: allocate_task
+# endregion FUNC__persist_node_with_cleanup
+
+
+# region FUNC_allocate_task
+# PURPOSE: Match a TO_DO task to a free compatible machine or request cloud allocation with critical-section dedup.
+# ENSURES: Returns True if allocated to a machine; False if cloud-provisioning was initiated or no allocation was possible. Tracker slot is discarded on failure paths.
 async def allocate_task(
     task_id: TaskId,
     engines: EngineRepository,
@@ -484,7 +398,7 @@ async def allocate_task(
         )
         return False
 
-    # START_BLOCK_ALLOCATE_CLOUD_CRITICAL_SECTION
+    # region BLOCK_allocate_cloud_critical_section
     logger.debug("CLOUD", extra={"task_id": task.task_id})
 
     # Step 0: tracker dedup
@@ -539,4 +453,7 @@ async def allocate_task(
                     task.task_id,
                     "allocator-unexpected",
                 )
-    # END_BLOCK_ALLOCATE_CLOUD_CRITICAL_SECTION
+    # endregion BLOCK_allocate_cloud_critical_section
+
+
+# endregion FUNC_allocate_task
