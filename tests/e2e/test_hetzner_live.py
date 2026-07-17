@@ -159,7 +159,7 @@ async def _delete_one_best_effort(
     from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
     try:
-        await hetzner_delete_node(cfg, ip)
+        await hetzner_delete_node(cfg, external_id=ip)
     except Exception as err:
         log.error(
             "[hetzner_live][CLEANUP] hetzner_delete_node raised for ip=%s err=%s "

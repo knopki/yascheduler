@@ -7,7 +7,7 @@
 
 from .az import az_create_node, az_delete_node
 from .hetzner import hetzner_create_node, hetzner_delete_node
-from .upcloud import upcload_delete_node, upcloud_create_node
+from .upcloud import upcloud_create_node, upcloud_delete_node
 from .vastai import vastai_create_node, vastai_delete_node
 
 __all__ = [
@@ -15,8 +15,8 @@ __all__ = [
     "az_delete_node",
     "hetzner_create_node",
     "hetzner_delete_node",
-    "upcload_delete_node",
     "upcloud_create_node",
+    "upcloud_delete_node",
     "vastai_create_node",
     "vastai_delete_node",
 ]

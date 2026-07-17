@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from .adapters import CloudAdapter
     from .cloud_configs import ConfigCloud
+    from .dto import CloudCreateNodeDTO
 
 __all__ = ["CloudProvisionerImpl"]
 
@@ -124,7 +125,7 @@ class CloudProvisionerImpl:
         # region BLOCK_create_vm
         logger.debug("CREATE_VM", extra={"provider": adapter.name})
         try:
-            ip_addr = await adapter.create_node(
+            dto: CloudCreateNodeDTO = await adapter.create_node(
                 cfg=config,
                 key=await self._get_ssh_key(),
                 cloud_config=await self._get_cloud_config_data(adapter, config),
@@ -149,10 +150,14 @@ class CloudProvisionerImpl:
         # and swallowed, then delete_node always runs.
         node = replace(
             node,
-            hostname=ip_addr,
-            external_id=ip_addr,
+            hostname=dto.hostname,
+            external_id=dto.external_id,
             cloud=adapter.name,
-            username=config.username,
+            username=dto.username,
+            port=dto.port,
+            jump_host=dto.jump_host,
+            jump_port=dto.jump_port,
+            jump_username=dto.jump_username,
         )
         try:
             node = await self._setup_vm(node, adapter, config)
@@ -170,7 +175,7 @@ class CloudProvisionerImpl:
                     node.node_id,
                     disc_err,
                 )
-            await adapter.delete_node(cfg=config, host=node.hostname)
+            await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
             raise
         except Exception as err:
             logger.warning(
@@ -186,7 +191,7 @@ class CloudProvisionerImpl:
                     node.node_id,
                     disc_err,
                 )
-            await adapter.delete_node(cfg=config, host=node.hostname)
+            await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
             msg = f"Setup node error: {err}"
             raise CloudSetupError(msg) from err
         # endregion BLOCK_setup_vm
@@ -236,7 +241,7 @@ class CloudProvisionerImpl:
         # endregion BLOCK_resolve_deallocate_provider
 
         # region BLOCK_delete_vm
-        await adapter.delete_node(cfg=config, host=node.hostname)
+        await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
         logger.debug(
             "DONE",
             extra={
@@ -302,7 +307,7 @@ class CloudProvisionerImpl:
     # region METHOD__setup_vm
     # PURPOSE: Wait for cloud-init, install engines, and stamp the Node enabled so a freshly-created VM becomes a functional compute node ready for job execution.
     # REQUIRES: node has hostname/username set; adapter has timeout settings.
-    # ENSURES: Stamps jump-leg identity on Node via replace before SSH connect; connects to VM, runs cloud-init, installs engines.
+    # ENSURES: Connects to VM, runs cloud-init, installs engines, stamps enabled=True.
     # RAISES: CloudSetupError on any SSH/cloud-init/setup failure.
     async def _setup_vm(
         self,
@@ -311,25 +316,6 @@ class CloudProvisionerImpl:
         config: ConfigCloud,
     ) -> Node:
         """Connect to VM, wait for cloud-init, install engines, return enabled Node via replace."""
-        # region BLOCK_resolve_jump
-        # Resolve jump from the matching CloudConfig (prefix == node.cloud)
-        # before opening the setup SSH session. Fall back to remote defaults.
-        # All three jump fields come from the SAME source (atomic leg rule).
-        jump_host = self.remote_config.jump_host
-        jump_username = self.remote_config.jump_username or "root"
-        jump_port = self.remote_config.jump_port
-        if config.prefix == node.cloud and config.jump_host and config.jump_username:
-            jump_host = config.jump_host
-            jump_username = config.jump_username
-            jump_port = config.jump_port
-        node = replace(
-            node,
-            jump_host=jump_host,
-            jump_username=jump_username,
-            jump_port=jump_port,
-        )
-        # endregion BLOCK_resolve_jump
-
         # region BLOCK_ssh_connect_setup
         session = await self._connect_to_vm(node, adapter, config)
         # endregion BLOCK_ssh_connect_setup

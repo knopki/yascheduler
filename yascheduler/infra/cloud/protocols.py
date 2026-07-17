@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
 
     from .cloud_init import CloudInitConfig
+    from .dto import CloudCreateNodeDTO
 
 __all__ = [
     "CreateNodeCallable",
@@ -47,7 +48,7 @@ class CreateNodeCallable(Protocol[TConfigCloud_contra]):
         cfg: TConfigCloud_contra,
         key: SSHKey,
         cloud_config: CloudInitConfig | None = None,
-    ) -> str:
+    ) -> CloudCreateNodeDTO:
         """Call."""
         raise NotImplementedError
 
@@ -59,7 +60,7 @@ class DeleteNodeCallable(Protocol[TConfigCloud_contra]):
     async def __call__(
         self,
         cfg: TConfigCloud_contra,
-        host: str,
+        external_id: str,
     ) -> None:
         """Call."""
         raise NotImplementedError

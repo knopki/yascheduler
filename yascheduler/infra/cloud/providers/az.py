@@ -52,7 +52,7 @@ try:
 except ImportError:
     _AZURE_AVAILABLE = False
 
-from yascheduler.infra.cloud import get_rnd_name
+from yascheduler.infra.cloud import CloudCreateNodeDTO, get_rnd_name
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +66,7 @@ if TYPE_CHECKING:
         ConfigCloudAzure,
     )
 
-__all__ = [
-    "az_create_node",
-    "az_delete_node",
-]
+__all__ = ["az_create_node", "az_delete_node"]
 
 # Azure SDK is too noisy
 for logger_name in [
@@ -250,7 +247,7 @@ async def create_node(
     cfg: ConfigCloudAzure,
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
-) -> str:
+) -> CloudCreateNodeDTO:
     """Create virtual machine with nic."""
     vm_name = get_rnd_name("yascheduler-vm")
     nic, ip_addr = await create_nic(cfg=cfg, client=nmc, vm_name=vm_name)
@@ -274,7 +271,14 @@ async def create_node(
     await poller.wait()
     vm_res = await poller.result()
     logger.debug("CREATE_VM", extra={"vm": vm_res.name})
-    return ip_addr
+    return CloudCreateNodeDTO(
+        external_id=ip_addr,
+        hostname=ip_addr,
+        username=cfg.username,
+        jump_host=cfg.jump_host,
+        jump_port=cfg.jump_port,
+        jump_username=cfg.jump_username or "root",
+    )
 
 
 # endregion FUNC_create_node
@@ -286,7 +290,7 @@ async def az_create_node(
     cfg: ConfigCloudAzure,
     key: SSHKey,
     cloud_config: CloudInitConfig | None = None,
-) -> str:
+) -> CloudCreateNodeDTO:
     """Create virtual machine with network interface."""
     if not _AZURE_AVAILABLE:
         msg = (
@@ -315,13 +319,13 @@ async def delete_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
     cfg: ConfigCloudAzure,
-    host: str,
+    external_id: str,
 ) -> None:
     """Delete virtual machine with network interface."""
     async for result in cmc.virtual_machines.list(cfg.resource_group):
         vm_res = cast("VirtualMachine", result)
         tag_ip = (vm_res.tags or {}).get(ID_TAG_NAME)
-        if tag_ip == host:
+        if tag_ip == external_id:
             poller = await cmc.virtual_machines.begin_power_off(
                 cfg.resource_group,
                 cast("str", vm_res.name),
@@ -340,7 +344,7 @@ async def delete_node(
     async for result in nmc.network_interfaces.list(cfg.resource_group):
         nic = cast("NetworkInterface", result)
         tag_ip = (nic.tags or {}).get(ID_TAG_NAME)
-        if tag_ip == host:
+        if tag_ip == external_id:
             poller = await nmc.network_interfaces.begin_delete(
                 cfg.resource_group,
                 cast("str", nic.name),
@@ -357,7 +361,7 @@ async def delete_node(
 # PURPOSE: Expose Azure VM deletion through the CloudAdapter callable signature so the generic provisioner can tear down Azure VMs without Azure-specific imports.
 async def az_delete_node(
     cfg: ConfigCloudAzure,
-    host: str,
+    external_id: str,
 ) -> None:
     """Delete virtual machine with network interface."""
     if not _AZURE_AVAILABLE:
@@ -375,7 +379,7 @@ async def az_delete_node(
             NetworkManagementClient(cred, cfg.subscription_id) as nmc,
             ComputeManagementClient(cred, cfg.subscription_id) as cmc,
         ):
-            return await delete_node(nmc, cmc, cfg, host)
+            return await delete_node(nmc, cmc, cfg, external_id)
 
 
 # endregion FUNC_az_delete_node

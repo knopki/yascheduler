@@ -16,6 +16,7 @@ from yascheduler.infra.cloud.cloud_configs import (
     ConfigCloudUpcloud,
     ConfigCloudVastAI,
 )
+from yascheduler.infra.cloud.protocols import CreateNodeCallable, DeleteNodeCallable
 
 DTO_CLASSES = (
     ConfigCloudAzure,
@@ -52,6 +53,20 @@ def test_cloud_config_protocol_has_jump_port() -> None:
 def test_azure_image_reference_does_not_inherit_cloud_config() -> None:
     """AzureImageReference does NOT inherit CloudConfig (it lacks the 6 Protocol fields)."""
     assert CloudConfig not in AzureImageReference.__mro__
+
+
+def test_create_node_callable_returns_cloud_create_node_dto() -> None:
+    """CreateNodeCallable.__call__ return annotation is CloudCreateNodeDTO."""
+    ann = CreateNodeCallable.__call__.__annotations__
+    assert "return" in ann
+    assert "CloudCreateNodeDTO" in ann["return"]
+
+
+def test_delete_node_callable_accepts_external_id() -> None:
+    """DeleteNodeCallable.__call__ has external_id parameter (not host)."""
+    ann = DeleteNodeCallable.__call__.__annotations__
+    assert "external_id" in ann
+    assert "host" not in ann
 
 
 if __name__ == "__main__":

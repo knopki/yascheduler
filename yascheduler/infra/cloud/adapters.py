@@ -153,15 +153,15 @@ def get_hetzner_adapter(name: str) -> CloudAdapter:
 def get_upcloud_adapter(name: str) -> CloudAdapter:
     """Create CloudAdapter for UpCloud with Buster platform support, single op limit."""
     from .providers.upcloud import (  # noqa: PLC0415
-        upcload_delete_node,
         upcloud_create_node,
+        upcloud_delete_node,
     )
 
     return CloudAdapter(
         name=name,
         supported_platform_checks=(can_debian_buster,),
         create_node=upcloud_create_node,
-        delete_node=upcload_delete_node,
+        delete_node=upcloud_delete_node,
         op_limit=1,
     )
 

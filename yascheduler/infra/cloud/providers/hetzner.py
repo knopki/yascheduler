@@ -26,7 +26,7 @@ try:
 except ImportError:
     _HETZNER_AVAILABLE = False
 
-from yascheduler.infra.cloud import get_key_name, get_rnd_name
+from yascheduler.infra.cloud import CloudCreateNodeDTO, get_key_name, get_rnd_name
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +36,7 @@ if TYPE_CHECKING:
 
     from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudHetzner
 
-__all__ = [
-    "hetzner_create_node",
-    "hetzner_delete_node",
-]
+__all__ = ["hetzner_create_node", "hetzner_delete_node"]
 
 executor = ThreadPoolExecutor(max_workers=5)
 
@@ -96,7 +93,7 @@ async def hetzner_create_node(
     cfg: ConfigCloudHetzner,
     key: ASSHKey,
     cloud_config: CloudInitConfig | None = None,
-) -> str:
+) -> CloudCreateNodeDTO:
     """Create node."""
     if not _HETZNER_AVAILABLE:
         msg = "Hetzner SDK not installed. Install hcloud package."
@@ -120,7 +117,14 @@ async def hetzner_create_node(
     assert ip_addr
     ip_str = str(ip_addr)
     logger.info("CREATED %s", ip_str)
-    return ip_str
+    return CloudCreateNodeDTO(
+        external_id=ip_str,
+        hostname=ip_str,
+        username=cfg.username,
+        jump_host=cfg.jump_host,
+        jump_port=cfg.jump_port,
+        jump_username=cfg.jump_username or "root",
+    )
 
 
 # endregion FUNC_hetzner_create_node
@@ -145,7 +149,7 @@ def find_srv(client: HClient, host: str) -> BoundServer | None:
 # PURPOSE: Tear down a Hetzner server by IP so billing stops and the node slot is freed for reallocation.
 async def hetzner_delete_node(
     cfg: ConfigCloudHetzner,
-    host: str,
+    external_id: str,
 ) -> None:
     """Delete node."""
     if not _HETZNER_AVAILABLE:
@@ -153,14 +157,14 @@ async def hetzner_delete_node(
         raise ImportError(msg)
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)
-    server = await loop.run_in_executor(executor, find_srv, client, host)
+    server = await loop.run_in_executor(executor, find_srv, client, external_id)
 
     if server:
         await loop.run_in_executor(executor, server.delete)
-        logger.info("DELETED %s", host)
+        logger.info("DELETED %s", external_id)
 
     else:
-        logger.info("NODE %s NOT DELETED AS UNKNOWN", host)
+        logger.info("NODE %s NOT DELETED AS UNKNOWN", external_id)
 
 
 # endregion FUNC_hetzner_delete_node

@@ -27,6 +27,7 @@ from yascheduler.domain.model import (
     TaskId,
     TaskStatus,
 )
+from yascheduler.infra.cloud.dto import CloudCreateNodeDTO
 from yascheduler.infra.cloud.manager import CloudProvisionerImpl
 
 if TYPE_CHECKING:
@@ -466,8 +467,15 @@ def _make_real_adapter_config(
     adapter.create_node_conn_timeout = 30
     adapter.create_node_timeout = create_node_timeout
 
-    async def _create_node(**kw: Any) -> str:
-        return ip
+    async def _create_node(**kw: Any) -> CloudCreateNodeDTO:
+        return CloudCreateNodeDTO(
+            external_id=ip,
+            hostname=ip,
+            username="root",
+            jump_host=None,
+            jump_port=22,
+            jump_username="root",
+        )
 
     adapter.create_node = _create_node
     adapter.delete_node = AsyncMock()

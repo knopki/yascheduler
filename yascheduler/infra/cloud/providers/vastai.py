@@ -12,6 +12,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from yascheduler.infra.cloud.dto import CloudCreateNodeDTO
+
 try:
     import aiohttp
 
@@ -246,7 +248,7 @@ async def vastai_create_node(
     cfg: ConfigCloudVastAI,
     key: SSHKey,  # noqa: ARG001
     cloud_config: CloudInitConfig | None = None,  # noqa: ARG001
-) -> str:
+) -> CloudCreateNodeDTO:
     """Create VastAI instance from cheapest matching offer and wait for readiness."""
     async with aiohttp.ClientSession() as session:
         logger.info("Searching VastAI offers...")
@@ -294,7 +296,14 @@ async def vastai_create_node(
                 ip_addr = info.get("public_ipaddr")
                 if ip_addr:
                     logger.info("Instance running at %s", ip_addr)
-                    return ip_addr
+                    return CloudCreateNodeDTO(
+                        external_id=ip_addr,
+                        hostname=ip_addr,
+                        username=cfg.username,
+                        jump_host=cfg.jump_host,
+                        jump_port=cfg.jump_port,
+                        jump_username=cfg.jump_username or "root",
+                    )
                 logger.warning("Instance running but no public IP address yet")
 
         raise _VastInstanceTimeoutError(instance_id, max_wait)
@@ -307,19 +316,19 @@ async def vastai_create_node(
 # PURPOSE: Tear down a VastAI GPU instance by IP so billing stops and the GPU slot returns to the marketplace.
 async def vastai_delete_node(
     cfg: ConfigCloudVastAI,
-    host: str,
+    external_id: str,
 ) -> None:
     """Delete VastAI instance by its IP address."""
     async with aiohttp.ClientSession() as session:
-        inst = await _find_instance_by_ip(session, cfg.api_key, host)
+        inst = await _find_instance_by_ip(session, cfg.api_key, external_id)
         if inst:
             instance_id = inst.get("id")
             if not isinstance(instance_id, int):
-                raise _VastInvalidHostInstanceIdError(host)
+                raise _VastInvalidHostInstanceIdError(external_id)
             await _delete_instance(session, cfg.api_key, cast("int", instance_id))
             logger.info("Deleted VastAI instance %s", instance_id)
         else:
-            logger.warning("No VastAI instance found with IP %s", host)
+            logger.warning("No VastAI instance found with IP %s", external_id)
 
 
 # endregion FUNC_vastai_delete_node

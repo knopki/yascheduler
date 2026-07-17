@@ -21,6 +21,7 @@ from .cloud_configs import (
     ConfigCloudVastAI,
 )
 from .cloud_init import CloudInitConfig
+from .dto import CloudCreateNodeDTO
 from .manager import CloudAllocateError, CloudProvisionerImpl, CloudSetupError
 from .protocols import (
     CreateNodeCallable,
@@ -33,6 +34,7 @@ __all__ = [
     "AzureImageReference",
     "CloudAdapter",
     "CloudAllocateError",
+    "CloudCreateNodeDTO",
     "CloudInitConfig",
     "CloudProvisionerImpl",
     "CloudSetupError",
