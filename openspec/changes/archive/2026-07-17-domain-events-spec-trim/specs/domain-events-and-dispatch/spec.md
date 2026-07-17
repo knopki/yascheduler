@@ -1,15 +1,4 @@
-# Domain Events and Dispatch
-
-## Purpose
-
-The domain event types emitted by the Task aggregate and use cases, the in-process
-`MessageBus` that decouples event recording from side-effect handlers, the
-`collect_events` / `publish_events` UoW hooks, and the `webhook_handler` adapter —
-the registered side-effect handler that translates events into outbound HTTP
-webhook calls. Events are immutable value objects carrying webhook delivery
-metadata on the base class.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: DomainEvent base type with webhook fields
 
@@ -123,8 +112,8 @@ transition. The mapping is:
 
 The `engine_name` value for `TaskAllocated` is sourced from `task.engine`
 inside `run`. The `reason` value for `TaskFailed` is sourced from the `reason`
-param of `reject` or `fail`. The `node_id` value for `TaskAbandoned` is
-sourced from the `node_id` param of `abandon`.
+param of `reject` or `fail`. The `node_id` value for `TaskAbandoned` is sourced
+from the `node_id` param of `abandon`.
 
 #### Scenario: submit_task records TaskCreated via materialize_task
 

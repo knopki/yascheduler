@@ -31,6 +31,9 @@ class MessageBus:
 
     # region METHOD_register
     # PURPOSE: Subscribe a handler to an event type so dispatch() can invoke it when events of that type are published.
+    # RATIONALE:
+    # - Q: How do handlers obtain their non-event dependencies (http session, repositories)?
+    #   A: Register a `functools.partial` that pre-binds the extra arguments; `dispatch()` calls the resulting callable with only the event, so the registry signature stays single-arg.
     def register(self, event_type: type, handler: Callable) -> None:
         """Register a handler callable for a specific event type."""
         self._handlers.setdefault(event_type, []).append(handler)

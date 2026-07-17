@@ -35,6 +35,9 @@ __all__ = [
 ]
 
 
+# region CLASS_WebhookPayload
+# PURPOSE: Fix the outbound wire shape {"task_id": int, "status": int, "custom_params": ...} so dataclasses.asdict serializes a flat JSON-ready dict.
+# INVARIANTS: frozen; task_id is a bare int (the TaskId.value), never a TaskId instance; custom_params defaults to an empty mapping.
 @dataclass(frozen=True)
 class WebhookPayload:
     """Payload dataclass for webhook event dispatch."""
@@ -42,6 +45,9 @@ class WebhookPayload:
     task_id: int = field()
     status: int = field()
     custom_params: Mapping[str, Any] = field(default_factory=dict)
+
+
+# endregion CLASS_WebhookPayload
 
 
 # region FUNC__get_semaphore
@@ -60,6 +66,7 @@ def _get_semaphore() -> Semaphore:
 
 # region FUNC_webhook_handler
 # PURPOSE: Deliver task lifecycle notifications to registered webhook URLs so external systems react asynchronously — backoff retries transient failures, and final errors are logged without crashing the dispatcher.
+# ENSURES: when webhook_url is None, returns without an HTTP request; otherwise builds WebhookPayload(task_id=event.task_id.value, status=<status>.value, custom_params=event.webhook_custom_params); exceptions from _send_webhook are caught and logged, never re-raised.
 async def webhook_handler(event: DomainEvent, http: aiohttp.ClientSession) -> None:
     """Async handler that sends webhooks for task lifecycle events."""
     if event.webhook_url is None:

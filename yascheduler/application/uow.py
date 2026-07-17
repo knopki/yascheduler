@@ -21,6 +21,8 @@ __all__ = [
 ]
 
 
+# region CLASS_AbstractUnitOfWork
+# PURPOSE: State the contract use cases depend on — transactional access to task/node repositories plus post-commit event dispatch — so use cases stay decoupled from any persistence implementation.
 @runtime_checkable
 class AbstractUnitOfWork(Protocol):
     """Async context manager providing task and node repositories sharing a transaction."""
@@ -63,3 +65,6 @@ class AbstractUnitOfWork(Protocol):
     async def publish_events(self) -> None:
         """Dispatch collected domain events via the message bus."""
         ...
+
+
+# endregion CLASS_AbstractUnitOfWork

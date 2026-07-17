@@ -161,6 +161,8 @@ class NewTask:
 # RATIONALE:
 # - Q: Why does allocated_node_id cover both "unallocated" and "node was deleted"?
 #   A: Both states mean "no node currently assigned" — the distinction is irrelevant at the entity level; the node-resolved transport address comes from NodeRepository, not from Task.
+# - Q: Why are there no `record_event`/`with_event`/`pull_events` primitives on `Task`?
+#   A: Event construction lives inside the transition methods so the source-status check and the event payload stay atomically bound — splitting them would let a caller record an event without performing (or after performing) the transition, breaking the invariant that events reflect actual state changes.
 @dataclass(frozen=True)
 class Task:
     """Post-persistence task entity with atomic lifecycle transitions.
