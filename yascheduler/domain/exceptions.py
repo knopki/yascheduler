@@ -126,12 +126,7 @@ class CloudCapacityExhaustedError(SchedulingError):
 
 
 class CloudError(DomainError):
-    """Operational cloud-provider failures: provider selection, VM creation, SSH/cloud-init/engine setup.
-
-    Cloud capacity planning is a distinct concern and lives under
-    `SchedulingError` as `CloudCapacityExhaustedError` — it is a domain
-    scheduling rule, not an operational provider failure.
-    """
+    """Operational cloud-provider failures."""
 
 
 class CloudAllocateError(CloudError):

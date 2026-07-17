@@ -1,31 +1,4 @@
-## Purpose
-
-Defines the domain exception hierarchy for business-level error handling: a `DomainError` base class with sub-hierarchies for validation, task lifecycle, machine state, scheduling, and cloud-provider operational failures.
-
-## Requirements
-
-### Requirement: DomainError base class
-
-The system SHALL provide a `DomainError(Exception)` base class for all
-business-level exceptions. All domain exception classes SHALL be exposed via
-`yascheduler.domain.exceptions` and `yascheduler.domain`.
-
-#### Scenario: DomainError is catchable as Exception
-- **WHEN** a `DomainError` subclass is raised
-- **THEN** it is caught by `except DomainError` and `except Exception`
-
-### Requirement: ValidationError hierarchy
-
-The system SHALL provide `ValidationError(DomainError)` with subclasses:
-`UnsupportedEngineError` and `MissingInputFileError`.
-
-#### Scenario: UnsupportedEngineError carries engine name
-- **WHEN** `UnsupportedEngineError("gaussian")` is raised
-- **THEN** the exception message contains "gaussian" and `e.engine_name == "gaussian"`
-
-#### Scenario: MissingInputFileError carries engine and filename
-- **WHEN** `MissingInputFileError("fleur", "inp.xml")` is raised
-- **THEN** `e.engine_name == "fleur"` and `e.filename == "inp.xml"`
+## MODIFIED Requirements
 
 ### Requirement: TaskError hierarchy
 
@@ -62,25 +35,6 @@ The exception message format SHALL be:
 #### Scenario: MachineBusyError is catchable as DomainError
 
 - **WHEN** a `MachineBusyError` is raised
-- **THEN** it is caught by `except DomainError` and `except Exception`
-
-### Requirement: MachineConnectionError
-
-The system SHALL provide `MachineConnectionError(DomainError)` for connection
-failures when establishing SSH connections to remote machines. The constructor
-SHALL take `node_id: NodeId` as the first argument, `hostname: str` as the
-second, and `reason: str` as the third, storing all three as instance
-attributes.
-
-The exception message format SHALL be:
-`f"cannot connect to machine ({node_id}) at {hostname}: {reason}"`.
-
-#### Scenario: MachineConnectionError carries node_id, hostname, and reason
-- **WHEN** `MachineConnectionError(NodeId(1), "10.0.0.1", "Connection refused")` is raised
-- **THEN** `e.node_id == NodeId(1)`, `e.hostname == "10.0.0.1"`, `e.reason == "Connection refused"`, and the exception message contains the node_id, hostname, and reason
-
-#### Scenario: MachineConnectionError is catchable as DomainError
-- **WHEN** a `MachineConnectionError` is raised
 - **THEN** it is caught by `except DomainError` and `except Exception`
 
 ### Requirement: SchedulingError hierarchy
