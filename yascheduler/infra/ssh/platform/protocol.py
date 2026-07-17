@@ -148,7 +148,7 @@ class OuterRunCallable(Protocol):
         self,
         *args: object,
         cwd: str | None = None,
-        **kwargs: dict[str, Any],
+        **kwargs: Any,  # noqa: ANN401
     ) -> Coroutine[Any, Any, SSHCompletedProcess]:
         """Call."""
 

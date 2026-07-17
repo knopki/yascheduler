@@ -55,7 +55,7 @@ def _query_config(
         f"output_files = 1.input.out\n"
         f"platforms = linux\n",
     )
-    return str(ini_path)
+    return str(ini_path)  # type: ignore[return-value]
 
 
 @pytest.fixture

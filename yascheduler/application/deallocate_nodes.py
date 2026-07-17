@@ -27,7 +27,9 @@ __all__ = ["deallocate_node", "deallocate_nodes"]
 
 # region FUNC_deallocate_node
 # PURPOSE: Tear down a cloud node completely — disconnect SSH, disable in DB, delete cloud VM, remove row — so billing stops and the scheduler no longer tracks it.
+# REQUIRES: The caller SHALL wrap deallocate_node in try/except Exception that logs node_id, hostname, and the error and continues; the caller SHALL NOT call repository.contains(...)/repository.disconnect(...) directly — SSH teardown is owned by deallocate_node.
 # ENSURES: Cloud VM deletion happens before row removal; if row removal fails after cloud delete, the error is logged but not re-raised (stale disabled row left for manual reconciliation).
+# RATIONALE: SSH disconnect runs before the if node.cloud: guard so teardown happens unconditionally for both cloud and static nodes. Cloud deletion is conditional on node.cloud because static nodes have no cloud VM to delete. The disable+remove bracket (disable in DB before cloud VM delete, remove row after) protects against allocator re-selection if cloud deletion fails — a disabled node is invisible to the allocator's free-machine selection.
 async def deallocate_node(
     node: Node,
     repository: MachineRepository,

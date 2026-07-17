@@ -48,7 +48,7 @@ class _PgRepository:
 
     # region METHOD__run
     # PURPOSE: Offload synchronous pg8000 calls to a thread-pool so async callers never block the event loop during SQL execution.
-    async def _run(self, sql: str, **params: dict[str, Any]) -> list[dict[str, Any]]:
+    async def _run(self, sql: str, **params: Any) -> list[dict[str, Any]]:  # noqa: ANN401
         """Execute SQL via the thread pool and return rows as dicts keyed by column name."""
 
         def _fn() -> list[dict[str, Any]]:

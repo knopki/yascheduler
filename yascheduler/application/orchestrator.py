@@ -4,6 +4,7 @@
 # SCOPE: Orchestrator class with async producer-consumer loops for machine connection, task allocation, task consumption, and node deallocation; resilience wrappers around use cases; config-driven sleep intervals and concurrency limits.
 # DEPENDENCIES: USES API: aiohttp.ClientSession
 # KEYWORDS: daemon, orchestrator, producer-consumer, loop, connect, allocate, consume, deallocate
+# INVARIANTS: Orchestrator-level dependencies typed against domain Protocols (MachineRepository, CloudProvisioner) and concrete collaborators (TaskDeployer, OutputDownloader, OccupancyChecker)
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -239,6 +240,12 @@ class Orchestrator:
 
     # ---- Producers / Consumers ----
 
+    # region METHOD_connect_machine_producer
+    # PURPOSE: Yield every enabled node not currently registered in the gateway (static or cloud-provisioned) so the connect consumer can establish an SSH session for it — the static-node never-abandon guarantee is enforced downstream in the consumer.
+    # REQUIRES: _connect_machine_consumer enforces the indefinite-retry path for cloud=None nodes before the grace-check; self._uow_factory yields a UnitOfWork whose nodes.list_enabled() returns the operator-defined enabled set from DB.
+    # ENSURES: Every yielded UMessage<NodeId, Node> corresponds to a node that is enabled in yascheduler_nodes and whose node_id is absent from self._repository (not already connected).
+    # INVARIANTS: The producer does not filter on cloud type; the consumer separates their fate.
+    # RATIONALE: Static and cloud nodes share the same producer filter (enabled + not connected) rather than splitting into two producers, because the separation happens in the consumer where node.cloud is already available on the message payload.
     async def _connect_machine_producer(
         self,
     ) -> AsyncGenerator[UMessage[NodeId, Node], None]:
@@ -257,6 +264,13 @@ class Orchestrator:
         for node in new_nodes:
             yield UMessage(node.node_id, node)
 
+    # endregion METHOD_connect_machine_producer
+    # region METHOD_connect_machine_consumer
+    # PURPOSE: Establish SSH connections for enabled nodes and handle failures — resetting the failure timer on success, retrying indefinitely for static nodes (cloud is None), retrying cloud nodes within their connect_grace window, and abandoning cloud nodes whose grace window has been exceeded.
+    # REQUIRES: self._connect_failures is an in-memory dict (not persisted — daemon restart resets grace windows); self._repository.connect reads jump_host/jump_port/jump_username from the Node itself (no config.remote lookup); self._connect_grace_for resolves grace by matching node.cloud against self._config_clouds prefixes (default 120s on mismatch).
+    # ENSURES: On successful connect, the node_id entry is popped from _connect_failures and self._machine_connected_event is set; for static nodes (cloud is None), a trace DEBUG + warning(...) record is emitted and the method returns before the grace-check (NEVER reaches abandon_node); for cloud nodes with age < grace, a trace DEBUG + warning(...) record is emitted and the method returns; for cloud nodes with age >= grace, abandon_node() is called and the failure-timer entry is released.
+    # INVARIANTS: _connect_failures is mutated exclusively in this method (setdefault on first failure, pop on success or after abandon); static nodes never write to _connect_failures because the early return before BLOCK_connect_grace_check avoids the setdefault call; no config.remote lookup or CloudConfig prefix-match loop for jump identity runs in the orchestrator — connection identity comes exclusively from the Node.
+    # RATIONALE: A transient SSH outage after a daemon restart must not silently delete an operator's static-node row — static nodes retry indefinitely rather than entering the grace window or abandon path. The failure timer is in-memory only: a daemon restart resets the grace window, which is the safer default (a flapping connection after restart gets fresh grace rather than immediate abandonment). The default grace of 120 seconds for unrecognised cloud prefixes ensures a conservative fallback if a cloud prefix is renamed or misconfigured.
     async def _connect_machine_consumer(self, msg: UMessage[NodeId, Node]) -> None:
         node = msg.payload
         keys = await asyncio.get_running_loop().run_in_executor(
@@ -357,6 +371,8 @@ class Orchestrator:
         except Exception:
             logger.exception("An error occuried on remote machine creation")
 
+    # endregion METHOD_connect_machine_consumer
+
     def _connect_grace_for(self, cloud: str | None) -> int:
         if cloud is None:
             return 120
@@ -402,6 +418,11 @@ class Orchestrator:
 
     # endregion METHOD_allocator_consumer
 
+    # region METHOD_task_consumer_producer
+    # PURPOSE: Yield RUNNING tasks whose id is not already in-flight so no task is concurrently consumed by two workers across overlapping producer cycles.
+    # REQUIRES: self._consuming reflects the current set of in-flight consume task ids (same-event-loop access, no await between read and skip decision); self._uow_factory yields a UoW that lists RUNNING tasks from the DB.
+    # ENSURES: Every yielded msg has msg.id NOT in self._consuming.
+    # INVARIANTS: self._consuming is mutated only in _task_consumer_consumer (add before await consume_task, remove in finally).
     async def _task_consumer_producer(
         self,
     ) -> AsyncGenerator[UMessage[TaskId, Task], None]:
@@ -417,9 +438,13 @@ class Orchestrator:
             yield UMessage(task.task_id, task)
         # endregion BLOCK_skip_in_flight
 
+    # endregion METHOD_task_consumer_producer
+
     # region METHOD_task_consumer_consumer
     # PURPOSE: Detect when a RUNNING task's machine is gone (evict after N cycles) or download outputs from a free machine, preventing phantom allocations and keeping the pipeline moving.
+    # REQUIRES: msg.id NOT in self._consuming at entry (enforced by producer skip); self._consuming and self._occupancy_started are same-event-loop sets (atomic add/remove without await); msg.payload.allocated_node_id resolved via repository.get_session once at the top.
     # ENSURES: Guards the task id in self._consuming around the consume_task await; node_id from _occupancy_started discarded only when consume_task returns True (finalised).
+    # INVARIANTS: self._consuming add/remove follows try/finally — added before await consume_task, removed in finally so a failed consume does not permanently block re-yield; self._occupancy_started entry for node_id added on first occupancy check tick, discarded only when consume_task returns True; machine-gone path (session is None) does not touch _consuming or _occupancy_started.
     async def _task_consumer_consumer(
         self,
         msg: UMessage[TaskId, Task],

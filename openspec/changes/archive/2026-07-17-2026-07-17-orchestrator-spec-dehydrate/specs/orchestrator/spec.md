@@ -1,11 +1,5 @@
-# Orchestrator
+## MODIFIED Requirements
 
-## Purpose
-
-Orchestrator class that manages concurrent producer-consumer loops for
-connecting machines, allocating tasks, consuming results, and deallocating
-idle cloud nodes.
-## Requirements
 ### Requirement: Orchestrator manages producer-consumer loops
 
 The system SHALL provide an `Orchestrator` class that runs 4 producer-consumer
@@ -281,4 +275,3 @@ failure SHALL NOT trigger disconnecting that session.
 #### Scenario: Stale session failure does not abort the loop
 - **WHEN** `free_sessions` contains two sessions and the first raises during per-session invocation
 - **THEN** the exception is caught and logged, the loop continues to the second session, and the allocator does not propagate the exception
-

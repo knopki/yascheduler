@@ -102,7 +102,7 @@ async def _api_request(
     method: str,
     url: str,
     api_key: str,
-    **kwargs: dict[str, Any],
+    **kwargs: Any,  # noqa: ANN401
 ) -> dict[str, Any]:
     headers = _get_headers(api_key)
     timeout = aiohttp.ClientTimeout(total=30)
