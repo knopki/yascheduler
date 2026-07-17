@@ -103,6 +103,9 @@ class ProcessResult:
 # region CLASS_TaskId
 # PURPOSE: Wrap the database task id in a dedicated value object so transport/serialization boundaries must unwrap it explicitly, preventing accidental mixing with bare ints.
 # INVARIANTS: value > 0; frozen and hashable; not equal to a bare int.
+# RATIONALE:
+# - Q: Why a dedicated type instead of bare int, NewType('TaskId', int), or int subclass?
+#   A: A frozen dataclass wrapper enforces explicit .value unwrapping at every external boundary, preventing accidental id/int mixing that NewType wouldn't catch at runtime and an int subclass wouldn't prevent.
 @dataclass(frozen=True)
 class TaskId:
     """Task primary-key value object.
@@ -132,6 +135,7 @@ class TaskId:
 
 # region CLASS_NewTask
 # PURPOSE: Carry the fields needed to insert a task before it has a database id, with no lifecycle methods — a pure data carrier.
+# INVARIANTS: No identity (task_id absent); no events, status, allocated_node_id, remote_folder, error, created_at/updated_at — these are all supplied post-insert by the DB or by Task transition methods.
 @dataclass(frozen=True)
 class NewTask:
     """Pre-persistence task record — no identity yet.
@@ -153,7 +157,10 @@ class NewTask:
 
 # region CLASS_Task
 # PURPOSE: Represent a persisted task as an immutable aggregate whose status only changes through atomic transition methods, so invariants and event emission stay centralized.
-# INVARIANTS: Every transition validates the source status, returns a new Task via replace, and appends the matching DomainEvent to events; allocated_node_id is the sole allocation signal.
+# INVARIANTS: Every transition validates the source status, returns a new Task via replace, and appends the matching DomainEvent to events; allocated_node_id is the sole allocation signal. No intermediate-state mutators exist.
+# RATIONALE:
+# - Q: Why does allocated_node_id cover both "unallocated" and "node was deleted"?
+#   A: Both states mean "no node currently assigned" — the distinction is irrelevant at the entity level; the node-resolved transport address comes from NodeRepository, not from Task.
 @dataclass(frozen=True)
 class Task:
     """Post-persistence task entity with atomic lifecycle transitions.
@@ -319,6 +326,9 @@ class Task:
 
 # region FUNC_materialize_task
 # PURPOSE: Attach the TaskCreated event to a freshly-inserted Task so the UoW dispatches it on commit.
+# RATIONALE:
+# - Q: Why a dedicated function instead of calling TaskCreated inside insert?
+#   A: Keeps the domain event construction in the domain layer and the SQL/ORM concern in the repository. The infrastructure layer never imports TaskCreated directly.
 def materialize_task(task: Task) -> Task:
     """Return a Task with a TaskCreated event appended to events."""
     event = TaskCreated(
@@ -336,6 +346,9 @@ def materialize_task(task: Task) -> Task:
 # region CLASS_NodeId
 # PURPOSE: Wrap the database node id in a dedicated value object so transport/serialization boundaries must unwrap it explicitly, preventing accidental mixing with bare ints.
 # INVARIANTS: value > 0; frozen and hashable; not equal to a bare int.
+# RATIONALE:
+# - Q: Why a dedicated type instead of bare int, NewType('NodeId', int), or int subclass?
+#   A: A frozen dataclass wrapper enforces explicit .value unwrapping at every external boundary, preventing accidental id/int mixing.
 @dataclass(frozen=True)
 class NodeId:
     """Node primary-key value object.
@@ -365,6 +378,7 @@ class NodeId:
 
 # region CLASS_NewNode
 # PURPOSE: Carry the fields needed to insert a node before it has a database id, mirroring Node minus identity.
+# INVARIANTS: No node_id field (absent by design). hostname="" is the empty-string sentinel for tmp rows. ncpus=None means no operator-set limit (discovered at spawn).
 @dataclass(frozen=True)
 class NewNode:
     """Pre-persistence node record — no identity yet; mirrors :class:`Node`.
@@ -390,7 +404,10 @@ class NewNode:
 
 # region CLASS_Node
 # PURPOSE: Represent a persisted node, carrying its database identity as the first field so a Node instance always proves it was read from (or returned by) the database.
-# INVARIANTS: node_id is always present (identity-first); a Node only ever originates from NodeRepository.insert or a repository read.
+# INVARIANTS: ncpus > 0. external_id is None for static nodes.
+# RATIONALE:
+# - Q: Why do created_at/updated_at default to datetime.now()?
+#   A: Mirrors the DB schema convention; the DB always overrides via RETURNING on insert/read.
 @dataclass(frozen=True)
 class Node:
     """Post-persistence node record — always carries its identity.
@@ -420,7 +437,10 @@ class Node:
 
 # region CLASS_ConnectedMachine
 # PURPOSE: Track a runtime-connected machine's occupancy state with atomic FREE/BUSY transitions so allocation and release are concurrency-safe.
-# INVARIANTS: Frozen; state changes return new instances via replace; free_since is set on every transition to FREE.
+# INVARIANTS: Frozen; state changes return new instances via replace; free_since is set on every transition to FREE. Platform is runtime-discovered.
+# RATIONALE:
+# - Q: Why is platform on ConnectedMachine instead of Node?
+#   A: It is runtime-discovered at connect time via the platform-package detector, not a persistent attribute of the node record. It feeds the is_compatible(engine.platforms) check and is meaningless outside a live connection.
 @dataclass(frozen=True)
 class ConnectedMachine:
     """Runtime connected machine.

@@ -63,7 +63,6 @@ Deploy = Union[
 
 # region CLASS_Engine
 # PURPOSE: Specify a calculation engine's spawn command, platform support, and deploy artefacts so tasks can be matched to compatible machines and provisioned reproducibly.
-# INVARIANTS: Frozen.
 @dataclass(frozen=True)
 class Engine:
     """Calculation engine specification with spawn command, platforms, deploy strategies."""
@@ -97,6 +96,9 @@ class Engine:
 
 # region CLASS_EngineRepository
 # PURPOSE: Hold the set of known engines as a frozen, queryable collection so allocation and setup can filter by predicate or platform without mutating shared state.
+# RATIONALE:
+# - Q: Why is EngineRepository unhashable despite being a frozen dataclass?
+#   A: Frozen dataclasses only generate __hash__ when all fields are hashable. Mapping[str, Engine] is not hashable (dict is unhashable in Python), so EngineRepository deliberately does not define __hash__.
 @dataclass(frozen=True)
 class EngineRepository:
     """Frozen collection of engines keyed by name."""

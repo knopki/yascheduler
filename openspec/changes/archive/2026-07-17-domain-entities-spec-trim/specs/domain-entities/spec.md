@@ -1,8 +1,4 @@
-## Purpose
-
-Defines the domain entity model for yascheduler: Task lifecycle, Node records, ConnectedMachine state, Engine specifications, and related value objects — all immutable with encapsulated business rules.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: TaskId value object
 
@@ -132,20 +128,15 @@ node shape that flows out of a repository. Pre-persistence node records use
 `NewNode`; the conversion happens in exactly one place —
 `NodeRepository.insert`.
 
-`ncpus: int | None` SHALL be interpreted as **operator-set static config**, not a
-discovery cache:
-
-- `None` means "no operator limit — the orchestrator discovers the CPU count at
-  spawn via `session.get_cpu_cores()` (memoized per session)".
-- `N > 0` means "operator-set static value — used directly at spawn, no remote
-  discovery".
+`ncpus: int | None` SHALL be interpreted as operator-set static config:
+- `None` means "no operator limit — the orchestrator discovers the CPU count at spawn via the SSH session".
+- `N > 0` means "operator-set static value — used directly at spawn, no remote discovery".
 
 `jump_host` / `jump_port` / `jump_username` are authoritative SSH
 connection-identity fields. They SHALL be populated exactly once at node
-creation and SHALL NOT be re-resolved at connect time:
-
-- Static nodes (`yasetnode` add-path): stamped from `config.remote.jump_host` / `config.remote.jump_username` / `config.remote.jump_port` at `NewNode` construction.
-- Cloud nodes (cloud allocator): stamped atomically from one source — the matching `CloudConfig` (`prefix == node.cloud`) if it sets BOTH `jump_host` and `jump_username` (then `CloudConfig.jump_port` supplies `jump_port`), otherwise from `config.remote.jump_host` / `config.remote.jump_username` / `config.remote.jump_port` fallback — applied in the same `replace(node, enabled=True, ...)` call that flips `enabled` and writes `ncpus`. The three jump fields SHALL all come from the same source; a node SHALL NOT mix cloud `jump_host` with remote `jump_port`.
+creation and read directly at connect time (no re-resolution):
+- Static nodes: stamped from `config.remote.jump_host` / `jump_username` / `jump_port` at `NewNode` construction.
+- Cloud nodes: stamped atomically from one source when `enabled` is flipped to `True` — the matching `CloudConfig` (`prefix == node.cloud`) if it sets BOTH `jump_host` and `jump_username` (then `CloudConfig.jump_port` supplies `jump_port`), otherwise from the `config.remote.*` fallback. The three jump fields SHALL all come from the same source.
 
 `jump_host = None` means "no tunnel" (direct connection).
 
@@ -161,17 +152,17 @@ creation and SHALL NOT be re-resolved at connect time:
 
 #### Scenario: Cloud node stamps jump from matching CloudConfig at creation
 
-- **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node with `cloud="hetzner"`, and the `hetzner` `CloudConfig` has `jump_host="jump.example.com"`, `jump_username="jumper"`, `jump_port=2222`
+- **WHEN** the cloud allocator flips `enabled` to `True` for a node with `cloud="hetzner"`, and the `hetzner` `CloudConfig` has `jump_host="jump.example.com"`, `jump_username="jumper"`, `jump_port=2222
 - **THEN** the persisted `Node.jump_host == "jump.example.com"`, `Node.jump_username == "jumper"`, and `Node.jump_port == 2222`
 
 #### Scenario: Cloud node falls back to remote defaults when CloudConfig has no jump
 
-- **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node whose matching `CloudConfig` does NOT set both `jump_host` and `jump_username`, and `config.remote.jump_host` is set with `config.remote.jump_port=2222`
+- **WHEN** the cloud allocator flips `enabled` to `True` for a node whose matching `CloudConfig` does NOT set both `jump_host` and `jump_username`, and `config.remote.jump_host` is set with `config.remote.jump_port=2222`
 - **THEN** the persisted `Node.jump_host` / `jump_username` / `jump_port` come from `config.remote.*`
 
 #### Scenario: Cloud node does not mix cloud jump_host with remote jump_port
 
-- **WHEN** the cloud allocator runs `replace(node, enabled=True, ...)` for a node whose matching `CloudConfig` sets `jump_host` but NOT `jump_username`, and `config.remote.jump_port=2222`
+- **WHEN** the cloud allocator flips `enabled` to `True` for a node whose matching `CloudConfig` sets `jump_host` but NOT `jump_username`, and `config.remote.jump_port=2222`
 - **THEN** the persisted `Node.jump_host`, `Node.jump_username`, AND `Node.jump_port` ALL come from `config.remote.*` (the cloud leg is not half-authoritative)
 
 #### Scenario: Node ncpus None means discover at spawn
@@ -233,23 +224,6 @@ The system SHALL provide an `Engine` value object as an immutable
 #### Scenario: Engine constructed with defaults for the 4 merge fields
 - **WHEN** `Engine(name="cp2k", spawn="cp2k", input_files=("inp",))` is constructed without `deployable`, `platform_packages`, `check_cmd_code`, `sleep_interval`
 - **THEN** `deployable == ()`, `platform_packages == ()`, `check_cmd_code == 0`, `sleep_interval == 10`
-
-### Requirement: ProcessResult value object
-
-The system SHALL provide a `ProcessResult` value object as an immutable object
-with fields: `exit_code: int`, `stdout: str`, `stderr: str`.
-
-#### Scenario: ProcessResult constructed with all fields
-- **WHEN** `ProcessResult(exit_code=0, stdout="out", stderr="err")` is constructed
-- **THEN** `exit_code == 0`, `stdout == "out"`, `stderr == "err"`
-
-### Requirement: MachineState enum
-
-The system SHALL provide a `MachineState` enum with values `FREE` and `BUSY`.
-
-#### Scenario: MachineState has FREE and BUSY values
-- **WHEN** `MachineState` is inspected
-- **THEN** `MachineState.FREE` and `MachineState.BUSY` are defined
 
 ### Requirement: materialize_task free function
 
@@ -361,3 +335,14 @@ instance; the original is not mutated.
 - **WHEN** `hash(repo)` is called on an `EngineRepository` instance
 - **THEN** `TypeError` is raised (frozen dataclass with `Mapping` field is unhashable)
 
+## REMOVED Requirements
+
+### Requirement: Engine INI parser in entrypoints
+
+**Reason**: The requirement describes functions (`parse_engine_section`,
+`parse_engines`, `engine_valid_fields`) that live in `entrypoints/config_parser.py`,
+not the domain layer. Coupling a domain-entities spec to an entrypoint module
+misrepresents the dependency direction.
+
+**Migration**: The requirement and its scenarios are relocated verbatim to the
+new `engine-config-parsing` capability.
