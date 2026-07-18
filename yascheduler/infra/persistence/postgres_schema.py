@@ -7,12 +7,15 @@
 # endregion MODULE_CONTRACT
 
 import contextlib
+import logging
 
 from pg8000 import DatabaseError
 from pg8000.native import Connection
 
 from .db_config import PostgresDbConfig
 from .sql_loader import load_query
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["apply_schema"]
 
@@ -46,7 +49,8 @@ def apply_schema(config: PostgresDbConfig) -> None:
             with contextlib.suppress(Exception):
                 conn.run("ROLLBACK")
         if "already exists" in str(e.args[0]):
-            pass
+            logger.exception("Database already initialized!")
+            logger.debug("ALREADY_EXISTS", extra={"error": str(e)})
         raise
         # endregion BLOCK_handle_existing
 

@@ -5,6 +5,7 @@
 # KEYWORDS: apply_schema, idempotency, connection lifecycle
 # endregion MODULE_CONTRACT
 
+import logging
 from urllib.parse import urlparse
 
 import pytest
@@ -52,7 +53,7 @@ def test_apply_schema_tables_exist() -> None:
 
 
 def test_apply_schema_raises_on_existing(
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _strict_schema = (
@@ -79,11 +80,12 @@ def test_apply_schema_raises_on_existing(
         config = _make_config(pg)
         apply_schema(config)
 
-        with pytest.raises(DatabaseError):
+        with caplog.at_level(logging.ERROR), pytest.raises(DatabaseError):
             apply_schema(config)
 
-        captured = capsys.readouterr()
-        assert "Database already initialized!" in captured.out
+    assert any(
+        "Database already initialized!" in r.getMessage() for r in caplog.records
+    )
 
 
 def test_apply_schema_has_node_ncpus_positive_check() -> None:
