@@ -282,18 +282,24 @@ The system SHALL define `CloudCreateNodeDTO` as a `@dataclass(frozen=True)` in `
 `DeleteNodeCallable` SHALL accept `external_id: str` as the resource identifier parameter instead of `host: str`.
 
 Each provider `*_create_node` function SHALL return a `CloudCreateNodeDTO` with:
-- `external_id` and `hostname` set to the VM's IP address
+- `external_id` set to the VM's IP address for Azure, Upcloud, and VastAI; for Hetzner, `external_id` SHALL be set to `str(server.id)` (the numeric Hetzner server ID)
+- `hostname` set to the VM's IP address (all providers)
 - `username` sourced from the provider's config DTO (`cfg.username`)
 - `port`, `jump_host`, `jump_port`, `jump_username` sourced from the provider's config DTO (with their respective defaults)
 
-Each provider `*_delete_node` function SHALL accept the `external_id` parameter and use it to locate the resource. Provider-internal logic may still match by IP; the contract is that `external_id` is the authoritative provider identifier.
+Each provider `*_delete_node` function SHALL accept the `external_id` parameter and use it to locate the resource. Provider-internal logic may still match by IP for Azure, Upcloud, and VastAI; Hetzner SHALL resolve via `client.servers.get_by_id(int(external_id))` — an O(1) lookup that does NOT iterate all servers. The contract is that `external_id` is the authoritative provider identifier.
 
 `CloudCreateNodeDTO` SHALL be importable via the `yascheduler.infra.cloud` subpackage facade.
 
 #### Scenario: create_node returns DTO with IP-based identity
 
-- **WHEN** `az_create_node`, `hetzner_create_node`, `upcloud_create_node`, or `vastai_create_node` succeeds
+- **WHEN** `az_create_node`, `upcloud_create_node`, or `vastai_create_node` succeeds
 - **THEN** the return value is a `CloudCreateNodeDTO` whose `external_id` and `hostname` equal the VM's IP address
+
+#### Scenario: hetzner_create_node returns DTO with server ID as external_id
+
+- **WHEN** `hetzner_create_node` succeeds
+- **THEN** the return value is a `CloudCreateNodeDTO` whose `external_id` equals `str(server.id)` (the numeric Hetzner server ID) and whose `hostname` equals the VM's IP address
 
 #### Scenario: create_node DTO carries config-derived connection parameters
 
@@ -303,5 +309,10 @@ Each provider `*_delete_node` function SHALL accept the `external_id` parameter 
 #### Scenario: delete_node identifies resource by external_id
 
 - **WHEN** `adapter.delete_node(cfg=config, external_id=node.external_id)` is called
-- **THEN** the provider locates the cloud resource by `external_id` (internal matching may use IP for providers lacking native external IDs)
+- **THEN** the provider locates the cloud resource by `external_id` (Azure, Upcloud, VastAI may match by IP; Hetzner resolves via `client.servers.get_by_id(int(external_id))` — an O(1) lookup that SHALL NOT iterate `client.servers.get_all()`)
+
+#### Scenario: hetzner_delete_node handles already-deleted server
+
+- **WHEN** `hetzner_delete_node` is called for a server that no longer exists (already deleted)
+- **THEN** `client.servers.get_by_id(int(external_id))` raises `APIException("not_found")`, the function logs "NODE %s NOT DELETED AS UNKNOWN" and returns without error
 

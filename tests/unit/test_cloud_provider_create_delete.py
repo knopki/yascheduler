@@ -37,7 +37,7 @@ class _AsyncIter:
 
 @pytest.mark.asyncio
 async def test_hetzner_create_node_returns_dto() -> None:
-    """hetzner_create_node returns CloudCreateNodeDTO with IP-based identity."""
+    """hetzner_create_node returns CloudCreateNodeDTO with server ID as external_id and IP as hostname."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
 
     cfg = ConfigCloudHetzner(username="testuser")
@@ -45,6 +45,7 @@ async def test_hetzner_create_node_returns_dto() -> None:
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
     mock_server = MagicMock()
+    mock_server.id = 42
     mock_server.public_net.ipv4.ip = "1.2.3.4"
 
     mock_client = MagicMock()
@@ -63,7 +64,7 @@ async def test_hetzner_create_node_returns_dto() -> None:
         result = await hetzner_create_node(cfg, mock_key)
 
     assert isinstance(result, CloudCreateNodeDTO)
-    assert result.external_id == "1.2.3.4"
+    assert result.external_id == "42"
     assert result.hostname == "1.2.3.4"
 
 
@@ -108,12 +109,13 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
 
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_accepts_external_id() -> None:
-    """hetzner_delete_node accepts external_id parameter to locate the resource."""
+    """hetzner_delete_node resolves by server ID via get_by_id, not by iteration."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
 
-    cfg = ConfigCloudHetzner()
+    cfg = ConfigCloudHetzner(token="test-del-accept")
     mock_client = MagicMock()
-    mock_client.servers.get_all.return_value = []
+    mock_server = MagicMock()
+    mock_client.servers.get_by_id.return_value = mock_server
 
     with (
         patch(
@@ -124,8 +126,48 @@ async def test_hetzner_delete_node_accepts_external_id() -> None:
     ):
         from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
-        # Should not raise — external_id is accepted as keyword
-        await hetzner_delete_node(cfg, external_id="1.2.3.4")
+        await hetzner_delete_node(cfg, external_id="42")
+
+    mock_client.servers.get_by_id.assert_called_once_with(42)
+    mock_client.servers.get_all.assert_not_called()
+    mock_server.delete.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_hetzner_delete_node_api_not_found() -> None:
+    """hetzner_delete_node handles APIException not_found from get_by_id gracefully."""
+    from hcloud import APIException
+
+    from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+
+    cfg = ConfigCloudHetzner(token="test-del-api404")
+    mock_client = MagicMock()
+    mock_client.servers.get_by_id.side_effect = APIException(
+        code="not_found",
+        message="server not found",
+        details={},
+    )
+
+    with (
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.HClient",
+            return_value=mock_client,
+        ),
+        patch("yascheduler.infra.cloud.providers.hetzner._HETZNER_AVAILABLE", True),
+    ):
+        from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
+
+        # Should not raise — APIException not_found is caught
+        await hetzner_delete_node(cfg, external_id="152213839")
+
+    mock_client.servers.get_by_id.assert_called_once_with(152213839)
+
+
+def test_hetzner_find_srv_removed() -> None:
+    """find_srv no longer exists in hetzner provider module."""
+    from yascheduler.infra.cloud.providers import hetzner as hetzner_mod
+
+    assert not hasattr(hetzner_mod, "find_srv")
 
 
 # =============================================================================

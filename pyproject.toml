@@ -104,6 +104,8 @@ markers = [
   "integration: integration tests (with testcontainers)",
   "e2e: end-to-end tests (with testcontainers)",
 ]
+log_format = "[%(name)s][%(funcName)s]:%(lineno)s %(message)s"
+log_cli_format = "[%(name)s][%(funcName)s]:%(lineno)s %(message)s"
 
 [tool.ruff.lint]
 select = ["ALL"]

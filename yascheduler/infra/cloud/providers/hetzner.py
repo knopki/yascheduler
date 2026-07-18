@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
-    from hcloud.servers.client import BoundServer
 
     from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudHetzner
 
@@ -118,7 +117,7 @@ async def hetzner_create_node(
     ip_str = str(ip_addr)
     logger.info("CREATED %s", ip_str)
     return CloudCreateNodeDTO(
-        external_id=ip_str,
+        external_id=str(server.id),
         hostname=ip_str,
         username=cfg.username,
         jump_host=cfg.jump_host,
@@ -130,23 +129,8 @@ async def hetzner_create_node(
 # endregion FUNC_hetzner_create_node
 
 
-# region FUNC_find_srv
-# PURPOSE: Locate a Hetzner server by its public IP so the delete path can find and remove the right server without storing external IDs.
-def find_srv(client: HClient, host: str) -> BoundServer | None:
-    """Find BoundServer by IP addr."""
-    for server in client.servers.get_all():
-        if (
-            server.public_net and server.public_net.ipv4 and server.public_net.ipv4.ip
-        ) == host and server.id:
-            return client.servers.get_by_id(server.id)
-    return None
-
-
-# endregion FUNC_find_srv
-
-
 # region FUNC_hetzner_delete_node
-# PURPOSE: Tear down a Hetzner server by IP so billing stops and the node slot is freed for reallocation.
+# PURPOSE: Tear down a Hetzner server by server ID so billing stops and the node slot is freed for reallocation.
 async def hetzner_delete_node(
     cfg: ConfigCloudHetzner,
     external_id: str,
@@ -157,14 +141,24 @@ async def hetzner_delete_node(
         raise ImportError(msg)
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)
-    server = await loop.run_in_executor(executor, find_srv, client, external_id)
+
+    try:
+        server = await loop.run_in_executor(
+            executor,
+            client.servers.get_by_id,
+            int(external_id),
+        )
+    except (ValueError, APIException) as err:
+        if isinstance(err, APIException) and err.code == "not_found":
+            logger.warning("NODE %s NOT DELETED AS UNKNOWN", external_id)
+            return
+        raise
 
     if server:
         await loop.run_in_executor(executor, server.delete)
         logger.info("DELETED %s", external_id)
-
     else:
-        logger.info("NODE %s NOT DELETED AS UNKNOWN", external_id)
+        logger.warning("NODE %s NOT DELETED AS UNKNOWN", external_id)
 
 
 # endregion FUNC_hetzner_delete_node

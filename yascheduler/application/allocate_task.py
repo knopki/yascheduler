@@ -342,7 +342,11 @@ async def _persist_node_with_cleanup(
 
     logger.debug(
         "CLOUD_DONE",
-        extra={"task_id": task_id, "hostname": node.hostname, "cloud": node.cloud},
+        extra={
+            "task_id": task_id,
+            "external_id": node.external_id,
+            "cloud": node.cloud,
+        },
     )
 
 

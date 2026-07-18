@@ -1,6 +1,6 @@
 # region MODULE_CONTRACT
 # PURPOSE: Real-Hetzner cloud-provider E2E test — autoscale -> allocate -> download -> idle-deallocate happy path against a live Hetzner Cloud account.
-# SCOPE: opt-in env-gated test (YASCHEDULER_TEST_HETZNER=1 + token); drives make_daemon + _submit_async; asserts VM creation, both jobs DONE with matching outputs, idle deallocation, strong deletion via find_srv; guaranteed observed-IP cleanup with loud-fail-on-leak in finally.
+# SCOPE: opt-in env-gated test (YASCHEDULER_TEST_HETZNER=1 + token); drives make_daemon + _submit_async; asserts VM creation, both jobs DONE with matching outputs, idle deallocation, strong deletion via client.servers.get_by_id; guaranteed server-ID based cleanup with loud-fail-on-leak in finally.
 # DEPENDENCIES: USES API: hcloud (opt-in, YASCHEDULER_TEST_HETZNER=1)
 # KEYWORDS: Hetzner Cloud, autoscale, deallocate, e2e
 # endregion MODULE_CONTRACT
@@ -135,46 +135,51 @@ def _ini_path_from_env() -> str:
     return path
 
 
-async def _assert_vm_deleted(client: Any, ip: str) -> None:
-    from yascheduler.infra.cloud.providers.hetzner import find_srv
+async def _assert_vm_deleted(client: Any, server_id: int) -> None:
+    from hcloud import APIException
 
     deadline = asyncio.get_running_loop().time() + _VM_DELETE_TIMEOUT_S
     while asyncio.get_running_loop().time() < deadline:
-        srv = await asyncio.to_thread(find_srv, client, ip)
+        try:
+            srv = await asyncio.to_thread(client.servers.get_by_id, server_id)
+        except APIException as err:
+            if err.code == "not_found":
+                return
+            raise
         if srv is None:
             return
         await asyncio.sleep(_POLL_INTERVAL_S)
     log.error(
-        "[hetzner_live][CLEANUP] VM %s was NOT deleted — manual cleanup required",
-        ip,
+        "[hetzner_live][CLEANUP] server %s was NOT deleted — manual cleanup required",
+        server_id,
     )
-    pytest.fail(f"Hetzner VM {ip} was NOT deleted — manual cleanup required")
+    pytest.fail(f"Hetzner server {server_id} was NOT deleted — manual cleanup required")
 
 
 async def _delete_one_best_effort(
     cfg: ConfigCloudHetzner,
-    ip: str,
+    server_id: str,
     log: logging.Logger,
 ) -> None:
     from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
     try:
-        await hetzner_delete_node(cfg, external_id=ip)
+        await hetzner_delete_node(cfg, external_id=server_id)
     except Exception as err:
         log.error(
-            "[hetzner_live][CLEANUP] hetzner_delete_node raised for ip=%s err=%s "
+            "[hetzner_live][CLEANUP] hetzner_delete_node raised for server_id=%s err=%s "
             "— proceeding to deletion verification",
-            ip,
+            server_id,
             err,
         )
 
 
 async def _cleanup_observed(
     token: str,
-    observed_ips: list[str],
+    observed_server_ids: list[str],
     log: logging.Logger,
 ) -> None:
-    if not observed_ips:
+    if not observed_server_ids:
         return
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
     from yascheduler.infra.cloud.providers.hetzner import get_client
@@ -182,12 +187,12 @@ async def _cleanup_observed(
     cfg: ConfigCloudHetzner = ConfigCloudHetzner(token=token, max_nodes=1)
     client = get_client(cfg)
 
-    for ip in observed_ips:
-        await _delete_one_best_effort(cfg, ip, log)
+    for sid in observed_server_ids:
+        await _delete_one_best_effort(cfg, sid, log)
 
-    # Strong per-IP deletion assertion: a survivor fails the test loudly.
-    for ip in observed_ips:
-        await _assert_vm_deleted(client, ip)
+    # Strong per-server deletion assertion: a survivor fails the test loudly.
+    for sid in observed_server_ids:
+        await _assert_vm_deleted(client, int(sid))
 
 
 async def _submit_two_jobs(
@@ -220,9 +225,9 @@ async def _submit_two_jobs(
 
 async def _poll_for_hetzner_node(
     uow_factory: Callable[[], PostgresUnitOfWork],
-    observed_ips: list[str],
+    observed_server_ids: list[str],
     timeout_s: float,
-) -> str:
+) -> None:
     deadline = asyncio.get_running_loop().time() + timeout_s
     while asyncio.get_running_loop().time() < deadline:
         async with uow_factory() as uow:
@@ -233,10 +238,11 @@ async def _poll_for_hetzner_node(
         # atomically removes the tmp row in the same commit).
         hetzner_nodes = [n for n in nodes if n.cloud == "hetzner" and n.enabled]
         if hetzner_nodes:
-            ip = hetzner_nodes[0].hostname
-            if ip not in observed_ips:
-                observed_ips.append(ip)
-            return ip
+            node = hetzner_nodes[0]
+            sid = node.external_id
+            if sid and sid not in observed_server_ids:
+                observed_server_ids.append(sid)
+            return
         await asyncio.sleep(_POLL_INTERVAL_S)
     pytest.fail(f"no enabled cloud==hetzner node appeared within {timeout_s}s")
 
@@ -244,7 +250,6 @@ async def _poll_for_hetzner_node(
 async def _wait_both_done(
     uow_factory: Callable[[], PostgresUnitOfWork],
     task_ids: list[int],
-    observed_ips: list[str],
     timeout_s: float,
 ) -> dict[int, str]:
     deadline = asyncio.get_running_loop().time() + timeout_s
@@ -259,8 +264,6 @@ async def _wait_both_done(
                 if t and t.status == DomainTaskStatus.RUNNING and t.allocated_node_id:
                     node = await uow.nodes.get_by_id(t.allocated_node_id)
                     seen_running[tid] = node.hostname if node else ""
-                    if node and node.hostname not in observed_ips:
-                        observed_ips.append(node.hostname)
         if all(s == DomainTaskStatus.DONE for s in statuses):
             return seen_running
         await asyncio.sleep(_POLL_INTERVAL_S)
@@ -273,7 +276,7 @@ async def _wait_both_done(
 async def _assert_outputs(
     uow_factory: Callable[[], PostgresUnitOfWork],
     task_ids: list[int],
-    observed_ips: list[str],
+    observed_server_ids: list[str],
     payloads: list[str],
 ) -> None:
     async with uow_factory() as uow:
@@ -295,14 +298,14 @@ async def _assert_outputs(
         assert actual == expected, (
             f"task {tid} output={actual!r}, expected {expected!r}"
         )
-        task_ip = (
-            nodes_by_id[task.allocated_node_id].hostname
+        task_sid = (
+            nodes_by_id[task.allocated_node_id].external_id
             if task.allocated_node_id and task.allocated_node_id in nodes_by_id
             else ""
         )
-        assert task_ip in observed_ips, (
-            f"task {tid} node.hostname={task_ip} "
-            f"not among observed hetzner IPs={observed_ips}"
+        assert task_sid in observed_server_ids, (
+            f"task {tid} node.external_id={task_sid} "
+            f"not among observed server IDs={observed_server_ids}"
         )
         assert isinstance(task.created_at, datetime), (
             f"task {tid} created_at={task.created_at!r} is not datetime"
@@ -314,16 +317,16 @@ async def _assert_outputs(
 
 def _assert_cloud_done_log(
     records: list[logging.LogRecord],
-    node_ips: list[str],
+    observed_server_ids: list[str],
 ) -> None:
     cloud_done_records = [r for r in records if r.getMessage() == "CLOUD_DONE"]
     done_match = any(
         (fields := extra_fields(rec)).get("cloud") == "hetzner"
-        and fields.get("hostname") in node_ips
+        and fields.get("external_id") in observed_server_ids
         for rec in cloud_done_records
     )
     assert done_match, (
-        f"no CLOUD_DONE trace record with cloud=hetzner and hostname in {node_ips}; "
+        f"no CLOUD_DONE trace record with cloud=hetzner and external_id in {observed_server_ids}; "
         f"captured CLOUD_DONE records={cloud_done_records}"
     )
 
@@ -366,7 +369,7 @@ async def test_hetzner_live(
     token, _server_type, _location, _image = _cloud_env_or_skip()
     ini_path = _ini_path_from_env()
 
-    observed_ips: list[str] = []
+    observed_server_ids: list[str] = []
     payloads = ["hello cloud 1", "hello cloud 2"]
 
     orchestrator = await make_daemon(config)
@@ -384,23 +387,26 @@ async def test_hetzner_live(
                 )
 
         # Poll until exactly one cloud==hetzner node appears (cold-start 0 -> 1).
-        # The node IP is recorded into observed_ips by the helper as a side effect.
-        await _poll_for_hetzner_node(uow_factory, observed_ips, _AUTOSCALE_TIMEOUT_S)
+        # The node server ID is recorded into observed_server_ids by the helper.
+        await _poll_for_hetzner_node(
+            uow_factory,
+            observed_server_ids,
+            _AUTOSCALE_TIMEOUT_S,
+        )
 
         await _wait_both_done(
             uow_factory,
             task_ids,
-            observed_ips,
             _COMPLETION_TIMEOUT_S,
         )
 
-        await _assert_outputs(uow_factory, task_ids, observed_ips, payloads)
+        await _assert_outputs(uow_factory, task_ids, observed_server_ids, payloads)
 
         # CLOUD_DONE is emitted by _persist_node_with_cleanup at provision time,
         # so it is already present once both tasks reached DONE.
-        _assert_cloud_done_log(log_records, observed_ips)
+        _assert_cloud_done_log(log_records, observed_server_ids)
 
-        # DB-row removal (idle deallocate), then strong find_srv deletion assertion.
+        # DB-row removal (idle deallocate), then strong get_by_id deletion assertion.
         await _poll_node_gone(uow_factory, _DEALLOC_TIMEOUT_S)
         # CLOUD_DELETE is emitted by deallocate_node during the idle-deallocate
         # that just removed the row — assert it only now, not at completion time.
@@ -410,8 +416,8 @@ async def test_hetzner_live(
 
         verify_cfg: ConfigCloudHetzner = ConfigCloudHetzner(token=token, max_nodes=1)
         verify_client = get_client(verify_cfg)
-        for ip in observed_ips:
-            await _assert_vm_deleted(verify_client, ip)
+        for sid in observed_server_ids:
+            await _assert_vm_deleted(verify_client, int(sid))
 
     finally:
         # (a) stop daemon + best-effort await of the background task.
@@ -420,5 +426,5 @@ async def test_hetzner_live(
             await asyncio.wait_for(orch_task, timeout=10)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             orch_task.cancel()
-        # (b) observed-IP cleanup with loud-fail-on-leak.
-        await _cleanup_observed(token, observed_ips, log)
+        # (b) observed-VM cleanup with loud-fail-on-leak.
+        await _cleanup_observed(token, observed_server_ids, log)

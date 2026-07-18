@@ -85,7 +85,7 @@ Provider image/size SHALL be overridable via environment variables (`YASCHEDULER
 
 The test SHALL provide a session-scoped `hetzner_config` fixture (in the test file, not conftest.py) depending only on session-scoped shared fixtures. The fixture writes a temp INI with `[db]`, `[local]`, `[remote]`, `[engine.test_shell]`, plus `[clouds]` (hetzner token, `hetzner_max_nodes = 1`, server_type/location/image_name, `hetzner_idle_tolerance` near 5–10, `hetzner_package_upgrade = false`), sets `YASCHEDULER_CONF_PATH` for the test duration, and returns the parsed `Config`. The fixture SHALL use a fresh `keys_dir` (daemon generates its own SSH key), NOT reuse the `ssh_pool` keypair, and NOT depend on `ssh_pool`, `uow_factory`, or `log_records`.
 
-The test SHALL submit two tasks, start the daemon, wait for autoscale provisioning of a Hetzner node, wait for both tasks to reach `DONE` with outputs downloaded, assert the provisioning-success trace record (`CLOUD_DONE`) is present, and assert idle deallocation removes both the DB node row and the Hetzner VM (verified via `find_srv` API call), with a corresponding `CLOUD_DELETE` trace record. Cleanup SHALL be guaranteed in a `finally` block: stop the daemon and delete every provisioned VM. A failure to actually delete a VM MUST surface as a test failure.
+The test SHALL submit two tasks, start the daemon, wait for autoscale provisioning of a Hetzner node, wait for both tasks to reach `DONE` with outputs downloaded, assert the provisioning-success trace record (`CLOUD_DONE`) is present, and assert idle deallocation removes both the DB node row and the Hetzner VM (verified via `client.servers.get_by_id` API call), with a corresponding `CLOUD_DELETE` trace record. Cleanup SHALL be guaranteed in a `finally` block: stop the daemon and delete every provisioned VM. A failure to actually delete a VM MUST surface as a test failure.
 
 Status assertions SHALL use `yascheduler.domain.TaskStatus`. The test SHALL NOT reference `task.context`.
 
@@ -104,11 +104,11 @@ Status assertions SHALL use `yascheduler.domain.TaskStatus`. The test SHALL NOT 
 #### Scenario: Idle node is deallocated and VM deletion verified via API
 - **WHEN** both tasks are `DONE` and the node has been idle for `hetzner_idle_tolerance`
 - **THEN** the `cloud == "hetzner"` node row disappears from the database within `idle_tolerance + 120` seconds
-- **AND** polling `find_srv(client, ip)` eventually returns `None` (strong deletion assertion)
+- **AND** polling `client.servers.get_by_id(server_id)` eventually returns `None` (strong deletion assertion)
 - **AND** the captured `log_records` contain a trace record with block marker `CLOUD_DELETE` whose structured fields expose `cloud=hetzner` and the node IP
 
 #### Scenario: Failed VM deletion fails the test loudly
-- **WHEN** the `finally` block's deletion attempt raises or a post-delete `find_srv` still returns the server
+- **WHEN** the `finally` block's deletion attempt raises or a post-delete `client.servers.get_by_id` still returns the server
 - **THEN** the test calls `pytest.fail(...)` naming the leaked IP and emits an ERROR log
 - **AND** the failure is not swallowed
 
