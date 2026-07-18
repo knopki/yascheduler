@@ -1,10 +1,10 @@
 """Domain port interfaces: abstract contracts for persistence, machine collection/sessions, and cloud provisioning."""
 # region MODULE_CONTRACT
-# PURPOSE: Define the abstract ports the domain requires so use cases stay decoupled from concrete persistence, SSH, and cloud adapters.
+# PURPOSE: Decouple use cases from infrastructure — abstract persistence, SSH, and cloud-provisioning concerns behind Protocol contracts so the application layer never imports adapters directly.
 # SCOPE:
 # - Protocol ports — TaskRepository, NodeRepository, MachineRepository, MachineSession, CloudConfig, CloudProvisioner.
 # - NOT: concrete implementations (infra.*) or use-case orchestration (application.*).
-# INVARIANTS: All ports are typing.Protocol; methods are async unless noted; runtime_checkable where isinstance selection is required.
+# INVARIANTS: All ports are typing.Protocol; methods are async unless noted; decorated with @runtime_checkable.
 # KEYWORDS: port, protocol, repository, persistence, machine session, cloud provisioner, CloudConfig, MachineRepository
 # endregion MODULE_CONTRACT
 
@@ -44,7 +44,8 @@ __all__ = [
 
 
 # region CLASS_TaskRepository
-# PURPOSE: Abstract task persistence so use cases stay agnostic to the SQL layer.
+# PURPOSE: Enable use cases to persist and query tasks without depending on SQL — the repository interface defines end-to-end identity management from NewTask (pre-identity) to Task (DB-generated identity).
+# INVARIANTS: All lookups and mutators keyed on TaskId; @runtime_checkable.
 @runtime_checkable
 class TaskRepository(Protocol):
     """Async port for task persistence."""
@@ -95,7 +96,8 @@ class TaskRepository(Protocol):
 
 
 # region CLASS_NodeRepository
-# PURPOSE: Abstract node persistence so use cases stay agnostic to the SQL layer.
+# PURPOSE: Enable use cases to manage node lifecycle without coupling to the SQL layer — the protocol abstracts all keying on NodeId.
+# INVARIANTS: Lookups and mutators keyed on NodeId; list_all ordered by node_id ascending; @runtime_checkable.
 @runtime_checkable
 class NodeRepository(Protocol):
     """Async port for node persistence."""
@@ -149,7 +151,7 @@ class NodeRepository(Protocol):
 
 
 # region CLASS_CloudConfig
-# PURPOSE: Pin the minimal config surface application consumers read from a cloud provider, so providers stay substitutable as long as they expose these fields.
+# PURPOSE: Enable cloud-provider substitutability via structural typing — any DTO exposing the required field set satisfies the contract without needing a shared base class or inheritance hierarchy.
 # INVARIANTS: Satisfied structurally (PEP 544) by every ConfigCloud* DTO in infra.cloud.cloud_configs.
 @runtime_checkable
 class CloudConfig(Protocol):
@@ -174,8 +176,11 @@ class CloudConfig(Protocol):
 
 
 # region CLASS_MachineSession
-# PURPOSE: Model the connected-machine handle collaborators operate on per call — identity, state transitions, connect-time config, SSH primitives, and the monitor mechanism — decoupled from collection lifecycle.
-# INVARIANTS: Methods are async unless noted; implementations own connection teardown (_close is private to the concrete class).
+# PURPOSE: Give callers a stable per-connection handle for SSH operations, state transitions, and monitor lifecycle — decoupled from collection pooling and teardown so a session can be passed as a single argument through the entire call chain.
+# INVARIANTS: Methods are async unless noted; implementations own connection teardown.
+# RATIONALE:
+# - Q: Why does the Protocol split collection lifecycle (MachineRepository) from the per-session handle (MachineSession)?
+#   A: So callers operate on a stable per-call handle while the repository owns connection pooling and teardown; the former facade MachineOperations was removed in favor of invoking collaborators directly on the session every caller already holds.
 @runtime_checkable
 class MachineSession(Protocol):
     """Connected-machine entity handle — identity, state transitions.
@@ -318,7 +323,7 @@ class MachineSession(Protocol):
 
 
 # region CLASS_MachineRepository
-# PURPOSE: Abstract the connected-machine collection — connect/disconnect lifecycle and queries — so use cases do not depend on a specific SSH session store.
+# PURPOSE: Decouple use cases from the SSH session collection — the repository owns connect/disconnect lifecycle and queries while callers receive a stable MachineSession handle per connection.
 @runtime_checkable
 class MachineRepository(Protocol):
     """Connected-machine collection — lifecycle and queries."""
@@ -345,7 +350,6 @@ class MachineRepository(Protocol):
         """Close and unregister all sessions."""
         ...
 
-    # ---- Queries ----
     def list_free(self, platforms: list[str] | None) -> list[MachineSession]:
         """Return free sessions, optionally filtering by platform."""
         ...
@@ -371,7 +375,13 @@ class MachineRepository(Protocol):
 
 
 # region CLASS_CloudProvisioner
-# PURPOSE: Abstract cloud VM provisioning so the orchestrator can allocate/deallocate capacity without binding to a specific provider SDK.
+# PURPOSE: Decouple the orchestrator from provider-specific cloud SDKs — the port abstracts allocate/deallocate/select_provider so capacity management stays adapter-agnostic.
+# INVARIANTS: stop shuts down all provider sessions.
+# RATIONALE:
+# - Q: Why does select_provider return a bare str instead of a ProviderSelection value object?
+#   A: The application treats it as an opaque identity and passes it back unchanged to allocate — a dedicated wrapper would add ceremony without behavioral benefit.
+# - Q: Why is capacity() not on the port?
+#   A: Capacity counting is an orchestrator/use-case concern, not an adapter concern — the port only needs select_provider's binary yes/no answer.
 @runtime_checkable
 class CloudProvisioner(Protocol):
     """Cloud VM provisioning port. ``allocate``/``deallocate`` are async.

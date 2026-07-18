@@ -1,7 +1,7 @@
-## Purpose
+# Delta: domain-ports
 
-Define abstract port contracts so domain use cases stay decoupled from persistence, SSH, and cloud provider implementations.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: TaskRepository port
 
 The system SHALL define a `TaskRepository` Protocol (`@runtime_checkable`, async methods):
@@ -108,4 +108,3 @@ The system SHALL define a `CloudProvisioner` Protocol:
 
 - **WHEN** `select_provider(["linux"], {"aws": 0})` is called and aws has capacity and supports linux
 - **THEN** returns the string `"aws"`; returns `None` when no capacity or the op semaphore is locked
-
