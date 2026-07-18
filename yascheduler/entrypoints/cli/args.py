@@ -1,6 +1,6 @@
 """Shared argparse helpers for CLI entry points — validators and flag adders consumed by all six CLI commands and the three daemon launchers."""
 # region MODULE_CONTRACT
-# PURPOSE: Provide shared argparse helpers — validators and flag adders — consumed by all six CLI commands and the three daemon launchers.
+# PURPOSE: Centralize argparse validation and flag registration so every CLI command launcher parses --config, --log-level, and --log-file consistently from a single validator/flag-adder source, ensuring uniform exit-2 messages and flag semantics across the entire console-script surface.
 # SCOPE: Argparse helpers for all CLI commands — path validation, config/log-level/log-file flag registration.
 # KEYWORDS: argparse, cli, validators, config, log-level, log-file
 # endregion MODULE_CONTRACT

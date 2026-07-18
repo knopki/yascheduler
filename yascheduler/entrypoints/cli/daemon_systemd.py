@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Yascheduler systemd daemon entry point (foreground, logs to stderr → journald)."""
 # region MODULE_CONTRACT
-# PURPOSE: Systemd service entry point for the scheduler daemon — runs in the foreground under systemd's supervision (logs to stderr → journald).
+# PURPOSE: Serve as the systemd service unit's ExecStart target, running the scheduler in the foreground so systemd manages its lifecycle via stderr → journald logging.
 # SCOPE: Systemd foreground daemon launcher — thin sync entry point.
 # INVARIANTS: Executable file with shebang.
 # KEYWORDS: systemd, daemon, entrypoint, foreground, journald
@@ -26,6 +26,9 @@ from .daemon_common import configure_logger, run_daemon
 
 # region FUNC_main
 # PURPOSE: Start the daemon under systemd supervision (foreground, stderr → journald); exit 0/1/2.
+# INVARIANTS:
+# - Entry point does NOT register SIGTERM/SIGINT handlers — run_daemon does that.
+# - try/except Exception prints Error: <exception> and exits 1; SystemExit(2) propagates.
 def main(argv: list[str] | None = None) -> None:
     """Start the daemon under systemd supervision (foreground, stderr → journald); exit 0/1/2."""
     # region BLOCK_parse_args

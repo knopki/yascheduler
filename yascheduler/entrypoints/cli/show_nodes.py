@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SSH_PORT = 22
 
 
+# region CLASS__NodeView
+# PURPOSE: project a Node plus its optional single running Task into a flat, frozen view object so filtering and rendering operate on a single value without re-joining per row
+# INVARIANTS: task_id and label are both None when free, both set when busy — the one-RUNNING-task-per-node invariant encoded in the type; frozen so safe to pass to renderers without defensive copies
 @dataclass(frozen=True)
 class _NodeView:
     node_id: NodeId
@@ -51,7 +54,12 @@ class _NodeView:
     task_id: TaskId | None
     label: str | None
 
+    # endregion CLASS__NodeView
 
+
+# region FUNC__parse_nodes_args
+# PURPOSE: declare the yanodes argparse grammar -- prog="yanodes", the --json renderer selector, the four subset-selector filters, and the --cloud / --no-cloud mutex group -- so the flag matrix is observable in one place
+# ENSURES: returns a Namespace whose cloud and no_cloud are never both active; argparse exits 2 on --cloud X --no-cloud before this function returns
 def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yanodes",
@@ -102,8 +110,12 @@ def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
     # endregion BLOCK_parse_args
 
 
+# endregion FUNC__parse_nodes_args
+
+
 # region FUNC__fetch_nodes_view
-# PURPOSE: Read nodes and running tasks within one UoW and join them in memory into a list of _NodeView.
+# PURPOSE: resolve a flat list of _NodeView rows from the database in one UoW so the caller gets a consistent, closed snapshot without open connections leaking out
+# INVARIANTS: single-UoW; allocates tasks_by_node_id dict keyed by NodeId directly from the one-RUNNING-task-per-node invariant — if that ever relaxes, shape becomes dict[NodeId, list[Task]]
 async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
     # region BLOCK_read_nodes
     logger.debug("READ", extra={"detail": "nodes and running tasks"})
@@ -147,6 +159,9 @@ async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
 # endregion FUNC__fetch_nodes_view
 
 
+# region FUNC__filter_rows
+# PURPOSE: apply the active CLI filters as a conjunctive predicate list so any combination of --enabled / --disabled / --busy / --free / --cloud / --no-cloud composes by AND
+# INVARIANTS: subset-selector pairs --enabled/--disabled and --busy/--free are no-ops when BOTH are set; --no-cloud only adds a predicate when --cloud was not given
 def _filter_rows(rows: list[_NodeView], args: argparse.Namespace) -> list[_NodeView]:
     # region BLOCK_filter
     predicates: list[Callable[[_NodeView], bool]] = []
@@ -166,8 +181,14 @@ def _filter_rows(rows: list[_NodeView], args: argparse.Namespace) -> list[_NodeV
     # endregion BLOCK_filter
 
 
+# endregion FUNC__filter_rows
+
+
 # region FUNC__render_nodes_table
-# PURPOSE: Render rows as a fixed-width text table with display transformations.
+# PURPOSE: produce a human-readable table from _NodeView rows using only stdlib so operators who install only the daemon's runtime deps can still run yanodes without an extra dependency
+# RATIONALE:
+# - Q: Why is the table rendered with stdlib f-string width specifiers rather than rich or tabulate?
+#   A: the CLI surface stays dependency-free for yascheduler operators who install only the daemon's runtime deps.
 def _render_nodes_table(rows: list[_NodeView]) -> str:
     # region BLOCK_render_table
     headers = [
@@ -211,7 +232,10 @@ def _render_nodes_table(rows: list[_NodeView]) -> str:
 
 
 # region FUNC__render_nodes_json
-# PURPOSE: Render rows as a JSON list of objects with raw domain values (no display transformations).
+# PURPOSE: produce JSON-serializable dicts from _NodeView rows so yanodes --json output can be piped into jq, fed to scripts, or consumed by other tools without text parsing
+# RATIONALE:
+# - Q: Why is node_id serialized via .value but other fields are emitted as-is?
+#   A: a NodeId dataclass is not JSON-serializable; .value unwraps the bare int that JSON accepts.
 def _render_nodes_json(rows: list[_NodeView]) -> str:
     # region BLOCK_render_json
     objects = [
@@ -245,7 +269,7 @@ def _render_nodes_json(rows: list[_NodeView]) -> str:
 
 
 # region FUNC__show_nodes_async
-# PURPOSE: Parse flags, read nodes+tasks via DI, filter, render, print; exit 0/1/2.
+# PURPOSE: orchestrate the full yanodes command pipeline — parse args, open one UoW, fetch, filter, render, write to stdout, exit 0/1/2 — so show_nodes is a single awaitable entry point
 async def _show_nodes_async(argv: list[str] | None) -> None:
     args = _parse_nodes_args(argv)
     # region BLOCK_handle_failure
@@ -278,7 +302,7 @@ async def _show_nodes_async(argv: list[str] | None) -> None:
 
 
 # region FUNC_show_nodes
-# PURPOSE: Sync entry point — run _show_nodes_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
+# PURPOSE: bridge from sync entry-point convention to the async pipeline so setuptools console_scripts and __main__ can call a synchronous function without exposing asyncio to callers
 def show_nodes(argv: list[str] | None = None) -> None:
     """Sync entry point — run _show_nodes_async via asyncio."""
     asyncio.run(_show_nodes_async(argv))

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Yascheduler SysV init daemon entry point (detached via python-daemon)."""
 # region MODULE_CONTRACT
-# PURPOSE: SysV init service entry point for the scheduler daemon — runs detached via python-daemon with PID file management.
+# PURPOSE: Support SysV-init-based systems by detaching the scheduler into a background daemon with PID file management via python-daemon.
 # SCOPE: SysV daemon launcher with DaemonContext and PID file management.
 # INVARIANTS: Executable file with shebang.
 # KEYWORDS: sysv, daemon, entrypoint, detached, pidfile

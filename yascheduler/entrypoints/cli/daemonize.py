@@ -1,6 +1,6 @@
 """yascheduler CLI command — start the daemon (foreground, intended for manual/debug/container use) via the shared daemon core."""
 # region MODULE_CONTRACT
-# PURPOSE: yascheduler CLI command — start the daemon in the foreground (manual/debug/container use) via the shared daemon core.
+# PURPOSE: Provide a foreground daemon launcher for manual debugging, containerized deployments, and operator troubleshooting that delegates its runtime lifecycle to the shared daemon core.
 # SCOPE: daemonize command — thin sync entry point delegating to daemon_common.
 # KEYWORDS: daemon, foreground, cli, entrypoint, debug
 # endregion MODULE_CONTRACT
@@ -22,7 +22,10 @@ from yascheduler.entrypoints.config_parser import parse_config
 
 
 # region FUNC_daemonize
-# PURPOSE: Start the yascheduler daemon in the foreground via the shared daemon core; exit 0 on clean shutdown, 1 on runtime error, 2 on argparse error.
+# PURPOSE: Start the yascheduler daemon in the foreground via the shared daemon core.
+# INVARIANTS:
+# - Entry point does NOT register SIGTERM/SIGINT handlers — run_daemon does that.
+# - try/except Exception prints Error: <exception> and exits 1; SystemExit(2) propagates.
 def daemonize(argv: list[str] | None = None) -> None:
     """Start the yascheduler daemon in the foreground via the shared daemon core; exit 0 on clean shutdown, 1 on runtime error, 2 on argparse error."""
     # region BLOCK_parse_args

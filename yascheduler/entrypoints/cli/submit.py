@@ -42,6 +42,9 @@ class EngineNotSupportedError(ValueError):
         super().__init__(f"Engine {engine_name} is not supported")
 
 
+# region FUNC__parse_submit_args
+# PURPOSE: Declare the yasubmit argparse grammar — prog="yasubmit", one positional script validated by existing_path, plus the shared --config / --log-level flags — so the AiiDA plugin's command shape stays stable
+# ENSURES: returns a Namespace whose script is a Path to an existing file or argparse exits 2 before this function returns
 def _parse_submit_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yasubmit",
@@ -55,6 +58,12 @@ def _parse_submit_args(argv: list[str] | None = None) -> argparse.Namespace:
     # endregion BLOCK_parse_args
 
 
+# endregion FUNC__parse_submit_args
+
+
+# region FUNC__parse_script_metadata
+# PURPOSE: Extract key=value metadata lines from an AiiDA submission script so the rest of the submit path can read them as a dict
+# INVARIANTS: lines without exactly one = are silently skipped — no exception on malformed lines
 def _parse_script_metadata(script_text: str) -> dict[str, str]:
     script_params: dict[str, str] = {}
     for line in script_text.splitlines():
@@ -66,6 +75,12 @@ def _parse_script_metadata(script_text: str) -> dict[str, str]:
     return script_params
 
 
+# endregion FUNC__parse_script_metadata
+
+
+# region FUNC__read_input_files
+# PURPOSE: Read each engine-declared input file into the task metadata dict so the orchestrator has all inputs locally before upload
+# INVARIANTS: text files are stored as UTF-8 strings; binary files that fail UTF-8 decode are stored base64-encoded under the same key
 def _read_input_files(engine: Engine, local_folder: str | Path) -> dict[str, str]:
     metadata: dict[str, str] = {}
     for input_file in engine.input_files:
@@ -78,6 +93,12 @@ def _read_input_files(engine: Engine, local_folder: str | Path) -> dict[str, str
     return metadata
 
 
+# endregion FUNC__read_input_files
+
+
+# region FUNC__build_metadata
+# PURPOSE: Assemble the task metadata dict — local_folder, engine input files, and webhook fields when applicable — so the submit use case receives a single ready payload
+# INVARIANTS: local_folder is always present; engine input files present only when engine is known; webhook fields present only when PARENT in script AND config.local.webhook_url is set
 def _build_metadata(
     script_params: dict[str, str],
     config: Config,
@@ -95,8 +116,15 @@ def _build_metadata(
     return metadata
 
 
+# endregion FUNC__build_metadata
+
+
 # region FUNC__submit_async
-# PURPOSE: Parse AiiDA script file and submit a task via CLIDeps; exit 0 on success, 1 on runtime error, 2 on argparse error.
+# PURPOSE: Provide the async entry point for yasubmit that routes a parsed script through the DI layer to the submit use case, with structured exit codes so callers (CLI, AiiDA plugin) can distinguish success, runtime failure, and argparse error
+# INVARIANTS: (a) success writes exactly str(task_id) to stdout; (b) failure writes Error: <message> to stderr and exits 1; (c) argparse failures (exit 2) propagate because SystemExit is not an Exception subclass
+# RATIONALE:
+# - Q: Why is there no --json / output-mode flag?
+#   A: The AiiDA scheduler plugin parses int(stdout.strip()) of the subprocess; the success output is therefore fixed to str(task_id) and cannot be decorated.
 async def _submit_async(argv: list[str] | None) -> None:
     args = _parse_submit_args(argv)
     script_file: Path = args.script
@@ -142,7 +170,7 @@ async def _submit_async(argv: list[str] | None) -> None:
 
 
 # region FUNC_submit
-# PURPOSE: Sync entry point — run _submit_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
+# PURPOSE: Bridge the sync CLI boundary to the async submit flow so the entry point does not force a sync implementation on the async subsystem
 def submit(argv: list[str] | None = None) -> None:
     """Sync entry point — runs _submit_async via asyncio.run."""
     asyncio.run(_submit_async(argv))

@@ -30,6 +30,9 @@ if TYPE_CHECKING:
     from yascheduler.domain import MachineSession, Node, Task
 
 
+# region FUNC__parse_status_args
+# PURPOSE: Declare the yastatus argparse grammar — prog="yastatus", the -j filter, the three-renderer mutex group, and the -o convergence modifier — so the flag matrix is observable in one place.
+# ENSURES: returns a Namespace whose convergence flag is never active without view; argparse exits 2 on -v -i, and the body-level parser.error exits 2 on -o without -v.
 def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yastatus",
@@ -83,6 +86,11 @@ def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+# endregion FUNC__parse_status_args
+
+
+# region FUNC__query_tasks
+# PURPOSE: Pick the right task query based on whether the operator passed -j so the renderer always receives a task list.
 async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> list[Task]:
     # region BLOCK_query
     if args.jobs:
@@ -95,8 +103,11 @@ async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> lis
     # endregion BLOCK_query
 
 
+# endregion FUNC__query_tasks
+
+
 # region FUNC__render_default
-# PURPOSE: AiiDA-compatibility default renderer — emit <task_id><ws><STATUS_NAME> per task.
+# PURPOSE: Emit task status lines in the format the AiiDA scheduler plugin's joblist parser expects — bare <task_id>   <STATUS> with no header, footer, or summary — so phantom jobs are never introduced by decoration.
 def _render_default(tasks: list[Task]) -> None:
     for task in tasks:
         sys.stdout.write(f"{task.task_id}   {task.status.name}\n")
@@ -106,7 +117,7 @@ def _render_default(tasks: list[Task]) -> None:
 
 
 # region FUNC__render_info
-# PURPOSE: Tab-separated one-line-per-task renderer (task_id, status, label, node_id).
+# PURPOSE: Render task metadata as parseable tab-separated lines so operators and scripts can consume structured status without depending on JSON or the AiiDA format.
 def _render_info(tasks: list[Task]) -> None:
     for task in tasks:
         sys.stdout.write(
@@ -123,7 +134,7 @@ def _render_info(tasks: list[Task]) -> None:
 
 
 # region FUNC__render_json
-# PURPOSE: Render tasks as a JSON list of objects with raw domain values (no display transformations); nested node object + audit timestamps.
+# PURPOSE: Serialize task and node state as JSON with raw domain values so automation tools can consume the full status programmatically without parsing human-oriented text.
 def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
     # region BLOCK_render_json
     objects = []
@@ -167,6 +178,9 @@ def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
 # endregion FUNC__render_json
 
 
+# region FUNC__download_convergence_snippet
+# PURPOSE: Fetch a remote CRYSTAL OUTPUT file via SFTP to a local temp path so _parse_convergence can parse it without monkey-patching pycrystal's I/O.
+# ENSURES: returns True on successful SFTP transfer; returns False on OSError so the caller can skip convergence display rather than crash.
 async def _download_convergence_snippet(
     session: MachineSession,
     remote_folder: str,
@@ -183,6 +197,13 @@ async def _download_convergence_snippet(
         return True
 
 
+# endregion FUNC__download_convergence_snippet
+
+
+# region FUNC__parse_convergence
+# PURPOSE: Convert a CRYSTAL output file into the human-readable convergence + optgeom text block the operator expects.
+# INVARIANTS: returns the CRYSTOUT_Error message verbatim on parse failure instead of raising — the verbose renderer needs to print SOMETHING for a corrupt file.
+# SCOPE: numerical formatting of optgeom cycles; NOT: file fetching or session lifecycle.
 def _parse_convergence(filepath: Path) -> str:
     """Parse CRYSTAL output file for convergence and geometry optimization info."""
     from numpy import nan  # noqa: PLC0415
@@ -223,8 +244,13 @@ def _parse_convergence(filepath: Path) -> str:
     return output_lines
 
 
+# endregion FUNC__parse_convergence
+
+
 # region FUNC__display_remote_output
-# PURPOSE: Connect to the remote machine via repository, tail the OUTPUT file, return (session, remote_folder) or None.
+# PURPOSE: Connect to the remote machine and tail the last lines of the OUTPUT file so the operator can inspect running-job progress without logging into the remote host separately.
+# INVARIANTS:
+# - connects via repository.connect(node=node, ...) reading login user/port/jump-leg from the Node, never passing jump_host/jump_username separately
 async def _display_remote_output(
     task: Task,
     node: Node | None,
@@ -266,7 +292,10 @@ async def _display_remote_output(
 
 
 # region FUNC__render_view
-# PURPOSE: Verbose renderer — for each RUNNING task with an allocated node, print a header, tail remote OUTPUT, optionally download+parse convergence snippet.
+# PURPOSE: Display a per-task detailed view of running jobs — header, remote OUTPUT tail, optional convergence snippet — so the operator can assess running-job health from one command.
+# INVARIANTS:
+# - creates convergence snippet temp file ONCE, reuses across all RUNNING tasks
+# - unlinks in finally clause — no leak on success, exception, or early-return
 async def _render_view(
     tasks: list[Task],
     nodes_by_id: dict[NodeId, Node],
@@ -334,7 +363,7 @@ async def _render_view(
 
 
 # region FUNC__check_status_async
-# PURPOSE: Query and display task status (default/info/json/view), optionally tailing remote output and parsing convergence. Exit 0/1/2.
+# PURPOSE: Orchestrate the full check_status lifecycle — parse args, query tasks, fetch nodes, render with the chosen formatter, and cleanup the temp snippet — with a single exit-1 catch-all so the operator never sees an unhandled traceback.
 async def _check_status_async(argv: list[str] | None) -> None:
     snippet: Path | None = None
     # region BLOCK_handle_failure
@@ -385,7 +414,7 @@ async def _check_status_async(argv: list[str] | None) -> None:
 
 
 # region FUNC_check_status
-# PURPOSE: Sync entry point — run _check_status_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
+# PURPOSE: Provide a synchronous CLI entry point by wrapping the async status query in asyncio.run so setuptools console_scripts can invoke it without async plumbing.
 def check_status(argv: list[str] | None = None) -> None:
     """Sync entry point — runs _check_status_async via asyncio.run."""
     asyncio.run(_check_status_async(argv))

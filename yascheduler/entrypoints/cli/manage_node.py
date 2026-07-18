@@ -77,7 +77,7 @@ class NodeTarget:
 
 
 # region FUNC__parse_host_spec
-# PURPOSE: argparse type — parse [user@]host[:port][~ncpus] into a frozen HostSpec; validate grammar and ranges.
+# PURPOSE: turn the yasetnode positional string into a validated HostSpec so the add path can consume it without re-parsing
 def _parse_host_spec(s: str) -> HostSpec:
     raw = s
 
@@ -163,7 +163,7 @@ def _parse_node_target(s: str) -> NodeTarget:
 
 
 # region FUNC__parse_node_args
-# PURPOSE: Parse yasetnode argparse — one positional host (type=_parse_node_target → NodeTarget) + three store_true flags.
+# PURPOSE: build and parse the yasetnode argument parser, rejecting illegal flag combinations at exit 2 before any I/O
 def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yasetnode",
@@ -212,7 +212,7 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 # region FUNC__remove_node_hard
-# PURPOSE: Hard-remove a node — in its own UoW, mark RUNNING tasks DONE, remove the node (by node_id), commit, then announce.
+# PURPOSE: permanently erase a node and its RUNNING tasks from the DB in a single transaction so an operator can force-clean a dead node
 async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
     # region BLOCK_mark_and_remove
     async with deps.uow_factory() as uow:
@@ -238,7 +238,7 @@ async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
 
 
 # region FUNC__remove_node_soft
-# PURPOSE: Soft-remove a node — in its own UoW, disable (by node_id) if RUNNING tasks exist, else remove (by node_id); commit, then announce.
+# PURPOSE: gracefully retire a node without destroying evidence of running work — disable if busy, erase if idle
 async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
     # region BLOCK_disable_or_remove
     async with deps.uow_factory() as uow:
@@ -267,7 +267,7 @@ async def _remove_node_soft(deps: CLIDeps, node: Node) -> None:
 
 
 # region FUNC__add_node
-# PURPOSE: Add a node — single-row lifecycle: insert enabled=False tmp row (UoW#1) to obtain node_id, connect+setup under that node_id, flip to enabled=True via update (UoW#2); always disconnect(T.node_id) in finally.
+# PURPOSE: register a new SSH-accessible host in the scheduler, verifying reachability before marking it active
 async def _add_node(
     deps: CLIDeps,
     repository: SSHMachineRepository,
@@ -337,7 +337,7 @@ async def _add_node(
 
 
 # region FUNC__resolve_and_validate_node
-# PURPOSE: Resolve the Node (node_id or host_spec path) via a read-only UoW and enforce add/remove presence rules; raises on rule violation.
+# PURPOSE: resolve a yasetnode target to a DB Node and enforce presence rules so the operator gets a clear error before any mutation
 async def _resolve_and_validate_node(
     target: NodeTarget,
     deps: CLIDeps,
@@ -386,7 +386,7 @@ async def _resolve_and_validate_node(
 
 
 # region FUNC__manage_node_async
-# PURPOSE: Add, soft-remove, or hard-remove a node; exit 0 on success, 1 on runtime error, 2 on argparse error.
+# PURPOSE: orchestrate the full yasetnode lifecycle — parse, validate, dispatch, and surface errors to the operator with the right exit code
 async def _manage_node_async(argv: list[str] | None) -> None:
     args = _parse_node_args(argv)
     target: NodeTarget = args.host
@@ -441,7 +441,7 @@ async def _manage_node_async(argv: list[str] | None) -> None:
 
 
 # region FUNC_manage_node
-# PURPOSE: Sync entry point — run _manage_node_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
+# PURPOSE: bridge the async manage_node coroutine to a sync CLI entry point that asyncio.run can call
 def manage_node(argv: list[str] | None = None) -> None:
     """Sync entry point — run _manage_node_async via asyncio."""
     asyncio.run(_manage_node_async(argv))

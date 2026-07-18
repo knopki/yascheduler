@@ -1,6 +1,6 @@
 """yainit CLI command — install service unit files and/or apply DB schema + migrations, with --schema/--daemon subset-selector flags."""
 # region MODULE_CONTRACT
-# PURPOSE: yainit CLI command — install systemd/SysV service unit files and/or apply DB schema + migrations, with --schema/--daemon subset-selector flags.
+# PURPOSE: Bootstrap the yascheduler environment — install service unit files for the detected init system and/or ensure the database schema is current — so the daemon can run and the CLI can operate.
 # SCOPE: init command — service install and/or DB schema+migrations application.
 # KEYWORDS: init, schema, migration, systemd, sysv, cli
 # endregion MODULE_CONTRACT
@@ -22,7 +22,7 @@ from .args import add_config_arg, add_log_level_arg
 
 
 # region FUNC__init_systemd
-# PURPOSE: Render and write the systemd unit file, overwriting if it exists.
+# PURPOSE: Install/reinstall the systemd service unit so systemd can start, stop, and supervise the yascheduler daemon.
 def _init_systemd(
     install_path: Path,
     unit_file: Path = Path("/etc/systemd/system/yascheduler.service"),
@@ -45,7 +45,7 @@ def _init_systemd(
 
 
 # region FUNC__init_sysv
-# PURPOSE: Render and write the SysV init script, overwriting if it exists, and chmod 0755.
+# PURPOSE: Install/reinstall the SysV init script so the service manager can start, stop, and supervise the yascheduler daemon.
 def _init_sysv(
     install_path: Path,
     startup_file: Path = Path("/etc/init.d/yascheduler"),
@@ -69,7 +69,7 @@ def _init_sysv(
 
 
 # region FUNC__init_schema
-# PURPOSE: Apply schema.sql via apply_schema then pending migrations via apply_migrations, honoring --config via config_path.
+# PURPOSE: Ensure the database has the required schema and up-to-date migrations so the daemon and CLI can operate against a valid database.
 def _init_schema(config_path: str | Path = CONFIG_FILE) -> None:
     config = parse_config(config_path)
     try:
@@ -88,7 +88,13 @@ def _init_schema(config_path: str | Path = CONFIG_FILE) -> None:
 
 
 # region FUNC_init
-# PURPOSE: Parse --schema/--daemon flags, install service and/or apply schema per the selected subset, exit 0/1/2.
+# PURPOSE: Parse --schema/--daemon flags and dispatch to subset initializers so the operator can install services, apply schema, or both without running the full bootstrap.
+# INVARIANTS:
+# - Systemd-vs-sysv detection is /run/systemd/system directory.
+# - try/except Exception prints Error: <message>, exits 1; SystemExit propagates.
+# RATIONALE:
+# - Q: Why does yainit skip DI and call apply_schema/apply_migrations directly?
+#   A: Bootstrapping — the database may not yet exist or may not yet have the schema that DI's repository adapters assume.
 def init(argv: list[str] | None = None) -> None:
     """Parse --schema/--daemon flags, install service and/or apply schema per the selected subset, exit 0/1/2."""
     parser = argparse.ArgumentParser(

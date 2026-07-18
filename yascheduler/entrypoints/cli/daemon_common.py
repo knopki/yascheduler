@@ -1,6 +1,6 @@
 """Shared daemon core — configure_logger and run_daemon, consumed by all three daemon entry points (daemonize, daemon_systemd, daemon_sysv)."""
 # region MODULE_CONTRACT
-# PURPOSE: Provide shared daemon configuration and runtime helpers — configure_logger and run_daemon — consumed by all three daemon entry points.
+# PURPOSE: Abstract the async daemon lifecycle — logger setup, orchestrator startup, signal handling, and cleanup — into a single shared core so all three daemon launchers  behave identically and reliably.
 # SCOPE: Root-logger configuration and async daemon core lifecycle — orchestrator startup, signal handling, and cleanup.
 # KEYWORDS: daemon, logger, signal, orchestration, common
 # endregion MODULE_CONTRACT
@@ -25,7 +25,12 @@ if TYPE_CHECKING:
 
 
 # region FUNC_configure_logger
-# PURPOSE: Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers).
+# PURPOSE: Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file.
+# INVARIANTS:
+# - Configures ROOT logger, not yascheduler.
+# - Always adds StreamHandler(sys.stderr).
+# - Adds FileHandler(log_file) only when log_file is not None.
+# - Both handlers share a single LogFormatter instance.
 def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
     """Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers)."""
     # region BLOCK_root_handlers
@@ -61,6 +66,8 @@ def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
 
 # region FUNC_run_daemon
 # PURPOSE: Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator.
+# INVARIANTS:
+# - orch.start() is inside try whose finally always awaits orch.stop().
 async def run_daemon(config: Config, logger: logging.Logger) -> None:
     """Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator."""
     # region BLOCK_build_orchestrator

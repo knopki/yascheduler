@@ -1,13 +1,6 @@
-## Purpose
+# Delta: cli
 
-The six CLI command entry points (`yasubmit`, `yastatus`, `yanodes`, `yasetnode`,
-`yainit`, `yascheduler`), the three daemon launchers (`daemonize`,
-`daemon_systemd`, `daemon_sysv`), the shared argparse helpers, and the async
-daemon core. Each CLI command is a synchronous `def` entry point that calls
-`asyncio.run(_<name>_async(argv))` and delegates to use cases via dependency
-injection (`yainit` is a bootstrap exception).
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Shared argparse helpers
 
@@ -466,9 +459,9 @@ One object per node, in the order returned by `uow.nodes.list_all()`.
 `show_nodes()` SHALL perform the node-to-running-task join in memory within a
 single UoW: it SHALL read `uow.nodes.list_all()` and
 `uow.tasks.list_by_status({TaskStatus.RUNNING})` (two reads within one UoW),
-  build a `tasks_by_node_id` dict mapping `allocated_node_id` to the single
-  running task on that node, and look up each node's task via
-  `tasks_by_node_id.get(node.node_id)`.
+build a `tasks_by_node_id` dict mapping `allocated_node_id` to the single
+running task on that node, and look up each node's task via
+`tasks_by_node_id.get(node.node_id)`.
 
 #### Scenario: yanodes join is O(n+m)
 - **WHEN** the implementation of the in-memory join is inspected
@@ -676,8 +669,6 @@ one helper, each opening its OWN UoW:
 - If `--remove-soft`: disable if RUNNING tasks exist, else remove; commit.
 - Otherwise (add): resolve username, call the add helper.
 
-The remove helpers SHALL accept `node: Node` (not `ip: str`).
-
 #### Scenario: yasetnode opens a validation UoW then dispatches via per-helper UoW
 - **WHEN** `yasetnode` is invoked with a valid host spec and a add/remove flag combination
 - **THEN** `Config.from_config_parser(args.config)` is called, `make_cli_deps(config)` is called to obtain `CLIDeps`, an `SSHMachineRepository` is constructed at the top of `manage_node` (before any UoW is opened), a short read-only UoW is opened to resolve the target `Node`, and the body dispatches to exactly one helper; each helper opens its OWN UoW via `deps.uow_factory()` to perform its mutations, commit, and print. On the add path, the repository is passed to the add helper.
@@ -813,3 +804,49 @@ snippet SHALL be cleaned up after display (no leaked temp files).
 
 - **WHEN** `yastatus -v` is invoked against a node with `jump_host="old-bastion.example.com"` (stamped at creation), and the `hetzner` cloud config has since been edited to `jump_host="new-bastion.example.com"`
 - **THEN** the tunnel leg uses `node.jump_host == "old-bastion.example.com"` (Node is the source of truth, not the live config)
+
+## REMOVED Requirements
+
+### Requirement: yasubmit exit code contract
+
+**Reason**: Exact duplicate of the shared `Daemon and CLI exit-code contract`
+requirement in the same spec. The removed requirement contained a single
+scenario ("exit codes match the shared contract") that restated the shared
+contract verbatim. The `Daemon and CLI exit-code contract` requirement already
+covers `yasubmit` (it names "all six CLI commands and the three daemon
+launchers"). Keeping a per-command duplicate created a maintenance hazard: the
+two statements could drift, and reviewers could not tell which was
+authoritative.
+
+**Migration**: None. The shared `Daemon and CLI exit-code contract` requirement
+is the authoritative source for `yasubmit`'s exit codes; no behavior changes.
+
+### Requirement: yanodes exit code contract
+
+**Reason**: Exact duplicate of the shared `Daemon and CLI exit-code contract`
+requirement in the same spec. The removed requirement contained a single
+scenario ("exit codes match the shared contract") that restated the shared
+contract verbatim. The shared contract already covers `yanodes`.
+
+**Migration**: None. The shared `Daemon and CLI exit-code contract` requirement
+is the authoritative source for `yanodes`'s exit codes; no behavior changes.
+
+### Requirement: yasetnode exit code contract
+
+**Reason**: Exact duplicate of the shared `Daemon and CLI exit-code contract`
+requirement in the same spec. The removed requirement contained a single
+scenario ("exit codes match the shared contract") that restated the shared
+contract verbatim. The shared contract already covers `yasetnode`.
+
+**Migration**: None. The shared `Daemon and CLI exit-code contract` requirement
+is the authoritative source for `yasetnode`'s exit codes; no behavior changes.
+
+### Requirement: yastatus exit code contract
+
+**Reason**: Exact duplicate of the shared `Daemon and CLI exit-code contract`
+requirement in the same spec. The removed requirement contained a single
+scenario ("exit codes match the shared contract") that restated the shared
+contract verbatim. The shared contract already covers `yastatus`.
+
+**Migration**: None. The shared `Daemon and CLI exit-code contract` requirement
+is the authoritative source for `yastatus`'s exit codes; no behavior changes.
