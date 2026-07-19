@@ -18,6 +18,9 @@ __all__ = ["AllocationTracker"]
 
 # region CLASS_AllocationTracker
 # PURPOSE: Prevent the daemon from provisioning duplicate cloud VMs for the same task, with a task-to-node link so abandon can discard by node.
+# RATIONALE:
+# - Q: why does the tracker expose both discard(task_id) and discard_by_node(node_id)?
+#   A: discard(task_id) is the happy-path release (the consume use case knows the task_id it just finalised); discard_by_node(node_id) is the abandon-path release (the abandon use case knows only the node_id whose VM was deleted, not the task_id that was tracked against it — the in-memory _entries dict is keyed by task_id but links a node_id value for exactly this discard-by-node path).
 class AllocationTracker:
     """In-memory dedup of in-flight cloud allocations.
 

@@ -125,7 +125,9 @@ async def _try_start_on_machine(
 # PURPOSE: Enumerate all viable machine-task pairs so the allocator can iterate them without redundant lookups.
 # REQUIRES: The UoW opened at block entry reads uow.nodes.list_enabled() in the same transaction as uow.tasks.list_by_status({RUNNING}); MachineRepository.list_free(platforms) is intersected with the enabled-node set MINUS the busy-node set (allocated_node_id of RUNNING tasks).
 # ENSURES: Returns list of (session, node) pairs for machines that are free, compatible, not already running a task, and present in the enabled-nodes DB view.
-# RATIONALE: The enabled=True gate restores the invariant that a machine is allocatable ONLY after its DB row is enabled=TRUE (the row flips from enabled=FALSE to TRUE after cloud-init, engine setup, and CPU detection complete). This gate lives in the use case, NOT in MachineRepository, because MachineRepository is an infrastructure-layer SSH-collection port that SHALL NOT be coupled to NodeRepository (a persistence port) — joining the two data sources is the use case's responsibility.
+# RATIONALE:
+# - Q: Why does the enabled=True gate live in the use case instead of MachineRepository?
+#   A: MachineRepository is an infrastructure-layer SSH-collection port that SHALL NOT be coupled to NodeRepository (a persistence port); joining these two data sources is the use case's responsibility. The gate restores the invariant that a machine is allocatable only after its DB row is enabled=TRUE — flipped from enabled=FALSE only after cloud-init, engine setup, and CPU detection complete.
 async def _find_free_machines(
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
@@ -357,7 +359,6 @@ async def _persist_node_with_cleanup(
 # PURPOSE: Match a TO_DO task to a free compatible machine or request cloud allocation with critical-section dedup.
 # REQUIRES: Delegates to _find_free_machines which opens a UoW that reads uow.nodes.list_enabled() alongside uow.tasks.list_by_status({RUNNING}), intersecting MachineRepository.list_free(platforms) with the enabled-node set minus the busy-node set (allocated_node_id of RUNNING tasks).
 # ENSURES: Returns True if allocated to a machine; False if cloud-provisioning was initiated or no allocation was possible. Tracker slot is discarded on failure paths.
-# RATIONALE: The enabled=True gate lives in the use case (not MachineRepository) because MachineRepository is an infrastructure-layer SSH-collection port that SHALL NOT be coupled to NodeRepository (a persistence port); joining these two data sources is the use case's responsibility. The gate restores the invariant that a machine is allocatable only after its DB row is enabled=TRUE — flipped from enabled=FALSE only after cloud-init, engine setup, and CPU detection complete.
 async def allocate_task(
     task_id: TaskId,
     engines: EngineRepository,

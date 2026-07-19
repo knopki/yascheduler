@@ -1,11 +1,6 @@
-# Use Cases
+# Delta: use-cases
 
-## Purpose
-
-Application-layer use cases that orchestrate domain operations for task
-submission, allocation, consumption, and node deallocation.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: SubmitTask use case
 
