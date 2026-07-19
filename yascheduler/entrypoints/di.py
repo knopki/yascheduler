@@ -1,6 +1,6 @@
 """Dependency injection composition root — factories per entry point (daemon, CLI)."""
 # region MODULE_CONTRACT
-# PURPOSE: Assemble all domain, application, and infrastructure collaborators into ready-to-use entry point objects (daemon Orchestrator, CLI dependencies).
+# PURPOSE: Hand each entry point only the collaborators its use cases need, so the daemon wire-up stays separate from the CLI wire-up and the entry point owns lifecycle alone.
 # SCOPE: Daemon orchestrator factory (make_daemon), CLI dependency container (CLIDeps + make_cli_deps), and domain event bus setup with webhook registration.
 # KEYWORDS: di, composition-root, factories, daemon, cli, dependency-injection
 # endregion MODULE_CONTRACT
@@ -55,7 +55,10 @@ if TYPE_CHECKING:
 
 
 # region CLASS_CLIDeps
-# PURPOSE: Lightweight dependency container for CLI submit operations — holds engines and a UoW factory.
+# PURPOSE: Carry the minimum collaborators a CLI command needs (engine registry + UoW factory) so a CLI invocation can submit or query tasks without paying the daemon's SSH/cloud/event-bus wire-up cost.
+# RATIONALE:
+#   Q: Why does CLIDeps bundle a uow_factory callable instead of a ready AbstractUnitOfWork instance?
+#   A: Each CLI query needs a fresh UoW so its transaction boundary is its own; a callable lets the facade open + close the UoW per call without leaking a handle across calls.
 @dataclass
 class CLIDeps:
     """Lightweight dependency container for CLI submit operations."""
@@ -64,7 +67,7 @@ class CLIDeps:
     uow_factory: Callable[[], AbstractUnitOfWork]
 
     # region METHOD_submit
-    # PURPOSE: Submit a new task via the submit_task use case, returning the generated TaskId.
+    # PURPOSE: Forward with two bundled collaborators into submit_task so the CLI call site stays one line and the boundary between CLI and use case stays explicit.
     async def submit(
         self,
         label: str,
@@ -87,7 +90,10 @@ class CLIDeps:
 
 
 # region FUNC__setup_domain_events
-# PURPOSE: Create a MessageBus, an aiohttp client session, and register webhook handlers for all domain event types.
+# PURPOSE: Stand up the daemon's event-bus backbone so domain events emitted by the use-case layer are delivered to operator-configured webhooks without each use case re-wiring its own bus.
+# RATIONALE:
+#   Q: Why is the webhook handler bound to one shared aiohttp.ClientSession instead of one session per webhook delivery?
+#   A: An aiohttp.ClientSession owns a connection pool; reusing one across all webhook deliveries keeps the daemon's outbound connection count bounded and lets the pool keep-alive across events.
 def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
     bus = MessageBus()
     http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
@@ -106,7 +112,7 @@ def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
 
 
 # region FUNC_make_daemon
-# PURPOSE: Async factory creating a fully-wired Orchestrator with all daemon dependencies (UoW, SSH, cloud, event bus).
+# PURPOSE: Hand the daemon entry point one ready Orchestrator wired with UoW + SSH + cloud + event bus + collaborators so run_daemon owns only the start/stop lifecycle and the wire-up boundary stays in one place.
 async def make_daemon(
     config: Config,
     *,
@@ -208,7 +214,7 @@ async def make_daemon(
 
 
 # region FUNC_make_cli_deps
-# PURPOSE: Sync factory creating lightweight CLIDeps for CLI commands (no SSH/cloud dependencies).
+# PURPOSE: Build a CLIDeps with only the engine registry and a UoW factory so a CLI invocation pays neither the SSH-pool nor the cloud-adapter nor the event-bus wire-up cost.
 def make_cli_deps(config: Config) -> CLIDeps:
     """Sync factory creating lightweight CLIDeps for CLI commands (no SSH/cloud)."""
     bus = MessageBus()

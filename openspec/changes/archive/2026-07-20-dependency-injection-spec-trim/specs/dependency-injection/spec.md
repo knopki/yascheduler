@@ -1,11 +1,6 @@
-# Dependency Injection
+# Delta: dependency-injection
 
-## Purpose
-
-Factory functions that wire up entry-point-specific dependencies, ensuring
-each entry point instantiates only the adapters it needs.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: make_daemon factory
 

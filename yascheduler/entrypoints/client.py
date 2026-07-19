@@ -41,6 +41,9 @@ __all__ = [
 
 # region FUNC_to_sync
 # PURPOSE: Wrap an async function so it can be called synchronously, detecting a running event loop and offloading to a worker thread when necessary.
+# RATIONALE:
+#   Q: Why does to_sync spin up a worker thread when an event loop is already running instead of using asyncio.run_until_complete?
+#   A: asyncio.run_until_complete cannot be called on a running loop; the only ways to block on a coroutine from inside a running loop are (1) await it (impossible — the caller is sync) or (2) move the coroutine to a different loop in a different thread and block on its result. The worker-thread path is option (2).
 def to_sync(
     func: Callable[ParamT, Coroutine[Any, Any, ReturnT_co]],
 ) -> Callable[ParamT, ReturnT_co]:
@@ -65,6 +68,8 @@ def to_sync(
 # endregion FUNC_to_sync
 
 
+# region FUNC__task_to_dict
+# PURPOSE: Project a Task plus its optional allocated Node into a flat JSON-serializable mapping so the public client API returns plain dicts to sync callers that cannot see domain value objects like TaskId / NodeId.
 def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]:
     node = nodes_by_id.get(t.allocated_node_id) if t.allocated_node_id else None
     metadata: dict[str, Any] = {"engine": t.engine}
@@ -106,6 +111,11 @@ def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]
     }
 
 
+# endregion FUNC__task_to_dict
+
+
+# region CLASS_Yascheduler
+# PURPOSE: Give sync and async callers a single facade for submitting and querying tasks.
 class Yascheduler:
     """Yascheduler client."""
 
@@ -116,7 +126,7 @@ class Yascheduler:
     config: Config
 
     # region METHOD___init__
-    # PURPOSE: Initialize the Yascheduler client with config path and optional DI factory.
+    # PURPOSE: Bind the facade to a parsed Config and (optionally) a deps factory seam so the rest of the facade can lazily obtain a fresh CLIDeps per query without re-parsing config and without a test-hostile module-level singleton.
     def __init__(
         self,
         config_path: PurePath | str = CONFIG_FILE,
@@ -131,7 +141,7 @@ class Yascheduler:
     # endregion METHOD___init__
 
     # region METHOD_queue_submit_task_async
-    # PURPOSE: Submit a new task asynchronously via CLIDeps.submit, returning the task_id as an int.
+    # PURPOSE: Forward a submit request through the deps seam into the use case and unwrap the resulting TaskId to int so sync callers see a plain int job id (the public surface stays int, the TaskId dataclass never escapes the facade).
     async def queue_submit_task_async(
         self,
         label: str,
@@ -148,7 +158,7 @@ class Yascheduler:
     # endregion METHOD_queue_submit_task_async
 
     # region METHOD_queue_submit_task
-    # PURPOSE: Submit a new task synchronously via the async delegate wrapped with to_sync.
+    # PURPOSE: Expose the async submit path to sync callers (AiiDA plugin, REPL) by bridging through to_sync so the facade stays sync on its public surface while the use-case layer stays async.
     def queue_submit_task(
         self,
         label: str,
@@ -164,7 +174,7 @@ class Yascheduler:
     # endregion METHOD_queue_submit_task
 
     # region METHOD_queue_get_tasks_async
-    # PURPOSE: Query tasks asynchronously by job IDs or statuses via the query_tasks use case.
+    # PURPOSE: Resolve a list of int job ids and int status values into typed TaskId / TaskStatus sequences, run them through the deps-seam query use case, and project each result via _task_to_dict so the public surface returns plain mappings and the marshalling boundary stays on the facade.
     async def queue_get_tasks_async(
         self,
         jobs: Sequence[int] | None = None,
@@ -185,7 +195,7 @@ class Yascheduler:
     # endregion METHOD_queue_get_tasks_async
 
     # region METHOD_queue_get_tasks
-    # PURPOSE: Query tasks synchronously by job IDs or statuses.
+    # PURPOSE: Bridge the async query path to sync callers via to_sync so the public surface stays sync.
     def queue_get_tasks(
         self,
         jobs: Sequence[int] | None = None,
@@ -197,7 +207,7 @@ class Yascheduler:
     # endregion METHOD_queue_get_tasks
 
     # region METHOD_queue_get_task_async
-    # PURPOSE: Get a single task by ID asynchronously.
+    # PURPOSE: Hand callers a one-task view (or None) on top of the list query so they do not have to unwrap [0] or handle empty lists themselves.
     async def queue_get_task_async(self, task_id: int) -> Mapping[str, Any] | None:
         """Get task by id."""
         for task_dict in await self.queue_get_tasks_async(jobs=[task_id]):
@@ -207,7 +217,7 @@ class Yascheduler:
     # endregion METHOD_queue_get_task_async
 
     # region METHOD_queue_get_task
-    # PURPOSE: Get a single task by ID synchronously.
+    # PURPOSE: Bridge the single-task async path to sync callers via to_sync.
     def queue_get_task(self, task_id: int) -> Mapping[str, Any] | None:
         """Get task by id."""
         for task_dict in self.queue_get_tasks(jobs=[task_id]):
@@ -215,3 +225,6 @@ class Yascheduler:
         return None
 
     # endregion METHOD_queue_get_task
+
+
+# endregion CLASS_Yascheduler
