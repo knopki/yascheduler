@@ -1,14 +1,6 @@
-# Unit testing
+# Delta: testing-unit
 
-## Purpose
-
-Unit tests for yascheduler: domain entities, domain exceptions, domain ports,
-domain services, config parsing, persistence adapters (mocked),
-application use cases, orchestrator lifecycle, dependency injection, CLI behavior,
-remote machine management, and shared test infrastructure. All tests run without
-external dependencies (no real DB, SSH, or filesystem).
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Domain entities lifecycle
 
@@ -279,3 +271,7 @@ The guard tests SHALL run under the `unit` pytest marker without external resour
 - **GIVEN** the committed `yascheduler/` package
 - **WHEN** the two guard tests are run via `uv run pytest -m unit`
 - **THEN** both pass (no `log` parameters in collaborator `__init__` methods and no `extra`-key collisions with native `LogRecord` attributes exist in the committed package)
+
+## REMOVED Requirements
+
+### Requirement: Shared test fixtures

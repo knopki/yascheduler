@@ -23,6 +23,7 @@ __all__ = [
 
 # region CLASS_UMessage
 # PURPOSE: Enable UniqueQueue deduplication by identity — decouple message payload from identity so two messages with the same content but different IDs are treated as distinct events.
+# INVARIANTS: `__eq__` and `__hash__` consult `id` only.
 @dataclass(frozen=True, eq=False)
 class UMessage(Generic[TUMsgId, TUMsgPayload]):
     """Async queue message."""
@@ -50,6 +51,7 @@ class UMessage(Generic[TUMsgId, TUMsgPayload]):
 
 # region CLASS_UniqueQueue
 # PURPOSE: Prevent the daemon from processing the same task event twice across overlapping producer-consumer cycles.
+# INVARIANTS: Dedup is keyed on `UMessage.id`; two messages with equal `id` are duplicates regardless of `payload`.
 class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     """Async queue with message deduplication."""
 
