@@ -22,6 +22,9 @@ __all__ = ["Migration"]
 
 # region CLASS_Migration
 # PURPOSE: Define the contract for Python-based migrations — inject config, connection, and logger so subclasses implement only the migration logic without wiring infrastructure.
+# RATIONALE:
+# - Q: Why do begin() and commit() exist as helper methods when the runner already opens a transaction before calling migrate()?
+#   A: Certain PostgreSQL operations cannot run inside an open transaction (CREATE INDEX CONCURRENTLY, VACUUM, REINDEX); the intended pattern is self.commit() to close the runner's transaction, run the non-transactional command, then self.begin() to reopen a transaction before the runner records the tracker — without these helpers a migration could not safely perform such operations.
 class Migration:
     """Base class for ``.py`` database migrations.
 

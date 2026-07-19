@@ -1,15 +1,6 @@
-# Database Migrations
+# Delta: db-migrations
 
-## Purpose
-
-Define the forward-only database migration system: the `apply_migrations()`
-runner, the `Migration` base class for `.py` migrations, the
-`yascheduler_migrations` tracker table, the migrations directory file format,
-and the migration edit procedure. The runner is called by `yainit` (and test
-fixtures) immediately after `apply_schema()`, bringing legacy and intermediate
-databases up to the latest snapshot in `schema.sql`.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Migration runner applies pending migrations sequentially
 

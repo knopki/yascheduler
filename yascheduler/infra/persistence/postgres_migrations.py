@@ -1,8 +1,18 @@
 """Apply pending database schema/data migrations in forward-only order."""
 # region MODULE_CONTRACT
 # PURPOSE: Evolve the database schema and data forward in production — one migration per tracker-recorded transaction — so the team makes incremental, replayable changes without manual DDL scripting.
-# SCOPE: Forward-only DDL/DML migration application over sql/migrations/ via one pg8000 connection, one transaction per migration, with yascheduler_migrations tracker recording.
+# SCOPE:
+# - Forward-only DDL/DML migration application over sql/migrations/ via one pg8000 connection, one transaction per migration, with yascheduler_migrations tracker recording.
+# - NOT: rollback / "down" path; NOT: migration generation tool; NOT: schema.sql generation tool; NOT: prefix_id uniqueness validation at runtime (a unit-test responsibility).
+# INVARIANTS: The migration system is forward-only — once a row is recorded in yascheduler_migrations, the runner never deletes it and never reverses the migration; the runner does not validate prefix_id uniqueness across files — a unit test scanning the migrations directory asserts uniqueness; the schema.sql snapshot and individual migration files are hand-written, no tool generates either; apply_migrations is synchronous and opens a single pg8000 connection for the whole run.
 # DEPENDENCIES: USES API: pg8000.Connection, READS: migration files (.sql, .py) from sql/migrations/, LOADS: Python migration modules dynamically via importlib
+# RATIONALE:
+# - Q: Why is the migration system forward-only with no down / rollback path?
+#   A: Rolling back a migration in production typically requires data-loss decisions the runner cannot make (a column add cannot be reversed without dropping the column and its data; a data backfill cannot be reversed without the pre-image); the project ships a new forward migration to fix a bad one, and the yascheduler_migrations tracker row is the audit log of what landed.
+# - Q: Why does the runner not validate prefix_id uniqueness at runtime?
+#   A: A duplicate prefix_id is a static authoring defect — surfacing it via a unit test that scans the migrations directory gives the author feedback at CI time before the migration reaches any database, and keeps the runner's job (apply pending migrations) narrow.
+# - Q: Why is there no migration generation tool?
+#   A: Every migration in this project is small, schema-anchored, and hand-reviewed against the schema.sql snapshot (the Migration edit procedure requirement); auto-generation would couple the project to a schema-diff tool and bypass the human review that the snapshot-conformance step enforces.
 # KEYWORDS: migration, apply, database, dml, ddl
 # endregion MODULE_CONTRACT
 
@@ -37,7 +47,8 @@ def _prefix_id(filename: Path) -> str:
 
 
 # region FUNC__scan_migrations
-# PURPOSE: Discover all available migration files so the runner can determine which ones need applying, in filename order.
+# PURPOSE: Hand the runner the complete, filename-sorted list of .sql and .py migration files so it can compute the pending set without re-globbing the directory per step.
+# INVARIANTS: Returns paths sorted by Path.name string comparison — same key the runner uses for prefix_id ordering; scans _MIGRATIONS_DIR for both *.sql and *.py files; the returned list is a fresh list each call — no caching across apply_migrations invocations.
 def _scan_migrations() -> list[Path]:
     files = list(_MIGRATIONS_DIR.glob("*.sql")) + list(_MIGRATIONS_DIR.glob("*.py"))
     return sorted(files, key=lambda f: f.name)
@@ -48,6 +59,7 @@ def _scan_migrations() -> list[Path]:
 
 # region FUNC__last_applied
 # PURPOSE: Determine the last successfully applied migration so the runner applies only newer files and avoids re-executing already-recorded steps.
+# INVARIANTS: Runs SELECT MAX(migration_id) FROM yascheduler_migrations and returns str(rows[0][0]) — the tracker stores prefix_id strings, so the comparison is lexicographic, matching the filename sort; the try/except DatabaseError is defensive — apply_schema is contractually run before apply_migrations and creates the tracker, but the except branch treats an absent tracker as None ("apply all") rather than crashing; apply_migrations is therefore robust to a manually-dropped tracker on a database that has no migrations applied yet.
 # ENSURES: Returns None when the tracker table is empty or absent (defensive — apply_schema is contractually run first).
 def _last_applied(conn: Connection) -> str | None:
     try:
@@ -66,6 +78,7 @@ def _last_applied(conn: Connection) -> str | None:
 
 # region FUNC__pending
 # PURPOSE: Compute the set of not-yet-applied migrations so the runner applies only what is needed, preserving chronological order.
+# INVARIANTS: Returns the full input list when last is None — fresh database, every migration is pending; otherwise filters by _prefix_id(f) > last — lexicographic comparison on the before-first-_ token, matching the filename sort key; preserves the sorted order of the input list — no re-sort.
 def _pending(last: str | None, files: list[Path]) -> list[Path]:
     if last is None:
         return list(files)
@@ -77,6 +90,10 @@ def _pending(last: str | None, files: list[Path]) -> list[Path]:
 
 # region FUNC__one_migration_subclass
 # PURPOSE: Extract the single Migration subclass from a .py migration file so the runner can call migrate() — fails loud on ambiguous or empty files to prevent silent skips.
+# INVARIANTS: Uses inspect.getmembers(module, inspect.isclass) filtered to issubclass(cls, Migration) and cls is not Migration and cls.__module__ == module.__name__ — imported Migration re-exports and unrelated Migration subclasses from other modules are NOT counted; candidate count MUST be exactly 1, otherwise raises RuntimeError with a message naming module.__file__ and the candidate count.
+# RATIONALE:
+# - Q: Why filter by cls.__module__ == module.__name__ in addition to issubclass(cls, Migration)?
+#   A: A .py migration file typically imports from yascheduler.infra.persistence.migration_base import Migration to declare its subclass — without the __module__ filter, Migration itself would appear as a class in the module and pollute the candidate list; filtering to classes defined locally to the migration file keeps the discovery exact.
 def _one_migration_subclass(module: ModuleType) -> type[Migration]:
     candidates = [
         cls
@@ -97,6 +114,9 @@ def _one_migration_subclass(module: ModuleType) -> type[Migration]:
 # endregion FUNC__one_migration_subclass
 
 
+# region FUNC__rollback
+# PURPOSE: Drain the runner's open transaction on the failure path of every migration step so a half-applied migration does not leave a BEGIN-state transaction behind for the next migration to inherit.
+# ENSURES: On call, issues ROLLBACK on the wrapped connection inside a contextlib.suppress(Exception) — best-effort: a connection-side failure during rollback is silenced because the caller is already on the exception path and will re-raise the original error.
 def _rollback(conn: Connection) -> None:
     # region BLOCK_rollback
     with contextlib.suppress(Exception):
@@ -104,8 +124,13 @@ def _rollback(conn: Connection) -> None:
     # endregion BLOCK_rollback
 
 
+# endregion FUNC__rollback
+
+
 # region FUNC__apply_sql_migration
 # PURPOSE: Execute a .sql migration file atomically and record it in the tracker so the schema evolves safely and re-runs are prevented.
+# INVARIANTS: Issues BEGIN then conn.run(path.read_text()) — the file text is executed as a multi-statement string in one round-trip, mirroring psql's default behavior; the tracker INSERT runs inside the same transaction as the SQL body so a schema change and its tracker record commit atomically.
+# ENSURES: On success, a row (<prefix_id>, <default-timestamp>) exists in yascheduler_migrations and the migration's SQL is committed; on any error from BEGIN through COMMIT, issues best-effort ROLLBACK via _rollback(conn) and re-raises — no tracker row is inserted for the failed migration.
 def _apply_sql_migration(conn: Connection, path: Path, prefix_id: str) -> None:
     conn.run("BEGIN")
     try:
@@ -128,6 +153,13 @@ def _apply_sql_migration(conn: Connection, path: Path, prefix_id: str) -> None:
 
 # region FUNC__record_py_tracker
 # PURPOSE: Persist the tracker record for a .py migration after migrate() succeeds so the same step is never re-applied, even if the runner crashes after the SQL landed.
+# INVARIANTS: Issues INSERT INTO yascheduler_migrations (migration_id) VALUES (:p) then COMMIT; on DatabaseError, reopens with BEGIN and retries the INSERT / COMMIT exactly once — the retry path handles transient DB-side errors like a deadlock on the tracker table; a non-transient failure such as a duplicate-prefix_id primary-key violation re-raises from the retry and surfaces the real defect.
+# ENSURES: On success, the row (<prefix_id>, <default-timestamp>) exists in yascheduler_migrations; works in BOTH the normal case — migrate's transaction still open, the INSERT/COMMIT commits inside it — and the commit-closed case — migrate called self.commit() and did not reopen, the INSERT autocommits and the trailing COMMIT is a no-op warning rather than an error.
+# RATIONALE:
+# - Q: Why does the tracker record succeed in BOTH the normal case and the self.commit()-closed case?
+#   A: pg8000 native AUTOCOMMITS statements issued outside an open transaction, and a bare COMMIT with no open transaction is a no-op warning rather than an error — so a Python migration that legitimately closed the runner's transaction for a non-transactional operation (CREATE INDEX CONCURRENTLY, VACUUM) is still tracker-recorded; the contract is "migrate() applied <=> tracker recorded".
+# - Q: Why does the function retry the INSERT/COMMIT once on DatabaseError?
+#   A: The retry is a defensive guard for transient DB-side errors on the tracker record (e.g. a deadlock between two concurrent yainit invocations); the reopen-and-retry turns a transient conflict into a success, while a non-transient failure (duplicate-prefix_id PK violation) re-raises from the retry and lets the caller's ROLLBACK handle it.
 def _record_py_tracker(conn: Connection, prefix_id: str) -> None:
     # region BLOCK_tracker_record
     # pg8000 native AUTOCOMMITS statements issued outside an open
@@ -166,6 +198,8 @@ def _record_py_tracker(conn: Connection, prefix_id: str) -> None:
 
 # region FUNC__apply_py_migration
 # PURPOSE: Execute a Python migration step inside a transaction — load the module, call migrate(), and record the tracker — so complex DDL/DML logic runs safely and is never re-applied.
+# INVARIANTS: Loads the migration module from path via importlib.util.spec_from_file_location(prefix_id, path) — the prefix_id is the module name, so a .py migration file is importable only by the runner, not by regular import statements; raises RuntimeError if the spec or loader is None; the runner opens BEGIN BEFORE loading the module, so a module-level statement that touches the DB (rare but legal) runs inside the migration's transaction.
+# ENSURES: On success, the migration's migrate() body has run AND the tracker row for <prefix_id> is recorded (the tracker recording is delegated to _record_py_tracker); on any error from module load, migrate(), or tracker recording, issues best-effort ROLLBACK via _rollback(conn) and re-raises — no tracker row is inserted for the failed migration.
 def _apply_py_migration(
     conn: Connection,
     path: Path,
@@ -197,6 +231,9 @@ def _apply_py_migration(
 
 # region FUNC_apply_migrations
 # PURPOSE: Apply all pending schema/data migrations in forward order so the database is up-to-date on every deployment without manual SQL intervention.
+# REQUIRES: config is a validated PostgresDbConfig with a reachable database; the database already has the yascheduler_migrations tracker table — apply_schema runs first in yainit and in test fixtures.
+# INVARIANTS: Synchronous — opens ONE pg8000 Connection for the whole run and closes it in finally; pending list is computed once from _last_applied + _scan_migrations + _pending — the directory is NOT re-scanned per migration; dispatches on path.suffix — .sql files route to _apply_sql_migration, everything else routes to _apply_py_migration; the runner does NOT validate prefix_id uniqueness at runtime — that is a unit-test responsibility; the runner does NOT delete tracker rows nor reverse applied migrations — the system is forward-only.
+# ENSURES: On success, every file in the pending list has a tracker row; on failure, the failing migration's tracker row is NOT inserted and the error propagates out of apply_migrations — the connection is closed in finally regardless.
 def apply_migrations(config: PostgresDbConfig) -> None:
     """Apply pending migrations from sql/migrations/ to the DB described by config, each in its own transaction."""
     conn: Connection | None = None
