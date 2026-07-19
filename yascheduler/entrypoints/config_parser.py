@@ -1,6 +1,6 @@
 """INI config parsing — adapter between ConfigParser and domain/infra types."""
 # region MODULE_CONTRACT
-# PURPOSE: Parse INI config files into frozen domain/infra configuration objects — the adapter between ConfigParser and the application's typed configuration model.
+# PURPOSE: Adapt `ConfigParser` to the application's frozen typed-configuration model so the rest of the system consumes validated value objects and never touches raw INI proxies.
 # SCOPE: INI config parsing — engine sections, cloud provider sections, DB config, local/remote settings, and the top-level parse_config assembly.
 # KEYWORDS: config, ini, parser, engine, cloud, database, settings
 # endregion MODULE_CONTRACT
@@ -558,7 +558,11 @@ def _remote_valid_fields() -> Sequence[str]:
 
 
 # region FUNC__parse_remote_section
-# PURPOSE: Build a frozen RemoteDefaults from a [remote] INI section.
+# PURPOSE: Turn a `[remote]` INI section into a validated `RemoteDefaults` value object so the rest of the system consumes immutable typed values instead of re-reading `ConfigParser` proxies at every SSH call site.
+# INVARIANTS: validation runs in the parser, not in `RemoteDefaults.__post_init__` — `jump_port` is checked against the 1..65535 range via `_check_port`, mirroring the `yascheduler_nodes.jump_port` DB `CHECK` constraint; `user` and `jump_user` are INI aliases for `username` and `jump_username` and are registered in `_remote_valid_fields` so `warn_unknown_fields` does not fire on them.
+# RATIONALE:
+# - Q: why does `jump_port` validation run in `_parse_remote_section` via `_check_port` instead of in `RemoteDefaults.__post_init__` like `LocalSettings` does for its concurrency limits?
+#   A: `jump_port` mirrors the `yascheduler_nodes.jump_port` DB `CHECK` constraint (1..65535) — keeping the same range check at parse time surfaces a misconfigured INI before any downstream code receives the value, and it follows the existing per-section parser idiom (`max_nodes`, `idle_tolerance`, cloud `{prefix}_jump_port`) so all port/limit invariants fail fast at config load; `LocalSettings` uses `__post_init__` because its limits are dataclass-internal (no DB mirror) and the parser must let a legitimate `0` reach `__post_init__` so `ge(1)` raises rather than being silently coerced.
 def _parse_remote_section(sec: SectionProxy) -> RemoteDefaults:
     warn_unknown_fields(_remote_valid_fields(), sec)
     data_dir = PurePath(sec.get("data_dir", "./data"))

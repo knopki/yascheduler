@@ -93,6 +93,8 @@ class LocalSettings:
 # endregion CLASS_LocalSettings
 
 
+# region CLASS_RemoteDefaults
+# PURPOSE: Give every SSH-remote consumer a single immutable bundle of remote FS + jump-host defaults so they never re-derive paths or bastion identity at each call site.
 @dataclass(frozen=True)
 class RemoteDefaults:
     """Remote machine defaults: data directories, SSH username, jump host."""
@@ -104,6 +106,9 @@ class RemoteDefaults:
     jump_username: str | None = None
     jump_host: str | None = None
     jump_port: int = 22
+
+
+# endregion CLASS_RemoteDefaults
 
 
 # Derived from LocalSettings field defaults so there is a single source of truth:
