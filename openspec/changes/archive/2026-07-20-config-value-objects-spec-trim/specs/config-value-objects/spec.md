@@ -1,13 +1,6 @@
-# Config Value Objects
+# Delta: config-value-objects
 
-## Purpose
-
-The frozen config value objects — `LocalSettings`, `RemoteDefaults`,
-`PostgresDbConfig`, and the `Config` aggregate — defined as stdlib
-dataclasses with `__post_init__` validation, no INI-parsing methods, and the
-composition-root-only consumption rule for `Config`.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: LocalSettings value object
 
