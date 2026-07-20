@@ -34,16 +34,18 @@ yascheduler_nodes CASCADE`).
 - **THEN** test B sees zero nodes
 
 ### Requirement: Node CRUD integration
-Tests SHALL verify node operations against real PostgreSQL via
-`PostgresNodeRepository` (through `uow.nodes`) and direct construction:
-`add` (`Node`), `get`, `list_all`, `list_enabled`, `list_disabled`, `get`
-(for `has_node` semantics), `enable`, `disable`, `remove`, `count_by_cloud`,
-`count_by_status`, `get_by_ips`. Tests SHALL construct domain `Node`
-entities (`yascheduler.domain.Node`) with the appropriate fields.
 
-#### Scenario: Add, retrieve, enable/disable filtering
-- **WHEN** two nodes are added (one enabled, one disabled) via `uow.nodes.add(Node(...))`
-- **THEN** `uow.nodes.get(ip)` returns matching fields, `uow.nodes.list_enabled()` returns one, `uow.nodes.list_disabled()` returns one
+Tests SHALL verify node operations against real PostgreSQL via
+`PostgresNodeRepository` (through `uow.nodes`) and direct construction. The
+covered operations are: `insert` (taking a `NewNode`, returning a `Node`),
+`get_by_id`, `get_by_ids`, `list_all`, `list_enabled`, `list_disabled`,
+`enable`, `disable`, `remove`, `count_by_cloud`, `count_by_status`. Tests
+SHALL construct domain `NewNode` entities (`yascheduler.domain.NewNode`) and
+assert the round-tripped `Node` fields.
+
+#### Scenario: Insert, retrieve, enable/disable filtering
+- **WHEN** two nodes are inserted (one enabled, one disabled) via `uow.nodes.insert(NewNode(hostname="[IP1]", enabled=True))` and `uow.nodes.insert(NewNode(hostname="[IP2]", enabled=False))`
+- **THEN** `uow.nodes.get_by_id(node_id)` returns matching fields, `uow.nodes.list_enabled()` returns one, `uow.nodes.list_disabled()` returns one
 
 ### Requirement: Task CRUD integration
 
@@ -60,16 +62,14 @@ Tests SHALL construct `Task` / `NewTask` with the typed fields directly (no
 (input-file payloads and unknown keys) SHALL be asserted to round-trip
 through `insert` + `get` / `list_by_status` / `list_by_jobs`. The seven typed
 columns (`engine`, `remote_folder`, `local_folder`, `webhook_url`, `error`,
-`webhook_custom_params`, `extra`) SHALL be asserted to round-trip. `error`
-SHALL be asserted to persist the new format contract values (bare strings for
-`reject`/orchestrator `fail`, `"Download error: ..."` for consume `fail`,
-`NULL` on success).
+`webhook_custom_params`, `extra`) SHALL be asserted to round-trip. `error` SHALL be asserted to persist the new format contract values (bare
+strings set via `task.fail()` / `task.reject()`, `NULL` on success).
 
 #### Scenario: Full task lifecycle
 - **WHEN** a task transitions through the lifecycle (insert → running → done) via domain `Task` methods and is persisted via `uow.tasks.save`
 - **THEN** each step reflects the correct status and typed fields (`engine`, `remote_folder`, `local_folder`, `error`, `extra`, `allocated_node_id`) in `uow.tasks.get`
 
-#### Scenario: set_task_error embeds error
+#### Scenario: Task error column embeds error string
 - **WHEN** a task is saved with `task.error="crash"` (via `task.fail("crash")` or `task.reject("crash")`) and status DONE
 - **THEN** `uow.tasks.get(id)` returns status DONE and the row's `error` column equals `"crash"` (the typed column carries the error string directly; no `metadata` JSONB serialization)
 

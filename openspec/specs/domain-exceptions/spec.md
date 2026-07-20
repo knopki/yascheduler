@@ -48,11 +48,8 @@ render the bare integer in its message.
 ### Requirement: MachineBusyError
 
 The system SHALL provide `MachineBusyError(DomainError)` for operations
-attempted on a busy machine. The constructor SHALL take
-`node_id: NodeId` as the sole argument and store it as an instance attribute.
-
-The exception message format SHALL be:
-`f"machine ({node_id}) is busy"`.
+attempted on a busy machine. The constructor SHALL take `node_id: NodeId` as
+the sole argument and store it as an instance attribute.
 
 #### Scenario: MachineBusyError carries node_id only
 
@@ -66,14 +63,11 @@ The exception message format SHALL be:
 
 ### Requirement: MachineConnectionError
 
-The system SHALL provide `MachineConnectionError(DomainError)` for connection
-failures when establishing SSH connections to remote machines. The constructor
-SHALL take `node_id: NodeId` as the first argument, `hostname: str` as the
-second, and `reason: str` as the third, storing all three as instance
-attributes.
-
-The exception message format SHALL be:
-`f"cannot connect to machine ({node_id}) at {hostname}: {reason}"`.
+The system SHALL provide `MachineConnectionError(DomainError)` for
+connection failures when establishing SSH connections to remote machines.
+The constructor SHALL take `node_id: NodeId` as the first argument,
+`hostname: str` as the second, and `reason: str` as the third, storing all
+three as instance attributes.
 
 #### Scenario: MachineConnectionError carries node_id, hostname, and reason
 - **WHEN** `MachineConnectionError(NodeId(1), "10.0.0.1", "Connection refused")` is raised

@@ -1,8 +1,4 @@
-## Purpose
-
-Defines the domain entity model for yascheduler: Task lifecycle, Node records, ConnectedMachine state, Engine specifications, and related value objects — all immutable with encapsulated business rules.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: TaskId value object
 
@@ -12,6 +8,10 @@ as the bare integer. `TaskId` is hashable and usable as a dict key.
 
 The wrapped value SHALL be unwrapped explicitly at every external boundary
 (SQL parameters, JSON serialization, CLI argument parsing).
+
+The field inventory, the `value > 0` invariant, the `__str__` contract, and
+the `frozen=True` declaration live in the `CLASS_TaskId` GRACE INVARIANTS —
+they are shape, not behavior.
 
 #### Scenario: TaskId validates positive
 - **WHEN** `TaskId(0)` or `TaskId(-3)` is constructed
@@ -26,6 +26,10 @@ as the bare integer. `NodeId` is hashable and usable as a dict key.
 The wrapped value SHALL be unwrapped explicitly at every external boundary
 (SQL parameters, JSON serialization, CLI argument parsing).
 
+The field inventory, the `value > 0` invariant, the `__str__` contract, and
+the `frozen=True` declaration live in the `CLASS_NodeId` GRACE INVARIANTS —
+they are shape, not behavior.
+
 #### Scenario: NodeId validates positive
 - **WHEN** `NodeId(0)` or `NodeId(-3)` is constructed
 - **THEN** `ValueError` is raised
@@ -37,6 +41,9 @@ pre-persistence task record — the input shape to `TaskRepository.insert`. It
 carries no identity and no lifecycle; the conversion to a `Task` happens in
 exactly one place — `TaskRepository.insert` — which attaches the generated
 identity, the DB-defaulted `status=TO_DO`, and `allocated_node_id=None`.
+
+The field inventory and defaults live in the `CLASS_NewTask` GRACE
+INVARIANTS.
 
 #### Scenario: NewTask is the pre-persistence input shape
 - **WHEN** a caller prepares a task record for insertion
@@ -53,6 +60,11 @@ return a new `Task` via `replace`.
 
 `Task` is the only task shape that flows out of a repository. The `events`
 field is public; the unit-of-work reads it directly for event collection.
+
+The field inventory, the `frozen=True` declaration, and the per-field
+optional/required contract live in the `CLASS_Task` GRACE INVARIANTS. The
+lifecycle semantics (which fields each transition sets, which event each
+emits) are behavior and remain in the scenarios below.
 
 `allocated_node_id` is `None` for unallocated tasks (TO_DO with no node
 bound) and for tasks whose node was deleted. It is set only by `run`.
@@ -137,6 +149,9 @@ creation and SHALL NOT be re-resolved at connect time:
 
 `jump_host = None` means "no tunnel" (direct connection).
 
+The field inventory, defaults, and `frozen=True` declaration live in the
+`CLASS_Node` and `CLASS_NewNode` GRACE INVARIANTS.
+
 #### Scenario: Node creation with defaults
 
 - **WHEN** a Node is instantiated with `node_id=NodeId(1)`, `hostname="[IP]"`, `ncpus=4`, and `enabled=True`
@@ -183,6 +198,9 @@ persisted and SHALL NOT propagate to `Node`).
 `MachineBusyError(self.node_id)` is raised by `occupy()` when the machine is
 already BUSY — the error carries the `node_id` (identity).
 
+The field inventory, defaults, and `frozen=True` declaration live in the
+`CLASS_ConnectedMachine` GRACE INVARIANTS.
+
 #### Scenario: Machine is compatible with platform list
 - **WHEN** `machine.is_compatible(("linux", "debian-12"))` is called on a FREE machine with `platform="debian-12"`
 - **THEN** returns True
@@ -204,6 +222,9 @@ already BUSY — the error carries the `node_id` (identity).
 The system SHALL provide an `Engine` value object as an immutable record
 (re-exported from `yascheduler.domain.model` and `yascheduler.domain`).
 
+The field inventory, defaults, and `frozen=True` declaration live in the
+`CLASS_Engine` GRACE INVARIANTS.
+
 #### Scenario: Engine constructed with defaults for the 4 merge fields
 - **WHEN** `Engine(name="cp2k", spawn="cp2k", input_files=("inp",))` is constructed without `deployable`, `platform_packages`, `check_cmd_code`, `sleep_interval`
 - **THEN** `deployable == ()`, `platform_packages == ()`, `check_cmd_code == 0`, `sleep_interval == 10`
@@ -211,7 +232,8 @@ The system SHALL provide an `Engine` value object as an immutable record
 ### Requirement: ProcessResult value object
 
 The system SHALL provide a `ProcessResult` value object as an immutable
-  record.
+record. The field inventory lives in the `CLASS_ProcessResult` GRACE
+INVARIANTS.
 
 #### Scenario: ProcessResult constructed with all fields
 - **WHEN** `ProcessResult(exit_code=0, stdout="out", stderr="err")` is constructed
@@ -220,7 +242,8 @@ The system SHALL provide a `ProcessResult` value object as an immutable
 ### Requirement: MachineState enum
 
 The system SHALL provide a `MachineState` enum with the FREE and BUSY
-values.
+values. The enum membership lives in the `CLASS_MachineState` GRACE
+INVARIANTS.
 
 #### Scenario: MachineState has FREE and BUSY values
 - **WHEN** `MachineState` is inspected
@@ -236,6 +259,10 @@ function that returns a new `Task` with a `TaskCreated` event appended to
 `materialize_task` is the sole `TaskCreated` emission site, called only by
 `TaskRepository.insert` on the row-mapping output. It is a domain-layer
 function; `TaskCreated` is consumed only inside the domain layer.
+
+The exact constructor argument shape of the emitted `TaskCreated` event
+lives in the `FUNC_materialize_task` GRACE ENSURES — that is shape, not
+behavior.
 
 #### Scenario: materialize_task attaches TaskCreated
 - **WHEN** `materialize_task(task)` is called on a freshly-inserted Task with `task_id=TaskId(42)`, `engine="fleur"`, `webhook_url="https://..."`, `webhook_custom_params={}`, `events=()`
@@ -259,6 +286,9 @@ except that `hostname` and `ncpus` carry defaults (`""` and `None`) so the
 tmp-reservation call site can construct a tmp node without naming them:
 `NewNode(cloud=selected_name, enabled=False)`.
 
+The full field inventory and defaults live in the `CLASS_NewNode` GRACE
+INVARIANTS.
+
 #### Scenario: NewNode defaults ncpus to None
 - **WHEN** a NewNode is instantiated with only `cloud="aws"` and `enabled=False`
 - **THEN** `ncpus` defaults to `None` (no operator-set limit; discovered at spawn)
@@ -268,6 +298,8 @@ tmp-reservation call site can construct a tmp node without naming them:
 The system SHALL provide a `NodeStatus` enum as a `StrEnum` with the `OTHER`
 value (a placeholder for future node lifecycle states). The enum value
 matches the `TASK_STATUS` convention (enum label == name).
+
+The enum membership lives in the `CLASS_NodeStatus` GRACE INVARIANTS.
 
 #### Scenario: NodeStatus has OTHER value
 - **WHEN** `NodeStatus` is inspected
@@ -288,6 +320,9 @@ collection of `Engine`s (re-exported from `yascheduler.domain.model` and
 `yascheduler.domain`). `filter` and `filter_platforms` SHALL return a new
 frozen `EngineRepository` instance; the original is not mutated.
 
+The field inventory, the method signatures, and the `frozen=True` declaration
+live in the `CLASS_EngineRepository` GRACE INVARIANTS.
+
 #### Scenario: EngineRepository constructed with data
 - **WHEN** `EngineRepository(data={"fleur": engine})` is constructed
 - **THEN** `repo["fleur"] is engine`, `repo.get("fleur") is engine`, `"fleur" in repo` is True, `repo.get("missing") is None`, and `list(repo.values()) == [engine]`
@@ -295,3 +330,13 @@ frozen `EngineRepository` instance; the original is not mutated.
 #### Scenario: EngineRepository is unhashable
 - **WHEN** `hash(repo)` is called on an `EngineRepository` instance
 - **THEN** `TypeError` is raised (frozen dataclass with `Mapping` field is unhashable)
+
+## REMOVED Requirements
+
+### Requirement: Task entity field-by-field enumeration
+
+REMOVED — the field list with per-field `Optional`/`required` annotation is
+shape, not behavior. It lives in the `CLASS_Task` GRACE INVARIANTS. The
+behavioral lifecycle scenarios (run/reject/complete/fail/abandon) are
+retained in the modified `Task entity with status lifecycle` requirement
+above.

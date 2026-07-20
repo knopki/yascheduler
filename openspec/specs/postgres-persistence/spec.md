@@ -15,15 +15,8 @@ synchronous calls dispatched through a `ThreadPoolExecutor`.
 
 The system SHALL keep task SQL in versioned `.sql` files under
 `infra/persistence/sql/task/` loaded by `load_query(name)` with `@cache`
-caching. The task SQL files SHALL be exactly: `insert` (RETURNING),
-`update_by_id`, `get_by_id`, `list_by_status`, `list_by_jobs`,
-`update_status`, `get_ids_by_node_id_and_status`, `count_by_status`.
-
-The system SHALL keep node SQL in versioned `.sql` files under
+caching. The system SHALL keep node SQL in versioned `.sql` files under
 `infra/persistence/sql/node/` loaded by the same `load_query(name)` cache.
-The node SQL files SHALL be exactly: `insert`, `update`, `get_by_id`,
-`get_by_ids`, `list_all`, `list_enabled`, `list_disabled`, `enable`,
-`disable`, `remove`, `count_by_cloud`, `count_by_status`.
 
 The schema DDL snapshot and migration file format are owned by the
 `postgres-schema-apply` and `db-migrations` capabilities respectively and
@@ -31,7 +24,7 @@ are not restated here.
 
 #### Scenario: SQL files loaded via load_query
 
-- **WHEN** a task SQL file is requested
+- **WHEN** a task or node SQL file is requested
 - **THEN** the content is returned; subsequent calls return the cached content
 
 ### Requirement: PostgresUnitOfWork transactional boundaries

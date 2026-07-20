@@ -1,13 +1,4 @@
-# Config Value Objects
-
-## Purpose
-
-The frozen config value objects — `LocalSettings`, `RemoteDefaults`,
-`PostgresDbConfig`, and the `Config` aggregate — defined as stdlib
-dataclasses with `__post_init__` validation, no INI-parsing methods, and the
-composition-root-only consumption rule for `Config`.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: LocalSettings value object
 
@@ -19,6 +10,10 @@ Validation: the concurrency-limit fields SHALL be `ge(1)` and
 `webhook_reqs_limit` SHALL be `ge(0)`, raising `ValueError` on violation.
 
 `LocalSettings` SHALL be importable from `yascheduler.domain`.
+
+The field inventory, the per-field defaults, and the `frozen=True` declaration
+live in the `CLASS_LocalSettings` GRACE INVARIANTS — they are shape, not
+behavior.
 
 #### Scenario: LocalSettings frozen
 - **WHEN** an attempt is made to assign `settings.data_dir = Path("/other")` on a `LocalSettings` instance
@@ -49,6 +44,9 @@ The dataclass SHALL be frozen with no INI parsing methods.
 
 `RemoteDefaults` SHALL be importable from `yascheduler.domain`.
 
+The field inventory and per-field defaults live in the
+`CLASS_RemoteDefaults` GRACE INVARIANTS.
+
 #### Scenario: RemoteDefaults frozen
 
 - **WHEN** an attempt is made to assign `defaults.username = "ops"` on a `RemoteDefaults` instance
@@ -64,47 +62,6 @@ The dataclass SHALL be frozen with no INI parsing methods.
 - **WHEN** a `RemoteDefaults` is constructed without an explicit `jump_port`
 - **THEN** `jump_port == 22`
 
-### Requirement: [remote] section jump_port parsing and validation
-
-The `[remote]` INI section parser SHALL read the optional `jump_port` key as an
-integer (default `22`) and surface it on `RemoteDefaults.jump_port`. The parser
-SHALL validate the range 1–65535 (mirroring the `yascheduler_nodes.jump_port`
-DB `CHECK` constraint) at parse time, raising `ValueError` on any value outside
-that range or on a non-integer value.
-
-The `jump_port` key SHALL be added to the `[remote]` valid-field set so
-unknown-field warnings do not fire on it.
-
-#### Scenario: jump_port defaults to 22 when [remote] key absent
-
-- **GIVEN** an INI with a `[remote]` section that does NOT set `jump_port`
-- **WHEN** `parse_config(path)` constructs the `Config`
-- **THEN** `config.remote.jump_port == 22`
-
-#### Scenario: jump_port read from [remote] section
-
-- **GIVEN** an INI with `[remote] jump_port = 2222`
-- **WHEN** `parse_config(path)` constructs the `Config`
-- **THEN** `config.remote.jump_port == 2222`
-
-#### Scenario: [remote] parser rejects jump_port below 1
-
-- **GIVEN** an INI with `[remote] jump_port = 0`
-- **WHEN** `parse_config(path)` is called
-- **THEN** `ValueError` is raised
-
-#### Scenario: [remote] parser rejects jump_port at or above 65536
-
-- **GIVEN** an INI with `[remote] jump_port = 65536`
-- **WHEN** `parse_config(path)` is called
-- **THEN** `ValueError` is raised
-
-#### Scenario: [remote] parser rejects non-integer jump_port
-
-- **GIVEN** an INI with `[remote] jump_port = ssh`
-- **WHEN** `parse_config(path)` is called
-- **THEN** `ValueError` is raised
-
 ### Requirement: PostgresDbConfig value object
 
 The system SHALL provide a `PostgresDbConfig` frozen stdlib dataclass that
@@ -114,6 +71,9 @@ with no INI parsing methods.
 Validation: `port` SHALL be `ge(1)`, raising `ValueError` on violation.
 
 `PostgresDbConfig` SHALL be importable from `yascheduler.infra.persistence`.
+
+The field inventory and per-field defaults live in the
+`CLASS_PostgresDbConfig` GRACE INVARIANTS.
 
 #### Scenario: PostgresDbConfig frozen
 - **WHEN** an attempt is made to assign `cfg.port = 5433` on a `PostgresDbConfig` instance
@@ -140,6 +100,9 @@ by `parse_config`.
 The `clouds` field SHALL be typed `Sequence[ConfigCloud]` where `ConfigCloud`
 is the infra Union of the 4 concrete `ConfigCloud*` DTOs.
 
+The field inventory and the `frozen=True` declaration live in the
+`CLASS_Config` GRACE INVARIANTS.
+
 #### Scenario: Config frozen
 - **WHEN** an attempt is made to assign `config.engines = other_engines` on a `Config` instance
 - **THEN** `FrozenInstanceError` is raised
@@ -163,18 +126,3 @@ is the infra Union of the 4 concrete `ConfigCloud*` DTOs.
 #### Scenario: Config.clouds runtime value is list[ConfigCloud]
 - **WHEN** `parse_config(path)` constructs a `Config` instance for a valid INI file
 - **THEN** `config.clouds` is a `list` whose every element is an instance of one of `ConfigCloudAzure`, `ConfigCloudHetzner`, `ConfigCloudUpcloud`, `ConfigCloudVastAI`
-
-### Requirement: shared.compat re-exports StrEnum
-
-The system SHALL re-export `StrEnum` from `yascheduler.shared.compat` using a
-version branch: `from enum import StrEnum` on Python 3.11+ and
-`from typing_extensions import StrEnum` below 3.11. `StrEnum` SHALL be included
-in `__all__`.
-
-#### Scenario: StrEnum is importable from shared.compat
-- **WHEN** `from yascheduler.shared.compat import StrEnum` is executed on any supported Python version (>=3.9)
-- **THEN** `StrEnum` is a class that can be subclassed to define a string enum
-
-#### Scenario: StrEnum is in __all__
-- **WHEN** `yascheduler.shared.compat.__all__` is inspected
-- **THEN** `StrEnum` is included alongside `Self` and `Unpack`

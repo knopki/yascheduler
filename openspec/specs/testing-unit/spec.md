@@ -224,11 +224,11 @@ Tests SHALL verify `WebhookPayload` defaults `custom_params` to an empty dict.
 
 ### Requirement: Client queue-query unit verification
 
-Tests SHALL verify that `Yascheduler.queue_get_tasks_async` routes queries through the `deps_factory`-injected `CLIDeps.uow_factory` and the `query_tasks` use case, then maps results to the public six-key dict shape.
+Tests SHALL verify that `Yascheduler.queue_get_tasks_async` routes queries through the `deps_factory`-injected `CLIDeps.uow_factory` and the `query_tasks` use case, then maps results to the public six-key dict shape `{task_id, label, status, metadata, node}` with the nested `node` object (carrying `hostname`, not `ip`).
 
 #### Scenario: Status filter dispatches list_by_status
 - **WHEN** `Yascheduler(deps_factory=...).queue_get_tasks_async(status=[0])` is called with `FakeTaskRepository.list_by_status` seeded to return a known Task
-- **THEN** `list_by_status({domain.TaskStatus.TO_DO})` is awaited and the returned dict has exactly the keys `{task_id, label, ip, status, metadata, cloud}`
+- **THEN** `list_by_status({domain.TaskStatus.TO_DO})` is awaited and the returned dict has exactly the keys `{task_id, label, status, metadata, node}` (the flat `ip` and `cloud` keys are ABSENT)
 
 #### Scenario: Jobs filter dispatches list_by_jobs
 - **WHEN** `Yascheduler(deps_factory=...).queue_get_tasks_async(jobs=[7])` is called
@@ -243,39 +243,22 @@ Tests SHALL verify that `Yascheduler.queue_get_tasks_async` routes queries throu
 - **THEN** `[]` is returned without dispatching to the repository
 
 #### Scenario: Returned dict shape and types are correct
-- **WHEN** a Task with `allocated_ip=None` is seeded into the fake repository and queried
-- **THEN** the returned dict has `ip == ""`, `status` is `isinstance(status, domain.TaskStatus)` (not a plain int), and `cloud is None`
+- **WHEN** a Task with `allocated_node_id=None` is seeded into the fake repository and queried
+- **THEN** the returned dict has `node == None`, `status` is `isinstance(status, domain.TaskStatus)` (not a plain int), and the flat `ip` / `cloud` keys are ABSENT
 
-### Requirement: Logging discipline guard tests
+### Requirement: Logging discipline guard tests (reference)
 
-The project SHALL provide two guard unit tests in `tests/unit/` that statically enforce the logging contract across the package:
+The project SHALL provide two guard unit tests in `tests/unit/` that statically enforce the logging contract owned by the `logging` capability: (a) no collaborator class accepts a `log` parameter in its `__init__`, and (b) no `extra={...}` literal callsite in `yascheduler/` uses a key that collides with a native `LogRecord` attribute. The guard tests SHALL run under the `unit` pytest marker without external resources.
 
-1. **No injected logger in collaborator constructors**: none of the seven collaborator classes (`Orchestrator`, `SSHMachineRepository`, `SSHMachineSession`, `TaskDeployer`, `OutputDownloader`, `OccupancyChecker`, `CloudProvisionerImpl`) SHALL accept a parameter named `log` in their `__init__` method (or declare a `log` class-level annotation for frozen dataclasses).
-2. **No extra-key collision with native LogRecord attributes**: every `extra={...}` literal callsite in `yascheduler/` SHALL use keys that do NOT collide with the native `LogRecord` attribute set, because stdlib merges `extra` into the record via `__dict__.update` and silently overwrites reserved keys (e.g. `name`, `msg`, `funcName`, `levelname`, `lineno`, `module`).
-
-The guard tests SHALL run under the `unit` pytest marker without external resources.
-
-#### Scenario: guard test fails on an injected logger parameter
-
-- **GIVEN** the no-injected-logger guard test is run
-- **WHEN** a `log` parameter appears in the `__init__` method of any of the seven collaborator classes (`Orchestrator`, `SSHMachineRepository`, `SSHMachineSession`, `TaskDeployer`, `OutputDownloader`, `OccupancyChecker`, `CloudProvisionerImpl`)
-- **THEN** the guard test fails, naming the class and the file
-- **AND** no such `log` parameter exists in the committed package
-
-#### Scenario: guard test fails on an extra-key collision with a native LogRecord attribute
-
-- **GIVEN** the extra-key-collision guard test is run
-- **WHEN** a `logger.debug(msg, extra={...})` callsite in `yascheduler/` uses a key that is a native `LogRecord` attribute name (e.g. `funcName`, `levelname`, `msg`, `name`)
-- **THEN** the guard test fails, naming the file, the offending key, and the call
-- **AND** no such colliding `extra` key exists in the committed package
-
-#### Scenario: guard tests run under the unit marker without external resources
-
-- **WHEN** the two guard tests are run via `uv run pytest -m unit`
-- **THEN** both pass without a database, SSH container, or cloud credentials
+The exhaustive collaborator list and the exhaustive `LogRecord` attribute set live in code (`CLASS_*` regions and the formatter module's `MODULE_CONTRACT` respectively) — the spec keeps only the behavioral rule.
 
 #### Scenario: guard tests pass on the committed package
 
 - **GIVEN** the committed `yascheduler/` package
-- **WHEN** the two guard tests are run via `uv run pytest -m unit`
+- **WHEN** the guard tests are run via `uv run pytest -m unit`
 - **THEN** both pass (no `log` parameters in collaborator `__init__` methods and no `extra`-key collisions with native `LogRecord` attributes exist in the committed package)
+
+#### Scenario: guard tests run under the unit marker without external resources
+
+- **WHEN** the guard tests are run via `uv run pytest -m unit`
+- **THEN** both pass without a database, SSH container, or cloud credentials

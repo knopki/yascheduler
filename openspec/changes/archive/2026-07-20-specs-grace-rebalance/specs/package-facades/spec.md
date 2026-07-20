@@ -1,8 +1,4 @@
-## Purpose
-
-Define the package-facade import discipline for `yascheduler`: clean-architecture layer direction (R3, enforced via `import-linter`), within-package relative imports (R1), cross-package facade imports via the layer's `__init__.py` (R2), the lazy-publication policy, outside-layer-set exemptions, residual-edge documentation, and the extended facade contents required for R2 retroactive compliance across the codebase.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Layer direction (R3)
 
@@ -64,11 +60,11 @@ is the sole public surface for cross-layer consumers:
 
 ### Requirement: Package facade as public surface (lazy publication)
 
-Each subpackage of `yascheduler` SHALL designate its `__init__.py` as
-the only public surface. Symbols are added to the facade lazily —
-only when an external consumer actually needs them. Empty facades
-(no symbols re-exported yet) are valid. Adding a symbol to a facade is a
-deliberate act, not an automatic re-export of all non-underscore names.
+Each subpackage of `yascheduler` SHALL designate its `__init__.py` as the
+only public surface. Symbols are added to the facade lazily — only when an
+external consumer actually needs them. Empty facades are valid. Adding a
+symbol to a facade is a deliberate act, not an automatic re-export of all
+non-underscore names.
 
 #### Scenario: Empty facade is valid
 - **WHEN** a subpackage's `__init__.py` is empty of public re-exports because no external consumer needs any of its symbols
@@ -80,15 +76,18 @@ deliberate act, not an automatic re-export of all non-underscore names.
 
 ### Requirement: Outside-layer-set exemptions
 
-The following modules SHALL be outside the `layers` contract (not
-checked for layer direction by R3) but SHALL still be subject to R2
-(must use facades for cross-package imports):
+The following modules SHALL be outside the `layers` contract (not checked
+for layer direction by R3) but SHALL still be subject to R2 (must use
+facades for cross-package imports):
 
 - `yascheduler.data` — shared infrastructure, may be imported by any layer.
 - `yascheduler.client` — compat shim re-exporting `Yascheduler`.
 
 `yascheduler.shared` SHALL contain only typing shims consumed by ≥2
 architectural layers.
+
+The exhaustive module list lives in `pyproject.toml` (the `layers` contract
+config); the spec keeps only the behavioral rule.
 
 #### Scenario: Outside-set modules not flagged for layer direction
 - **WHEN** the `layers` contract runs
@@ -131,19 +130,20 @@ symbols resolvable via `from yascheduler import <name>`, constructor and
 method signatures (parameter positions and names, return shapes), and
 documented behavior.
 
-Backward-compatible extensions (adding keyword-only optional parameters,
-refining internal implementation, adding new public symbols) are
-permitted; breaking changes (removing or repositioning parameters,
-changing return shapes, removing exported symbols) SHALL be treated as a
-new capability requiring explicit spec coverage.
+Backward-compatible extensions are permitted; breaking changes (removing or
+repositioning parameters, changing return shapes, removing exported symbols)
+SHALL be treated as a new capability requiring explicit spec coverage.
 
 Key stability rules:
-- The package facade exports (`Yascheduler`, `CONFIG_FILE`,
-  `LOG_FILE`, `PID_FILE`, `__version__`) SHALL remain resolvable.
+
+- The package facade exports SHALL remain resolvable.
 - The deep import path `from yascheduler.client import Yascheduler` SHALL
   remain resolvable via the compat shim.
 - The AiiDA scheduler entrypoint SHALL remain registered under the
   entry-point name `yascheduler` in `[project.entry-points."aiida.schedulers"]`.
+
+The exhaustive current-export list lives in the package `MODULE_CONTRACT`
+SCOPE — the spec keeps only the behavioral stability rule.
 
 #### Scenario: Yascheduler symbol resolves with backward-compatible signature
 - **WHEN** a downstream consumer imports `from yascheduler import Yascheduler`
@@ -157,39 +157,31 @@ Key stability rules:
 - **WHEN** the AiiDA scheduler plugin is discovered via `importlib.metadata.entry_points(group="aiida.schedulers")`
 - **THEN** the entry-point named `yascheduler` resolves to the object path `yascheduler.entrypoints.aiida_plugin:YaScheduler`
 
-#### Scenario: Old deep paths are gone
-- **WHEN** a downstream consumer attempts `from yascheduler.aiida_plugin import YaScheduler` or `from yascheduler.shared import to_sync`
-- **THEN** `ModuleNotFoundError` / `ImportError` is raised
-
 ### Requirement: Yascheduler facade public contract
 
 The `Yascheduler` facade SHALL expose the query methods (`queue_get_tasks`,
 `queue_get_tasks_async`, `queue_get_task`, `queue_get_task_async`) and the
 submission method (`queue_submit_task`) with the public contract below.
-Each query method SHALL return Mappings with EXACTLY the keys
-`{task_id, label, status, metadata, node}`.
 
-- `queue_get_tasks(jobs, status)`, `queue_get_tasks_async(jobs, status)`,
-  `queue_get_task(task_id)`, and `queue_get_task_async(task_id)` signatures
-  SHALL NOT change; their public `task_id`/`jobs` parameters stay `int` /
-  `list[int]`.
-  - Each query method SHALL return Mappings (a `Sequence[Mapping]` for the
-    list variants `queue_get_tasks` / `queue_get_tasks_async`, an
-    `Optional[Mapping]` for the single-task variants `queue_get_task` /
-    `queue_get_task_async`) with EXACTLY the keys
-    `{task_id, label, status, metadata, node}`. The flat `ip` and `cloud` keys
-    are REMOVED and replaced by a nested `node` key. This is a **BREAKING**
-    change to the facade dict shape.
-  - The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
-    `TaskId`).
+Each query method SHALL return Mappings with EXACTLY the keys
+`{task_id, label, status, metadata, node}` — a BREAKING change from the
+former flat `ip` / `cloud` keys, replaced by a nested `node` key.
+
+- The query-method signatures SHALL NOT change; the public `task_id`/`jobs`
+  parameters stay `int` / `list[int]`.
+- Each query method SHALL return Mappings (a `Sequence[Mapping]` for the
+  list variants, an `Optional[Mapping]` for the single-task variants) with
+  EXACTLY the keys `{task_id, label, status, metadata, node}`.
+- The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
+  `TaskId`).
 - `queue_submit_task(...) -> int` SHALL stay `int`.
 - `status` SHALL be a `domain.TaskStatus` enum member (preserves `.name`
   access and cross-class IntEnum equality; NOT a plain `int`).
 - `label` SHALL be the raw `task.label` string.
 - `metadata` SHALL be a flat dict reconstructed from the typed `Task` fields
   plus `extra`: the six typed fields (`engine`, `remote_folder`,
-  `local_folder`, `webhook_url`, `webhook_custom_params`, `error`) with `None`
-  values omitted, then `**task.extra` merged.
+  `local_folder`, `webhook_url`, `webhook_custom_params`, `error`) with
+  `None` values omitted, then `**task.extra` merged.
 - `node` SHALL be an object built from `nodes_by_id.get(task.allocated_node_id)`,
   or `null` when the task has no allocated node. When non-null, the object
   has exactly `{hostname, port, username, cloud}`:
@@ -242,3 +234,48 @@ The public contract applies identically across the package facade
 #### Scenario: queue_submit_task returns bare int
 - **WHEN** `queue_submit_task(...)` is called
 - **THEN** it returns a bare `int` (NOT a `TaskId`)
+
+## REMOVED Requirements
+
+### Requirement: Layers contract configuration
+
+REMOVED — the requirement restated the `[tool.importlinter]` keys
+(`root_package`, `exclude_type_checking_imports`, one
+`[[tool.importlinter.contracts]]` entry of type `layers`). This is
+configuration-file content, not behavior. The `import-linter` contract is
+the guard for R3; `pyproject.toml` is the source of truth for its own keys.
+The "Adapter imports from domain — allowed" / "Domain imports from
+application or adapters — violation" scenarios are retained under the
+modified `Layer direction (R3)` requirement above.
+
+### Requirement: Compat shim for yascheduler.client
+
+REMOVED as a standalone requirement — the deep-import-path behavior is
+already covered by the modified `Public API stability` scenario "Deep import
+path resolves via compat shim". The shim module's contents (which symbols it
+re-exports, which it does NOT) live in the shim's `MODULE_CONTRACT` SCOPE.
+The "Shim does not re-export Config" scenario is dropped because the
+negative enumeration is shape, not behavior.
+
+### Requirement: Entrypoints layer facade
+
+REMOVED as a standalone requirement — the eight-symbol enumeration
+(`Yascheduler`, `make_daemon`, `make_cli_deps`, `CLIDeps`, `Config`,
+`CONFIG_FILE`, `LOG_FILE`, `PID_FILE`) is shape and lives in the
+entrypoints `MODULE_CONTRACT` SCOPE. The behavioral rule ("entrypoints
+facade is the layer facade for the entrypoints layer") is already covered
+by the modified `Cross-package facade imports (R2)` requirement.
+
+### Requirement: Per-symbol R1/R2/R3 scenarios
+
+REMOVED — the per-symbol scenarios that re-pinned the same R1/R2/R3 rules
+("Application imports from adapters at module level — violation", "Indirect
+imports are caught", "yascheduler.shared imports from adapters — violation",
+"Entrypoints imports from infra — allowed", "Infra imports from entrypoints
+— violation", "Application imports from entrypoints — violation",
+"Composition root imports from infra — allowed", "entrypoints CLI module
+uses relative imports", "Application imports adapter symbols via infra
+layer facade", "Within-layer cross-subpackage imports also use the layer
+facade", "Old deep paths are gone") are collapsed into the modified
+R1/R2/R3 requirements' representative scenarios. The `import-linter`
+contract is the guard; per-symbol scenarios are documentation noise.

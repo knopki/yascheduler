@@ -1,7 +1,7 @@
 """Entrypoints layer facade."""
 # region MODULE_CONTRACT
 # PURPOSE: Expose the entrypoints layer's public surface (outermost hexagonal layer: driving adapters + composition root) from one import path.
-# SCOPE: Layer facade: Yascheduler, make_daemon, make_cli_deps, CLIDeps, Config, plus path constants (CONFIG_FILE, LOG_FILE, PID_FILE).
+# SCOPE: Layer facade re-exporting eight wiring symbols: Yascheduler, make_daemon, make_cli_deps, CLIDeps, Config, CONFIG_FILE, LOG_FILE, PID_FILE.
 # KEYWORDS: entrypoints, facade, public api, re-export
 # endregion MODULE_CONTRACT
 
