@@ -1,8 +1,6 @@
-## Purpose
+# Delta: package-facades
 
-Define the package-facade import discipline for `yascheduler`: clean-architecture layer direction (R3, enforced via `import-linter`), within-package relative imports (R1), cross-package facade imports via the layer's `__init__.py` (R2), the lazy-publication policy, outside-layer-set exemptions, residual-edge documentation, and the extended facade contents required for R2 retroactive compliance across the codebase.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Layer direction (R3)
 

@@ -115,7 +115,7 @@ def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]
 
 
 # region CLASS_Yascheduler
-# PURPOSE: Give sync and async callers a single facade for submitting and querying tasks.
+# PURPOSE: Give external consumers a stable sync+async Python client that submits and queries tasks while preserving a public int-typed contract over a TaskId-typed domain.
 class Yascheduler:
     """Yascheduler client."""
 
@@ -141,7 +141,7 @@ class Yascheduler:
     # endregion METHOD___init__
 
     # region METHOD_queue_submit_task_async
-    # PURPOSE: Forward a submit request through the deps seam into the use case and unwrap the resulting TaskId to int so sync callers see a plain int job id (the public surface stays int, the TaskId dataclass never escapes the facade).
+    # PURPOSE: Offload each task submission through a fresh DI container so the caller does not need to open a Unit of Work or import the use case; unwrap the TaskId result at the facade boundary so the public contract stays int.
     async def queue_submit_task_async(
         self,
         label: str,
@@ -175,6 +175,7 @@ class Yascheduler:
 
     # region METHOD_queue_get_tasks_async
     # PURPOSE: Resolve a list of int job ids and int status values into typed TaskId / TaskStatus sequences, run them through the deps-seam query use case, and project each result via _task_to_dict so the public surface returns plain mappings and the marshalling boundary stays on the facade.
+    # REQUIRES: status values are valid TaskStatus integer values — TaskStatus(x) is invoked per element and raises ValueError on unknown values.
     async def queue_get_tasks_async(
         self,
         jobs: Sequence[int] | None = None,

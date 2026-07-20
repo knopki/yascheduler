@@ -1,6 +1,9 @@
 """Dependency injection composition root — factories per entry point (daemon, CLI)."""
 # region MODULE_CONTRACT
 # PURPOSE: Hand each entry point only the collaborators its use cases need, so the daemon wire-up stays separate from the CLI wire-up and the entry point owns lifecycle alone.
+# RATIONALE:
+# - Q: why does the composition root live in the entrypoints layer rather than in its own dedicated top-level package or in the application layer?
+#   A: hexagonal architecture places the composition root in the outermost layer (the driving-adapter layer) alongside the other entry points; the entrypoints layer is layer 1 in the import-linter layers contract, so its imports flow entrypoints → infra → application → domain — which is layer-legal. Placing the root here keeps wiring next to the entry points that consume it and avoids inventing a sixth architectural layer outside the contract.
 # SCOPE: Daemon orchestrator factory (make_daemon), CLI dependency container (CLIDeps + make_cli_deps), and domain event bus setup with webhook registration.
 # KEYWORDS: di, composition-root, factories, daemon, cli, dependency-injection
 # endregion MODULE_CONTRACT
