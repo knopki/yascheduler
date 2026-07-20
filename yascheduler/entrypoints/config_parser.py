@@ -1,6 +1,9 @@
 """INI config parsing — adapter between ConfigParser and domain/infra types."""
 # region MODULE_CONTRACT
 # PURPOSE: Adapt `ConfigParser` to the application's frozen typed-configuration model so the rest of the system consumes validated value objects and never touches raw INI proxies.
+# RATIONALE:
+# - Q: Why does INI parsing live in `entrypoints/config_parser.py` while the typed value objects (Engine, LocalSettings, RemoteDefaults, PostgresDbConfig, ConfigCloud*) live in `yascheduler.domain` and `yascheduler.infra`?
+#   A: Keeping the typed value objects in domain/infra lets use cases and the orchestrator depend on business types without importing the parser (the spec's "domain does not reference an entrypoints module" rule).
 # SCOPE: INI config parsing — engine sections, cloud provider sections, DB config, local/remote settings, and the top-level parse_config assembly.
 # KEYWORDS: config, ini, parser, engine, cloud, database, settings
 # endregion MODULE_CONTRACT
@@ -41,6 +44,8 @@ if TYPE_CHECKING:
     from yascheduler.infra.cloud.cloud_configs import ConfigCloud
 
 
+# region FUNC__check_spawn
+# PURPOSE: Reject malformed spawn templates at parse time so a misconfigured engine fails fast at config load instead of producing a cryptic `KeyError` during task spawn on a remote node.
 def _check_spawn(engine: Engine, value: str) -> None:
     try:
         value.format(task_path="", engine_path="", ncpus="")
@@ -49,12 +54,22 @@ def _check_spawn(engine: Engine, value: str) -> None:
         raise ValueError(msg.format(name=engine.name, placeholder=err.args[0])) from err
 
 
+# endregion FUNC__check_spawn
+
+
+# region FUNC__check_check_
+# PURPOSE: Enforce that every engine declares at least one liveness-check method so the daemon can detect task completion on a node — an engine with neither `check_cmd` nor `check_pname` is unusable and must fail at config load, not at first scheduling cycle.
 def _check_check_(engine: Engine) -> None:
     if not engine.check_cmd and not engine.check_pname:
         msg = f"Engine {engine.name} has no *check_cmd* or *check_pname* set"
         raise ValueError(msg)
 
 
+# endregion FUNC__check_check_
+
+
+# region FUNC__check_at_least_one_elem
+# PURPOSE: Reject engines that ship no input files or no output files so a task cannot be queued for an engine that would have nothing to upload or download — a misconfigured engine fails at config load, not at task dispatch.
 def _check_at_least_one_elem(
     engine: Engine,
     field_name: str,
@@ -63,6 +78,9 @@ def _check_at_least_one_elem(
     if not value or len(value) < 1:
         msg = f"Engine {engine.name} has no *{field_name}* config set"
         raise ValueError(msg)
+
+
+# endregion FUNC__check_at_least_one_elem
 
 
 def _check_port(name: str, value: int) -> int:
@@ -75,7 +93,7 @@ def _check_port(name: str, value: int) -> int:
 
 
 # region FUNC_engine_valid_fields
-# PURPOSE: Return valid INI keys for an [engine.*] section (dataclass fields + deploy aliases, excluding name and deployable).
+# PURPOSE: Tell the unknown-field warning which `[engine.*]` INI keys are legitimate so a typo in an engine section surfaces as a warning at config load instead of silently being dropped on the floor.
 def engine_valid_fields() -> Sequence[str]:
     """Return valid INI keys for an [engine.*] section."""
     exclude_names = ["name", "deployable"]
@@ -93,7 +111,7 @@ def engine_valid_fields() -> Sequence[str]:
 
 
 # region FUNC_parse_engine_section
-# PURPOSE: Build a frozen Engine from a single [engine.*] INI section, validating spawn placeholders, check methods, and required file lists.
+# PURPOSE: Turn one INI `[engine.*]` section into a frozen `Engine` value object the orchestrator can match against task requirements, with every malformed config (unknown spawn placeholder, missing check method, empty input/output list, missing spawn) surfacing as `ValueError` at config load rather than as a cryptic failure during task scheduling.
 def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
     """Build a frozen Engine from a single [engine.*] section."""
     warn_unknown_fields(engine_valid_fields(), sec)
@@ -151,7 +169,10 @@ def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
 
 
 # region FUNC_parse_engines
-# PURPOSE: Parse all engine.* sections from an INI config into an EngineRepository.
+# PURPOSE: Collect every `[engine.*]` section in the INI into one frozen `EngineRepository` so the orchestrator and allocator have a single read-only registry to match task platforms against, built once at config load and never re-parsed.
+# ENSURES:
+# - Returns an `EngineRepository` whose `data` maps each section suffix (the engine name) to the `Engine` returned by `parse_engine_section`
+# - Iterates only sections whose name starts with the literal `engine.` prefix (other sections are invisible)
 def parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository:
     """Parse all engine.* sections from an INI config into an EngineRepository."""
     snames = filter(lambda x: x.startswith("engine."), cfg.sections())
