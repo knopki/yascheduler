@@ -126,6 +126,7 @@ class OccupancyChecker:
 
     # region METHOD_start_occupancy_check
     # PURPOSE: Background task periodically checks occupancy, releases machine when done.
+    # REQUIRES: session.machine.state is FREE or BUSY — occupy() is called ONLY if FREE (idempotent — start_task_on_machine already occupied it on the deploy path).
     def start_occupancy_check(self, session: MachineSession, config: Engine) -> None:
         """Start background occupancy monitoring.
 

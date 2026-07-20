@@ -19,6 +19,7 @@ __all__ = ["_init_paths"]
 
 # region FUNC__init_paths
 # PURPOSE: Normalize remote data/engines/tasks dirs using adapter path type.
+# INVARIANTS: Pure — no I/O, no logging.
 def _init_paths(
     adapter: RemoteMachineAdapter,
     data_dir: PurePath | None,

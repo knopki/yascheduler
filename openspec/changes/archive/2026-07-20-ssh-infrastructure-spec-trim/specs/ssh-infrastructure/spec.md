@@ -1,17 +1,6 @@
-# SSH Infrastructure
+# Delta: ssh-infrastructure
 
-## Purpose
-
-Provide SSH machine infrastructure split across SSHMachineRepository
-(connected-machine collection lifecycle, queries, state transitions,
-occupancy-monitor mechanism) and SSHMachineSession (per-machine command
-execution, SFTP transfer, process inspection, node setup, task deployment,
-output download, and occupancy check logic). Both implement the
-MachineRepository and MachineSession domain ports respectively using
-asyncssh for SSH connections and SFTP, with retry logic on idempotent
-operations.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: MachineRepository port
 

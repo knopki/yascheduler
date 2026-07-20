@@ -51,6 +51,12 @@ __all__ = [
 ]
 
 
+# region CLASS_MyPureWindowsPath
+# PURPOSE: Subclass PureWindowsPath so SSH SFTP paths returned by a Windows remote arrive at the session without a spurious leading backslash that breaks SFTP makedirs/file placement.
+# INVARIANTS: Subclass of PureWindowsPath; the overridden _parse_args strips a leading \ from UNC-style returns so paths like \C:\Users\user become C:\Users\user; the second guard re-introduces a \\ root when parsing a PurePath instance whose first part equals its drive, restoring the path semantics PureWindowsPath would otherwise eat.
+# RATIONALE:
+# - Q: why subclass PureWindowsPath instead of using PureWindowsPath directly?
+#   A: asyncssh's SFTP realpath on Windows returns paths with a leading \ (the SFTP protocol's POSIX-like prefix); PureWindowsPath("\C:\Users") parses the leading \ as a UNC root and produces an unusable \C:\Users form — the subclass rewrites the parse to drop the leading \ when the next part looks like a drive letter.
 class MyPureWindowsPath(PureWindowsPath):
     """Custom ``PureWindowsPath`` subclass preventing leading slashes."""
 
@@ -71,6 +77,9 @@ class MyPureWindowsPath(PureWindowsPath):
         return drv, root, parts
 
     # endregion METHOD__parse_args
+
+
+# endregion CLASS_MyPureWindowsPath
 
 
 # region FUNC_windows_quote

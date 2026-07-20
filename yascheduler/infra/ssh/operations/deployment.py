@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 # region FUNC__safe_b64decode
 # PURPOSE: Decode base64 string with lenient padding handling.
+# INVARIANTS: Lenient on padding — auto-appends = to satisfy len % 4 == 0; normalizes whitespace and newlines before decoding; accepts str or bytes input — bytes is decoded first.
 def _safe_b64decode(b64_data: str | bytes) -> bytes:
     if isinstance(b64_data, bytes):
         b64_data = b64_data.decode()
@@ -157,7 +158,7 @@ class TaskDeployer:
 
     # region METHOD_start_task_on_machine
     # PURPOSE: Upload task inputs and spawn calculation process on remote machine.
-    # REQUIRES: task.remote_folder is not None (asserted before session.occupy)
+    # REQUIRES: task.remote_folder is not None (asserted before session.occupy).
     async def start_task_on_machine(
         self,
         session: MachineSession,

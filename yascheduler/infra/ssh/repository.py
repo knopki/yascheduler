@@ -45,6 +45,11 @@ __all__ = [
 ]
 
 
+# region CLASS_MySSHClient
+# PURPOSE: Accept any SSH host public key at connect time so first-contact to freshly-provisioned VMs succeeds without an out-of-band fingerprint exchange — the cloud-provisioned hosts we connect to are trusted by construction.
+# RATIONALE:
+# - Q: why trust all host keys instead of pinning?
+#   A: yascheduler connects to VMs it just created via cloud APIs and to operator-managed static nodes from yascheduler_nodes; either path implies the operator already trusts the host. Pinning would require an out-of-band fingerprint channel that does not exist in this deployment shape.
 class MySSHClient(SSHClient):
     """SSH client that trusts all host keys (insecure — accept for dev/staging)."""
 
@@ -60,6 +65,9 @@ class MySSHClient(SSHClient):
         return True
 
 
+# endregion CLASS_MySSHClient
+
+
 DEFAULT_CONN_OPTS = SSHClientConnectionOptions(
     client_factory=MySSHClient,
     preferred_auth="publickey",
@@ -73,6 +81,8 @@ DEFAULT_CONN_OPTS = SSHClientConnectionOptions(
 )
 
 
+# region FUNC__build_tunnel_options
+# PURPOSE: Build the asyncssh bastion-leg options from node.jump_* fields so connect can pass a single tunnel= argument (or None) without re-deriving the bastion identity at every call site.
 def _build_tunnel_options(
     node: Node,
     client_keys: Sequence[PurePath] | None,
@@ -91,8 +101,15 @@ def _build_tunnel_options(
     )
 
 
+# endregion FUNC__build_tunnel_options
+
+
 # region CLASS_SSHMachineRepository
-# PURPOSE: Concrete MachineRepository — connected-machine collection keyed by NodeId. True collection only: lifecycle + queries.
+# PURPOSE: Concrete MachineRepository — connected-machine collection keyed by NodeId.
+# SCOPE: Connected-machine collection lifecycle and queries. NOT: single-machine operations, accessor getters, state-transition wrappers, monitor mechanism — those are SSHMachineSession.
+# RATIONALE:
+# - Q: why does connect read username/port/jump_* from node instead of taking them as parameters?
+#   A: the caller (cloud allocator or static-node loader) is the sole authority for those fields — they are stamped onto the Node once and read many times; threading them as separate parameters would create a second source of truth that drifts the moment a caller forgets to pass one.
 class SSHMachineRepository:
     """SSHMachineRepository implementing the MachineRepository Protocol.
 
@@ -112,7 +129,7 @@ class SSHMachineRepository:
     # ---- Connection lifecycle ----
 
     # region METHOD__open_connection
-    # PURPOSE: Build SSH options and open connection.
+    # PURPOSE: Build SSH options and open connection via asyncssh with retry on SSHRetryExc.
     @my_backoff_exc()
     async def _open_connection(
         self,
@@ -159,6 +176,7 @@ class SSHMachineRepository:
 
     # region METHOD_connect
     # PURPOSE: Open an SSH connection and register a MachineSession under node.node_id; translates transport errors into MachineConnectionError.
+    # REQUIRES: The caller has stamped transport identity onto node — node.hostname, node.username, node.port, and (optionally) node.jump_host / node.jump_port / node.jump_username.
     async def connect(
         self,
         node: Node,

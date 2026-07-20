@@ -113,6 +113,7 @@ class SSHMachineSession:
 
     # region METHOD_occupy
     # PURPOSE: Read-modify-write transitioning the snapshot to BUSY.
+    # REQUIRES: session.machine.state == FREE — the read-modify-write transitions FREE to BUSY; calling on a BUSY machine is a programmer error.
     def occupy(self) -> None:
         """Read-modify-write transitioning the snapshot to BUSY."""
         self._machine = self._machine.occupy()
@@ -121,6 +122,7 @@ class SSHMachineSession:
 
     # region METHOD_release
     # PURPOSE: Read-modify-write transitioning the snapshot to FREE with free_since = time.monotonic().
+    # ENSURES: session.machine.state == FREE with free_since = time.monotonic().
     def release(self) -> None:
         """Read-modify-write transitioning the snapshot to FREE with free_since = time."""
         self._machine = self._machine.release()
@@ -129,6 +131,7 @@ class SSHMachineSession:
 
     # region METHOD_update
     # PURPOSE: Replace the internal machine snapshot (used by rollback paths).
+    # ENSURES: session.machine is replaced wholesale with the passed ConnectedMachine — used by rollback paths that need to restore a prior snapshot.
     def update(self, machine: ConnectedMachine) -> None:
         """Replace the internal machine snapshot (used by rollback paths)."""
         self._machine = machine
@@ -164,10 +167,13 @@ class SSHMachineSession:
 
     # ---- Cache priming (repository only) ----
 
+    # region METHOD__prime_ncpus_cache
+    # PURPOSE: Let SSHMachineRepository.connect seed the session's CPU-core cache with the value it already discovered, so the first get_cpu_cores() call on the new session returns without re-invoking the adapter.
     def _prime_ncpus_cache(self, ncpus: int) -> None:
         """Prime the CPU-core cache with an already-discovered value (called by SSHMachineRepository.connect)."""
         self._cached_ncpus = ncpus
 
+    # endregion METHOD__prime_ncpus_cache
     # ---- Adapter-derived accessors (read-only) ----
 
     @property
@@ -182,6 +188,9 @@ class SSHMachineSession:
 
     # ---- Base primitives ----
 
+    # region METHOD_run
+    # PURPOSE: Run a command and return a structured ProcessResult so callers branching on exit_code/stdout/stderr do not touch the raw asyncssh process object.
+    # ENSURES: Returns a ProcessResult with exit_code derived from proc.returncode (-1 when None), stdout/stderr coerced to str.
     async def run(self, cmd: str) -> ProcessResult:
         """Run command and return structured result."""
         proc = await self.run_full(cmd)
@@ -195,8 +204,9 @@ class SSHMachineSession:
             else str(proc.stderr or ""),
         )
 
+    # endregion METHOD_run
     # region METHOD_run_full
-    # PURPOSE: Run command via self._adapter and return raw SSHCompletedProcess; retries on SSHRetryExc.
+    # PURPOSE: Run command via self._adapter and return raw SSHCompletedProcess; retries on SSHRetryExc. Callers branching on exit_code/stdout/stderr should prefer run() for the structured ProcessResult.
     @my_backoff_exc()
     async def run_full(self, cmd: str) -> SSHCompletedProcess:
         """Run command via self._conn + self._adapter directly (no repository call)."""
@@ -204,23 +214,34 @@ class SSHMachineSession:
 
     # endregion METHOD_run_full
 
+    # region METHOD_run_bg
+    # PURPOSE: Spawn a background process on the remote machine — single attempt, no retry — so daemon-style processes stay running after the SSH call returns.
+    # INVARIANTS: Single attempt — spawn is non-idempotent; a successful remote side-effect followed by a lost client confirmation would produce a duplicate on retry; delegates to self._adapter.run_bg(self._conn, self._adapter.quote, cmd, cwd=cwd) — no hostname-keyed lookup, no call into the repository.
     async def run_bg(self, cmd: str, *, cwd: str | None = None) -> None:
         """Start background process on remote machine (single attempt — spawn is non-idempotent)."""
         await self._adapter.run_bg(self._conn, self._adapter.quote, cmd, cwd=cwd)
 
+    # endregion METHOD_run_bg
+    # region METHOD_upload
+    # PURPOSE: Upload a local file to a remote path via SFTP — single attempt, no retry — so a partial upload followed by a retry does not produce a corrupt-or-duplicate remote file.
+    # INVARIANTS: Single attempt — sftp.put is non-idempotent; opens a fresh SFTP client via self._conn.start_sftp_client() per call.
     async def upload(self, local: Path, remote: str) -> None:
         """Upload file to remote machine via SFTP (single attempt — put is non-idempotent)."""
         async with self._conn.start_sftp_client() as sftp:
             await sftp.put(str(local), remote)
 
+    # endregion METHOD_upload
+    # region METHOD_open_sftp
+    # PURPOSE: Hand callers an async-context-manager SFTP client bound to this session's connection so per-file operations can be batched without each re-opening a channel.
     @asynccontextmanager
     async def open_sftp(self) -> AsyncIterator[SFTPClient]:
         """Open SFTP client (async context manager)."""
         async with self._conn.start_sftp_client() as sftp:
             yield sftp
 
+    # endregion METHOD_open_sftp
     # region METHOD_get_cpu_cores
-    # PURPOSE: Return CPU core count, memoized per session.
+    # PURPOSE: Return CPU core count, memoized per session. Cache miss invokes adapter with retry; cache hit returns without adapter invocation.
     @my_backoff_exc()
     async def get_cpu_cores(self) -> int:
         """Return CPU core count, memoized per session (cache miss invokes adapter with retry; cache hit returns without adapter invocation)."""
@@ -253,6 +274,8 @@ class SSHMachineSession:
 
     # endregion METHOD_setup_node
 
+    # region METHOD_pgrep
+    # PURPOSE: Yield remote processes whose name or command line matches a pattern so occupancy checks can detect if a calculation is still running.
     async def pgrep(
         self,
         pattern: str | Pattern[str],
@@ -267,10 +290,15 @@ class SSHMachineSession:
         ):
             yield proc
 
+    # endregion METHOD_pgrep
+    # region METHOD_list_processes
+    # PURPOSE: Yield every running process on the remote machine so an operator can inspect what is consuming a node.
     async def list_processes(self) -> AsyncGenerator[ProcessInfo, None]:
         """Yield all running processes on remote machine."""
         async for proc in self._adapter.list_processes(self._conn, None):
             yield proc
+
+    # endregion METHOD_list_processes
 
     # region METHOD_install_monitor
     # PURPOSE: Generic occupancy-monitor installer on this session. Re-installing cancels the prior monitor before installing the new one. Idempotent on a closed session.

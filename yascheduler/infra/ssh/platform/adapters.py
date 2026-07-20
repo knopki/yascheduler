@@ -80,6 +80,8 @@ __all__ = [
 ]
 
 
+# region CLASS_RemoteMachineAdapter
+# PURPOSE: Bundle a platform's SSH-callables + check sequence into a single frozen value so platform detection can return one adapter carrying everything the session needs to operate on the remote machine.
 @dataclass(frozen=True)
 class RemoteMachineAdapter:
     """Remote machine adapter — frozen data class holding platform-specific callables and check sequence."""
@@ -97,6 +99,8 @@ class RemoteMachineAdapter:
 
     checks: Sequence[SSHCheck] = field(default_factory=tuple)
 
+
+# endregion CLASS_RemoteMachineAdapter
 
 linux_adapter = RemoteMachineAdapter(
     platform="linux",

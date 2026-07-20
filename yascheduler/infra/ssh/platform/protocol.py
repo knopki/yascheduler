@@ -7,6 +7,7 @@
 # - Protocols: RunCallable, RunBgCallable, OuterRunCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable
 # - Callable aliases: SSHCheck, QuoteCallable, GetCPUCoresCallable
 # KEYWORDS: protocol, type aliases, ssh, sftp, exceptions, callables
+# DEPENDENCIES: USES API: asyncssh.
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -95,6 +96,8 @@ SSHRetryExc = (
 AllSSHRetryExc = SSHRetryExc + SFTPRetryExc
 
 
+# region CLASS_ProcessInfo
+# PURPOSE: Carry a single remote process's identity (pid, name, command line) out of pgrep/list_processes so occupancy checks and process listings branch on structured fields instead of re-parsing ps/Get-CimInstance output.
 @dataclass(frozen=True)
 class ProcessInfo:
     """Remote process information — PID, name, and command line."""
@@ -104,10 +107,15 @@ class ProcessInfo:
     command: str
 
 
+# endregion CLASS_ProcessInfo
+
+
 SSHCheck = Callable[[SSHClientConnection], Coroutine[Any, Any, bool]]
 QuoteCallable = Callable[[str], str]
 
 
+# region CLASS_RunCallable
+# PURPOSE: Type every platform-specific synchronous-SSH command-execution callable against a single structural contract so adapter wiring stays platform-agnostic and the type-checker rejects run callables that drop the quote parameter.
 class RunCallable(Protocol):
     """Callable protocol for synchronous SSH command execution."""
 
@@ -124,6 +132,11 @@ class RunCallable(Protocol):
         """Call."""
 
 
+# endregion CLASS_RunCallable
+
+
+# region CLASS_RunBgCallable
+# PURPOSE: Type every platform-specific background-process spawn callable against a single structural contract so the session's run_bg can delegate without per-platform branching.
 class RunBgCallable(Protocol):
     """Callable protocol for background SSH command execution."""
 
@@ -140,6 +153,11 @@ class RunBgCallable(Protocol):
         """Call."""
 
 
+# endregion CLASS_RunBgCallable
+
+
+# region CLASS_OuterRunCallable
+# PURPOSE: Type the closure that make_run_fn produces so adapter methods that need a run callable (get_cpu_cores, setup_node) accept a single typed callable instead of (conn, quote) plus a free function.
 class OuterRunCallable(Protocol):
     """Callable protocol wrapping ``run``/``run_bg`` with platform dispatch."""
 
@@ -153,9 +171,14 @@ class OuterRunCallable(Protocol):
         """Call."""
 
 
+# endregion CLASS_OuterRunCallable
+
+
 GetCPUCoresCallable = Callable[[OuterRunCallable], Coroutine[Any, Any, int]]
 
 
+# region CLASS_ListProcessesCallable
+# PURPOSE: Type every platform-specific process-listing callable so SSHMachineSession.list_processes delegates without per-platform branching.
 class ListProcessesCallable(Protocol):
     """Callable protocol for listing remote processes."""
 
@@ -168,6 +191,11 @@ class ListProcessesCallable(Protocol):
         """Call."""
 
 
+# endregion CLASS_ListProcessesCallable
+
+
+# region CLASS_PgrepCallable
+# PURPOSE: Type every platform-specific pattern-matching process callable so SSHMachineSession.pgrep delegates without per-platform branching.
 class PgrepCallable(Protocol):
     """Callable protocol for pattern-matching remote processes."""
 
@@ -183,6 +211,11 @@ class PgrepCallable(Protocol):
         """Call."""
 
 
+# endregion CLASS_PgrepCallable
+
+
+# region CLASS_SetupNodeCallable
+# PURPOSE: Type every platform-specific node-setup callable so SSHMachineSession.setup_node delegates without per-platform branching.
 class SetupNodeCallable(Protocol):
     """Callable protocol for node setup operations."""
 
@@ -196,3 +229,6 @@ class SetupNodeCallable(Protocol):
         engines_dir: PurePath,
     ) -> Coroutine[Any, Any, None]:
         """Call."""
+
+
+# endregion CLASS_SetupNodeCallable

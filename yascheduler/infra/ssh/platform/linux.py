@@ -249,6 +249,7 @@ async def linux_deploy_engines(
 
 # region FUNC_log_mpi_version
 # PURPOSE: Log MPI version info from remote via mpirun.
+# INVARIANTS: Runs mpirun --allow-run-as-root -V with check=True; logs VERSION with the first stdout line on success; silently no-ops on non-zero exit — MPI may not be installed.
 async def log_mpi_version(run: OuterRunCallable) -> None:
     """Log MPI version info from remote via mpirun."""
     r = await run("mpirun --allow-run-as-root -V", check=True)
@@ -261,6 +262,7 @@ async def log_mpi_version(run: OuterRunCallable) -> None:
 
 # region FUNC_linux_setup_node
 # PURPOSE: Setup generic Linux node by deploying engines via SFTP.
+# INVARIANTS: Opens a fresh SFTP client via conn.start_sftp_client() and delegates to linux_deploy_engines(run, quote, sftp, engines, engines_dir).
 async def linux_setup_node(
     conn: SSHClientConnection,
     run: OuterRunCallable,
