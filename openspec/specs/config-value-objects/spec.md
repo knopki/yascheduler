@@ -36,11 +36,6 @@ Validation: the concurrency-limit fields SHALL be `ge(1)` and
 - **WHEN** `dataclasses.fields(LocalSettings)` is introspected for a field named `cloud_package_upgrade`
 - **THEN** no such field exists (the knob was relocated to the per-provider `ConfigCloud*` DTOs)
 
-#### Scenario: legacy [local] cloud_package_upgrade warns as unknown
-- **WHEN** a `[local]` section containing `cloud_package_upgrade = false` is parsed
-- **THEN** parsing succeeds (no error raised) and a `ConfigWarning` is emitted naming `cloud_package_upgrade` as an unknown field
-- **AND** the resulting `LocalSettings` carries no `cloud_package_upgrade` attribute
-
 ### Requirement: RemoteDefaults value object
 
 The system SHALL provide a `RemoteDefaults` frozen stdlib dataclass that

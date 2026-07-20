@@ -154,12 +154,12 @@ file install and/or `apply_schema(config.db)` + `apply_migrations(config.db)`.
 - **WHEN** writing the service file raises `OSError` (e.g. permission denied, missing `/etc/systemd/system/` or `/etc/init.d/` parent directory, disk full)
 - **THEN** `init()` prints `Error: cannot write to <path>: <error>` and exits `1`
 
-#### Scenario: yainit detects systemd via /run/systemd/system
-- **WHEN** `yainit` service install is requested and `/run/systemd/system/` exists as a directory
+#### Scenario: yainit installs systemd unit on a systemd host
+- **WHEN** `yainit` service install is requested on a host managed by systemd
 - **THEN** the systemd unit template is rendered and written to `/etc/systemd/system/yascheduler.service`
 
-#### Scenario: yainit detects non-systemd host
-- **WHEN** `yainit` service install is requested and `/run/systemd/system/` does NOT exist
+#### Scenario: yainit installs sysv init script on a non-systemd host
+- **WHEN** `yainit` service install is requested on a host NOT managed by systemd
 - **THEN** the sysv init script template is rendered and written to `/etc/init.d/yascheduler` with `chmod 0755`
 
 #### Scenario: yasubmit parses AiiDA script and submits task

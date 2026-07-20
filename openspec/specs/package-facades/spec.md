@@ -157,10 +157,6 @@ Key stability rules:
 - **WHEN** the AiiDA scheduler plugin is discovered via `importlib.metadata.entry_points(group="aiida.schedulers")`
 - **THEN** the entry-point named `yascheduler` resolves to the object path `yascheduler.entrypoints.aiida_plugin:YaScheduler`
 
-#### Scenario: Old deep paths are gone
-- **WHEN** a downstream consumer attempts `from yascheduler.aiida_plugin import YaScheduler` or `from yascheduler.shared import to_sync`
-- **THEN** `ModuleNotFoundError` / `ImportError` is raised
-
 ### Requirement: Yascheduler facade public contract
 
 The `Yascheduler` facade SHALL expose the query methods (`queue_get_tasks`,
@@ -178,8 +174,7 @@ Each query method SHALL return Mappings with EXACTLY the keys
     `Optional[Mapping]` for the single-task variants `queue_get_task` /
     `queue_get_task_async`) with EXACTLY the keys
     `{task_id, label, status, metadata, node}`. The flat `ip` and `cloud` keys
-    are REMOVED and replaced by a nested `node` key. This is a **BREAKING**
-    change to the facade dict shape.
+    are NOT part of the shape.
   - The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
     `TaskId`).
 - `queue_submit_task(...) -> int` SHALL stay `int`.

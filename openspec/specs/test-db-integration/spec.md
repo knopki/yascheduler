@@ -92,10 +92,8 @@ public Mapping shape (keys exactly `{task_id, label, status, metadata,
 node}`) and the expected values.
 
 The test SHALL assert `status` by int value, by equality with a
-`yascheduler.domain.TaskStatus` member, or by `.name` — never via
-`isinstance(result["status"], yascheduler.db.TaskStatus)` (the legacy enum
-class is removed). The canonical status type is
-`yascheduler.domain.TaskStatus`.
+`yascheduler.domain.TaskStatus` member, or by `.name`. The canonical
+status type is `yascheduler.domain.TaskStatus`.
 
 The test SHALL NOT patch any internal collaborator. It exercises the full
 facade path through real Postgres.
@@ -112,6 +110,3 @@ facade path through real Postgres.
 - **WHEN** `Yascheduler().queue_get_task(task_id)` is called for an existing task
 - **THEN** a single Mapping (not a list) with the five-key shape is returned; querying a non-existent id returns `None`
 
-#### Scenario: Test asserts status against domain.TaskStatus
-- **WHEN** the integration test's `status` assertion is inspected
-- **THEN** it uses one of `int(result["status"])`, `result["status"] == 0`, `result["status"] == domain.TaskStatus.TO_DO`, or `result["status"].name == "TO_DO"` — never `isinstance(result["status"], yascheduler.db.TaskStatus)`
