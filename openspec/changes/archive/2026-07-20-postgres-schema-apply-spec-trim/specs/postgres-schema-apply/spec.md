@@ -1,10 +1,6 @@
-# PostgreSQL Schema Application
+# Delta: postgres-schema-apply
 
-## Purpose
-
-Define the synchronous `apply_schema()` function that reads `schema.sql` and applies it transactionally to a PostgreSQL database.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Transactional schema application
 
