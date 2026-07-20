@@ -2,6 +2,7 @@
 # region MODULE_CONTRACT
 # PURPOSE: Bridge domain repository ports to PostgreSQL so the orchestrator persists and loads tasks and nodes transactionally without coupling domain logic to pg8000 or SQL details.
 # SCOPE: Async task and node CRUD over pg8000 via ThreadPoolExecutor.
+# INVARIANTS: Every repository method is async and routes synchronous pg8000 calls through asyncio.get_running_loop().run_in_executor(self._executor, _fn).
 # DEPENDENCIES: USES API: pg8000.Connection, READS: SQL files from disk via sql_loader
 # KEYWORDS: postgres, repository, task, node, crud
 # endregion MODULE_CONTRACT
@@ -33,12 +34,11 @@ if TYPE_CHECKING:
 
     from pg8000.native import Connection
 
-__all__ = [
-    "PostgresNodeRepository",
-    "PostgresTaskRepository",
-]
+__all__ = ["PostgresNodeRepository", "PostgresTaskRepository"]
 
 
+# region CLASS__PgRepository
+# PURPOSE: Hold the shared pg8000.Connection and ThreadPoolExecutor so the two public repositories derive a single _run(sql, **params) helper without re-declaring the connection / executor wiring.
 class _PgRepository:
     """Base for pg8000-backed repositories — holds connection, executor."""
 
@@ -59,6 +59,9 @@ class _PgRepository:
         return await asyncio.get_running_loop().run_in_executor(self._executor, _fn)
 
     # endregion METHOD__run
+
+
+# endregion CLASS__PgRepository
 
 
 # region CLASS_PostgresTaskRepository

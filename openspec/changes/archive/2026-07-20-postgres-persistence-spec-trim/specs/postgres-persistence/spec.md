@@ -1,15 +1,6 @@
-# PostgreSQL Persistence
+# Delta: postgres-persistence
 
-## Purpose
-
-PostgreSQL-backed persistence adapter: `PostgresUnitOfWork` (transaction
-boundaries, connection lifecycle), `PostgresTaskRepository` /
-`PostgresNodeRepository` (satisfying the domain ports), the SQL file layout and
-`load_query` caching, and the `TaskRowNotFoundError` /
-`UnitOfWorkNotInitializedError` persistence exceptions. Built on pg8000 with all
-synchronous calls dispatched through a `ThreadPoolExecutor`.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: SQL file layout
 

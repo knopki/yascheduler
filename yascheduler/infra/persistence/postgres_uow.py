@@ -69,7 +69,7 @@ class PostgresUnitOfWork:
         return self._nodes
 
     # region METHOD___aenter__
-    # PURPOSE: Open a connection, start a transaction, and expose repositories so callers read/write within the same transactional boundary.
+    # PURPOSE: Open a transactional boundary around the orchestrator's unit of work so every repository write within the async with block participates in the same BEGIN/COMMIT cycle.
     # ENSURES: Connection is open with an active transaction; repositories are available via .tasks / .nodes.
     async def __aenter__(self) -> Self:
         """Open connection, begin transaction, wire repositories."""
