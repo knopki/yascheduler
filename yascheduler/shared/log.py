@@ -2,6 +2,9 @@
 # region MODULE_CONTRACT
 # PURPOSE: Make internal trace flow observable via structured DEBUG logs without polluting user-facing output.
 # SCOPE: LogFormatter only — renders trace records (DEBUG + in-package + extra-diff) as [module][funcName]:lineno msg sorted k=v; regular records as LEVEL name: message.
+# INVARIANTS:
+# - every `extra={...}` callsite uses flat user-supplied keys — no nested sentinel container such as `extra={"trace": {...}}`
+# - every `extra={...}` callsite uses keys that do NOT collide with native `LogRecord` attribute names (enforced by the static guard in `tests/unit/test_log_scope_discipline.py`)
 # KEYWORDS: logging, formatter, trace, structured logging, debug, discriminator
 # endregion MODULE_CONTRACT
 

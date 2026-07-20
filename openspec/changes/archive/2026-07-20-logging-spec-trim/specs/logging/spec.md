@@ -1,14 +1,6 @@
-# Logging
+# Delta: logging
 
-## Purpose
-
-The `LogFormatter` logging contract for the `yascheduler` package. Module-level
-loggers are bound via stdlib `logging.getLogger(__name__)`. Structured DEBUG
-tracing goes through `logger.debug(msg, extra={...})` with flat user-supplied
-keys; user-facing INFO/WARN/ERROR records render as plain narrative. The static
-guard tests live in the `testing-unit` spec.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Module-local stdlib logger binding
 
