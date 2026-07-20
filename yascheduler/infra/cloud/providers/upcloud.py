@@ -51,6 +51,8 @@ def get_client(cfg: ConfigCloudUpcloud) -> CloudManager:
 
 # region FUNC_upcloud_create_node_sync
 # PURPOSE: Provision an UpCloud server with SSH key and cloud-config so the VM is ready for scheduler use immediately after creation.
+# INVARIANTS:
+# - external_id = hostname = VM's public IP
 def upcloud_create_node_sync(
     cfg: ConfigCloudUpcloud,
     key: SSHKey,
@@ -96,6 +98,8 @@ def upcloud_create_node_sync(
 
 # region FUNC_upcloud_create_node
 # PURPOSE: Offload synchronous UpCloud server creation to a thread so the async caller does not block the event loop.
+# INVARIANTS:
+# - external_id = hostname = VM's public IP
 async def upcloud_create_node(
     cfg: ConfigCloudUpcloud,
     key: SSHKey,
@@ -119,6 +123,8 @@ async def upcloud_create_node(
 
 # region FUNC_upcloud_delete_node_sync
 # PURPOSE: Tear down an UpCloud server by IP (stop, destroy server, clean up storage) so billing stops and no orphaned storage accrues costs.
+# INVARIANTS:
+# - Iterates client.get_servers() and matches by public IP
 def upcloud_delete_node_sync(
     cfg: ConfigCloudUpcloud,
     external_id: str,
@@ -153,6 +159,8 @@ def upcloud_delete_node_sync(
 
 # region FUNC_upcloud_delete_node
 # PURPOSE: Offload synchronous UpCloud server deletion to a thread so the async caller does not block the event loop.
+# INVARIANTS:
+# - Iterates client.get_servers() and matches by public IP
 async def upcloud_delete_node(
     cfg: ConfigCloudUpcloud,
     external_id: str,

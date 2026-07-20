@@ -241,6 +241,8 @@ def create_vm_params(
 
 # region FUNC_create_node
 # PURPOSE: Orchestrate NIC creation then VM provisioning so the caller gets a running VM's IP without managing intermediate resources.
+# INVARIANTS:
+# - external_id = hostname = VM's private IP
 async def create_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
@@ -286,6 +288,8 @@ async def create_node(
 
 # region FUNC_az_create_node
 # PURPOSE: Expose Azure VM creation through the CloudAdapter callable signature so the generic provisioner can launch Azure VMs without Azure-specific imports.
+# INVARIANTS:
+# - external_id = hostname = VM's private IP
 async def az_create_node(
     cfg: ConfigCloudAzure,
     key: SSHKey,
@@ -315,6 +319,9 @@ async def az_create_node(
 
 # region FUNC_delete_node
 # PURPOSE: Tear down a VM and its NIC matched by IP so cloud billing stops and the resource group does not accumulate orphaned resources.
+# INVARIANTS:
+# - Matches VM by ID_TAG_NAME tag = IP
+# - Iterates cmc.virtual_machines.list — IP match is the provider-internal mechanism permitted by the spec
 async def delete_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
@@ -359,6 +366,9 @@ async def delete_node(
 
 # region FUNC_az_delete_node
 # PURPOSE: Expose Azure VM deletion through the CloudAdapter callable signature so the generic provisioner can tear down Azure VMs without Azure-specific imports.
+# INVARIANTS:
+# - Matches VM by ID_TAG_NAME tag = IP
+# - Iterates cmc.virtual_machines.list — IP match is the provider-internal mechanism permitted by the spec
 async def az_delete_node(
     cfg: ConfigCloudAzure,
     external_id: str,

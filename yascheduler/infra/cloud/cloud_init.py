@@ -26,15 +26,11 @@ class CloudInitConfig:
 
     # region METHOD_render
     # PURPOSE: Serialize the config to JSON and strip empty sequences so cloud-init schema validation does not reject the user-data (minItems requirement).
+    # INVARIANTS:
+    # - Emits a "#cloud-config\n" prefix
+    # - Drops empty bootcmd/packages so cloud-config schema minItems: 1 validation does not reject the user-data
     def render(self) -> str:
         """Render to user-data format."""
-        # cloud-init's cloud-config schema enforces minItems: 1 on bootcmd
-        # and packages. Emitting "bootcmd": [] / "packages": [] fails schema
-        # validation ("... is too short") and marks the run failed (exit=2),
-        # which surfaces as SETUP_FAILED + VM deletion. Omit empty sequences
-        # so the keys disappear entirely. bootcmd is a tuple and packages is a
-        # list; asdict keeps the tuple as-is, but json.dumps serializes an
-        # empty tuple as [] — so both empty tuple and empty list must be dropped.
         data = {
             k: v
             for k, v in asdict(self).items()

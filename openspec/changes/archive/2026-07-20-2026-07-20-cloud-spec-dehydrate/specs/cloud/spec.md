@@ -1,10 +1,7 @@
-# Cloud
+# Delta: cloud
 
-## Purpose
+## MODIFIED Requirements
 
-The cloud subsystem exists as an isolated boundary to decouple cloud-provider lifecycle management from the core scheduler — allowing providers (Hetzner, Upcloud, Azure, VastAI) to be added, removed, or maintained without affecting task allocation, SSH orchestration, or the domain model.
-
-## Requirements
 ### Requirement: CloudConfig structural Protocol
 
 The system SHALL define a structural `@runtime_checkable` `CloudConfig` Protocol

@@ -314,6 +314,8 @@ async def vastai_create_node(
 
 # region FUNC_vastai_delete_node
 # PURPOSE: Tear down a VastAI GPU instance by IP so billing stops and the GPU slot returns to the marketplace.
+# INVARIANTS:
+# - Resolves instance by IP via _find_instance_by_ip, then deletes by instance id
 async def vastai_delete_node(
     cfg: ConfigCloudVastAI,
     external_id: str,

@@ -1,6 +1,6 @@
 """Cloud provider config DTOs."""
 # region MODULE_CONTRACT
-# PURPOSE: Define per-provider configuration contracts so the provisioner can read VM parameters (image, size, credentials, limits) without knowing provider-specific DTO internals.
+# PURPOSE: Define per-provider configuration contracts so the provisioner can read VM parameters (image, size, credentials, limits) without depending on provider-specific SDK types.
 # SCOPE: ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference, ConfigCloud union.
 # KEYWORDS: config, dto, azure, hetzner, upcloud, vastai, cloud config, image reference
 # endregion MODULE_CONTRACT
@@ -25,6 +25,8 @@ __all__ = [
 ]
 
 
+# region CLASS_AzureImageReference
+# PURPOSE: Hold the Azure image identity so INI config can refer to a VM image by one URN instead of four separate keys.
 @dataclass(frozen=True)
 class AzureImageReference:
     """Azure image reference (publisher:offer:sku:version URN)."""
@@ -51,6 +53,11 @@ class AzureImageReference:
     # endregion METHOD_from_urn
 
 
+# endregion CLASS_AzureImageReference
+
+
+# region CLASS_ConfigCloudAzure
+# PURPOSE: Carry Azure-specific credentials, network topology, and VM sizing so the Azure provider can be configured from INI without leaking Azure SDK types into other providers.
 @dataclass(frozen=True)
 class ConfigCloudAzure(CloudConfig):
     """Azure cloud configuration."""
@@ -80,6 +87,11 @@ class ConfigCloudAzure(CloudConfig):
     jump_port: int = 22
 
 
+# endregion CLASS_ConfigCloudAzure
+
+
+# region CLASS_ConfigCloudHetzner
+# PURPOSE: Carry Hetzner token, server type, and image so the Hetzner provider can be configured from INI without leaking hcloud types into other providers.
 @dataclass(frozen=True)
 class ConfigCloudHetzner(CloudConfig):
     """Hetzner cloud configuration."""
@@ -101,6 +113,11 @@ class ConfigCloudHetzner(CloudConfig):
     jump_port: int = 22
 
 
+# endregion CLASS_ConfigCloudHetzner
+
+
+# region CLASS_ConfigCloudUpcloud
+# PURPOSE: Carry UpCloud credentials and image so the UpCloud provider can be configured from INI without leaking upcloud_api types into other providers.
 @dataclass(frozen=True)
 class ConfigCloudUpcloud(CloudConfig):
     """Upcloud cloud configuration."""
@@ -120,6 +137,11 @@ class ConfigCloudUpcloud(CloudConfig):
     jump_port: int = 22
 
 
+# endregion CLASS_ConfigCloudUpcloud
+
+
+# region CLASS_ConfigCloudVastAI
+# PURPOSE: Carry VastAI GPU-scheduling parameters so the VastAI provider can be configured from INI without leaking aiohttp types into other providers.
 @dataclass(frozen=True)
 class ConfigCloudVastAI(CloudConfig):
     """VastAI cloud configuration."""
@@ -144,6 +166,9 @@ class ConfigCloudVastAI(CloudConfig):
     jump_username: str | None = None
     jump_host: str | None = None
     jump_port: int = 22
+
+
+# endregion CLASS_ConfigCloudVastAI
 
 
 ConfigCloud = Union[

@@ -107,7 +107,11 @@ class CloudProvisionerImpl:
     # region METHOD_allocate
     # PURPOSE: Spin up a cloud VM, run cloud-init and engine setup, and return an enabled Node so the scheduler gets a usable compute node. On failure, tear down the VM to avoid orphaned billable resources.
     # REQUIRES: provider name is known and has a config.
-    # ENSURES: Creates cloud VM, writes SSH key, installs engines. On setup failure: best-effort disconnect then delete VM.
+    # ENSURES:
+    # - returned Node.node_id == node.node_id
+    # - hostname, external_id, username, port, jump_host, jump_port, jump_username copied from CloudCreateNodeDTO
+    # - cloud == adapter.name
+    # - on success enabled=True and ncpus is None — the standalone get_cpu_cores() is NOT invoked here
     # RAISES: CloudAllocateError if provider unknown or VM creation fails; CloudSetupError if SSH/cloud-init/setup fails.
     async def allocate(self, provider: str, node: Node) -> Node:
         """Create VM on named provider, run cloud-init and engine setup, return the enabled Node (no DB write; caller flips enabled=TRUE via NodeRepository."""

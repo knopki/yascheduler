@@ -131,6 +131,9 @@ async def hetzner_create_node(
 
 # region FUNC_hetzner_delete_node
 # PURPOSE: Tear down a Hetzner server by server ID so billing stops and the node slot is freed for reallocation.
+# INVARIANTS:
+# - Resolves via client.servers.get_by_id(int(external_id))
+# - APIException(code="not_found") is logged and returns without error
 async def hetzner_delete_node(
     cfg: ConfigCloudHetzner,
     external_id: str,

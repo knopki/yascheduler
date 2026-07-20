@@ -445,6 +445,9 @@ def parse_cloud_section(sec: SectionProxy, prefix: str) -> ConfigCloud:
 
 # region FUNC_parse_clouds
 # PURPOSE: Build the list of ConfigCloud DTOs from a [clouds] section, inheriting remote.username for missing prefix users.
+# RATIONALE:
+# - Q: Why derive prefixes from [clouds] option names instead of an explicit list?
+#   A: So adding a provider is one parser + one registry entry, with no separate prefix-list key to forget.
 def parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[ConfigCloud]:
     """Build the list of ConfigCloud DTOs from a [clouds] section, inheriting remote.username for missing prefix users."""
     if not cfg.has_section("clouds"):
