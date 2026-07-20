@@ -245,7 +245,9 @@ class Orchestrator:
     # REQUIRES: _connect_machine_consumer enforces the indefinite-retry path for cloud=None nodes before the grace-check; self._uow_factory yields a UnitOfWork whose nodes.list_enabled() returns the operator-defined enabled set from DB.
     # ENSURES: Every yielded UMessage<NodeId, Node> corresponds to a node that is enabled in yascheduler_nodes and whose node_id is absent from self._repository (not already connected).
     # INVARIANTS: The producer does not filter on cloud type; the consumer separates their fate.
-    # RATIONALE: Static and cloud nodes share the same producer filter (enabled + not connected) rather than splitting into two producers, because the separation happens in the consumer where node.cloud is already available on the message payload.
+    # RATIONALE:
+    # - Q: Why do static and cloud nodes share the same producer filter instead of splitting into two producers?
+    #   A: The separation happens in the consumer where node.cloud is already available on the message payload — a single producer avoids duplicating the enabled+not-connected filter logic.
     async def _connect_machine_producer(
         self,
     ) -> AsyncGenerator[UMessage[NodeId, Node], None]:
@@ -270,7 +272,11 @@ class Orchestrator:
     # REQUIRES: self._connect_failures is an in-memory dict (not persisted — daemon restart resets grace windows); self._repository.connect reads jump_host/jump_port/jump_username from the Node itself (no config.remote lookup); self._connect_grace_for resolves grace by matching node.cloud against self._config_clouds prefixes (default 120s on mismatch).
     # ENSURES: On successful connect, the node_id entry is popped from _connect_failures and self._machine_connected_event is set; for static nodes (cloud is None), a trace DEBUG + warning(...) record is emitted and the method returns before the grace-check (NEVER reaches abandon_node); for cloud nodes with age < grace, a trace DEBUG + warning(...) record is emitted and the method returns; for cloud nodes with age >= grace, abandon_node() is called and the failure-timer entry is released.
     # INVARIANTS: _connect_failures is mutated exclusively in this method (setdefault on first failure, pop on success or after abandon); static nodes never write to _connect_failures because the early return before BLOCK_connect_grace_check avoids the setdefault call; no config.remote lookup or CloudConfig prefix-match loop for jump identity runs in the orchestrator — connection identity comes exclusively from the Node.
-    # RATIONALE: A transient SSH outage after a daemon restart must not silently delete an operator's static-node row — static nodes retry indefinitely rather than entering the grace window or abandon path. The failure timer is in-memory only: a daemon restart resets the grace window, which is the safer default (a flapping connection after restart gets fresh grace rather than immediate abandonment). The default grace of 120 seconds for unrecognised cloud prefixes ensures a conservative fallback if a cloud prefix is renamed or misconfigured.
+    # RATIONALE:
+    # - Q: Why do static nodes retry indefinitely instead of entering the grace/abandon path?
+    #   A: A transient SSH outage after a daemon restart must not silently delete an operator's static-node row — static nodes retry indefinitely rather than entering the grace window or abandon path.
+    # - Q: Why is the default grace 120 seconds for unrecognised cloud prefixes?
+    #   A: The conservative fallback ensures the abandon path still fires for misconfigured or renamed cloud prefixes rather than silently retrying forever.
     async def _connect_machine_consumer(self, msg: UMessage[NodeId, Node]) -> None:
         node = msg.payload
         keys = await asyncio.get_running_loop().run_in_executor(
@@ -373,6 +379,8 @@ class Orchestrator:
 
     # endregion METHOD_connect_machine_consumer
 
+    # region METHOD__connect_grace_for
+    # PURPOSE: Resolve the per-cloud connect_grace seconds for a node so the connect consumer can decide retry-vs-abandon without each call site re-deriving the prefix lookup and default.
     def _connect_grace_for(self, cloud: str | None) -> int:
         if cloud is None:
             return 120
@@ -381,6 +389,10 @@ class Orchestrator:
                 return cfg.connect_grace
         return 120
 
+    # endregion METHOD__connect_grace_for
+
+    # region METHOD__allocator_producer
+    # PURPOSE: Bound the next allocation wave to the larger of remaining cloud capacity or current free-machine count so the allocate queue never starves when capacity exists and never floods when it does not.
     async def _allocator_producer(
         self,
     ) -> AsyncGenerator[UMessage[TaskId, Task], None]:
@@ -393,6 +405,8 @@ class Orchestrator:
             logger.debug("ALLOCATOR_PRODUCER", extra={"task_ids": ", ".join(ids)})
         for task in tasks:
             yield UMessage(task.task_id, task)
+
+    # endregion METHOD__allocator_producer
 
     # region METHOD_allocator_consumer
     # PURPOSE: Fire-and-forget task allocation — keep the worker alive even if one task fails so remaining tasks in the queue still get their allocation attempt.

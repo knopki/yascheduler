@@ -1,11 +1,7 @@
-# Orchestrator
+# Delta: orchestrator
 
-## Purpose
+## MODIFIED Requirements
 
-Orchestrator class that manages concurrent producer-consumer loops for
-connecting machines, allocating tasks, consuming results, and deallocating
-idle cloud nodes.
-## Requirements
 ### Requirement: Orchestrator manages producer-consumer loops
 
 The system SHALL provide an `Orchestrator` class that runs 4 producer-consumer
@@ -123,7 +119,7 @@ lookup) and SHALL use `repository.list_connected()`.
 
 #### Scenario: Deallocator consumer wraps deallocate_node in try/except
 - **WHEN** `deallocate_node(node, repository, clouds, uow_factory)` raises an `Exception` during the consumer's processing
-- **THEN** the consumer logs `node_id`, `hostname` (when present), and the error, and continue to the next queued node without re-raising
+- **THEN** the consumer logs `node_id`, `hostname` (when present), and the error, and continues to the next queued node without re-raising
 
 #### Scenario: Deallocator consumer does not duplicate SSH teardown
 - **WHEN** the deallocate consumer processes a node
@@ -269,4 +265,3 @@ to the next free session. If no free session succeeds, the helper SHALL return
 #### Scenario: Stale session failure does not abort the loop
 - **WHEN** `free_sessions` contains two sessions and the first raises during per-session invocation
 - **THEN** the exception is caught and logged, the loop continues to the second session, and the allocator does not propagate the exception
-
