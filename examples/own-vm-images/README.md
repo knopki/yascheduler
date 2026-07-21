@@ -47,10 +47,11 @@ Then run build script:
 packer build ./hcloud-debian-12-fleur.pkr.hcl
 ```
 
-This can take 15 to 20 minutes.
-If everything is successful, the last line will show the image ID. Remember this ID - you will need to specify it in `yascheduler.conf`.
+This can take 15 to 20 minutes. If everything is successful, the last line will
+show the image ID. Remember this ID - you will need to specify it in
+`yascheduler.conf`.
 
-```
+```text
 --> hcloud.debian: A snapshot was created: 'fleur-debian-xxxxx' (ID: 123123123)
 ```
 
@@ -71,7 +72,9 @@ output_files = aiida.in inp.xml default.econfig shell.out out out.error scratch 
 spawn = fleur -minimalOutput -wtime 360 > shell.out 2> out.error
 check_cmd = ps -eocomm= | grep -q fleur
 input_files = inp.xml
-output_files = inp.xml kpts.xml sym.xml relax.xml shell.out out.error out out.xml FleurInputSchema.xsd FleurOutputSchema.xsd juDFT_times.json cdn1 usage.json
+output_files = inp.xml kpts.xml sym.xml relax.xml shell.out out.error
+  out out.xml FleurInputSchema.xsd FleurOutputSchema.xsd juDFT_times.json
+  cdn1 usage.json
 
 [clouds]
 ; Your API key

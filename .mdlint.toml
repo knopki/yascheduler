@@ -1,0 +1,17 @@
+exclude = [
+  "openspec",
+  "CHANGELOG.md",
+]
+
+[rules.MD013]
+code_block_line_length = 120
+tables = false
+
+[rules.MD033]
+allowed_elements = ["rule"]
+
+[rules.MD053]
+enabled = false  # FIXME: upgrade markdownlint-rs to 0.3.21 and enable
+
+[rules.MD055]
+enabled = false

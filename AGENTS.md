@@ -23,6 +23,7 @@
 - Every module should export only the public API via `__all__`.
 
 <!-- #endregion SECTION_Dev_Rules -->
+
 <!-- #region SECTION_OpenSpec_Rule -->
 
 ## OpenSpec Rule
@@ -36,7 +37,9 @@ implementation.
 
 If the user requests changes outside the OpenSpec workflow, offer to use
 OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
+
 <!-- #endregion SECTION_OpenSpec_Rule -->
+
 <!-- #region SECTION_Verification -->
 
 ## Verification
@@ -46,10 +49,10 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 - For changes touching DB queries, node lifecycle, SSH interaction, or
   orchestrator flow, also add or update integration/e2e tests per the relevant
   OpenSpec specs.
-- Run tests: `uv run pytest -m unit`, `uv run pytest -m integration`, `uv run
-pytest -m e2e`. Assume Docker is available and running, no pre-flight checks.
-- Static checks: `uv run zuban check`, `uv run ruff check .`, `uv run ruff
-format --check .`, `uv run lint-imports`
+- Run tests: `uv run pytest -m unit`, `uv run pytest -m integration`,
+  `uv run pytest -m e2e`. Assume Docker is available and running, no pre-flight checks.
+- Static checks: `uv run zuban check`, `uv run ruff check .`,
+  `uv run ruff format --check .`, `uv run lint-imports`
 - Spec validation: `openspec validate --all --json` must pass after creating a
   change proposal and after any modification to `openspec/specs/`, and also
   after archiving or syncing changes.
@@ -90,7 +93,9 @@ matters. Module-local tests stay close to module. Update tests when log markers
 change intentionally.
 
 <!-- #endregion SECTION_Logging -->
+
 <!-- #endregion SECTION_Verification -->
+
 <!-- #region SECTION_Project -->
 
 ## Project
@@ -123,6 +128,7 @@ yascheduler/
 ```
 
 <!-- #endregion SECTION_Project -->
+
 <!-- #region RULES_REPEATED -->
 
 <critical_rules>
@@ -143,4 +149,5 @@ yascheduler/
 test log records.</rule>
 <rule>Hexagonal architecture; adhere to yascheduler/ structure</rule>
 </critical_rules>
+
 <!-- #endregion RULES_REPEATED -->
