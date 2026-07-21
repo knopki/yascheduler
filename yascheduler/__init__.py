@@ -1,24 +1,9 @@
-# FILE: yascheduler/__init__.py
-# VERSION: 1.9.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Package entry point exposing public client and constants.
-#   SCOPE: Re-exports Yascheduler, CONFIG_FILE, PID_FILE, LOG_FILE, __version__.
-#   DEPENDS: M-ENTRYPOINTS
-#   LINKS: M-ENTRYPOINTS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   Yascheduler - Public client class (re-exported via yascheduler.entrypoints)
-#   CONFIG_FILE - Default config file path (re-exported via yascheduler.entrypoints)
-#   PID_FILE - Default PID file path (re-exported via yascheduler.entrypoints)
-#   LOG_FILE - Default log file path (re-exported via yascheduler.entrypoints)
-#   __version__ - Package version from metadata
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Re-export path constants from yascheduler.entrypoints instead of yascheduler.shared (prune-shared-kernel).
-#   PREVIOUS_CHANGE: v1.8.0 - Source Yascheduler from yascheduler.entrypoints facade (M-ENTRYPOINTS) instead of yascheduler.client.
-# END_CHANGE_SUMMARY
+"""Package entry point exposing public client and constants."""
+# region MODULE_CONTRACT
+# PURPOSE: Expose the public client facade, version string, and canonical path constants at the package root so external consumers can ``from yascheduler import Yascheduler``.
+# SCOPE: Public package surface: Yascheduler facade, __version__, and runtime path constants (CONFIG_FILE, LOG_FILE, PID_FILE).
+# KEYWORDS: package, entrypoint, version, paths, constants
+# endregion MODULE_CONTRACT
 
 from importlib.metadata import PackageNotFoundError, version
 

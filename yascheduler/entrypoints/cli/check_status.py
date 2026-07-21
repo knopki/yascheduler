@@ -1,32 +1,9 @@
-# FILE: yascheduler/entrypoints/cli/check_status.py
-# VERSION: 1.7.0
-# START_MODULE_CONTRACT
-#   PURPOSE: yastatus CLI command — query and display task status with optional remote output and convergence.
-#   SCOPE: check_status command + argparse + single query-phase UoW + default/info/json/view renderers + connection-params resolver + remote output + convergence helpers.
-#   DEPENDS: M-ENTRYPOINTS-CONFIG, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-DOMAIN-MODEL, M-SHARED, M-APPLICATION-UOW, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   check_status - Sync entry point: asyncio.run(_check_status_async(argv))
-#   _check_status_async - Parse flags, query tasks via DI, dispatch renderer, exit 0/1/2
-#   _parse_status_args - Parse yastatus argparse flags (mutex renderers, -o requires -v)
-#   _query_tasks - Conditional task query within the single query-phase UoW
-#   _render_default - AiiDA-compatible default renderer (<id>   <STATUS>)
-#   _render_info - Tab-separated one-line-per-task renderer (task_id, status, label, node_id)
-#   _render_json - Raw-domain-values JSON (nested node object + created_at/updated_at)
-#   _render_view - Verbose renderer: SSH tail of OUTPUT, optional convergence snippet (uses node.ip from resolved Node)
-#   _resolve_conn_params - Resolve SSH conn params mirroring orchestrator._connect_machine_consumer
-#   _display_remote_output - Connect via SSHMachineRepository / SSHMachineOperations, tail OUTPUT file
-#   _download_convergence_snippet - Download OUTPUT file via SFTP
-#   _parse_convergence - Parse CRYSTAL output for convergence info
-#   _ConnParams - Frozen SSH connection params DTO
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: _render_json and _render_view read task.engine/task.local_folder/task.remote_folder (was task.context.X).
-#   PREVIOUS_CHANGE: v1.6.0 - task-schema-and-entity-cleanup: _render_info emits node_id= (was ip=); _render_json drops flat allocated_ip/port/cloud fields, adds nested node object {ip, port, username, cloud} (or null) + created_at/updated_at (ISO-8601); _render_view reads node.ip from the resolved Node (was task.allocated_ip). BREAKING yastatus --json wire format change.
-# END_CHANGE_SUMMARY
+"""yastatus CLI command — query and display task status."""
+# region MODULE_CONTRACT
+# PURPOSE: yastatus CLI command — query and display task status with optional remote output tailing and CRYSTAL convergence parsing.
+# SCOPE: check_status command — query and display task status with multiple renderers (default, info, json, view).
+# KEYWORDS: status, cli, query, display, render, convergence
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -37,7 +14,6 @@ import logging
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,13 +30,9 @@ if TYPE_CHECKING:
     from yascheduler.domain import MachineSession, Node, Task
 
 
-# START_CONTRACT: _parse_status_args
-#   PURPOSE: Parse yastatus CLI flags — mutex renderers (-v/-i/--json) plus -o (requires -v) and -j filter.
-#   INPUTS: { argv: list[str] | None - optional argv for argparse, None reads sys.argv }
-#   OUTPUTS: { argparse.Namespace - parsed flags }
-#   SIDE_EFFECTS: argparse may call sys.exit on --help/error (exit 0/2); parser.error exits 2 for -o-without--v.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_CONTRACT: _parse_status_args
+# region FUNC__parse_status_args
+# PURPOSE: Declare the yastatus argparse grammar — prog="yastatus", the -j filter, the three-renderer mutex group, and the -o convergence modifier — so the flag matrix is observable in one place.
+# ENSURES: returns a Namespace whose convergence flag is never active without view; argparse exits 2 on -v -i, and the body-level parser.error exits 2 on -o without -v.
 def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="yastatus",
@@ -106,75 +78,65 @@ def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     add_config_arg(parser)
     add_log_level_arg(parser, default="WARNING")
-    # START_BLOCK_PARSE_ARGS
+    # region BLOCK_parse_args
     args = parser.parse_args(argv)
     if args.convergence and not args.view:
         parser.error("--convergence requires --view")
-    # END_BLOCK_PARSE_ARGS
+    # endregion BLOCK_parse_args
     return args
 
 
-# START_CONTRACT: _query_tasks
-#   PURPOSE: Conditional task query — list_by_jobs when -j is given, else list_by_status({RUNNING, TO_DO}).
-#   INPUTS: { uow: AbstractUnitOfWork - open query-phase UoW, args: argparse.Namespace - parsed flags }
-#   OUTPUTS: { list[Task] - tasks matching the filter, in repository order }
-#   SIDE_EFFECTS: One read within the UoW; no commit.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-MODEL
-# END_CONTRACT: _query_tasks
+# endregion FUNC__parse_status_args
+
+
+# region FUNC__query_tasks
+# PURPOSE: Pick the right task query based on whether the operator passed -j so the renderer always receives a task list.
 async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> list[Task]:
-    # START_BLOCK_QUERY
+    # region BLOCK_query
     if args.jobs:
         # argparse yields list[int]; wrap to TaskId before crossing into the
         # repository (same int→TaskId marshalling pattern as the facade).
         return await uow.tasks.list_by_jobs(job_ids=[TaskId(j) for j in args.jobs])
     return await uow.tasks.list_by_status(
-        statuses={TaskStatus.RUNNING, TaskStatus.TO_DO}
+        statuses={TaskStatus.RUNNING, TaskStatus.TO_DO},
     )
-    # END_BLOCK_QUERY
+    # endregion BLOCK_query
 
 
-# START_CONTRACT: _render_default
-#   PURPOSE: AiiDA-compatibility default renderer — emit <task_id><ws><STATUS_NAME> per task.
-#   INPUTS: { tasks: list[Task] }
-#   OUTPUTS: { None - prints one line per task to stdout }
-#   SIDE_EFFECTS: Writes to stdout. Do NOT decorate: the AiiDA scheduler plugin parses this via
-#                 `for job_id, status in job.split()` (exactly 2 elements per line) and maps STATUS_NAME
-#                 through _MAP_STATUS_YASCHEDULER (keys {TO_DO, RUNNING, DONE}).
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_CONTRACT: _render_default
+# endregion FUNC__query_tasks
+
+
+# region FUNC__render_default
+# PURPOSE: Emit task status lines in the format the AiiDA scheduler plugin's joblist parser expects — bare <task_id>   <STATUS> with no header, footer, or summary — so phantom jobs are never introduced by decoration.
 def _render_default(tasks: list[Task]) -> None:
     for task in tasks:
-        print(f"{task.task_id}   {task.status.name}")
+        sys.stdout.write(f"{task.task_id}   {task.status.name}\n")
 
 
-# START_CONTRACT: _render_info
-#   PURPOSE: Tab-separated one-line-per-task renderer (task_id, status, label, node_id).
-#   INPUTS: { tasks: list[Task] }
-#   OUTPUTS: { None - prints one tab-separated line per task to stdout }
-#   SIDE_EFFECTS: Writes to stdout. Not used by the AiiDA plugin; free to change.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_CONTRACT: _render_info
+# endregion FUNC__render_default
+
+
+# region FUNC__render_info
+# PURPOSE: Render task metadata as parseable tab-separated lines so operators and scripts can consume structured status without depending on JSON or the AiiDA format.
 def _render_info(tasks: list[Task]) -> None:
     for task in tasks:
-        print(
-            "task_id={}\tstatus={}\tlabel={}\tnode_id={}".format(
+        sys.stdout.write(
+            "task_id={}\tstatus={}\tlabel={}\tnode_id={}\n".format(
                 task.task_id,
                 task.status.name,
                 task.label,
                 task.allocated_node_id or "-",
-            )
+            ),
         )
 
 
-# START_CONTRACT: _render_json
-#   PURPOSE: Render tasks as a JSON list of objects with raw domain values (no display transformations); nested node object + audit timestamps.
-#   INPUTS: { tasks: list[Task], nodes_by_id: dict[NodeId, Node] - node lookup by allocated_node_id }
-#   OUTPUTS: { str - json.dumps(list_of_objects) }
-#   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_CONTRACT: _render_json
+# endregion FUNC__render_info
+
+
+# region FUNC__render_json
+# PURPOSE: Serialize task and node state as JSON with raw domain values so automation tools can consume the full status programmatically without parsing human-oriented text.
 def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
-    # START_BLOCK_RENDER_JSON
+    # region BLOCK_render_json
     objects = []
     for task in tasks:
         node = (
@@ -192,65 +154,33 @@ def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
                 "updated_at": task.updated_at.isoformat(),
                 "node": (
                     {
-                        "ip": node.ip,
+                        "hostname": node.hostname,
                         "port": node.port,
                         "username": node.username,
                         "cloud": node.cloud,
+                        "jump_host": node.jump_host,
+                        "jump_port": node.jump_port,
+                        "jump_username": node.jump_username,
+                        "external_id": node.external_id,
+                        "status": node.status.name,
+                        "created_at": node.created_at.isoformat(),
+                        "updated_at": node.updated_at.isoformat(),
                     }
                     if node is not None
                     else None
                 ),
-            }
+            },
         )
     return json.dumps(objects)
-    # END_BLOCK_RENDER_JSON
+    # endregion BLOCK_render_json
 
 
-@dataclass(frozen=True)
-class _ConnParams:
-    username: str
-    port: int
-    jump_host: str | None
-    jump_username: str | None
+# endregion FUNC__render_json
 
 
-# START_CONTRACT: _resolve_conn_params
-#   PURPOSE: Resolve the four SSH connection parameters for a node — username/port from the node, jump host
-#          from the matching cloud (prefix == node.cloud) or the config.remote fallback.
-#   INPUTS: { node: Node, config: Config }
-#   OUTPUTS: { _ConnParams - (username, port, jump_host, jump_username) }
-#   SIDE_EFFECTS: None
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-ENTRYPOINTS-CONFIG
-#   NOTE: Mirrors orchestrator._connect_machine_consumer:209-214; duplicated (not shared) because the shape
-#         differs (orchestrator connects inline; check_status returns a params object for the gateway call).
-#         Promotion to a shared helper awaits a third consumer. The `break` below stops at the first matching
-#         cloud; the orchestrator lacks it but the prefix match is unique so behavior is equivalent.
-# END_CONTRACT: _resolve_conn_params
-def _resolve_conn_params(node: Node, config: Config) -> _ConnParams:
-    # START_BLOCK_RESOLVE_JUMP
-    jump_host = config.remote.jump_host
-    jump_username = config.remote.jump_username
-    for cloud in config.clouds:
-        if cloud.prefix == node.cloud:
-            if cloud.jump_host and cloud.jump_username:
-                jump_host, jump_username = cloud.jump_host, cloud.jump_username
-            break
-    # END_BLOCK_RESOLVE_JUMP
-    return _ConnParams(
-        username=node.username,
-        port=node.port,
-        jump_host=jump_host,
-        jump_username=jump_username,
-    )
-
-
-# START_CONTRACT: _download_convergence_snippet
-#   PURPOSE: Download the remote OUTPUT file via SFTP into a local temp path for convergence parsing.
-#   INPUTS: { session: MachineSession, remote_folder: str, local_path: Path }
-#   OUTPUTS: { bool - True on success, False on OSError (e.g. missing remote file) }
-#   SIDE_EFFECTS: Opens an SFTP channel and writes to local_path.
-#   LINKS: M-SSH-SESSION
-# END_CONTRACT: _download_convergence_snippet
+# region FUNC__download_convergence_snippet
+# PURPOSE: Fetch a remote CRYSTAL OUTPUT file via SFTP to a local temp path so _parse_convergence can parse it without monkey-patching pycrystal's I/O.
+# ENSURES: returns True on successful SFTP transfer; returns False on OSError so the caller can skip convergence display rather than crash.
 async def _download_convergence_snippet(
     session: MachineSession,
     remote_folder: str,
@@ -261,22 +191,23 @@ async def _download_convergence_snippet(
         r_output = session.path(remote_folder) / "OUTPUT"
         async with session.open_sftp() as sftp:
             await sftp.get([str(r_output)], local_path)
-        return True
     except OSError:
         return False
+    else:
+        return True
 
 
-# START_CONTRACT: _parse_convergence
-#   PURPOSE: Parse a CRYSTAL OUTPUT snippet into a human-readable convergence + optgeom summary string.
-#   INPUTS: { filepath: Path - local path to a downloaded OUTPUT snippet }
-#   OUTPUTS: { str - formatted convergence/optgeom lines, or the CRYSTOUT_Error message on parse failure }
-#   SIDE_EFFECTS: Reads filepath; deferred-imports numpy/pycrystal (optional scientific deps) inside the body.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_CONTRACT: _parse_convergence
+# endregion FUNC__download_convergence_snippet
+
+
+# region FUNC__parse_convergence
+# PURPOSE: Convert a CRYSTAL output file into the human-readable convergence + optgeom text block the operator expects.
+# INVARIANTS: returns the CRYSTOUT_Error message verbatim on parse failure instead of raising — the verbose renderer needs to print SOMETHING for a corrupt file.
+# SCOPE: numerical formatting of optgeom cycles; NOT: file fetching or session lifecycle.
 def _parse_convergence(filepath: Path) -> str:
     """Parse CRYSTAL output file for convergence and geometry optimization info."""
-    from numpy import nan  # pyright: ignore[reportMissingImports]
-    from pycrystal import (  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
+    from numpy import nan  # noqa: PLC0415
+    from pycrystal import (  # noqa: PLC0415
         CRYSTOUT,
         CRYSTOUT_Error,
     )
@@ -313,58 +244,58 @@ def _parse_convergence(filepath: Path) -> str:
     return output_lines
 
 
-# START_CONTRACT: _display_remote_output
-#   PURPOSE: Connect to the remote machine via repository, tail the OUTPUT file, return (session, remote_folder) or None.
-#   INPUTS: { task: Task - for remote_folder, node: Node | None - resolved node (carries node_id + ip; None skips connect), conn_params: _ConnParams, config: Config }
-#   OUTPUTS: { tuple[MachineSession, str, SSHMachineRepository] | None - (session, remote_folder, repository) or None if skipped }
-#   SIDE_EFFECTS: Connects via SSH (session registers under node.node_id), reads remote file, prints to stdout.
-#   LINKS: M-SSH-REPOSITORY, M-SSH-SESSION
-# END_CONTRACT: _display_remote_output
+# endregion FUNC__parse_convergence
+
+
+# region FUNC__display_remote_output
+# PURPOSE: Connect to the remote machine and tail the last lines of the OUTPUT file so the operator can inspect running-job progress without logging into the remote host separately.
+# INVARIANTS:
+# - connects via repository.connect(node=node, ...) reading login user/port/jump-leg from the Node, never passing jump_host/jump_username separately
 async def _display_remote_output(
-    task: Task, node: Node | None, conn_params: _ConnParams, config: Config
+    task: Task,
+    node: Node | None,
+    config: Config,
 ) -> tuple[MachineSession, str, SSHMachineRepository] | None:
     """Connect to machine via repository (under node.node_id), display tail of remote OUTPUT."""
     if node is None:
-        print("NO ALLOCATED IP")
+        sys.stdout.write("NO ALLOCATED HOSTNAME\n")
         return None
     repository = SSHMachineRepository()
     try:
         session = await repository.connect(
             node=node,
             client_keys=list_private_keys(config.local.keys_dir),
-            jump_host=conn_params.jump_host,
-            jump_username=conn_params.jump_username,
         )
     except Exception:
-        print("CAN'T CONNECT")
+        sys.stdout.write("CAN'T CONNECT\n")
         return None
     remote_folder = task.remote_folder
     if not remote_folder:
-        print("OUTDATED TASK, SKIPPING")
+        sys.stdout.write("OUTDATED TASK, SKIPPING\n")
         await repository.disconnect(session.machine.node_id)
         return None
     if session.is_closed:
-        print("CAN'T CONNECT")
+        sys.stdout.write("CAN'T CONNECT\n")
         return None
     r_output = session.path(remote_folder) / "OUTPUT"
     result = await session.run_full(
         f"tail -n15 {session.quote(str(r_output))}",
     )
     if result.returncode:
-        print("OUTDATED TASK, SKIPPING")
+        sys.stdout.write("OUTDATED TASK, SKIPPING\n")
     else:
-        print(result.stdout)
+        sys.stdout.write(f"{result.stdout}\n")
     return session, remote_folder, repository
 
 
-# START_CONTRACT: _render_view
-#   PURPOSE: Verbose renderer — for each RUNNING task with an allocated IP, resolve conn params, print a
-#          header, tail remote OUTPUT, optionally download+parse a convergence snippet into a tempfile.
-#   INPUTS: { tasks: list[Task], nodes_by_ip: dict[str, Node], config: Config, fetch_convergence: bool, deps: CLIDeps }
-#   OUTPUTS: { Path | None - path to the convergence snippet tempfile (cleaned by the caller), or None }
-#   SIDE_EFFECTS: Connects to remote machines via SSH, writes a tempfile, prints to stdout.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-ENTRYPOINTS-CONFIG
-# END_CONTRACT: _render_view
+# endregion FUNC__display_remote_output
+
+
+# region FUNC__render_view
+# PURPOSE: Display a per-task detailed view of running jobs — header, remote OUTPUT tail, optional convergence snippet — so the operator can assess running-job health from one command.
+# INVARIANTS:
+# - creates convergence snippet temp file ONCE, reuses across all RUNNING tasks
+# - unlinks in finally clause — no leak on success, exception, or early-return
 async def _render_view(
     tasks: list[Task],
     nodes_by_id: dict[NodeId, Node],
@@ -374,86 +305,76 @@ async def _render_view(
 ) -> Path | None:
     running = [t for t in tasks if t.status == TaskStatus.RUNNING]
     snippet: Path | None = None
-    # START_BLOCK_CREATE_SNIPPET
+    # region BLOCK_create_snippet
     if fetch_convergence:
-        fd, name = tempfile.mkstemp(suffix=".tmp")  # noqa: ASYNC241
-        os.close(fd)  # noqa: ASYNC230
+        fd, name = tempfile.mkstemp(suffix=".tmp")
+        os.close(fd)
         snippet = Path(name)
-    # END_BLOCK_CREATE_SNIPPET
+    # endregion BLOCK_create_snippet
     try:
-        # START_BLOCK_ITERATE_RUNNING
+        # region BLOCK_iterate_running
         for task in running:
             node = (
                 nodes_by_id.get(task.allocated_node_id)
                 if task.allocated_node_id
                 else None
             )
-            if node is not None:
-                conn_params = _resolve_conn_params(node, config)
-            else:
-                conn_params = _ConnParams(
-                    username=config.remote.username,
-                    port=22,
-                    jump_host=config.remote.jump_host,
-                    jump_username=config.remote.jump_username,
-                )
+            username = node.username if node is not None else config.remote.username
             cloud_str = node.cloud if node and node.cloud else ""
-            print(
+            sys.stdout.write(
                 "." * 50
-                + "ID{} {} at {}@{}:{}:{}".format(
+                + "ID{} {} at {}@{}:{}:{}\n".format(
                     task.task_id,
                     task.label,
-                    conn_params.username,
-                    node.ip if node else "",
+                    username,
+                    node.hostname if node else "",
                     cloud_str,
                     task.remote_folder or "",
-                )
+                ),
             )
-            conn = await _display_remote_output(task, node, conn_params, config)
+            conn = await _display_remote_output(task, node, config)
             if conn is None:
                 continue
             session, remote_folder, repository = conn
             try:
                 if fetch_convergence and snippet is not None:
                     success = await _download_convergence_snippet(
-                        session, remote_folder, snippet
+                        session,
+                        remote_folder,
+                        snippet,
                     )
                     if success:
                         output = _parse_convergence(snippet)
                         if output:
-                            print(output)
+                            sys.stdout.write(f"{output}\n")
             finally:
                 await repository.disconnect(session.machine.node_id)
-        # END_BLOCK_ITERATE_RUNNING
+        # endregion BLOCK_iterate_running
     except Exception:
         # Self-clean the snippet on exception so the temp file never leaks; re-raise to the caller's
         # top-level handler (which prints "Error: ..." and exits 1).
-        if snippet is not None and os.path.exists(snippet):  # noqa: ASYNC240
-            os.unlink(snippet)  # noqa: ASYNC230
+        if snippet is not None and snippet.exists():
+            snippet.unlink()
         raise
     return snippet
 
 
-# START_CONTRACT: _check_status_async
-#   PURPOSE: Query and display task status (default/info/json/view), optionally tailing remote output and
-#          parsing convergence. Exit 0 on success, 1 on runtime failure, 2 on argparse error.
-#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
-#   OUTPUTS: { None - prints to stdout; calls sys.exit(1) on failure }
-#   SIDE_EFFECTS: Opens ONE short query-phase UoW (closed before any SSH), reads config, may connect via SSH,
-#                 writes/removes a convergence tempfile in view mode.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS, M-DI, M-APPLICATION-UOW, M-SSH-REPOSITORY, M-SSH-OPERATIONS
-# END_CONTRACT: _check_status_async
+# endregion FUNC__render_view
+
+
+# region FUNC__check_status_async
+# PURPOSE: Orchestrate the full check_status lifecycle — parse args, query tasks, fetch nodes, render with the chosen formatter, and cleanup the temp snippet — with a single exit-1 catch-all so the operator never sees an unhandled traceback.
 async def _check_status_async(argv: list[str] | None) -> None:
     snippet: Path | None = None
-    # START_BLOCK_HANDLE_FAILURE
+    # region BLOCK_handle_failure
     try:
         args = _parse_status_args(argv)
-        # START_BLOCK_CONFIGURE_LOGGER
+        # region BLOCK_configure_logger
         root = logging.getLogger()
         root.setLevel(logging.getLevelName(args.log_level))
         if not root.handlers:
             root.addHandler(logging.StreamHandler(sys.stderr))
-        # END_BLOCK_CONFIGURE_LOGGER
+        # endregion BLOCK_configure_logger
 
         config = parse_config(args.config)
         deps = make_cli_deps(config)
@@ -468,33 +389,38 @@ async def _check_status_async(argv: list[str] | None) -> None:
         # RENDER PHASE — no DB connection held during SSH.
         if args.view:
             snippet = await _render_view(
-                tasks, nodes_by_id, config, bool(args.convergence), deps
+                tasks,
+                nodes_by_id,
+                config,
+                bool(args.convergence),
+                deps,
             )
         elif args.info:
             _render_info(tasks)
         elif args.json:
-            print(_render_json(tasks, nodes_by_id))
+            sys.stdout.write(f"{_render_json(tasks, nodes_by_id)}\n")
         else:
             _render_default(tasks)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
-    # END_BLOCK_HANDLE_FAILURE
+    # endregion BLOCK_handle_failure
     finally:
-        if snippet is not None and os.path.exists(snippet):  # noqa: ASYNC240
-            os.unlink(snippet)  # noqa: ASYNC230
+        if snippet is not None and snippet.exists():
+            snippet.unlink()
 
 
-# START_CONTRACT: check_status
-#   PURPOSE: Sync entry point — run _check_status_async via asyncio.run (no @to_sync; CLI entry points have no async caller).
-#   INPUTS: { argv: list[str] | None - optional argv, None reads sys.argv (console_script default) }
-#   OUTPUTS: { None - delegates to asyncio.run }
-#   SIDE_EFFECTS: Starts a fresh event loop via asyncio.run.
-#   LINKS: M-ENTRYPOINTS-CLI-CHECK-STATUS
-# END_CONTRACT: check_status
+# endregion FUNC__check_status_async
+
+
+# region FUNC_check_status
+# PURPOSE: Provide a synchronous CLI entry point by wrapping the async status query in asyncio.run so setuptools console_scripts can invoke it without async plumbing.
 def check_status(argv: list[str] | None = None) -> None:
+    """Sync entry point — runs _check_status_async via asyncio.run."""
     asyncio.run(_check_status_async(argv))
 
+
+# endregion FUNC_check_status
 
 if __name__ == "__main__":
     check_status()

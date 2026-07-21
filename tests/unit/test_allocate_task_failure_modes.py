@@ -1,34 +1,19 @@
-# FILE: tests/unit/test_allocate_task_failure_modes.py
-# VERSION: 1.7.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
-#   SCOPE: Step 1 commit failure, step 2 cleanup failure (best-effort logging), step 3 final persist failure (VM deallocate + tmp cleanup) —
-#          all verify tracker.discard via outer finally, correct exception propagation, and no leaked VM/tmp-node.
-#   DEPENDS: M-APPLICATION-ALLOCATE
-#   LINKS: M-APPLICATION-ALLOCATE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestAllocateTaskFailureModes - allocate_task hardening: step1/step2-cleanup/step3 failures all release tracker entry; step3 also verifies best-effort VM+tmp cleanup
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: [v1.6.0 - cloud-port-node-arg: step3 asserts clouds.allocate/deallocate called with Node args (was NodeId/scalars).]
-#   PREVIOUS_CHANGE: [v1.5.0 - remove-tmp-node-fake-ip: _make_uow sets uow.nodes.insert to return a tmp Node (NewNode(cloud=..., enabled=False) → Node with node_id); step2/step3 cleanup asserts remove(tmp_node_id) directly (no get lookup).]
-# END_CHANGE_SUMMARY
-#
 """Failure-mode tests for allocate_task cloud-fallback hardening.
 
 Validates that the outer try/finally with success-flag correctly releases the
 tracker entry on any unhandled exception (step 1 commit, step 2 cleanup, step
 3 final persist) while preserving it on the success path.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Failure-mode tests for allocate_task cloud-fallback hardening (outer try/finally with success-flag + step-3 VM-leak fix).
+# SCOPE: Step 1 commit failure, step 2 cleanup failure (best-effort logging), step 3 final persist failure (VM deallocate + tmp cleanup) — all verify tracker.discard via outer finally, correct exception propagation, and no leaked VM/tmp-node.
+# KEYWORDS: allocate_task, cloud fallback, try/finally, VM leak
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import PurePath
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -56,7 +41,13 @@ def _make_uow(todo_task: Task) -> AsyncMock:
     uow.nodes.list_all = AsyncMock(return_value=[])
     # remove-tmp-node-fake-ip: tmp-node insertion is insert(NewNode(cloud=...,
     # enabled=False)) → Node carrying the generated node_id (the cleanup handle).
-    tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+    tmp_node = Node(
+        node_id=NodeId(2),
+        hostname="",
+        ncpus=None,
+        enabled=False,
+        cloud="aws",
+    )
     uow.nodes.insert = AsyncMock(return_value=tmp_node)
     uow.collect_events = AsyncMock(return_value=[])
     uow.publish_events = AsyncMock()
@@ -66,7 +57,8 @@ def _make_uow(todo_task: Task) -> AsyncMock:
 
 
 def _make_clouds(
-    selection: str, allocate_side_effect: object | None = None
+    selection: str,
+    allocate_side_effect: object | None = None,
 ) -> MagicMock:
     clouds = MagicMock(spec=CloudProvisioner)
     clouds.select_provider.return_value = selection
@@ -124,7 +116,7 @@ class TestAllocateTaskFailureModes:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
         uow.commit = AsyncMock(side_effect=RuntimeError("db connection lost"))
@@ -143,11 +135,12 @@ class TestAllocateTaskFailureModes:
                 engines=engines,
                 uow_factory=lambda: uow,
                 repository=repository,
-                operations=operations,
+                occupancy_checker=occupancy_checker,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
                 allocation_lock=asyncio.Lock(),
+                remote_tasks_dir=PurePath("/remote/tasks"),
             )
 
         tracker.discard.assert_called_once_with(todo_task.task_id)
@@ -164,7 +157,7 @@ class TestAllocateTaskFailureModes:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
         uow.nodes.remove = AsyncMock(side_effect=RuntimeError("cleanup db lost"))
@@ -183,11 +176,12 @@ class TestAllocateTaskFailureModes:
                 engines=engines,
                 uow_factory=lambda: uow,
                 repository=repository,
-                operations=operations,
+                occupancy_checker=occupancy_checker,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
                 allocation_lock=asyncio.Lock(),
+                remote_tasks_dir=PurePath("/remote/tasks"),
             )
 
         # Original CloudAllocateError propagates, not the cleanup RuntimeError.
@@ -208,10 +202,10 @@ class TestAllocateTaskFailureModes:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
-        cloud_node = Node(node_id=NodeId(1), ip="10.0.0.100", ncpus=4, cloud="aws")
+        cloud_node = Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, cloud="aws")
         uow.nodes.remove = AsyncMock()
         # First commit (step 1) succeeds; second commit (step 3 persist) fails;
         # subsequent commits (best-effort tmp cleanup) succeed.
@@ -239,11 +233,12 @@ class TestAllocateTaskFailureModes:
                 engines=engines,
                 uow_factory=lambda: uow,
                 repository=repository,
-                operations=operations,
+                occupancy_checker=occupancy_checker,
                 clouds=clouds,
                 start_task_on_machine=AsyncMock(),
                 tracker=tracker,
                 allocation_lock=asyncio.Lock(),
+                remote_tasks_dir=PurePath("/remote/tasks"),
             )
 
         # Original persist exception propagates.
@@ -280,7 +275,7 @@ class TestAllocateTaskFailureModes:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = _make_uow(todo_task)
 
@@ -292,11 +287,12 @@ class TestAllocateTaskFailureModes:
             engines=engines,
             uow_factory=lambda: uow,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
             allocation_lock=asyncio.Lock(),
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False

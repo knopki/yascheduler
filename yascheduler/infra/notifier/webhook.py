@@ -1,28 +1,17 @@
-# FILE: yascheduler/infra/notifier/webhook.py
-# VERSION: 1.2.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Webhook event handler and outbound payload DTO — sends HTTP notifications for task lifecycle events.
-#   SCOPE: WebhookPayload frozen dataclass, webhook_handler async function dispatching webhooks per event type, _send_webhook retry helper.
-#   DEPENDS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
-#   LINKS: M-DOMAIN-EVENTS, M-NOTIFIER-WEBHOOK
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   webhook_handler - Async handler that sends webhooks for task lifecycle events
-#   _send_webhook - Send webhook payload via HTTP POST with retry and rate limiting
-#   WebhookPayload - Webhook request data shape
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - webhook_handler extracts .value when building WebhookPayload: task_id=event.task_id.value (add-task-id-identity). event.task_id is now a TaskId; dataclasses.asdict recurses into nested dataclasses, so passing the TaskId directly would produce {"task_id": {"value": 42}, ...} (a wire-shape break). WebhookPayload.task_id stays int (the correct target type); the .value extraction is the domain→transport boundary unwrap.
-#   PREVIOUS_CHANGE: v1.1.0 - Absorb WebhookPayload from yascheduler/webhook.py (relocate-webhook-payload); root module deleted, M-WEBHOOK graph record removed.
-# END_CHANGE_SUMMARY
+"""Webhook event handler and outbound payload DTO — sends HTTP notifications for task lifecycle events."""
+# region MODULE_CONTRACT
+# PURPOSE: Notify external systems (CI pipelines, monitoring) about task lifecycle events asynchronously so operators react to completions and failures without the orchestrator blocking on outbound HTTP.
+# SCOPE: Webhook event dispatch with backoff retries and concurrency throttling; outbound payload DTO.
+# DEPENDENCIES: USES API: aiohttp.ClientSession, USES API: backoff.on_exception, WRITES: HTTP POST via aiohttp
+# KEYWORDS: webhook, handler, notification, http, event
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import logging
 from asyncio.locks import Semaphore
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -40,38 +29,46 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_webhook_sem: Semaphore | None = None
+__all__ = [
+    "WebhookPayload",
+    "webhook_handler",
+]
 
 
+# region CLASS_WebhookPayload
+# PURPOSE: Fix the outbound wire shape {"task_id": int, "status": int, "custom_params": ...} so dataclasses.asdict serializes a flat JSON-ready dict.
+# INVARIANTS: frozen; task_id is a bare int (the TaskId.value), never a TaskId instance; custom_params defaults to an empty mapping.
 @dataclass(frozen=True)
 class WebhookPayload:
+    """Payload dataclass for webhook event dispatch."""
+
     task_id: int = field()
     status: int = field()
     custom_params: Mapping[str, Any] = field(default_factory=dict)
 
 
-# START_CONTRACT: _get_semaphore
-#   PURPOSE: Lazy-initialize module-level concurrency semaphore for webhook requests
-#   INPUTS: { None }
-#   OUTPUTS: { asyncio.Semaphore - shared semaphore instance (max 10 concurrent) }
-#   SIDE_EFFECTS: Creates and stores global _webhook_sem on first call
-#   LINKS: M-NOTIFIER-WEBHOOK, fn-webhook_handler
-# END_CONTRACT: _get_semaphore
+# endregion CLASS_WebhookPayload
+
+
+# region FUNC__get_semaphore
+# PURPOSE: Limit concurrent outbound webhook requests process-wide so the event loop is not saturated by parallel HTTP deliveries.
+@lru_cache(maxsize=1)
 def _get_semaphore() -> Semaphore:
-    global _webhook_sem
-    if _webhook_sem is None:
-        _webhook_sem = Semaphore(10)
-    return _webhook_sem
+    """Return the process-wide webhook concurrency semaphore (lazy-init).
+
+    Created lazily on first call so it binds to the running event loop.
+    """
+    return Semaphore(10)
 
 
-# START_CONTRACT: webhook_handler
-#   PURPOSE: Async handler that sends webhooks for task lifecycle events.
-#   INPUTS: { event: DomainEvent - domain event (event.task_id is a TaskId) with optional webhook_url, http: aiohttp.ClientSession }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Sends HTTP POST via _send_webhook (body built via asdict(WebhookPayload(task_id=event.task_id.value, ...))); suppresses final errors after backoff exhausts.
-#   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
-# END_CONTRACT: webhook_handler
+# endregion FUNC__get_semaphore
+
+
+# region FUNC_webhook_handler
+# PURPOSE: Deliver task lifecycle notifications to registered webhook URLs so external systems react asynchronously — backoff retries transient failures, and final errors are logged without crashing the dispatcher.
+# ENSURES: when webhook_url is None, returns without an HTTP request; otherwise builds WebhookPayload(task_id=event.task_id.value, status=<status>.value, custom_params=event.webhook_custom_params); exceptions from _send_webhook are caught and logged, never re-raised.
 async def webhook_handler(event: DomainEvent, http: aiohttp.ClientSession) -> None:
+    """Async handler that sends webhooks for task lifecycle events."""
     if event.webhook_url is None:
         return
 
@@ -90,29 +87,33 @@ async def webhook_handler(event: DomainEvent, http: aiohttp.ClientSession) -> No
     try:
         await _send_webhook(event.webhook_url, payload, http)
     except aiohttp.ClientError:
-        logger.exception(
-            "[NotifierWebhook][webhook_handler][GIVEUP] %s", event.webhook_url
-        )
+        logger.exception("webhook giveup: %s", event.webhook_url)
 
 
-# START_CONTRACT: _send_webhook
-#   PURPOSE: Send webhook payload via HTTP POST with retry and rate limiting.
-#   INPUTS: { url: str, payload: WebhookPayload, http: aiohttp.ClientSession }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Sends HTTP POST to url; logs warning on non-ok response.
-#   RAISES: aiohttp.ClientError — propagated for backoff retry.
-#   LINKS: M-NOTIFIER-WEBHOOK
-# END_CONTRACT: _send_webhook
+# endregion FUNC_webhook_handler
+
+
+# region FUNC__send_webhook
+# PURPOSE: POST the webhook payload with exponential backoff and concurrency throttling so transient network failures are retried automatically without overwhelming the target.
 @backoff.on_exception(backoff.fibo, aiohttp.ClientError, max_time=60)
 async def _send_webhook(
-    url: str, payload: WebhookPayload, http: aiohttp.ClientSession
+    url: str,
+    payload: WebhookPayload,
+    http: aiohttp.ClientSession,
 ) -> None:
     async with _get_semaphore():
         try:
             async with http.post(url, data=asdict(payload)) as resp:
                 if resp.ok:
                     return
-                raise aiohttp.ClientError(f"HTTP {resp.status}: {await resp.text()}")
+                # Raised inside the try so the except below logs every retry
+                # for BOTH error sources (network failure and HTTP status).
+                msg = f"HTTP {resp.status}: {await resp.text()}"
+                raise aiohttp.ClientError(msg)  # noqa: TRY301
         except aiohttp.ClientError:
-            logger.warning("[NotifierWebhook][_send_webhook][RETRY] %s", url)
+            logger.debug("RETRY", extra={"url": url})
+            logger.warning("webhook retry to %s", url)
             raise
+
+
+# endregion FUNC__send_webhook

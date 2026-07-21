@@ -111,8 +111,9 @@ dependency-injected parameters. Every use case is UoW-based.
   transient-only SFTP failures leave the task `RUNNING`, preserve the
   remote dir, and retain the tracker slot so the orchestrator re-consumes
   on the next tick.
-- **`abandon_node.py`** — `abandon_node(node, repository, clouds, uow_factory,
-tracker)` cleans up a never-connected cloud node: best-effort
+- **`abandon_node.py`** —
+  `abandon_node(node, repository, clouds, uow_factory, tracker)`
+  cleans up a never-connected cloud node: best-effort
   `clouds.deallocate`, `uow.nodes.remove + commit`, then locates the
   originating `TO_DO` task by `allocated_ip == ip` (via
   `uow.tasks.list_by_status({TO_DO})` + in-memory filter) and calls
@@ -208,18 +209,21 @@ a single machine. Three concrete modules (`repository.py`, `session.py`,
 `MachineSession`, `MachineOperations`).
 
 - **`repository.py`** — `SSHMachineRepository` implements `MachineRepository`.
-  Owns the connected-machine collection (`_sessions: dict[str,
-MachineSession]`). Seven-method surface: `connect → MachineSession`,
-  `disconnect(ip)`, `disconnect_all()`, `list_free(platforms) →
-list[MachineSession]`, `list_connected() → list[MachineSession]`,
-  `get_session(ip) → MachineSession | None`, plus `__contains__`/`__len__`.
+  Owns the connected-machine collection
+  (`_sessions: dict[str, MachineSession]`).
+  Seven-method surface: `connect → MachineSession`,
+  `disconnect(ip)`, `disconnect_all()`,
+  `list_free(platforms) → list[MachineSession]`,
+  `list_connected() → list[MachineSession]`,
+  `get_session(ip) → MachineSession \| None`,
+  plus `**contains**`/`**len**`.
   State transitions (`occupy`/`release`/`update`), accessor getters
   (`path`/`quote`/`hostname`), and the monitor mechanism live on the
   session — the repository only hands sessions out and tracks them by IP.
   `disconnect(ip)` pops `_sessions[ip]` and delegates teardown to
   `session._close()`; it SHALL NOT touch any other session's monitor.
   Connection-building bits (`MySSHClient`, `DEFAULT_CONN_OPTS`,
-  `_resolve_tunnel`) live here.
+  `_build_tunnel_options`) live here.
 - **`session.py`** — `SSHMachineSession` implements `MachineSession`, the
   connected-machine entity handle. Carries domain identity (`ip`, mutable
   `machine` snapshot, `occupy`/`release`/`update` transitions), read-only
@@ -255,8 +259,6 @@ list[MachineSession]`, `list_connected() → list[MachineSession]`,
   (adapter registry, platform detection, run-fn closure).
 - **`keys.py`** — the pure `list_private_keys(keys_dir)` discovery function
   the orchestrator consumes via injection.
-- **`exceptions.py`** — re-exports the retry-exception tuples
-  (`AllSSHRetryExc`, `SFTPRetryExc`).
 
 ### 2.5 Cloud Adapter (`yascheduler/infra/cloud/`)
 
@@ -289,14 +291,14 @@ and swallowed after backoff exhausts.
 Six per-command modules, each parsing argparse, calling use cases via DI, and
 formatting output:
 
-| Script        | Module            | Purpose                                                     |
-| ------------- | ----------------- | ----------------------------------------------------------- |
-| `yasubmit`    | `submit.py`       | Parse AiiDA script, submit a task                           |
-| `yastatus`    | `check_status.py` | Query tasks; verbose mode tails OUTPUT                      |
-| `yanodes`     | `show_nodes.py`   | List nodes and running tasks                                |
-| `yasetnode`   | `manage_node.py`  | Add / soft-remove / hard-remove a node                      |
-| `yainit`      | `init.py`         | Install service unit files and/or apply schema + migrations |
-| `yascheduler` | `daemonize.py`    | Start the daemon in the foreground                          |
+| Script | Module | Purpose |
+| --- | --- | --- |
+| `yasubmit` | `submit.py` | Parse AiiDA script, submit a task |
+| `yastatus` | `check_status.py` | Query tasks; verbose mode tails OUTPUT |
+| `yanodes` | `show_nodes.py` | List nodes and running tasks |
+| `yasetnode` | `manage_node.py` | Add / soft-remove / hard-remove a node |
+| `yainit` | `init.py` | Install service unit files and/or apply schema + migrations |
+| `yascheduler` | `daemonize.py` | Start the daemon in the foreground |
 
 Three daemon launchers (`daemonize.py`, `daemon_systemd.py`, `daemon_sysv.py`)
 share the daemon core in `daemon_common.py` (`configure_logger` + `run_daemon`)
@@ -332,8 +334,7 @@ SIGTERM/SIGINT handlers that call `orch.stop()`.
   through the `query_tasks` use case over a UoW. Sync wrappers use a private
   `to_sync` helper.
 - **`client.py`** (package root) — compat shim re-exporting `Yascheduler`
-  from `entrypoints.client`, preserving `from yascheduler.client import
-Yascheduler`.
+  from `entrypoints.client`, preserving `from yascheduler.client import Yascheduler`.
 - **`entrypoints/paths.py`** — `CONFIG_FILE`/`LOG_FILE`/`PID_FILE`.
 - **`entrypoints/aiida_plugin.py`** — AiiDA scheduler plugin (`YaScheduler`).
   Talks to yascheduler over SSH transport (runs `yasubmit`/`yastatus`
@@ -367,12 +368,12 @@ The daemon's runtime work is the `Orchestrator`. `start()` launches four
 **producer-consumer loop pairs**, each wired through a de-duplicating
 `UniqueQueue` (keyed so the same task/node is not processed twice):
 
-| Loop           | Producer scans                        | Consumer does                                     | Limit knob     |
-| -------------- | ------------------------------------- | ------------------------------------------------- | -------------- |
-| **Connect**    | `uow.nodes.list_enabled()`            | `repository.connect()` newly enabled nodes        | `conn_machine` |
-| **Allocate**   | `uow.tasks.list_by_status({TO_DO})`   | `allocate_task()` (engine → free machine → cloud) | `allocate`     |
-| **Consume**    | `uow.tasks.list_by_status({RUNNING})` | completion check; if done → `consume_task()`      | `consume`      |
-| **Deallocate** | idle free machines                    | `deallocate_node()` sweep                         | `deallocate`   |
+| Loop | Producer scans | Consumer does | Limit knob |
+| --- | --- | --- | --- |
+| **Connect** | `uow.nodes.list_enabled()` | `repository.connect()` newly enabled nodes | `conn_machine` |
+| **Allocate** | `uow.tasks.list_by_status({TO_DO})` | `allocate_task()` (engine → free machine → cloud) | `allocate` |
+| **Consume** | `uow.tasks.list_by_status({RUNNING})` | completion check; if done → `consume_task()` | `consume` |
+| **Deallocate** | idle free machines | `deallocate_node()` sweep | `deallocate` |
 
 Per-loop concurrency limits and queue sizes come from `LocalSettings`; the
 sleep interval is `min(engine.sleep_interval)` across engines. Shutdown is

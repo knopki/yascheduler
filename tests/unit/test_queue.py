@@ -1,32 +1,8 @@
-# FILE: tests/unit/test_queue.py
-# VERSION: 1.3.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for UniqueQueue and UMessage covering deduplication, item lifecycle, and edge cases.
-#   SCOPE: put/get, deduplication, item_done tracking, psize, task_done NotImplementedError.
-#   DEPENDS: M-QUEUE
-#   LINKS: M-QUEUE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   queue - fixture returning a UniqueQueue instance
-#   msg - helper creating a UMessage with default id and payload
-#   test_put_get - put then get returns original message
-#   test_deduplication - duplicate put is silently skipped
-#   test_item_done_tracking - get adds to pending, item_done removes it
-#   test_item_done_allows_requeue - after item_done the same message can be re-queued
-#   test_psize_after_get - psize reflects in-flight items
-#   test_task_done_raises - task_done raises NotImplementedError
-#   test_dedup_by_id - two messages with equal id dedup regardless of payload
-#   test_dedup_first_wins - on duplicate id the first-inserted message is retained
-#   test_unhashable_payload - unhashable payload is accepted through full lifecycle
-#   test_put_race_full_queue - concurrent puts on full queue deduplicate under lock
-#   test_dedup_on_node_id_not_ip - two UMessages with distinct NodeId but same ip are both kept (NodeId-keyed dedup strength)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Added test_dedup_on_node_id_not_ip covering the NodeId-keyed dedup contract used by the deallocator queue (UniqueQueue[NodeId, Node]): two messages with distinct NodeId but the same ip are both kept — proves the rekey from ip (non-unique post migration 003) to NodeId (strictly unique SERIAL PK) does not collapse same-IP nodes.
-#   PREVIOUS_CHANGE: v1.2.0 - Added test_put_race_full_queue covering concurrent-put dedup under lock (check-then-act race fix).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for UniqueQueue and UMessage covering deduplication, item lifecycle, and edge cases.
+# SCOPE: put/get, deduplication, item_done tracking, psize, task_done NotImplementedError.
+# KEYWORDS: UniqueQueue, UMessage, deduplication, psize
+# endregion MODULE_CONTRACT
 
 import asyncio
 
@@ -36,36 +12,15 @@ import pytest_asyncio
 from yascheduler.application.queue import UMessage, UniqueQueue
 
 
-# START_CONTRACT: queue
-#   PURPOSE: Fixture returning a UniqueQueue instance named "test".
-#   INPUTS: { None }
-#   OUTPUTS: { UniqueQueue - fresh queue instance }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: queue
 @pytest_asyncio.fixture
 async def queue() -> UniqueQueue:
     return UniqueQueue(name="test")
 
 
-# START_CONTRACT: msg
-#   PURPOSE: Helper creating a UMessage with default id and payload.
-#   INPUTS: { msg_id: str - message ID (default "a"), payload: str - message payload (default "data") }
-#   OUTPUTS: { UMessage - constructed message }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: msg
 def msg(msg_id: str = "a", payload: str = "data") -> UMessage:
     return UMessage(id=msg_id, payload=payload)
 
 
-# START_CONTRACT: test_put_get
-#   PURPOSE: Verify that a message put into the queue can be retrieved via get returning the same message.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_put_get
 async def test_put_get(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
@@ -73,13 +28,6 @@ async def test_put_get(queue: UniqueQueue) -> None:
     assert result == m
 
 
-# START_CONTRACT: test_deduplication
-#   PURPOSE: Verify that putting the same message twice results in queue size 1 (deduplication).
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_deduplication
 async def test_deduplication(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
@@ -87,13 +35,6 @@ async def test_deduplication(queue: UniqueQueue) -> None:
     assert queue.qsize() == 1
 
 
-# START_CONTRACT: test_item_done_tracking
-#   PURPOSE: Verify that get adds to pending count and item_done removes it.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_item_done_tracking
 async def test_item_done_tracking(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
@@ -103,13 +44,6 @@ async def test_item_done_tracking(queue: UniqueQueue) -> None:
     assert queue.psize() == 0
 
 
-# START_CONTRACT: test_item_done_allows_requeue
-#   PURPOSE: Verify that after item_done the same message can be re-queued.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_item_done_allows_requeue
 async def test_item_done_allows_requeue(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
@@ -119,13 +53,6 @@ async def test_item_done_allows_requeue(queue: UniqueQueue) -> None:
     assert queue.qsize() == 1
 
 
-# START_CONTRACT: test_psize_after_get
-#   PURPOSE: Verify that psize reflects in-flight items after get.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_psize_after_get
 async def test_psize_after_get(queue: UniqueQueue) -> None:
     m = msg()
     await queue.put(m)
@@ -133,38 +60,17 @@ async def test_psize_after_get(queue: UniqueQueue) -> None:
     assert queue.psize() == 1
 
 
-# START_CONTRACT: test_task_done_raises
-#   PURPOSE: Verify that task_done raises NotImplementedError.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_task_done_raises
 async def test_task_done_raises(queue: UniqueQueue) -> None:
     with pytest.raises(NotImplementedError, match="task_done"):
         queue.task_done()
 
 
-# START_CONTRACT: test_dedup_by_id
-#   PURPOSE: Verify that two UMessage instances with equal id dedup regardless of payload (id-only invariant).
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_dedup_by_id
 async def test_dedup_by_id(queue: UniqueQueue) -> None:
     await queue.put(UMessage(id="a", payload="x"))
     await queue.put(UMessage(id="a", payload="y"))
     assert queue.qsize() == 1
 
 
-# START_CONTRACT: test_dedup_first_wins
-#   PURPOSE: Verify that on a duplicate id the first-inserted message is retained (first-wins, not last-wins).
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_dedup_first_wins
 async def test_dedup_first_wins(queue: UniqueQueue) -> None:
     await queue.put(UMessage(id="a", payload="x"))
     await queue.put(UMessage(id="a", payload="y"))
@@ -172,20 +78,6 @@ async def test_dedup_first_wins(queue: UniqueQueue) -> None:
     assert got.payload == "x"
 
 
-# START_CONTRACT: test_unhashable_payload
-#   PURPOSE: Verify that an unhashable payload (dict) is accepted through construct/put/get/item_done without raising.
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_unhashable_payload
-# START_CONTRACT: test_put_race_full_queue
-#   PURPOSE: Verify that concurrent puts of the same item on a full queue do not produce duplicates (check-then-act race fix).
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE
-# END_CONTRACT: test_put_race_full_queue
 async def test_put_race_full_queue() -> None:
     """Reproduce the check-then-act race: two concurrent put(Y) on a full maxsize=1 queue.
 
@@ -234,13 +126,6 @@ async def test_put_race_full_queue() -> None:
     assert put_count == 1
 
 
-# START_CONTRACT: test_dedup_on_node_id_not_ip
-#   PURPOSE: Prove NodeId-keyed dedup keeps two same-IP nodes distinct (deallocator queue contract).
-#   INPUTS: { None }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: None
-#   LINKS: M-QUEUE, M-APPLICATION-ORCHESTRATOR
-# END_CONTRACT: test_dedup_on_node_id_not_ip
 @pytest.mark.asyncio
 async def test_dedup_on_node_id_not_ip() -> None:
     """Two UMessages with distinct NodeId but the same ip are both kept (NodeId-keyed dedup).
@@ -254,8 +139,8 @@ async def test_dedup_on_node_id_not_ip() -> None:
 
     q: UniqueQueue[NodeId, Node] = UniqueQueue("deallocate_test", maxsize=10)
 
-    node_a = Node(node_id=NodeId(1), ip="10.0.0.9", ncpus=2, cloud="aws")
-    node_b = Node(node_id=NodeId(2), ip="10.0.0.9", ncpus=2, cloud="aws")
+    node_a = Node(node_id=NodeId(1), hostname="10.0.0.9", ncpus=2, cloud="aws")
+    node_b = Node(node_id=NodeId(2), hostname="10.0.0.9", ncpus=2, cloud="aws")
 
     await q.put(UMessage(node_a.node_id, node_a))
     await q.put(UMessage(node_b.node_id, node_b))

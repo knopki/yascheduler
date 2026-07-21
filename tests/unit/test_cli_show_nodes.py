@@ -1,33 +1,13 @@
-# FILE: tests/unit/test_cli_show_nodes.py
-# VERSION: 1.4.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yanodes show_nodes() flag parsing, filtering, table/JSON rendering, and exit codes.
-#   SCOPE: show_nodes() and private helpers with mocked Config/CLIDeps/UoW.
-#   DEPENDS: M-ENTRYPOINTS-CLI-SHOW-NODES
-#   LINKS: M-ENTRYPOINTS-CLI-SHOW-NODES
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestShowNodesParsing - --help, unknown flag, --cloud/--no-cloud mutex
-#   TestShowNodesRendering - default table, display transformations, JSON raw values, empty results
-#   TestShowNodesFiltering - enabled/disabled, busy/free, cloud exact, no-cloud, AND composition, subset=default
-#   TestShowNodesOrder - list_all() order preserved
-#   TestShowNodesErrors - exit 1 on DB error and config error
-#   TestShowNodesStructure - no external deps (rich/tabulate), O(n+m) join invariant
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.3.0 - task-schema-and-entity-cleanup: remove allocated_ip from make_task helper, drop ip= kwarg from all call sites
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yanodes show_nodes() flag parsing, filtering, table/JSON rendering, and exit codes.
+# SCOPE: show_nodes() flag parsing, filtering, table/JSON rendering, exit codes with mocked Config/CLIDeps/UoW.
+# KEYWORDS: yanodes, show_nodes, filtering, table/JSON rendering
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import importlib
 import inspect
-import sys
 from pathlib import Path, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
@@ -91,7 +71,6 @@ def make_mock_deps(config: MagicMock, uow: AsyncMock) -> MagicMock:
     deps.uow_factory = MagicMock(return_value=uow)
     deps.submit = AsyncMock(return_value=TaskId(42))
     deps.engines = config.engines
-    deps.remote_tasks_dir = PurePosixPath("/tmp/tasks")
     return deps
 
 
@@ -190,11 +169,17 @@ class TestShowNodesRendering:
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
     ) -> None:
         _config, uow, _deps = stub_config_deps
-        node1 = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22)
+        node1 = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=4,
+            enabled=True,
+            port=22,
+        )
         node2 = Node(
             node_id=NodeId(2),
-            ip="10.0.0.2",
-            ncpus=0,
+            hostname="10.0.0.2",
+            ncpus=None,
             enabled=False,
             port=2222,
             cloud="hetzner",
@@ -205,8 +190,8 @@ class TestShowNodesRendering:
                     task_id=1,
                     label="my_job",
                     allocated_node_id=NodeId(1),
-                )
-            ]
+                ),
+            ],
         )
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
 
@@ -216,7 +201,7 @@ class TestShowNodesRendering:
         lines = out.splitlines()
         # Header
         assert "NODE_ID" in lines[0]
-        assert "IP" in lines[0]
+        assert "HOSTNAME" in lines[0]
         assert "PORT" in lines[0]
         assert "NCPUS" in lines[0]
         assert "ENABLED" in lines[0]
@@ -232,13 +217,37 @@ class TestShowNodesRendering:
         assert "-" in lines[1]  # port rendered as '-'
         assert "yes" in lines[1]
         assert "my_job" in lines[1]
-        # Row 2: free node, port 2222, ncpus=0 -> MAX, enabled no, cloud hetzner,
+        # Row 2: free node, port 2222, ncpus=None -> MAX, enabled no, cloud hetzner,
         # task_id/label -> '-'
         assert "10.0.0.2" in lines[2]
         assert "2222" in lines[2]
         assert "MAX" in lines[2]
         assert "no" in lines[2]
         assert "hetzner" in lines[2]
+
+    def test_table_shows_max_for_none_ncpus(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
+    ) -> None:
+        """Gherkin: yanodes table shows MAX for None ncpus."""
+        _config, uow, _deps = stub_config_deps
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=None,
+            enabled=True,
+            port=22,
+        )
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.nodes.list_all = AsyncMock(return_value=[node])
+
+        _run([])
+
+        out, _ = capsys.readouterr()
+        lines = out.splitlines()
+        assert len(lines) == 2  # header + one data row
+        assert "MAX" in lines[1]
 
     def test_json_output_raw_values(
         self,
@@ -249,11 +258,16 @@ class TestShowNodesRendering:
 
         _config, uow, _deps = stub_config_deps
         node1 = Node(
-            node_id=NodeId(1), ip="10.0.0.1", ncpus=0, enabled=True, port=22, cloud=None
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=None,
+            enabled=True,
+            port=22,
+            cloud=None,
         )
         node2 = Node(
             node_id=NodeId(2),
-            ip="10.0.0.2",
+            hostname="10.0.0.2",
             ncpus=4,
             enabled=False,
             port=2222,
@@ -261,8 +275,8 @@ class TestShowNodesRendering:
         )
         uow.tasks.list_by_status = AsyncMock(
             return_value=[
-                make_task(task_id=7, label="job7", allocated_node_id=NodeId(1))
-            ]
+                make_task(task_id=7, label="job7", allocated_node_id=NodeId(1)),
+            ],
         )
         uow.nodes.list_all = AsyncMock(return_value=[node1, node2])
 
@@ -272,25 +286,65 @@ class TestShowNodesRendering:
         data = _json.loads(out)
         assert isinstance(data, list)
         assert len(data) == 2
-        assert list(data[0])[0] == "node_id"
+        assert next(iter(data[0])) == "node_id"
         assert data[0]["node_id"] == 1
-        # Busy node: raw port=22 (not "-" or null), ncpus=0 (not "MAX"), enabled bool,
+        # Busy node: raw port=22 (not "-" or null), ncpus=None (null in JSON), enabled bool,
         # cloud null, occupied_by object.
-        assert data[0]["ip"] == "10.0.0.1"
+        assert data[0]["hostname"] == "10.0.0.1"
         assert data[0]["port"] == 22
-        assert data[0]["ncpus"] == 0
+        assert data[0]["ncpus"] is None
         assert data[0]["enabled"] is True
         assert data[0]["cloud"] is None
+        assert data[0]["jump_host"] is None
+        assert data[0]["jump_port"] == 22
+        assert data[0]["jump_username"] == "root"
+        assert data[0]["external_id"] is None
+        assert data[0]["status"] == "OTHER"
+        assert data[0]["created_at"] is not None
+        assert data[0]["updated_at"] is not None
         assert data[0]["occupied_by"] == {"task_id": 7, "label": "job7"}
         # Free node: occupied_by null.
-        assert list(data[1])[0] == "node_id"
+        assert next(iter(data[1])) == "node_id"
         assert data[1]["node_id"] == 2
-        assert data[1]["ip"] == "10.0.0.2"
+        assert data[1]["hostname"] == "10.0.0.2"
         assert data[1]["port"] == 2222
         assert data[1]["ncpus"] == 4
         assert data[1]["enabled"] is False
         assert data[1]["cloud"] == "hetzner"
+        assert data[1]["jump_host"] is None
+        assert data[1]["jump_port"] == 22
+        assert data[1]["jump_username"] == "root"
+        assert data[1]["external_id"] is None
+        assert data[1]["status"] == "OTHER"
+        assert data[1]["created_at"] is not None
+        assert data[1]["updated_at"] is not None
         assert data[1]["occupied_by"] is None
+
+    def test_json_emits_null_ncpus_for_none(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
+    ) -> None:
+        """Gherkin: yanodes --json emits null ncpus for None."""
+        import json as _json
+
+        _config, uow, _deps = stub_config_deps
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=None,
+            enabled=True,
+            port=22,
+        )
+        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.nodes.list_all = AsyncMock(return_value=[node])
+
+        _run(["--json"])
+
+        out, _ = capsys.readouterr()
+        data = _json.loads(out)
+        assert len(data) == 1
+        assert data[0]["ncpus"] is None
 
     def test_json_empty_is_empty_list(
         self,
@@ -324,7 +378,7 @@ class TestShowNodesRendering:
         # Header only, no data rows.
         assert len(lines) == 1
         assert "NODE_ID" in lines[0]
-        assert "IP" in lines[0]
+        assert "HOSTNAME" in lines[0]
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +391,7 @@ def _three_mixed_nodes() -> list[Node]:
     return [
         Node(
             node_id=NodeId(1),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=4,
             enabled=True,
             port=22,
@@ -345,18 +399,23 @@ def _three_mixed_nodes() -> list[Node]:
         ),
         Node(
             node_id=NodeId(2),
-            ip="10.0.0.2",
+            hostname="10.0.0.2",
             ncpus=4,
             enabled=False,
             port=22,
             cloud="hetzner",
         ),
         Node(
-            node_id=NodeId(3), ip="10.0.0.3", ncpus=4, enabled=True, port=22, cloud=None
+            node_id=NodeId(3),
+            hostname="10.0.0.3",
+            ncpus=4,
+            enabled=True,
+            port=22,
+            cloud=None,
         ),
         Node(
             node_id=NodeId(4),
-            ip="10.0.0.4",
+            hostname="10.0.0.4",
             ncpus=4,
             enabled=False,
             port=22,
@@ -370,15 +429,15 @@ def _wire(uow: AsyncMock, nodes: list[Node], tasks: list[Task] | None = None) ->
     uow.tasks.list_by_status = AsyncMock(return_value=tasks or [])
 
 
-def _ips_from_table(out: str) -> list[str]:
-    """Extract the IP column from a table output (skip header)."""
+def _hostnames_from_table(out: str) -> list[str]:
+    """Extract the HOSTNAME column from a table output (skip header)."""
     lines = out.splitlines()
-    ips: list[str] = []
+    hostnames: list[str] = []
     for line in lines[1:]:
-        # NODE_ID is column 0, IP is column 1; strip and split.
-        ip = line.split()[1]
-        ips.append(ip)
-    return ips
+        # NODE_ID is column 0, HOSTNAME is column 1; strip and split.
+        hostname = line.split()[1]
+        hostnames.append(hostname)
+    return hostnames
 
 
 class TestShowNodesFiltering:
@@ -428,7 +487,7 @@ class TestShowNodesFiltering:
         )
         _run(["--enabled", "--busy", "--cloud", "hetzner"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.1"]
+        assert _hostnames_from_table(out) == ["10.0.0.1"]
 
     def test_enabled_filter(
         self,
@@ -439,7 +498,7 @@ class TestShowNodesFiltering:
         _wire(uow, _three_mixed_nodes())
         _run(["--enabled"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.1", "10.0.0.3"]
+        assert _hostnames_from_table(out) == ["10.0.0.1", "10.0.0.3"]
 
     def test_disabled_filter(
         self,
@@ -450,7 +509,7 @@ class TestShowNodesFiltering:
         _wire(uow, _three_mixed_nodes())
         _run(["--disabled"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.2", "10.0.0.4"]
+        assert _hostnames_from_table(out) == ["10.0.0.2", "10.0.0.4"]
 
     def test_busy_filter(
         self,
@@ -466,7 +525,7 @@ class TestShowNodesFiltering:
         )
         _run(["--busy"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.2"]
+        assert _hostnames_from_table(out) == ["10.0.0.2"]
 
     def test_free_filter(
         self,
@@ -482,7 +541,7 @@ class TestShowNodesFiltering:
         )
         _run(["--free"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.1", "10.0.0.3", "10.0.0.4"]
+        assert _hostnames_from_table(out) == ["10.0.0.1", "10.0.0.3", "10.0.0.4"]
 
     def test_cloud_exact_match(
         self,
@@ -493,7 +552,7 @@ class TestShowNodesFiltering:
         _wire(uow, _three_mixed_nodes())
         _run(["--cloud", "hetzner"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.1", "10.0.0.2"]
+        assert _hostnames_from_table(out) == ["10.0.0.1", "10.0.0.2"]
 
     def test_no_cloud_filter(
         self,
@@ -504,7 +563,7 @@ class TestShowNodesFiltering:
         _wire(uow, _three_mixed_nodes())
         _run(["--no-cloud"])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.3"]
+        assert _hostnames_from_table(out) == ["10.0.0.3"]
 
 
 # ---------------------------------------------------------------------------
@@ -522,14 +581,32 @@ class TestShowNodesOrder:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         nodes = [
-            Node(node_id=NodeId(3), ip="10.0.0.3", ncpus=4, enabled=True, port=22),
-            Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22),
-            Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=4, enabled=True, port=22),
+            Node(
+                node_id=NodeId(3),
+                hostname="10.0.0.3",
+                ncpus=4,
+                enabled=True,
+                port=22,
+            ),
+            Node(
+                node_id=NodeId(1),
+                hostname="10.0.0.1",
+                ncpus=4,
+                enabled=True,
+                port=22,
+            ),
+            Node(
+                node_id=NodeId(2),
+                hostname="10.0.0.2",
+                ncpus=4,
+                enabled=True,
+                port=22,
+            ),
         ]
         _wire(uow, nodes)
         _run([])
         out, _ = capsys.readouterr()
-        assert _ips_from_table(out) == ["10.0.0.3", "10.0.0.1", "10.0.0.2"]
+        assert _hostnames_from_table(out) == ["10.0.0.3", "10.0.0.1", "10.0.0.2"]
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +663,7 @@ class TestShowNodesStructure:
         # Also assert the module globals don't expose rich/tabulate.
         assert "rich" not in show_nodes_mod.__dict__
         assert "tabulate" not in show_nodes_mod.__dict__
-        assert "rich" not in sys.modules or "tabulate" not in sys.modules or True
+        assert True
 
     def test_fetch_nodes_view_is_o_n_plus_m(
         self,
@@ -596,7 +673,15 @@ class TestShowNodesStructure:
         _config, uow, _deps = stub_config_deps
         _wire(
             uow,
-            [Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True, port=22)],
+            [
+                Node(
+                    node_id=NodeId(1),
+                    hostname="10.0.0.1",
+                    ncpus=4,
+                    enabled=True,
+                    port=22,
+                ),
+            ],
             [make_task(task_id=1, label="j1", allocated_node_id=NodeId(1))],
         )
         _run([])
@@ -617,7 +702,8 @@ class TestShowNodesConfigLogLevel:
     """--config and --log-level argparse + behavior scenarios (defaults WARNING)."""
 
     def test_help_lists_config_and_log_level(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])
@@ -627,7 +713,8 @@ class TestShowNodesConfigLogLevel:
         assert "--log-level" in out
 
     def test_config_nonexistent_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--config", "/nonexistent.conf"])
@@ -671,7 +758,9 @@ class TestShowNodesConfigLogLevel:
         _wire(uow, [])
         deps = make_mock_deps(make_mock_config(), uow)
         monkeypatch.setattr(
-            show_nodes_mod, "make_cli_deps", MagicMock(return_value=deps)
+            show_nodes_mod,
+            "make_cli_deps",
+            MagicMock(return_value=deps),
         )
         _run(["--config", str(custom_conf)])
         from_config_spy.assert_called_once_with(custom_conf)

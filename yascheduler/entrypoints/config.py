@@ -1,20 +1,9 @@
-# FILE: yascheduler/entrypoints/config.py
-# VERSION: 1.1.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Composition-root config aggregate bundling settings from all inner layers for delivery to the orchestrator and CLIs.
-#   SCOPE: Config frozen dataclass aggregating PostgresDbConfig, LocalSettings, RemoteDefaults, Sequence[ConfigCloud], EngineRepository; only entrypoints consumes it.
-#   DEPENDS: M-DOMAIN-SETTINGS, M-INFRA-DB-CONFIG, M-CLOUD-CONFIGS, M-DOMAIN-ENGINE
-#   LINKS: M-DI, M-ENTRYPOINTS-CONFIG-PARSER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   Config - Frozen dataclass: composition-root aggregate (db, local, remote, clouds, engines); importable from yascheduler.entrypoints
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Narrow Config.clouds field type from Sequence[CloudConfig] (domain Protocol) to Sequence[ConfigCloud] (infra Union), imported TYPE_CHECKING-only from yascheduler.infra.cloud.cloud_configs (narrow-config-clouds-type). Aligns the static field type with the runtime type (parse_clouds returns list[ConfigCloud]) and lets the composition root drop the 2 Protocol→Union downcasts in di.py.
-#   PREVIOUS_CHANGE: v1.0.0 - Relocate Config aggregate from yascheduler.config.config to yascheduler.entrypoints.config as a frozen stdlib dataclass (config-aggregate-to-entrypoints / P4); no attrs dependency; INI parsing owned by parse_config in entrypoints.config_parser.
-# END_CHANGE_SUMMARY
+"""Composition-root config aggregate bundling settings from all inner layers for delivery to the orchestrator and CLIs."""
+# region MODULE_CONTRACT
+# PURPOSE: Bundle all layer-specific settings (DB, local, remote, clouds, engines) into a single frozen composition-root dataclass for delivery to the orchestrator and CLI entry points.
+# SCOPE: Config frozen dataclass — composition-root aggregate; no parsing logic (owned by config_parser).
+# KEYWORDS: config, composition-root, settings, aggregate
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -33,6 +22,8 @@ if TYPE_CHECKING:
     from yascheduler.infra.persistence import PostgresDbConfig
 
 
+# region CLASS_Config
+# PURPOSE: Give the composition root a single immutable bag of every layer's settings so the orchestrator and CLI entry points receive one validated object instead of re-reading INI or threading five separate values through their constructors.
 @dataclass(frozen=True)
 class Config:
     """Composition-root config aggregate."""
@@ -42,3 +33,6 @@ class Config:
     remote: RemoteDefaults
     clouds: Sequence[ConfigCloud]
     engines: EngineRepository
+
+
+# endregion CLASS_Config

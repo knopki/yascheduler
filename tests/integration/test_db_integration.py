@@ -1,38 +1,9 @@
-# FILE: tests/integration/test_db_integration.py
-# VERSION: 2.5.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
-#   SCOPE: Node CRUD, Task CRUD with flat typed fields + JSONB extra, status transitions, UoW-based composition queries (list_by_jobs, get_by_ids), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
-#   DEPENDS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL, M-CONFIG-DB
-#   LINKS: M-PERSISTENCE-UOW, M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_add_and_get_node - round-trip add + get via Node domain object
-#   test_get_all_nodes_filtering - list_all, list_enabled, list_disabled
-#   test_has_node - existing and non-existing IP
-#   test_enable_disable_node - toggling enabled status via repo
-#   test_remove_node - node removed after removal
-#   test_count_aggregations - count_by_cloud, count_by_status
-#   test_add_and_get_task - round-trip insert + get with typed fields and JSONB extra
-#   test_task_lifecycle - insert -> allocate_to(node)/mark_running -> DONE with with_download_results (preserves allocated_node_id)
-#   test_set_task_error - with and without error message (typed error field)
-#   test_get_tasks_by_status - filtering across statuses
-#   test_get_tasks_by_jobs - array parameter with unnest
-#   test_get_task_ids_by_node_id_and_status - filtered by node_id and status
-#   test_get_tasks_with_cloud_by_id_status - in-test composition: list_by_jobs + get_by_ips
-#   test_tmp_node_lifecycle_via_insert - tmp-node inserted via insert(NewNode(cloud=..., enabled=False)) carries ip="", enabled=False, node_id; remove cleans up
-#   test_migration_003_backfills_prov_ips_and_drops_unique - migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key; pre-creates yascheduler_tasks at 002-era schema so 004 ALTER is valid
-#   test_list_filters_empty_ip_in_sql - list_enabled/list_disabled exclude ip='' rows at the SQL layer (no python post-filter)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v2.5.0 - drop-task-context-entity: Task/NewTask constructed with flat typed fields; TaskContext.from_metadata/to_metadata removed; context.X reads → task.X; lifecycle test uses with_download_results; extra preserved through download path.
-#   PREVIOUS_CHANGE: v2.4.0 - task-schema-and-entity-cleanup: removed all allocated_ip references; test_add_and_get_task uses allocated_node_id; test_task_lifecycle no longer asserts allocated_ip; test_set_task_error removes allocated_ip from Task construction; test_get_task_ids_by_ip_and_status → test_get_task_ids_by_node_id_and_status (uses list_ids_by_node_id_and_status); test_get_tasks_with_cloud_by_id_status uses allocated_node_id for node resolution.
-# END_CHANGE_SUMMARY
-
 """Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL."""
+# region MODULE_CONTRACT
+# PURPOSE: Integration tests for PostgresUnitOfWork + repositories against real PostgreSQL via testcontainers.
+# SCOPE: Node CRUD, Task CRUD with flat typed fields + JSONB extra, status transitions, UoW-based composition queries (list_by_jobs, get_by_ids), tmp-node lifecycle via insert, migration 003 backfill + constraint drop, migration 004 pre-create table at 002-era schema (so 004 ALTER ADD COLUMN is valid).
+# KEYWORDS: PostgresUnitOfWork, Node CRUD, Task CRUD, JSONB, migration
+# endregion MODULE_CONTRACT
 
 from collections.abc import Callable
 
@@ -51,19 +22,17 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 # ---------------------------------------------------------------------------
 
 
-# START_CONTRACT: test_add_and_get_node
-#   PURPOSE: Verify Node add + get round-trip with all fields via UoW.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_add_and_get_node
 async def test_add_and_get_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Insert a node and retrieve it; verify all fields match."""
     new_node = NewNode(
-        ip="10.0.0.1", username="admin", port=2222, ncpus=8, cloud="azure", enabled=True
+        hostname="10.0.0.1",
+        username="admin",
+        port=2222,
+        ncpus=8,
+        cloud="azure",
+        enabled=True,
     )
-    assert new_node.ip == "10.0.0.1"
+    assert new_node.hostname == "10.0.0.1"
     assert new_node.username == "admin"
     assert new_node.port == 2222
     assert new_node.ncpus == 8
@@ -80,7 +49,7 @@ async def test_add_and_get_node(uow_factory: Callable[[], PostgresUnitOfWork]) -
     async with uow_factory() as uow:
         retrieved = await uow.nodes.get_by_id(persisted.node_id)
         assert retrieved is not None
-        assert retrieved.ip == "10.0.0.1"
+        assert retrieved.hostname == "10.0.0.1"
         assert retrieved.username == "admin"
         assert retrieved.port == 2222
         assert retrieved.ncpus == 8
@@ -88,20 +57,13 @@ async def test_add_and_get_node(uow_factory: Callable[[], PostgresUnitOfWork]) -
         assert retrieved.enabled is True
 
 
-# START_CONTRACT: test_get_all_nodes_filtering
-#   PURPOSE: Verify list_all, list_enabled, list_disabled filtering via UoW.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_all_nodes_filtering
 async def test_get_all_nodes_filtering(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Add enabled and disabled nodes; verify filtered queries."""
     async with uow_factory() as uow:
-        await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0, enabled=True))
-        await uow.nodes.insert(NewNode(ip="10.0.0.2", ncpus=0, enabled=False))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=None, enabled=True))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.2", ncpus=None, enabled=False))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -110,24 +72,17 @@ async def test_get_all_nodes_filtering(
 
         enabled = await uow.nodes.list_enabled()
         assert len(enabled) == 1
-        assert enabled[0].ip == "10.0.0.1"
+        assert enabled[0].hostname == "10.0.0.1"
 
         disabled = await uow.nodes.list_disabled()
         assert len(disabled) == 1
-        assert disabled[0].ip == "10.0.0.2"
+        assert disabled[0].hostname == "10.0.0.2"
 
 
-# START_CONTRACT: test_has_node
-#   PURPOSE: Verify get() returns node for existing IP and None for non-existing.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_has_node
 async def test_has_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Check has_node for existing and non-existing IPs."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0))
+        node = await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=None))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -135,19 +90,14 @@ async def test_has_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
         assert await uow.nodes.get_by_id(NodeId(99999)) is None
 
 
-# START_CONTRACT: test_enable_disable_node
-#   PURPOSE: Verify enable/disable toggle the enabled flag via repo.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_enable_disable_node
 async def test_enable_disable_node(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Toggle node enabled status and verify."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0, enabled=False))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.1", ncpus=None, enabled=False),
+        )
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -169,17 +119,10 @@ async def test_enable_disable_node(
         assert fetched.enabled is False
 
 
-# START_CONTRACT: test_remove_node
-#   PURPOSE: Verify remove deletes the node; get returns None after removal.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_remove_node
 async def test_remove_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Remove a node and verify it is gone."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=0))
+        node = await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=None))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -191,26 +134,19 @@ async def test_remove_node(uow_factory: Callable[[], PostgresUnitOfWork]) -> Non
         assert await uow.nodes.get_by_id(node.node_id) is None
 
 
-# START_CONTRACT: test_count_aggregations
-#   PURPOSE: Verify count_by_cloud and count_by_status aggregation via repo.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_count_aggregations
 async def test_count_aggregations(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Verify cloud and status aggregation queries."""
     async with uow_factory() as uow:
         await uow.nodes.insert(
-            NewNode(ip="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=None, cloud="azure", enabled=True),
         )
         await uow.nodes.insert(
-            NewNode(ip="10.0.0.2", ncpus=0, cloud="azure", enabled=False)
+            NewNode(hostname="10.0.0.2", ncpus=None, cloud="azure", enabled=False),
         )
         await uow.nodes.insert(
-            NewNode(ip="10.0.0.3", ncpus=0, cloud="hetzner", enabled=True)
+            NewNode(hostname="10.0.0.3", ncpus=None, cloud="hetzner", enabled=True),
         )
         await uow.commit()
 
@@ -228,32 +164,32 @@ async def test_count_aggregations(
 # ---------------------------------------------------------------------------
 
 
-# START_CONTRACT: test_add_and_get_task
-#   PURPOSE: Verify Task insert + get round-trip including typed fields and JSONB extra via UoW.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_add_and_get_task
 async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Add a task and retrieve it; verify all fields including typed fields and JSONB extra."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=4, enabled=True))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.1", ncpus=4, enabled=True),
+        )
         task = await uow.tasks.insert(
             NewTask(
                 label="calc",
                 engine="fleur",
                 webhook_custom_params={},
                 extra={"param": 42},
-            )
+            ),
         )
-        task = task.allocate_to(node)
+        # Transition to a CHECK-valid RUNNING state via task.run.
+        # A TO_DO + allocated_node_id save is rejected by the
+        # task_status_field_invariants CHECK (TO_DO requires
+        # allocated_node_id IS NULL); production always uses run
+        # before save.
+        task = task.run(node.node_id, "/r")
         await uow.tasks.save(task)
         await uow.commit()
         assert task.task_id.value >= 1
         assert task.label == "calc"
         assert task.allocated_node_id == node.node_id
-        assert task.status == DomainTaskStatus.TO_DO
+        assert task.status == DomainTaskStatus.RUNNING
         assert task.engine == "fleur"
         assert task.webhook_custom_params == {}
         assert task.extra == {"param": 42}
@@ -264,32 +200,27 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
         assert retrieved.task_id == task.task_id
         assert retrieved.label == "calc"
         assert retrieved.allocated_node_id == node.node_id
-        assert retrieved.status == DomainTaskStatus.TO_DO
+        assert retrieved.status == DomainTaskStatus.RUNNING
         assert retrieved.engine == "fleur"
         assert retrieved.webhook_custom_params == {}
         assert retrieved.extra == {"param": 42}
 
 
-# START_CONTRACT: test_task_lifecycle
-#   PURPOSE: Verify full task lifecycle: insert -> allocate_to/mark_running -> DONE with with_download_results.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_task_lifecycle
 async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Walk a task through TO_DO -> RUNNING -> DONE and verify each step."""
     async with uow_factory() as uow:
         # Insert a node first so allocate_to(node) can bind a real node_id
         # (the DB FK allocated_node_id REFERENCES yascheduler_nodes(node_id)).
-        node = await uow.nodes.insert(NewNode(ip="10.0.0.5", ncpus=4, enabled=True))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.5", ncpus=4, enabled=True),
+        )
         task = await uow.tasks.insert(
             NewTask(
                 label="sim",
                 engine="fleur",
                 webhook_custom_params={},
                 extra={"param": 42},
-            )
+            ),
         )
         await uow.commit()
         assert task.status == DomainTaskStatus.TO_DO
@@ -299,9 +230,8 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
         assert task is not None
-        # Construct the Node for allocate_to using the DB-assigned node_id.
-        alloc_node = Node(node_id=node_id, ip="10.0.0.5", ncpus=4)
-        updated = task.allocate_to(alloc_node).mark_running()
+        # CHECK-valid RUNNING: task.run sets allocated_node_id + remote_folder.
+        updated = task.run(node_id, "/r")
         await uow.tasks.save(updated)
         await uow.commit()
 
@@ -314,9 +244,7 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     async with uow_factory() as uow:
         task = await uow.tasks.get(task_id)
         assert task is not None
-        updated = task.with_download_results(
-            local_folder="/l", remote_folder="/r"
-        ).complete()
+        updated = task.complete(local_folder="/l", remote_folder="/r")
         await uow.tasks.save(updated)
         await uow.commit()
 
@@ -330,20 +258,12 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         assert done.allocated_node_id == node_id
 
 
-# START_CONTRACT: test_set_task_error
-#   PURPOSE: Verify setting task error embeds error in typed error field; without error extra is preserved.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_set_task_error
 async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """set_task_error embeds error in typed error field; without error extra is preserved."""
-
     # With error message
     async with uow_factory() as uow:
         task = await uow.tasks.insert(
-            NewTask(label="fail-job", engine="fleur", webhook_custom_params={})
+            NewTask(label="fail-job", engine="fleur", webhook_custom_params={}),
         )
         await uow.commit()
         task_id = task.task_id
@@ -373,7 +293,7 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
     # Without error message (use a new task for clarity)
     async with uow_factory() as uow:
         task2 = await uow.tasks.insert(
-            NewTask(label="fail-job2", engine="fleur", webhook_custom_params={})
+            NewTask(label="fail-job2", engine="fleur", webhook_custom_params={}),
         )
         await uow.commit()
         task2_id = task2.task_id
@@ -400,36 +320,28 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         assert t2.extra == {"only": "meta"}
 
 
-# START_CONTRACT: test_get_tasks_by_status
-#   PURPOSE: Verify list_by_status filters correctly by status values.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_tasks_by_status
 async def test_get_tasks_by_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Filter tasks by status; multiple statuses supported."""
     async with uow_factory() as uow:
         await uow.tasks.insert(NewTask(label="todo", engine="fleur"))
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.7", ncpus=2, enabled=True),
+        )
         t2 = await uow.tasks.insert(NewTask(label="running", engine="fleur"))
         t3 = await uow.tasks.insert(NewTask(label="done", engine="fleur"))
-        await uow.tasks.save(
-            Task(
-                task_id=t2.task_id,
-                engine="fleur",
-                label="running",
-                status=DomainTaskStatus.RUNNING,
-            )
-        )
+        # CHECK-valid RUNNING via real domain transitions (a bare
+        # Task(status=RUNNING) with NULL allocated_node_id/remote_folder is
+        # rejected by task_status_field_invariants).
+        await uow.tasks.save(t2.run(node.node_id, "/r"))
         await uow.tasks.save(
             Task(
                 task_id=t3.task_id,
                 engine="fleur",
                 label="done",
                 status=DomainTaskStatus.DONE,
-            )
+            ),
         )
         await uow.commit()
 
@@ -448,18 +360,11 @@ async def test_get_tasks_by_status(
 
         # Multiple statuses
         multi = await uow.tasks.list_by_status(
-            {DomainTaskStatus.TO_DO, DomainTaskStatus.DONE}
+            {DomainTaskStatus.TO_DO, DomainTaskStatus.DONE},
         )
         assert len(multi) == 2
 
 
-# START_CONTRACT: test_get_tasks_by_jobs
-#   PURPOSE: Verify list_by_jobs uses unnest to filter by task IDs array.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_tasks_by_jobs
 async def test_get_tasks_by_jobs(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
     """Retrieve tasks by array of IDs; only requested IDs returned."""
     async with uow_factory() as uow:
@@ -475,88 +380,71 @@ async def test_get_tasks_by_jobs(uow_factory: Callable[[], PostgresUnitOfWork]) 
         assert ids == {t1.task_id, t3.task_id}
 
 
-# START_CONTRACT: test_get_task_ids_by_node_id_and_status
-#   PURPOSE: Verify filtering task IDs by node_id and status.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_get_task_ids_by_node_id_and_status
 async def test_get_task_ids_by_node_id_and_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Filter task IDs by node_id and status."""
     async with uow_factory() as uow:
-        node = await uow.nodes.insert(NewNode(ip="192.168.1.1", ncpus=4, enabled=True))
+        node = await uow.nodes.insert(
+            NewNode(hostname="192.168.1.1", ncpus=4, enabled=True),
+        )
         node_id = node.node_id
         other_node = await uow.nodes.insert(
-            NewNode(ip="10.0.0.1", ncpus=4, enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=4, enabled=True),
         )
 
         t1 = await uow.tasks.insert(NewTask(label="x", engine="fleur"))
-        t1 = t1.allocate_to(node)
-        t1 = t1.mark_running()
+        t1 = t1.run(node.node_id, "/r/x")
         await uow.tasks.save(t1)
 
         ty = await uow.tasks.insert(NewTask(label="y", engine="fleur"))
-        ty = ty.allocate_to(other_node)
-        ty = ty.mark_running()
+        ty = ty.run(other_node.node_id, "/r/y")
         await uow.tasks.save(ty)
 
+        # tz: a DONE task allocated to `node`. Build via the real lifecycle
+        # (allocate_to + mark_running + with_remote_folder → save → complete →
+        # save) so every persisted state satisfies the
+        # task_status_field_invariants CHECK (a TO_DO + allocated_node_id save
+        # is rejected; DONE is unconstrained).
         tz = await uow.tasks.insert(NewTask(label="z", engine="fleur"))
-        tz = tz.allocate_to(node)
+        tz = tz.run(node.node_id, "/r/z")
         await uow.tasks.save(tz)
-        tz_done = Task(
-            task_id=tz.task_id,
-            label=tz.label,
-            engine=tz.engine,
-            status=DomainTaskStatus.DONE,
-            allocated_node_id=tz.allocated_node_id,
-        )
+        tz_done = tz.complete(local_folder="/l", remote_folder="/r/z")
         await uow.tasks.save(tz_done)
         await uow.commit()
 
     async with uow_factory() as uow:
         ids = await uow.tasks.list_ids_by_node_id_and_status(
-            node_id, DomainTaskStatus.RUNNING
+            node_id,
+            DomainTaskStatus.RUNNING,
         )
         assert ids == [t1.task_id]
 
 
-# START_CONTRACT: test_get_tasks_with_cloud_by_id_status
-#   PURPOSE: Verify in-test composition of list_by_jobs + get_by_ips for cloud attribute.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES, M-DOMAIN-MODEL
-# END_CONTRACT: test_get_tasks_with_cloud_by_id_status
 async def test_get_tasks_with_cloud_by_id_status(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """Compose list_by_jobs + get_by_ids to get cloud attribute."""
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
-            NewNode(ip="10.0.0.1", ncpus=0, cloud="azure", enabled=True)
+            NewNode(hostname="10.0.0.1", ncpus=None, cloud="azure", enabled=True),
         )
         node_id = node.node_id
         await uow.commit()
 
     async with uow_factory() as uow:
         t = await uow.tasks.insert(NewTask(label="", engine="fleur"))
-        t = t.allocate_to(node)
-        t = t.mark_running()
+        t = t.run(node.node_id, "/r/t")
         await uow.tasks.save(t)
 
+        # t2: a DONE task allocated to `node`, built via the real lifecycle so
+        # every persisted state satisfies the task_status_field_invariants
+        # CHECK (a TO_DO + allocated_node_id save is rejected; RUNNING requires
+        # remote_folder; DONE is unconstrained).
         t2 = await uow.tasks.insert(NewTask(label="", engine="fleur"))
-        t2 = t2.allocate_to(node)
+        t2 = t2.run(node.node_id, "/r/t2")
         await uow.tasks.save(t2)
-        t2_done = Task(
-            task_id=t2.task_id,
-            label=t2.label,
-            engine=t2.engine,
-            status=DomainTaskStatus.DONE,
-            allocated_node_id=t2.allocated_node_id,
-        )
+        t2_done = t2.complete(local_folder="/l", remote_folder="/r/t2")
         await uow.tasks.save(t2_done)
         await uow.commit()
 
@@ -578,13 +466,6 @@ async def test_get_tasks_with_cloud_by_id_status(
 # ---------------------------------------------------------------------------
 
 
-# START_CONTRACT: test_tmp_node_lifecycle_via_insert
-#   PURPOSE: Verify insert(NewNode(cloud=..., enabled=False)) creates a tmp-node row with ip="" sentinel and enabled=False, returning a Node carrying node_id; remove(node_id) cleans up.
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_tmp_node_lifecycle_via_insert
 async def test_tmp_node_lifecycle_via_insert(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
@@ -595,7 +476,7 @@ async def test_tmp_node_lifecycle_via_insert(
         assert isinstance(node, Node)
         assert isinstance(node.node_id, NodeId)
         assert node.node_id.value >= 1
-        assert node.ip == ""
+        assert node.hostname == ""
         assert node.enabled is False
         assert node.cloud == "azure"
         assert node.username == "root"
@@ -604,7 +485,7 @@ async def test_tmp_node_lifecycle_via_insert(
     async with uow_factory() as uow:
         # The tmp row is invisible to list_disabled (ip <> '' SQL filter excludes ip="").
         disabled = await uow.nodes.list_disabled()
-        assert all(n.ip != "" for n in disabled)
+        assert all(n.hostname != "" for n in disabled)
         # But visible to list_all (counts toward capacity).
         all_nodes = await uow.nodes.list_all()
         assert any(n.node_id == node.node_id for n in all_nodes)
@@ -618,13 +499,6 @@ async def test_tmp_node_lifecycle_via_insert(
         assert all(n.node_id != node.node_id for n in all_nodes)
 
 
-# START_CONTRACT: test_migration_003_backfills_prov_ips_and_drops_unique
-#   PURPOSE: Verify migration 003 backfills prov... → '' and drops the yascheduler_nodes_ip_key UNIQUE constraint (duplicate real ip insert succeeds post-migration).
-#   INPUTS: { None - starts its own PostgresContainer }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Starts a Postgres container; seeds a prov... row; applies schema + migrations (003 backfills + drops constraint)
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: test_migration_003_backfills_prov_ips_and_drops_unique
 async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
     """Migration 003 backfills prov... → '' and drops yascheduler_nodes_ip_key."""
     from urllib.parse import urlparse
@@ -661,7 +535,7 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_migrations "
                 "(migration_id TEXT PRIMARY KEY, "
-                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             )
             conn.run("INSERT INTO yascheduler_migrations (migration_id) VALUES ('002')")
             conn.run(
@@ -669,11 +543,11 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
                 "node_id SERIAL PRIMARY KEY, ip VARCHAR(15) UNIQUE, "
                 "port INTEGER DEFAULT 22, username VARCHAR(255) DEFAULT 'root', "
                 "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
-                "cloud VARCHAR(32) DEFAULT NULL)"
+                "cloud VARCHAR(32) DEFAULT NULL)",
             )
             conn.run(
                 "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
-                "VALUES ('provabc1234567', FALSE, 'aws')"
+                "VALUES ('provabc1234567', FALSE, 'aws')",
             )
             # Pre-create yascheduler_tasks at the 002-era schema (no
             # allocated_node_id) so apply_migrations runs 003 then 004
@@ -682,7 +556,7 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.run(
                 "CREATE TABLE yascheduler_tasks ("
                 "task_id SERIAL PRIMARY KEY, label VARCHAR(256), "
-                "metadata JSONB, ip VARCHAR(15), status SMALLINT)"
+                "metadata JSONB, ip VARCHAR(15), status SMALLINT)",
             )
         finally:
             conn.close()
@@ -704,8 +578,8 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.run("BEGIN")
             try:
                 rows = conn.run(
-                    "SELECT ip, enabled, cloud FROM yascheduler_nodes "
-                    "WHERE cloud = 'aws'"
+                    "SELECT hostname, enabled, cloud FROM yascheduler_nodes "
+                    "WHERE cloud = 'aws'",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -718,12 +592,12 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.run("BEGIN")
             try:
                 conn.run(
-                    "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
-                    "VALUES ('10.0.0.99', TRUE, 'aws')"
+                    "INSERT INTO yascheduler_nodes (hostname, enabled, cloud) "
+                    "VALUES ('10.0.0.99', TRUE, 'aws')",
                 )
                 conn.run(
-                    "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
-                    "VALUES ('10.0.0.99', TRUE, 'hetzner')"
+                    "INSERT INTO yascheduler_nodes (hostname, enabled, cloud) "
+                    "VALUES ('10.0.0.99', TRUE, 'hetzner')",
                 )
             finally:
                 conn.run("ROLLBACK")
@@ -731,24 +605,17 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
             conn.close()
 
 
-# START_CONTRACT: test_list_filters_empty_ip_in_sql
-#   PURPOSE: Verify list_enabled returns only enabled rows (no python post-filter) and list_disabled excludes ip='' rows at the SQL layer (no python post-filter).
-#   INPUTS: { uow_factory: UoW factory fixture }
-#   OUTPUTS: { None - assertion-based test }
-#   SIDE_EFFECTS: None
-#   LINKS: M-PERSISTENCE-POSTGRES
-# END_CONTRACT: test_list_filters_empty_ip_in_sql
 async def test_list_filters_empty_ip_in_sql(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
     """list_enabled/list_disabled filtering is in SQL, not python (remove-tmp-node-fake-ip)."""
     async with uow_factory() as uow:
         # A real enabled node (has a real ip).
-        await uow.nodes.insert(NewNode(ip="10.0.0.1", ncpus=4, enabled=True))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.1", ncpus=4, enabled=True))
         # A tmp/pending row (ip="", enabled=False) — excluded by list_disabled SQL.
         await uow.nodes.insert(NewNode(cloud="aws", enabled=False))
         # A real-disabled VM (ip<>"", enabled=False) — included by list_disabled.
-        await uow.nodes.insert(NewNode(ip="10.0.0.2", ncpus=4, enabled=False))
+        await uow.nodes.insert(NewNode(hostname="10.0.0.2", ncpus=4, enabled=False))
         await uow.commit()
 
     async with uow_factory() as uow:
@@ -756,13 +623,13 @@ async def test_list_filters_empty_ip_in_sql(
         # Only the enabled real node; no python post-filter needed (invariant:
         # no enabled row has ip="").
         assert len(enabled) == 1
-        assert enabled[0].ip == "10.0.0.1"
+        assert enabled[0].hostname == "10.0.0.1"
 
         disabled = await uow.nodes.list_disabled()
         # Only the real-disabled VM (ip <> '' is filtered in SQL); the tmp row
         # with ip="" is excluded at the SQL layer.
         assert len(disabled) == 1
-        assert disabled[0].ip == "10.0.0.2"
+        assert disabled[0].hostname == "10.0.0.2"
 
         all_nodes = await uow.nodes.list_all()
         # list_all returns everything (including the tmp row with ip="").

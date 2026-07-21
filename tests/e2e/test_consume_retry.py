@@ -1,22 +1,8 @@
-# FILE: tests/e2e/test_consume_retry.py
-# VERSION: 1.5.0
-# START_MODULE_CONTRACT
-#   PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
-#   SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-CONSUME, M-SSH-OPS-DOWNLOAD, M-PERSISTENCE-UOW, M-DOMAIN-MODEL
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-CONSUME, M-SSH-OPS-DOWNLOAD, M-PERSISTENCE-UOW
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_consume_retry_then_success - First download_outputs returns transient errors -> stays RUNNING; second succeeds -> DONE, rmtree ran
-#   test_consume_permanent_marks_done_with_error - download_outputs returns permanent errors -> DONE+error, rmtree ran
-#   test_consume_transient_preserves_remote_dir_regression - On transient errors the remote dir still exists after consume_task returns False
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - drop-task-context-entity follow-up: wrappers return the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors); empty strings for the unused local/remote paths in the synthetic failure paths.
-#   PREVIOUS_CHANGE: v1.4.0 - simplify-cloud-connect-node-args: both repository.connect calls drop the `username=`/`port=` kwargs.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: E2E tests for consume_task retry/permanent/regression flows (fix-download-rmtree-data-loss).
+# SCOPE: retry-then-success (transient then success), permanent->DONE+error, data-loss regression (remote dir preserved on transient).
+# KEYWORDS: consume_task, retry, permanent error, data loss, e2e
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -30,7 +16,6 @@ from asyncssh.sftp import SFTPFailure
 from yascheduler.domain.model import NewNode, Node, NodeId, Task, TaskId
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
-from yascheduler.infra.ssh.operations import SSHMachineOperations
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 
 if TYPE_CHECKING:
@@ -41,7 +26,7 @@ if TYPE_CHECKING:
     from yascheduler.entrypoints import Config
     from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 
-log = logging.getLogger("e2e.test_consume_retry")
+log = logging.getLogger(__name__)
 
 
 async def _setup_node_and_submit(
@@ -53,17 +38,16 @@ async def _setup_node_and_submit(
     async with uow_factory() as uow:
         db_node = await uow.nodes.insert(
             NewNode(
-                ip=ssh_container["host"],
+                hostname=ssh_container["host"],
                 username=ssh_container["username"],
                 port=ssh_container["port"],
                 enabled=True,
-                ncpus=0,
-            )
+                ncpus=None,
+            ),
         )
         await uow.commit()
 
-    repository = SSHMachineRepository(log=log)
-    operations = SSHMachineOperations(repository=repository)
+    repository = SSHMachineRepository()
     session = await repository.connect(
         node=db_node,
         client_keys=[ssh_container["key_path"]],
@@ -71,12 +55,14 @@ async def _setup_node_and_submit(
         engines_dir=e2e_config.remote.engines_dir,
         tasks_dir=e2e_config.remote.tasks_dir,
     )
-    await operations.setup_node(session, e2e_config.engines)
+    await session.setup_node(e2e_config.engines)
     await repository.disconnect(db_node.node_id)
 
     deps = make_cli_deps(e2e_config)
     task_id = await deps.submit(
-        "e2e retry test", {"1.input": "hello e2e"}, "test_shell"
+        "e2e retry test",
+        {"1.input": "hello e2e"},
+        "test_shell",
     )
     assert task_id.value > 0
     return task_id
@@ -107,7 +93,8 @@ async def test_consume_retry_then_success(
 ) -> None:
     """A RUNNING task whose first download_outputs returns transient errors
     (remote dir preserved) succeeds on the second consume cycle -> task DONE,
-    remote dir removed, TaskCompleted recorded."""
+    remote dir removed, TaskCompleted recorded.
+    """
     task_id = await _setup_node_and_submit(e2e_config, uow_factory, ssh_container)
 
     orchestrator = await make_daemon(e2e_config)
@@ -115,7 +102,7 @@ async def test_consume_retry_then_success(
     # Install the download_outputs wrapper BEFORE starting the orchestrator so
     # the first consume cycle hits the patched impl (no timing race where the
     # real download runs first and finalises the task).
-    real_download = orchestrator._operations.download_outputs
+    real_download = orchestrator._output_downloader.download_outputs
     call_count = {"n": 0}
     target_task_id = task_id
 
@@ -149,7 +136,7 @@ async def test_consume_retry_then_success(
             task_id=task_id,
         )
 
-    orchestrator._operations.download_outputs = flaky_download_outputs  # type: ignore[method-assign]
+    orchestrator._output_downloader.download_outputs = flaky_download_outputs  # type: ignore[method-assign]
 
     orch_task = asyncio.create_task(orchestrator.start())
 
@@ -180,7 +167,8 @@ async def test_consume_permanent_marks_done_with_error(
 ) -> None:
     """A RUNNING task whose download_outputs returns permanent errors
     (e.g. missing output file) -> task DONE+error, remote dir removed,
-    TaskFailed recorded."""
+    TaskFailed recorded.
+    """
     task_id = await _setup_node_and_submit(e2e_config, uow_factory, ssh_container)
 
     orchestrator = await make_daemon(e2e_config)
@@ -207,7 +195,7 @@ async def test_consume_permanent_marks_done_with_error(
             [("/remote/1.input.out", OSError("No such file"))],
         )
 
-    orchestrator._operations.download_outputs = permanent_download_outputs  # type: ignore[method-assign]
+    orchestrator._output_downloader.download_outputs = permanent_download_outputs  # type: ignore[method-assign]
 
     orch_task = asyncio.create_task(orchestrator.start())
 
@@ -230,14 +218,15 @@ async def test_consume_transient_preserves_remote_dir_regression(
 ) -> None:
     """Regression: when download_outputs returns transient errors, the remote
     directory still exists after consume_task returns False (the original bug
-    would have rmtree'd it, losing undownloaded outputs irrecoverably)."""
+    would have rmtree'd it, losing undownloaded outputs irrecoverably).
+    """
     task_id = await _setup_node_and_submit(e2e_config, uow_factory, ssh_container)
 
     orchestrator = await make_daemon(e2e_config)
 
     # Install the transient-only patch BEFORE start() to avoid a timing race
     # where the real download runs first and finalises the task.
-    real_download = orchestrator._operations.download_outputs
+    real_download = orchestrator._output_downloader.download_outputs
 
     # Wrap to observe whether rmtree would have been called. We patch
     # download_outputs to always return transient errors so rmtree is gated
@@ -265,7 +254,7 @@ async def test_consume_transient_preserves_remote_dir_regression(
             [],
         )
 
-    orchestrator._operations.download_outputs = transient_only_download  # type: ignore[method-assign]
+    orchestrator._output_downloader.download_outputs = transient_only_download  # type: ignore[method-assign]
 
     orch_task = asyncio.create_task(orchestrator.start())
 
@@ -288,11 +277,11 @@ async def test_consume_transient_preserves_remote_dir_regression(
         assert captured_remote_dir, "download_outputs was never called"
         remote_dir = captured_remote_dir[-1]
         # Connect and check the remote dir exists
-        check_repo = SSHMachineRepository(log=log)
+        check_repo = SSHMachineRepository()
         check_node = Node(
             node_id=NodeId(9999),
-            ip=ssh_container["host"],
-            ncpus=0,
+            hostname=ssh_container["host"],
+            ncpus=None,
             enabled=True,
             cloud=None,
             username=ssh_container["username"],
@@ -311,13 +300,14 @@ async def test_consume_transient_preserves_remote_dir_regression(
     finally:
         # Restore real download so the orchestrator can finalise the task on
         # shutdown cycle, then stop.
-        orchestrator._operations.download_outputs = real_download  # type: ignore[method-assign]
+        orchestrator._output_downloader.download_outputs = real_download  # type: ignore[method-assign]
         await _stop_orchestrator(orchestrator, orch_task)
         await _cleanup_node(uow_factory, ssh_container)
 
 
 async def _stop_orchestrator(
-    orchestrator: Orchestrator, orch_task: asyncio.Task[None]
+    orchestrator: Orchestrator,
+    orch_task: asyncio.Task[None],
 ) -> None:
     await orchestrator.stop()
     try:
@@ -332,7 +322,16 @@ async def _cleanup_node(
 ) -> None:
     async with uow_factory() as uow:
         all_nodes = await uow.nodes.list_all()
-        matching = [n for n in all_nodes if n.ip == ssh_container["host"]]
+        matching = [n for n in all_nodes if n.hostname == ssh_container["host"]]
         if matching:
-            await uow.nodes.remove(matching[0].node_id)
+            node_id = matching[0].node_id
+            # Abandon any RUNNING tasks on this node before removing it.
+            # task_status_field_invariants CHECK forbids RUNNING with NULL
+            # allocated_node_id, so the FK ON DELETE SET NULL would violate it.
+            running = await uow.tasks.list_by_status({DomainTaskStatus.RUNNING})
+            for t in running:
+                if t.allocated_node_id == node_id:
+                    abandoned = t.abandon(node_id, error="test cleanup")
+                    await uow.tasks.save(abandoned)
+            await uow.nodes.remove(node_id)
         await uow.commit()

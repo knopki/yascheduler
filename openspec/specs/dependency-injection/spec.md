@@ -9,23 +9,16 @@ each entry point instantiates only the adapters it needs.
 
 ### Requirement: make_daemon factory
 
-The system SHALL provide an `async make_daemon(config: Config, log:
-Logger | None = None, *, clouds: CloudProvisionerImpl | None = None) ->
-Orchestrator` factory function, exposed at `yascheduler.entrypoints.di`.
-The `Config` aggregate SHALL be imported from `yascheduler.entrypoints.config`.
-The function SHALL create a `PostgresUnitOfWork` factory and pass it to the
-`Orchestrator`. It SHALL construct the SSH infrastructure directly as TWO ports
-— a `MachineRepository` (instantiated as `SSHMachineRepository`) and a
-`MachineOperations` (instantiated as `SSHMachineOperations`) — and pass both to
-the `Orchestrator` and to `CloudProvisionerImpl`.
-
-The composition root SHALL NOT introduce a DB-facade class. Persistence is
-accessed only via `PostgresUnitOfWork` and the repository ports
-(`TaskRepository`, `NodeRepository`).
-
-The composition root SHALL NOT use `typing.cast` to bridge between the
-domain `CloudConfig` Protocol and the infra `ConfigCloud` Union. The
-`typing.cast` symbol SHALL NOT be imported by `yascheduler.entrypoints.di`.
+The system SHALL provide an
+`async make_daemon(config: Config, *, clouds: CloudProvisionerImpl | None = None) -> Orchestrator`
+factory function, exposed at `yascheduler.entrypoints.di`. The `Config`
+aggregate SHALL be imported from `yascheduler.entrypoints.config` (or
+re-exported by `yascheduler.entrypoints`). The function SHALL create a
+`PostgresUnitOfWork` factory and pass it to the `Orchestrator`. It SHALL
+construct a `SSHMachineRepository` and three stateless collaborator instances
+(`TaskDeployer`, `OutputDownloader`, `OccupancyChecker` from
+`yascheduler.infra`) and pass the repository and the three collaborators to
+the `Orchestrator`.
 
 #### Scenario: Config imported from entrypoints
 
@@ -36,6 +29,16 @@ domain `CloudConfig` Protocol and the infra `ConfigCloud` Union. The
 
 - **WHEN** `yascheduler.entrypoints.di` is imported
 - **THEN** it does NOT import a `DB` facade, and no `DB`-like facade class is introduced; persistence is wired only via `PostgresUnitOfWork`
+
+#### Scenario: Three collaborators constructed without log argument
+
+- **WHEN** `make_daemon(config)` is called
+- **THEN** exactly one instance each of `TaskDeployer()`, `OutputDownloader()`, `OccupancyChecker()` is constructed with no arguments; all three are passed to `Orchestrator(...)` as `task_deployer=`, `output_downloader=`, `occupancy_checker=` keyword arguments
+
+#### Scenario: make_daemon does not accept a log parameter
+
+- **WHEN** `make_daemon` is inspected for its signature
+- **THEN** it is declared `async def make_daemon(config, *, clouds=None) -> Orchestrator` with no `log` parameter
 
 ### Requirement: make_cli_deps factory
 
@@ -55,10 +58,9 @@ lightweight dependencies for CLI commands.
 ### Requirement: DI factories in yascheduler.entrypoints.di
 
 The system SHALL expose DI factories from `yascheduler.entrypoints.di`. The
-module SHALL NOT import from `remote_machine/` or `clouds/`. The module is
-a resident of the `yascheduler.entrypoints` layer and is subject to the
-`layers` contract (R3); its imports flow `entrypoints → infra →
-application → domain`.
+module is a resident of the `yascheduler.entrypoints` layer and is subject
+to the `layers` contract (R3); its imports flow
+`entrypoints → infra → application → domain`.
 
 #### Scenario: Import factories
 - **WHEN** `from yascheduler.entrypoints.di import make_daemon, make_cli_deps` is executed
@@ -85,9 +87,7 @@ keyword-only `deps_factory: Callable[[Config], CLIDeps]` parameter. When
 `deps_factory is None`, the constructor SHALL lazily default to
 `make_cli_deps` (invoked per query call, not cached). The factory passed
 via `deps_factory` SHALL be invoked as `<factory>(self.config)` exactly
-once per `queue_get_tasks_async` call to obtain a fresh `CLIDeps`,
-mirroring the per-call construction pattern already used by
-`queue_submit_task_async`.
+once per `queue_get_tasks_async` call to obtain a fresh `CLIDeps`.
 
 The factory invocation SHALL be synchronous (not awaited).
 
@@ -116,59 +116,37 @@ The factory invocation SHALL be synchronous (not awaited).
 On the `clouds is None` branch, `make_daemon` SHALL construct exactly one
 `SSHMachineRepository` instance and inject the SAME instance into both
 `CloudProvisionerImpl.machine_repository` and `Orchestrator.repository`.
-It SHALL ALSO construct exactly one `SSHMachineOperations` instance bound
-to that repository and inject it into `Orchestrator.operations` (and into
-`CloudProvisionerImpl.machine_operations` if it needs any operations-side
-methods — current `CloudProvisionerImpl` uses only `setup_node` and
-`get_cpu_cores`, both on operations). This ensures a single `_sessions`
-registry spans cloud setup (via `_setup_vm`) and orchestrator runtime, so
-that connections opened during cloud allocation are visible to the
-orchestrator and are reaped by `Orchestrator.stop()` via
-`repository.disconnect_all()`.
 
-The pre-built-clouds (`clouds is not None`) branch SHALL continue to
-construct a fresh `SSHMachineRepository` and
-`SSHMachineOperations` pair for the orchestrator while the caller-supplied
-`clouds` retain whatever repository/operations they were built with. This
-branch is exercised only by unit tests and performs no real allocations.
-
-This requirement exists to prevent two correctness defects that arise from
-split registries: (1) every allocated cloud node leaks one SSH connection
-for the process lifetime because the cloud repository is never drained,
-and (2) the orchestrator opens a second connection to each cloud VM
-because its `contains(ip)` filter inspects only its own registry.
+The pre-built-clouds (`clouds is not None`) branch SHALL construct a fresh
+`SSHMachineRepository` for the orchestrator; the caller-supplied `clouds`
+retain whatever repository they were built with.
 
 #### Scenario: clouds is None shares one repository instance
 
 - **WHEN** `make_daemon(config)` is called without a `clouds` argument
 - **THEN** the `SSHMachineRepository` instance passed as `CloudProvisionerImpl.machine_repository` SHALL be the same object (`is`) as the instance passed as `Orchestrator.repository`
 
-#### Scenario: clouds is None shares one operations instance
+#### Scenario: CloudProvisionerImpl constructed without operations port or log
 
 - **WHEN** `make_daemon(config)` is called without a `clouds` argument
-- **THEN** the `SSHMachineOperations` instance passed to `Orchestrator.operations` SHALL be the same object (`is`) as the instance passed to `CloudProvisionerImpl.machine_operations` (if the latter is wired); both share the same `repository` reference
+- **THEN** `CloudProvisionerImpl(...)` SHALL be invoked with `machine_repository=` but WITHOUT any `machine_operations=` (or equivalent operations-side) keyword argument AND WITHOUT any `log=` keyword argument
 
-#### Scenario: clouds is None constructs exactly one SSHMachineRepository
-
-- **WHEN** `make_daemon(config)` is called without a `clouds` argument
-- **THEN** `SSHMachineRepository(...)` SHALL be invoked exactly once across the construction of `CloudProvisionerImpl` and `Orchestrator`
-
-#### Scenario: clouds is None constructs exactly one SSHMachineOperations
+#### Scenario: clouds is None constructs three collaborator instances
 
 - **WHEN** `make_daemon(config)` is called without a `clouds` argument
-- **THEN** `SSHMachineOperations(repository=..., log=...)` SHALL be invoked exactly once across the construction of `CloudProvisionerImpl` and `Orchestrator`; the single instance is shared by both consumers on the production path
+- **THEN** `TaskDeployer()`, `OutputDownloader()`, and `OccupancyChecker()` SHALL each be invoked exactly once with no arguments; all three instances are passed to `Orchestrator(...)`
 
-#### Scenario: pre-built clouds path keeps its own repository/operations
+#### Scenario: pre-built clouds path keeps its own repository
 
 - **WHEN** `make_daemon(config, clouds=my_clouds)` is called
-- **THEN** the orchestrator SHALL be constructed with a `repository` and an `operations` pair that are freshly-constructed `SSHMachineRepository` / `SSHMachineOperations`, NOT taken from `my_clouds`; the caller-supplied `clouds` instance SHALL be wired to the orchestrator unchanged
+- **THEN** the orchestrator SHALL be constructed with a `repository` that is a freshly-constructed `SSHMachineRepository` (without `log=`), NOT taken from `my_clouds`; the caller-supplied `clouds` instance SHALL be wired to the orchestrator unchanged
 
 #### Scenario: cloud-allocation connections are visible to orchestrator
 
-- **WHEN** a cloud node is allocated via `clouds.allocate(provider)` and `_setup_vm` connects it via `machine_repository.connect(ip)`
-- **THEN** a subsequent `_connect_machine_producer` cycle in the orchestrator SHALL observe `repository.contains(ip) == True` for that node and SHALL NOT call `repository.connect(ip)` again for it
+- **WHEN** a cloud node is allocated and connected via the shared repository
+- **THEN** a subsequent orchestrator cycle SHALL observe `repository.contains(node.node_id) == True` for that node and SHALL NOT open a second connection
 
 #### Scenario: cloud-allocation connections are reaped at shutdown
 
 - **WHEN** `Orchestrator.stop()` runs after one or more cloud nodes have been allocated on the `clouds is None` path
-- **THEN** `repository.disconnect_all()` SHALL close every connection opened by `_setup_vm`, leaving no cloud-setup SSH connection open at process exit
+- **THEN** `repository.disconnect_all()` SHALL close every connection opened during cloud allocation, leaving no cloud-setup SSH connection open at process exit

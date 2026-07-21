@@ -1,20 +1,9 @@
-# FILE: yascheduler/infra/ssh/platform/paths.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Normalize remote data/engines/tasks dirs using the adapter's path type.
-#   SCOPE: _init_paths (moved verbatim from helpers.py).
-#   DEPENDS: M-PLATFORM-ADAPTERS
-#   LINKS: M-PLATFORM-ADAPTERS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _init_paths - Normalize remote data/engines/tasks dirs using adapter path type.
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py (decompose-ssh-gateway); _init_paths moved verbatim, no behavioral change.
-#   PREVIOUS_CHANGE: none
-# END_CHANGE_SUMMARY
+"""Normalize remote data/engines/tasks dirs using the adapter's path type."""
+# region MODULE_CONTRACT
+# PURPOSE: Normalize remote data/engines/tasks dirs using the adapter's path type.
+# SCOPE: _init_paths — ensures directory paths match the remote path semantics.
+# KEYWORDS: paths, directories, data, engines, tasks, remote
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -25,11 +14,12 @@ if TYPE_CHECKING:
 
     from .adapters import RemoteMachineAdapter
 
+__all__ = ["_init_paths"]
 
-# START_CONTRACT: _init_paths
-#   PURPOSE: Normalize remote data/engines/tasks dirs using adapter path type
-#   LINKS: none
-# END_CONTRACT: _init_paths
+
+# region FUNC__init_paths
+# PURPOSE: Normalize remote data/engines/tasks dirs using adapter path type.
+# INVARIANTS: Pure — no I/O, no logging.
 def _init_paths(
     adapter: RemoteMachineAdapter,
     data_dir: PurePath | None,
@@ -46,3 +36,6 @@ def _init_paths(
     if not isinstance(tasks_dir, path_cls):
         tasks_dir = path_cls(str(tasks_dir)) if tasks_dir else data_dir / "tasks"
     return data_dir, engines_dir, tasks_dir
+
+
+# endregion FUNC__init_paths

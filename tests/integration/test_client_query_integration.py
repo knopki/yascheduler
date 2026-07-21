@@ -1,30 +1,13 @@
-# FILE: tests/integration/test_client_query_integration.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Implementation-agnostic integration test pinning the Yascheduler query-method output shape against real PostgreSQL.
-#   SCOPE: Submit a real task, query via jobs=[id] and status=[0], assert 5-key dict shape with nested node object.
-#   DEPENDS: M-ENTRYPOINTS-CLIENT, M-ENTRYPOINTS-CONFIG, M-INFRA-DB-CONFIG, M-PERSISTENCE-SCHEMA
-#   LINKS: M-ENTRYPOINTS-CLIENT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _query_config - session-scoped INI path pointing at testcontainer DB with minimal engine
-#   test_query_by_jobs - queue_get_tasks(jobs=[id]) returns one 5-key Mapping with nested node
-#   test_query_by_status - queue_get_tasks(status=[0]) returns matching 5-key Mapping
-#   test_query_single_task - queue_get_task(id) returns Mapping; unknown id returns None
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: EXPECTED_KEYS changed from {task_id, label, ip, status, metadata, cloud} to {task_id, label, status, metadata, node}; test_query_by_jobs_returns_six_key_mapping → test_query_by_jobs_returns_five_key_mapping_with_node; assertions updated for nested node dict.
-#   PREVIOUS_CHANGE: v1.0.1 - Migrate import path from yascheduler.client to yascheduler.entrypoints.client.
-# END_CHANGE_SUMMARY
-
 """Implementation-agnostic integration test — Yascheduler query path against real PostgreSQL (5-key shape).
 
 Implementation-agnostic: asserts observable behavior only (never isinstance
 on db.TaskStatus). Valid both before the UoW swap (DB-backed) and after.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Implementation-agnostic integration test pinning the Yascheduler query-method output shape against real PostgreSQL.
+# SCOPE: Submit a real task, query via jobs=[id] and status=[0], assert 5-key dict shape with nested node object.
+# KEYWORDS: Yascheduler query, Postgres, task dict shape
+# endregion MODULE_CONTRACT
 
 from typing import TYPE_CHECKING
 
@@ -40,13 +23,6 @@ if TYPE_CHECKING:
 EXPECTED_KEYS = {"task_id", "label", "status", "metadata", "node"}
 
 
-# START_CONTRACT: _query_config
-#   PURPOSE: Build an INI config pointing at the testcontainer DB with a minimal engine.
-#   INPUTS: { _db_config: PostgresDbConfig, tmp_path_factory: TempPathFactory }
-#   OUTPUTS: { Iterator[str] - path to the written INI file }
-#   SIDE_EFFECTS: Writes a temp INI file and engine directories.
-#   LINKS: M-CONFIG
-# END_CONTRACT: _query_config
 @pytest.fixture(scope="session")
 def _query_config(
     _db_config: "PostgresDbConfig",
@@ -77,18 +53,11 @@ def _query_config(
         f"check_pname = sleep\n"
         f"input_files = 1.input\n"
         f"output_files = 1.input.out\n"
-        f"platforms = linux\n"
+        f"platforms = linux\n",
     )
-    yield str(ini_path)
+    return str(ini_path)  # type: ignore[return-value]
 
 
-# START_CONTRACT: _submit_task
-#   PURPOSE: Submit a real TO_DO task via the facade and return its id.
-#   INPUTS: { _query_config: str, _init_schema: None }
-#   OUTPUTS: { int - task_id }
-#   SIDE_EFFECTS: Inserts a task row into the testcontainer PostgreSQL.
-#   LINKS: M-ENTRYPOINTS-CLIENT
-# END_CONTRACT: _submit_task
 @pytest.fixture
 def _submit_task(
     _query_config: str,
@@ -107,7 +76,9 @@ class TestClientQueryIntegration:
     """Implementation-agnostic: query methods return 5-key Mapping shape with nested node object."""
 
     def test_query_by_jobs_returns_five_key_mapping_with_node(
-        self, _query_config: str, _submit_task: int
+        self,
+        _query_config: str,
+        _submit_task: int,
     ) -> None:
         task_id = _submit_task
         result = Yascheduler(_query_config).queue_get_tasks(jobs=[task_id])
@@ -126,7 +97,9 @@ class TestClientQueryIntegration:
         assert isinstance(mapping["metadata"], dict)
 
     def test_query_by_status_returns_five_key_mapping_with_node(
-        self, _query_config: str, _submit_task: int
+        self,
+        _query_config: str,
+        _submit_task: int,
     ) -> None:
         task_id = _submit_task
         result = Yascheduler(_query_config).queue_get_tasks(status=[0])
@@ -141,7 +114,9 @@ class TestClientQueryIntegration:
         assert "node" in mapping
 
     def test_query_single_task_returns_mapping_or_none(
-        self, _query_config: str, _submit_task: int
+        self,
+        _query_config: str,
+        _submit_task: int,
     ) -> None:
         task_id = _submit_task
         found = Yascheduler(_query_config).queue_get_task(task_id)

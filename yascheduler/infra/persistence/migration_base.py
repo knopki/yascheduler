@@ -1,19 +1,10 @@
-# FILE: yascheduler/infra/persistence/migration_base.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Migration base class for .py migrations with injected config/conn/log and begin()/commit() helpers.
-#   SCOPE: Migration class.
-#   DEPENDS: M-INFRA-DB-CONFIG, M-PERSISTENCE
-#   LINKS: M-PERSISTENCE-MIGRATIONS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   Migration - base class for .py database migrations; instantiated by the runner with (config, conn, log)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Introduce Migration base class for .py migrations (add-db-migrations). Subclasses receive injected config/conn/log and use begin()/commit() for non-transactional ops (CREATE INDEX CONCURRENTLY, VACUUM).
-# END_CHANGE_SUMMARY
+"""Migration base class for .py migrations with injected config/conn/log and begin()/commit() helpers."""
+# region MODULE_CONTRACT
+# PURPOSE: Provide a minimal contract for Python-based migrations — inject config, connection, and logger so subclasses implement only the migration step without plumbing infrastructure.
+# SCOPE: Migration base class for .py migration subclasses; runner instantiates with (config, conn, log).
+# DEPENDENCIES: USES API: pg8000.Connection
+# KEYWORDS: migration, base class, database migration
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -26,7 +17,14 @@ if TYPE_CHECKING:
 
     from .db_config import PostgresDbConfig
 
+__all__ = ["Migration"]
 
+
+# region CLASS_Migration
+# PURPOSE: Define the contract for Python-based migrations — inject config, connection, and logger so subclasses implement only the migration logic without wiring infrastructure.
+# RATIONALE:
+# - Q: Why do begin() and commit() exist as helper methods when the runner already opens a transaction before calling migrate()?
+#   A: Certain PostgreSQL operations cannot run inside an open transaction (CREATE INDEX CONCURRENTLY, VACUUM, REINDEX); the intended pattern is self.commit() to close the runner's transaction, run the non-transactional command, then self.begin() to reopen a transaction before the runner records the tracker — without these helpers a migration could not safely perform such operations.
 class Migration:
     """Base class for ``.py`` database migrations.
 
@@ -42,13 +40,6 @@ class Migration:
     ``yascheduler_migrations`` tracker guards against re-application.
     """
 
-    # START_CONTRACT: Migration
-    #   PURPOSE: Base class injected with (config, conn, log); subclass implements migrate().
-    #   INPUTS: { config: PostgresDbConfig - DB connection params, conn: pg8000.native.Connection - open connection (runner has issued BEGIN), log: logging.Logger - migration-scoped logger }
-    #   OUTPUTS: { None - subclass migrate() performs DDL/DML via self.conn }
-    #   SIDE_EFFECTS: None in the base class; subclasses run DDL/DML via self.conn.
-    #   LINKS: M-PERSISTENCE-MIGRATIONS (runner instantiates subclasses), M-INFRA-DB-CONFIG, pg8000.native.Connection
-    # END_CONTRACT: Migration
     def __init__(
         self,
         config: PostgresDbConfig,
@@ -68,4 +59,8 @@ class Migration:
         self.conn.run("COMMIT")
 
     def migrate(self) -> None:
+        """Run a single migration step."""
         raise NotImplementedError
+
+
+# endregion CLASS_Migration

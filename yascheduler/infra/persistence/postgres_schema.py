@@ -1,21 +1,18 @@
-# FILE: yascheduler/infra/persistence/postgres_schema.py
-# VERSION: 1.0.1
-# START_MODULE_CONTRACT
-#   PURPOSE: Synchronous, transactional application of schema.sql via pg8000.
-#   SCOPE: apply_schema() — one-shot schema init for CLI and test fixtures.
-#   DEPENDS: M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG
-#   LINKS: M-PERSISTENCE, M-CLI-COMMANDS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   apply_schema - apply schema.sql in a BEGIN/COMMIT transaction, rollback on failure
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config (config-aggregate-to-entrypoints / P4).
-#   PREVIOUS_CHANGE: v1.0.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-# END_CHANGE_SUMMARY
+"""Synchronous, transactional application of schema.sql via pg8000."""
+# region MODULE_CONTRACT
+# PURPOSE: Bootstrap the database schema from scratch (fresh database, test fixtures, CI) in a single transactional apply — idempotent so repeated invocation does not corrupt existing databases.
+# SCOPE: One-shot schema.sql application via pg8000 for CLI init and test fixtures.
+# DEPENDENCIES: USES API: pg8000.Connection, READS: schema.sql via sql_loader
+# KEYWORDS: schema, apply, postgres, ddl
+# INVARIANTS:
+# - schema.sql is the canonical full latest snapshot of the database — every CREATE TABLE statement includes all current columnsr.
+# - apply_schema is the sole consumer of schema.sql; apply_migrations consumes the migration files in sql/migrations/ separately.
+# RATIONALE:
+# - Q: why is schema.sql maintained as a hand-edited full snapshot instead of being generated from migrations?
+#   A: a fresh database must reach the latest schema in a single transactional apply (for CI, test fixtures, and fresh deployments) without replaying every historical migration; maintaining the snapshot by hand is the tradeoff, and the migration edit procedure (see the db-migrations spec) requires updating both schema.sql and the migration files in lockstep.
+# endregion MODULE_CONTRACT
 
+import contextlib
 import logging
 
 from pg8000 import DatabaseError
@@ -26,18 +23,25 @@ from .sql_loader import load_query
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["apply_schema"]
 
-# START_CONTRACT: apply_schema
-#   PURPOSE: Apply schema.sql to a PostgreSQL database in a single transaction.
-#   INPUTS: { config: PostgresDbConfig - database connection parameters }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates tables; opens/closes a pg8000 connection; prints on "already exists".
-#   LINKS: M-PERSISTENCE-SQLLOADER, M-INFRA-DB-CONFIG, pg8000.native.Connection
-# END_CONTRACT: apply_schema
+
+# region FUNC_apply_schema
+# PURPOSE: Bootstrap the database from scratch — apply all DDL in one transaction so CI, test fixtures, and fresh deployments start with a consistent schema without manual setup.
+# ENSURES:
+# - On success, the database contains every table, enum type, trigger function, and CHECK constraint declared in schema.sql; the bootstrap DO block has either created yascheduler_migrations and seeded it to the latest migration (fresh database), created the tracker without a seed row (legacy database), or left the tracker untouched (modern database); the connection is closed.
+# - On any failure, the open transaction is rolled back (best-effort), the original exception is re-raised, and the connection is closed.
+# INVARIANTS:
+# - Synchronous — opens ONE pg8000 native Connection for the whole apply and closes it in finally.
+# - Wraps the entire schema.sql body in a single BEGIN / COMMIT transaction — partial-failure leaves no half-applied schema.
+# - On DatabaseError, issues best-effort ROLLBACK, logs "Database already initialized!" when the error message contains "already exists", and re-raises regardless.
+# - On any other BaseException, issues best-effort ROLLBACK and re-raises.
+# - Closes the connection in finally regardless of outcome.
 def apply_schema(config: PostgresDbConfig) -> None:
+    """Apply schema."""
     conn: Connection | None = None
     try:
-        # START_BLOCK_OPEN_CONNECTION
+        # region BLOCK_open_connection
         conn = Connection(
             user=config.user,
             host=config.host,
@@ -45,46 +49,39 @@ def apply_schema(config: PostgresDbConfig) -> None:
             port=config.port,
             password=config.password,
         )
-        logger.debug("[postgres_schema][apply_schema][OPEN_CONNECTION] connected")
-        # END_BLOCK_OPEN_CONNECTION
+        # endregion BLOCK_open_connection
 
-        # START_BLOCK_APPLY_SCHEMA
+        # region BLOCK_apply_schema
         schema_sql = load_query("schema")
         conn.run("BEGIN")
         conn.run(schema_sql)
         conn.run("COMMIT")
-        logger.debug("[postgres_schema][apply_schema][APPLY_SCHEMA] schema applied")
-        # END_BLOCK_APPLY_SCHEMA
+        # endregion BLOCK_apply_schema
 
     except DatabaseError as e:
-        # START_BLOCK_HANDLE_EXISTING
-        logger.debug(
-            "[postgres_schema][apply_schema][HANDLE_EXISTING] DatabaseError caught"
-        )
+        # region BLOCK_handle_existing
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.run("ROLLBACK")
-            except Exception:
-                pass
         if "already exists" in str(e.args[0]):
-            print("Database already initialized!")
+            logger.exception("Database already initialized!")
+            logger.debug("ALREADY_EXISTS", extra={"error": str(e)})
         raise
-        # END_BLOCK_HANDLE_EXISTING
+        # endregion BLOCK_handle_existing
 
     except BaseException:
-        # START_BLOCK_ROLLBACK
-        logger.debug("[postgres_schema][apply_schema][ROLLBACK] Rolling back on error")
+        # region BLOCK_rollback
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.run("ROLLBACK")
-            except Exception:
-                pass
         raise
-        # END_BLOCK_ROLLBACK
+        # endregion BLOCK_rollback
 
     finally:
-        # START_BLOCK_CLOSE
+        # region BLOCK_close
         if conn is not None:
             conn.close()
-            logger.debug("[postgres_schema][apply_schema][CLOSE] connection closed")
-        # END_BLOCK_CLOSE
+        # endregion BLOCK_close
+
+
+# endregion FUNC_apply_schema

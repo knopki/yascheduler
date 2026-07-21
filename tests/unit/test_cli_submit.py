@@ -1,28 +1,8 @@
-# FILE: tests/unit/test_cli_submit.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yasubmit submit() argparse, content validation, exit codes, helpers, and AiiDA stdout contract.
-#   SCOPE: submit() and private helpers (_existing_path, _parse_submit_args, _parse_script_metadata,
-#          _read_input_files, _build_metadata) with mocked Config/CLIDeps.
-#   DEPENDS: M-ENTRYPOINTS-CLI-SUBMIT
-#   LINKS: M-ENTRYPOINTS-CLI-SUBMIT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestSubmitParsing - --help, no-args, missing file, extra positional, unknown flag, prog name
-#   TestSubmitHappyPath - valid script → stdout str(task_id), deps.submit call args, exit 0
-#   TestSubmitContentValidation - ENGINE missing/unknown → exit 1 + stderr, stdout empty
-#   TestSubmitWebhook - _build_metadata webhook branch (PARENT + webhook_url; PARENT absent; webhook_url None)
-#   TestSubmitHelpers - _parse_script_metadata, _read_input_files (utf-8 + base64), _build_metadata
-#   TestSubmitExitCodes - success 0, runtime error 1, argparse error 2
-#   TestSubmitArgvInjection - explicit argv list, no sys.argv patch needed
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --log-level WARN exits 2; --log-level DEBUG sets root to DEBUG; --config /custom.conf passed to Config.from_config_parser; defaults CONFIG_FILE/WARNING).
-#   PREVIOUS_CHANGE: v1.0.0 - Initial unit tests for relocated yasubmit (entrypoints/cli/submit.py) in relocate-submit-command.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yasubmit submit() argparse, content validation, exit codes, helpers, and AiiDA stdout contract.
+# SCOPE: submit() argparse, content validation, exit codes, AiiDA stdout contract, and metadata helpers with mocked Config/CLIDeps.
+# KEYWORDS: yasubmit, submit, argparse, AiiDA stdout contract
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -78,7 +58,6 @@ def make_mock_deps(config: MagicMock) -> MagicMock:
     deps = MagicMock(spec=CLIDeps)
     deps.submit = AsyncMock(return_value=TaskId(42))
     deps.engines = config.engines
-    deps.remote_tasks_dir = Path("/tmp/tasks")
     return deps
 
 
@@ -130,7 +109,8 @@ class TestSubmitParsing:
         assert err.strip()  # argparse usage error
 
     def test_nonexistent_file_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["/nonexistent/script.in"])
@@ -190,7 +170,7 @@ class TestSubmitHappyPath:
         monkeypatch: pytest.MonkeyPatch,
         stub_config_deps: tuple[MagicMock, MagicMock],
     ) -> None:
-        config, deps = stub_config_deps
+        _config, deps = stub_config_deps
         script = tmp_path / "test.in"
         script.write_text("LABEL = Test job\nENGINE = g09\n")
         (tmp_path / "input").write_text("dummy input")
@@ -290,7 +270,9 @@ class TestSubmitWebhook:
         (tmp_path / "input").write_text("data")
 
         metadata = submit_mod._build_metadata(
-            {"ENGINE": "g09", "PARENT": "42"}, config, str(tmp_path)
+            {"ENGINE": "g09", "PARENT": "42"},
+            config,
+            str(tmp_path),
         )
         assert metadata["webhook_url"] == "https://example.com/hook"
         assert metadata["webhook_custom_params"] == {"parent": "42"}
@@ -318,7 +300,9 @@ class TestSubmitWebhook:
         monkeypatch.chdir(tmp_path)
 
         metadata = submit_mod._build_metadata(
-            {"ENGINE": "g09", "PARENT": "42"}, config, str(tmp_path)
+            {"ENGINE": "g09", "PARENT": "42"},
+            config,
+            str(tmp_path),
         )
         assert "webhook_url" not in metadata
         assert "webhook_custom_params" not in metadata
@@ -338,7 +322,7 @@ class TestSubmitHelpers:
 
     def test_parse_script_metadata_malformed_ignored(self) -> None:
         result = submit_mod._parse_script_metadata(
-            "LABEL = Test\nmalformed line\nENGINE = g09\n"
+            "LABEL = Test\nmalformed line\nENGINE = g09\n",
         )
         assert result == {"LABEL": "Test", "ENGINE": "g09"}
 
@@ -346,7 +330,9 @@ class TestSubmitHelpers:
         assert submit_mod._parse_script_metadata("") == {}
 
     def test_read_input_files_utf8(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         engine = Engine(name="g09", spawn="run.sh", input_files=("input",))
         (tmp_path / "input").write_text("hello", encoding="utf-8")
@@ -356,7 +342,9 @@ class TestSubmitHelpers:
         assert result == {"input": "hello"}
 
     def test_read_input_files_base64_fallback(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         engine = Engine(name="g09", spawn="run.sh", input_files=("binary.dat",))
         # Bytes that are not valid UTF-8 (0xFF is invalid alone)
@@ -366,11 +354,13 @@ class TestSubmitHelpers:
         result = submit_mod._read_input_files(engine, str(tmp_path))
         assert "binary.dat" in result
         assert result["binary.dat"] == base64.b64encode(b"\xff\xfe\x00\x01").decode(
-            "ascii"
+            "ascii",
         )
 
     def test_build_metadata_local_folder_always_present(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config = make_mock_config(webhook_url=None)
         (tmp_path / "input").write_text("data")
@@ -380,7 +370,9 @@ class TestSubmitHelpers:
         assert metadata["local_folder"] == str(tmp_path)
 
     def test_build_metadata_input_files_merged(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config = make_mock_config(webhook_url=None)
         (tmp_path / "input").write_text("merged-content")
@@ -529,7 +521,8 @@ class TestSubmitConfigLogLevel:
     """--config and --log-level argparse + behavior scenarios."""
 
     def test_help_lists_config_and_log_level(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])
@@ -539,7 +532,9 @@ class TestSubmitConfigLogLevel:
         assert "--log-level" in out
 
     def test_config_nonexistent_exits_two(
-        self, capsys: pytest.CaptureFixture[str], tmp_path: Path
+        self,
+        capsys: pytest.CaptureFixture[str],
+        tmp_path: Path,
     ) -> None:
         script = tmp_path / "s.in"
         script.write_text("ENGINE = g09\n")

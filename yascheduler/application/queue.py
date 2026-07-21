@@ -1,25 +1,10 @@
-# FILE: yascheduler/application/queue.py
-# VERSION: 1.9.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Deduplicating async queue for producer-consumer scheduling loops.
-#   SCOPE: UniqueQueue class, UMessage dataclass.
-#   DEPENDS: none
-#   LINKS: M-QUEUE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   UniqueQueue - Async queue that skips duplicate messages by ID
-#   UMessage - Typed message with ID and payload
-#   TUMsgId - TypeVar for message ID (bound Hashable)
-#   TUMsgPayload - TypeVar for message payload
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.9.0 - Added asyncio.Lock to UniqueQueue to close check-then-act race window in put() under full-queue concurrent puts.
-#   PREVIOUS_CHANGE: v1.8.0 - Migrated UMessage from attrs to stdlib dataclasses; equality and hash are now keyed on id only via manual __eq__/__hash__ with eq=False (payload excluded; field(compare=False) was rejected because it conflicts with __slots__); manual __slots__ retained for immutability parity with prior attrs @define.
-# END_CHANGE_SUMMARY
-"""Async queue with message deduplication"""
+"""Async queue with message deduplication."""
+# region MODULE_CONTRACT
+# PURPOSE: Ensure each message ID is processed at most once per lifecycle so producer-consumer loops never double-process a task event.
+# SCOPE: UniqueQueue (deduplicating async queue) and UMessage (typed message) for producer-consumer scheduling loops.
+# INVARIANTS: Dedup is by message ID, not payload — two messages with same ID but different payloads are treated as duplicates.
+# KEYWORDS: queue, dedup, producer, consumer, async, UniqueQueue, UMessage
+# endregion MODULE_CONTRACT
 
 import asyncio
 from collections import deque
@@ -30,59 +15,59 @@ from typing import Generic, TypeVar
 TUMsgId = TypeVar("TUMsgId", bound=Hashable)
 TUMsgPayload = TypeVar("TUMsgPayload")
 
+__all__ = [
+    "UMessage",
+    "UniqueQueue",
+]
 
+
+# region CLASS_UMessage
+# PURPOSE: Enable UniqueQueue deduplication by identity — decouple message payload from identity so two messages with the same content but different IDs are treated as distinct events.
+# INVARIANTS: `__eq__` and `__hash__` consult `id` only.
 @dataclass(frozen=True, eq=False)
 class UMessage(Generic[TUMsgId, TUMsgPayload]):
-    """Async queue message"""
+    """Async queue message."""
 
     __slots__ = ("id", "payload")
     id: TUMsgId
     payload: TUMsgPayload
 
-    # START_BLOCK_DEFINE_ID_ONLY_EQUALITY
-    # START_CONTRACT: __eq__
-    #   PURPOSE: Id-only equality — two UMessage instances are equal iff their id values are equal; payload is excluded (D2 invariant). __hash__ is keyed on id only, consistent with __eq__, so deque membership and set membership in UniqueQueue.put agree.
-    #   INPUTS: { other: object - RHS operand }
-    #   OUTPUTS: { bool - True if other is UMessage with equal id; NotImplemented if wrong type }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: __eq__
+    # region BLOCK_define_id_only_equality
     def __eq__(self, other: object) -> bool:
+        """Equality check by message ID only."""
         if not isinstance(other, UMessage):
             return NotImplemented
         return self.id == other.id
 
-    # START_CONTRACT: __hash__
-    #   PURPOSE: Hash keyed on id only, consistent with id-only __eq__.
-    #   INPUTS: { None }
-    #   OUTPUTS: { int - hash of self.id }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: __hash__
     def __hash__(self) -> int:
+        """Hash based on message ID."""
         return hash(self.id)
 
-    # END_BLOCK_DEFINE_ID_ONLY_EQUALITY
+    # endregion BLOCK_define_id_only_equality
 
 
+# endregion CLASS_UMessage
+
+
+# region CLASS_UniqueQueue
+# PURPOSE: Prevent the daemon from processing the same task event twice across overlapping producer-consumer cycles.
+# INVARIANTS: Dedup is keyed on `UMessage.id`; two messages with equal `id` are duplicates regardless of `payload`.
 class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
-    """Async queue with message deduplication"""
+    """Async queue with message deduplication."""
 
     name: str
     _put_lock: asyncio.Lock
     _queue: deque[UMessage[TUMsgId, TUMsgPayload]]
     _done_pending: set[UMessage[TUMsgId, TUMsgPayload]]
 
-    # START_CONTRACT: __init__
-    #   PURPOSE: Initialize queue with name, maxsize, and _put_lock
-    #   INPUTS: { name: str - queue identifier } | { maxsize: int - maximum queue size, default 0 (unlimited) }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Initializes internal queue state, done_pending set, and _put_lock
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: __init__
     def __init__(
-        self, name: str, *argv: object, maxsize: int = 0, **kwargs: object
-    ) -> None:  # noqa: ANN002,ANN003
+        self,
+        name: str,
+        *argv: object,
+        maxsize: int = 0,
+        **kwargs: object,
+    ) -> None:
+        """Initialise the queue with deduplication support."""
         self.name = name
         self._put_lock = asyncio.Lock()
         self._done_pending = set()
@@ -93,59 +78,35 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
         self._done_pending.add(item)
         return item
 
-    # START_CONTRACT: get
-    #   PURPOSE: Get next message from queue; tracks retrieved items in done_pending set for completion tracking
-    #   INPUTS: { None }
-    #   OUTPUTS: { UMessage - the next message from the queue }
-    #   SIDE_EFFECTS: Removes item from queue and adds to done_pending set
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: get
     async def get(self) -> UMessage[TUMsgId, TUMsgPayload]:
+        """Return and track the next message from the queue."""
         return await super().get()
 
-    # START_CONTRACT: put
-    #   PURPOSE: Put message into queue under _put_lock, skip if ID already in seen set or queue
-    #   INPUTS: { item: UMessage - message to enqueue }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Appends item to queue if not duplicate; lock serializes check-then-act
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: put
+    # region METHOD_put
+    # PURPOSE: Guarantee at-most-once delivery per message ID — skip duplicates already queued or processed so subsequent producer cycles do not re-enqueue the same event.
     async def put(self, item: UMessage[TUMsgId, TUMsgPayload]) -> None:
+        """Enqueue a message; skip if already present or done."""
         async with self._put_lock:
             # skip already added
             if item in self._queue or item in self._done_pending:
                 return
             await super().put(item)
 
-    # START_CONTRACT: task_done
-    #   PURPOSE: Mark task as done (not implemented, use item_done instead)
-    #   INPUTS: { None }
-    #   OUTPUTS: { None - always raises NotImplementedError }
-    #   SIDE_EFFECTS: Raises NotImplementedError
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: task_done
-    def task_done(self) -> None:
-        raise NotImplementedError("task_done() not implemented, use item_done()")
+    # endregion METHOD_put
 
-    # START_CONTRACT: item_done
-    #   PURPOSE: Indicate a specific enqueued task is complete
-    #   INPUTS: { item: UMessage - the completed message }
-    #   OUTPUTS: { None - no return value }
-    #   SIDE_EFFECTS: Removes item from done_pending set, decrements unfinished task counter
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: item_done
+    def task_done(self) -> None:
+        """``task_done()`` is not supported; use ``item_done()``."""
+        msg = "task_done() not implemented, use item_done()"
+        raise NotImplementedError(msg)
+
     def item_done(self, item: UMessage) -> None:
         """Indicate that a enqueued task is complete."""
         self._done_pending.remove(item)
         super().task_done()
 
-    # START_CONTRACT: psize
-    #   PURPOSE: Return number of pending items (not done but not in queue)
-    #   INPUTS: { None }
-    #   OUTPUTS: { int - number of items in done_pending set }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-QUEUE
-    # END_CONTRACT: psize
     def psize(self) -> int:
-        """Number of items not done but not in queue."""
+        """Return number of items not done but not in queue.."""
         return len(self._done_pending)
+
+
+# endregion CLASS_UniqueQueue

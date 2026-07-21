@@ -1,29 +1,17 @@
-# FILE: yascheduler/shared/compat.py
-# VERSION: 1.8.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Type compatibility shims: Self and Unpack for older Python versions.
-#   SCOPE: Self and Unpack type re-exports.
-#   DEPENDS: none
-#   LINKS: M-SHARED
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   Self - Self type alias for older Python versions
-#   Unpack - Unpack type re-exported from typing_extensions for older Python versions
-# END_MODULE_MAP
-
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - Remove ParamSpec (consumed only by the former to_sync; moved with it into entrypoints.client). Keep Self and Unpack. (prune-shared-kernel).
-#   PREVIOUS_CHANGE: v1.7.0 - Re-export Unpack (PEP 692) with version branch (task-context-replace).
-# END_CHANGE_SUMMARY
+"""Type compatibility shims: Self and Unpack for older Python versions."""
+# region MODULE_CONTRACT
+# PURPOSE: Maintain forward-compatible type annotations across Python 3.9+ without import branching at every call site.
+# SCOPE: Python version compat shims for type annotations.
+# KEYWORDS: typing compat, Self, Unpack, StrEnum, python version compat
+# endregion MODULE_CONTRACT
 
 import sys
 
 if sys.version_info < (3, 11):
-    from typing_extensions import Self, Unpack
+    from typing_extensions import Self, StrEnum, Unpack
 else:
+    from enum import StrEnum
     from typing import Self, Unpack
 
 
-__all__ = ["Self", "Unpack"]
+__all__ = ["Self", "StrEnum", "Unpack"]

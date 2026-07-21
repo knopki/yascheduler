@@ -1,24 +1,3 @@
-# FILE: tests/unit/test_application_events.py
-# VERSION: 1.3.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for domain event recording from application use cases.
-#   SCOPE: submit_task records TaskCreated, allocate_task records TaskFailed/TaskAllocated, consume_task records TaskCompleted/TaskFailed.
-#   DEPENDS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME
-#   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestSubmitTaskEvents - submit_task: records TaskCreated event
-#   TestAllocateTaskEvents - allocate_task: records TaskFailed (unsupported engine) and TaskAllocated (free machine) events
-#   TestConsumeTaskEvents - consume_task: records TaskCompleted (success) and TaskFailed (permanent download failure) events
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - drop-task-context-entity follow-up: download_outputs AsyncMock return_values updated to the new 4-tuple shape (local_folder, remote_folder, transient_errors, permanent_errors).
-#   PREVIOUS_CHANGE: v1.2.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
-# END_CHANGE_SUMMARY
-#
 """Unit tests for domain event recording from application use cases.
 
 Tests cover:
@@ -26,6 +5,11 @@ Tests cover:
 - allocate_task records TaskFailed or TaskAllocated event
 - consume_task records TaskCompleted or TaskFailed event
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for domain event recording from application use cases.
+# SCOPE: submit_task records TaskCreated, allocate_task records TaskFailed/TaskAllocated, consume_task records TaskCompleted/TaskFailed.
+# KEYWORDS: TaskCreated, TaskFailed, TaskAllocated, TaskCompleted, event recording
+# endregion MODULE_CONTRACT
 
 import asyncio
 from collections.abc import Callable
@@ -56,6 +40,7 @@ from yascheduler.domain.model import (
     Task,
     TaskId,
     TaskStatus,
+    materialize_task,
 )
 from yascheduler.domain.ports import CloudProvisioner
 
@@ -68,12 +53,15 @@ class TestSubmitTaskEvents:
     """Verify submit_task records TaskCreated event."""
 
     async def test_submit_task_records_task_created_event(
-        self, engine: Engine, mock_engine_repo: MagicMock, mock_uow_factory: MagicMock
+        self,
+        engine: Engine,
+        mock_engine_repo: MagicMock,
+        mock_uow_factory: MagicMock,
     ) -> None:
         uow = mock_uow_factory.return_value
 
         def _insert_side_effect(new_task: NewTask) -> Task:
-            return Task(
+            task = Task(
                 task_id=TaskId(55),
                 label=new_task.label,
                 engine=new_task.engine,
@@ -87,6 +75,7 @@ class TestSubmitTaskEvents:
                 updated_at=datetime(2025, 1, 1),
                 status=TaskStatus.TO_DO,
             )
+            return materialize_task(task)
 
         uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
 
@@ -96,12 +85,11 @@ class TestSubmitTaskEvents:
             engine_name="test_engine",
             engines=mock_engine_repo,
             uow_factory=mock_uow_factory,
-            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         saved_arg: Task = uow.tasks.save.call_args[0][0]
-        assert len(saved_arg._events) == 1
-        event = saved_arg._events[0]
+        assert len(saved_arg.events) == 1
+        event = saved_arg.events[0]
         assert isinstance(event, TaskCreated)
         assert event.task_id == TaskId(55)
         assert event.engine_name == "test_engine"
@@ -150,21 +138,23 @@ class TestAllocateTaskEvents:
             engines=engines,
             uow_factory=uow_factory,
             repository=MagicMock(),
-            operations=MagicMock(),
+            occupancy_checker=MagicMock(),
             clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert len(saved_task._events) == 1
-        event = saved_task._events[0]
+        assert len(saved_task.events) == 1
+        event = saved_task.events[0]
         assert isinstance(event, TaskFailed)
         assert event.reason == "unsupported engine"
 
     async def test_allocate_free_machine_records_task_allocated_event(
-        self, engine: Engine
+        self,
+        engine: Engine,
     ) -> None:
         """Successful allocation records TaskAllocated event."""
         import time
@@ -176,15 +166,14 @@ class TestAllocateTaskEvents:
 
         free_machine = MagicMock(spec=ConnectedMachine)
         free_machine.node_id = NodeId(1)
-        free_machine.ip = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
-        free_session = SimpleNamespace(machine=free_machine, ip="10.0.0.1")
+        free_session = SimpleNamespace(machine=free_machine, hostname="10.0.0.1")
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[free_session])
-        operations = MagicMock()
-        operations.start_occupancy_check = MagicMock()
+        occupancy_checker = MagicMock()
+        occupancy_checker.start_occupancy_check = MagicMock()
 
         from datetime import datetime
 
@@ -210,7 +199,9 @@ class TestAllocateTaskEvents:
         uow.nodes = AsyncMock()
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, enabled=True),
+            ],
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -231,18 +222,19 @@ class TestAllocateTaskEvents:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         # save was called — check the last save has a TaskAllocated event
         save_calls = uow.tasks.save.call_args_list
         last_save_task: Task = save_calls[-1][0][0]
         allocated_events = [
-            e for e in last_save_task._events if isinstance(e, TaskAllocated)
+            e for e in last_save_task.events if isinstance(e, TaskAllocated)
         ]
         assert len(allocated_events) == 1
         assert allocated_events[0].node_id == NodeId(1)
@@ -255,15 +247,15 @@ class TestConsumeTaskEvents:
     """Verify consume_task records TaskCompleted or TaskFailed events."""
 
     @pytest.fixture
-    def mock_operations(self) -> MagicMock:
-        operations = MagicMock()
-        operations.download_outputs = AsyncMock(return_value=("", "", [], []))
-        return operations
+    def mock_output_downloader(self) -> MagicMock:
+        output_downloader = MagicMock()
+        output_downloader.download_outputs = AsyncMock(return_value=("", "", [], []))
+        return output_downloader
 
     async def _run_consume(
         self,
-        session: Any,  # noqa: ANN401 - test stub for MachineSession
-        operations: MagicMock,
+        session: Any,
+        output_downloader: MagicMock,
         task: Task,
         uow_factory: Callable[[], AbstractUnitOfWork],
         engines: EngineRepository,
@@ -273,7 +265,7 @@ class TestConsumeTaskEvents:
         await consume_task(
             task_id=task.task_id,
             session=session,  # type: ignore[arg-type]
-            operations=operations,
+            output_downloader=output_downloader,
             engines=engines,
             uow_factory=uow_factory,
             local_tasks_dir=local_tasks_dir,
@@ -282,7 +274,7 @@ class TestConsumeTaskEvents:
 
     async def test_consume_success_records_task_completed_event(
         self,
-        mock_operations: MagicMock,
+        mock_output_downloader: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
@@ -304,7 +296,7 @@ class TestConsumeTaskEvents:
 
         await self._run_consume(
             session=SimpleNamespace(),  # opaque to consume_task; only forwarded to operations.download_outputs
-            operations=mock_operations,
+            output_downloader=mock_output_downloader,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -313,20 +305,25 @@ class TestConsumeTaskEvents:
         )
 
         saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert len(saved_task._events) == 1
-        event = saved_task._events[0]
+        assert len(saved_task.events) == 1
+        event = saved_task.events[0]
         assert isinstance(event, TaskCompleted)
         assert event.task_id == TaskId(1)
         tracker.discard.assert_called_once_with(TaskId(1))
 
     async def test_consume_failure_records_task_failed_event(
         self,
-        mock_operations: MagicMock,
+        mock_output_downloader: MagicMock,
         running_task: Task,
         mock_engine_repo: MagicMock,
     ) -> None:
-        mock_operations.download_outputs = AsyncMock(
-            return_value=("", "", [], [("/remote/file", OSError("Connection refused"))])
+        mock_output_downloader.download_outputs = AsyncMock(
+            return_value=(
+                "",
+                "",
+                [],
+                [("/remote/file", OSError("Connection refused"))],
+            ),
         )
 
         uow = AsyncMock()
@@ -347,7 +344,7 @@ class TestConsumeTaskEvents:
 
         await self._run_consume(
             session=SimpleNamespace(),  # opaque to consume_task; only forwarded to operations.download_outputs
-            operations=mock_operations,
+            output_downloader=mock_output_downloader,
             task=running_task,
             uow_factory=uow_factory,
             engines=mock_engine_repo,
@@ -356,8 +353,8 @@ class TestConsumeTaskEvents:
         )
 
         saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert len(saved_task._events) == 1
-        event = saved_task._events[0]
+        assert len(saved_task.events) == 1
+        event = saved_task.events[0]
         assert isinstance(event, TaskFailed)
         assert event.task_id == TaskId(1)
         tracker.discard.assert_called_once_with(TaskId(1))

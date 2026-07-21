@@ -1,27 +1,9 @@
-# FILE: tests/unit/test_no_attrs_dependency.py
-# VERSION: 1.0.1
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: AST-based canary guarding that no module under yascheduler/ imports attrs or attr.
-#   SCOPE: Walk every .py file in the yascheduler package, parse with ast, flag any ImportFrom/Import node whose module's first dotted segment is exactly "attrs" or "attr".
-#   DEPENDS: none (stdlib ast, pathlib, importlib only)
-#   LINKS: no-attrs-dependency spec
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _package_root - resolve the yascheduler/ source directory from the installed package
-#   _iter_python_files - yield every .py file path under a directory recursively
-#   _import_first_segment - return the first dotted segment of an import module name, or None for relative imports
-#   _attrs_violations - collect (path, lineno, module_name) for every attrs/attr import in a file
-#   test_no_attrs_imports_in_yascheduler - fail if any yascheduler module imports attrs/attr
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.1 - Polish: wrap ast.parse so a syntax-error file raises a clear canary message instead of a raw traceback; document the dynamic-import non-goal (__import__/importlib.import_module/exec) in the test docstring.
-#   PREVIOUS_CHANGE: v1.0.0 - Add AST-based canary guarding that no yascheduler module imports attrs or attr (drop-attrs-dependency / P5). Flags all ImportFrom/Import nodes regardless of TYPE_CHECKING guard context.
-# END_CHANGE_SUMMARY
-
 """Canary: no yascheduler module imports attrs or attr."""
+# region MODULE_CONTRACT
+# PURPOSE: AST-based canary guarding that no module under yascheduler/ imports attrs or attr.
+# SCOPE: Walk every .py file in the yascheduler package, parse with ast, flag any ImportFrom/Import node whose module's first dotted segment is exactly "attrs" or "attr".
+# KEYWORDS: attrs, attr, AST canary, import guard
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -51,7 +33,8 @@ def _iter_python_files(root: Path) -> list[Path]:
 
 
 def _import_first_segment(
-    node: ast.ImportFrom | ast.Import, alias: ast.alias
+    node: ast.ImportFrom | ast.Import,
+    alias: ast.alias,
 ) -> str | None:
     """Return the first dotted segment of an import's module name.
 
@@ -76,14 +59,12 @@ def _attrs_violations(path: Path, source: bytes) -> list[tuple[Path, int, str]]:
     except SyntaxError as exc:
         raise AssertionError(
             f"{path}: cannot parse (SyntaxError: {exc.msg} at line {exc.lineno}). "
-            "Fix the syntax error so the attrs-import canary can inspect this file."
+            "Fix the syntax error so the attrs-import canary can inspect this file.",
         ) from exc
     found: list[tuple[Path, int, str]] = []
     for node in ast.walk(tree):
         aliases: list[ast.alias] = []
-        if isinstance(node, ast.Import):
-            aliases = node.names
-        elif isinstance(node, ast.ImportFrom):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
             aliases = node.names
         else:
             continue
@@ -95,13 +76,6 @@ def _attrs_violations(path: Path, source: bytes) -> list[tuple[Path, int, str]]:
     return found
 
 
-# START_CONTRACT: test_no_attrs_imports_in_yascheduler
-#   PURPOSE: Fail if any .py file under yascheduler/ imports attrs or attr (including TYPE_CHECKING-guarded imports).
-#   INPUTS: { None }
-#   OUTPUTS: { None - raises AssertionError listing every offending file and import on failure }
-#   SIDE_EFFECTS: None - reads and parses source files only; no execution of yascheduler code.
-#   LINKS: no-attrs-dependency spec
-# END_CONTRACT: test_no_attrs_imports_in_yascheduler
 def test_no_attrs_imports_in_yascheduler() -> None:
     """No yascheduler module imports attrs or attr in any form.
 
@@ -132,5 +106,5 @@ def test_no_attrs_imports_in_yascheduler() -> None:
         )
         raise AssertionError(
             "yascheduler modules must not import 'attrs' or 'attr'.\n"
-            "Offending imports:\n" + formatted
+            "Offending imports:\n" + formatted,
         )

@@ -1,35 +1,3 @@
-# FILE: tests/unit/test_application_orchestrator.py
-# VERSION: 1.11.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
-#   SCOPE: Constructor queue initialization, start/stop lifecycle, cancellation propagation, concurrency limits,
-#          _clouds_get_capacity inline UoW arithmetic, constructor stores allocation_tracker/active_clouds/allocation_lock,
-#          _deallocator_consumer passes uow_factory to deallocate_node, _allocator_consumer swallows exceptions,
-#          _task_consumer_consumer conditional _occupancy_started discard on consume_task bool, in-flight _consuming guard.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR
-#   LINKS: M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_task - build a Task with sensible default typed fields; overrides win
-#   TestOrchestratorLifecycle - Lifecycle: constructor queues, start tasks, stop cleanup, cancellation, limits
-#   TestOrchestratorTaskAbandoned - TaskAbandoned event recorded when machine is gone
-#   TestCloudsGetCapacity - _clouds_get_capacity inline UoW arithmetic over active_clouds
-#   TestOrchestratorConstructor - Constructor stores allocation_tracker, active_clouds, allocation_lock; no _adapters/_configs
-#   TestDeallocatorConsumer - _deallocator_consumer takes Node from msg.payload (no UoW lookup); does not duplicate SSH teardown; logs node_id+ip on error; queue dedups on NodeId not ip
-#   TestAllocatorConsumer - _allocator_consumer swallows allocate_task exceptions to keep worker alive
-#   TestConsumeConditionalDiscard - _task_consumer_consumer discards _occupancy_started only when consume_task returns True
-#   TestConsumeInFlightGuard - producer skips in-flight task ids; consumer adds/discards around consume_task await
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.11.0 - extract _make_task helper to collapse repeated Task(...) constructions (GRACE-lite 1000-line limit compliance).
-#   PREVIOUS_CHANGE: v1.10.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); task.context.error → task.error; remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.8.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
-#   PREVIOUS_CHANGE: v1.6.1 - add-node-id-identity test update: prepend node_id=NodeId(<n>) to all Node(...) constructions and add NodeId to 3 local imports.
-# END_CHANGE_SUMMARY
-#
 """Unit tests for Orchestrator lifecycle management.
 
 Tests cover:
@@ -43,10 +11,16 @@ Tests cover:
 - _deallocator_consumer calls deallocate_node with uow_factory
 - TaskAbandoned event recorded when machine is gone
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for Orchestrator lifecycle management after v2.0.0 extraction.
+# SCOPE: Constructor queue initialization, start/stop lifecycle, cancellation propagation, concurrency limits, _clouds_get_capacity inline UoW arithmetic, constructor stores allocation_tracker/active_clouds/allocation_lock, _deallocator_consumer passes uow_factory to deallocate_node, _allocator_consumer swallows exceptions, _task_consumer_consumer conditional _occupancy_started discard on consume_task bool, in-flight _consuming guard.
+# KEYWORDS: Orchestrator, lifecycle, concurrency limits, cancellation
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import Counter
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -75,23 +49,23 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-def _make_task(**overrides: Any) -> Task:  # noqa: ANN401
+def _make_task(**overrides: Any) -> Task:
     """Build a Task with default typed fields; overrides win."""
-    base: dict[str, Any] = dict(
-        task_id=TaskId(1),
-        engine="test_engine",
-        created_at=datetime(2025, 1, 1),
-        updated_at=datetime(2025, 1, 1),
-        label="test",
-        local_folder=None,
-        remote_folder=None,
-        webhook_url=None,
-        webhook_custom_params={},
-        error=None,
-        extra={},
-        status=TaskStatus.TO_DO,
-        allocated_node_id=None,
-    )
+    base: dict[str, Any] = {
+        "task_id": TaskId(1),
+        "engine": "test_engine",
+        "created_at": datetime(2025, 1, 1),
+        "updated_at": datetime(2025, 1, 1),
+        "label": "test",
+        "local_folder": None,
+        "remote_folder": None,
+        "webhook_url": None,
+        "webhook_custom_params": {},
+        "error": None,
+        "extra": {},
+        "status": TaskStatus.TO_DO,
+        "allocated_node_id": None,
+    }
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 
@@ -162,7 +136,9 @@ def make_orchestrator(
     repository = MagicMock()
     repository.__len__ = MagicMock(return_value=1)
     repository.disconnect_all = AsyncMock()
-    operations = MagicMock()
+    task_deployer = MagicMock()
+    output_downloader = MagicMock()
+    occupancy_checker = MagicMock()
 
     # EngineRepository.values() must yield at least one Engine so
     # Orchestrator.__init__ can compute min(sleep_interval).
@@ -171,8 +147,6 @@ def make_orchestrator(
     engines = MagicMock(spec=EngineRepository)
     engines.values.return_value = [engine]
 
-    log = MagicMock()
-
     if allocation_tracker is None:
         allocation_tracker = AllocationTracker()
     if active_clouds is None:
@@ -180,15 +154,16 @@ def make_orchestrator(
     if allocation_lock is None:
         allocation_lock = asyncio.Lock()
 
-    orch = Orchestrator(
+    return Orchestrator(
         local_settings=config.local,
         remote_defaults=config.remote,
         uow_factory=uow_factory,
         clouds=clouds,
         repository=repository,
-        operations=operations,
+        task_deployer=task_deployer,
+        output_downloader=output_downloader,
+        occupancy_checker=occupancy_checker,
         engines=engines,
-        log=log,
         config_clouds=[],
         local_tasks_dir=Path("/tmp"),
         allocation_tracker=allocation_tracker,
@@ -196,7 +171,6 @@ def make_orchestrator(
         allocation_lock=allocation_lock,
         list_private_keys_fn=lambda _keys_dir: [],
     )
-    return orch
 
 
 # =============================================================================
@@ -310,7 +284,10 @@ class TestOrchestratorLifecycle:
         orch._cancellation_event.set()
 
         await orch._create_producer_consumers(
-            q, empty_producer, consumer, workers_num=2
+            q,
+            empty_producer,
+            consumer,
+            workers_num=2,
         )
 
         # No items were ever produced since the loop never entered its body
@@ -329,16 +306,18 @@ class TestOrchestratorLifecycle:
         orch._cancellation_event.set()
         orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
-        with patch.object(
-            orch,
-            "_create_producer_consumers",
-            wraps=orch._create_producer_consumers,
-        ) as mock_pc:
-            with patch(
+        with (
+            patch.object(
+                orch,
+                "_create_producer_consumers",
+                wraps=orch._create_producer_consumers,
+            ) as mock_pc,
+            patch(
                 "yascheduler.application.orchestrator.asyncio.sleep",
                 new_callable=AsyncMock,
-            ):
-                await orch.start()
+            ),
+        ):
+            await orch.start()
 
         # _create_producer_consumers is called 4 times (conn_machine / allocate / consume / deallocate)
         assert mock_pc.call_count == 4
@@ -360,16 +339,18 @@ class TestOrchestratorLifecycle:
         orch._cancellation_event.set()
         orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
-        with patch.object(
-            orch,
-            "_create_producer_consumers",
-            wraps=orch._create_producer_consumers,
-        ) as mock_pc:
-            with patch(
+        with (
+            patch.object(
+                orch,
+                "_create_producer_consumers",
+                wraps=orch._create_producer_consumers,
+            ) as mock_pc,
+            patch(
                 "yascheduler.application.orchestrator.asyncio.sleep",
                 new_callable=AsyncMock,
-            ):
-                await orch.start()
+            ),
+        ):
+            await orch.start()
 
         # Fourth call is for the deallocate queue
         deallocate_call = mock_pc.call_args_list[3]
@@ -388,16 +369,18 @@ class TestOrchestratorLifecycle:
         orch._cancellation_event.set()
         orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
-        with patch.object(
-            orch,
-            "_create_producer_consumers",
-            wraps=orch._create_producer_consumers,
-        ) as mock_pc:
-            with patch(
+        with (
+            patch.object(
+                orch,
+                "_create_producer_consumers",
+                wraps=orch._create_producer_consumers,
+            ) as mock_pc,
+            patch(
                 "yascheduler.application.orchestrator.asyncio.sleep",
                 new_callable=AsyncMock,
-            ):
-                await orch.start()
+            ),
+        ):
+            await orch.start()
 
         # First call is for the conn_machine queue
         conn_machine_call = mock_pc.call_args_list[0]
@@ -416,16 +399,18 @@ class TestOrchestratorLifecycle:
         orch._cancellation_event.set()
         orch._repository.__len__ = MagicMock(return_value=1)  # type: ignore[method-assign]
 
-        with patch.object(
-            orch,
-            "_create_producer_consumers",
-            wraps=orch._create_producer_consumers,
-        ) as mock_pc:
-            with patch(
+        with (
+            patch.object(
+                orch,
+                "_create_producer_consumers",
+                wraps=orch._create_producer_consumers,
+            ) as mock_pc,
+            patch(
                 "yascheduler.application.orchestrator.asyncio.sleep",
                 new_callable=AsyncMock,
-            ):
-                await orch.start()
+            ),
+        ):
+            await orch.start()
 
         # Third call is for the consume queue
         consume_call = mock_pc.call_args_list[2]
@@ -483,8 +468,8 @@ class TestOrchestratorTaskAbandoned:
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
         assert saved_task.error == "node is gone"
-        assert len(saved_task._events) == 1
-        event = saved_task._events[0]
+        assert len(saved_task.events) == 1
+        event = saved_task.events[0]
         assert isinstance(event, TaskAbandoned)
         assert event.task_id == TaskId(42)
         assert event.node_id == NodeId(42)
@@ -522,9 +507,9 @@ class TestCloudsGetCapacity:
         from yascheduler.domain.model import Node, NodeId
 
         nodes = [
-            Node(node_id=NodeId(1), ip="1", ncpus=2, cloud="aws"),
-            Node(node_id=NodeId(2), ip="2", ncpus=2, cloud="aws"),
-            Node(node_id=NodeId(3), ip="3", ncpus=2, cloud="gcp"),
+            Node(node_id=NodeId(1), hostname="1", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(2), hostname="2", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(3), hostname="3", ncpus=2, cloud="gcp"),
         ]
         mock_uow = AsyncMock()
         mock_uow.nodes.list_all = AsyncMock(return_value=nodes)
@@ -546,7 +531,7 @@ class TestCloudsGetCapacity:
         from yascheduler.domain.model import Node, NodeId
 
         nodes = [
-            Node(node_id=NodeId(i + 1), ip=str(i), ncpus=2, cloud="aws")
+            Node(node_id=NodeId(i + 1), hostname=str(i), ncpus=2, cloud="aws")
             for i in range(10)
         ]
         mock_uow = AsyncMock()
@@ -569,9 +554,9 @@ class TestCloudsGetCapacity:
         from yascheduler.domain.model import Node, NodeId
 
         nodes = [
-            Node(node_id=NodeId(1), ip="1", ncpus=2, cloud="gcp"),
-            Node(node_id=NodeId(2), ip="2", ncpus=2, cloud="azure"),
-            Node(node_id=NodeId(3), ip="3", ncpus=2, cloud="aws"),
+            Node(node_id=NodeId(1), hostname="1", ncpus=2, cloud="gcp"),
+            Node(node_id=NodeId(2), hostname="2", ncpus=2, cloud="azure"),
+            Node(node_id=NodeId(3), hostname="3", ncpus=2, cloud="aws"),
         ]
         mock_uow = AsyncMock()
         mock_uow.nodes.list_all = AsyncMock(return_value=nodes)
@@ -626,7 +611,7 @@ class TestDeallocatorConsumer:
 
         orch = make_orchestrator()
 
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         msg = UMessage(NodeId(1), node)
 
         with patch(
@@ -636,7 +621,10 @@ class TestDeallocatorConsumer:
             await orch._deallocator_consumer(msg)
 
         mock_dealloc.assert_called_once_with(
-            node, orch._repository, orch._clouds, orch._uow_factory
+            node,
+            orch._repository,
+            orch._clouds,
+            orch._uow_factory,
         )
 
     @pytest.mark.asyncio
@@ -649,7 +637,7 @@ class TestDeallocatorConsumer:
         orch._repository.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
         orch._repository.disconnect = AsyncMock()  # type: ignore[method-assign]
 
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         msg = UMessage(NodeId(1), node)
 
         with patch(
@@ -662,14 +650,19 @@ class TestDeallocatorConsumer:
         orch._repository.disconnect.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_consumer_logs_node_id_and_ip_on_error(self) -> None:
-        """deallocate_node raises -> error log includes both node_id=%s and ip=%s (proves D5)."""
+    async def test_consumer_logs_node_id_and_ip_on_error(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """deallocate_node raises -> error log includes both node_id=%s and hostname=%s."""
         from yascheduler.application.queue import UMessage
         from yascheduler.domain.model import Node, NodeId
 
+        caplog.set_level(logging.ERROR)
+
         orch = make_orchestrator()
 
-        node = Node(node_id=NodeId(7), ip="10.0.0.7", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(7), hostname="10.0.0.7", ncpus=4, cloud="aws")
         msg = UMessage(NodeId(7), node)
 
         with patch(
@@ -679,26 +672,25 @@ class TestDeallocatorConsumer:
             # Must not raise — consumer swallows to keep worker alive.
             await orch._deallocator_consumer(msg)
 
-        orch._log.error.assert_called_once()  # type: ignore[attr-defined]
-        args, _ = orch._log.error.call_args  # type: ignore[attr-defined]
-        fmt = args[0]
-        # The format string carries both node_id and ip fields.
-        assert "node_id=%s" in fmt
-        assert "ip=%s" in fmt
-        # The rendered args supply node_id and ip in order.
-        assert args[1] == NodeId(7)
-        assert args[2] == "10.0.0.7"
+        assert len(caplog.records) >= 1
+        record = caplog.records[-1]
+        assert "node_id=7" in record.getMessage()
+        assert "hostname=10.0.0.7" in record.getMessage()
 
 
 class TestAllocatorConsumer:
     """_allocator_consumer swallows allocate_task exceptions (worker survival)."""
 
     @pytest.mark.asyncio
-    async def test_swallows_cloud_allocate_error(self) -> None:
+    async def test_swallows_cloud_allocate_error(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """CloudAllocateError from allocate_task is caught + logged; worker survives."""
         from yascheduler.application.queue import UMessage
         from yascheduler.domain.exceptions import CloudAllocateError
 
+        caplog.set_level(logging.ERROR)
         orch = make_orchestrator()
 
         task_payload = _make_task(engine="e", label="t")
@@ -712,14 +704,17 @@ class TestAllocatorConsumer:
             await orch._allocator_consumer(msg)
 
         mock_alloc.assert_called_once()
-        # Error was logged
-        orch._log.error.assert_called_once()  # type: ignore[attr-defined]
+        assert any("Allocator error" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_swallows_any_exception(self) -> None:
+    async def test_swallows_any_exception(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """Any Exception from allocate_task is caught; worker survives."""
         from yascheduler.application.queue import UMessage
 
+        caplog.set_level(logging.ERROR)
         orch = make_orchestrator()
 
         task_payload = _make_task(task_id=TaskId(42), engine="e", label="t")
@@ -732,7 +727,7 @@ class TestAllocatorConsumer:
             await orch._allocator_consumer(msg)
 
         mock_alloc.assert_called_once()
-        orch._log.error.assert_called_once()  # type: ignore[attr-defined]
+        assert any("Allocator error" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_propagates_allocate_task_args(self) -> None:
@@ -755,11 +750,12 @@ class TestAllocatorConsumer:
             engines=orch._engines,
             uow_factory=orch._uow_factory,
             repository=orch._repository,
-            operations=orch._operations,
+            occupancy_checker=orch._occupancy_checker,
             clouds=orch._clouds,
             start_task_on_machine=orch._start_task_on_machine,
             tracker=orch._tracker,
             allocation_lock=orch._allocation_lock,
+            remote_tasks_dir=orch._remote_defaults.tasks_dir,
         )
 
 
@@ -775,9 +771,7 @@ class TestConsumeConditionalDiscard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -811,9 +805,7 @@ class TestConsumeConditionalDiscard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -852,7 +844,10 @@ class TestConsumeInFlightGuard:
 
         task_a = _make_task(engine="e", label="a", status=TaskStatus.RUNNING)
         task_b = _make_task(
-            task_id=TaskId(2), engine="e", label="b", status=TaskStatus.RUNNING
+            task_id=TaskId(2),
+            engine="e",
+            label="b",
+            status=TaskStatus.RUNNING,
         )
 
         mock_uow = AsyncMock()
@@ -864,9 +859,9 @@ class TestConsumeInFlightGuard:
         # Mark task_a as in-flight
         orch._consuming.add(TaskId(1))
 
-        yielded: list[UMessage[TaskId, Task]] = []
-        async for msg in orch._task_consumer_producer():
-            yielded.append(msg)
+        yielded: list[UMessage[TaskId, Task]] = [
+            msg async for msg in orch._task_consumer_producer()
+        ]
 
         # Only task_b (id=2) is yielded; task_a (id=1) is skipped
         assert len(yielded) == 1
@@ -881,9 +876,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -917,9 +910,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -955,9 +946,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            ip="10.0.0.1",
             platform="linux",
-            ncpus=2,
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -974,12 +963,14 @@ class TestConsumeInFlightGuard:
         )
         msg = UMessage(TaskId(5), task)
 
-        with patch(
-            "yascheduler.application.orchestrator.consume_task",
-            new=AsyncMock(side_effect=RuntimeError("boom")),
+        with (
+            patch(
+                "yascheduler.application.orchestrator.consume_task",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            pytest.raises(RuntimeError),
         ):
-            with pytest.raises(RuntimeError):
-                await orch._task_consumer_consumer(msg, Counter())
+            await orch._task_consumer_consumer(msg, Counter())
 
         # finally released the guard even on exception
         assert TaskId(5) not in orch._consuming

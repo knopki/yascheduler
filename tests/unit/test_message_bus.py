@@ -1,26 +1,13 @@
-# FILE: tests/unit/test_message_bus.py
-# VERSION: 1.1.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the MessageBus event dispatcher.
-#   SCOPE: register, dispatch, multiple handlers, partial-wrapped handlers.
-#   DEPENDS: M-DOMAIN-EVENTS, M-APPLICATION-MESSAGE_BUS
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestMessageBus - dispatch to single/multiple handlers, no-op on missing, partial handler
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.0.1 - Import Self from yascheduler.shared facade (shared-kernel-extraction).
-#   PREVIOUS_CHANGE: v1.0.0 - MessageBus unit tests.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the MessageBus event dispatcher.
+# SCOPE: register, dispatch, multiple handlers, partial-wrapped handlers.
+# KEYWORDS: MessageBus, dispatch, handler registration, partial handlers
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import functools
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -57,7 +44,10 @@ class TestMessageBus:
     async def test_dispatch_with_no_handlers(self) -> None:
         bus = MessageBus()
         event = TaskFailed(
-            task_id=TaskId(1), webhook_url=None, webhook_custom_params={}, reason="err"
+            task_id=TaskId(1),
+            webhook_url=None,
+            webhook_custom_params={},
+            reason="err",
         )
         await bus.dispatch([event])  # no error raised
 
@@ -130,7 +120,7 @@ class TestUoWEventDispatch:
     """Tests verifying UoW event dispatch flow via MessageBus."""
 
     async def test_commit_dispatches_events_via_bus(self) -> None:
-        """commit calls publish_events which dispatches via bus."""
+        """Commit calls publish_events which dispatches via bus."""
         bus = MessageBus()
         dispatched: list[object] = []
 
@@ -158,7 +148,7 @@ class TestUoWEventDispatch:
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
         )
-        task = task.record_event(event)
+        task = replace(task, events=(event,))
 
         bus_dispatch = bus.dispatch
         collected_events: list[object] = []
@@ -185,7 +175,7 @@ class TestUoWEventDispatch:
         assert dispatched == [event]
 
     async def test_rollback_clears_without_dispatch(self) -> None:
-        """rollback clears saved tasks without dispatching events."""
+        """Rollback clears saved tasks without dispatching events."""
         bus = MessageBus()
         dispatched: list[object] = []
 
@@ -250,7 +240,7 @@ class TestUoWEventDispatch:
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
         )
-        t1 = t1.record_event(e1)
+        t1 = replace(t1, events=(e1,))
         t2 = Task(
             task_id=TaskId(2),
             label="t2",
@@ -264,7 +254,7 @@ class TestUoWEventDispatch:
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
         )
-        t2 = t2.record_event(e2)
+        t2 = replace(t2, events=(e2,))
 
         bus_dispatch = bus.dispatch
 
@@ -280,12 +270,9 @@ class TestUoWEventDispatch:
 
             async def collect_events(self) -> list[DomainEvent]:
                 events: list[DomainEvent] = []
-                remaining: list[Task] = []
                 for t in self._saved:
-                    clean, evts = t.pull_events()
-                    events.extend(evts)
-                    remaining.append(clean)
-                self._saved = remaining
+                    events.extend(t.events)
+                self._saved.clear()
                 return events
 
             async def publish_events(self) -> None:

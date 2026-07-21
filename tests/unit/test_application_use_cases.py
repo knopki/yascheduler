@@ -1,27 +1,3 @@
-# FILE: tests/unit/test_application_use_cases.py
-# VERSION: 4.9.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
-#   SCOPE: submit_task validation and success, allocate_task free/cloud/error paths (session-node pairing, allocate_to(node), node_id logging), deallocate_nodes disable/skip. (consume_task tests in test_consume_task.py.)
-#   DEPENDS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
-#   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-ALLOCATE, M-APPLICATION-CONSUME, M-APPLICATION-DEALLOCATE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestSubmitTask - submit_task: unknown engine, missing input, success path
-#   TestAllocateTask - allocate_task: unsupported engine, free machine (session-node pair, allocate_to(node), tracker.discard), cloud-fallback happy path, failure cleanup, dedup, throttle, step1/step2-cleanup/step3 hardening
-#   TestDeallocateNodes - deallocate_nodes: idle disable, non-cloud skip, returns Node objects, no-dot-filter
-#   TestDeallocateNodeBracketing - deallocate_node: disable+remove bracketing around cloud delete
-#   TestTmpCleanupByNodeId - tmp-cleanup paths call remove(tmp_node_id) directly (no get lookup); idempotent on 0-row remove
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.9.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); task.context.X → task.X reads; remove TaskContext import.
-#   PREVIOUS_CHANGE: v4.8.0 - cloud-port-node-arg: allocate/deallocate asserts + _persist_node_with_cleanup call use Node args (was NodeId/scalars).
-#   PREVIOUS_CHANGE: v4.7.1 - task-allocated-node-id: extract _find_free_machines pairing + _try_start_on_machine node_id-logging tests into tests/unit/test_allocate_task_node_pairing.py (this file exceeded the 1000-line GRACE-lite hard limit after the v4.7.0 additions). The free-machine test still asserts saved_task.allocated_node_id == NodeId(1) here.
-# END_CHANGE_SUMMARY
-#
 """Unit tests for application use cases.
 
 Tests cover the 4 application use cases:
@@ -33,6 +9,11 @@ Tests cover the 4 application use cases:
 Event recording tests (TaskCreated, TaskAllocated, TaskCompleted, TaskFailed)
 are in test_application_events.py.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for application use cases (submit, allocate, consume, deallocate).
+# SCOPE: submit_task validation, allocate_task free/cloud/error paths (session-node pairing, allocate_to, node_id logging), deallocate_nodes disable/skip.
+# KEYWORDS: submit_task, allocate_task, deallocate_nodes
+# endregion MODULE_CONTRACT
 
 import asyncio
 import time
@@ -52,6 +33,7 @@ from yascheduler.application.deallocate_nodes import deallocate_node, deallocate
 from yascheduler.application.submit_task import submit_task
 from yascheduler.application.uow import AbstractUnitOfWork
 from yascheduler.domain import Engine, EngineRepository
+from yascheduler.domain.events import TaskCreated
 from yascheduler.domain.exceptions import (
     CloudAllocateError,
     MissingInputFileError,
@@ -78,7 +60,9 @@ class TestSubmitTask:
     """submit_task — validates engine & inputs, persists via UoW."""
 
     async def test_submit_task_unknown_engine(
-        self, mock_engine_repo: MagicMock, mock_uow_factory: MagicMock
+        self,
+        mock_engine_repo: MagicMock,
+        mock_uow_factory: MagicMock,
     ) -> None:
         """Engine not in repository -> UnsupportedEngineError."""
         mock_engine_repo.__contains__.return_value = False
@@ -90,13 +74,14 @@ class TestSubmitTask:
                 engine_name="nonexistent_engine",
                 engines=mock_engine_repo,
                 uow_factory=mock_uow_factory,
-                remote_tasks_dir=PurePath("/remote/tasks"),
             )
         assert "nonexistent_engine" in str(exc_info.value)
         mock_uow_factory.assert_not_called()
 
     async def test_submit_task_missing_input_file(
-        self, mock_engine_repo: MagicMock, mock_uow_factory: MagicMock
+        self,
+        mock_engine_repo: MagicMock,
+        mock_uow_factory: MagicMock,
     ) -> None:
         """Engine requires 'inp' but metadata lacks it -> MissingInputFileError."""
         with pytest.raises(MissingInputFileError) as exc_info:
@@ -106,22 +91,24 @@ class TestSubmitTask:
                 engine_name="test_engine",
                 engines=mock_engine_repo,
                 uow_factory=mock_uow_factory,
-                remote_tasks_dir=PurePath("/remote/tasks"),
             )
         assert "inp" in str(exc_info.value)
         assert "test_engine" in str(exc_info.value)
         mock_uow_factory.assert_not_called()
 
     async def test_submit_task_success_returns_task_id(
-        self, engine: Engine, mock_engine_repo: MagicMock, mock_uow_factory: MagicMock
+        self,
+        engine: Engine,
+        mock_engine_repo: MagicMock,
+        mock_uow_factory: MagicMock,
     ) -> None:
-        """Happy path: validates, inserts, saves with remote_folder, commits, returns id."""
+        """Happy path: validates, inserts, saves, commits, returns id."""
         uow = mock_uow_factory.return_value
 
         def _insert_side_effect(new_task: NewTask) -> Task:
             from datetime import datetime
 
-            return Task(
+            task = Task(
                 task_id=TaskId(42),
                 label=new_task.label,
                 engine=new_task.engine,
@@ -135,6 +122,10 @@ class TestSubmitTask:
                 updated_at=datetime(2025, 1, 1),
                 status=TaskStatus.TO_DO,
             )
+            # insert now calls materialize_task, so the returned Task has TaskCreated in events
+            from yascheduler.domain.model import materialize_task
+
+            return materialize_task(task)
 
         uow.tasks.insert = AsyncMock(side_effect=_insert_side_effect)
 
@@ -144,7 +135,6 @@ class TestSubmitTask:
             engine_name="test_engine",
             engines=mock_engine_repo,
             uow_factory=mock_uow_factory,
-            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert task_id == TaskId(42)
@@ -156,13 +146,13 @@ class TestSubmitTask:
         assert inserted_arg.extra == {"inp": "content"}
         assert inserted_arg.engine == "test_engine"
 
-        # save was called with the task that now has remote_folder set
+        # save was called with the task that has TaskCreated in events
         uow.tasks.save.assert_called_once()
         saved_arg: Task = uow.tasks.save.call_args[0][0]
         assert saved_arg.task_id == TaskId(42)
-        assert saved_arg.remote_folder is not None
-        assert str(saved_arg.remote_folder).startswith("/remote/tasks/")
-        assert saved_arg.remote_folder.endswith("_42")  # dt_str_taskid
+        assert saved_arg.remote_folder is None  # remote_folder not set at submit time
+        assert len(saved_arg.events) == 1
+        assert isinstance(saved_arg.events[0], TaskCreated)
 
         uow.commit.assert_called_once()
 
@@ -221,11 +211,12 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=MagicMock(),
-            operations=MagicMock(),
+            occupancy_checker=MagicMock(),
             clouds=MagicMock(),
             start_task_on_machine=AsyncMock(),
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False
@@ -249,16 +240,15 @@ class TestAllocateTask:
 
         free_machine = MagicMock(spec=ConnectedMachine)
         free_machine.node_id = NodeId(1)
-        free_machine.ip = "10.0.0.1"
         free_machine.state = MachineState.FREE
         free_machine.free_since = time.monotonic()
 
-        free_session = SimpleNamespace(machine=free_machine, ip="10.0.0.1")
+        free_session = SimpleNamespace(machine=free_machine, hostname="10.0.0.1")
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[free_session])
-        operations = MagicMock()
-        operations.start_occupancy_check = MagicMock()
+        occupancy_checker = MagicMock()
+        occupancy_checker.start_occupancy_check = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -268,7 +258,9 @@ class TestAllocateTask:
         uow.nodes = AsyncMock()
         # Fix A: _find_free_machines intersects list_free with DB-enabled IPs.
         uow.nodes.list_enabled = AsyncMock(
-            return_value=[Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, enabled=True)]
+            return_value=[
+                Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, enabled=True),
+            ],
         )
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -289,11 +281,12 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is True
@@ -304,7 +297,10 @@ class TestAllocateTask:
         assert _call_engine is engine
         assert _call_task.allocated_node_id == NodeId(1)
         assert not hasattr(_call_task, "allocated_ip")
-        operations.start_occupancy_check.assert_called_once_with(free_session, engine)
+        occupancy_checker.start_occupancy_check.assert_called_once_with(
+            free_session,
+            engine,
+        )
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.allocated_node_id == NodeId(1)
@@ -327,7 +323,7 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])  # No free machines
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -335,7 +331,13 @@ class TestAllocateTask:
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
-        tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+        tmp_node = Node(
+            node_id=NodeId(2),
+            hostname="",
+            ncpus=None,
+            enabled=False,
+            cloud="aws",
+        )
         uow.nodes.insert = AsyncMock(return_value=tmp_node)
         uow.nodes.update = AsyncMock()
         uow.nodes.remove = AsyncMock()
@@ -357,7 +359,7 @@ class TestAllocateTask:
         clouds.select_provider.return_value = "aws"
         cloud_node = Node(
             node_id=NodeId(1),
-            ip="10.0.0.100",
+            hostname="[IP]",
             ncpus=4,
             cloud="aws",
             enabled=True,
@@ -373,17 +375,20 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False  # Cloud path returns False
 
         # tracker.add called
         tracker.add.assert_called_once_with(todo_task.task_id)
+        # tracker.set_node patches the task-to-node link after tmp-node insert
+        tracker.set_node.assert_called_once_with(todo_task.task_id, NodeId(2))
 
         # select_provider called with platforms and current counts
         clouds.select_provider.assert_called_once_with(["linux"], {})
@@ -416,7 +421,7 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -424,7 +429,13 @@ class TestAllocateTask:
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
-        tmp_node = Node(node_id=NodeId(2), ip="", ncpus=0, enabled=False, cloud="aws")
+        tmp_node = Node(
+            node_id=NodeId(2),
+            hostname="",
+            ncpus=None,
+            enabled=False,
+            cloud="aws",
+        )
         uow.nodes.insert = AsyncMock(return_value=tmp_node)
         uow.nodes.remove = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -453,11 +464,12 @@ class TestAllocateTask:
                 engines=engines,
                 uow_factory=uow_factory,
                 repository=repository,
-                operations=operations,
+                occupancy_checker=occupancy_checker,
                 clouds=clouds,
                 start_task_on_machine=start_on_machine,
                 tracker=tracker,
                 allocation_lock=allocation_lock,
+                remote_tasks_dir=PurePath("/remote/tasks"),
             )
 
         # tmp-node inserted via insert(NewNode(cloud=..., enabled=False))
@@ -487,7 +499,7 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -513,11 +525,12 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False
@@ -543,7 +556,7 @@ class TestAllocateTask:
 
         repository = MagicMock()
         repository.list_free = MagicMock(return_value=[])
-        operations = MagicMock()
+        occupancy_checker = MagicMock()
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -572,11 +585,12 @@ class TestAllocateTask:
             engines=engines,
             uow_factory=uow_factory,
             repository=repository,
-            operations=operations,
+            occupancy_checker=occupancy_checker,
             clouds=clouds,
             start_task_on_machine=start_on_machine,
             tracker=tracker,
             allocation_lock=allocation_lock,
+            remote_tasks_dir=PurePath("/remote/tasks"),
         )
 
         assert result is False
@@ -641,7 +655,7 @@ class TestTmpCleanupByNodeId:
         """[9.3] _persist_node_with_cleanup success: update(node) + commit (no get lookup, no remove)."""
         cloud_node = Node(
             node_id=NodeId(7),
-            ip="10.0.0.100",
+            hostname="10.0.0.100",
             ncpus=4,
             cloud="aws",
             enabled=True,
@@ -685,7 +699,7 @@ class TestDeallocateNodes:
     async def test_deallocate_nodes_disables_idle_cloud_nodes(self) -> None:
         """Enabled cloud node idle beyond tolerance -> disable_node called, Node returned."""
         # An enabled Azure node
-        az_node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="az")
+        az_node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="az")
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -702,7 +716,7 @@ class TestDeallocateNodes:
             return uow
 
         config_clouds = [
-            MagicMock(spec=ConfigCloudAzure, prefix="az", idle_tolerance=300)
+            MagicMock(spec=ConfigCloudAzure, prefix="az", idle_tolerance=300),
         ]
 
         # free_since (monotonic) is well beyond tolerance so the node qualifies
@@ -721,14 +735,14 @@ class TestDeallocateNodes:
         # Second phase: disabled Node qualifies (has cloud, valid ip) -> returned
         assert isinstance(result, list)
         assert any(
-            isinstance(n, Node) and n.node_id == NodeId(1) and n.ip == "10.0.0.1"
+            isinstance(n, Node) and n.node_id == NodeId(1) and n.hostname == "10.0.0.1"
             for n in result
         )
 
     async def test_deallocate_nodes_skips_non_cloud_nodes(self) -> None:
         """Node with cloud=None -> NOT disabled, NOT in returned list."""
         # An enabled node without cloud
-        local_node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud=None)
+        local_node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud=None)
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -745,7 +759,7 @@ class TestDeallocateNodes:
             return uow
 
         config_clouds = [
-            MagicMock(spec=ConfigCloudAzure, prefix="az", idle_tolerance=300)
+            MagicMock(spec=ConfigCloudAzure, prefix="az", idle_tolerance=300),
         ]
 
         idle_machines = {NodeId(1): time.monotonic() - 3600}
@@ -765,7 +779,7 @@ class TestDeallocateNodes:
 
     async def test_deallocate_nodes_returns_node_objects(self) -> None:
         """Return type is list[Node]; each element carries node_id, ip, cloud (proves D1)."""
-        cloud_node = Node(node_id=NodeId(2), ip="10.0.0.2", ncpus=2, cloud="aws")
+        cloud_node = Node(node_id=NodeId(2), hostname="10.0.0.2", ncpus=2, cloud="aws")
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -782,7 +796,7 @@ class TestDeallocateNodes:
             return uow
 
         config_clouds = [
-            MagicMock(spec=ConfigCloudAzure, prefix="aws", idle_tolerance=300)
+            MagicMock(spec=ConfigCloudAzure, prefix="aws", idle_tolerance=300),
         ]
         idle_machines = {NodeId(2): time.monotonic() - 3600}
 
@@ -797,17 +811,17 @@ class TestDeallocateNodes:
         only = result[0]
         assert isinstance(only, Node)
         assert only.node_id == NodeId(2)
-        assert only.ip == "10.0.0.2"
+        assert only.hostname == "10.0.0.2"
         assert only.cloud == "aws"
 
     async def test_deallocate_nodes_no_dot_filter(self) -> None:
-        """Phase 2 filter is `node.ip not in busy_ips and node.cloud` — no `.` guard (proves D4).
+        """Phase 2 filter is `node.hostname not in busy_ips and node.cloud` — no `.` guard (proves D4).
 
         A disabled cloud node with a valid ipv4 ip (dots present) is returned; the
-        old `and "." in node.ip` guard would also have passed it, but this test
+        old `and "." in node.hostname` guard would also have passed it, but this test
         pins the filter shape so a future regression reintroducing the guard fails.
         """
-        cloud_node = Node(node_id=NodeId(3), ip="10.0.0.3", ncpus=2, cloud="aws")
+        cloud_node = Node(node_id=NodeId(3), hostname="10.0.0.3", ncpus=2, cloud="aws")
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
@@ -824,7 +838,7 @@ class TestDeallocateNodes:
             return uow
 
         config_clouds = [
-            MagicMock(spec=ConfigCloudAzure, prefix="aws", idle_tolerance=300)
+            MagicMock(spec=ConfigCloudAzure, prefix="aws", idle_tolerance=300),
         ]
         idle_machines: dict[NodeId, float] = {}
 
@@ -836,7 +850,7 @@ class TestDeallocateNodes:
 
         assert isinstance(result, list)
         assert any(
-            isinstance(n, Node) and n.node_id == NodeId(3) and n.ip == "10.0.0.3"
+            isinstance(n, Node) and n.node_id == NodeId(3) and n.hostname == "10.0.0.3"
             for n in result
         )
 
@@ -851,7 +865,7 @@ class TestDeallocateNodeBracketing:
 
     async def test_bracketing_order_disable_cloud_delete_remove(self) -> None:
         """[12.4] disable+commit -> cloud deallocate -> remove+commit ordering."""
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False  # Skip disconnect
 
@@ -859,10 +873,10 @@ class TestDeallocateNodeBracketing:
 
         uow = AsyncMock()
         uow.nodes.disable = AsyncMock(
-            side_effect=lambda _node_id: calls.append("disable")
+            side_effect=lambda _node_id: calls.append("disable"),
         )
         uow.nodes.remove = AsyncMock(
-            side_effect=lambda _node_id: calls.append("remove")
+            side_effect=lambda _node_id: calls.append("remove"),
         )
         uow.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
         uow.__aenter__ = AsyncMock(return_value=uow)
@@ -873,18 +887,21 @@ class TestDeallocateNodeBracketing:
 
         clouds = MagicMock(spec=CloudProvisioner)
         clouds.deallocate = AsyncMock(
-            side_effect=lambda _node: calls.append("deallocate")
+            side_effect=lambda _node: calls.append("deallocate"),
         )
 
         await deallocate_node(
-            node=node, repository=gateway, clouds=clouds, uow_factory=uow_factory
+            node=node,
+            repository=gateway,
+            clouds=clouds,
+            uow_factory=uow_factory,
         )
 
         assert calls == ["disable", "commit", "deallocate", "remove", "commit"]
 
     async def test_failure_in_cloud_delete_leaves_node_disabled(self) -> None:
         """[12.4] clouds.deallocate raises -> node stays disabled, remove NOT called."""
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False
 
@@ -892,10 +909,10 @@ class TestDeallocateNodeBracketing:
 
         uow = AsyncMock()
         uow.nodes.disable = AsyncMock(
-            side_effect=lambda _node_id: calls.append("disable")
+            side_effect=lambda _node_id: calls.append("disable"),
         )
         uow.nodes.remove = AsyncMock(
-            side_effect=lambda _node_id: calls.append("remove")
+            side_effect=lambda _node_id: calls.append("remove"),
         )
         uow.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
         uow.__aenter__ = AsyncMock(return_value=uow)
@@ -906,7 +923,7 @@ class TestDeallocateNodeBracketing:
 
         clouds = MagicMock(spec=CloudProvisioner)
         clouds.deallocate = AsyncMock(
-            side_effect=CloudAllocateError("VM deletion failed")
+            side_effect=CloudAllocateError("VM deletion failed"),
         )
 
         with pytest.raises(CloudAllocateError):
@@ -925,10 +942,11 @@ class TestDeallocateNodeBracketing:
         assert calls == ["disable", "commit"]
 
     async def test_remove_failure_after_cloud_delete_is_logged_not_raised(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """[review-hardening] remove UoW fails after clouds.deallocate succeeded -> exception swallowed, REMOVE_FAILED logged; cloud VM is gone so worker stays alive for reconciliation."""
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4, cloud="aws")
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
         gateway.contains.return_value = False
 
@@ -947,7 +965,8 @@ class TestDeallocateNodeBracketing:
         clouds.deallocate = AsyncMock()
 
         with caplog.at_level(
-            "ERROR", logger="yascheduler.application.deallocate_nodes"
+            "ERROR",
+            logger="yascheduler.application.deallocate_nodes",
         ):
             # Must not raise — the cloud VM is already gone.
             await deallocate_node(
@@ -961,8 +980,8 @@ class TestDeallocateNodeBracketing:
         clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.disable.assert_awaited_once_with(NodeId(1))
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
-        # Reconciliation marker logged.
+        # Reconciliation narrative logged (plain narrative, no grace marker).
         assert any(
-            "REMOVE_FAILED" in r.message and "10.0.0.1" in r.message
+            "node remove failed" in r.message and "10.0.0.1" in r.message
             for r in caplog.records
         )

@@ -1,33 +1,19 @@
-# FILE: tests/unit/test_abandon_node.py
-# VERSION: 1.5.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup).
-#   SCOPE: Happy path, non-cloud skip, cloud-delete failure tolerance, DB-remove failure re-raise, no-task no-op, ambiguous-task warning.
-#   DEPENDS: M-APPLICATION-ABANDON-NODE, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ABANDON-NODE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestAbandonNode - Happy path, non-cloud skip, cloud-delete failure, DB-remove failure, no-task, ambiguous-task
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.4.0 - task-schema-and-entity-cleanup: fixtures use allocated_node_id (was allocated_ip); orchestrator MACHINE_GONE log no longer includes ip.
-#   PREVIOUS_CHANGE: v1.2.0 - node-id-keyed-mutators: uow.nodes.remove asserts expect NodeId(1) (was ip string "10.0.0.5").
-# END_CHANGE_SUMMARY
 """Unit tests for the abandon_node use case.
 
-Covers all six scenarios from the use-cases spec:
+Covers the six scenarios from the use-cases spec:
 
-- Happy path: VM deleted, DB row removed, tracker released
-- Non-cloud node skips VM deletion
+- Happy path: VM deleted, DB row removed, tracker entry discarded by node
+- Non-cloud node skips VM deletion (discard_by_node still runs)
 - Cloud deletion failure does not block DB cleanup
-- DB remove failure is re-raised
-- No matching TO_DO task → no discard
-- Multiple matching TO_DO tasks → warning logged, no discard
+- DB remove failure is re-raised (discard_by_node skipped)
+- No matching tracker entry -> no warning, no raise
+- Multiple tracker entries for one node -> warning logged, no raise
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the abandon_node use case (never-connected cloud-node cleanup via discard_by_node).
+# SCOPE: Happy path, non-cloud node, cloud-delete failure tolerance, DB-remove failure re-raise, no-entry no-op, ambiguous-tracker warning.
+# KEYWORDS: abandon_node, discard_by_node, never-connected, cloud cleanup
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -37,9 +23,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.log_assertions import extra_fields as _fields
 from yascheduler.application.abandon_node import abandon_node
 from yascheduler.application.allocation_tracker import AllocationTracker
-from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain.model import Node, NodeId
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -47,10 +34,10 @@ if TYPE_CHECKING:
     from yascheduler.application.uow import AbstractUnitOfWork
 
 
-def _cloud_node(ip: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
+def _cloud_node(hostname: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
     return Node(
         node_id=NodeId(1),
-        ip=ip,
+        hostname=hostname,
         ncpus=2,
         cloud=cloud,
         username="root",
@@ -59,41 +46,13 @@ def _cloud_node(ip: str = "10.0.0.5", cloud: str | None = "aws") -> Node:
     )
 
 
-def _todo_task(
-    task_id: int,
-    allocated_node_id: NodeId | None = None,
-) -> Task:
-    from datetime import datetime
-
-    return Task(
-        task_id=TaskId(task_id),
-        label="t",
-        engine="e",
-        remote_folder=None,
-        local_folder=None,
-        webhook_url=None,
-        webhook_custom_params={},
-        error=None,
-        extra={},
-        created_at=datetime(2025, 1, 1),
-        updated_at=datetime(2025, 1, 1),
-        status=TaskStatus.TO_DO,
-        allocated_node_id=allocated_node_id,
-    )
-
-
-def _build_uow(
-    *,
-    todo_tasks: list[Task] | None = None,
-    remove_side_effect: Exception | None = None,
-) -> AsyncMock:
-    """Build a UoW mock whose tasks.list_by_status returns the given tasks.
+def _build_uow(*, remove_side_effect: Exception | None = None) -> AsyncMock:
+    """Build a UoW mock. The DB read (list_by_status) is no longer used by
+    abandon_node, so no tasks mock is set up.
 
     `remove_side_effect`, when set, makes uow.nodes.remove raise on first call.
     """
     uow = AsyncMock()
-    uow.tasks = AsyncMock()
-    uow.tasks.list_by_status = AsyncMock(return_value=todo_tasks or [])
     uow.nodes = AsyncMock()
     if remove_side_effect is not None:
         uow.nodes.remove = AsyncMock(side_effect=remove_side_effect)
@@ -111,17 +70,17 @@ def _uow_factory(uow: AsyncMock) -> Callable[[], AbstractUnitOfWork]:
 
 
 class TestAbandonNode:
-    """abandon_node — VM delete + DB remove + tracker discard."""
+    """abandon_node — VM delete + DB remove + tracker discard_by_node."""
 
     @pytest.mark.asyncio
     async def test_happy_path_vm_deleted_row_removed_tracker_discarded(self) -> None:
-        """cloud node + one matching TO_DO task → all three actions fire, no raise."""
+        """Cloud node + one tracker entry linked -> all three actions fire, discard_by_node returns 1, no raise."""
         node = _cloud_node()
-        task = _todo_task(42, allocated_node_id=node.node_id)
-        uow = _build_uow(todo_tasks=[task])
+        uow = _build_uow()
 
         clouds = AsyncMock()
         tracker = MagicMock(spec=AllocationTracker)
+        tracker.discard_by_node.return_value = 1
 
         await abandon_node(
             node,
@@ -133,16 +92,17 @@ class TestAbandonNode:
         clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         uow.commit.assert_awaited_once()
-        tracker.discard.assert_called_once_with(TaskId(42))
+        tracker.discard_by_node.assert_called_once_with(node.node_id)
 
     @pytest.mark.asyncio
     async def test_abandon_node_non_cloud_skips_vm_deletion(self) -> None:
-        """node.cloud is None → clouds.deallocate NOT called, DB remove still runs."""
+        """node.cloud is None -> clouds.deallocate NOT called, DB remove still runs, discard_by_node still runs (unconditional)."""
         node = _cloud_node(cloud=None)
-        uow = _build_uow(todo_tasks=[])
+        uow = _build_uow()
 
         clouds = AsyncMock()
         tracker = MagicMock(spec=AllocationTracker)
+        tracker.discard_by_node.return_value = 0
 
         await abandon_node(
             node,
@@ -154,22 +114,25 @@ class TestAbandonNode:
         clouds.deallocate.assert_not_called()
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         uow.commit.assert_awaited_once()
-        tracker.discard.assert_not_called()
+        tracker.discard_by_node.assert_called_once_with(node.node_id)
 
     @pytest.mark.asyncio
     async def test_abandon_node_cloud_delete_failure_does_not_block_db_cleanup(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """clouds.deallocate raises → logged at error, DB remove still runs, no raise."""
+        """clouds.deallocate raises -> logged at error, DB remove still runs, discard_by_node still runs, no raise."""
         node = _cloud_node()
-        uow = _build_uow(todo_tasks=[])
+        uow = _build_uow()
 
         clouds = AsyncMock()
         clouds.deallocate = AsyncMock(side_effect=RuntimeError("vm gone"))
         tracker = MagicMock(spec=AllocationTracker)
+        tracker.discard_by_node.return_value = 0
 
         with caplog.at_level(
-            logging.ERROR, logger="yascheduler.application.abandon_node"
+            logging.DEBUG,
+            logger="yascheduler.application.abandon_node",
         ):
             # Must NOT raise — cloud delete failure is logged not raised.
             await abandon_node(
@@ -182,83 +145,33 @@ class TestAbandonNode:
         clouds.deallocate.assert_awaited_once_with(node)
         uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         uow.commit.assert_awaited_once()
+        tracker.discard_by_node.assert_called_once_with(node.node_id)
         assert any(
-            "CLOUD_DELETE_FAILED" in r.message
-            and "10.0.0.5" in r.message
-            and "aws" in r.message
+            r.getMessage() == "CLOUD_DELETE_FAILED"
+            and _fields(r).get("node_id") == NodeId(1)
+            and _fields(r).get("hostname") == "10.0.0.5"
+            and _fields(r).get("cloud") == "aws"
             for r in caplog.records
         )
 
     @pytest.mark.asyncio
     async def test_abandon_node_db_remove_failure_reraised(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """uow.nodes.remove raises → logged at error + re-raised (caller keeps worker alive)."""
+        """uow.nodes.remove raises -> logged at error + re-raised (caller keeps worker alive). discard_by_node is NOT called (discard runs after the remove; remove failure skips it)."""
         node = _cloud_node()
-        uow = _build_uow(
-            todo_tasks=[],
-            remove_side_effect=RuntimeError("db gone"),
-        )
+        uow = _build_uow(remove_side_effect=RuntimeError("db gone"))
 
         clouds = AsyncMock()
         tracker = MagicMock(spec=AllocationTracker)
 
-        with caplog.at_level(
-            logging.ERROR, logger="yascheduler.application.abandon_node"
-        ):
-            with pytest.raises(RuntimeError, match="db gone"):
-                await abandon_node(
-                    node,
-                    clouds=clouds,
-                    uow_factory=_uow_factory(uow),
-                    tracker=tracker,
-                )
-
-        clouds.deallocate.assert_awaited_once_with(node)
-        uow.nodes.remove.assert_awaited_once_with(NodeId(1))
-        assert any(
-            "REMOVE_FAILED" in r.message and "10.0.0.5" in r.message
-            for r in caplog.records
-        )
-        # Tracker never reached (DB remove failed before the release-task block).
-        tracker.discard.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_abandon_node_no_matching_task_no_discard(self) -> None:
-        """Zero TO_DO tasks with allocated_ip == node.ip → tracker.discard NOT called."""
-        node = _cloud_node()
-        # Unrelated task pointing at a different node.
-        unrelated = _todo_task(99)
-        uow = _build_uow(todo_tasks=[unrelated])
-
-        clouds = AsyncMock()
-        tracker = MagicMock(spec=AllocationTracker)
-
-        await abandon_node(
-            node,
-            clouds=clouds,
-            uow_factory=_uow_factory(uow),
-            tracker=tracker,
-        )
-
-        uow.tasks.list_by_status.assert_awaited_once_with({TaskStatus.TO_DO})
-        tracker.discard.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_abandon_node_multiple_matching_tasks_logs_warning_no_discard(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Two TO_DO tasks with same allocated_node_id → warning logged, no discard, no raise."""
-        node = _cloud_node()
-        t1 = _todo_task(101, allocated_node_id=node.node_id)
-        t2 = _todo_task(102, allocated_node_id=node.node_id)
-        uow = _build_uow(todo_tasks=[t1, t2])
-
-        clouds = AsyncMock()
-        tracker = MagicMock(spec=AllocationTracker)
-
-        with caplog.at_level(
-            logging.WARNING, logger="yascheduler.application.abandon_node"
+        with (
+            caplog.at_level(
+                logging.DEBUG,
+                logger="yascheduler.application.abandon_node",
+            ),
+            pytest.raises(RuntimeError, match="db gone"),
         ):
             await abandon_node(
                 node,
@@ -267,10 +180,75 @@ class TestAbandonNode:
                 tracker=tracker,
             )
 
-        tracker.discard.assert_not_called()
+        clouds.deallocate.assert_awaited_once_with(node)
+        uow.nodes.remove.assert_awaited_once_with(NodeId(1))
         assert any(
-            "AMBIGUOUS_TASK" in r.message
-            and "10.0.0.5" in r.message
-            and "2" in r.message
+            r.getMessage() == "REMOVE_FAILED"
+            and _fields(r).get("hostname") == "10.0.0.5"
+            for r in caplog.records
+        )
+        # discard_by_node runs AFTER the remove block; a remove failure
+        # re-raises before reaching it, so the tracker entry stays until
+        # the next abandon attempt. Not a regression — matches the prior
+        # ordering (the old code also discarded after the remove block).
+        tracker.discard_by_node.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_abandon_node_no_matching_tracker_entry_no_discard(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """discard_by_node returns 0 -> no warning logged, function returns without raising."""
+        node = _cloud_node()
+        uow = _build_uow()
+
+        clouds = AsyncMock()
+        tracker = MagicMock(spec=AllocationTracker)
+        tracker.discard_by_node.return_value = 0
+
+        with caplog.at_level(
+            logging.DEBUG,
+            logger="yascheduler.application.abandon_node",
+        ):
+            await abandon_node(
+                node,
+                clouds=clouds,
+                uow_factory=_uow_factory(uow),
+                tracker=tracker,
+            )
+
+        tracker.discard_by_node.assert_called_once_with(node.node_id)
+        assert not any(r.getMessage() == "AMBIGUOUS_TRACKER" for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_abandon_node_multiple_tracker_entries_logs_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """discard_by_node returns 2 (corruption) -> warning logged with AMBIGUOUS_TRACKER, node_id, ip, count=2, no raise."""
+        node = _cloud_node()
+        uow = _build_uow()
+
+        clouds = AsyncMock()
+        tracker = MagicMock(spec=AllocationTracker)
+        tracker.discard_by_node.return_value = 2
+
+        with caplog.at_level(
+            logging.DEBUG,
+            logger="yascheduler.application.abandon_node",
+        ):
+            await abandon_node(
+                node,
+                clouds=clouds,
+                uow_factory=_uow_factory(uow),
+                tracker=tracker,
+            )
+
+        tracker.discard_by_node.assert_called_once_with(node.node_id)
+        assert any(
+            r.getMessage() == "AMBIGUOUS_TRACKER"
+            and _fields(r).get("node_id") == NodeId(1)
+            and _fields(r).get("hostname") == "10.0.0.5"
+            and _fields(r).get("count") == 2
             for r in caplog.records
         )

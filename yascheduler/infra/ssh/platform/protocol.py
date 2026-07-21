@@ -1,43 +1,22 @@
-#!/usr/bin/env python3
-# FILE: yascheduler/infra/ssh/platform/protocol.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Protocol definitions for process info, SSH checks, and adapters.
-#   SCOPE: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc, ProcessInfo, SSHCheck, QuoteCallable, RunCallable, RunBgCallable, OuterRunCallable, GetCPUCoresCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable protocols and type aliases.
-#   DEPENDS: M-DOMAIN-ENGINE
-#   LINKS: M-PLATFORM-ADAPTERS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   SFTPRetryExc             - Tuple of retriable SFTP exception types.
-#   SSHRetryExc              - Tuple of retriable SSH exception types.
-#   AllSSHRetryExc           - Union of SSHRetryExc and SFTPRetryExc.
-#   ProcessInfo              - Frozen dataclass holding pid, name, command.
-#   SSHCheck                 - Callable alias: async SSH connection health check.
-#   QuoteCallable            - Callable alias: string quoting function.
-#   RunCallable              - Protocol: run a command via SSH and return completed process.
-#   RunBgCallable            - Protocol: run a command in background via SSH.
-#   OuterRunCallable         - Protocol: curried run callable with pre-bound conn/quote.
-#   GetCPUCoresCallable      - Callable alias: async CPU core count retrieval.
-#   ListProcessesCallable    - Protocol: async generator listing running processes.
-#   PgrepCallable            - Protocol: async generator filtering processes by pattern.
-#   SetupNodeCallable        - Protocol: async node setup (engines, dirs, logging).
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Consolidate ProcessInfo into protocol.py (frozen dataclass); remove PProcessInfo and PNode Protocols (prune-platform-protocols). Consumers import ProcessInfo from .protocol; ListProcessesCallable/PgrepCallable now annotate AsyncGenerator[ProcessInfo, None].
-#   PREVIOUS_CHANGE: v1.1.0 - Delete PEngine and PEngineRepository Protocols (engine-to-domain-frozen); consumers import Engine/EngineRepository from yascheduler.domain directly. Switch Deploy* import from yascheduler.config to yascheduler.domain. SetupNodeCallable.__call__ now references EngineRepository (TYPE_CHECKING import from yascheduler.domain).
-# END_CHANGE_SUMMARY
+"""Protocol definitions for process info, SSH checks, and adapters."""
+# region MODULE_CONTRACT
+# PURPOSE: Type aliases, exception tuples, and callable protocols for SSH remote machine operations.
+# SCOPE:
+# - Exception tuples: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc
+# - Data class: ProcessInfo
+# - Protocols: RunCallable, RunBgCallable, OuterRunCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable
+# - Callable aliases: SSHCheck, QuoteCallable, GetCPUCoresCallable
+# KEYWORDS: protocol, type aliases, ssh, sftp, exceptions, callables
+# DEPENDENCIES: USES API: asyncssh.
+# endregion MODULE_CONTRACT
+
+from __future__ import annotations
 
 import asyncio
-import logging
 from abc import abstractmethod
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from dataclasses import dataclass
-from pathlib import PurePath
-from re import Pattern
-from typing import TYPE_CHECKING, Any, Optional, Protocol, Union
+from typing import TYPE_CHECKING, Any, Protocol
 
 from asyncssh.connection import SSHClientConnection
 from asyncssh.misc import (
@@ -50,7 +29,6 @@ from asyncssh.misc import (
     ProtocolError,
     ServiceNotAvailable,
 )
-from asyncssh.process import SSHClientProcess, SSHCompletedProcess
 from asyncssh.sftp import (
     SFTPBadMessage,
     SFTPByteRangeLockConflict,
@@ -66,7 +44,28 @@ from asyncssh.sftp import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import PurePath
+    from re import Pattern
+
+    from asyncssh.process import SSHClientProcess, SSHCompletedProcess
+
     from yascheduler.domain import EngineRepository
+
+__all__ = [
+    "AllSSHRetryExc",
+    "GetCPUCoresCallable",
+    "ListProcessesCallable",
+    "OuterRunCallable",
+    "PgrepCallable",
+    "ProcessInfo",
+    "QuoteCallable",
+    "RunBgCallable",
+    "RunCallable",
+    "SFTPRetryExc",
+    "SSHCheck",
+    "SSHRetryExc",
+    "SetupNodeCallable",
+]
 
 SFTPRetryExc = (
     asyncio.TimeoutError,
@@ -97,18 +96,29 @@ SSHRetryExc = (
 AllSSHRetryExc = SSHRetryExc + SFTPRetryExc
 
 
+# region CLASS_ProcessInfo
+# PURPOSE: Carry a single remote process's identity (pid, name, command line) out of pgrep/list_processes so occupancy checks and process listings branch on structured fields instead of re-parsing ps/Get-CimInstance output.
 @dataclass(frozen=True)
 class ProcessInfo:
+    """Remote process information — PID, name, and command line."""
+
     pid: int
     name: str
     command: str
+
+
+# endregion CLASS_ProcessInfo
 
 
 SSHCheck = Callable[[SSHClientConnection], Coroutine[Any, Any, bool]]
 QuoteCallable = Callable[[str], str]
 
 
+# region CLASS_RunCallable
+# PURPOSE: Type every platform-specific synchronous-SSH command-execution callable against a single structural contract so adapter wiring stays platform-agnostic and the type-checker rejects run callables that drop the quote parameter.
 class RunCallable(Protocol):
+    """Callable protocol for synchronous SSH command execution."""
+
     @abstractmethod
     def __call__(
         self,
@@ -116,13 +126,20 @@ class RunCallable(Protocol):
         quote: QuoteCallable,
         command: str,
         *args: object,
-        cwd: Optional[str] = None,
+        cwd: str | None = None,
         **kwargs: dict[str, Any],
     ) -> Coroutine[Any, Any, SSHCompletedProcess]:
-        pass
+        """Call."""
 
 
+# endregion CLASS_RunCallable
+
+
+# region CLASS_RunBgCallable
+# PURPOSE: Type every platform-specific background-process spawn callable against a single structural contract so the session's run_bg can delegate without per-platform branching.
 class RunBgCallable(Protocol):
+    """Callable protocol for background SSH command execution."""
+
     @abstractmethod
     def __call__(
         self,
@@ -130,55 +147,88 @@ class RunBgCallable(Protocol):
         quote: QuoteCallable,
         command: str,
         *args: object,
-        cwd: Optional[str] = None,
+        cwd: str | None = None,
         **kwargs: object,
     ) -> Coroutine[Any, Any, SSHClientProcess[Any]]:
-        pass
+        """Call."""
 
 
+# endregion CLASS_RunBgCallable
+
+
+# region CLASS_OuterRunCallable
+# PURPOSE: Type the closure that make_run_fn produces so adapter methods that need a run callable (get_cpu_cores, setup_node) accept a single typed callable instead of (conn, quote) plus a free function.
 class OuterRunCallable(Protocol):
+    """Callable protocol wrapping ``run``/``run_bg`` with platform dispatch."""
+
     @abstractmethod
     def __call__(
         self,
         *args: object,
-        cwd: Optional[str] = None,
+        cwd: str | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> Coroutine[Any, Any, SSHCompletedProcess]:
-        pass
+        """Call."""
+
+
+# endregion CLASS_OuterRunCallable
 
 
 GetCPUCoresCallable = Callable[[OuterRunCallable], Coroutine[Any, Any, int]]
 
 
+# region CLASS_ListProcessesCallable
+# PURPOSE: Type every platform-specific process-listing callable so SSHMachineSession.list_processes delegates without per-platform branching.
 class ListProcessesCallable(Protocol):
+    """Callable protocol for listing remote processes."""
+
     @abstractmethod
     def __call__(
-        self, conn: SSHClientConnection, query: Optional[str] = None
+        self,
+        conn: SSHClientConnection,
+        query: str | None = None,
     ) -> AsyncGenerator[ProcessInfo, None]:
-        pass
+        """Call."""
 
 
+# endregion CLASS_ListProcessesCallable
+
+
+# region CLASS_PgrepCallable
+# PURPOSE: Type every platform-specific pattern-matching process callable so SSHMachineSession.pgrep delegates without per-platform branching.
 class PgrepCallable(Protocol):
+    """Callable protocol for pattern-matching remote processes."""
+
     @abstractmethod
     def __call__(
         self,
         conn: SSHClientConnection,
         quote: QuoteCallable,
-        pattern: Union[str, Pattern[str]],
+        pattern: str | Pattern[str],
+        *,
         full: bool = True,
     ) -> AsyncGenerator[ProcessInfo, None]:
-        pass
+        """Call."""
 
 
+# endregion CLASS_PgrepCallable
+
+
+# region CLASS_SetupNodeCallable
+# PURPOSE: Type every platform-specific node-setup callable so SSHMachineSession.setup_node delegates without per-platform branching.
 class SetupNodeCallable(Protocol):
+    """Callable protocol for node setup operations."""
+
     @abstractmethod
     def __call__(
         self,
         conn: SSHClientConnection,
         run: OuterRunCallable,
         quote: QuoteCallable,
-        engines: "EngineRepository",
+        engines: EngineRepository,
         engines_dir: PurePath,
-        log: Optional[logging.Logger] = None,
     ) -> Coroutine[Any, Any, None]:
-        pass
+        """Call."""
+
+
+# endregion CLASS_SetupNodeCallable

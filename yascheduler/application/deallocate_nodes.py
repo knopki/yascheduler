@@ -1,21 +1,9 @@
-# FILE: yascheduler/application/deallocate_nodes.py
-# VERSION: 4.8.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion.
-#   SCOPE: deallocate_node, deallocate_nodes async functions.
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-SSH-REPOSITORY, M-CLOUD-PROVISIONER
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   deallocate_node - Disconnect (by node_id) and cloud-deallocate a single node (clouds.deallocate(node) reads node.cloud/node.ip internally); logs+flags stale row if DB remove fails after successful cloud delete
-#   deallocate_nodes - Disable idle cloud nodes and return Node objects for VM deletion (idle_machines dict[NodeId, float]; busy_node_ids matching)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v4.8.0 - cloud-port-node-arg: deallocate_node calls clouds.deallocate(node) (was clouds.deallocate(node.cloud, node.ip)).
-#   PREVIOUS_CHANGE: v4.7.0 - ssh-rekey-node-id: deallocate_nodes takes idle_machines: dict[NodeId, float] (was dict[str, float] keyed by ip); busy matching rekeyed to busy_node_ids = {t.allocated_node_id}; phase-1 disable matches by node.node_id in idle_machines and node.node_id not in busy_node_ids; phase-2 filter node.node_id not in busy_node_ids and node.cloud. deallocate_node calls repository.contains(node.node_id)/repository.disconnect(node.node_id) (was node.ip). clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host).
-# END_CHANGE_SUMMARY
+"""Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion."""
+# region MODULE_CONTRACT
+# PURPOSE: Stop paying for idle cloud capacity by disabling nodes that have been free past their configured tolerance, returning their Node objects so the orchestrator can delete the VMs.
+# SCOPE: Idle cloud node deallocation — disable nodes in DB by idle tolerance, collect disabled nodes for VM deletion.
+# KEYWORDS: deallocate, idle, node, cloud, disable, tolerance
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -34,101 +22,99 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["deallocate_node", "deallocate_nodes"]
 
-# START_CONTRACT: deallocate_node
-#   PURPOSE: Disconnect and cloud-deallocate a single node.
-#   INPUTS: {
-#     node: Node - The node to deallocate,
-#     repository: MachineRepository, operations: MachineOperations - SSH gateway,
-#     clouds: CloudProvisioner - Cloud provider manager,
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory
-#   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Disconnects remote machine, disables node (by node_id) via UoW, deletes cloud VM via port, removes node (by node_id) via second UoW. If the second UoW fails after cloud delete succeeded, logs loudly for manual reconciliation (row stays disabled) and does not re-raise — the cloud VM is already gone.
-#   LINKS: M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-CLOUD-PROVISIONER, M-APPLICATION-UOW
-# END_CONTRACT: deallocate_node
+
+# region FUNC_deallocate_node
+# PURPOSE: Tear down a cloud node completely — disconnect SSH, disable in DB, delete cloud VM, remove row — so billing stops and the scheduler no longer tracks it.
+# REQUIRES: The caller SHALL wrap deallocate_node in try/except Exception that logs node_id, hostname, and the error and continues; the caller SHALL NOT call repository.contains(...)/repository.disconnect(...) directly — SSH teardown is owned by deallocate_node.
+# ENSURES: Cloud VM deletion happens before row removal; if row removal fails after cloud delete, the error is logged but not re-raised (stale disabled row left for manual reconciliation).
+# RATIONALE:
+# - Q: Why does SSH disconnect run before the cloud guard and why is cloud deletion conditional?
+#   A: SSH disconnect runs before the if node.cloud: guard so teardown happens unconditionally for both cloud and static nodes. Cloud deletion is conditional on node.cloud because static nodes have no cloud VM to delete. The disable+remove bracket (disable in DB before cloud VM delete, remove row after) protects against allocator re-selection if cloud deletion fails — a disabled node is invisible to the allocator's free-machine selection.
 async def deallocate_node(
     node: Node,
     repository: MachineRepository,
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> None:
+    """Disconnect and cloud-deallocate a single node."""
     if repository.contains(node.node_id):
         await repository.disconnect(node.node_id)
         logger.debug(
-            "[deallocate_node][DISCONNECT] node_id=%s ip=%s gateway disconnected",
-            node.node_id,
-            node.ip,
+            "DISCONNECT",
+            extra={"node_id": node.node_id, "hostname": node.hostname},
         )
     if node.cloud:
-        # START_BLOCK_DISABLE
+        # region BLOCK_disable
         logger.debug(
-            "[deallocate_node][DISABLE] node_id=%s ip=%s cloud=%s",
-            node.node_id,
-            node.ip,
-            node.cloud,
+            "DISABLE",
+            extra={
+                "node_id": node.node_id,
+                "hostname": node.hostname,
+                "cloud": node.cloud,
+            },
         )
         async with uow_factory() as uow:
             await uow.nodes.disable(node.node_id)
             await uow.commit()
-        # END_BLOCK_DISABLE
+        # endregion BLOCK_disable
 
-        # START_BLOCK_CLOUD_DELETE
+        # region BLOCK_cloud_delete
         logger.debug(
-            "[deallocate_node][CLOUD_DELETE] node_id=%s ip=%s cloud=%s",
-            node.node_id,
-            node.ip,
-            node.cloud,
+            "CLOUD_DELETE",
+            extra={
+                "node_id": node.node_id,
+                "hostname": node.hostname,
+                "cloud": node.cloud,
+            },
         )
         await clouds.deallocate(node)
-        # END_BLOCK_CLOUD_DELETE
+        # endregion BLOCK_cloud_delete
 
-        # START_BLOCK_REMOVE
+        # region BLOCK_remove
         logger.debug(
-            "[deallocate_node][REMOVE] node_id=%s ip=%s cloud=%s",
-            node.node_id,
-            node.ip,
-            node.cloud,
+            "REMOVE",
+            extra={
+                "node_id": node.node_id,
+                "hostname": node.hostname,
+                "cloud": node.cloud,
+            },
         )
         try:
             async with uow_factory() as uow:
                 await uow.nodes.remove(node.node_id)
                 await uow.commit()
-        except Exception as remove_err:
+        except Exception:
             # Cloud VM is already gone; the disabled DB row is stale. Log
             # loudly so operators can reconcile manually. Not re-raised: the
             # cloud delete succeeded, and the next cycle's deallocate_node
             # will re-attempt (cloud-SDK delete-idempotency dependent) plus
             # this remove.
-            logger.error(
-                "[deallocate_node][REMOVE_FAILED] node_id=%s ip=%s cloud=%s err=%s "
+            logger.exception(
+                "node remove failed: node_id=%s hostname=%s cloud=%s "
                 "— VM is deleted but DB row left disabled; "
                 "manual reconciliation needed",
                 node.node_id,
-                node.ip,
+                node.hostname,
                 node.cloud,
-                remove_err,
             )
-        # END_BLOCK_REMOVE
+        # endregion BLOCK_remove
 
 
-# START_CONTRACT: deallocate_nodes
-#   PURPOSE: Disable idle cloud nodes exceeding tolerance and return their Node objects for VM deletion.
-#   INPUTS: {
-#     uow_factory: Callable[[], AbstractUnitOfWork] - Unit of Work factory,
-#     config_clouds: Sequence[CloudConfig] - Cloud configuration with idle_tolerance,
-#     idle_machines: dict[NodeId, float] - NodeId -> free_since monotonic timestamp (seconds since arbitrary epoch)
-#   }
-#   OUTPUTS: { list[Node] - Disabled node objects (each carrying node_id) for orchestrator to deallocate }
-#   SIDE_EFFECTS: Disables nodes in DB.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS
-# END_CONTRACT: deallocate_nodes
+# endregion FUNC_deallocate_node
+
+
+# region FUNC_deallocate_nodes
+# PURPOSE: Disable idle cloud nodes exceeding their configured idle tolerance and return the disabled Node objects for VM deletion.
+# ENSURES: Returns only disabled cloud nodes whose node_id is not in busy_node_ids; intermediate list is non-empty for pyright/mypy inference.
 async def deallocate_nodes(
     uow_factory: Callable[[], AbstractUnitOfWork],
     config_clouds: Sequence[CloudConfig],
     idle_machines: dict[NodeId, float],
 ) -> list[Node]:
-    # START_BLOCK_DISABLE_IDLE
+    """Disable idle cloud nodes exceeding tolerance and return their Node objects for VM deletion."""
+    # region BLOCK_disable_idle
     async with uow_factory() as uow:
         running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
         busy_node_ids = {
@@ -154,19 +140,26 @@ async def deallocate_nodes(
                 await uow.nodes.disable(node.node_id)
                 await uow.commit()
                 logger.debug(
-                    "[deallocate_nodes][DISABLE] node_id=%s ip=%s cloud=%s",
-                    node.node_id,
-                    node.ip,
-                    node.cloud,
+                    "DISABLE",
+                    extra={
+                        "node_id": node.node_id,
+                        "hostname": node.hostname,
+                        "cloud": node.cloud,
+                    },
                 )
-    # END_BLOCK_DISABLE_IDLE
+    # endregion BLOCK_disable_idle
 
-    # START_BLOCK_COLLECT_DISABLED
+    # region BLOCK_collect_disabled
+    # Note: intermediate var is required — inlining the return inside the
+    # async-with makes pyright/mypy infer an implicit None fall-through.
     async with uow_factory() as uow:
         free_disabled_nodes = [
             node
             for node in await uow.nodes.list_disabled()
             if node.node_id not in busy_node_ids and node.cloud
         ]
-    return free_disabled_nodes
-    # END_BLOCK_COLLECT_DISABLED
+    return free_disabled_nodes  # noqa: RET504
+    # endregion BLOCK_collect_disabled
+
+
+# endregion FUNC_deallocate_nodes

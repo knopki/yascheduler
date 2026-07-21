@@ -3,7 +3,8 @@
 One can manage a remote Windows machine over SSH similarly to Unix.
 This is possible on all the Windows versions, starting from Windows 10.
 For that, on a target Windows machine, follow these one-off instructions or
-run a PowerShell script from this repo: https://github.com/tilde-lab/yascheduler/blob/master/windows_init.ps1
+run a PowerShell script from this repo:
+[windows_init.ps1](https://github.com/tilde-lab/yascheduler/blob/master/windows_init.ps1)
 
 First, install OpenSSH server:
 

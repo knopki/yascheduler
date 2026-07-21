@@ -1,34 +1,17 @@
-# FILE: tests/unit/test_cli_init.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yainit init() flag parsing, dispatch, exit codes, and service overwrite behavior.
-#   SCOPE: init() and its helpers with mocked apply_schema + filesystem.
-#   DEPENDS: M-ENTRYPOINTS-CLI-INIT
-#   LINKS: M-ENTRYPOINTS-CLI-INIT
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestInitFlags - Flag parsing and dispatch (no flags, --schema, --daemon, both, --help, --bogus)
-#   TestInitErrors - Exit-code contract on DatabaseError and OSError
-#   TestServiceInstall - Service file overwrite and detection logic
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Stub apply_migrations (autouse) so _init_schema tests don't open a real DB (add-db-migrations wiring).
-#   PREVIOUS_CHANGE: v1.1.0 - consolidate-daemon-entrypoints: added --config/--log-level scenarios (--help lists them; --config /nonexistent exits 2; --config /custom.conf passed through _init_schema(config_path) to Config.from_config_parser; defaults CONFIG_FILE/WARNING). The daemon_systemd.py / daemon_sysv.py path assertions (lines 243, 259) remain unchanged.
-# END_CHANGE_SUMMARY
-
 """Unit tests for yainit (entrypoints/cli/init.py).
 
 Covers flag parsing, dispatch, exit codes (0/1/2), service overwrite, and
 systemd-vs-sysv detection. apply_schema and the service helpers are mocked
 or injected via the public unit_file/startup_file parameters.
 """
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yainit init() flag parsing, dispatch, exit codes, and service overwrite behavior.
+# SCOPE: init() flag parsing, dispatch, exit codes, service overwrite behavior with mocked apply_schema + filesystem.
+# KEYWORDS: yainit, init, flag parsing, service overwrite, apply_schema
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -66,7 +49,8 @@ def _stub_apply_migrations(monkeypatch: pytest.MonkeyPatch) -> None:
     apply_migrations is never reached).
     """
     monkeypatch.setattr(
-        "yascheduler.entrypoints.cli.init.apply_migrations", MagicMock()
+        "yascheduler.entrypoints.cli.init.apply_migrations",
+        MagicMock(),
     )
 
 
@@ -82,12 +66,14 @@ class TestInitFlags:
         sysv_mock = MagicMock()
         apply_mock = MagicMock()
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init._init_systemd", systemd_mock
+            "yascheduler.entrypoints.cli.init._init_systemd",
+            systemd_mock,
         )
         monkeypatch.setattr("yascheduler.entrypoints.cli.init._init_sysv", sysv_mock)
         monkeypatch.setattr("yascheduler.entrypoints.cli.init.apply_schema", apply_mock)
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Path.is_dir", lambda self: True
+            "yascheduler.entrypoints.cli.init.Path.is_dir",
+            lambda self: True,
         )
 
         with pytest.raises(SystemExit) as exc:
@@ -107,7 +93,8 @@ class TestInitFlags:
         sysv_mock = MagicMock()
         apply_mock = MagicMock()
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init._init_systemd", systemd_mock
+            "yascheduler.entrypoints.cli.init._init_systemd",
+            systemd_mock,
         )
         monkeypatch.setattr("yascheduler.entrypoints.cli.init._init_sysv", sysv_mock)
         monkeypatch.setattr("yascheduler.entrypoints.cli.init.apply_schema", apply_mock)
@@ -129,12 +116,14 @@ class TestInitFlags:
         sysv_mock = MagicMock()
         apply_mock = MagicMock()
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init._init_systemd", systemd_mock
+            "yascheduler.entrypoints.cli.init._init_systemd",
+            systemd_mock,
         )
         monkeypatch.setattr("yascheduler.entrypoints.cli.init._init_sysv", sysv_mock)
         monkeypatch.setattr("yascheduler.entrypoints.cli.init.apply_schema", apply_mock)
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Path.is_dir", lambda self: True
+            "yascheduler.entrypoints.cli.init.Path.is_dir",
+            lambda self: True,
         )
 
         with pytest.raises(SystemExit) as exc:
@@ -154,12 +143,14 @@ class TestInitFlags:
         sysv_mock = MagicMock()
         apply_mock = MagicMock()
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init._init_systemd", systemd_mock
+            "yascheduler.entrypoints.cli.init._init_systemd",
+            systemd_mock,
         )
         monkeypatch.setattr("yascheduler.entrypoints.cli.init._init_sysv", sysv_mock)
         monkeypatch.setattr("yascheduler.entrypoints.cli.init.apply_schema", apply_mock)
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Path.is_dir", lambda self: True
+            "yascheduler.entrypoints.cli.init.Path.is_dir",
+            lambda self: True,
         )
 
         with pytest.raises(SystemExit) as exc:
@@ -223,14 +214,17 @@ class TestInitErrors:
         """OSError writing service file → init prints 'Error: cannot write to'; exit 1."""
         # Force systemd path and make write_text raise OSError
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Path.is_dir", lambda self: True
+            "yascheduler.entrypoints.cli.init.Path.is_dir",
+            lambda self: True,
         )
-        with patch(
-            "yascheduler.entrypoints.cli.init.Path.write_text",
-            side_effect=OSError("Permission denied"),
+        with (
+            patch(
+                "yascheduler.entrypoints.cli.init.Path.write_text",
+                side_effect=OSError("Permission denied"),
+            ),
+            pytest.raises(SystemExit) as exc,
         ):
-            with pytest.raises(SystemExit) as exc:
-                init(["--daemon"])
+            init(["--daemon"])
 
         assert exc.value.code == 1
         out, err = capsys.readouterr()
@@ -272,7 +266,7 @@ class TestServiceInstall:
         assert "STALE CONTENT" not in content
         assert "%YASCHEDULER_DAEMON_FILE%" not in content
         assert "daemon_sysv.py" in content
-        mode = stat.S_IMODE(os.stat(startup_file).st_mode)
+        mode = stat.S_IMODE(startup_file.stat().st_mode)
         assert mode == 0o755
 
     def test_missing_parent_dir_exits_one(
@@ -288,8 +282,8 @@ class TestServiceInstall:
             _init_systemd(install_path, unit_file=unit_file)
 
         assert exc.value.code == 1
-        out, _ = capsys.readouterr()
-        assert "Error: cannot write to" in out
+        _, err = capsys.readouterr()
+        assert "Error: cannot write to" in err
 
     def test_systemd_detection_via_run_dir(
         self,
@@ -299,11 +293,13 @@ class TestServiceInstall:
         systemd_mock = MagicMock()
         sysv_mock = MagicMock()
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init._init_systemd", systemd_mock
+            "yascheduler.entrypoints.cli.init._init_systemd",
+            systemd_mock,
         )
         monkeypatch.setattr("yascheduler.entrypoints.cli.init._init_sysv", sysv_mock)
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Path.is_dir", lambda self: True
+            "yascheduler.entrypoints.cli.init.Path.is_dir",
+            lambda self: True,
         )
 
         with pytest.raises(SystemExit) as exc:
@@ -321,11 +317,13 @@ class TestServiceInstall:
         systemd_mock = MagicMock()
         sysv_mock = MagicMock()
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init._init_systemd", systemd_mock
+            "yascheduler.entrypoints.cli.init._init_systemd",
+            systemd_mock,
         )
         monkeypatch.setattr("yascheduler.entrypoints.cli.init._init_sysv", sysv_mock)
         monkeypatch.setattr(
-            "yascheduler.entrypoints.cli.init.Path.is_dir", lambda self: False
+            "yascheduler.entrypoints.cli.init.Path.is_dir",
+            lambda self: False,
         )
 
         with pytest.raises(SystemExit) as exc:
@@ -360,7 +358,8 @@ class TestInitConfigLogLevel:
     """--config and --log-level argparse + behavior scenarios (defaults WARNING)."""
 
     def test_help_lists_config_and_log_level(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             init(["--help"])
@@ -370,7 +369,8 @@ class TestInitConfigLogLevel:
         assert "--log-level" in out
 
     def test_config_nonexistent_exits_two(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             init(["--schema", "--config", "/nonexistent.conf"])

@@ -35,7 +35,7 @@ dependencies = [
   "backoff~=2.1.2",
   "pg8000~=1.19",
   "python-daemon~=2.3",
-  "typing-extensions >= 4.2.0; python_version < '3.11'",
+  "typing-extensions >= 4.6.0; python_version < '3.11'",
 ]
 
 [project.urls]
@@ -68,16 +68,20 @@ upcloud = ["upcloud_api~=2.0"]
 dev = [
   "build",
   "commitizen",
-  "import-linter >=2.5,<2.6",
+  "import-linter>=2.5.2",
+  "markdownlint-rs>=0.3.15; python_version < '3.10'",
+  "markdownlint-rs>=0.3.18; python_version >= '3.10'",
+  "prek>=0.4.9",
   "pytest~=8.0",
   "pytest-asyncio~=0.25",
   "pytest-cov~=6.0",
   "pytest-mock~=3.0",
-  "ruff~=0.15.9",
+  "ruff>=0.15.9",
   "sqlfluff>=4.1.0",
   "testcontainers[postgres]~=4.0",
+  "tombi>=1.2.0; python_version >= '3.10'",
   "twine",
-  "zuban",
+  "zuban~=0.7.2",
 ]
 
 [build-system]
@@ -91,28 +95,6 @@ version_files = ["pyproject.toml:^version"]
 version_provider = "pep621"
 update_changelog_on_bump = true
 changelog_incremental = true
-
-[tool.mypy]
-ignore_missing_imports = true
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-addopts = []
-testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
-markers = [
-  "unit: unit tests (no external services)",
-  "integration: integration tests (with testcontainers)",
-  "e2e: end-to-end tests (with testcontainers)",
-]
-
-[tool.ruff]
-exclude = ["scripts/grace_check.py"]
-
-[tool.ruff.lint]
-# Enable specific rules
-select = ["ANN", "ASYNC", "E", "F", "I", "N", "UP", "TCH", "W"]
-# Disable specific rules
-ignore = ["E501"]
 
 [tool.importlinter]
 root_package = "yascheduler"
@@ -128,6 +110,84 @@ layers = [
   "yascheduler.domain",
   "yascheduler.shared",
 ]
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = []
+log_cli_format = "[%(name)s][%(funcName)s]:%(lineno)s %(message)s"
+log_format = "[%(name)s][%(funcName)s]:%(lineno)s %(message)s"
+markers = [
+  "unit: unit tests (no external services)",
+  "integration: integration tests (with testcontainers)",
+  "e2e: end-to-end tests (with testcontainers)",
+]
+testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "C901",  # complexity - FIXME: enable and refactor bad code
+  "BLE",  # blind except
+  "D105",  # undocumented magic method
+  "D107",  # undocumented __init__
+  "D203",  # incorrect-blank-line-before-class
+  "D213",  # multi-line-summary-second-line
+  "E501",  # Line too long
+  "ERA001",  # Found commented-out code
+  "FBT",  # boolean positional args are fine
+  "FIX002",  # we have TODOs
+  "S101",  # FIXME: asserts are evil, use TypeGuard
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "ANN",  # test fixtures/mocks/doubles use Any extensively
+  "ARG",  # unused arguments for fixtures
+  "B011",  # assert-false
+  "B017",  # assert-raises-exception patterns
+  "DTZ",  # datetime rules
+  "D",  # tests do not need docstrings
+  "EM",  # exception-message style is not load-bearing in tests
+  "TRY",  # exception-message style is not load-bearing in tests
+  "E402",  # module-level imports after patches are common in tests
+  "FIX",
+  "TD",  # TODOs in test scaffolding
+  "PERF401",  # readable loops preferred over comprehensions in test data
+  "PLC0415",  # local imports are used for monkeypatching/mocking
+  "PLR2004",  # magic values
+  "PLR0915",  # test functions are often long by nature
+  "PT006",
+  "PT011",
+  "PT012",
+  "PT015",
+  "PT017",
+  "PT018",
+  "PT019",  # pytest style preferences
+  "PYI034",  # non-self-return-type on test doubles
+  "RUF002",
+  "RUF003",  # arrows/symbols in test docstrings and comments
+  "S",  # asserts, exec, /tmp paths, fake creds
+  "SLF",  # private methods
+  "TC",  # third-party imports in type-checking blocks not needed in tests
+  "TRY",  # log/exception style not enforced in tests
+]
+"examples/**" = [
+  "D",  # examples don't need docstrings
+  "INP",  # implicit namespace package
+  "PTH",  # os.path is fine in standalone scripts
+  "S101",  # asserts validate example preconditions
+  "T201",  # print is the right tool for example CLI output
+]
+"docs/_semantic_template_reference.py" = ["D", "INP"]
+
+[tool.ruff.lint.pylint]
+max-args = 16  # FIXME: 16 is too much!
+max-statements = 59  # FIXME: this is overcomplicated
+max-branches = 21
+max-returns = 7
 
 [tool.setuptools.package-data]
 "yascheduler.infra.persistence.sql" = ["**/*.sql"]

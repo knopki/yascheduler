@@ -1,27 +1,20 @@
-# FILE: yascheduler/domain/settings.py
-# VERSION: 1.3.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Cross-layer application settings as frozen stdlib dataclasses — local daemon config and remote SSH defaults.
-#   SCOPE: LocalSettings (daemon paths, webhook, concurrency limits) and RemoteDefaults (SSH paths, username, jump host); no INI parsing on the DTOs.
-#   DEPENDS: none
-#   LINKS: M-DOMAIN-PORTS, M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   LocalSettings - Frozen dataclass: daemon data paths, webhook, concurrency limits; __post_init__ validates ge(1)/ge(0)
-#   RemoteDefaults - Frozen dataclass: remote SSH paths, username, jump host
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Remove cloud_package_upgrade field from LocalSettings (move-cloud-package-upgrade): the cloud-init package_upgrade knob is a cloud-only concern and is relocated to the per-provider ConfigCloud* DTOs (package_upgrade: bool = True); a leftover [local] cloud_package_upgrade INI key now surfaces as an "unknown field" ConfigWarning. No __post_init__ change (the field had no validation; _INT_DEFAULTS only ever included the int ge(1)/ge(0) fields, so it is unaffected).
-#   PREVIOUS_CHANGE: v1.2.0 - Add cloud_package_upgrade: bool = True field to LocalSettings (add-hetzner-live-e2e); the flag controls cloud-init package_upgrade on freshly-provisioned VMs and is read by CloudProvisionerImpl._get_cloud_config_data. No __post_init__ validation (any bool accepted); the field is not in _GE1_LIMIT_FIELDS so it is not int-validated.
-# END_CHANGE_SUMMARY
+"""Cross-layer application settings as frozen stdlib dataclasses — local daemon config and remote SSH defaults."""
+# region MODULE_CONTRACT
+# PURPOSE: Carry daemon and remote-SSH defaults as validated, immutable values shared across layers without re-parsing INI at each use site.
+# SCOPE:
+# - LocalSettings (daemon data paths, webhook, concurrency limits) and RemoteDefaults (remote SSH paths, username, jump host).
+# - NOT: INI parsing (entrypoints.config_parser) or cloud-provider config (infra.cloud.cloud_configs).
+# INVARIANTS: After construction, concurrency-limit fields are >= 1, webhook_reqs_limit >= 0, and path fields are Path instances.
+# KEYWORDS: settings, config, daemon, concurrency limits, webhook, jump host, LocalSettings, RemoteDefaults
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path, PurePath
 from typing import cast
+
+__all__ = ["LocalSettings", "RemoteDefaults"]
 
 # Concurrency-limit int fields that must be >= 1 (formerly validators.ge(1)).
 _GE1_LIMIT_FIELDS = (
@@ -36,6 +29,9 @@ _GE1_LIMIT_FIELDS = (
 )
 
 
+# region CLASS_LocalSettings
+# PURPOSE: Freeze the daemon's runtime configuration (paths, webhook, concurrency limits) so it is validated once and shared safely across async components.
+# INVARIANTS: Concurrency-limit fields >= 1; webhook_reqs_limit >= 0; path fields are Path instances.
 @dataclass(frozen=True)
 class LocalSettings:
     """Local daemon settings: data paths, concurrency limits, webhook config."""
@@ -55,7 +51,7 @@ class LocalSettings:
     deallocate_limit: int = 5
     deallocate_pending: int = 1
 
-    # START_BLOCK_VALIDATE
+    # region BLOCK_validate
     def __post_init__(self) -> None:
         """Validate field constraints.
 
@@ -70,42 +66,49 @@ class LocalSettings:
                 continue
             if f.name in _GE1_LIMIT_FIELDS:
                 if not isinstance(value, int):
-                    raise ValueError(
-                        f"{f.name} must be int, got {type(value).__name__}"
-                    )
+                    msg = f"{f.name} must be int, got {type(value).__name__}"
+                    raise ValueError(msg)
                 if value < 1:
-                    raise ValueError(f"{f.name} must be >= 1, got {value}")
+                    msg = f"{f.name} must be >= 1, got {value}"
+                    raise ValueError(msg)
             elif f.name == "webhook_reqs_limit":
                 if not isinstance(value, int):
-                    raise ValueError(
-                        f"webhook_reqs_limit must be int, got {type(value).__name__}"
-                    )
+                    msg = f"webhook_reqs_limit must be int, got {type(value).__name__}"
+                    raise ValueError(msg)
                 if value < 0:
-                    raise ValueError(f"webhook_reqs_limit must be >= 0, got {value}")
+                    msg = f"webhook_reqs_limit must be >= 0, got {value}"
+                    raise ValueError(msg)
             elif f.name in ("data_dir", "tasks_dir", "engines_dir", "keys_dir"):
                 if not isinstance(value, Path):
-                    raise ValueError(
-                        f"{f.name} must be Path, got {type(value).__name__}"
-                    )
+                    msg = f"{f.name} must be Path, got {type(value).__name__}"
+                    raise ValueError(msg)
             elif f.name == "webhook_url":
                 if not isinstance(value, str):
-                    raise ValueError(
-                        f"webhook_url must be str, got {type(value).__name__}"
-                    )
+                    msg = f"webhook_url must be str, got {type(value).__name__}"
+                    raise ValueError(msg)
 
-    # END_BLOCK_VALIDATE
+    # endregion BLOCK_validate
 
 
+# endregion CLASS_LocalSettings
+
+
+# region CLASS_RemoteDefaults
+# PURPOSE: Give every SSH-remote consumer a single immutable bundle of remote FS + jump-host defaults so they never re-derive paths or bastion identity at each call site.
 @dataclass(frozen=True)
 class RemoteDefaults:
     """Remote machine defaults: data directories, SSH username, jump host."""
 
-    data_dir: PurePath = PurePath("./data")
-    tasks_dir: PurePath = PurePath("./data/tasks")
-    engines_dir: PurePath = PurePath("./data/engines")
+    data_dir: PurePath = field(default_factory=lambda: PurePath("./data"))
+    tasks_dir: PurePath = field(default_factory=lambda: PurePath("./data/tasks"))
+    engines_dir: PurePath = field(default_factory=lambda: PurePath("./data/engines"))
     username: str = "root"
     jump_username: str | None = None
     jump_host: str | None = None
+    jump_port: int = 22
+
+
+# endregion CLASS_RemoteDefaults
 
 
 # Derived from LocalSettings field defaults so there is a single source of truth:
@@ -113,7 +116,7 @@ class RemoteDefaults:
 _INT_DEFAULTS: dict[str, int] = {
     f.name: cast("int", f.default)
     for f in fields(LocalSettings)
-    if f.name in (_GE1_LIMIT_FIELDS + ("webhook_reqs_limit",))
+    if f.name in ((*_GE1_LIMIT_FIELDS, "webhook_reqs_limit"))
     and f.default is not MISSING
 }
 

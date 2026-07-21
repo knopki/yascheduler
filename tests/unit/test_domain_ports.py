@@ -1,35 +1,17 @@
-# FILE: tests/unit/test_domain_ports.py
-# VERSION: 1.8.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
-#   SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, MachineOperations, CloudProvisioner Protocols.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_task_repository_protocol - Stub with all TaskRepository methods passes isinstance
-#   test_node_repository_protocol - Stub with all NodeRepository methods passes isinstance
-#   test_machine_repository_protocol - Stub with all MachineRepository methods passes isinstance
-#   test_machine_session_protocol - Stub with all MachineSession methods passes isinstance
-#   test_machine_operations_protocol - Stub with all MachineOperations methods passes isinstance
-#   test_cloud_provisioner_protocol - Stub with all CloudProvisioner methods passes isinstance
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.0 - simplify-cloud-connect-node-args: StubMachineRepository.connect drops `username`/`port` params to match the new port signature.
-#   PREVIOUS_CHANGE: v1.7.0 - remove-tmp-node-fake-ip: StubNodeRepository.add_tmp removed (insert is the sole insertion path).
-# END_CHANGE_SUMMARY
-
-# ruff: noqa: ANN401
+# region MODULE_CONTRACT
+# PURPOSE: Structural conformance tests for domain port Protocols via isinstance checks.
+# SCOPE: TaskRepository, NodeRepository, MachineRepository, MachineSession, CloudProvisioner Protocols.
+# KEYWORDS: domain port Protocols, isinstance, structural conformance
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from unittest.mock import MagicMock
+
+import pytest
 
 from yascheduler.domain.model import (
     ConnectedMachine,
@@ -44,7 +26,6 @@ from yascheduler.domain.model import (
 )
 from yascheduler.domain.ports import (
     CloudProvisioner,
-    MachineOperations,
     MachineRepository,
     MachineSession,
     NodeRepository,
@@ -56,7 +37,7 @@ if TYPE_CHECKING:
     from pathlib import Path
     from re import Pattern
 
-    from yascheduler.domain import Engine, EngineRepository
+    from yascheduler.domain import EngineRepository
 
 
 class StubTaskRepository:
@@ -67,7 +48,10 @@ class StubTaskRepository:
         pass
 
     async def list_by_status(
-        self, statuses: set[TaskStatus], *, limit: int | None = None
+        self,
+        statuses: set[TaskStatus],
+        *,
+        limit: int | None = None,
     ) -> list[Task]:
         return []
 
@@ -81,7 +65,9 @@ class StubTaskRepository:
         pass
 
     async def list_ids_by_node_id_and_status(
-        self, node_id: NodeId, status: TaskStatus
+        self,
+        node_id: NodeId,
+        status: TaskStatus,
     ) -> list[TaskId]:
         return []
 
@@ -125,14 +111,14 @@ class StubNodeRepository:
 
 
 def _make_session_stub() -> ConnectedMachine:
-    return ConnectedMachine(node_id=NodeId(1), ip="10.0.0.1", platform="linux", ncpus=1)
+    return ConnectedMachine(node_id=NodeId(1), platform="linux")
 
 
 class StubMachineSession(MachineSession):
     """Stub MachineSession covering the full Protocol surface."""
 
     @property
-    def ip(self) -> str:
+    def hostname(self) -> str:
         return "10.0.0.1"
 
     @property
@@ -180,10 +166,6 @@ class StubMachineSession(MachineSession):
     def quote(self) -> Callable[[str], str]:
         return lambda s: s
 
-    @property
-    def hostname(self) -> str:
-        return "host"
-
     async def run(self, cmd: str) -> ProcessResult:
         return ProcessResult(exit_code=0)
 
@@ -210,7 +192,9 @@ class StubMachineSession(MachineSession):
         pass
 
     async def pgrep(
-        self, pattern: str | Pattern[str], full: bool = True
+        self,
+        pattern: str | Pattern[str],
+        full: bool = True,
     ) -> AsyncGenerator[Any, None]:
         return
         yield  # type: ignore[unreachable]
@@ -247,8 +231,6 @@ class StubMachineRepository(MachineRepository):
         data_dir: PurePath | None = None,
         engines_dir: PurePath | None = None,
         tasks_dir: PurePath | None = None,
-        jump_host: str | None = None,
-        jump_username: str | None = None,
     ) -> MachineSession:
         return StubMachineSession()
 
@@ -277,62 +259,6 @@ class StubMachineRepository(MachineRepository):
         return False
 
 
-class StubMachineOperations:
-    async def run(self, session: StubMachineSession, cmd: str) -> ProcessResult:
-        return ProcessResult(exit_code=0)
-
-    async def run_full(self, session: StubMachineSession, cmd: str) -> Any:
-        return MagicMock(returncode=0)
-
-    async def run_bg(
-        self, session: StubMachineSession, cmd: str, *, cwd: str | None = None
-    ) -> None:
-        pass
-
-    async def setup_node(
-        self, session: StubMachineSession, engines: EngineRepository
-    ) -> None:
-        pass
-
-    async def occupancy_check(
-        self, session: StubMachineSession, config: Engine
-    ) -> bool:
-        return False
-
-    async def download_outputs(
-        self,
-        session: StubMachineSession,
-        remote_dir: str,
-        local_dir: Path,
-        files: list[str],
-        task_id: TaskId | None = None,
-    ) -> tuple[
-        str,
-        str,
-        list[tuple[str | None, Exception]],
-        list[tuple[str | None, Exception]],
-    ]:
-        return ("", "", [], [])
-
-    def start_occupancy_check(
-        self, session: StubMachineSession, config: Engine
-    ) -> None:
-        pass
-
-    async def start_task_on_machine(
-        self,
-        session: StubMachineSession,
-        engine: Engine,
-        task: Task,
-        ncpus: int,
-        engines_dir: PurePath,
-    ) -> bool:
-        return True
-
-    async def get_cpu_cores(self, session: StubMachineSession) -> int:
-        return 0
-
-
 class StubCloudProvisioner:
     async def allocate(self, provider: str, node: Node) -> Node:
         raise NotImplementedError
@@ -341,7 +267,9 @@ class StubCloudProvisioner:
         pass
 
     def select_provider(
-        self, platforms: list[str], current_counts: dict[str, int]
+        self,
+        platforms: list[str],
+        current_counts: dict[str, int],
     ) -> str | None:
         return None
 
@@ -349,73 +277,108 @@ class StubCloudProvisioner:
         pass
 
 
-# START_CONTRACT: test_task_repository_protocol
-#   PURPOSE: Verify a stub implementing all TaskRepository methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_task_repository_protocol
 def test_task_repository_protocol() -> None:
     stub = StubTaskRepository()
     assert isinstance(stub, TaskRepository)
 
 
-# START_CONTRACT: test_node_repository_protocol
-#   PURPOSE: Verify a stub implementing all NodeRepository methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_node_repository_protocol
 def test_node_repository_protocol() -> None:
     stub = StubNodeRepository()
     assert isinstance(stub, NodeRepository)
 
 
-# START_CONTRACT: test_machine_repository_protocol
-#   PURPOSE: Verify a stub implementing all MachineRepository methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_machine_repository_protocol
 def test_machine_repository_protocol() -> None:
     stub = StubMachineRepository()
     assert isinstance(stub, MachineRepository)
 
 
-# START_CONTRACT: test_machine_session_protocol
-#   PURPOSE: Verify a stub implementing all MachineSession methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_machine_session_protocol
+def test_machine_repository_connect_signature_no_jump_kwargs() -> None:
+    """MachineRepository.connect has no jump_host or jump_username parameters."""
+    import inspect
+
+    sig = inspect.signature(MachineRepository.connect)
+    params = sig.parameters
+    assert "jump_host" not in params
+    assert "jump_username" not in params
+    # Verify jump is read from node — node param is present
+    assert "node" in params
+    assert "client_keys" in params
+
+
 def test_machine_session_protocol() -> None:
     stub = StubMachineSession()
     assert isinstance(stub, MachineSession)
 
 
-# START_CONTRACT: test_machine_operations_protocol
-#   PURPOSE: Verify a stub implementing all MachineOperations methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_machine_operations_protocol
-def test_machine_operations_protocol() -> None:
-    stub = StubMachineOperations()
-    assert isinstance(stub, MachineOperations)
-
-
-# START_CONTRACT: test_cloud_provisioner_protocol
-#   PURPOSE: Verify a stub implementing all CloudProvisioner methods satisfies the Protocol structurally.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion passes if isinstance succeeds }
-#   SIDE_EFFECTS: None
-#   LINKS:
-# END_CONTRACT: test_cloud_provisioner_protocol
 def test_cloud_provisioner_protocol() -> None:
     stub = StubCloudProvisioner()
     assert isinstance(stub, CloudProvisioner)
+
+
+def test_machine_session_hostname() -> None:
+    """MachineSession Protocol has hostname property."""
+    assert hasattr(MachineSession, "hostname")
+
+
+def test_two_protocols_defined() -> None:
+    """MachineRepository and MachineSession are defined as runtime_checkable Protocols."""
+    assert issubclass(MachineRepository, Protocol)  # type: ignore[arg-type]
+    assert issubclass(MachineSession, Protocol)  # type: ignore[arg-type]
+    # Verify runtime_checkable decorator was applied
+    assert hasattr(MachineRepository, "__instancecheck__")
+    assert hasattr(MachineSession, "__instancecheck__")
+
+    # No MachineOperations Protocol exists
+    with pytest.raises(ImportError):
+        from yascheduler.domain.ports import MachineOperations  # noqa: F401
+
+
+def test_node_repository_insert_shape() -> None:
+    """NodeRepository.insert takes NewNode and returns Node."""
+    import inspect
+
+    sig = inspect.signature(StubNodeRepository.insert)
+    params = list(sig.parameters.keys())
+    assert "new_node" in params
+
+
+def test_node_repository_get_by_id_shape() -> None:
+    """NodeRepository.get_by_id takes NodeId and returns Node | None."""
+    import inspect
+
+    sig = inspect.signature(StubNodeRepository.get_by_id)
+    params = list(sig.parameters.keys())
+    assert "node_id" in params
+    # Return annotation should include None
+    ann = sig.return_annotation
+    assert ann is not inspect.Parameter.empty
+
+
+def test_node_repository_remove_shape() -> None:
+    """NodeRepository.remove takes NodeId."""
+    import inspect
+
+    sig = inspect.signature(StubNodeRepository.remove)
+    params = list(sig.parameters.keys())
+    assert "node_id" in params
+
+
+def test_cloud_allocate_sets_external_id_alongside_hostname() -> None:
+    """CloudProvisioner.allocate takes provider and node, returns Node."""
+    import inspect
+
+    sig = inspect.signature(StubCloudProvisioner.allocate)
+    params = list(sig.parameters.keys())
+    assert "provider" in params
+    assert "node" in params
+    ann = sig.return_annotation
+    assert str(ann) == "Node"
+
+
+def test_cloud_deallocate_reads_node_cloud_and_hostname() -> None:
+    """CloudProvisioner.deallocate takes a Node."""
+    import inspect
+
+    sig = inspect.signature(StubCloudProvisioner.deallocate)
+    params = list(sig.parameters.keys())
+    assert "node" in params

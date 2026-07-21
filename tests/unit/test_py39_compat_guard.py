@@ -1,22 +1,8 @@
-# FILE: tests/unit/test_py39_compat_guard.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the py3.9 PEP 604 compatibility checker (tests/py39_compat_guard.py).
-#   SCOPE: has_future_annotations, check_source (param/return/vararg/kwarg/AnnAssign scope rules, future-import suppression), scan_paths directory recursion.
-#   DEPENDS: tests/py39_compat_guard
-#   LINKS: none
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestFutureAnnotationsDetection - future-import present / absent / unrelated future
-#   TestParamAndReturnViolations - param, return, nested GenericAlias union, *args/**kwargs, suppression, clean case
-#   TestAnnotatedAssignmentScope - module-level flagged, class-level flagged, function-local ignored, nested-func params flagged
-#   TestScanPaths - directory recursion mixes good/bad/future-import files
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial unit tests for the py3.9 compat guard checker.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the py3.9 PEP 604 compatibility checker (tests/py39_compat_guard.py).
+# SCOPE: has_future_annotations, check_source (param/return/vararg/kwarg/AnnAssign scope rules, future-import suppression), scan_paths directory recursion.
+# KEYWORDS: PEP 604, has_future_annotations, scan_paths, compat checker
+# endregion MODULE_CONTRACT
 
 import ast
 from pathlib import Path
@@ -62,7 +48,8 @@ class TestParamAndReturnViolations:
 
     def test_vararg_and_kwarg_flagged(self) -> None:
         v = check_source(
-            "def f(*args: int | None, **kw: str | None) -> None: ...\n", "m.py"
+            "def f(*args: int | None, **kw: str | None) -> None: ...\n",
+            "m.py",
         )
         contexts = {x.context for x in v}
         assert "param *args of f()" in contexts
@@ -114,7 +101,7 @@ class TestScanPaths:
         nested.mkdir()
         (nested / "suppressed.py").write_text(
             "from __future__ import annotations\n"
-            "def f(x: int | None = None) -> None: ...\n"
+            "def f(x: int | None = None) -> None: ...\n",
         )
 
         v = scan_paths([tmp_path])

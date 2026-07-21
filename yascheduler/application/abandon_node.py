@@ -1,106 +1,91 @@
-# FILE: yascheduler/application/abandon_node.py
-# VERSION: 1.4.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Abandon never-connected cloud node use case — VM delete + DB-row remove + release stuck TO_DO task.
-#   SCOPE: abandon_node async function.
-#   DEPENDS: M-APPLICATION-UOW, M-DOMAIN-MODEL, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ABANDON-NODE, M-APPLICATION-ORCHESTRATOR
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   abandon_node - Best-effort cloud VM delete (clouds.deallocate(node)), remove yascheduler_nodes row, discard stuck task's tracker entry
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - cloud-port-node-arg: calls clouds.deallocate(node) (was clouds.deallocate(node.cloud, node.ip)).
-#   PREVIOUS_CHANGE: v1.3.0 - ssh-rekey-node-id: stuck-task matching rekeyed from t.allocated_ip == node.ip to t.allocated_node_id == node.node_id (dup-IP nodes now disambiguated). REORDERED: read the stuck TO_DO task BEFORE uow.nodes.remove(node.node_id) — the allocated_node_id FK is ON DELETE SET NULL, so reading after remove would null allocated_node_id and the in-memory filter would no longer match. clouds.deallocate(node.cloud, node.ip) stays ip-keyed (ip = cloud host). uow.nodes.remove(node.node_id) unchanged.
-# END_CHANGE_SUMMARY
+"""Abandon never-connected cloud node use case — VM delete + DB-row remove + discard tracker entry linked to the node."""
+# region MODULE_CONTRACT
+# PURPOSE: Prevent resource leaks — orphan cloud VMs, stale DB rows, dangling tracker entries — when a provisioned node never connects, so billing stops and the scheduler does not track phantom resources.
+# SCOPE: Never-connected cloud node cleanup — cloud VM delete (best-effort), node row removal, tracker discard-by-node.
+# KEYWORDS: abandon, never-connected, cloud, cleanup, vm delete, tracker
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import Node, TaskStatus
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from yascheduler.domain import CloudProvisioner
+    from yascheduler.domain import CloudProvisioner, Node
 
     from .allocation_tracker import AllocationTracker
     from .uow import AbstractUnitOfWork
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["abandon_node"]
 
-# START_CONTRACT: abandon_node
-#   PURPOSE: Clean up a cloud node that never established its SSH connection and release its stuck task.
-#   INPUTS: {
-#     node: Node - The never-connected node to abandon,
-#     clouds: CloudProvisioner - Cloud provider manager for VM deletion,
-#     uow_factory: Callable[[], AbstractUnitOfWork] - UoW factory,
-#     tracker: AllocationTracker - In-flight allocation dedup to release the stuck task into
-#   }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Best-effort cloud VM delete (logged not raised); reads the stuck TO_DO task (BEFORE removing the node row — the allocated_node_id FK is ON DELETE SET NULL, so reading after remove would null allocated_node_id and the in-memory filter t.allocated_node_id == node.node_id would no longer match); removes yascheduler_nodes row + commit (re-raised on failure so the orchestrator's outer try/except keeps the worker alive); on success, discards the stuck TO_DO task from AllocationTracker so it re-allocates on the next cycle. Does NOT call repository.disconnect (node was never in the repository). Does NOT mark the task FAILED or emit a domain event (per Non-Goal on re-allocation limits).
-#   RAISES: Re-raises any exception from uow.nodes.remove / uow.commit (caller catches to keep the worker alive). Cloud-delete failures are swallowed (logged at error) so DB cleanup still runs.
-#   LINKS: M-APPLICATION-UOW, M-DOMAIN-PORTS, M-CLOUD-PROVISIONER, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: abandon_node
+
+# region FUNC_abandon_node
+# PURPOSE: Clean up all traces of a never-connected node — best-effort cloud VM delete, DB row removal, tracker discard — so cloud billing stops and future tasks are not falsely deduped.
+# REQUIRES: node is a cloud node (cloud is not None).
+# ENSURES: Cloud VM deletion is best-effort (logged on failure, never raised); DB row removal failure re-raises; tracker entries for the node are discarded.
 async def abandon_node(
     node: Node,
     clouds: CloudProvisioner,
     uow_factory: Callable[[], AbstractUnitOfWork],
     tracker: AllocationTracker,
 ) -> None:
-    # START_BLOCK_CLOUD_DELETE
+    """Clean up a cloud node that never established its SSH connection and discard the tracker entry linked to the node."""
+    # region BLOCK_cloud_delete
     if node.cloud is not None:
         try:
             await clouds.deallocate(node)
         except Exception as err:
-            logger.error(
-                "[abandon_node][CLOUD_DELETE_FAILED] node_id=%s ip=%s cloud=%s err=%s",
-                node.node_id,
-                node.ip,
-                node.cloud,
-                err,
+            logger.debug(
+                "CLOUD_DELETE_FAILED",
+                extra={
+                    "node_id": node.node_id,
+                    "hostname": node.hostname,
+                    "cloud": node.cloud,
+                    "err": err,
+                },
             )
-    # END_BLOCK_CLOUD_DELETE
+            logger.exception("cloud delete failed for node %s", node.hostname)
+    # endregion BLOCK_cloud_delete
 
-    # START_BLOCK_RELEASE_TASK
-    # Read the stuck TO_DO task BEFORE removing the node row: the
-    # allocated_node_id FK is ON DELETE SET NULL, so removing the node row
-    # first would null allocated_node_id and the in-memory filter
-    # `t.allocated_node_id == node.node_id` would no longer match. Reading
-    # before remove keeps the matching robust to the FK cascade.
-    async with uow_factory() as uow:
-        todo_tasks = await uow.tasks.list_by_status({TaskStatus.TO_DO})
-    matching = [t for t in todo_tasks if t.allocated_node_id == node.node_id]
-    # END_BLOCK_RELEASE_TASK
-
-    # START_BLOCK_REMOVE_ROW
+    # region BLOCK_remove_row
     try:
         async with uow_factory() as uow:
             await uow.nodes.remove(node.node_id)
             await uow.commit()
     except Exception as err:
-        logger.error(
-            "[abandon_node][REMOVE_FAILED] node_id=%s ip=%s err=%s",
+        logger.debug(
+            "REMOVE_FAILED",
+            extra={"node_id": node.node_id, "hostname": node.hostname, "err": err},
+        )
+        logger.exception(
+            "abandon_node remove failed: node_id=%s hostname=%s",
             node.node_id,
-            node.ip,
-            err,
+            node.hostname,
         )
         raise
-    # END_BLOCK_REMOVE_ROW
+    # endregion BLOCK_remove_row
 
-    # START_BLOCK_DISCARD_TRACKER
-    if len(matching) == 1:
-        tracker.discard(matching[0].task_id)
-    elif len(matching) > 1:
-        logger.warning(
-            "[abandon_node][AMBIGUOUS_TASK] node_id=%s ip=%s count=%d",
-            node.node_id,
-            node.ip,
-            len(matching),
+    # region BLOCK_discard_by_node
+    removed = tracker.discard_by_node(node.node_id)
+    if removed > 1:
+        logger.debug(
+            "AMBIGUOUS_TRACKER",
+            extra={
+                "node_id": node.node_id,
+                "hostname": node.hostname,
+                "count": removed,
+            },
         )
-    # END_BLOCK_DISCARD_TRACKER
+        logger.warning(
+            "ambiguous tracker: node %s has %d entries",
+            node.hostname,
+            removed,
+        )
+    # endregion BLOCK_discard_by_node
+
+
+# endregion FUNC_abandon_node

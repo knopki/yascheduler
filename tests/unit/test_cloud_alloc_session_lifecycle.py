@@ -1,36 +1,9 @@
-# FILE: tests/unit/test_cloud_alloc_session_lifecycle.py
-# VERSION: 1.5.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Regression-guard the four fixes in fix-cloud-alloc-session-lifecycle (DB-enabled free-machine gate, setup-failure disconnect, per-session loop isolation, stdout in cloud-init error).
-#   SCOPE: Fix A (setup-in-flight / disabled-but-connected / enabled / concurrent pile-on via timing-aware fakes through allocate_task),
-#          Fix B (CloudSetupError + generic exception + never-connected + success-no-disconnect via real CloudProvisionerImpl.allocate),
-#          Fix C (stale session isolated, cloud branch reachable via allocate_task),
-#          Fix D (cloud-init message contains stdout; timeout message unchanged via real CloudProvisionerImpl._setup_vm).
-#   DEPENDS: M-APPLICATION-ALLOCATE, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-PERSISTENCE-UOW
-#   LINKS: M-APPLICATION-ALLOCATE, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   FakeMachineSession        - Minimal MachineSession handle carrying ip + ConnectedMachine snapshot
-#   FakeMachineRepository     - In-memory repository mirroring SSHMachineRepository connect-before-return / disconnect / list_free semantics
-#   _FakeNodeRepo / _FakeTaskRepo / FakeUnitOfWork - Shared-store in-memory UoW tracking tasks and nodes
-#   FakeCloudProvisioner      - CloudProvisioner fake reproducing connect-before-enable timing for allocator tests
-#   _make_real_adapter_config - Mock CloudAdapter + ConfigCloud pair for real CloudProvisionerImpl tests
-#   _make_real_provisioner    - Construct a real CloudProvisionerImpl wired to a FakeMachineRepository
-#   TestFixA                  - DB-enabled free-machine gate (4 scenarios)
-#   TestFixB                  - Setup-failure disconnect via real CloudProvisionerImpl.allocate (4 scenarios)
-#   TestFixC                  - Per-session loop isolation (2 scenarios)
-#   TestFixD                  - stdout in cloud-init error message (2 scenarios)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - drop-task-context-entity: update Task/NewTask construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.4.0 - cloud-port-node-arg: FakeCloudProvisioner + real CloudProvisionerImpl allocate call sites take node: Node; added _tmp_node helper.
-#   PREVIOUS_CHANGE: v1.3.0 - simplify-cloud-connect-node-args: FakeMachineRepository.connect drops the `username` param (keeps `**kwargs`).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Regression-guard the four fixes in fix-cloud-alloc-session-lifecycle (DB-enabled free-machine gate, setup-failure disconnect, per-session loop isolation, stdout in cloud-init error).
+# SCOPE: Fix A (setup-in-flight / disabled-but-connected / enabled / concurrent pile-on via timing-aware fakes through allocate_task), Fix B (CloudSetupError + generic exception + never-connected + success-no-disconnect via real CloudProvisionerImpl.allocate), Fix C (stale session isolated, cloud branch reachable via allocate_task), Fix D (cloud-init message contains stdout; timeout message unchanged via real CloudProvisionerImpl._setup_vm).
+# KEYWORDS: cloud alloc session, setup-in-flight, disconnect, isolation
+# endregion MODULE_CONTRACT
 
-# ruff: noqa: ANN401
 from __future__ import annotations
 
 import asyncio
@@ -54,6 +27,7 @@ from yascheduler.domain.model import (
     TaskId,
     TaskStatus,
 )
+from yascheduler.infra.cloud.dto import CloudCreateNodeDTO
 from yascheduler.infra.cloud.manager import CloudProvisionerImpl
 
 if TYPE_CHECKING:
@@ -68,25 +42,32 @@ if TYPE_CHECKING:
 
 
 class FakeMachineSession:
-    """Minimal MachineSession carrying ip + a mutable ConnectedMachine snapshot."""
+    """Minimal MachineSession carrying ip + a mutable ConnectedMachine snapshot.
 
-    def __init__(self, ip: str, platform: str = "linux") -> None:
-        self._ip = ip
-        # Derive node_id from ip to ensure uniqueness; the allocator pairs
+    Exposes ``run``/``setup_node``/``get_cpu_cores`` as configurable AsyncMock
+    attributes so tests can set up return values / side effects (the real
+    ``CloudProvisionerImpl._setup_vm`` calls these directly on the session).
+    """
+
+    def __init__(self, hostname: str, platform: str = "linux") -> None:
+        self._hostname = hostname
+        # Derive node_id from hostname to ensure uniqueness; the allocator pairs
         # sessions with nodes by node_id so this must match the DB-side ID.
-        last_octet = int(ip.rsplit(".", 1)[-1]) if "." in ip else 1
+        last_octet = int(hostname.rsplit(".", 1)[-1]) if "." in hostname else 1
         self._machine = ConnectedMachine(
-            ip=ip,
             platform=platform,
-            ncpus=4,
             state=MachineState.FREE,
             free_since=0.0,
             node_id=NodeId(last_octet),
         )
+        # Session methods called directly by CloudProvisionerImpl._setup_vm.
+        self.run: AsyncMock = AsyncMock()
+        self.setup_node: AsyncMock = AsyncMock()
+        self.get_cpu_cores: AsyncMock = AsyncMock(return_value=4)
 
     @property
-    def ip(self) -> str:
-        return self._ip
+    def hostname(self) -> str:
+        return self._hostname
 
     @property
     def machine(self) -> ConnectedMachine:
@@ -101,12 +82,20 @@ class FakeMachineRepository:
     pops the session (safe no-op if absent, like SSHMachineRepository.disconnect).
     Set connect_raises to make connect() fail before registering (mirrors a
     _connect_to_vm SSH failure — Fix B never-connected scenario).
+
+    ``session_run_side_effect``, when set, is applied as the ``side_effect`` of
+    the session's ``run`` AsyncMock (``CloudProvisionerImpl._setup_vm`` calls
+    ``session.run(...)`` directly). Similarly ``session_get_cpu_cores_return``
+    sets the return value of ``session.get_cpu_cores``.
     """
 
     def __init__(
         self,
         connect_raises: BaseException | None = None,
         disconnect_raises: BaseException | None = None,
+        *,
+        session_run_side_effect: Any = None,
+        session_get_cpu_cores_return: int = 4,
     ) -> None:
         self._sessions: dict[str, FakeMachineSession] = {}
         self._node_id_to_ip: dict[NodeId, str] = {}
@@ -114,6 +103,8 @@ class FakeMachineRepository:
         self.disconnect_calls: list[NodeId] = []
         self._connect_raises = connect_raises
         self._disconnect_raises = disconnect_raises
+        self._session_run_side_effect = session_run_side_effect
+        self._session_get_cpu_cores_return = session_get_cpu_cores_return
 
     async def connect(
         self,
@@ -125,9 +116,23 @@ class FakeMachineRepository:
             raise self._connect_raises
         self.connect_calls.append(node)
         platform = kwargs.get("platform", "linux")
-        session = FakeMachineSession(ip=node.ip, platform=platform)
-        self._sessions[node.ip] = session
-        self._node_id_to_ip[node.node_id] = node.ip
+        session = FakeMachineSession(hostname=node.hostname, platform=platform)
+        if self._session_run_side_effect is not None:
+            # A MagicMock configured with exit_code/stdout/stderr attributes is
+            # a plain return value — use return_value so `await session.run(cmd)`
+            # resolves to it directly. side_effect would call the MagicMock and
+            # surface a fresh child mock, dropping the configured attributes.
+            # A real async function (e.g. _slow_run blocking 60s) is a callable
+            # side effect — use side_effect so AsyncMock calls it with the cmd.
+            if isinstance(self._session_run_side_effect, MagicMock):
+                session.run = AsyncMock(return_value=self._session_run_side_effect)
+            else:
+                session.run = AsyncMock(side_effect=self._session_run_side_effect)
+        session.get_cpu_cores = AsyncMock(
+            return_value=self._session_get_cpu_cores_return,
+        )
+        self._sessions[node.hostname] = session
+        self._node_id_to_ip[node.node_id] = node.hostname
         return session
 
     async def disconnect(self, node_id: NodeId) -> None:
@@ -192,26 +197,26 @@ class _FakeNodeRepo:
         self._id_counter += 1
         node = Node(
             node_id=NodeId(self._id_counter),
-            ip=new_node.ip,
+            hostname=new_node.hostname,
             ncpus=new_node.ncpus,
             enabled=new_node.enabled,
             cloud=new_node.cloud,
             username=new_node.username,
             port=new_node.port,
         )
-        self._store[node.ip] = node
+        self._store[node.hostname] = node
         return node
 
     async def update(self, node: Node) -> None:
-        self._store[node.ip] = node
+        self._store[node.hostname] = node
 
     async def enable(self, node_id: NodeId) -> None:
         ip = self._ip_for(node_id)
         node = self._store.get(ip) if ip is not None else None
         if node is not None:
-            self._store[node.ip] = Node(
+            self._store[node.hostname] = Node(
                 node_id=node.node_id,
-                ip=node.ip,
+                hostname=node.hostname,
                 ncpus=node.ncpus,
                 enabled=True,
                 cloud=node.cloud,
@@ -223,9 +228,9 @@ class _FakeNodeRepo:
         ip = self._ip_for(node_id)
         node = self._store.get(ip) if ip is not None else None
         if node is not None:
-            self._store[node.ip] = Node(
+            self._store[node.hostname] = Node(
                 node_id=node.node_id,
-                ip=node.ip,
+                hostname=node.hostname,
                 ncpus=node.ncpus,
                 enabled=False,
                 cloud=node.cloud,
@@ -270,7 +275,10 @@ class _FakeTaskRepo:
         self._store[task.task_id] = task
 
     async def list_by_status(
-        self, statuses: set[TaskStatus], *, limit: int | None = None
+        self,
+        statuses: set[TaskStatus],
+        *,
+        limit: int | None = None,
     ) -> list[Task]:
         result = [t for t in self._store.values() if t.status in statuses]
         return result[:limit] if limit is not None else result
@@ -308,7 +316,9 @@ class _FakeTaskRepo:
             self._store[task_id] = replace(t, status=status)
 
     async def list_ids_by_node_id_and_status(
-        self, node_id: NodeId, status: TaskStatus
+        self,
+        node_id: NodeId,
+        status: TaskStatus,
     ) -> list[TaskId]:
         return [
             t.task_id
@@ -396,8 +406,8 @@ class FakeCloudProvisioner:
         session = await self._repo.connect(
             Node(
                 node_id=node.node_id,
-                ip=self._new_ip,
-                ncpus=4,
+                hostname=self._new_ip,
+                ncpus=None,
                 enabled=True,
                 cloud=provider,
                 username="root",
@@ -406,21 +416,21 @@ class FakeCloudProvisioner:
             platform=self._new_platform,
         )
         if self._fail:
-            raise CloudSetupError(f"setup failed on {session.ip}")
+            raise CloudSetupError(f"setup failed on {session.hostname}")
         async with self._uow_factory() as uow:
             await uow.nodes.insert(
                 NewNode(
-                    ip=session.ip,
-                    ncpus=4,
+                    hostname=session.hostname,
+                    ncpus=None,
                     enabled=True,
                     cloud=provider,
-                )
+                ),
             )
             await uow.commit()
         return Node(
             node_id=node.node_id,
-            ip=self._new_ip,
-            ncpus=4,
+            hostname=self._new_ip,
+            ncpus=None,
             enabled=True,
             cloud=provider,
             username="root",
@@ -431,7 +441,9 @@ class FakeCloudProvisioner:
         pass
 
     def select_provider(
-        self, platforms: list[str], current_counts: dict[str, int]
+        self,
+        platforms: list[str],
+        current_counts: dict[str, int],
     ) -> str | None:
         return self._select_result
 
@@ -446,7 +458,7 @@ class FakeCloudProvisioner:
 
 def _make_real_adapter_config(
     name: str = "test",
-    ip: str = "10.0.0.50",
+    ip: str = "[IP]",
     create_node_timeout: float = 300,
 ) -> tuple[MagicMock, MagicMock]:
     """Build a mock CloudAdapter + ConfigCloud for real CloudProvisionerImpl tests."""
@@ -455,8 +467,15 @@ def _make_real_adapter_config(
     adapter.create_node_conn_timeout = 30
     adapter.create_node_timeout = create_node_timeout
 
-    async def _create_node(**kw: Any) -> str:
-        return ip
+    async def _create_node(**kw: Any) -> CloudCreateNodeDTO:
+        return CloudCreateNodeDTO(
+            external_id=ip,
+            hostname=ip,
+            username="root",
+            jump_host=None,
+            jump_port=22,
+            jump_username="root",
+        )
 
     adapter.create_node = _create_node
     adapter.delete_node = AsyncMock()
@@ -470,6 +489,7 @@ def _make_real_adapter_config(
     config.username = "root"
     config.jump_host = None
     config.jump_username = None
+    config.prefix = name
     return adapter, config
 
 
@@ -484,52 +504,16 @@ def _make_real_local_config() -> MagicMock:
 
 def _make_real_remote_config() -> MagicMock:
     cfg = MagicMock()
+    cfg.jump_host = None
+    cfg.jump_username = None
     cfg.data_dir = PurePath("./data")
     cfg.engines_dir = PurePath("./data/engines")
     cfg.tasks_dir = PurePath("./data/tasks")
     return cfg
 
 
-class _FakeMachineOperations:
-    """Configurable SSHMachineOperations for real CloudProvisionerImpl tests.
-
-    run() returns the configured cloud-init ProcessResult; setup_node and
-    get_cpu_cores are configurable via raise_setup / raise_cpus / ncpus.
-    """
-
-    def __init__(
-        self,
-        *,
-        cloud_init_result: Any = None,
-        cloud_init_hang: bool = False,
-        raise_setup: BaseException | None = None,
-        raise_cpus: BaseException | None = None,
-        ncpus: int = 4,
-    ) -> None:
-        self._cloud_init_result = cloud_init_result
-        self._cloud_init_hang = cloud_init_hang
-        self._raise_setup = raise_setup
-        self._raise_cpus = raise_cpus
-        self._ncpus = ncpus
-
-    async def run(self, session: Any, cmd: str) -> Any:
-        if self._cloud_init_hang:
-            await asyncio.sleep(60)
-        return self._cloud_init_result
-
-    async def setup_node(self, session: Any, engines: Any) -> None:
-        if self._raise_setup is not None:
-            raise self._raise_setup
-
-    async def get_cpu_cores(self, session: Any) -> int:
-        if self._raise_cpus is not None:
-            raise self._raise_cpus
-        return self._ncpus
-
-
 def _make_real_provisioner(
     machine_repository: Any,
-    machine_operations: Any,
     *,
     adapters: dict[str, Any] | None = None,
     configs: dict[str, Any] | None = None,
@@ -550,11 +534,9 @@ def _make_real_provisioner(
         adapters=a,
         configs=c,
         machine_repository=machine_repository,
-        machine_operations=machine_operations,
         local_config=_make_real_local_config(),
         remote_config=_make_real_remote_config(),
         engines=engines,
-        log=MagicMock(),
     )
     return prov, adapter
 
@@ -595,8 +577,8 @@ def _make_todo_task(task_id: int = 1) -> Task:
 def _node(n: int, *, enabled: bool = True) -> Node:
     return Node(
         node_id=NodeId(n),
-        ip=f"10.0.0.{n}",
-        ncpus=4,
+        hostname=f"10.0.0.{n}",
+        ncpus=None,
         enabled=enabled,
         username="root",
         port=22,
@@ -606,13 +588,14 @@ def _node(n: int, *, enabled: bool = True) -> Node:
 def _tmp_node(n: int, *, cloud: str = "test") -> Node:
     """Build a tmp-node Node as allocate_task inserts it (pre-allocate).
 
-    ``allocate`` receives this and overlays ip/cloud/username via ``replace``
-    after ``create_node`` returns the VM ip.
+    ``allocate`` receives this and overlays hostname/cloud/username via ``replace``
+    after ``create_node`` returns the VM hostname. ``ncpus`` is ``None`` (cloud
+    nodes discover at spawn via the session cache).
     """
     return Node(
         node_id=NodeId(n),
-        ip="",
-        ncpus=0,
+        hostname="",
+        ncpus=None,
         enabled=False,
         cloud=cloud,
         username="root",
@@ -629,7 +612,8 @@ def _make_engine_repo(engine: Engine) -> Any:
 
 def _patch_ssh_key() -> Any:
     """Patch CloudProvisionerImpl._get_ssh_key so create_node gets a mock key
-    without touching the filesystem (get_or_create_ssh_key does real IO)."""
+    without touching the filesystem (get_or_create_ssh_key does real IO).
+    """
     return patch(
         "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
         new=AsyncMock(return_value=MagicMock()),
@@ -647,17 +631,19 @@ async def _allocate(
 ) -> Any:
     """Thin allocate_task wrapper. Fakes are Any-typed so the Protocol-typed
     parameters (uow_factory/repository/clouds) accept the concrete fakes without
-    per-call type: ignore. Returns the allocate_task bool result."""
+    per-call type: ignore. Returns the allocate_task bool result.
+    """
     return await allocate_task(
         task_id=task_id,
         engines=engines or _make_engine_repo(_make_engine()),
         uow_factory=lambda: uow,
         repository=repo,
-        operations=MagicMock(),
+        occupancy_checker=MagicMock(),
         clouds=clouds,
         start_task_on_machine=start_cb,
         tracker=AllocationTracker(),
         allocation_lock=asyncio.Lock(),
+        remote_tasks_dir=PurePath("/remote/tasks"),
     )
 
 
@@ -679,7 +665,11 @@ class TestFixA:
 
         start_cb: AsyncMock = AsyncMock(return_value=True)
         clouds = FakeCloudProvisioner(
-            repo, lambda: uow, provider="aws", fail=False, select_provider_result=None
+            repo,
+            lambda: uow,
+            provider="aws",
+            fail=False,
+            select_provider_result=None,
         )
 
         result = await _allocate(TaskId(1), repo, uow, clouds, start_cb)
@@ -728,7 +718,7 @@ class TestFixA:
         captured_ip: list[str] = []
 
         async def _start(session: Any, engine: Any, task: Any) -> bool:
-            captured_ip.append(session.ip)
+            captured_ip.append(session.hostname)
             return True
 
         result = await _allocate(TaskId(1), repo, uow, MagicMock(), _start)
@@ -746,7 +736,10 @@ class TestFixA:
 
         start_cb: AsyncMock = AsyncMock(return_value=True)
         clouds = FakeCloudProvisioner(
-            repo, lambda: uow, provider="aws", select_provider_result=None
+            repo,
+            lambda: uow,
+            provider="aws",
+            select_provider_result=None,
         )
 
         result = await _allocate(TaskId(1), repo, uow, clouds, start_cb)
@@ -768,11 +761,14 @@ class TestFixB:
 
     async def test_cloud_setup_error_disconnects_before_deleting_vm(self) -> None:
         """CloudSetupError from _setup_vm (cloud-init failure) triggers disconnect(ip) before delete_node, leaving _sessions empty."""
-        repo = FakeMachineRepository()
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=2, stdout="status: error", stderr="")
+        repo = FakeMachineRepository(
+            session_run_side_effect=MagicMock(
+                exit_code=2,
+                stdout="status: error",
+                stderr="",
+            ),
         )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with (
             _patch_ssh_key(),
@@ -799,11 +795,7 @@ class TestFixB:
         registered because every failure there is wrapped.
         """
         repo = FakeMachineRepository()
-        # A successful-looking ops (never reached once _setup_vm is patched).
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=0, stdout="", stderr="")
-        )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with (
             _patch_ssh_key(),
@@ -825,10 +817,7 @@ class TestFixB:
         """When _connect_to_vm itself fails (session never registered), allocate's except still calls disconnect(ip) safely and the VM is deleted."""
         # connect_raises makes _connect_to_vm raise before registering a session.
         repo = FakeMachineRepository(connect_raises=OSError("ssh connect refused"))
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=0, stdout="", stderr="")
-        )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with (
             _patch_ssh_key(),
@@ -843,20 +832,19 @@ class TestFixB:
 
     async def test_success_path_does_not_disconnect(self) -> None:
         """On a successful _setup_vm, the session stays registered — the orchestrator reuses the connection."""
-        repo = FakeMachineRepository()
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=0, stdout="", stderr=""),
-            ncpus=8,
+        repo = FakeMachineRepository(
+            session_run_side_effect=MagicMock(exit_code=0, stdout="", stderr=""),
+            session_get_cpu_cores_return=8,
         )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with _patch_ssh_key():
             node = await prov.allocate("test", _tmp_node(1))
 
-        assert node.ip == "10.0.0.50"
-        assert node.ncpus == 8
+        assert node.hostname == "[IP]"
+        assert node.ncpus is None  # No ncpus write-back — cloud nodes discover at spawn
         assert repo.disconnect_calls == []
-        assert "10.0.0.50" in repo._sessions
+        assert "[IP]" in repo._sessions
         adapter.delete_node.assert_not_awaited()
 
     async def test_disconnect_failure_does_not_skip_vm_deletion(self) -> None:
@@ -866,12 +854,14 @@ class TestFixB:
         best-effort wrap that raise would skip delete_node and orphan the VM.
         """
         repo = FakeMachineRepository(
-            disconnect_raises=RuntimeError("wait_closed failed")
+            disconnect_raises=RuntimeError("wait_closed failed"),
+            session_run_side_effect=MagicMock(
+                exit_code=2,
+                stdout="status: error",
+                stderr="",
+            ),
         )
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=2, stdout="status: error", stderr="")
-        )
-        prov, adapter = _make_real_provisioner(repo, ops)
+        prov, adapter = _make_real_provisioner(repo)
 
         with (
             _patch_ssh_key(),
@@ -903,8 +893,8 @@ class TestFixC:
         call_log: list[str] = []
 
         async def _start(session: Any, engine: Any, task: Any) -> bool:
-            call_log.append(session.ip)
-            if session.ip == "10.0.0.1":
+            call_log.append(session.hostname)
+            if session.hostname == "10.0.0.1":
                 raise RuntimeError("stale session channel closed")
             return True
 
@@ -929,7 +919,11 @@ class TestFixC:
             raise RuntimeError("unreachable session")
 
         clouds = FakeCloudProvisioner(
-            repo, lambda: uow, provider="aws", new_ip="10.0.0.99", fail=False
+            repo,
+            lambda: uow,
+            provider="aws",
+            new_ip="10.0.0.99",
+            fail=False,
         )
 
         result = await _allocate(TaskId(1), repo, uow, clouds, _start_fails)
@@ -951,11 +945,14 @@ class TestFixD:
 
     async def test_cloud_init_error_contains_stdout(self) -> None:
         """cloud-init exit_code=2 with stdout='status: error' yields a CloudSetupError whose message contains stdout=status: error."""
-        repo = FakeMachineRepository()
-        ops = _FakeMachineOperations(
-            cloud_init_result=MagicMock(exit_code=2, stdout="status: error", stderr="")
+        repo = FakeMachineRepository(
+            session_run_side_effect=MagicMock(
+                exit_code=2,
+                stdout="status: error",
+                stderr="",
+            ),
         )
-        prov, _adapter = _make_real_provisioner(repo, ops)
+        prov, _adapter = _make_real_provisioner(repo)
 
         with _patch_ssh_key(), pytest.raises(CloudSetupError) as exc_info:
             await prov.allocate("test", _tmp_node(1))
@@ -966,9 +963,15 @@ class TestFixD:
 
     async def test_cloud_init_timeout_message_unchanged(self) -> None:
         """asyncio.TimeoutError in the CLOUD_INIT block yields the unchanged 'timed out' message (does not read result.stdout/stderr)."""
-        repo = FakeMachineRepository()
-        ops = _FakeMachineOperations(cloud_init_hang=True)
-        prov, adapter = _make_real_provisioner(repo, ops)
+
+        # AsyncMock side_effect treats a bare coroutine as an iterator, not a
+        # callable — wrap in an async function so session.run(cmd) blocks for
+        # 60s and asyncio.wait_for cancels at create_node_timeout.
+        async def _slow_run(cmd: str) -> Any:
+            await asyncio.sleep(60)
+
+        repo = FakeMachineRepository(session_run_side_effect=_slow_run)
+        prov, adapter = _make_real_provisioner(repo)
         # adapter is the same object as prov.adapters["test"] (adapters=None).
         adapter.create_node_timeout = 0.05
 
@@ -977,6 +980,6 @@ class TestFixD:
 
         msg = str(exc_info.value)
         assert "timed out" in msg
-        assert "10.0.0.50" in msg
+        assert "[IP]" in msg
         assert "0.05s" in msg
         assert "stdout=" not in msg

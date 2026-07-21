@@ -1,26 +1,8 @@
-# FILE: tests/unit/test_persistence_allocated_node_id.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the task-schema-and-entity-cleanup persistence-layer changes: _row_to_task reads NodeId + audit timestamps + title + enum-label status, insert/save bind :node_id + :title + :status (name), and the 5 task SQL files include allocated_node_id/created_at/updated_at/title.
-#   SCOPE: _row_to_task NodeId wrapping + NULL handling + title→label + enum name lookup + created_at/updated_at reads + no allocated_ip; insert/save :node_id/:title/:status binding (value and None); SQL-file content for the 5 task files that feed _row_to_task and the 3 status/aggregate files that do NOT; list_ids_by_node_id_and_status SQL file; Protocol-conformance test.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SQLLOADER, M-DOMAIN-MODEL, M-DOMAIN-PORTS
-#   LINKS: M-PERSISTENCE-POSTGRES, M-PERSISTENCE-SQLLOADER, M-DOMAIN-PORTS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestRowToTaskAllocatedNodeId - _row_to_task reads allocated_node_id → NodeId; NULL/missing key → None; reads title→label, status via name lookup, created_at/updated_at
-#   TestInsertSaveBindAllocatedNodeId - insert/save bind :node_id (value or None), :title, :status (name)
-#   TestTaskSqlIncludesAllocatedNodeId - 5 task SQL files include allocated_node_id/created_at/updated_at/title; 3 status/aggregate files do NOT
-#   TestGetIdsByNodeIdAndStatusSql - get_ids_by_node_id_and_status.sql replaces get_ids_by_ip_and_status.sql
-#   TestTaskRepositoryProtocolConformance - PostgresTaskRepository satisfies the updated TaskRepository Protocol (list_ids_by_node_id_and_status)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: _row dict includes flat typed columns (no metadata JSON); remove TaskContext import; Task/NewTask construction with flat fields.
-#   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: _row_to_task reads title (renamed from label) → Task.label, reads status via TaskStatus[row["status"]] (name lookup, was int cast), reads created_at/updated_at, drops allocated_ip read. insert/save bind :title (was :label, value is task.label), :status as status.name (was status.value), drop :ip. list_ids_by_ip_and_status → list_ids_by_node_id_and_status. SQL file tests updated for the new column lists. Protocol-conformance test added.
-#   PREVIOUS_CHANGE: v1.0.0 - task-allocated-node-id: extract allocated_node_id persistence tests from test_persistence_adapter.py into a focused module (the parent file exceeded the 1000-line GRACE-lite hard limit after the additions).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the task-schema-and-entity-cleanup persistence-layer changes: _row_to_task reads NodeId + audit timestamps + title + enum-label status, insert/save bind :node_id + :title + :status (name), and the 5 task SQL files include allocated_node_id/created_at/updated_at/title.
+# SCOPE: NodeId wrapping, SQL bind params for node_id/title/status, SQL-file content verification, Protocol conformance.
+# KEYWORDS: _row_to_task, NodeId, allocated_node_id, SQL bind params
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -101,7 +83,8 @@ class TestRowToTaskAllocatedNodeId:
         assert task.allocated_node_id is None
 
     async def test_handles_missing_allocated_node_id_key(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         repo = _make_repo(mocker)
         r = _row(task_id=1, allocated_node_id=None)
@@ -124,7 +107,7 @@ class TestRowToTaskAllocatedNodeId:
         assert task.label == "my_job"
 
     async def test_reads_status_by_name_lookup(self, mocker: MockerFixture) -> None:
-        """status is read via TaskStatus[row["status"]] (name lookup, was int cast)."""
+        """Status is read via TaskStatus[row["status"]] (name lookup, was int cast)."""
         repo = _make_repo(mocker)
         repo._run.return_value = [_row(task_id=1, status="RUNNING")]  # type: ignore[attr-defined]
 
@@ -139,7 +122,7 @@ class TestRowToTaskAllocatedNodeId:
         created = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         updated = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
         repo._run.return_value = [  # type: ignore[attr-defined]
-            _row(task_id=1, created_at=created, updated_at=updated)
+            _row(task_id=1, created_at=created, updated_at=updated),
         ]
 
         task = await repo.get(TaskId(1))
@@ -177,7 +160,8 @@ class TestInsertSaveBindAllocatedNodeId:
         assert "ip" not in kwargs
 
     async def test_insert_binds_null_allocated_node_id_by_default(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         repo = _make_repo(mocker)
         repo._run.return_value = [_row(task_id=99, allocated_node_id=None)]  # type: ignore[attr-defined]
@@ -217,7 +201,8 @@ class TestInsertSaveBindAllocatedNodeId:
         assert "ip" not in kwargs
 
     async def test_save_binds_null_allocated_node_id(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
         repo = _make_repo(mocker)
         from datetime import datetime

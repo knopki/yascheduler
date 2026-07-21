@@ -1,22 +1,8 @@
-# FILE: tests/unit/test_cloud_config_protocol_inheritance.py
-# VERSION: 1.1.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Assert the 4 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol (D1).
-#   SCOPE: MRO + isinstance checks for the 4 DTOs; AzureImageReference negative case.
-#   DEPENDS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
-#   LINKS: M-CLOUD-CONFIGS, M-DOMAIN-PORTS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_all_four_dtos_inherit_cloud_config                 - MRO check for all 4 DTOs (PEP 544-safe, no issubclass)
-#   test_isinstance_returns_true_for_each_dto               - isinstance(dto, CloudConfig) is True for each DTO
-#   test_azure_image_reference_does_not_inherit_cloud_config - AzureImageReference.__mro__ excludes CloudConfig
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Drop test_no_issubclass_in_production_code (test-for-test's-sake: enforced PEP 544 discipline already covered by openspec/specs/cloud-config spec and runtime TypeError on any issubclass call; the test shelled out to rg, an undeclared CI dependency).
-#   PREVIOUS_CHANGE: v1.0.0 - Assert explicit DTO→CloudConfig Protocol inheritance (resolve-type-bridge-debt / D1); uses __mro__ introspection and isinstance, never issubclass (PEP 544 data-Protocol ban).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Assert the 4 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol (D1).
+# SCOPE: MRO + isinstance checks for the 4 DTOs; AzureImageReference negative case.
+# KEYWORDS: CloudConfig Protocol, MRO, isinstance, DTO inheritance
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -30,6 +16,7 @@ from yascheduler.infra.cloud.cloud_configs import (
     ConfigCloudUpcloud,
     ConfigCloudVastAI,
 )
+from yascheduler.infra.cloud.protocols import CreateNodeCallable, DeleteNodeCallable
 
 DTO_CLASSES = (
     ConfigCloudAzure,
@@ -57,9 +44,29 @@ def test_isinstance_returns_true_for_each_dto() -> None:
         )
 
 
+def test_cloud_config_protocol_has_jump_port() -> None:
+    """CloudConfig Protocol declares jump_port: int"""
+    assert "jump_port" in CloudConfig.__annotations__
+    assert CloudConfig.__annotations__["jump_port"] in (int, "int")
+
+
 def test_azure_image_reference_does_not_inherit_cloud_config() -> None:
     """AzureImageReference does NOT inherit CloudConfig (it lacks the 6 Protocol fields)."""
     assert CloudConfig not in AzureImageReference.__mro__
+
+
+def test_create_node_callable_returns_cloud_create_node_dto() -> None:
+    """CreateNodeCallable.__call__ return annotation is CloudCreateNodeDTO."""
+    ann = CreateNodeCallable.__call__.__annotations__
+    assert "return" in ann
+    assert "CloudCreateNodeDTO" in ann["return"]
+
+
+def test_delete_node_callable_accepts_external_id() -> None:
+    """DeleteNodeCallable.__call__ has external_id parameter (not host)."""
+    ann = DeleteNodeCallable.__call__.__annotations__
+    assert "external_id" in ann
+    assert "host" not in ann
 
 
 if __name__ == "__main__":

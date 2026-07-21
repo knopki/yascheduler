@@ -1,38 +1,8 @@
-# FILE: tests/unit/test_domain_model.py
-# VERSION: 1.7.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, Engine, Task, Node, ConnectedMachine.
-#   SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods, ConnectedMachine state transitions, Task.with_remote_folder, Task.with_download_results, Task.allocate_to(node) binding allocated_node_id (sole allocation signal), Task.error column format contract.
-#   DEPENDS: M-DOMAIN-MODEL, M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   test_task_status_values - TO_DO=0, RUNNING=1, DONE=2, is int
-#   test_machine_state_distinct - FREE != BUSY
-#   test_process_result - construction defaults and all fields
-#   test_engine_validate_inputs - ok when files present, raises MissingInputFileError when missing
-#   test_task_construction - default TO_DO status
-#   test_task_immutability - FrozenInstanceError on mutation
-#   test_allocate_to_takes_node_and_binds_allocated_node_id - allocate_to(node) sets allocated_node_id (sole allocation signal)
-#   test_allocate_to_rejects_already_allocated - raises TaskAlreadyAllocatedError, allocated_node_id unchanged
-#   test_mark_running_raises_when_allocated_node_id_none - mark_running guard on allocated_node_id
-#   test_task_mark_running - transitions to RUNNING
-#   test_task_complete - transitions RUNNING->DONE
-#   test_task_fail - transitions to DONE with error set
-#   test_task_fail_not_running - raises TaskNotRunningError
-#   test_task_reject - transitions TO_DO->DONE with error set
-#   test_new_task_defaults - NewTask typed-field defaults, no task_id, no remote_folder, no error
-#   TestTaskWithRemoteFolder - with_remote_folder sets the field, preserves others, no validation, chains
-#   TestTaskWithDownloadResults - with_download_results sets both fields, preserves extra, keyword-only, no validation, chains
-#   TestTaskErrorFormat - Task.error column format contract (bare on reject/fail, None on success)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.7.0 - drop-task-context-entity: remove TestTaskContext, TestTaskContextReplace, TestTaskWithContext; add TestTaskWithRemoteFolder, TestTaskWithDownloadResults, TestTaskErrorFormat; update Task/NewTask construction to typed fields; Engine.validate_inputs takes extra dict (was TaskContext).
-#   PREVIOUS_CHANGE: v1.6.0 - task-schema-and-entity-cleanup: drop allocated_ip from Task/NewTask.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for domain entities: TaskStatus, MachineState, ProcessResult, Engine, Task, Node, ConnectedMachine.
+# SCOPE: Enum values, dataclass defaults/frozen semantics, Engine validation, Task lifecycle methods (run/reject/complete/fail/abandon), ConnectedMachine state transitions, materialize_task, Task.error column format contract, public events field.
+# KEYWORDS: TaskStatus, MachineState, ConnectedMachine, Engine, Task lifecycle
+# endregion MODULE_CONTRACT
 
 import time
 from dataclasses import FrozenInstanceError
@@ -40,12 +10,16 @@ from datetime import datetime
 
 import pytest
 
-from yascheduler.domain.events import TaskCreated
+from yascheduler.domain.events import (
+    TaskAbandoned,
+    TaskAllocated,
+    TaskCompleted,
+    TaskCreated,
+    TaskFailed,
+)
 from yascheduler.domain.exceptions import (
     MachineBusyError,
     MissingInputFileError,
-    TaskAlreadyAllocatedError,
-    TaskNotAllocatedError,
     TaskNotRunningError,
     TaskNotTodoError,
 )
@@ -57,46 +31,41 @@ from yascheduler.domain.model import (
     NewTask,
     Node,
     NodeId,
+    NodeStatus,
     ProcessResult,
     Task,
     TaskId,
     TaskStatus,
+    materialize_task,
 )
 
 _DT = datetime(2025, 1, 1)
 
 
-def _node(node_id: int = 7, ip: str = "10.0.0.1") -> Node:
+def _node(node_id: int = 7, hostname: str = "10.0.0.1") -> Node:
     """Construct a minimal Node for allocate_to tests."""
-    return Node(node_id=NodeId(node_id), ip=ip, ncpus=4)
+    return Node(node_id=NodeId(node_id), hostname=hostname, ncpus=4)
 
 
 def _make_task(**overrides: object) -> Task:
     """Build a Task with typed fields; all 11 required fields supplied."""
-    base: dict[str, object] = dict(
-        task_id=TaskId(1),
-        label="test",
-        engine="cp2k",
-        remote_folder=None,
-        local_folder=None,
-        webhook_url=None,
-        webhook_custom_params={},
-        error=None,
-        extra={},
-        created_at=_DT,
-        updated_at=_DT,
-    )
+    base: dict[str, object] = {
+        "task_id": TaskId(1),
+        "label": "test",
+        "engine": "cp2k",
+        "remote_folder": None,
+        "local_folder": None,
+        "webhook_url": None,
+        "webhook_custom_params": {},
+        "error": None,
+        "extra": {},
+        "created_at": _DT,
+        "updated_at": _DT,
+    }
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
 
 
-# START_CONTRACT: test_task_status_values
-#   PURPOSE: Verify TaskStatus enum values and int compatibility
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: TaskStatus]
-# END_CONTRACT: test_task_status_values
 class TestTaskStatus:
     def test_values(self) -> None:
         assert TaskStatus.TO_DO == 0
@@ -112,13 +81,6 @@ class TestTaskStatus:
         assert TaskStatus.DONE is TaskStatus(2)
 
 
-# START_CONTRACT: test_machine_state_distinct
-#   PURPOSE: Verify FREE and BUSY are distinct members
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: MachineState]
-# END_CONTRACT: test_machine_state_distinct
 class TestMachineState:
     def test_free_not_equal_busy(self) -> None:
         assert MachineState.FREE != MachineState.BUSY
@@ -128,13 +90,6 @@ class TestMachineState:
         assert MachineState.BUSY is MachineState(2)
 
 
-# START_CONTRACT: test_process_result
-#   PURPOSE: Verify ProcessResult dataclass default and full construction
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: ProcessResult]
-# END_CONTRACT: test_process_result
 class TestProcessResult:
     def test_defaults(self) -> None:
         r = ProcessResult(exit_code=0)
@@ -149,13 +104,6 @@ class TestProcessResult:
         assert r.stderr == "err"
 
 
-# START_CONTRACT: test_engine_validate_inputs
-#   PURPOSE: Verify Engine.validate_inputs passes when files present, fails with MissingInputFileError when missing
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Engine, MissingInputFileError]
-# END_CONTRACT: test_engine_validate_inputs
 class TestEngine:
     def test_validate_inputs_passes_when_all_present(self) -> None:
         engine = Engine(name="cp2k", spawn="cp2k", input_files=("inp", "xyz"))
@@ -173,20 +121,9 @@ class TestEngine:
         engine.validate_inputs({})  # no exception
 
 
-# START_CONTRACT: test_task
-#   PURPOSE: Verify Task construction, immutability, and lifecycle methods
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task, TaskAlreadyAllocatedError, TaskNotAllocatedError]
-# END_CONTRACT: test_task
 class TestTask:
     def make_task(self, **overrides: object) -> Task:
         return _make_task(**overrides)
-
-    @staticmethod
-    def _node(node_id: int = 7, ip: str = "10.0.0.1") -> Node:
-        return Node(node_id=NodeId(node_id), ip=ip, ncpus=4)
 
     def test_construction_default_status(self) -> None:
         task = self.make_task()
@@ -204,60 +141,59 @@ class TestTask:
         with pytest.raises(FrozenInstanceError):
             task.status = TaskStatus.RUNNING  # type: ignore[misc]
 
-    def test_allocate_to_takes_node_and_binds_allocated_node_id(self) -> None:
+    def test_run(self) -> None:
         task = self.make_task()
-        node = self._node(node_id=7, ip="10.0.0.1")
-        allocated = task.allocate_to(node)
-        assert allocated.allocated_node_id == NodeId(7)
-        assert allocated.task_id == task.task_id
-        assert allocated.status == task.status
-        assert task.allocated_node_id is None
-        assert not hasattr(allocated, "allocated_ip")
-
-    def test_allocate_to_rejects_already_allocated(self) -> None:
-        task = self.make_task(allocated_node_id=NodeId(7))
-        node = self._node(node_id=8, ip="10.0.0.2")
-        with pytest.raises(TaskAlreadyAllocatedError) as exc_info:
-            task.allocate_to(node)
-        assert "1" in str(exc_info.value)
-        assert task.allocated_node_id == NodeId(7)
-
-    def test_mark_running_raises_when_allocated_node_id_none(self) -> None:
-        task = self.make_task()
-        with pytest.raises(TaskNotAllocatedError) as exc_info:
-            task.mark_running()
-        assert "1" in str(exc_info.value)
-
-    def test_mark_running(self) -> None:
-        task = self.make_task()
-        running = task.allocate_to(self._node()).mark_running()
+        running = task.run(NodeId(7), "/r")
         assert running.status == TaskStatus.RUNNING
+        assert running.allocated_node_id == NodeId(7)
+        assert running.remote_folder == "/r"
         assert running.task_id == task.task_id
+        assert len(running.events) == 1
+        evt = running.events[0]
+        assert isinstance(evt, TaskAllocated)
+        assert evt.node_id == NodeId(7)
+        assert evt.engine_name == "cp2k"
+
+    def test_run_on_non_todo_raises(self) -> None:
+        task = self.make_task(status=TaskStatus.RUNNING)
+        with pytest.raises(TaskNotTodoError) as exc_info:
+            task.run(NodeId(7), "/r")
+        assert "1" in str(exc_info.value)
 
     def test_complete_on_running(self) -> None:
         task = self.make_task()
-        running = task.allocate_to(self._node()).mark_running()
-        done = running.complete()
+        running = task.run(NodeId(7), "/r")
+        done = running.complete(local_folder="/l", remote_folder="/r")
         assert done.status == TaskStatus.DONE
         assert done.error is None
+        assert done.local_folder == "/l"
+        assert done.remote_folder == "/r"
+        assert len(done.events) == 2
+        assert isinstance(done.events[1], TaskCompleted)
+        assert done.events[1].local_folder == "/l"
 
     def test_complete_on_todo_raises(self) -> None:
         task = self.make_task()
         with pytest.raises(TaskNotRunningError) as exc_info:
-            task.complete()
+            task.complete(local_folder="/l", remote_folder="/r")
         assert "1" in str(exc_info.value)
 
     def test_fail_on_running(self) -> None:
         task = self.make_task()
-        running = task.allocate_to(self._node()).mark_running()
-        failed = running.fail("out of memory")
+        running = task.run(NodeId(7), "/r")
+        failed = running.fail("out of memory", local_folder="/l", remote_folder="/r")
         assert failed.status == TaskStatus.DONE
         assert failed.error == "out of memory"
+        assert failed.local_folder == "/l"
+        assert failed.remote_folder == "/r"
+        assert len(failed.events) == 2
+        assert isinstance(failed.events[1], TaskFailed)
+        assert failed.events[1].reason == "out of memory"
 
     def test_fail_on_todo_raises(self) -> None:
         task = self.make_task()
         with pytest.raises(TaskNotRunningError) as exc_info:
-            task.fail("reason")
+            task.fail("reason", local_folder="/l", remote_folder="/r")
         assert "1" in str(exc_info.value)
 
     def test_reject_on_todo(self) -> None:
@@ -265,58 +201,109 @@ class TestTask:
         rejected = task.reject("unsupported engine")
         assert rejected.status == TaskStatus.DONE
         assert rejected.error == "unsupported engine"
+        assert len(rejected.events) == 1
+        assert isinstance(rejected.events[0], TaskFailed)
+        assert rejected.events[0].reason == "unsupported engine"
 
     def test_reject_on_running_raises(self) -> None:
         task = self.make_task()
-        running = task.allocate_to(self._node()).mark_running()
+        running = task.run(NodeId(7), "/r")
         with pytest.raises(TaskNotTodoError):
             running.reject("reason")
 
+    def test_abandon_with_node_id(self) -> None:
+        task = self.make_task()
+        running = task.run(NodeId(7), "/r")
+        abandoned = running.abandon(NodeId(7))
+        assert abandoned.status == TaskStatus.DONE
+        assert abandoned.error == "node is gone"
+        assert len(abandoned.events) == 2
+        assert isinstance(abandoned.events[1], TaskAbandoned)
+        assert abandoned.events[1].node_id == NodeId(7)
 
-# START_CONTRACT: test_node
-#   PURPOSE: Verify Node dataclass defaults and full construction
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Node]
-# END_CONTRACT: test_node
+    def test_abandon_none_no_event(self) -> None:
+        task = self.make_task()
+        running = task.run(NodeId(7), "/r")
+        abandoned = running.abandon(None)
+        assert abandoned.status == TaskStatus.DONE
+        assert abandoned.error == "node is gone"
+        # No TaskAbandoned event when node_id is None
+        assert len(abandoned.events) == 1  # only the TaskAllocated from run
+
+    def test_abandon_on_todo_raises(self) -> None:
+        task = self.make_task()
+        with pytest.raises(TaskNotRunningError) as exc_info:
+            task.abandon(NodeId(7))
+        assert "1" in str(exc_info.value)
+
+
+class TestNodeStatus:
+    def test_other_value(self) -> None:
+        """NodeStatus.OTHER is defined with value 'OTHER'."""
+        assert NodeStatus.OTHER == "OTHER"
+        assert NodeStatus.OTHER.value == "OTHER"
+
+    def test_is_strenum(self) -> None:
+        """NodeStatus members are str instances (StrEnum)."""
+        assert isinstance(NodeStatus.OTHER, str)
+
+    def test_name_lookup(self) -> None:
+        """NodeStatus['OTHER'] returns NodeStatus.OTHER (name-based lookup)."""
+        assert NodeStatus["OTHER"] is NodeStatus.OTHER
+
+
 class TestNode:
     def test_defaults(self) -> None:
-        node = Node(node_id=NodeId(1), ip="10.0.0.1", ncpus=4)
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4)
         assert node.node_id == NodeId(1)
-        assert node.ip == "10.0.0.1"
+        assert node.hostname == "10.0.0.1"
         assert node.ncpus == 4
         assert node.enabled is True
         assert node.cloud is None
         assert node.username == "root"
         assert node.port == 22
+        assert node.jump_host is None
+        assert node.jump_port == 22
+        assert node.jump_username == "root"
+        assert node.external_id is None
+        assert node.status == NodeStatus.OTHER
+        assert isinstance(node.created_at, datetime)
+        assert isinstance(node.updated_at, datetime)
+
+    def test_ncpus_none_means_discover_at_spawn(self) -> None:
+        """Node with ncpus=None: orchestrator discovers at spawn via session cache."""
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=None)
+        assert node.ncpus is None
 
     def test_full_construction(self) -> None:
         node = Node(
             node_id=NodeId(7),
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=8,
             enabled=False,
             cloud="hetzner",
             username="admin",
             port=2222,
+            jump_host="jump.example.com",
+            jump_port=2222,
+            jump_username="jumpuser",
+            external_id="ext-123",
+            status=NodeStatus.OTHER,
         )
         assert node.node_id == NodeId(7)
-        assert node.ip == "10.0.0.1"
+        assert node.hostname == "10.0.0.1"
         assert node.ncpus == 8
         assert node.enabled is False
         assert node.cloud == "hetzner"
         assert node.username == "admin"
         assert node.port == 2222
+        assert node.jump_host == "jump.example.com"
+        assert node.jump_port == 2222
+        assert node.jump_username == "jumpuser"
+        assert node.external_id == "ext-123"
+        assert node.status == NodeStatus.OTHER
 
 
-# START_CONTRACT: test_node_id
-#   PURPOSE: Verify NodeId value object validation, str, equality, hashability.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: NodeId]
-# END_CONTRACT: test_node_id
 class TestNodeId:
     def test_post_init_rejects_non_positive(self) -> None:
         for bad in (0, -1, -100):
@@ -345,67 +332,77 @@ class TestNodeId:
         assert NodeId(5) != NodeId(6)
 
 
-# START_CONTRACT: test_new_node
-#   PURPOSE: Verify NewNode dataclass defaults (including ip/ncpus defaults), full construction, absence of node_id.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: NewNode]
-# END_CONTRACT: test_new_node
 class TestNewNode:
     def test_has_no_node_id_attribute(self) -> None:
-        NewNode()
+        n = NewNode()
+        assert not hasattr(n, "node_id")
 
     def test_defaults(self) -> None:
-        n = NewNode(ip="x", ncpus=4)
+        n = NewNode(hostname="x", ncpus=4)
         assert n.enabled is True
         assert n.cloud is None
         assert n.username == "root"
         assert n.port == 22
+        assert n.jump_host is None
+        assert n.jump_port == 22
+        assert n.jump_username == "root"
+        assert n.external_id is None
+        assert n.status == NodeStatus.OTHER
 
     def test_full_construction(self) -> None:
         n = NewNode(
-            ip="10.0.0.1",
+            hostname="10.0.0.1",
             ncpus=8,
             enabled=False,
             cloud="aws",
             username="admin",
             port=2222,
+            jump_host="jump.example.com",
+            jump_port=2222,
+            jump_username="jumpuser",
+            external_id="ext-123",
+            status=NodeStatus.OTHER,
         )
-        assert n.ip == "10.0.0.1"
+        assert n.hostname == "10.0.0.1"
         assert n.ncpus == 8
         assert n.enabled is False
         assert n.cloud == "aws"
         assert n.username == "admin"
         assert n.port == 2222
+        assert n.jump_host == "jump.example.com"
+        assert n.jump_port == 2222
+        assert n.jump_username == "jumpuser"
+        assert n.external_id == "ext-123"
+        assert n.status == NodeStatus.OTHER
+
+    def test_defaults_ncpus_to_none(self) -> None:
+        """NewNode instantiated with only cloud and enabled defaults ncpus to None."""
+        n = NewNode(cloud="aws", enabled=False)
+        assert n.ncpus is None
 
     def test_tmp_reservation_defaults(self) -> None:
         n = NewNode(cloud="aws", enabled=False)
-        assert n.ip == ""
-        assert n.ncpus == 0
+        assert n.hostname == ""
+        assert n.ncpus is None
         assert n.username == "root"
         assert n.port == 22
+        assert n.jump_host is None
+        assert n.jump_port == 22
+        assert n.jump_username == "root"
+        assert n.external_id is None
+        assert n.status == NodeStatus.OTHER
         assert n.enabled is False
         assert n.cloud == "aws"
 
-    def test_explicit_ip_ncpus_override_defaults(self) -> None:
-        n = NewNode(ip="10.0.0.1", ncpus=4)
-        assert n.ip == "10.0.0.1"
+    def test_explicit_hostname_ncpus_override_defaults(self) -> None:
+        n = NewNode(hostname="10.0.0.1", ncpus=4)
+        assert n.hostname == "10.0.0.1"
         assert n.ncpus == 4
 
 
-# START_CONTRACT: test_connected_machine
-#   PURPOSE: Verify ConnectedMachine compatibility check, occupy, and release
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: ConnectedMachine, MachineBusyError]
-# END_CONTRACT: test_connected_machine
 class TestConnectedMachine:
     def make_machine(self, **overrides: object) -> ConnectedMachine:
-        defaults: dict[str, object] = dict(
-            node_id=NodeId(1), ip="10.0.0.1", platform="linux", ncpus=4
-        )
+        defaults: dict[str, object] = {"node_id": NodeId(1), "platform": "linux"}
         defaults.update(overrides)
         return ConnectedMachine(**defaults)  # type: ignore[arg-type]
 
@@ -435,7 +432,8 @@ class TestConnectedMachine:
         m = self.make_machine(state=MachineState.BUSY)
         with pytest.raises(MachineBusyError) as exc_info:
             m.occupy()
-        assert "10.0.0.1" in str(exc_info.value)
+        assert exc_info.value.node_id == NodeId(1)
+        assert not hasattr(exc_info.value, "hostname")
 
     def test_release_sets_free_and_timestamp(self) -> None:
         before = time.monotonic()
@@ -449,130 +447,11 @@ class TestConnectedMachine:
         assert m.free_since is None
 
 
-# START_CONTRACT: test_with_remote_folder
-#   PURPOSE: Verify Task.with_remote_folder sets the field, preserves all others, no status validation, chains with with_event/fail/complete.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task.with_remote_folder]
-# END_CONTRACT: test_with_remote_folder
-class TestTaskWithRemoteFolder:
-    def test_sets_remote_folder(self) -> None:
-        task = _make_task(remote_folder=None)
-        result = task.with_remote_folder("/remote/20240101_000000_7")
-        assert result.remote_folder == "/remote/20240101_000000_7"
-        assert result.task_id == task.task_id
-        assert result.label == task.label
-        assert result.engine == task.engine
-        assert result.local_folder == task.local_folder
-        assert result.webhook_url == task.webhook_url
-        assert result.webhook_custom_params == task.webhook_custom_params
-        assert result.error == task.error
-        assert result.extra == task.extra
-        assert result.status == task.status
-        assert result.allocated_node_id == task.allocated_node_id
-        assert result._events == task._events
-
-    def test_preserves_original(self) -> None:
-        task = _make_task(remote_folder=None)
-        result = task.with_remote_folder("/r/new")
-        assert task.remote_folder is None
-        assert result.remote_folder == "/r/new"
-
-    @pytest.mark.parametrize("status", list(TaskStatus))
-    def test_no_status_validation(self, status: TaskStatus) -> None:
-        task = _make_task(status=status)
-        result = task.with_remote_folder("/r")
-        assert result.remote_folder == "/r"
-        assert result.status == status
-
-    def test_chains_with_with_event(self) -> None:
-        task = _make_task(engine="cp2k")
-        result = task.with_remote_folder("/r").with_event(
-            TaskCreated, engine_name="cp2k"
-        )
-        assert result.remote_folder == "/r"
-        assert len(result._events) == 1
-        evt = result._events[0]
-        assert isinstance(evt, TaskCreated)
-        assert evt.engine_name == "cp2k"
-        assert evt.task_id == task.task_id
-
-    def test_chains_with_fail(self) -> None:
-        task = _make_task()
-        running = task.allocate_to(_node()).mark_running()
-        result = running.with_remote_folder("/r").fail("reason")
-        assert result.status == TaskStatus.DONE
-        assert result.error == "reason"
-        assert result.remote_folder == "/r"
-
-
-# START_CONTRACT: test_with_download_results
-#   PURPOSE: Verify Task.with_download_results sets local_folder+remote_folder, preserves extra, keyword-only, no status validation, chains.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task.with_download_results]
-# END_CONTRACT: test_with_download_results
-class TestTaskWithDownloadResults:
-    def test_sets_both_fields(self) -> None:
-        task = _make_task(local_folder=None, remote_folder=None)
-        result = task.with_download_results(
-            local_folder="/local/out", remote_folder="/remote/out"
-        )
-        assert result.local_folder == "/local/out"
-        assert result.remote_folder == "/remote/out"
-        assert result.task_id == task.task_id
-        assert result.engine == task.engine
-        assert result.status == task.status
-
-    def test_does_not_touch_extra(self) -> None:
-        task = _make_task(extra={"input.in": "ATOMS"})
-        result = task.with_download_results(local_folder="/l", remote_folder="/r")
-        assert result.extra == {"input.in": "ATOMS"}
-
-    def test_accepts_equal_values(self) -> None:
-        task = _make_task(local_folder="/l", remote_folder="/r")
-        result = task.with_download_results(local_folder="/l", remote_folder="/r")
-        assert result.local_folder == "/l"
-        assert result.remote_folder == "/r"
-
-    def test_keyword_only(self) -> None:
-        task = _make_task()
-        with pytest.raises(TypeError):
-            task.with_download_results("/l", "/r")  # type: ignore[call-arg, misc]
-
-    @pytest.mark.parametrize("status", list(TaskStatus))
-    def test_no_status_validation(self, status: TaskStatus) -> None:
-        task = _make_task(status=status)
-        result = task.with_download_results(local_folder="/l", remote_folder="/r")
-        assert result.local_folder == "/l"
-        assert result.remote_folder == "/r"
-        assert result.status == status
-
-    def test_chains_with_complete(self) -> None:
-        task = _make_task()
-        running = task.allocate_to(_node()).mark_running()
-        result = running.with_download_results(
-            local_folder="/l", remote_folder="/r"
-        ).complete()
-        assert result.status == TaskStatus.DONE
-        assert result.local_folder == "/l"
-        assert result.remote_folder == "/r"
-
-
-# START_CONTRACT: test_error_format
-#   PURPOSE: Verify Task.error column format contract — bare on reject/fail, None on success.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: Task.error column format contract]
-# END_CONTRACT: test_error_format
 class TestTaskErrorFormat:
     def test_error_is_none_on_success(self) -> None:
         task = _make_task()
-        running = task.allocate_to(_node()).mark_running()
-        done = running.complete()
+        running = task.run(NodeId(7), "/r")
+        done = running.complete(local_folder="/l", remote_folder="/r")
         assert done.error is None
 
     def test_error_is_bare_reason_on_reject(self) -> None:
@@ -582,18 +461,28 @@ class TestTaskErrorFormat:
 
     def test_error_is_bare_reason_on_fail(self) -> None:
         task = _make_task()
-        running = task.allocate_to(_node()).mark_running()
-        failed = running.fail("node is gone")
+        running = task.run(NodeId(7), "/r")
+        failed = running.fail("node is gone", local_folder="/l", remote_folder="/r")
         assert failed.error == "node is gone"
 
 
-# START_CONTRACT: test_task_id
-#   PURPOSE: Verify TaskId value object validation, str, equality, hashability.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: TaskId]
-# END_CONTRACT: test_task_id
+class TestMaterializeTask:
+    def test_materialize_task_adds_task_created_event(self) -> None:
+        task = _make_task(events=())
+        result = materialize_task(task)
+        assert len(result.events) == 1
+        evt = result.events[0]
+        assert isinstance(evt, TaskCreated)
+        assert evt.task_id == task.task_id
+        assert evt.webhook_url == task.webhook_url
+        assert evt.webhook_custom_params == task.webhook_custom_params
+        assert evt.engine_name == task.engine
+        # All other fields preserved
+        assert result.label == task.label
+        assert result.status == task.status
+        assert result.remote_folder == task.remote_folder
+
+
 class TestTaskId:
     def test_post_init_rejects_non_positive(self) -> None:
         for bad in (0, -1):
@@ -622,13 +511,6 @@ class TestTaskId:
         assert TaskId(5) != TaskId(6)
 
 
-# START_CONTRACT: test_new_task
-#   PURPOSE: Verify NewTask typed-field defaults, no task_id, no remote_folder, no error, no lifecycle methods.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertions }
-#   SIDE_EFFECTS: None
-#   LINKS: [M-DOMAIN-MODEL: NewTask]
-# END_CONTRACT: test_new_task
 class TestNewTask:
     def test_constructs_with_defaults(self) -> None:
         nt = NewTask(label="x", engine="cp2k")
@@ -660,15 +542,10 @@ class TestNewTask:
     def test_has_no_lifecycle_methods(self) -> None:
         nt = NewTask(label="x", engine="cp2k")
         for method in (
-            "allocate_to",
-            "mark_running",
+            "run",
             "complete",
             "fail",
             "reject",
-            "with_remote_folder",
-            "with_download_results",
-            "with_event",
-            "pull_events",
-            "record_event",
+            "abandon",
         ):
             assert not hasattr(nt, method)

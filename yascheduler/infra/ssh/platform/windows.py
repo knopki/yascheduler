@@ -1,43 +1,24 @@
-#!/usr/bin/env python3
-# FILE: yascheduler/infra/ssh/platform/windows.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Windows-specific remote commands: engine deployment, process listing.
-#   SCOPE: Windows setup_node, list_processes implementations.
-#   DEPENDS: M-DOMAIN-ENGINE, M-PLATFORM-PROTOCOL
-#   LINKS: M-PLATFORM-ADAPTERS, M-DOMAIN-ENGINE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   MyPureWindowsPath - Custom PureWindowsPath that handles leading slashes correctly
-#   windows_quote - Quote a string for PowerShell
-#   windows_get_cpu_cores - Get number of CPU cores via PowerShell
-#   windows_list_processes - List running processes via Get-CimInstance
-#   windows_pgrep - Find processes matching a pattern
-#   deploy_local_files - Upload local binary files via SFTP
-#   deploy_local_archive - Upload and extract local archive via Expand-Archive
-#   deploy_remote_archive - Download and extract remote archive via Invoke-WebRequest
-#   windows_deploy_engines - Deploy all engines for a node
-#   windows_setup_node - Setup Windows node
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Import ProcessInfo from .protocol (not .common); list_processes/pgrep return AsyncGenerator[ProcessInfo, None] (prune-platform-protocols).
-#   PREVIOUS_CHANGE: v1.1.0 - Switch Deploy* import from yascheduler.config to yascheduler.domain; replace PEngineRepository type hints with EngineRepository from yascheduler.domain (engine-to-domain-frozen).
-# END_CHANGE_SUMMARY
+"""Windows-specific remote commands: engine deployment, process listing, CPU detection."""
+# region MODULE_CONTRACT
+# PURPOSE: Windows-specific remote machine operations — setup_node, get_cpu_cores, process listing, pgrep, engine deployment helpers.
+# SCOPE:
+# - MyPureWindowsPath custom path class
+# - windows_quote, windows_get_cpu_cores, windows_list_processes, windows_pgrep
+# - Deploy helpers (deploy_local_files/archive, deploy_remote_archive)
+# - windows_deploy_engines, windows_setup_node
+# DEPENDENCIES: USES API: asyncssh (SSHClientConnection, SFTPClient)
+# KEYWORDS: windows, ssh, remote, deploy, engines, cpu, processes, powershell
+# endregion MODULE_CONTRACT
+
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncGenerator, Sequence
 from pathlib import PurePath, PureWindowsPath
 from re import Pattern
-from typing import Optional, Union
-
-from asyncssh.connection import SSHClientConnection
-from asyncssh.sftp import SFTPClient
+from typing import TYPE_CHECKING
 
 from yascheduler.domain import (
     EngineRepository,
@@ -48,20 +29,45 @@ from yascheduler.domain import (
 
 from .protocol import OuterRunCallable, ProcessInfo, QuoteCallable
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Sequence
 
+    from asyncssh.connection import SSHClientConnection
+    from asyncssh.sftp import SFTPClient
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "MyPureWindowsPath",
+    "deploy_local_archive",
+    "deploy_local_files",
+    "deploy_remote_archive",
+    "windows_deploy_engines",
+    "windows_get_cpu_cores",
+    "windows_list_processes",
+    "windows_pgrep",
+    "windows_quote",
+    "windows_setup_node",
+]
+
+
+# region CLASS_MyPureWindowsPath
+# PURPOSE: Subclass PureWindowsPath so SSH SFTP paths returned by a Windows remote arrive at the session without a spurious leading backslash that breaks SFTP makedirs/file placement.
+# INVARIANTS: Subclass of PureWindowsPath; the overridden _parse_args strips a leading \ from UNC-style returns so paths like \C:\Users\user become C:\Users\user; the second guard re-introduces a \\ root when parsing a PurePath instance whose first part equals its drive, restoring the path semantics PureWindowsPath would otherwise eat.
+# RATIONALE:
+# - Q: why subclass PureWindowsPath instead of using PureWindowsPath directly?
+#   A: asyncssh's SFTP realpath on Windows returns paths with a leading \ (the SFTP protocol's POSIX-like prefix); PureWindowsPath("\C:\Users") parses the leading \ as a UNC root and produces an unusable \C:\Users form — the subclass rewrites the parse to drop the leading \ when the next part looks like a drive letter.
 class MyPureWindowsPath(PureWindowsPath):
-    # START_CONTRACT: MyPureWindowsPath._parse_args
-    #   PURPOSE: Custom path parsing to prevent leading slash on Windows paths
-    #   INPUTS: { path: - path string to parse }
-    #   OUTPUTS: { tuple - (drv, root, parts) parsed path components }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-REMOTE-WINDOWS
-    # END_CONTRACT: MyPureWindowsPath._parse_args
+    """Custom ``PureWindowsPath`` subclass preventing leading slashes."""
+
+    # region METHOD__parse_args
+    # PURPOSE: Custom path parsing to prevent leading slash on Windows paths.
     @classmethod
     def _parse_args(cls, path: str) -> tuple[str, str, list[str]]:
         drv, root, parts = cls._parse_args(path)
         # prevent leading slash like \C:\Users\user
-        if not drv and root == "\\" and len(parts) > 2 and parts[0] == "\\":
+        parts_len = 3
+        if not drv and root == "\\" and len(parts) >= parts_len and parts[0] == "\\":
             drv = parts[1]
             parts = parts[1:]
         # prevent eating first part when parsing PurePath instance
@@ -70,49 +76,47 @@ class MyPureWindowsPath(PureWindowsPath):
 
         return drv, root, parts
 
+    # endregion METHOD__parse_args
 
-# START_CONTRACT: windows_quote
-#   PURPOSE: Quote a string for PowerShell by wrapping in single quotes and escaping embedded single quotes
-#   INPUTS: { s: str - string to quote }
-#   OUTPUTS: { str - PowerShell-quoted string }
-#   SIDE_EFFECTS: None
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: windows_quote
+
+# endregion CLASS_MyPureWindowsPath
+
+
+# region FUNC_windows_quote
+# PURPOSE: Quote a string for PowerShell by wrapping in single quotes and escaping embedded single quotes.
 def windows_quote(s: str) -> str:
+    """Quote a string for PowerShell by wrapping in single quotes and escaping embedded single quotes."""
     return "'{}'".format(str(s).replace("'", "''"))
 
 
-# START_CONTRACT: windows_get_cpu_cores
-#   PURPOSE: Get number of CPU cores on remote Windows via PowerShell
-#   INPUTS: { run: OuterRunCallable - async command runner }
-#   OUTPUTS: { int - number of CPU cores (defaults to 1 on error) }
-#   SIDE_EFFECTS: None
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: windows_get_cpu_cores
+# endregion FUNC_windows_quote
+
+
+# region FUNC_windows_get_cpu_cores
+# PURPOSE: Get number of CPU cores on remote Windows via PowerShell.
 async def windows_get_cpu_cores(run: OuterRunCallable) -> int:
-    """
-    Get number of CPU cores
+    """Get number of CPU cores.
+
     :raises asyncssh.Error: An SSH error has occurred.
     """
     res = await run("[environment]::ProcessorCount")
     try:
-        return int(res.stdout and res.stdout.strip() or "1")
+        return int((res.stdout and res.stdout.strip()) or "1")
     except ValueError:
         return 1
 
 
-# START_CONTRACT: windows_list_processes
-#   PURPOSE: Yield running process info from remote Windows via Get-CimInstance
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { query: Optional[str] - optional PowerShell where filter }
-#   OUTPUTS: { AsyncGenerator[ProcessInfo, None] - stream of process info }
-#   SIDE_EFFECTS: None
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: windows_list_processes
+# endregion FUNC_windows_get_cpu_cores
+
+
+# region FUNC_windows_list_processes
+# PURPOSE: Yield running process info from remote Windows via Get-CimInstance.
 async def windows_list_processes(
-    conn: SSHClientConnection, query: Optional[str] = None
+    conn: SSHClientConnection,
+    query: str | None = None,
 ) -> AsyncGenerator[ProcessInfo, None]:
-    """
-    Returns information about all running processes
+    """Return information about all running processes.
+
     :raises asyncssh.Error: An SSH error has occurred.
     """
     where_pipe_cmd = f"| ?{{ {query} }}" if query else ""
@@ -126,9 +130,12 @@ async def windows_list_processes(
                 data = json.loads(line)
                 if not data["command"]:
                     data["command"] = data["name"]
-                assert isinstance(data["pid"], int)
-                assert isinstance(data["name"], str)
-                assert isinstance(data["command"], str)
+                if not isinstance(data["pid"], int):
+                    continue
+                if not isinstance(data["name"], str):
+                    continue
+                if not isinstance(data["command"], str):
+                    continue
                 # skip self
                 if (
                     data["name"] == "powershell.exe"
@@ -136,25 +143,24 @@ async def windows_list_processes(
                 ):
                     continue
                 yield ProcessInfo(**data)
-            except Exception:
+            except Exception:  # noqa: S112
                 continue
 
 
-# START_CONTRACT: windows_pgrep
-#   PURPOSE: Find processes matching a pattern on Windows via where-filter and yield their info
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { quote: QuoteCallable - PowerShell quoting function } | { pattern: Union[str, Pattern[str]] - match pattern } | { full: bool - match against name or full cmdline if True }
-#   OUTPUTS: { AsyncGenerator[ProcessInfo, None] - stream of matching process info }
-#   SIDE_EFFECTS: None
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: windows_pgrep
+# endregion FUNC_windows_list_processes
+
+
+# region FUNC_windows_pgrep
+# PURPOSE: Find processes matching a pattern on Windows via where-filter and yield their info.
 async def windows_pgrep(
     conn: SSHClientConnection,
     quote: QuoteCallable,
-    pattern: Union[str, Pattern[str]],
+    pattern: str | Pattern[str],
+    *,
     full: bool = True,
 ) -> AsyncGenerator[ProcessInfo, None]:
-    """
-    Returns information about running processes, that name matches a pattern.
+    """Return information about running processes matching a name pattern.
+
     If `full`, check match against name or full cmd.
     :raises asyncssh.Error: An SSH error has occurred.
     """
@@ -170,62 +176,45 @@ async def windows_pgrep(
         yield x
 
 
-# START_CONTRACT: deploy_local_files
-#   PURPOSE: Upload local binary files to remote Windows via SFTP
-#   INPUTS: { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { files: Sequence[PurePath] - local file paths } | { log: Optional[logging.Logger] - logger }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Uploads files to remote machine in parallel
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: deploy_local_files
+# endregion FUNC_windows_pgrep
+
+
+# region FUNC_deploy_local_files
+# PURPOSE: Upload local binary files to remote Windows via SFTP.
 async def deploy_local_files(
     sftp: SFTPClient,
     engine_dir: PurePath,
     files: Sequence[PurePath],
-    log: Optional[logging.Logger] = None,
 ) -> None:
-    "Uploading binary from local; requires broadband connection"
+    """Upload binary from local; requires broadband connection."""
 
     async def upload(src: PurePath, dst: PurePath) -> None:
-        if log:
-            log.debug(
-                "[Windows][deploy_local_files][UPLOAD] src=%s dst=%s",
-                str(src),
-                str(dst),
-            )
+        logger.debug("UPLOAD", extra={"src": str(src), "dst": str(dst)})
         await sftp.put([str(src)], str(dst))
 
-    await asyncio.gather(*map(lambda x: upload(x, engine_dir / x.name), files))
+    await asyncio.gather(*(upload(x, engine_dir / x.name) for x in files))
 
 
-# START_CONTRACT: deploy_local_archive
-#   PURPOSE: Upload local archive via SFTP and extract via Expand-Archive on remote Windows
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { archive: PurePath - local archive path } | { log: Optional[logging.Logger] - logger }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Uploads archive, extracts it, removes archive file on remote
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: deploy_local_archive
+# endregion FUNC_deploy_local_files
+
+
+# region FUNC_deploy_local_archive
+# PURPOSE: Upload local archive via SFTP and extract via Expand-Archive on remote Windows.
 async def deploy_local_archive(
     run: OuterRunCallable,
     quote: QuoteCallable,
     sftp: SFTPClient,
     engine_dir: PurePath,
     archive: PurePath,
-    log: Optional[logging.Logger] = None,
 ) -> None:
-    """
-    Upload local archive.
+    """Upload local archive.
+
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
     """
     rpath = engine_dir / archive.name
-    if log:
-        log.debug(
-            "[Windows][deploy_local_archive][UPLOAD] name=%s path=%s",
-            archive.name,
-            str(rpath),
-        )
+    logger.debug("UPLOAD", extra={"archive": archive.name, "path": str(rpath)})
     await sftp.put([str(archive)], engine_dir)
-    if log:
-        log.debug("[Windows][deploy_local_archive][EXTRACT] name=%s", archive.name)
+    logger.debug("EXTRACT", extra={"archive": archive.name})
     await run(
         f"""Expand-Archive {quote(str(rpath))} `
             -DestinationPath {quote(str(engine_dir))} `
@@ -235,38 +224,31 @@ async def deploy_local_archive(
     await sftp.remove(rpath)
 
 
-# START_CONTRACT: deploy_remote_archive
-#   PURPOSE: Download remote archive via Invoke-WebRequest and extract via Expand-Archive on remote Windows
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engine_dir: PurePath - destination directory } | { url: str - download URL } | { log: Optional[logging.Logger] - logger }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Downloads archive from URL, extracts it, removes archive file on remote
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: deploy_remote_archive
+# endregion FUNC_deploy_local_archive
+
+
+# region FUNC_deploy_remote_archive
+# PURPOSE: Download remote archive via Invoke-WebRequest and extract via Expand-Archive on remote Windows.
 async def deploy_remote_archive(
     run: OuterRunCallable,
     quote: QuoteCallable,
     sftp: SFTPClient,
     engine_dir: PurePath,
     url: str,
-    log: Optional[logging.Logger] = None,
 ) -> None:
-    """
-    Downloading binary from a trusted non-public address.
+    """Download a binary from a trusted non-public address.
+
     Binary may be gzipped, without subfolders, with an arbitrary archive name.
     """
     name = "archive.zip"
     rpath = engine_dir / name
-    if log:
-        log.debug(
-            "[Windows][deploy_remote_archive][DOWNLOAD] url=%s path=%s", url, str(rpath)
-        )
+    logger.debug("DOWNLOAD", extra={"url": url, "path": str(rpath)})
     await run(
         f"""Invoke-WebRequest -Uri {quote(url)} `
             -OutFile {quote(str(rpath))} -Force""",
         check=True,
     )
-    if log:
-        log.debug("[Windows][deploy_remote_archive][EXTRACT] name=%s", name)
+    logger.debug("EXTRACT", extra={"archive": name})
     await run(
         f"""Expand-Archive {quote(str(rpath))} `
             -DestinationPath {quote(str(engine_dir))} `
@@ -276,64 +258,65 @@ async def deploy_remote_archive(
     await sftp.remove(rpath)
 
 
-# START_CONTRACT: windows_deploy_engines
-#   PURPOSE: Deploy all engines for a Windows node by iterating engine repository and dispatching deploy strategies
-#   INPUTS: { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { sftp: SFTPClient - SFTP connection } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates engine directories, uploads files/archives, downloads remote archives
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: windows_deploy_engines
+# endregion FUNC_deploy_remote_archive
+
+
+# region FUNC_windows_deploy_engines
+# PURPOSE: Deploy all engines for a Windows node by iterating engine repository and dispatching deploy strategies.
 async def windows_deploy_engines(
     run: OuterRunCallable,
     quote: QuoteCallable,
     sftp: SFTPClient,
     engines: EngineRepository,
     engines_dir: PurePath,
-    log: Optional[logging.Logger] = None,
 ) -> None:
-    """
-    Setup node for target engines.
-    """
+    """Set up node for target engines."""
     for engine in engines.values():
-        if log:
-            log.info(f"Setup {engine.name} engine...")
+        logger.info("Setup %s engine...", engine.name)
         engine_dir = PureWindowsPath(
-            (await sftp.realpath(engines_dir / engine.name))[1:]
+            (await sftp.realpath(engines_dir / engine.name))[1:],
         )
         # sftp.makedirs is broken for PureWindowsPath
         await sftp.makedirs(PurePath(engine_dir), exist_ok=True)
         for deployment in engine.deployable:
             if isinstance(deployment, LocalFilesDeploy):
-                await deploy_local_files(sftp, engine_dir, deployment.files, log)
+                await deploy_local_files(sftp, engine_dir, deployment.files)
 
             if isinstance(deployment, LocalArchiveDeploy):
                 await deploy_local_archive(
-                    run, quote, sftp, engine_dir, deployment.file
+                    run,
+                    quote,
+                    sftp,
+                    engine_dir,
+                    deployment.file,
                 )
 
             if isinstance(deployment, RemoteArchiveDeploy):
                 await deploy_remote_archive(
-                    run, quote, sftp, engine_dir, deployment.url
+                    run,
+                    quote,
+                    sftp,
+                    engine_dir,
+                    deployment.url,
                 )
-        if log:
-            log.info(f"Setup of {engine.name} engine is done...")
+        logger.info("Setup of %s engine is done...", engine.name)
 
 
-# START_CONTRACT: windows_setup_node
-#   PURPOSE: Setup Windows node by deploying engines via SFTP
-#   INPUTS: { conn: SSHClientConnection - SSH connection } | { run: OuterRunCallable - async command runner } | { quote: QuoteCallable - PowerShell quoting function } | { engines: EngineRepository - engine definitions } | { engines_dir: PurePath - base engines directory } | { log: Optional[logging.Logger] - logger }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates SFTP client, deploys all engines on Windows
-#   LINKS: M-REMOTE-WINDOWS
-# END_CONTRACT: windows_setup_node
+# endregion FUNC_windows_deploy_engines
+
+
+# region FUNC_windows_setup_node
+# PURPOSE: Setup Windows node by deploying engines via SFTP.
 async def windows_setup_node(
     conn: SSHClientConnection,
     run: OuterRunCallable,
     quote: QuoteCallable,
     engines: EngineRepository,
     engines_dir: PurePath,
-    log: Optional[logging.Logger] = None,
 ) -> None:
-    "Setup Windows node"
+    """Set up Windows node."""
     async with conn.start_sftp_client() as sftp:
-        await windows_deploy_engines(run, quote, sftp, engines, engines_dir, log)
+        await windows_deploy_engines(run, quote, sftp, engines, engines_dir)
+
+
+# endregion FUNC_windows_setup_node

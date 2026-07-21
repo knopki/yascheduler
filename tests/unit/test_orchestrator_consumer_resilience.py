@@ -1,24 +1,9 @@
-# FILE: tests/unit/test_orchestrator_consumer_resilience.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for orchestrator consumer-worker error resilience (fix-save-silent-zero-rows).
-#   SCOPE: consumer Exception → logged and worker continues processing subsequent messages;
-#          consumer CancelledError → propagates past `except Exception` to the graceful-drain path.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR
-#   LINKS: M-QUEUE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestConsumerResilience - consumer Exception is logged and the worker continues the loop
-#   TestConsumerCancelledErrorDrain - consumer CancelledError reaches the graceful-drain path
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for orchestrator consumer-worker resilience (fix-save-silent-zero-rows).
-# END_CHANGE_SUMMARY
-
 """Unit tests for orchestrator consumer-worker error resilience."""
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for orchestrator consumer-worker error resilience (fix-save-silent-zero-rows).
+# SCOPE: consumer Exception → logged and worker continues processing subsequent messages; consumer CancelledError → propagates past `except Exception` to the graceful-drain path.
+# KEYWORDS: consumer resilience, CancelledError, error recovery
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -45,7 +30,8 @@ from yascheduler.infra.persistence import TaskRowNotFoundError
 
 def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
     """Build an Orchestrator with mocked deps; real Engine so _sleep_interval
-    is configurable and _asleep_until returns immediately when interval is 0."""
+    is configurable and _asleep_until returns immediately when interval is 0.
+    """
     local = MagicMock(spec=LocalSettings)
     local.conn_machine_pending = 10
     local.allocate_pending = 5
@@ -78,9 +64,9 @@ def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
     repository = MagicMock()
     repository.__len__ = MagicMock(return_value=1)
     repository.disconnect_all = AsyncMock()
-    operations = MagicMock()
-
-    log = MagicMock(spec=logging.Logger)
+    task_deployer = MagicMock()
+    output_downloader = MagicMock()
+    occupancy_checker = MagicMock()
 
     return Orchestrator(
         local_settings=local,
@@ -88,9 +74,10 @@ def _make_orchestrator(sleep_interval: int = 0) -> Orchestrator:
         uow_factory=lambda: mock_uow,
         clouds=AsyncMock(),
         repository=repository,
-        operations=operations,
+        task_deployer=task_deployer,
+        output_downloader=output_downloader,
+        occupancy_checker=occupancy_checker,
         engines=engines,
-        log=log,
         config_clouds=[],
         local_tasks_dir=Path("/tmp"),
         allocation_tracker=AllocationTracker(),
@@ -133,19 +120,16 @@ def _idle_producer() -> _EmptyAsyncGen:
 
 class TestConsumerResilience:
     """Consumer raises Exception on first message → logged, worker continues,
-    subsequent messages are still processed (worker task NOT killed)."""
+    subsequent messages are still processed (worker task NOT killed).
+    """
 
     @pytest.mark.asyncio
     async def test_consumer_exception_continues_loop(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         orch = _make_orchestrator(sleep_interval=0)
         q: UniqueQueue = UniqueQueue("test", maxsize=10)
-
-        log_name = "test_consumer_resilience"
-        logger = logging.getLogger(log_name)
-        logger.setLevel(logging.DEBUG)
-        orch._log = logger  # type: ignore[method-assign]
 
         processed: list[int] = []
         first_call = {"n": 0}
@@ -166,9 +150,9 @@ class TestConsumerResilience:
         await q.put(UMessage(1, 1))
         await q.put(UMessage(2, 2))
 
-        with caplog.at_level(logging.ERROR, logger=log_name):
+        with caplog.at_level(logging.DEBUG, logger="yascheduler"):
             loop_task = asyncio.create_task(
-                orch._create_producer_consumers(q, producer, consumer, workers_num=1)
+                orch._create_producer_consumers(q, producer, consumer, workers_num=1),
             )
             orch._bg_jobs.add(loop_task)
 
@@ -188,8 +172,8 @@ class TestConsumerResilience:
         assert processed == [2], (
             f"worker did not continue to the second message; processed={processed}"
         )
-        assert any("CONSUMER_ERROR" in r.getMessage() for r in caplog.records), (
-            "consumer Exception was not logged"
+        assert any(r.getMessage() == "CONSUMER_ERROR" for r in caplog.records), (
+            "consumer Exception was not logged as CONSUMER_ERROR trace"
         )
 
 
@@ -207,12 +191,13 @@ class TestConsumerCancelledErrorDrain:
     ) -> None:
         """The CONSUMER_ERROR log line must NOT appear for a CancelledError, and
         the worker exits cleanly (CancelledError propagates past `except Exception`
-        to the `finally: queue.item_done(msg)` and onward to the drain)."""
+        to the `finally: queue.item_done(msg)` and onward to the drain).
+        """
         orch = _make_orchestrator(sleep_interval=0)
         q: UniqueQueue = UniqueQueue("test", maxsize=10)
 
         async def consumer(_msg: UMessage[int, int]) -> None:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
 
         def producer() -> _EmptyAsyncGen:
             return _idle_producer()
@@ -220,13 +205,12 @@ class TestConsumerCancelledErrorDrain:
         await q.put(UMessage(1, 1))
 
         handler = _ListHandler()
-        log = logging.getLogger("test_consumer_no_swallow")
-        log.addHandler(handler)
-        log.setLevel(logging.DEBUG)
-        orch._log = log  # type: ignore[method-assign]
+        parent = logging.getLogger("yascheduler")
+        parent.addHandler(handler)
+        parent.setLevel(logging.DEBUG)
 
         loop_task = asyncio.create_task(
-            orch._create_producer_consumers(q, producer, consumer, workers_num=1)
+            orch._create_producer_consumers(q, producer, consumer, workers_num=1),
         )
         orch._bg_jobs.add(loop_task)
 
@@ -236,7 +220,7 @@ class TestConsumerCancelledErrorDrain:
             t.cancel()
         await asyncio.gather(*orch._bg_jobs, return_exceptions=True)
 
-        log.removeHandler(handler)
-        assert not any("CONSUMER_ERROR" in r.getMessage() for r in handler.records), (
+        parent.removeHandler(handler)
+        assert not any(r.getMessage() == "CONSUMER_ERROR" for r in handler.records), (
             "CancelledError was swallowed by except Exception"
         )

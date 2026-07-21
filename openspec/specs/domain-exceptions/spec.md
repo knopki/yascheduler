@@ -1,13 +1,14 @@
 ## Purpose
 
-Defines the domain exception hierarchy for business-level error handling: DomainError base class with sub-hierarchies for validation, task lifecycle, machine state, and scheduling errors.
+Defines the domain exception hierarchy for business-level error handling: a `DomainError` base class with sub-hierarchies for validation, task lifecycle, machine state, scheduling, and cloud-provider operational failures.
 
 ## Requirements
 
 ### Requirement: DomainError base class
 
 The system SHALL provide a `DomainError(Exception)` base class for all
-business-level exceptions.
+business-level exceptions. All domain exception classes SHALL be exposed via
+`yascheduler.domain.exceptions` and `yascheduler.domain`.
 
 #### Scenario: DomainError is catchable as Exception
 - **WHEN** a `DomainError` subclass is raised
@@ -28,19 +29,9 @@ The system SHALL provide `ValidationError(DomainError)` with subclasses:
 
 ### Requirement: TaskError hierarchy
 
-The system SHALL provide `TaskError(DomainError)` with subclasses:
-`TaskAlreadyAllocatedError`, `TaskNotAllocatedError`, `TaskNotTodoError`,
-`TaskNotRunningError`. Each SHALL take `task_id: TaskId` (was `int`); the
-`f"task {task_id} ..."` message renders the bare integer via `TaskId.__str__`,
-so the message text is unchanged in appearance.
-
-#### Scenario: TaskAlreadyAllocatedError carries TaskId
-- **WHEN** `TaskAlreadyAllocatedError(TaskId(42))` is raised
-- **THEN** `e.task_id == TaskId(42)` and the message contains `"42"`
-
-#### Scenario: TaskNotAllocatedError carries TaskId
-- **WHEN** `TaskNotAllocatedError(TaskId(42))` is raised
-- **THEN** `e.task_id == TaskId(42)` and the message contains `"42"`
+The system SHALL provide `TaskError(DomainError)` with subclasses
+`TaskNotTodoError` and `TaskNotRunningError`. Each SHALL take a `TaskId` and
+render the bare integer in its message.
 
 #### Scenario: TaskNotTodoError carries TaskId
 - **WHEN** `TaskNotTodoError(TaskId(42))` is raised
@@ -51,26 +42,36 @@ so the message text is unchanged in appearance.
 - **THEN** `e.task_id == TaskId(42)` and the message contains `"42"`
 
 #### Scenario: TaskError messages render bare integer
-- **WHEN** `str(TaskAlreadyAllocatedError(TaskId(42)))` is evaluated
-- **THEN** the result is `"task 42 is already allocated to a node"` (NOT `"task TaskId(value=42) ..."`)
+- **WHEN** `str(TaskNotTodoError(TaskId(42)))` is evaluated
+- **THEN** the result contains `"42"` (NOT `"TaskId(value=42)"`)
 
 ### Requirement: MachineBusyError
 
 The system SHALL provide `MachineBusyError(DomainError)` for operations
-attempted on a busy machine.
+attempted on a busy machine. The constructor SHALL take `node_id: NodeId` as
+the sole argument and store it as an instance attribute.
 
-#### Scenario: MachineBusyError carries IP
-- **WHEN** `MachineBusyError("10.0.0.1")` is raised
-- **THEN** the exception message contains the IP address
+#### Scenario: MachineBusyError carries node_id only
+
+- **WHEN** `MachineBusyError(NodeId(1))` is raised
+- **THEN** `e.node_id == NodeId(1)`, the exception message contains the bare integer `"1"` (NOT `"NodeId(value=1)"`), the exception does NOT have a `hostname` attribute, and the message format is `"machine (1) is busy"`
+
+#### Scenario: MachineBusyError is catchable as DomainError
+
+- **WHEN** a `MachineBusyError` is raised
+- **THEN** it is caught by `except DomainError` and `except Exception`
 
 ### Requirement: MachineConnectionError
 
-The system SHALL provide `MachineConnectionError(DomainError)` for connection
-failures when establishing SSH connections to remote machines.
+The system SHALL provide `MachineConnectionError(DomainError)` for
+connection failures when establishing SSH connections to remote machines.
+The constructor SHALL take `node_id: NodeId` as the first argument,
+`hostname: str` as the second, and `reason: str` as the third, storing all
+three as instance attributes.
 
-#### Scenario: MachineConnectionError carries IP and reason
-- **WHEN** `MachineConnectionError("10.0.0.1", "Connection refused")` is raised
-- **THEN** `e.ip == "10.0.0.1"` and the exception message contains both the IP and reason
+#### Scenario: MachineConnectionError carries node_id, hostname, and reason
+- **WHEN** `MachineConnectionError(NodeId(1), "10.0.0.1", "Connection refused")` is raised
+- **THEN** `e.node_id == NodeId(1)`, `e.hostname == "10.0.0.1"`, `e.reason == "Connection refused"`, and the exception message contains the node_id, hostname, and reason
 
 #### Scenario: MachineConnectionError is catchable as DomainError
 - **WHEN** a `MachineConnectionError` is raised
@@ -78,14 +79,9 @@ failures when establishing SSH connections to remote machines.
 
 ### Requirement: SchedulingError hierarchy
 
-The system SHALL provide `SchedulingError(DomainError)` with subclasses:
-`NoCompatibleNodeError` and `CloudCapacityExhaustedError`.
-`CloudCapacityExhaustedError` is a scheduling rule (no capacity to provision)
-raised by the allocator; it deliberately remains under `SchedulingError` and
-SHALL NOT be a subclass of `CloudError`. `NoCompatibleNodeError` and
-`CloudCapacityExhaustedError` SHALL take `task_id: TaskId` (was `int`); the
-`f"... task {task_id} ..."` messages render the bare integer via
-`TaskId.__str__`.
+The system SHALL provide `SchedulingError(DomainError)` with subclasses
+`NoCompatibleNodeError` and `CloudCapacityExhaustedError`. Each SHALL take a
+`TaskId` and render the bare integer in its message.
 
 #### Scenario: NoCompatibleNodeError carries TaskId and platforms
 - **WHEN** `NoCompatibleNodeError(TaskId(42), ["linux", "debian-12"])` is raised
@@ -107,9 +103,9 @@ operational cloud-provider failures, with subclasses `CloudAllocateError` and
 `CloudSetupError`. `CloudError` and its subclasses SHALL be catchable via
 `except DomainError`.
 
-`CloudError` covers operational cloud-provider failures (provider selection, VM
-creation, SSH/cloud-init/engine setup). Cloud capacity planning is NOT part of
-this hierarchy — see `CloudCapacityExhaustedError` under `SchedulingError`.
+`CloudError` SHALL be exported from `yascheduler.domain` (NOT from
+`yascheduler.infra.cloud`). The leaf classes `CloudAllocateError` and
+`CloudSetupError` remain re-exported from `yascheduler.infra.cloud`.
 
 #### Scenario: CloudError is a DomainError
 
@@ -134,17 +130,11 @@ this hierarchy — see `CloudCapacityExhaustedError` under `SchedulingError`.
 
 - **WHEN** `CloudAllocateError("Unknown provider: foo")` is raised
 - **THEN** `str(e)` equals `"Unknown provider: foo"`
-- **AND** the class defines no custom `__init__` beyond `Exception`
 
 #### Scenario: CloudError is not a SchedulingError
 
 - **WHEN** the class hierarchy is inspected
 - **THEN** `issubclass(CloudError, SchedulingError)` is false
-
-### Requirement: CloudError is exported from yascheduler.domain
-
-The system SHALL export `CloudError` from both `yascheduler.domain.exceptions`
-and the `yascheduler.domain` package (`__all__`).
 
 #### Scenario: Import CloudError from domain.exceptions
 
@@ -156,13 +146,6 @@ and the `yascheduler.domain` package (`__all__`).
 - **WHEN** a module imports `from yascheduler.domain import CloudError`
 - **THEN** the class is available and present in `yascheduler.domain.__all__`
 
-### Requirement: CloudError is not re-exported from yascheduler.infra.cloud
-
-The system SHALL NOT export `CloudError` from `yascheduler.infra.cloud`;
-the new root remains accessible only via `yascheduler.domain`. The adapter
-module's existing re-exports (`CloudAllocateError`, `CloudSetupError`) are
-unchanged.
-
 #### Scenario: infra.cloud does not re-export CloudError
 
 - **WHEN** a module attempts `from yascheduler.infra.cloud import CloudError`
@@ -173,11 +156,7 @@ unchanged.
 - **WHEN** a module imports `from yascheduler.infra.cloud import CloudAllocateError, CloudSetupError`
 - **THEN** both classes are available
 
-### Requirement: Domain error classes are in yascheduler.domain.exceptions
-
-The system SHALL expose all domain exception classes from
-`yascheduler.domain.exceptions`.
-
 #### Scenario: Import domain exceptions
+
 - **WHEN** a module imports `from yascheduler.domain.exceptions import DomainError, ValidationError`
 - **THEN** the classes are available

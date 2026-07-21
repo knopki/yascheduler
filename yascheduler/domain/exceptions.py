@@ -1,43 +1,40 @@
-# FILE: yascheduler/domain/exceptions.py
-# VERSION: 1.10.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Domain exception hierarchy for business-level error handling.
-#   SCOPE: DomainError base class and sub-hierarchies: validation, task lifecycle, machine state, scheduling, connection.
-#   DEPENDS: none
-#   LINKS: M-DOMAIN-MODEL
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   DomainError - Base class for all domain exceptions
-#   ValidationError - Input validation errors
-#   UnsupportedEngineError - Unknown calculation engine requested
-#   MissingInputFileError - Required engine input file not provided
-#   TaskError - Task lifecycle errors
-#   TaskAlreadyAllocatedError - Task already bound to a node
-#   TaskNotAllocatedError - Task not yet allocated to a node
-#   TaskNotTodoError - Task not in TODO status
-#   TaskNotRunningError - Task not in RUNNING status
-#   MachineBusyError - Operation attempted on a busy machine
-#   MachineConnectionError - SSH connection failure carrying ip and reason
-#   SchedulingError - Scheduling/allocation errors
-#   NoCompatibleNodeError - No matching node found for task
-#   CloudCapacityExhaustedError - Cloud provider at capacity
-#   CloudError - Cloud provider operational errors
-#   CloudAllocateError - Cloud node allocation error
-#   CloudSetupError - Cloud node setup error
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - The 6 task-keyed exceptions (TaskAlreadyAllocatedError, TaskNotAllocatedError, TaskNotTodoError, TaskNotRunningError, NoCompatibleNodeError, CloudCapacityExhaustedError) take task_id: TaskId (was int); f"task {task_id} ..." messages render the bare integer via TaskId.__str__ (add-task-id-identity). Added `from __future__ import annotations` and import TaskId under TYPE_CHECKING to break the model↔exceptions runtime import cycle (annotations are strings, so no NameError; f-string messages use the parameter, not the annotation).
-#   PREVIOUS_CHANGE: v1.9.0 - Add CloudError(DomainError) intermediate root; reparent CloudAllocateError/CloudSetupError under it (cloud-error-hierarchy).
-# END_CHANGE_SUMMARY
+"""Domain exception hierarchy for business-level error handling."""
+# region MODULE_CONTRACT
+# PURPOSE: Give the scheduler one typed error vocabulary so callers catch specific business failures instead of parsing messages.
+# SCOPE:
+# - DomainError root plus validation, task-lifecycle, machine-state, scheduling, and cloud sub-hierarchies.
+# - NOT: error rendering, exit codes, or retry policy.
+# INVARIANTS: Every domain error subclasses DomainError; messages are stable and human-readable.
+# RATIONALE:
+# - Q: Why is CloudCapacityExhaustedError under SchedulingError, not CloudError?
+#   A: Capacity planning is a domain scheduling rule (no provider can serve the request), whereas CloudError covers operational provider failures (VM creation, SSH, setup). Keeping them apart lets the allocator retry/throttle differently from handling provider outages.
+# KEYWORDS: domain error, exception, validation, task lifecycle, machine busy, scheduling, cloud error
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from yascheduler.domain.model import TaskId
+    from yascheduler.domain.model import NodeId, TaskId
+
+__all__ = [
+    "CloudAllocateError",
+    "CloudCapacityExhaustedError",
+    "CloudError",
+    "CloudSetupError",
+    "DomainError",
+    "MachineBusyError",
+    "MachineConnectionError",
+    "MissingInputFileError",
+    "NoCompatibleNodeError",
+    "SchedulingError",
+    "TaskError",
+    "TaskNotRunningError",
+    "TaskNotTodoError",
+    "UnsupportedEngineError",
+    "ValidationError",
+]
 
 
 class DomainError(Exception):
@@ -69,22 +66,6 @@ class TaskError(DomainError):
     """Task lifecycle errors."""
 
 
-class TaskAlreadyAllocatedError(TaskError):
-    """Task already bound to a node."""
-
-    def __init__(self, task_id: TaskId) -> None:
-        self.task_id = task_id
-        super().__init__(f"task {task_id} is already allocated to a node")
-
-
-class TaskNotAllocatedError(TaskError):
-    """Task not yet allocated to a node."""
-
-    def __init__(self, task_id: TaskId) -> None:
-        self.task_id = task_id
-        super().__init__(f"task {task_id} is not allocated to any node")
-
-
 class TaskNotTodoError(TaskError):
     """Task not in TODO status."""
 
@@ -104,18 +85,21 @@ class TaskNotRunningError(TaskError):
 class MachineBusyError(DomainError):
     """Operation attempted on a busy machine."""
 
-    def __init__(self, ip: str) -> None:
-        self.ip = ip
-        super().__init__(f"machine at {ip} is busy")
+    def __init__(self, node_id: NodeId) -> None:
+        self.node_id = node_id
+        super().__init__(f"machine ({node_id}) is busy")
 
 
 class MachineConnectionError(DomainError):
     """SSH connection failure when establishing a connection to a remote machine."""
 
-    def __init__(self, ip: str, reason: str) -> None:
-        self.ip = ip
+    def __init__(self, node_id: NodeId, hostname: str, reason: str) -> None:
+        self.node_id = node_id
+        self.hostname = hostname
         self.reason = reason
-        super().__init__(f"cannot connect to {ip}: {reason}")
+        super().__init__(
+            f"cannot connect to machine ({node_id}) at {hostname}: {reason}",
+        )
 
 
 class SchedulingError(DomainError):
@@ -129,7 +113,7 @@ class NoCompatibleNodeError(SchedulingError):
         self.task_id = task_id
         self.platforms = platforms
         super().__init__(
-            f"no compatible node found for task {task_id} on platforms: {platforms}"
+            f"no compatible node found for task {task_id} on platforms: {platforms}",
         )
 
 
@@ -142,12 +126,7 @@ class CloudCapacityExhaustedError(SchedulingError):
 
 
 class CloudError(DomainError):
-    """Operational cloud-provider failures: provider selection, VM creation, SSH/cloud-init/engine setup.
-
-    Cloud capacity planning is a distinct concern and lives under
-    `SchedulingError` as `CloudCapacityExhaustedError` — it is a domain
-    scheduling rule, not an operational provider failure.
-    """
+    """Operational cloud-provider failures."""
 
 
 class CloudAllocateError(CloudError):

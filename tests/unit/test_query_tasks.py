@@ -1,25 +1,8 @@
-# FILE: tests/unit/test_query_tasks.py
-# VERSION: 1.2.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for the query_tasks use case (7 QueryTasks scenarios + node batch-load).
-#   SCOPE: status dispatch, jobs dispatch, both-supplied ValueError, neither empty, read-only no commit, all-unallocated nodes empty, distinct node ids batch-loaded once, status with node loading.
-#   DEPENDS: M-APPLICATION-QUERY-TASKS
-#   LINKS: M-APPLICATION-QUERY-TASKS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   FakeTaskRepository - In-memory task repo capturing list_by_status/list_by_jobs calls
-#   FakeNodeRepository - In-memory node repo capturing get_by_ids calls, returning stored nodes
-#   FakeUnitOfWork - In-memory UoW exposing FakeTaskRepository + FakeNodeRepository, tracking commit calls
-#   TestQueryTasks - 7 QueryTasks spec scenarios against fakes
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - drop-task-context-entity: update Task construction (flat fields, no TaskContext); remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.1.0 - task-schema-and-entity-cleanup: add FakeNodeRepository with get_by_ids; update FakeUnitOfWork to expose .nodes; fix assertions for tuple (tasks, nodes_by_id) return; add test_all_unallocated_returns_empty_nodes, test_distinct_allocated_node_ids_batch_loaded_once, test_query_by_statuses_loads_nodes.
-#   PREVIOUS_CHANGE: [v1.0.1 - Add `from __future__ import annotations` to restore Python 3.9 compatibility (PEP 604 `X | None` in FakeTaskRepository signatures).]
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for the query_tasks use case (7 QueryTasks scenarios + node batch-load).
+# SCOPE: status dispatch, jobs dispatch, both-supplied ValueError, neither empty, read-only no commit, all-unallocated nodes empty, distinct node ids batch-loaded once, status with node loading.
+# KEYWORDS: query_tasks, status dispatch, jobs dispatch, node batch-load
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -46,7 +29,10 @@ class FakeTaskRepository:
         self.list_by_jobs_calls: list[list[TaskId]] = []
 
     async def list_by_status(
-        self, statuses: set[TaskStatus], *, limit: int | None = None
+        self,
+        statuses: set[TaskStatus],
+        *,
+        limit: int | None = None,
     ) -> list[Task]:
         self.list_by_status_calls.append(statuses)
         return self._tasks
@@ -72,7 +58,9 @@ class FakeUnitOfWork:
     """In-memory UoW exposing FakeTaskRepository + FakeNodeRepository and tracking commit calls."""
 
     def __init__(
-        self, repo: FakeTaskRepository, nodes: FakeNodeRepository | None = None
+        self,
+        repo: FakeTaskRepository,
+        nodes: FakeNodeRepository | None = None,
     ) -> None:
         self.tasks = repo
         self.nodes = nodes or FakeNodeRepository()
@@ -81,7 +69,7 @@ class FakeUnitOfWork:
     async def __aenter__(self) -> FakeUnitOfWork:
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:  # noqa: ANN001
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
         return False
 
     async def commit(self) -> None:
@@ -129,7 +117,9 @@ class TestQueryTasks:
         uow = FakeUnitOfWork(repo)
 
         tasks, nodes_by_id = await query_tasks(
-            jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=_factory(uow)
+            jobs=None,
+            statuses=[TaskStatus.TO_DO],
+            uow_factory=_factory(uow),
         )
 
         assert len(tasks) == 1
@@ -159,7 +149,9 @@ class TestQueryTasks:
 
         with pytest.raises(ValueError, match="mutually exclusive"):
             await query_tasks(
-                jobs=[TaskId(1)], statuses=[TaskStatus.TO_DO], uow_factory=factory
+                jobs=[TaskId(1)],
+                statuses=[TaskStatus.TO_DO],
+                uow_factory=factory,
             )
 
         factory.assert_not_called()
@@ -191,7 +183,9 @@ class TestQueryTasks:
         uow = FakeUnitOfWork(repo, nodes=nodes_repo)
 
         tasks, nodes_by_id = await query_tasks(
-            jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=_factory(uow)
+            jobs=None,
+            statuses=[TaskStatus.TO_DO],
+            uow_factory=_factory(uow),
         )
 
         assert len(tasks) == 1
@@ -207,8 +201,8 @@ class TestQueryTasks:
             _make_task(task_id=4, allocated_node_id=None),
         ]
         nodes_list = [
-            Node(node_id=NodeId(7), ip="10.0.0.7", ncpus=2),
-            Node(node_id=NodeId(8), ip="10.0.0.8", ncpus=4),
+            Node(node_id=NodeId(7), hostname="10.0.0.7", ncpus=2),
+            Node(node_id=NodeId(8), hostname="10.0.0.8", ncpus=4),
         ]
         repo = FakeTaskRepository(tasks=tasks_list)
         nodes_repo = FakeNodeRepository(nodes=nodes_list)
@@ -227,15 +221,19 @@ class TestQueryTasks:
     async def test_query_by_statuses_loads_nodes(self) -> None:
         """Query by statuses dispatches to list_by_status and loads nodes."""
         task = _make_task(
-            task_id=1, status=TaskStatus.TO_DO, allocated_node_id=NodeId(7)
+            task_id=1,
+            status=TaskStatus.TO_DO,
+            allocated_node_id=NodeId(7),
         )
-        node = Node(node_id=NodeId(7), ip="10.0.0.1", ncpus=2)
+        node = Node(node_id=NodeId(7), hostname="10.0.0.1", ncpus=2)
         repo = FakeTaskRepository(tasks=[task])
         nodes_repo = FakeNodeRepository(nodes=[node])
         uow = FakeUnitOfWork(repo, nodes=nodes_repo)
 
         tasks, nodes_by_id = await query_tasks(
-            jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=_factory(uow)
+            jobs=None,
+            statuses=[TaskStatus.TO_DO],
+            uow_factory=_factory(uow),
         )
 
         assert len(tasks) == 1

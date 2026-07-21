@@ -1,29 +1,14 @@
-# FILE: yascheduler/entrypoints/cli/init.py
-# VERSION: 1.3.0
-# START_MODULE_CONTRACT
-#   PURPOSE: yainit CLI command — install service unit files and/or apply DB schema + migrations, with --schema/--daemon subset-selector flags.
-#   SCOPE: init command + argparse + systemd/sysv service install + DB schema application + migration application delegation.
-#   DEPENDS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS, M-ENTRYPOINTS-CONFIG, M-ENTRYPOINTS, M-ENTRYPOINTS-CLI-ARGS
-#   LINKS: M-ENTRYPOINTS-CLI-INIT, M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   init - Parse --schema/--daemon flags, install service and/or apply schema+migrations, exit 0/1/2
-#   _init_systemd - Render and write the systemd unit file (overwrite if exists)
-#   _init_sysv - Render and write the SysV init script (overwrite + chmod 0755)
-#   _init_schema - Apply schema.sql then pending migrations (config_path param honors --config)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.3.0 - Call apply_migrations(config.db) after apply_schema(config.db) in _init_schema (add-db-migrations).
-#   PREVIOUS_CHANGE: v1.2.2 - Import CONFIG_FILE from yascheduler.entrypoints facade instead of yascheduler.shared (prune-shared-kernel).
-# END_CHANGE_SUMMARY
+"""yainit CLI command — install service unit files and/or apply DB schema + migrations, with --schema/--daemon subset-selector flags."""
+# region MODULE_CONTRACT
+# PURPOSE: Bootstrap the yascheduler environment — install service unit files for the detected init system and/or ensure the database schema is current — so the daemon can run and the CLI can operate.
+# SCOPE: init command — service install and/or DB schema+migrations application.
+# KEYWORDS: init, schema, migration, systemd, sysv, cli
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -36,84 +21,82 @@ from yascheduler.infra import apply_migrations, apply_schema
 from .args import add_config_arg, add_log_level_arg
 
 
-# START_CONTRACT: _init_systemd
-#   PURPOSE: Render and write the systemd unit file, overwriting if it exists.
-#   INPUTS: { install_path: Path - yascheduler/ package root, unit_file: Path - target unit path (default /etc/systemd/system/yascheduler.service, injectable for tests) }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Writes the unit file; raises SystemExit(1) on OSError.
-#   LINKS: M-ENTRYPOINTS-CLI-INIT
-# END_CONTRACT: _init_systemd
+# region FUNC__init_systemd
+# PURPOSE: Install/reinstall the systemd service unit so systemd can start, stop, and supervise the yascheduler daemon.
 def _init_systemd(
     install_path: Path,
     unit_file: Path = Path("/etc/systemd/system/yascheduler.service"),
 ) -> None:
-    print("Installing systemd service")
+    sys.stdout.write("Installing systemd service\n")
     src_unit_file = install_path / "data/yascheduler.service"
     daemon_file = install_path / "entrypoints/cli/daemon_systemd.py"
     systemd_script = src_unit_file.read_text("utf-8").replace(
-        "%YASCHEDULER_DAEMON_FILE%", str(daemon_file)
+        "%YASCHEDULER_DAEMON_FILE%",
+        str(daemon_file),
     )
     try:
         unit_file.write_text(systemd_script, "utf-8")
     except OSError as e:
-        print(f"Error: cannot write to {unit_file}: {e}")
+        sys.stderr.write(f"Error: cannot write to {unit_file}: {e}\n")
         sys.exit(1)
 
 
-# START_CONTRACT: _init_sysv
-#   PURPOSE: Render and write the SysV init script, overwriting if it exists, and chmod 0755.
-#   INPUTS: { install_path: Path - yascheduler/ package root, startup_file: Path - target init.d path (default /etc/init.d/yascheduler, injectable for tests) }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Writes the init script and sets mode 0755; raises SystemExit(1) on OSError.
-#   LINKS: M-ENTRYPOINTS-CLI-INIT
-# END_CONTRACT: _init_sysv
+# endregion FUNC__init_systemd
+
+
+# region FUNC__init_sysv
+# PURPOSE: Install/reinstall the SysV init script so the service manager can start, stop, and supervise the yascheduler daemon.
 def _init_sysv(
     install_path: Path,
     startup_file: Path = Path("/etc/init.d/yascheduler"),
 ) -> None:
-    print("Installing SysV service")
+    sys.stdout.write("Installing SysV service\n")
     src_startup_file = install_path / "data/yascheduler.sh"
     daemon_file = install_path / "entrypoints/cli/daemon_sysv.py"
     sysv_script = src_startup_file.read_text("utf-8").replace(
-        "%YASCHEDULER_DAEMON_FILE%", str(daemon_file)
+        "%YASCHEDULER_DAEMON_FILE%",
+        str(daemon_file),
     )
     try:
         startup_file.write_text(sysv_script, "utf-8")
-        os.chmod(startup_file, 0o755)
+        startup_file.chmod(0o755)
     except OSError as e:
-        print(f"Error: cannot write to {startup_file}: {e}")
+        sys.stderr.write(f"Error: cannot write to {startup_file}: {e}\n")
         sys.exit(1)
 
 
-# START_CONTRACT: _init_schema
-#   PURPOSE: Apply schema.sql via apply_schema then pending migrations via apply_migrations, honoring --config via config_path.
-#   INPUTS: { config_path: str | Path - path to the config file (default CONFIG_FILE) }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Creates DB tables and the yascheduler_migrations tracker; applies pending migrations; raises SystemExit(1) on DatabaseError.
-#   LINKS: M-PERSISTENCE-SCHEMA, M-PERSISTENCE-MIGRATIONS
-# END_CONTRACT: _init_schema
+# endregion FUNC__init_sysv
+
+
+# region FUNC__init_schema
+# PURPOSE: Ensure the database has the required schema and up-to-date migrations so the daemon and CLI can operate against a valid database.
 def _init_schema(config_path: str | Path = CONFIG_FILE) -> None:
     config = parse_config(config_path)
     try:
-        # START_BLOCK_APPLY_SCHEMA
+        # region BLOCK_apply_schema
         apply_schema(config.db)
-        # END_BLOCK_APPLY_SCHEMA
-        # START_BLOCK_APPLY_MIGRATIONS
+        # endregion BLOCK_apply_schema
+        # region BLOCK_apply_migrations
         apply_migrations(config.db)
-        # END_BLOCK_APPLY_MIGRATIONS
+        # endregion BLOCK_apply_migrations
     except DatabaseError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
 
 
-# START_CONTRACT: init
-#   PURPOSE: Parse --schema/--daemon flags, install service and/or apply schema per the selected subset, exit 0/1/2.
-#   INPUTS: { argv: list[str] | None - optional argv for argparse, None reads sys.argv (console_script default) }
-#   OUTPUTS: { None - no return value, calls sys.exit }
-#   SIDE_EFFECTS: Writes service unit files, creates DB tables, calls sys.exit
-#   LINKS: M-ENTRYPOINTS-CLI-INIT, M-PERSISTENCE-SCHEMA
-# END_CONTRACT: init
+# endregion FUNC__init_schema
+
+
+# region FUNC_init
+# PURPOSE: Parse --schema/--daemon flags and dispatch to subset initializers so the operator can install services, apply schema, or both without running the full bootstrap.
+# INVARIANTS:
+# - Systemd-vs-sysv detection is /run/systemd/system directory.
+# - try/except Exception prints Error: <message>, exits 1; SystemExit propagates.
+# RATIONALE:
+# - Q: Why does yainit skip DI and call apply_schema/apply_migrations directly?
+#   A: Bootstrapping — the database may not yet exist or may not yet have the schema that DI's repository adapters assume.
 def init(argv: list[str] | None = None) -> None:
+    """Parse --schema/--daemon flags, install service and/or apply schema per the selected subset, exit 0/1/2."""
     parser = argparse.ArgumentParser(
         prog="yainit",
         description="Install yascheduler service and initialize the database schema",
@@ -131,30 +114,30 @@ def init(argv: list[str] | None = None) -> None:
     add_config_arg(parser)
     add_log_level_arg(parser, default="WARNING")
 
-    # START_BLOCK_VALIDATE_FLAGS
+    # region BLOCK_validate_flags
     args = parser.parse_args(argv)
-    # END_BLOCK_VALIDATE_FLAGS
+    # endregion BLOCK_validate_flags
 
     install_path = Path(__file__).parent.parent.parent  # yascheduler/
 
-    # START_BLOCK_HANDLE_FAILURE
+    # region BLOCK_handle_failure
     try:
-        # START_BLOCK_CONFIGURE_LOGGER
+        # region BLOCK_configure_logger
         root = logging.getLogger()
         root.setLevel(logging.getLevelName(args.log_level))
         if not root.handlers:
             root.addHandler(logging.StreamHandler(sys.stderr))
-        # END_BLOCK_CONFIGURE_LOGGER
+        # endregion BLOCK_configure_logger
 
-        # START_BLOCK_DISPATCH
+        # region BLOCK_dispatch
         run_daemon = not args.schema or args.daemon
         run_schema = not args.daemon or args.schema
-        # END_BLOCK_DISPATCH
+        # endregion BLOCK_dispatch
 
         if run_daemon:
-            # START_BLOCK_DETECT_INIT_SYSTEM
+            # region BLOCK_detect_init_system
             has_systemd = Path("/run/systemd/system").is_dir()
-            # END_BLOCK_DETECT_INIT_SYSTEM
+            # endregion BLOCK_detect_init_system
             if has_systemd:
                 _init_systemd(install_path)
             else:
@@ -167,10 +150,12 @@ def init(argv: list[str] | None = None) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
-    # END_BLOCK_HANDLE_FAILURE
+    # endregion BLOCK_handle_failure
 
+
+# endregion FUNC_init
 
 if __name__ == "__main__":
     init()

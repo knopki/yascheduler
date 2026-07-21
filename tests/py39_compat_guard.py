@@ -1,23 +1,8 @@
-# FILE: tests/py39_compat_guard.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: AST checker flagging PEP 604 `X | Y` annotations that crash Python 3.9 at import time unless the module has `from __future__ import annotations`.
-#   SCOPE: Pure functions scanning source for runtime-evaluated union annotations — function params/returns and module/class-level annotated assignments. Function-local annotated assignments are ignored (not evaluated per PEP 526).
-#   DEPENDS: none (stdlib ast only)
-#   LINKS: none (test infrastructure; stays out of knowledge graph per GRACE-lite)
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   Violation - dataclass: path, lineno, col, context
-#   has_future_annotations - True iff module body imports `from __future__ import annotations`
-#   check_source - parse a source string, return Violations (empty when future-import present)
-#   check_file - read+check a single .py Path
-#   scan_paths - recurse files/dirs, return aggregated Violations
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial py3.9 compat guard: detects runtime-evaluated PEP 604 annotations missing `from __future__ import annotations`.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: AST checker flagging PEP 604 `X | Y` annotations that crash Python 3.9 at import time unless the module has `from __future__ import annotations`.
+# SCOPE: Pure functions scanning source for runtime-evaluated union annotations — function params/returns and module/class-level annotated assignments. Function-local annotated assignments are ignored (not evaluated per PEP 526).
+# KEYWORDS: PEP 604, Python 3.9, AST checker, union annotations
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -71,11 +56,13 @@ class _AnnUnionFinder(ast.NodeVisitor):
             self._check(arg.annotation, f"param {arg.arg!r} of {node.name}()")
         if args.vararg is not None:
             self._check(
-                args.vararg.annotation, f"param *{args.vararg.arg} of {node.name}()"
+                args.vararg.annotation,
+                f"param *{args.vararg.arg} of {node.name}()",
             )
         if args.kwarg is not None:
             self._check(
-                args.kwarg.annotation, f"param **{args.kwarg.arg} of {node.name}()"
+                args.kwarg.annotation,
+                f"param **{args.kwarg.arg} of {node.name}()",
             )
         self._check(node.returns, f"return of {node.name}()")
         self._func_depth += 1

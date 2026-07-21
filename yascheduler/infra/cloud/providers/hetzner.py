@@ -1,31 +1,15 @@
-# FILE: yascheduler/infra/cloud/providers/hetzner.py
-# VERSION: 1.8.1
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Hetzner Cloud server creation and deletion via API.
-#   SCOPE: Hetzner create/delete node functions.
-#   DEPENDS: M-CLOUD-CONFIGS, M-CLOUD-PROTOCOLS, M-CLOUD-UTILS
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-CONFIGS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   get_client - Get cached Hetzner API client
-#   get_ssh_key_id - Get or create Hetzner SSH key ID
-#   hetzner_create_node - Create Hetzner server (public entry point)
-#   find_srv - Find server by IP address
-#   hetzner_delete_node - Delete Hetzner server (public entry point)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.8.1 - fix-hetzner-ssh-key-uniqueness: get_ssh_key_id recovery branch now triggers on APIException code `uniqueness_error` (Hetzner's current duplicate-key wording "SSH key not unique") in addition to the legacy "already" substring; previously the new wording skipped the fingerprint/name lookup and re-raised, breaking all allocations once a key already existed on the Hetzner project.
-#   PREVIOUS_CHANGE: v1.8.0 - Retype hetzner_create_node cloud_config param PCloudConfig | None → CloudInitConfig | None; TYPE_CHECKING import CloudInitConfig from yascheduler.infra.cloud facade (cloud-init-rename-and-prune / D2).
-# END_CHANGE_SUMMARY
-#
-"""Hetzner cloud methods"""
+"""Hetzner cloud methods."""
+# region MODULE_CONTRACT
+# PURPOSE: Provision and decommission Hetzner Cloud servers so the scheduler can run compute workloads on Hetzner through the generic CloudAdapter contract.
+# SCOPE: Hetzner create/delete node functions.
+# DEPENDENCIES: USES API: hcloud (Hetzner Cloud SDK); WRITES: HTTP to Hetzner API (server/SSH key create/delete)
+# KEYWORDS: hetzner, cloud, server, create, delete, api, ssh key
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import cache, partial
 from typing import TYPE_CHECKING, cast
@@ -42,42 +26,37 @@ try:
 except ImportError:
     _HETZNER_AVAILABLE = False
 
-from yascheduler.infra.cloud import get_key_name, get_rnd_name
+from yascheduler.infra.cloud import CloudCreateNodeDTO, get_key_name, get_rnd_name
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    import logging
-
     from asyncssh.public_key import SSHKey as ASSHKey
-    from hcloud.servers.client import BoundServer
 
     from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudHetzner
+
+__all__ = ["hetzner_create_node", "hetzner_delete_node"]
 
 executor = ThreadPoolExecutor(max_workers=5)
 
 
-# START_CONTRACT: get_client
-#   PURPOSE: Get cached Hetzner API client for given config
-#   INPUTS: { cfg: ConfigCloudHetzner - Hetzner cloud config with API token }
-#   OUTPUTS: { HClient - Hetzner API client instance }
-#   SIDE_EFFECTS: None - uses cache
-#   LINKS: M-CLOUD-HETZNER
-# END_CONTRACT: get_client
+# region FUNC_get_client
+# PURPOSE: Reuse an authenticated Hetzner API client across calls so repeated server create/delete does not re-authenticate on every operation.
 @cache
 def get_client(cfg: ConfigCloudHetzner) -> HClient:
-    "Get Hetzner client"
+    """Get Hetzner client."""
     return HClient(cfg.token)
 
 
-# START_CONTRACT: get_ssh_key_id
-#   PURPOSE: Get or create Hetzner SSH key ID from local SSH key
-#   INPUTS: { client: HClient - Hetzner API client, key: ASSHKey - local SSH key }
-#   OUTPUTS: { int - Hetzner SSH key ID }
-#   SIDE_EFFECTS: Creates new SSH key in Hetzner project if not exists
-#   LINKS: M-CLOUD-HETZNER
-# END_CONTRACT: get_ssh_key_id
+# endregion FUNC_get_client
+
+
+# region FUNC_get_ssh_key_id
+# PURPOSE: Register the local SSH key with the Hetzner project (or find its existing ID) so the server receives the right key on creation and duplicates are handled gracefully.
+# ENSURES: Creates new SSH key in Hetzner project if not exists; deduplicates on uniqueness error.
 @cache
 def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
-    "Get Hetzner ssh id"
+    """Get Hetzner ssh id."""
     key_name = get_key_name(key)
     pub_key = key.export_public_key("openssh").decode("utf-8")
 
@@ -89,7 +68,7 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
         # API wording "SSH key not unique"); older wording contained "already".
         if err.code == "uniqueness_error" or "already" in str(err):
             hkey = client.ssh_keys.get_by_fingerprint(
-                key.get_fingerprint("md5").split(":", maxsplit=1)[1]
+                key.get_fingerprint("md5").split(":", maxsplit=1)[1],
             ) or client.ssh_keys.get_by_name(key_name)
             if hkey:
                 return cast("int", hkey.id)
@@ -101,25 +80,23 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
                     and len(cast("str", hkey.name)) == name_len
                 ):
                     return cast("int", hkey.id)
-        raise err
+        raise
 
 
-# START_CONTRACT: hetzner_create_node
-#   PURPOSE: Create Hetzner server with SSH key and cloud-config
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudHetzner - Hetzner config, key: ASSHKey - SSH key, cloud_config: Optional[CloudInitConfig] - optional cloud-init user-data renderer }
-#   OUTPUTS: { str - IP address of created server }
-#   SIDE_EFFECTS: Creates Hetzner Cloud server with associated resources
-#   LINKS: M-CLOUD-HETZNER
-# END_CONTRACT: hetzner_create_node
+# endregion FUNC_get_ssh_key_id
+
+
+# region FUNC_hetzner_create_node
+# PURPOSE: Provision a Hetzner server via the CloudAdapter interface so the generic provisioner can launch Hetzner compute nodes.
 async def hetzner_create_node(
-    log: logging.Logger,
     cfg: ConfigCloudHetzner,
     key: ASSHKey,
     cloud_config: CloudInitConfig | None = None,
-) -> str:
-    """Create node"""
+) -> CloudCreateNodeDTO:
+    """Create node."""
     if not _HETZNER_AVAILABLE:
-        raise ImportError("Hetzner SDK not installed. Install hcloud package.")
+        msg = "Hetzner SDK not installed. Install hcloud package."
+        raise ImportError(msg)
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)
     ssh_key_id = await loop.run_in_executor(executor, get_ssh_key_id, client, key)
@@ -138,49 +115,53 @@ async def hetzner_create_node(
     ip_addr = server.public_net and server.public_net.ipv4 and server.public_net.ipv4.ip
     assert ip_addr
     ip_str = str(ip_addr)
-    log.info("CREATED %s", ip_str)
-    return ip_str
+    logger.info("CREATED %s", ip_str)
+    return CloudCreateNodeDTO(
+        external_id=str(server.id),
+        hostname=ip_str,
+        username=cfg.username,
+        jump_host=cfg.jump_host,
+        jump_port=cfg.jump_port,
+        jump_username=cfg.jump_username or "root",
+    )
 
 
-# START_CONTRACT: find_srv
-#   PURPOSE: Find Hetzner BoundServer by public IP address
-#   INPUTS: { client: HClient - Hetzner API client, host: str - IP address to search for }
-#   OUTPUTS: { Optional[BoundServer] - server if found, None otherwise }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-HETZNER
-# END_CONTRACT: find_srv
-def find_srv(client: HClient, host: str) -> BoundServer | None:
-    """Find BoundServer by IP addr"""
-    for server in client.servers.get_all():
-        if (
-            server.public_net and server.public_net.ipv4 and server.public_net.ipv4.ip
-        ) == host and server.id:
-            return client.servers.get_by_id(server.id)
-    return None
+# endregion FUNC_hetzner_create_node
 
 
-# START_CONTRACT: hetzner_delete_node
-#   PURPOSE: Delete Hetzner server by host IP address
-#   INPUTS: { log: logging.Logger - logger, cfg: ConfigCloudHetzner - Hetzner config, host: str - IP address of server to delete }
-#   OUTPUTS: { None }
-#   SIDE_EFFECTS: Deletes Hetzner Cloud server
-#   LINKS: M-CLOUD-HETZNER, find_srv
-# END_CONTRACT: hetzner_delete_node
+# region FUNC_hetzner_delete_node
+# PURPOSE: Tear down a Hetzner server by server ID so billing stops and the node slot is freed for reallocation.
+# INVARIANTS:
+# - Resolves via client.servers.get_by_id(int(external_id))
+# - APIException(code="not_found") is logged and returns without error
 async def hetzner_delete_node(
-    log: logging.Logger,
     cfg: ConfigCloudHetzner,
-    host: str,
+    external_id: str,
 ) -> None:
-    """Delete node"""
+    """Delete node."""
     if not _HETZNER_AVAILABLE:
-        raise ImportError("Hetzner SDK not installed. Install hcloud package.")
+        msg = "Hetzner SDK not installed. Install hcloud package."
+        raise ImportError(msg)
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)
-    server = await loop.run_in_executor(executor, find_srv, client, host)
+
+    try:
+        server = await loop.run_in_executor(
+            executor,
+            client.servers.get_by_id,
+            int(external_id),
+        )
+    except (ValueError, APIException) as err:
+        if isinstance(err, APIException) and err.code == "not_found":
+            logger.warning("NODE %s NOT DELETED AS UNKNOWN", external_id)
+            return
+        raise
 
     if server:
         await loop.run_in_executor(executor, server.delete)
-        log.info("DELETED %s", host)
-
+        logger.info("DELETED %s", external_id)
     else:
-        log.info("NODE %s NOT DELETED AS UNKNOWN", host)
+        logger.warning("NODE %s NOT DELETED AS UNKNOWN", external_id)
+
+
+# endregion FUNC_hetzner_delete_node

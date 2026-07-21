@@ -13,42 +13,25 @@ metadata on the base class.
 
 ### Requirement: DomainEvent base type with webhook fields
 
-The system SHALL define a `DomainEvent` frozen dataclass base in
-`yascheduler.domain.events` with fields `task_id: TaskId`, `webhook_url: str |
-None`, `webhook_custom_params: dict[str, object]`. An `Event` type alias SHALL be
+The system SHALL define a `DomainEvent` frozen dataclass base with fields
+`task_id: TaskId`, `webhook_url: str | None`,
+`webhook_custom_params: dict[str, object]`. An `Event` type alias SHALL be
 defined as a union of all domain event subclasses.
 
-`task_id` is a `TaskId` (the Task-side analog of `NodeId`), not a bare `int`.
-Events are constructed only from `Task.with_event`, which passes
-`task_id=self.task_id` (already a `TaskId` — no `.value` extraction at
-construction). At the webhook boundary, `infra/notifier/webhook.py` extracts
-`.value`.
-
 #### Scenario: All events carry webhook fields and TaskId
-- **WHEN** any event type is instantiated via `Task.with_event`
+- **WHEN** any event type is constructed
 - **THEN** it is a frozen dataclass with `webhook_url`, `webhook_custom_params`, and `event.task_id` is a `TaskId` instance (not a bare `int`)
 
 ### Requirement: Concrete event types
 
 The system SHALL provide the following events (each a frozen dataclass subclass
-of `DomainEvent`), importable from `yascheduler.domain.events`:
+of `DomainEvent`), exposed via `yascheduler.domain`:
 
 - `TaskCreated` — `engine_name: str`
 - `TaskAllocated` — `node_id: NodeId`, `engine_name: str`
-- `TaskCompleted` — `local_folder: str`, `has_errors: bool`
+- `TaskCompleted` — `local_folder: str`
 - `TaskFailed` — `reason: str`
 - `TaskAbandoned` — `node_id: NodeId`
-
-`TaskAllocated` and `TaskAbandoned` carry `node_id: NodeId` (was
-`node_ip: str`). The field is the node identity, not the transport
-address. `node_ip` is removed — it was the last ip-as-identity field in
-the event layer. Emission sites pass `task.allocated_node_id` (was
-`task.allocated_ip` / `session.ip`).
-
-`webhook_handler` builds `WebhookPayload(task_id=event.task_id.value,
-status=<status>.value, custom_params=event.webhook_custom_params)` — it
-does NOT read `node_id` (or the prior `node_ip`), so the webhook wire
-format is unchanged. No external breakage.
 
 #### Scenario: TaskCreated carries engine_name
 
@@ -58,25 +41,29 @@ format is unchanged. No external breakage.
 #### Scenario: TaskAllocated carries node_id
 
 - **WHEN** `TaskAllocated(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, node_id=NodeId(7), engine_name="fleur")` is created
-- **THEN** `event.node_id == NodeId(7)` and `event.engine_name == "fleur"` (the field is `node_id: NodeId`, NOT `node_ip: str`)
+- **THEN** `event.node_id == NodeId(7)` and `event.engine_name == "fleur"`
 
 #### Scenario: TaskAbandoned carries node_id
 
 - **WHEN** `TaskAbandoned(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, node_id=NodeId(7))` is created
-- **THEN** `event.node_id == NodeId(7)` (the field is `node_id: NodeId`, NOT `node_ip: str`)
+- **THEN** `event.node_id == NodeId(7)`
 
 #### Scenario: TaskFailed carries reason
 
 - **WHEN** `TaskFailed(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, reason="unsupported engine")` is created
 - **THEN** `event.reason == "unsupported engine"`
+
+#### Scenario: TaskCompleted carries local_folder and no has_errors
+
+- **WHEN** `TaskCompleted(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, local_folder="/data/out")` is created
+- **THEN** `event.local_folder == "/data/out"` and the event has NO `has_errors` field
+
 ### Requirement: MessageBus dispatches events to handlers
 
-`MessageBus` (`yascheduler.application.message_bus`) SHALL expose
-`register(event_type, handler)` (multiple handlers per event type; handlers are
-async callables accepting a single `DomainEvent`; use `functools.partial` to bind
-dependencies) and `async dispatch(events: Sequence[DomainEvent])` which dispatches
-each event to all registered handlers for its type. An event with no registered
-handlers is silently ignored.
+`MessageBus` SHALL expose `register(event_type, handler)` (multiple handlers per
+event type are supported) and `async dispatch(events: Sequence[DomainEvent])`
+which dispatches each event to all registered handlers for its type. An event
+with no registered handlers is silently ignored.
 
 #### Scenario: Multiple handlers for one event
 - **WHEN** two handlers are registered for `TaskCompleted`
@@ -103,127 +90,88 @@ dispatch.
 - **WHEN** an exception triggers `uow.rollback()`
 - **THEN** collected events are discarded without dispatch
 
-### Requirement: Events collected from aggregates via immutable tuple
+### Requirement: Events collected from aggregates via public events field
 
 The system SHALL collect events from Task aggregates via `collect_events()`.
-Events are stored as `_events: tuple[DomainEvent, ...]` on the Task aggregate
-(preserving `frozen=True`). Use cases call `task.record_event(event)` which
-returns a new Task instance with the event appended; `pull_events()` returns a
-`(Task, tuple[DomainEvent, ...])` pair — a new Task with empty events and the
-collected events tuple. `PostgresTaskRepository.save(task)` SHALL append the task
-to a `_saved_tasks` list provided by the UoW, enabling `collect_events()` to pull
-events from all aggregates touched in the transaction.
+Events are stored as `events: tuple[DomainEvent, ...]` on the Task aggregate
+(preserving `frozen=True`; the field is public with `repr=True`).
+`PostgresTaskRepository.save(task)` SHALL track the task for event collection,
+enabling `collect_events()` to read `task.events` from all aggregates touched in
+the transaction.
 
-#### Scenario: pull_events returns clean task and events
-- **WHEN** `pull_events()` is called on a Task with recorded events
-- **THEN** it returns `(new_task_with_empty_events, collected_events_tuple)` without mutating the original
+#### Scenario: collect_events reads events field directly
+- **WHEN** `collect_events()` is called on a UoW with saved tasks carrying events
+- **THEN** it returns a flat list of all events from `task.events` across saved tasks, and the tracking is cleared
 
 #### Scenario: save tracks task for event collection
 - **WHEN** `uow.tasks.save(task)` is called
-- **THEN** the task is persisted and appended to `_saved_tasks`
+- **THEN** the task is persisted and tracked for event collection
 
-### Requirement: Task.with_event event factory
-
-`Task.with_event(event_type, **fields) -> Task` SHALL construct an event of the
-given type with `task_id`, `webhook_url`, `webhook_custom_params` populated from
-the task's own typed fields (`self.task_id`, `self.webhook_url`,
-`self.webhook_custom_params` — was `self.context.X` before
-`drop-task-context-entity`), plus the caller-supplied subclass-specific fields,
-and append it via `record_event`. Five `@overload` declarations make
-subclass-specific fields keyword-only. If a caller passes `task_id` /
-`webhook_url` / `webhook_custom_params` in `**fields`, the method silently drops
-them in favor of the task's own values. `record_event(event)` remains the
-low-level primitive for pre-constructed events.
-
-For `TaskAllocated` and `TaskAbandoned`, the `node_id` field SHALL be
-supplied by the caller (from `task.allocated_node_id` or
-`session.machine.node_id`). The prior `node_ip` field is gone; callers
-updated accordingly.
-
-No `TaskContext` indirection: the method reads webhook fields directly off
-the `Task` instance. The `Task.with_context(...)` mutation helper is removed
-per the `domain-entities` delta.
-
-#### Scenario: with_event populates base fields from task typed fields
-
-- **WHEN** `task.with_event(TaskAllocated, node_id=NodeId(7), engine_name="fleur")` is called on a Task whose `webhook_url` field is set
-- **THEN** the recorded `TaskAllocated` carries the `webhook_url` from `task.webhook_url` (was `task.context.webhook_url`), plus `node_id` and `engine_name`
-
-#### Scenario: with_event silently drops base-field collisions
-
-- **WHEN** `task.with_event(TaskCreated, engine_name="fleur", webhook_url="https://other")` is called on a Task whose `webhook_url` field is a different value
-- **THEN** the recorded event carries the task's own `webhook_url` (the caller-supplied value is dropped)
-
-#### Scenario: with_event reads task.webhook_custom_params not task.context.X
-- **WHEN** `task.with_event` is inspected for how it populates the base webhook fields
-- **THEN** it reads `self.webhook_url` and `self.webhook_custom_params` (no `self.context` reference); the `TaskContext` indirection is gone
 ### Requirement: Use-case-to-event mapping
 
-Use cases SHALL record events via `task.with_event(EventType,
-**subclass_specific_fields)`, which populates `task_id`, `webhook_url`,
-`webhook_custom_params` from the `Task` instance's own typed fields (was
-`task.context.X`):
+The system SHALL emit the matching domain event for each task lifecycle
+transition. The mapping is:
 
-| Use case | Event | `with_event` call | Trigger |
+| Use case | Transition method | Event emitted | Trigger |
 |---|---|---|---|
-| `submit_task` | `TaskCreated` | `task.with_event(TaskCreated, engine_name=task.engine)` | New task submission |
-| `allocate_task._try_start_on_machine` | `TaskAllocated` | `task.with_event(TaskAllocated, node_id=node.node_id, engine_name=task.engine)` | After task allocated |
-| `allocate_task._validate_engine` | `TaskFailed` | `task.with_event(TaskFailed, reason="unsupported engine")` | Engine not found (no separate `TaskRejected` type) |
-| `consume_task._decide_finalisation` | `TaskCompleted` | `task.with_event(TaskCompleted, local_folder=str(store_folder), has_errors=False)` | Successful completion |
-| `consume_task._decide_finalisation` | `TaskFailed` | `task.with_event(TaskFailed, reason=error_msg)` | Task failure |
-| `orchestrator._task_consumer_consumer` | `TaskAbandoned` | `task.with_event(TaskAbandoned, node_id=task.allocated_node_id)` | After `task.fail("node is gone")` |
+| `TaskRepository.insert` (via `materialize_task`) | — (not a Task method) | `TaskCreated` | New task insertion |
+| `allocate_task` | `task.run(node_id, remote_folder)` | `TaskAllocated` | Task started on a free machine |
+| `allocate_task` | `task.reject("unsupported engine")` | `TaskFailed` | Engine not found |
+| `consume_task` (success) | `task.complete(local_folder, remote_folder)` | `TaskCompleted` | Successful completion |
+| `consume_task` (failure) | `task.fail(error_msg, local_folder, remote_folder)` | `TaskFailed` | Download failure |
+| `orchestrator` | `task.abandon(node_id)` | `TaskAbandoned` (only when `node_id is not None`) | Node disappeared |
 
-The `engine_name` value is sourced from `task.engine` (was
-`task.context.engine`); the webhook base fields are sourced from
-`task.webhook_url` / `task.webhook_custom_params` (was `task.context.X`)
-inside `with_event`.
+The `engine_name` value for `TaskAllocated` is sourced from `task.engine`
+inside `run`. The `reason` value for `TaskFailed` is sourced from the `reason`
+param of `reject` or `fail`. The `node_id` value for `TaskAbandoned` is
+sourced from the `node_id` param of `abandon`.
 
-#### Scenario: submit_task records TaskCreated
+#### Scenario: submit_task records TaskCreated via materialize_task
 
 - **WHEN** a task is submitted via `submit_task`
-- **THEN** `task.with_event(TaskCreated, engine_name=task.engine)` is called (was `task.context.engine`)
+- **THEN** `uow.tasks.insert(new_task)` returns a Task with `TaskCreated` already in `events` (attached by `materialize_task` inside `insert`); `submit_task` saves and commits
 
-#### Scenario: allocate_task records TaskAllocated with node_id
+#### Scenario: allocate_task records TaskAllocated via run
 
-- **WHEN** `_try_start_on_machine` allocates a task to a `Node` with `node_id=NodeId(7)`
-- **THEN** `task.with_event(TaskAllocated, node_id=NodeId(7), engine_name=task.engine)` is called (was `task.context.engine`); the event carries `node_id=NodeId(7)`
+- **WHEN** `allocate_task` starts a task on a `Node` with `node_id=NodeId(7)`
+- **THEN** `task.run(node_id=NodeId(7), remote_folder=...)` is called; the returned Task carries a `TaskAllocated(node_id=NodeId(7), engine_name=task.engine)` event in `events`
 
-#### Scenario: orchestrator records TaskAbandoned with node_id when node disappears
+#### Scenario: consume_task records TaskCompleted via complete
 
-- **WHEN** `_task_consumer_consumer` detects the machine is gone and calls `task.fail("node is gone")`
-- **THEN** `task.with_event(TaskAbandoned, node_id=task.allocated_node_id)` is called; the event carries the task's webhook fields (preserved through `fail()`)
+- **WHEN** `consume_task` finalises on full download success
+- **THEN** `task.complete(local_folder=str(store_folder), remote_folder=...)` is called; the returned Task carries a `TaskCompleted(local_folder=...)` event in `events`
+
+#### Scenario: orchestrator records TaskAbandoned via abandon
+
+- **WHEN** `orchestrator` detects the machine is gone (and `node_id is not None`)
+- **THEN** `task.abandon(node_id)` is called; the returned Task carries a `TaskAbandoned(node_id=node_id)` event in `events`. When `node_id is None` (double-abandon edge), `task.abandon(None)` is called and no `TaskAbandoned` event is emitted.
+
 ### Requirement: Webhook handler — the registered side-effect handler
 
-`webhook_handler` (`yascheduler.infra.notifier.webhook`) SHALL be an async
-function that processes `TaskCreated`, `TaskAllocated`, `TaskCompleted`,
-`TaskFailed`, and `TaskAbandoned` events by sending webhook notifications. It
-SHALL build `WebhookPayload(task_id=event.task_id.value, status=<status>.value,
-custom_params=event.webhook_custom_params)` and serialize it via
-`dataclasses.asdict(payload)` into the HTTP POST body. The `.value` extraction
-at the `WebhookPayload` construction site is REQUIRED: `dataclasses.asdict`
-recurses into nested dataclasses, so passing `task_id=event.task_id` (a `TaskId`)
-would produce `{"task_id": {"value": 42}, ...}` instead of `{"task_id": 42,
-...}`. `WebhookPayload.task_id` SHALL be typed `int`.
+`webhook_handler` SHALL be an async function that processes `TaskCreated`,
+`TaskAllocated`, `TaskCompleted`, `TaskFailed`, and `TaskAbandoned` events by
+sending webhook notifications. The HTTP POST body SHALL be the wire shape
+`{"task_id": int, "status": int, "custom_params": ...}`, where `task_id` is the
+bare `int` (the `TaskId.value`, not the `TaskId` dataclass) and `status` is the
+matching `TaskStatus` value for the event type.
 
-When `webhook_url` is `None`, the event is skipped (no HTTP request). Webhook
-HTTP failures SHALL be logged and the exception suppressed so they never
-propagate back into the use-case layer. Delivery SHALL use fibonacci-backoff
-retry (`backoff.fibo`, `max_time=60`) with a semaphore for rate limiting.
-
-`WebhookPayload` (`task_id`, `status`, `custom_params`; default `custom_params =
-{}`) is the wire shape `{"task_id": int, "status": int, "custom_params": ...}`.
+When `webhook_url` is `None`, the event SHALL be skipped (no HTTP request).
+Webhook HTTP failures SHALL be logged and the exception suppressed so they
+never propagate back into the use-case layer. Delivery SHALL use
+fibonacci-backoff retry (`backoff.fibo`, `max_time=60`) with a semaphore for
+rate limiting.
 
 #### Scenario: TaskCreated sends TO_DO webhook
 - **WHEN** `webhook_handler(TaskCreated(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, engine_name="fleur"), http)` is called
 - **THEN** an HTTP POST is sent with `{"task_id": 42, "status": 0, "custom_params": {}}` (status=0 is TO_DO; `task_id` is the bare int `.value`)
 
 #### Scenario: TaskCompleted sends DONE webhook
-- **WHEN** `webhook_handler(TaskCompleted(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, local_folder="/data/...", has_errors=False), http)` is called
+- **WHEN** `webhook_handler(TaskCompleted(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, local_folder="/data/..."), http)` is called
 - **THEN** an HTTP POST is sent with `{"task_id": 42, "status": 2, "custom_params": {}}`
 
 #### Scenario: WebhookPayload task_id is the bare int
-- **WHEN** `webhook_handler` builds `WebhookPayload` from an event with `task_id=TaskId(42)`
-- **THEN** `payload.task_id == 42` (a bare `int`); `dataclasses.asdict(payload)` produces `{"task_id": 42, ...}`, NOT `{"task_id": {"value": 42}, ...}`
+- **WHEN** `webhook_handler` builds the payload from an event with `task_id=TaskId(42)`
+- **THEN** the POST body has `"task_id": 42` (a bare `int`), NOT `{"task_id": {"value": 42}, ...}`
 
 #### Scenario: No webhook URL — event skipped
 - **WHEN** `webhook_handler` is called with an event whose `webhook_url is None`

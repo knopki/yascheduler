@@ -1,31 +1,8 @@
-# FILE: tests/unit/test_persistence_adapter.py
-# VERSION: 1.10.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yascheduler.infra.persistence.
-#   SCOPE: load_query file-reading and caching behaviour; PostgresUnitOfWork lifecycle; PostgresTaskRepository and PostgresNodeRepository CRUD via fake _run.
-#   DEPENDS: none
-#   LINKS:
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_task_row - build a fake _run row dict for a Task with sensible defaults
-#   test_load_query_first_call_reads_file - verify disk read on first access
-#   test_load_query_second_call_uses_cache - verify cached result (no re-read)
-#   test_uow_enter_creates_repositories - verify __aenter__ sets tasks and nodes
-#   test_uow_commit_called - verify commit delegates to connection
-#   test_uow_rollback_on_exception - verify exception triggers rollback
-#   test_uow_closes_connection - verify connection.close is called on exit
-#   TestPostgresTaskRepository - task CRUD via mocked _run
-#   TestPostgresNodeRepository - node CRUD via mocked _run
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.10.0 - extract _make_task_row helper to collapse repeated 12-column row dicts (GRACE-lite 1000-line limit compliance).
-#   PREVIOUS_CHANGE: v1.9.0 - drop-task-context-entity: update mock row data (flat columns, no metadata JSON); task.context.X → task.X reads; Task/NewTask construction with flat fields; remove TaskContext import.
-#   PREVIOUS_CHANGE: v1.8.1 - task-allocated-node-id: extract allocated_node_id bind/read tests + SQL-content tests into tests/unit/test_persistence_allocated_node_id.py (this file exceeded the 1000-line GRACE-lite hard limit after the v1.8.0 additions).
-#   PREVIOUS_CHANGE: v1.8.0 - task-allocated-node-id: add test_row_to_task_reads_allocated_node_id, test_row_to_task_handles_null_allocated_node_id, test_insert_binds_allocated_node_id, test_save_binds_allocated_node_id, test_save_binds_null_allocated_node_id, and TestTaskSqlIncludesAllocatedNodeId (verifies insert/update_by_id/get_by_id/list_by_status/list_by_jobs SQL files include allocated_node_id; update_status/get_ids_by_ip_and_status/count_by_status do NOT).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yascheduler.infra.persistence.
+# SCOPE: load_query file-reading and caching behaviour; PostgresUnitOfWork lifecycle; PostgresTaskRepository and PostgresNodeRepository CRUD via fake _run.
+# KEYWORDS: load_query, PostgresUnitOfWork, CRUD, fake _run
+# endregion MODULE_CONTRACT
 
 import json
 from pathlib import Path
@@ -36,9 +13,7 @@ from pytest_mock import MockerFixture
 
 from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
-    NewNode,
     NewTask,
-    Node,
     NodeId,
     Task,
     TaskId,
@@ -55,7 +30,7 @@ from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
 from yascheduler.infra.persistence.sql_loader import load_query
 
 
-def _make_task_row(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
+def _make_task_row(**overrides: Any) -> dict[str, Any]:
     """Build a fake _run row dict for a Task with sensible defaults; overrides win."""
     base = {
         "task_id": 1,
@@ -76,17 +51,10 @@ def _make_task_row(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401
     return base
 
 
-# START_CONTRACT: test_load_query_first_call_reads_file
-#   PURPOSE: Verify that the first call to load_query reads the file from disk
-#            and returns its contents unchanged.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: Creates a temporary .sql file in the persistence sql/ tree.
-#   LINKS: load_query
-# END_CONTRACT: test_load_query_first_call_reads_file
 @pytest.mark.unit
 def test_load_query_first_call_reads_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """load_query reads the file on first call and returns its content."""
     load_query.cache_clear()
@@ -106,17 +74,10 @@ def test_load_query_first_call_reads_file(
     assert load_query("task/get_by_id") == "SELECT * FROM tasks WHERE id = :task_id"
 
 
-# START_CONTRACT: test_load_query_second_call_uses_cache
-#   PURPOSE: Verify that a second call does not re-read the file by checking
-#            that mutating the file between calls does not change the result.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None
-#   LINKS: load_query
-# END_CONTRACT: test_load_query_second_call_uses_cache
 @pytest.mark.unit
 def test_load_query_second_call_uses_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """load_query returns the cached value; file mutation has no effect."""
     load_query.cache_clear()
@@ -141,13 +102,6 @@ def test_load_query_second_call_uses_cache(
     assert result_b != "SELECT 1"
 
 
-# START_CONTRACT: test_uow_enter_creates_repositories
-#   PURPOSE: Verify that async enter creates task and node repositories.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork, PostgresTaskRepository, PostgresNodeRepository
-# END_CONTRACT: test_uow_enter_creates_repositories
 async def test_uow_enter_creates_repositories(mocker: MockerFixture) -> None:
     """__aenter__ instantiates both task and node repositories."""
     mock_conn = mocker.MagicMock()
@@ -164,13 +118,6 @@ async def test_uow_enter_creates_repositories(mocker: MockerFixture) -> None:
         assert isinstance(uow.nodes, PostgresNodeRepository)
 
 
-# START_CONTRACT: test_collect_events_preserves_shared_list
-#   PURPOSE: Verify collect_events mutates in place so repo._saved_tasks and uow._saved_tasks are the same list.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.collect_events
-# END_CONTRACT: test_collect_events_preserves_shared_list
 async def test_collect_events_preserves_shared_list(mocker: MockerFixture) -> None:
     """collect_events preserves shared list reference between UoW and repo."""
     mock_conn = mocker.MagicMock()
@@ -188,13 +135,6 @@ async def test_collect_events_preserves_shared_list(mocker: MockerFixture) -> No
         assert uow.tasks._saved_tasks is uow._saved_tasks
 
 
-# START_CONTRACT: test_uow_commit_called
-#   PURPOSE: Verify commit delegates to pg8000 connection.run("COMMIT").
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.commit
-# END_CONTRACT: test_uow_commit_called
 async def test_uow_commit_called(mocker: MockerFixture) -> None:
     """commit() calls connection.run('COMMIT')."""
     mock_conn = mocker.MagicMock()
@@ -212,13 +152,6 @@ async def test_uow_commit_called(mocker: MockerFixture) -> None:
     mock_conn.run.assert_any_call("COMMIT")
 
 
-# START_CONTRACT: test_uow_rollback_on_exception
-#   PURPOSE: Verify that a context body exception triggers rollback and close.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.rollback
-# END_CONTRACT: test_uow_rollback_on_exception
 async def test_uow_rollback_on_exception(mocker: MockerFixture) -> None:
     """Exception inside context triggers rollback and closes connection."""
     mock_conn = mocker.MagicMock()
@@ -238,13 +171,6 @@ async def test_uow_rollback_on_exception(mocker: MockerFixture) -> None:
     mock_conn.close.assert_called_once()
 
 
-# START_CONTRACT: test_uow_closes_connection
-#   PURPOSE: Verify connection.close() is called on normal exit.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.__aexit__
-# END_CONTRACT: test_uow_closes_connection
 async def test_uow_closes_connection(mocker: MockerFixture) -> None:
     """connection.close() is called on normal exit."""
     mock_conn = mocker.MagicMock()
@@ -262,13 +188,6 @@ async def test_uow_closes_connection(mocker: MockerFixture) -> None:
     mock_conn.close.assert_called_once()
 
 
-# START_CONTRACT: test_uow_commit_after_exit_raises
-#   PURPOSE: commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block.
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.commit, PostgresUnitOfWork._require_conn
-# END_CONTRACT: test_uow_commit_after_exit_raises
 async def test_uow_commit_after_exit_raises(mocker: MockerFixture) -> None:
     """commit() raises UnitOfWorkNotInitializedError when called outside 'async with' block."""
     mock_conn = mocker.MagicMock()
@@ -284,18 +203,12 @@ async def test_uow_commit_after_exit_raises(mocker: MockerFixture) -> None:
         pass  # connection now closed by __aexit__
 
     with pytest.raises(
-        UnitOfWorkNotInitializedError, match="Connection not initialized"
+        UnitOfWorkNotInitializedError,
+        match="Connection not initialized",
     ):
         await uow.commit()
 
 
-# START_CONTRACT: test_uow_double_commit
-#   PURPOSE: Second commit within the same context is accepted by pg8000 (idempotent).
-#   INPUTS: { None }
-#   OUTPUTS: { None - assertion-based }
-#   SIDE_EFFECTS: None (mocked connection)
-#   LINKS: PostgresUnitOfWork.commit
-# END_CONTRACT: test_uow_double_commit
 async def test_uow_double_commit(mocker: MockerFixture) -> None:
     """Second commit within the same context is accepted by pg8000 (idempotent)."""
     mock_conn = mocker.MagicMock()
@@ -339,7 +252,7 @@ class TestPostgresTaskRepository:
     # -- get -------------------------------------------------------------------
 
     async def test_get_returns_task(self, mocker: MockerFixture) -> None:
-        """get returns a Task hydrated from the row returned by _run."""
+        """Get returns a Task hydrated from the row returned by _run."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [_make_task_row(task_id=42, status="RUNNING")]  # type: ignore[attr-defined]
 
@@ -353,7 +266,7 @@ class TestPostgresTaskRepository:
         assert task.status == DomainTaskStatus.RUNNING
 
     async def test_get_returns_none_when_not_found(self, mocker: MockerFixture) -> None:
-        """get returns None when _run returns an empty list."""
+        """Get returns None when _run returns an empty list."""
         repo = self._make_repo(mocker)
         repo._run.return_value = []  # type: ignore[attr-defined]
 
@@ -362,9 +275,10 @@ class TestPostgresTaskRepository:
         assert task is None
 
     async def test_get_with_none_ip_and_extra_fields(
-        self, mocker: MockerFixture
+        self,
+        mocker: MockerFixture,
     ) -> None:
-        """get handles null allocated_node_id and extra metadata fields."""
+        """Get handles null allocated_node_id and extra metadata fields."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             _make_task_row(
@@ -376,7 +290,7 @@ class TestPostgresTaskRepository:
                 webhook_url="https://hook.example.com",
                 webhook_custom_params=json.dumps({"key": "val"}),
                 extra=json.dumps({"extra_field": "extra_val"}),
-            )
+            ),
         ]  # type: ignore[attr-defined]
 
         task = await repo.get(TaskId(1))
@@ -396,7 +310,7 @@ class TestPostgresTaskRepository:
     # -- insert ----------------------------------------------------------------
 
     async def test_insert_returns_task_with_id(self, mocker: MockerFixture) -> None:
-        """insert runs INSERT SQL and returns Task with generated ID."""
+        """Insert runs INSERT SQL and returns Task with generated ID."""
         repo = self._make_repo(mocker)
         repo._run.return_value = [_make_task_row(task_id=99, title="label")]  # type: ignore[attr-defined]
 
@@ -413,7 +327,7 @@ class TestPostgresTaskRepository:
     # -- save ------------------------------------------------------------------
 
     async def test_save_calls_update_by_id(self, mocker: MockerFixture) -> None:
-        """save calls _run with the update_by_id query and all task fields."""
+        """Save calls _run with the update_by_id query and all task fields."""
         repo = self._make_repo(mocker)
         from datetime import datetime
 
@@ -447,7 +361,7 @@ class TestPostgresTaskRepository:
         assert kwargs["remote_folder"] == "/remote"
 
     async def test_save_running_task(self, mocker: MockerFixture) -> None:
-        """save persists a RUNNING task with its allocated_node_id."""
+        """Save persists a RUNNING task with its allocated_node_id."""
         repo = self._make_repo(mocker)
         from datetime import datetime
 
@@ -485,7 +399,7 @@ class TestPostgresTaskRepository:
         ]
 
         tasks = await repo.list_by_status(
-            {DomainTaskStatus.TO_DO, DomainTaskStatus.RUNNING}
+            {DomainTaskStatus.TO_DO, DomainTaskStatus.RUNNING},
         )
 
         assert len(tasks) == 2
@@ -556,421 +470,3 @@ class TestPostgresTaskRepository:
         counts = await repo.count_by_status()
 
         assert counts == {}
-
-
-# ============================================================================
-# PostgresNodeRepository — unit tests with mocked _run
-# ============================================================================
-
-
-class TestPostgresNodeRepository:
-    """PostgresNodeRepository CRUD operations via fake in-memory _run."""
-
-    # -- helpers ---------------------------------------------------------------
-
-    @staticmethod
-    def _make_repo(mocker: MockerFixture) -> PostgresNodeRepository:
-        """Build a minimal PostgresNodeRepository with a mock _run."""
-        repo = PostgresNodeRepository.__new__(PostgresNodeRepository)
-        mock_run = mocker.AsyncMock()
-        mocker.patch.object(repo, "_run", mock_run)
-        return repo
-
-    # -- get -------------------------------------------------------------------
-
-    async def test_get_returns_node(self, mocker: MockerFixture) -> None:
-        """get returns a Node hydrated from the row returned by _run."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "node_id": 1,
-                "ip": "10.0.0.1",
-                "ncpus": 8,
-                "enabled": True,
-                "cloud": "hetzner",
-                "username": "root",
-                "port": 22,
-            }
-        ]
-
-        node = await repo.get_by_id(NodeId(1))
-
-        assert node is not None
-        assert node.node_id == NodeId(1)
-        assert node.ip == "10.0.0.1"
-        assert node.ncpus == 8
-        assert node.enabled is True
-        assert node.cloud == "hetzner"
-        assert node.username == "root"
-        assert node.port == 22
-
-    async def test_get_returns_none_when_not_found(self, mocker: MockerFixture) -> None:
-        """get returns None when _run returns empty."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = []  # type: ignore[attr-defined]
-
-        node = await repo.get_by_id(NodeId(999))
-
-        assert node is None
-
-    async def test_get_with_zero_ncpus(self, mocker: MockerFixture) -> None:
-        """get handles null/zero ncpus correctly (defaults to 0)."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "node_id": 2,
-                "ip": "10.0.0.2",
-                "ncpus": None,
-                "enabled": False,
-                "cloud": None,
-                "username": "admin",
-                "port": 2222,
-            }
-        ]
-
-        node = await repo.get_by_id(NodeId(2))
-
-        assert node is not None
-        assert node.node_id == NodeId(2)
-        assert node.ip == "10.0.0.2"
-        assert node.ncpus == 0
-        assert node.enabled is False
-        assert node.cloud is None
-        assert node.port == 2222
-
-    # -- get_by_id -------------------------------------------------------------
-
-    async def test_get_by_id_returns_node(self, mocker: MockerFixture) -> None:
-        """get_by_id returns a Node hydrated from the row returned by _run."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "node_id": 5,
-                "ip": "10.0.0.5",
-                "ncpus": 4,
-                "enabled": True,
-                "cloud": "aws",
-                "username": "root",
-                "port": 22,
-            }
-        ]
-
-        result = await repo.get_by_id(NodeId(5))
-
-        assert result is not None
-        assert result.node_id == NodeId(5)
-        assert result.ip == "10.0.0.5"
-        repo._run.assert_awaited_once_with(  # type: ignore[attr-defined]
-            load_query("node/get_by_id"), node_id=5
-        )
-
-    async def test_get_by_id_missing_returns_none(self, mocker: MockerFixture) -> None:
-        """get_by_id returns None when _run returns empty."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = []  # type: ignore[attr-defined]
-
-        result = await repo.get_by_id(NodeId(999))
-
-        assert result is None
-
-    # -- get_by_ids -----------------------------------------------------------
-
-    async def test_get_by_ids_empty_returns_empty_dict(
-        self, mocker: MockerFixture
-    ) -> None:
-        """get_by_ids([]) returns an empty dict."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = []  # type: ignore[attr-defined]
-
-        result = await repo.get_by_ids([])
-
-        assert result == {}
-        assert repo._run.call_count == 1  # type: ignore[attr-defined]
-
-    # -- list_all --------------------------------------------------------------
-
-    async def test_list_all_returns_nodes(self, mocker: MockerFixture) -> None:
-        """list_all returns all nodes from _run."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "node_id": 1,
-                "ip": "10.0.0.1",
-                "ncpus": 4,
-                "enabled": True,
-                "cloud": "hetzner",
-                "username": "root",
-                "port": 22,
-            },
-            {
-                "node_id": 2,
-                "ip": "10.0.0.2",
-                "ncpus": 8,
-                "enabled": False,
-                "cloud": "upcloud",
-                "username": "admin",
-                "port": 2222,
-            },
-        ]
-
-        nodes = await repo.list_all()
-
-        assert len(nodes) == 2
-        assert nodes[0].node_id == NodeId(1)
-        assert nodes[0].ip == "10.0.0.1"
-        assert nodes[1].node_id == NodeId(2)
-        assert nodes[1].ip == "10.0.0.2"
-
-    # -- list_enabled / list_disabled ------------------------------------------
-
-    async def test_list_enabled_returns_only_enabled(
-        self, mocker: MockerFixture
-    ) -> None:
-        """list_enabled returns only nodes with valid IPs (containing '.')."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "node_id": 1,
-                "ip": "10.0.0.1",
-                "ncpus": 4,
-                "enabled": True,
-                "cloud": "hetzner",
-                "username": "root",
-                "port": 22,
-            },
-            {
-                "node_id": 2,
-                "ip": "10.0.0.2",
-                "ncpus": 8,
-                "enabled": True,
-                "cloud": "upcloud",
-                "username": "admin",
-                "port": 2222,
-            },
-            {
-                "node_id": 3,
-                "ip": "10.0.0.3",
-                "ncpus": 2,
-                "enabled": False,
-                "cloud": "hetzner",
-                "username": "root",
-                "port": 22,
-            },
-        ]
-
-        nodes = await repo.list_enabled()
-
-        # All rows have "." in IP, so all 3 pass the filter
-        assert len(nodes) == 3
-
-    async def test_list_enabled_no_python_post_filter(
-        self, mocker: MockerFixture
-    ) -> None:
-        """list_enabled returns all enabled rows from SQL — no python post-filter (remove-tmp-node-fake-ip).
-
-        By the invariant (ip == '' IFF enabled=FALSE AND tmp/pending), no
-        enabled row has ip == "", so the prior "." in ip post-filter was dead
-        and is removed. The SQL WHERE enabled = TRUE is the only filter; a
-        row with a non-ipv4 hostname like "localhost" is returned unchanged.
-        """
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "node_id": 1,
-                "ip": "10.0.0.1",
-                "ncpus": 4,
-                "enabled": True,
-                "cloud": "hetzner",
-                "username": "root",
-                "port": 22,
-            },
-            {
-                "node_id": 2,
-                "ip": "localhost",
-                "ncpus": 4,
-                "enabled": True,
-                "cloud": None,
-                "username": "root",
-                "port": 22,
-            },
-        ]
-
-        nodes = await repo.list_enabled()
-
-        # No python post-filter — both enabled rows are returned.
-        assert len(nodes) == 2
-
-    async def test_list_disabled_returns_disabled_with_valid_ips(
-        self, mocker: MockerFixture
-    ) -> None:
-        """list_disabled returns all rows (SQL filters disabled) that have valid IPs."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "node_id": 1,
-                "ip": "10.0.0.1",
-                "ncpus": 4,
-                "enabled": False,
-                "cloud": "hetzner",
-                "username": "root",
-                "port": 22,
-            },
-            {
-                "node_id": 2,
-                "ip": "10.0.0.2",
-                "ncpus": 8,
-                "enabled": False,
-                "cloud": "upcloud",
-                "username": "admin",
-                "port": 2222,
-            },
-        ]
-
-        nodes = await repo.list_disabled()
-
-        assert len(nodes) == 2
-        assert all(n.enabled is False for n in nodes)
-
-    async def test_list_disabled_no_python_post_filter(
-        self, mocker: MockerFixture
-    ) -> None:
-        """list_disabled returns all rows from SQL — no python post-filter (remove-tmp-node-fake-ip).
-
-        The ip <> '' presence check is in SQL (node/list_disabled.sql), not
-        python. The repo returns whatever SQL returns; a row with a non-ipv4
-        hostname like "localhost" passes (it is a real-disabled VM with a real
-        address). Only ip == "" tmp rows are excluded, and that happens at
-        the SQL layer.
-        """
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [  # type: ignore[attr-defined]
-            {
-                "node_id": 1,
-                "ip": "10.0.0.1",
-                "ncpus": 4,
-                "enabled": False,
-                "cloud": "hetzner",
-                "username": "root",
-                "port": 22,
-            },
-            {
-                "node_id": 2,
-                "ip": "localhost",
-                "ncpus": 8,
-                "enabled": False,
-                "cloud": None,
-                "username": "admin",
-                "port": 2222,
-            },
-        ]
-
-        nodes = await repo.list_disabled()
-
-        # No python post-filter — both disabled rows with non-empty ip are returned.
-        assert len(nodes) == 2
-        assert all(n.enabled is False for n in nodes)
-
-    # -- add -------------------------------------------------------------------
-
-    async def test_insert_returns_node_with_id(self, mocker: MockerFixture) -> None:
-        """insert runs INSERT SQL and returns Node with generated NodeId."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [{"node_id": 42}]  # type: ignore[attr-defined]
-        new_node = NewNode(
-            ip="10.0.0.1",
-            ncpus=8,
-            enabled=True,
-            cloud="hetzner",
-            username="root",
-            port=22,
-        )
-
-        result = await repo.insert(new_node)
-
-        assert isinstance(result, Node)
-        assert result.node_id == NodeId(42)
-        repo._run.assert_awaited_once()  # type: ignore[attr-defined]
-        _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
-        assert kwargs["ip"] == "10.0.0.1"
-        assert kwargs["ncpus"] == 8
-        assert kwargs["enabled"] is True
-        assert kwargs["cloud"] == "hetzner"
-        assert kwargs["username"] == "root"
-        assert kwargs["port"] == 22
-
-    async def test_insert_inserts_cloud_node(self, mocker: MockerFixture) -> None:
-        """insert persists a cloud-provisioned node."""
-        repo = self._make_repo(mocker)
-        repo._run.return_value = [{"node_id": 7}]  # type: ignore[attr-defined]
-        new_node = NewNode(
-            ip="10.0.0.5",
-            ncpus=2,
-            enabled=False,
-            cloud="upcloud",
-            username="admin",
-            port=2222,
-        )
-
-        result = await repo.insert(new_node)
-
-        assert isinstance(result, Node)
-        assert result.node_id == NodeId(7)
-        _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
-        assert kwargs["cloud"] == "upcloud"
-        assert kwargs["enabled"] is False
-
-    async def test_update_binds_all_fields_including_ip(
-        self, mocker: MockerFixture
-    ) -> None:
-        """update runs UPDATE SQL binding ip, ncpus, enabled, cloud, username, port, node_id (V1 cloud lifecycle relies on ip being SET)."""
-        repo = self._make_repo(mocker)
-
-        await repo.update(
-            Node(
-                node_id=NodeId(7),
-                ip="10.0.0.99",
-                ncpus=8,
-                enabled=True,
-                cloud="hetzner",
-                username="root",
-                port=22,
-            )
-        )
-
-        repo._run.assert_awaited_once()  # type: ignore[attr-defined]
-        _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
-        assert kwargs["node_id"] == 7
-        assert kwargs["ip"] == "10.0.0.99", (
-            "update must bind ip (V1 cloud lifecycle sets real ip via update)"
-        )
-        assert kwargs["ncpus"] == 8
-        assert kwargs["enabled"] is True
-        assert kwargs["cloud"] == "hetzner"
-        assert kwargs["username"] == "root"
-        assert kwargs["port"] == 22
-
-    # -- enable / disable / remove ---------------------------------------------
-
-    async def test_enable_executes_update(self, mocker: MockerFixture) -> None:
-        """enable calls _run with the enable query and node_id.value."""
-        repo = self._make_repo(mocker)
-
-        await repo.enable(NodeId(7))
-
-        repo._run.assert_awaited_once_with(load_query("node/enable"), node_id=7)  # type: ignore[attr-defined]
-
-    async def test_disable_executes_update(self, mocker: MockerFixture) -> None:
-        """disable calls _run with the disable query and node_id.value."""
-        repo = self._make_repo(mocker)
-
-        await repo.disable(NodeId(7))
-
-        repo._run.assert_awaited_once_with(load_query("node/disable"), node_id=7)  # type: ignore[attr-defined]
-
-    async def test_remove_executes_delete(self, mocker: MockerFixture) -> None:
-        """remove calls _run with the remove (delete) query and node_id.value."""
-        repo = self._make_repo(mocker)
-
-        await repo.remove(NodeId(7))
-
-        repo._run.assert_awaited_once_with(load_query("node/remove"), node_id=7)  # type: ignore[attr-defined]

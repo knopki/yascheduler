@@ -1,21 +1,11 @@
-# FILE: yascheduler/infra/ssh/platform/detect.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Platform detection — run adapter checks on a connected host, return first match and all matched platforms.
-#   SCOPE: _detect_platform + MAX_SESSIONS (moved verbatim from helpers.py).
-#   DEPENDS: M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL, M-PLATFORM-EXC
-#   LINKS: M-PLATFORM-ADAPTERS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   MAX_SESSIONS - Default MaxSessions on OpenSSH server (10); bounds detection concurrency.
-#   _detect_platform - Run adapter checks on connected host, return first match and all matched platforms.
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Extracted from infra/ssh/helpers.py (decompose-ssh-gateway); _detect_platform + MAX_SESSIONS moved verbatim, no behavioral change.
-#   PREVIOUS_CHANGE: none
-# END_CHANGE_SUMMARY
+"""Platform detection — run adapter checks on a connected host, return first match and all matched platforms."""
+# region MODULE_CONTRACT
+# PURPOSE: Run adapter checks on a connected host, return first matching adapter and all matched platform tags.
+# SCOPE: Platform detection by running each adapter's check sequence against the remote host.
+# INVARIANTS: MAX_SESSIONS=10 is the default OpenSSH server MaxSessions — the semaphore cap matches the protocol's natural limit.
+# DEPENDENCIES: USES API: asyncstdlib, asyncio.locks
+# KEYWORDS: platform detection, adapter, detect, remote, checks
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -35,16 +25,23 @@ if TYPE_CHECKING:
     from .adapters import RemoteMachineAdapter
     from .protocol import SSHCheck
 
+__all__ = ["MAX_SESSIONS", "_detect_platform"]
+
 MAX_SESSIONS = 10  # default MaxSessions on OpenSSH server
 
 
-# START_CONTRACT: _detect_platform
-#   PURPOSE: Run adapter checks on connected host, return first match and all matched platforms
-#   SIDE_EFFECTS: Runs check commands on remote host
-#   LINKS: M-PLATFORM-ADAPTERS, M-PLATFORM-PROTOCOL
-# END_CONTRACT: _detect_platform
+# region FUNC__detect_platform
+# PURPOSE: Run adapter checks on connected host, return first match and all matched platforms.
+# ENSURES: Raises PlatformGuessFailedError if no adapter matches.
+# INVARIANTS: Uses asyncstdlib.all + asyncstdlib.map to run each adapter's checks tuple concurrently under a Semaphore(MAX_SESSIONS) — MAX_SESSIONS=10 is the default OpenSSH server MaxSessions; the first adapter whose checks all pass is the returned adapter; the platforms list collects every matching adapter's platform tag (a Debian-12 host matches linux, debian-like, debian, debian-12 — all four tags are returned so the orchestrator's engine filter sees them).
+# RATIONALE:
+# - Q: why run every adapter's checks even after the first match?
+#   A: the platforms list (not just the chosen adapter.platform) is what the orchestrator's engine-filter reads — early exit would lose the multi-platform tags that let a Debian-12 host match a linux-only engine AND a debian-12-only engine.
+# - Q: why a Semaphore(MAX_SESSIONS)?
+#   A: the adapter checks open SSH channels concurrently; OpenSSH's default MaxSessions=10 caps concurrent channels per connection — exceeding it surfaces as ChannelOpenError (a retryable SSHRetryExc); the semaphore caps the concurrency at the source.
 async def _detect_platform(
-    conn: SSHClientConnection, adapters: Sequence[RemoteMachineAdapter]
+    conn: SSHClientConnection,
+    adapters: Sequence[RemoteMachineAdapter],
 ) -> tuple[RemoteMachineAdapter, Sequence[str]]:
     sess_lim = Semaphore(MAX_SESSIONS)
 
@@ -57,11 +54,14 @@ async def _detect_platform(
     checks: Sequence[bool] = [
         await aall(amap(lambda y: with_limit(conn, y), x.checks)) for x in adapters
     ]
-    for candidate, check in zip(adapters, checks):  # noqa: B905
+    for candidate, check in zip(adapters, checks):
         if check:
             platforms.append(candidate.platform)
         if check and not adapter:
             adapter = candidate
     if not adapter:
-        raise PlatformGuessFailedError()
+        raise PlatformGuessFailedError
     return adapter, platforms
+
+
+# endregion FUNC__detect_platform

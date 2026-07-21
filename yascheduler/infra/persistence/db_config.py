@@ -1,23 +1,15 @@
-# FILE: yascheduler/infra/persistence/db_config.py
-# VERSION: 1.0.0
-# START_MODULE_CONTRACT
-#   PURPOSE: PostgreSQL connection configuration as a frozen stdlib dataclass.
-#   SCOPE: PostgresDbConfig value object with user/password/database/host/port; no INI parsing on the DTO.
-#   DEPENDS: none
-#   LINKS: M-PERSISTENCE-UOW, M-PERSISTENCE-SCHEMA
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   PostgresDbConfig - Frozen dataclass: PostgreSQL connection params; __post_init__ validates port >= 1
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Relocate ConfigDb from yascheduler.config.db to yascheduler.infra.persistence.db_config as PostgresDbConfig frozen stdlib dataclass (config-aggregate-to-entrypoints / P4); INI parsing moves to entrypoints.config_parser; no attrs dependency.
-# END_CHANGE_SUMMARY
+"""PostgreSQL connection configuration as a frozen stdlib dataclass."""
+# region MODULE_CONTRACT
+# PURPOSE: Supply type-safe, immutable connection parameters so all persistence consumers (UoW, migrations, schema applier, CLI) connect to the same database without repeating defaults or parsing config ad-hoc.
+# SCOPE: PostgresDbConfig frozen dataclass with user/password/database/host/port; no INI parsing.
+# KEYWORDS: postgres, config, database connection, dataclass
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+__all__ = ["PostgresDbConfig"]
 
 
 @dataclass(frozen=True)
@@ -25,17 +17,16 @@ class PostgresDbConfig:
     """PostgreSQL connection configuration."""
 
     user: str = "yascheduler"
-    password: str = "password"
+    password: str = "password"  # noqa:  S105 not a real password
     database: str = "database"
     host: str = "localhost"
     port: int = 5432
 
-    # START_BLOCK_VALIDATE
+    # region BLOCK_validate
     def __post_init__(self) -> None:
-        """Validate port >= 1 (formerly attrs validator)."""
-        if not isinstance(self.port, int):
-            raise ValueError(f"port must be int, got {type(self.port).__name__}")
-        if self.port < 1:
-            raise ValueError(f"port must be >= 1, got {self.port}")
+        """Validate port >= 1."""
+        if not self.port >= 1:
+            msg = f"port must be >= 1, got {self.port}"
+            raise ValueError(msg)
 
-    # END_BLOCK_VALIDATE
+    # endregion BLOCK_validate

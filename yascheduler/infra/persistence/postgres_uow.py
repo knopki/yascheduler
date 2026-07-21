@@ -1,30 +1,21 @@
-# FILE: yascheduler/infra/persistence/postgres_uow.py
-# VERSION: 1.4.1
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit of Work implementation for PostgreSQL using pg8000.
-#   SCOPE: PostgresUnitOfWork managing transactions, repositories, event dispatch, and connection lifecycle.
-#   DEPENDS: M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG, M-PERSISTENCE-EXCEPTIONS, M-APPLICATION-MESSAGE-BUS, M-DOMAIN-EVENTS
-#   LINKS: M-PERSISTENCE-POSTGRES, M-INFRA-DB-CONFIG, M-APPLICATION-MESSAGE-BUS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   PostgresUnitOfWork - async context manager providing tasks and node repositories with event dispatch
-#   _require_conn - guard returning Connection or raising UnitOfWorkNotInitializedError
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.5.0 - Import PostgresDbConfig from .db_config intra-package instead of ConfigDb from yascheduler.config (config-aggregate-to-entrypoints / P4).
-#   PREVIOUS_CHANGE: v1.4.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-# END_CHANGE_SUMMARY
+"""Unit of Work implementation for PostgreSQL using pg8000."""
+# region MODULE_CONTRACT
+# PURPOSE: Bound repository access to a single database transaction and dispatch collected domain events on commit, so the orchestrator's writes are atomic and side-effects are delivered exactly once.
+# SCOPE: PostgresUnitOfWork managing transaction lifecycle, repository wiring, event collection and dispatch.
+# DEPENDENCIES: USES API: pg8000.Connection
+# KEYWORDS: unit of work, uow, postgres, transaction, event dispatch
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, TypeVar
 
 from pg8000.native import Connection
+from typing_extensions import Self
 
 from .exceptions import UnitOfWorkNotInitializedError
 from .postgres import PostgresNodeRepository, PostgresTaskRepository
@@ -38,31 +29,21 @@ if TYPE_CHECKING:
 
     from .db_config import PostgresDbConfig
 
-T = TypeVar("T")
+__all__ = ["PostgresUnitOfWork"]
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
 
-# START_CONTRACT: PostgresUnitOfWork
-#   PURPOSE: Async context manager that manages a pg8000 connection and exposes
-#            task and node repositories operating on the same transaction.
-#   INPUTS: { config: PostgresDbConfig - database connection parameters }
-#   OUTPUTS: { PostgresUnitOfWork - self from __aenter__ }
-#   SIDE_EFFECTS: Creates and closes pg8000 connections; manages a ThreadPoolExecutor.
-#   LINKS: PostgresTaskRepository, PostgresNodeRepository, PostgresDbConfig, pg8000.native.Connection
-# END_CONTRACT: PostgresUnitOfWork
+
+# region CLASS_PostgresUnitOfWork
+# PURPOSE: Wrap repository access in a single transaction per request and dispatch collected domain events on commit, so the orchestrator's writes are atomic and side-effects fire exactly once.
 class PostgresUnitOfWork:
     """Async context manager for PostgreSQL transactional boundaries."""
 
-    # START_CONTRACT: PostgresUnitOfWork.__init__
-    #   PURPOSE: Initialise UoW with config and a single-worker thread pool.
-    #   INPUTS: { config: PostgresDbConfig - database connection parameters }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Creates a ThreadPoolExecutor(max_workers=1).
-    #   LINKS: ThreadPoolExecutor, PostgresDbConfig
-    # END_CONTRACT: PostgresUnitOfWork.__init__
     def __init__(self, config: PostgresDbConfig, bus: MessageBus) -> None:
-        # FIXME: no backoff.on_exception on InterfaceError
+        """Initialise UoW with config and a single-worker thread pool."""
+        # TODO(knopki): #001 no backoff.on_exception on InterfaceError
         self._config = config
         self._bus = bus
         self._saved_tasks: list[Task] = []
@@ -73,57 +54,51 @@ class PostgresUnitOfWork:
 
     @property
     def tasks(self) -> PostgresTaskRepository:
+        """Tasks."""
         if self._tasks is None:
-            raise UnitOfWorkNotInitializedError(
-                "UoW not entered; use 'async with' to access repositories"
-            )
+            msg = "UoW not entered; use 'async with' to access repositories"
+            raise UnitOfWorkNotInitializedError(msg)
         return self._tasks
 
     @property
     def nodes(self) -> PostgresNodeRepository:
+        """Nodes."""
         if self._nodes is None:
-            raise UnitOfWorkNotInitializedError(
-                "UoW not entered; use 'async with' to access repositories"
-            )
+            msg = "UoW not entered; use 'async with' to access repositories"
+            raise UnitOfWorkNotInitializedError(msg)
         return self._nodes
 
-    # START_CONTRACT: PostgresUnitOfWork.__aenter__
-    #   PURPOSE: Create a pg8000 connection and instantiate repositories.
-    #   INPUTS: { None }
-    #   OUTPUTS: { PostgresUnitOfWork - self }
-    #   SIDE_EFFECTS: Opens a real PostgreSQL connection via pg8000.
-    #   LINKS: _create_connection, PostgresTaskRepository, PostgresNodeRepository
-    # END_CONTRACT: PostgresUnitOfWork.__aenter__
-    async def __aenter__(self) -> PostgresUnitOfWork:
+    # region METHOD___aenter__
+    # PURPOSE: Open a transactional boundary around the orchestrator's unit of work so every repository write within the async with block participates in the same BEGIN/COMMIT cycle.
+    # ENSURES: Connection is open with an active transaction; repositories are available via .tasks / .nodes.
+    async def __aenter__(self) -> Self:
         """Open connection, begin transaction, wire repositories."""
         self._saved_tasks = []
         loop = asyncio.get_running_loop()
         try:
             self._conn = await loop.run_in_executor(
-                self._executor, self._create_connection
+                self._executor,
+                self._create_connection,
             )
             await loop.run_in_executor(self._executor, lambda: self._conn.run("BEGIN"))
             self._tasks = PostgresTaskRepository(
-                self._conn, self._executor, self._saved_tasks
+                self._conn,
+                self._executor,
+                self._saved_tasks,
             )
             self._nodes = PostgresNodeRepository(self._conn, self._executor)
         except BaseException:
             if self._conn is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await loop.run_in_executor(self._executor, self._conn.close)
-                except Exception:
-                    pass
             self._executor.shutdown(wait=False)
             raise
         return self
 
-    # START_CONTRACT: PostgresUnitOfWork.__aexit__
-    #   PURPOSE: Close the connection and shut down the executor; rollback on exception.
-    #   INPUTS: { exc_type, exc_val, exc_tb - exception info from the context body }
-    #   OUTPUTS: { bool - False to propagate any exception }
-    #   SIDE_EFFECTS: Rolls back if exception occurred; closes connection; shuts down executor.
-    #   LINKS: rollback, _require_conn, Connection.close, ThreadPoolExecutor.shutdown
-    # END_CONTRACT: PostgresUnitOfWork.__aexit__
+    # endregion METHOD___aenter__
+
+    # region METHOD___aexit__
+    # PURPOSE: Rollback on error, close the connection, and release the thread-pool so resources never leak regardless of the exit path.
     async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
@@ -132,26 +107,19 @@ class PostgresUnitOfWork:
     ) -> bool:
         """Rollback on error, close connection, shutdown executor."""
         if exc_type is not None and self._conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self.rollback()
-            except Exception:
-                pass
         if self._conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._run_sync(self._conn.close)
-            except Exception:
-                pass
         self._executor.shutdown(wait=False)
         self._conn = None
         return False
 
-    # START_CONTRACT: PostgresUnitOfWork.commit
-    #   PURPOSE: Commit the current transaction and dispatch collected events.
-    #   INPUTS: { None }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Commits the pg8000 connection transaction; dispatches domain events via MessageBus.
-    #   LINKS: _require_conn, _run_sync, publish_events
-    # END_CONTRACT: PostgresUnitOfWork.commit
+    # endregion METHOD___aexit__
+
+    # region METHOD_commit
+    # PURPOSE: Persist all repository writes and deliver domain event side-effects atomically — commit fails = no writes + no events.
     async def commit(self) -> None:
         """Commit the transaction and dispatch collected events."""
         conn = self._require_conn()
@@ -159,72 +127,53 @@ class PostgresUnitOfWork:
         try:
             await self.publish_events()
         except Exception:
-            logger.exception("[PostgresUoW][commit] Event dispatch failed after commit")
+            logger.exception("event dispatch failed after commit")
 
-    # START_CONTRACT: PostgresUnitOfWork.rollback
-    #   PURPOSE: Roll back the current transaction and discard collected events.
-    #   INPUTS: { None }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Rolls back the pg8000 connection transaction; clears saved tasks.
-    #   LINKS: _require_conn, _run_sync
-    # END_CONTRACT: PostgresUnitOfWork.rollback
+    # endregion METHOD_commit
+
+    # region METHOD_rollback
+    # PURPOSE: Discard all uncommitted writes and collected events so a failed unit of work leaves the database in its pre-transaction state.
     async def rollback(self) -> None:
         """Rollback the transaction and discard events."""
         conn = self._require_conn()
         await self._run_sync(lambda: conn.run("ROLLBACK"))
         self._saved_tasks.clear()
 
-    # START_CONTRACT: PostgresUnitOfWork.collect_events
-    #   PURPOSE: Pull events from all saved aggregates, returning collected events and updating saved tasks.
-    #   INPUTS: { None }
-    #   OUTPUTS: { list[DomainEvent] - flat list of all collected events }
-    #   SIDE_EFFECTS: Replaces _saved_tasks with clean (event-free) task instances.
-    #   LINKS: M-DOMAIN-EVENTS, M-DOMAIN-MODEL
-    # END_CONTRACT: PostgresUnitOfWork.collect_events
+    # endregion METHOD_rollback
+
+    # region METHOD_collect_events
+    # PURPOSE: Gather domain events emitted by saved aggregates so they can be dispatched after commit, ensuring side-effects match persisted state.
     async def collect_events(self) -> list[DomainEvent]:
+        """Read events from all saved aggregates via the public events field and clear _saved_tasks."""
         events: list[DomainEvent] = []
-        saved = list(self._saved_tasks)
+        for task in self._saved_tasks:
+            events.extend(task.events)
         self._saved_tasks.clear()
-        for task in saved:
-            clean_task, task_events = task.pull_events()
-            events.extend(task_events)
-            self._saved_tasks.append(clean_task)
         return events
 
-    # START_CONTRACT: PostgresUnitOfWork.publish_events
-    #   PURPOSE: Collect events and dispatch them via the message bus.
-    #   INPUTS: { None }
-    #   OUTPUTS: { None }
-    #   SIDE_EFFECTS: Dispatches events; clears _saved_tasks.
-    #   LINKS: M-APPLICATION-MESSAGE-BUS
-    # END_CONTRACT: PostgresUnitOfWork.publish_events
+    # endregion METHOD_collect_events
+
+    # region METHOD_publish_events
+    # PURPOSE: Dispatch collected domain events through the message bus so registered handlers (webhooks, logging) react after a successful commit.
     async def publish_events(self) -> None:
+        """Collect events and dispatch them via the message bus."""
         events = await self.collect_events()
         await self._bus.dispatch(events)
         self._saved_tasks.clear()
 
-    # START_CONTRACT: _require_conn
-    #   PURPOSE: Return the active connection or raise UnitOfWorkNotInitializedError if UoW was not entered.
-    #   INPUTS: { None }
-    #   OUTPUTS: { Connection - the active pg8000 connection }
-    #   SIDE_EFFECTS: None
-    #   LINKS: pg8000.native.Connection
-    # END_CONTRACT: _require_conn
+    # endregion METHOD_publish_events
+
     def _require_conn(self) -> Connection:
         """Return active connection, or raise if not yet entered."""
         if self._conn is None:
+            msg = "Connection not initialized; use 'async with' to enter the UoW"
             raise UnitOfWorkNotInitializedError(
-                "Connection not initialized; use 'async with' to enter the UoW"
+                msg,
             )
         return self._conn
 
-    # START_CONTRACT: _create_connection
-    #   PURPOSE: Create a new synchronous pg8000 connection from config.
-    #   INPUTS: { None }
-    #   OUTPUTS: { Connection - a new pg8000 native connection }
-    #   SIDE_EFFECTS: Opens a TCP connection to PostgreSQL.
-    #   LINKS: pg8000.native.Connection, PostgresDbConfig
-    # END_CONTRACT: _create_connection
+    # region METHOD__create_connection
+    # PURPOSE: Bootstrap a pg8000 connection from the frozen config so the UoW can start a transaction against the configured database.
     def _create_connection(self) -> Connection:
         """Create a new pg8000 connection from config."""
         return Connection(
@@ -235,14 +184,12 @@ class PostgresUnitOfWork:
             password=self._config.password,
         )
 
-    # START_CONTRACT: _run_sync
-    #   PURPOSE: Run a synchronous function in the thread pool executor.
-    #   INPUTS: { fn: Callable[[], T] - synchronous callable }
-    #   OUTPUTS: { T - the return value of fn }
-    #   SIDE_EFFECTS: Executes fn in a separate thread.
-    #   LINKS: asyncio.loop.run_in_executor
-    # END_CONTRACT: _run_sync
+    # endregion METHOD__create_connection
+
     async def _run_sync(self, fn: Callable[[], T]) -> T:
         """Execute fn in the thread pool, return its result."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, fn)
+
+
+# endregion CLASS_PostgresUnitOfWork

@@ -1,34 +1,13 @@
-# FILE: tests/unit/test_orchestrator_stop_idempotent.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for Orchestrator.stop() idempotency and exception safety (fix-daemon-resource-leak-on-start-return).
-#   SCOPE: _stopped guard single-execution across sequential/interleaved/repeated callers; dead-bg-job tolerance via except Exception;
-#          CancelledError still reaches the graceful-drain path; per-step try/except isolation (clouds.stop/gateway.disconnect_all/http_session.close);
-#          http_session nulled after close; stop() before start() is a safe no-op.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR
-#   LINKS: M-DOMAIN-PORTS, M-CLOUD-PROVISIONER
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_orchestrator - Build an Orchestrator with mocked deps and an injectable http_session
-#   TestStopIdempotent - cleanup body runs exactly once across sequential/double calls
-#   TestStopInterleaved - two coroutines: second sees _stopped==True and returns as no-op
-#   TestStopDeadBgJob - a bg job that terminated with RuntimeError does not abort cleanup
-#   TestStopCancelledError - a running job that raises CancelledError keeps the drain path
-#   TestStopPerStepIsolation - one failing cleanup step does not skip the others; http_session nulled
-#   TestStopBeforeStart - stop() on a freshly-constructed orchestrator is a safe no-op
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for Orchestrator.stop() idempotency and exception safety (fix-daemon-resource-leak-on-start-return).
-# END_CHANGE_SUMMARY
 """Unit tests for Orchestrator.stop() idempotency and exception safety."""
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for Orchestrator.stop() idempotency and exception safety (fix-daemon-resource-leak-on-start-return).
+# SCOPE: _stopped guard single-execution across sequential/interleaved/repeated callers; dead-bg-job tolerance via except Exception; CancelledError still reaches the graceful-drain path; per-step try/except isolation (clouds.stop/gateway.disconnect_all/http_session.close); http_session nulled after close; stop() before start() is a safe no-op.
+# KEYWORDS: Orchestrator.stop, idempotency, exception safety, graceful-drain
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -55,7 +34,8 @@ def _make_orchestrator(
     disconnect_all: AsyncMock | None = None,
 ) -> Orchestrator:
     """Build an Orchestrator with mocked deps. Inject cleanup-step AsyncMocks
-    via the real dependency slots so tests can assert on the held references."""
+    via the real dependency slots so tests can assert on the held references.
+    """
     local = MagicMock(spec=LocalSettings)
     local.conn_machine_pending = 10
     local.allocate_pending = 5
@@ -89,19 +69,20 @@ def _make_orchestrator(
     repository.disconnect_all = (
         disconnect_all if disconnect_all is not None else AsyncMock()
     )
-    operations = MagicMock()
-
-    log = MagicMock(spec=logging.Logger)
+    task_deployer = MagicMock()
+    output_downloader = MagicMock()
+    occupancy_checker = MagicMock()
 
     return Orchestrator(
         local_settings=local,
         remote_defaults=remote,
-        uow_factory=lambda: AsyncMock(),
+        uow_factory=AsyncMock,
         clouds=clouds,
         repository=repository,
-        operations=operations,
+        task_deployer=task_deployer,
+        output_downloader=output_downloader,
+        occupancy_checker=occupancy_checker,
         engines=engines,
-        log=log,
         config_clouds=[],
         local_tasks_dir=MagicMock(),  # type: ignore[arg-type]
         allocation_tracker=AllocationTracker(),
@@ -121,7 +102,6 @@ class TestStopIdempotent:
     """stop(): cleanup body executes exactly once across repeated calls."""
 
     async def test_stop_runs_cleanup_body_once(self) -> None:
-        # START_BLOCK_TEST_STOP_RUNS_CLEANUP_BODY_ONCE
         clouds_stop = AsyncMock()
         disconnect_all = AsyncMock()
         http_session = MagicMock()
@@ -141,7 +121,6 @@ class TestStopIdempotent:
         http_session.close.assert_awaited_once()
         # http_session nulled after the first call.
         assert orch._http_session is None
-        # END_BLOCK_TEST_STOP_RUNS_CLEANUP_BODY_ONCE
 
 
 # =============================================================================
@@ -154,7 +133,8 @@ class TestStopHttpSessionNulled:
 
     @pytest.mark.parametrize("close_raises", [False, True])
     async def test_stop_http_session_nulled_after_close(
-        self, close_raises: bool
+        self,
+        close_raises: bool,
     ) -> None:
         http_session = MagicMock()
         if close_raises:
@@ -178,7 +158,6 @@ class TestStopInterleaved:
     """Two coroutines calling stop(): the second sees _stopped==True and no-ops."""
 
     async def test_stop_interleaved_calls_serialized_by_guard(self) -> None:
-        # START_BLOCK_TEST_STOP_INTERLEAVED_CALLS_SERIALIZED_BY_GUARD
         # clouds.stop() awaits once before completing so the second caller
         # gets a chance to run mid-first-call (at the clouds.stop await).
         clouds_stop_calls = 0
@@ -207,7 +186,6 @@ class TestStopInterleaved:
         # ran exactly once total.
         assert clouds_stop_calls == 1
         disconnect_all.assert_awaited_once()
-        # END_BLOCK_TEST_STOP_INTERLEAVED_CALLS_SERIALIZED_BY_GUARD
 
 
 # =============================================================================
@@ -219,7 +197,6 @@ class TestStopDeadBgJob:
     """A bg job already terminated with a non-CancelledError must not abort stop()."""
 
     async def test_stop_dead_bg_job_does_not_abort_cleanup(self) -> None:
-        # START_BLOCK_TEST_STOP_DEAD_BG_JOB_DOES_NOT_ABORT_CLEANUP
         clouds_stop = AsyncMock()
         disconnect_all = AsyncMock()
         http_session = MagicMock()
@@ -247,7 +224,6 @@ class TestStopDeadBgJob:
         disconnect_all.assert_awaited_once()
         http_session.close.assert_awaited_once()
         assert orch._http_session is None
-        # END_BLOCK_TEST_STOP_DEAD_BG_JOB_DOES_NOT_ABORT_CLEANUP
 
 
 # =============================================================================
@@ -259,7 +235,6 @@ class TestStopCancelledError:
     """A job that raises CancelledError on cancel keeps the existing drain path."""
 
     async def test_stop_cancellederror_preserves_drain(self) -> None:
-        # START_BLOCK_TEST_STOP_CANCELLEDERROR_PRESERVES_DRAIN
         clouds_stop = AsyncMock()
         disconnect_all = AsyncMock()
         http_session = MagicMock()
@@ -271,10 +246,7 @@ class TestStopCancelledError:
         )
 
         async def _hang_until_cancelled() -> None:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                raise
+            await asyncio.Event().wait()
 
         live_task = asyncio.create_task(_hang_until_cancelled())
         orch._bg_jobs.add(live_task)
@@ -286,7 +258,6 @@ class TestStopCancelledError:
         clouds_stop.assert_awaited_once()
         disconnect_all.assert_awaited_once()
         http_session.close.assert_awaited_once()
-        # END_BLOCK_TEST_STOP_CANCELLEDERROR_PRESERVES_DRAIN
 
 
 # =============================================================================
@@ -298,7 +269,6 @@ class TestStopPerStepIsolation:
     """Each cleanup step is isolated; one failing step does not skip the others."""
 
     async def test_stop_failing_clouds_stop_does_not_skip_rest(self) -> None:
-        # START_BLOCK_TEST_STOP_FAILING_CLOUDS_STOP_DOES_NOT_SKIP_REST
         clouds_stop = AsyncMock(side_effect=RuntimeError("clouds down"))
         disconnect_all = AsyncMock()
         http_session = MagicMock()
@@ -315,10 +285,8 @@ class TestStopPerStepIsolation:
         disconnect_all.assert_awaited_once()
         http_session.close.assert_awaited_once()
         assert orch._http_session is None
-        # END_BLOCK_TEST_STOP_FAILING_CLOUDS_STOP_DOES_NOT_SKIP_REST
 
     async def test_stop_failing_disconnect_all_does_not_skip_http(self) -> None:
-        # START_BLOCK_TEST_STOP_FAILING_DISCONNECT_ALL_DOES_NOT_SKIP_HTTP
         clouds_stop = AsyncMock()
         disconnect_all = AsyncMock(side_effect=RuntimeError("gateway down"))
         http_session = MagicMock()
@@ -335,7 +303,6 @@ class TestStopPerStepIsolation:
         disconnect_all.assert_awaited_once()
         http_session.close.assert_awaited_once()
         assert orch._http_session is None
-        # END_BLOCK_TEST_STOP_FAILING_DISCONNECT_ALL_DOES_NOT_SKIP_HTTP
 
 
 # =============================================================================
@@ -347,7 +314,6 @@ class TestStopBeforeStart:
     """stop() on a freshly-constructed orchestrator is a safe no-op."""
 
     async def test_stop_before_start_is_safe_noop(self) -> None:
-        # START_BLOCK_TEST_STOP_BEFORE_START_IS_SAFE_NOOP
         clouds_stop = AsyncMock()
         disconnect_all = AsyncMock()
         http_session = MagicMock()
@@ -368,4 +334,3 @@ class TestStopBeforeStart:
         disconnect_all.assert_awaited_once()
         http_session.close.assert_awaited_once()
         assert orch._http_session is None
-        # END_BLOCK_TEST_STOP_BEFORE_START_IS_SAFE_NOOP

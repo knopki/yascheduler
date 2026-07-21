@@ -1,29 +1,8 @@
-# FILE: tests/unit/test_ssh_gateway_download_outputs.py
-# VERSION: 1.4.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for SSHMachineOperations.download_outputs classification + conditional rmtree.
-#   SCOPE: Success path, per-file permanent error, per-file transient error, session-level error, rmtree gating, per-file SFTP isolation, task_id log correlation.
-#   DEPENDS: M-SSH-OPS-DOWNLOAD, M-SSH-SESSION
-#   LINKS: M-SSH-OPS-DOWNLOAD, M-SSH-SESSION
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   _make_session_with_sftp - Build an SSHMachineSession whose _conn.start_sftp_client yields a configured sftp mock
-#   test_download_outputs_success - All files download OK; returns (local_folder, remote_folder, [], []); rmtree called
-#   test_download_outputs_per_file_permanent_error - Per-file OSError caught; classified permanent; rmtree NOT called (conservative gate)
-#   test_download_outputs_per_file_transient_error - Per-file SFTPFailure (SFTPRetryExc) caught; classified transient; rmtree NOT called
-#   test_download_outputs_session_error - Session-level failure caught; returned in transient_errors; rmtree NOT called
-#   test_download_outputs_task_id_in_signature - task_id param accepted for log correlation
-#   test_download_outputs_rmtree_only_on_full_success - rmtree called only when both error lists empty
-#   test_download_outputs_per_file_sftp_isolation - dropped client on file 2 does not fail-fast file 3
-#   test_download_outputs_session_level_failure_transient - open_sftp failure -> session-level transient
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.4.0 - drop-task-context-entity: tests unpack the new 4-tuple return (local_folder, remote_folder, transient_errors, permanent_errors); drop meta_add list-of-pairs assertions.
-#   PREVIOUS_CHANGE: v1.3.0 - session-based-machine-handle: download_outputs now takes a session param (was ip). Tests build a real SSHMachineSession via _make_state and wire sftp mocks on session._conn.start_sftp_client (was operations.get_sftp / repository.get_path monkey-patches). session.path replaces repository.get_path.
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for SSHMachineOperations.download_outputs classification + conditional rmtree.
+# SCOPE: Success path, per-file permanent error, per-file transient error, session-level error, rmtree gating, per-file SFTP isolation, task_id log correlation.
+# KEYWORDS: download_outputs, rmtree gating, SFTP isolation
+# endregion MODULE_CONTRACT
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -36,10 +15,9 @@ from asyncssh.sftp import SFTPFailure
 
 from tests.unit.test_ssh_gateway import _make_state
 from yascheduler.domain.model import TaskId
-from yascheduler.infra.ssh.operations import SSHMachineOperations
+from yascheduler.infra.ssh.operations import OutputDownloader
 from yascheduler.infra.ssh.operations import download as download_module
 from yascheduler.infra.ssh.platform.protocol import SFTPConnectionLost
-from yascheduler.infra.ssh.repository import SSHMachineRepository
 from yascheduler.infra.ssh.session import SSHMachineSession
 
 
@@ -59,13 +37,13 @@ def _no_sftp_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _wire_sftp(session: SSHMachineSession, sftp_mock: AsyncMock) -> SSHMachineSession:
     """Install ``sftp_mock`` as the singleton SFTP client yielded by the session's conn."""
-    session._adapter.path = PurePosixPath  # type: ignore[method-assign,misc]  # noqa: SLF001
+    session._adapter.path = PurePosixPath  # type: ignore[method-assign,misc]
 
     @asynccontextmanager
     async def _sftp_ctx() -> AsyncGenerator[AsyncMock, None]:
         yield sftp_mock
 
-    session._conn.start_sftp_client = _sftp_ctx  # type: ignore[method-assign,misc,assignment]  # noqa: SLF001
+    session._conn.start_sftp_client = _sftp_ctx  # type: ignore[method-assign,misc,assignment]
     return session
 
 
@@ -75,8 +53,8 @@ def _make_session_with_sftp(sftp_mock: AsyncMock) -> SSHMachineSession:
     return _wire_sftp(session, sftp_mock)
 
 
-def _make_operations() -> SSHMachineOperations:
-    return SSHMachineOperations(repository=SSHMachineRepository())
+def _make_output_downloader() -> OutputDownloader:
+    return OutputDownloader()
 
 
 @pytest.mark.asyncio
@@ -86,7 +64,7 @@ async def test_download_outputs_success() -> None:
     sftp_mock.get = AsyncMock(return_value=None)
     sftp_mock.rmtree = AsyncMock(return_value=None)
     session = _make_session_with_sftp(sftp_mock)
-    operations = _make_operations()
+    operations = _make_output_downloader()
 
     (
         local_folder,
@@ -116,7 +94,7 @@ async def test_download_outputs_per_file_permanent_error() -> None:
     sftp_mock.get = AsyncMock(side_effect=OSError("permission denied"))
     sftp_mock.rmtree = AsyncMock(return_value=None)
     session = _make_session_with_sftp(sftp_mock)
-    operations = _make_operations()
+    operations = _make_output_downloader()
 
     (
         local_folder,
@@ -148,7 +126,7 @@ async def test_download_outputs_per_file_transient_error() -> None:
     sftp_mock.get = AsyncMock(side_effect=SFTPFailure("connection lost"))
     sftp_mock.rmtree = AsyncMock(return_value=None)
     session = _make_session_with_sftp(sftp_mock)
-    operations = _make_operations()
+    operations = _make_output_downloader()
 
     (
         local_folder,
@@ -177,15 +155,15 @@ async def test_download_outputs_per_file_transient_error() -> None:
 async def test_download_outputs_session_error() -> None:
     """open_sftp raises (session-level failure); caught in transient_errors; rmtree NOT called."""
     session = _make_state()
-    session._adapter.path = PurePosixPath  # type: ignore[method-assign,misc]  # noqa: SLF001
+    session._adapter.path = PurePosixPath  # type: ignore[method-assign,misc]
 
     @asynccontextmanager
     async def bad_sftp() -> AsyncGenerator[Any, None]:
         raise OSError("no connection")
         yield  # type: ignore[unreachable]
 
-    session._conn.start_sftp_client = bad_sftp  # type: ignore[method-assign,misc]  # noqa: SLF001
-    operations = _make_operations()
+    session._conn.start_sftp_client = bad_sftp  # type: ignore[method-assign,misc]
+    operations = _make_output_downloader()
 
     (
         local_folder,
@@ -216,7 +194,7 @@ async def test_download_outputs_task_id_in_signature() -> None:
     sftp_mock.get = AsyncMock(return_value=None)
     sftp_mock.rmtree = AsyncMock(return_value=None)
     session = _make_session_with_sftp(sftp_mock)
-    operations = _make_operations()
+    operations = _make_output_downloader()
 
     (
         local_folder,
@@ -255,15 +233,18 @@ async def test_download_outputs_task_id_in_signature() -> None:
 
 @pytest.mark.asyncio
 async def test_download_outputs_rmtree_only_on_full_success() -> None:
-    """rmtree runs ONLY when both transient_errors and permanent_errors are empty."""
+    """Rmtree runs ONLY when both transient_errors and permanent_errors are empty."""
     # Full success -> rmtree called once.
     sftp_ok = AsyncMock()
     sftp_ok.get = AsyncMock(return_value=None)
     sftp_ok.rmtree = AsyncMock(return_value=None)
     session_ok = _make_session_with_sftp(sftp_ok)
-    ops_ok = _make_operations()
+    ops_ok = _make_output_downloader()
     await ops_ok.download_outputs(
-        session_ok, remote_dir="/r", local_dir=Path("/l"), files=["f1", "f2"]
+        session_ok,
+        remote_dir="/r",
+        local_dir=Path("/l"),
+        files=["f1", "f2"],
     )
     sftp_ok.rmtree.assert_awaited_once_with(PurePosixPath("/r"))
 
@@ -272,9 +253,12 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
     sftp_perm.get = AsyncMock(side_effect=OSError("denied"))
     sftp_perm.rmtree = AsyncMock(return_value=None)
     session_perm = _make_session_with_sftp(sftp_perm)
-    ops_perm = _make_operations()
+    ops_perm = _make_output_downloader()
     _, _, transient, permanent = await ops_perm.download_outputs(
-        session_perm, remote_dir="/r", local_dir=Path("/l"), files=["f1", "f2"]
+        session_perm,
+        remote_dir="/r",
+        local_dir=Path("/l"),
+        files=["f1", "f2"],
     )
     assert len(permanent) == 2
     assert transient == []
@@ -285,9 +269,12 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
     sftp_trans.get = AsyncMock(side_effect=SFTPFailure("lost"))
     sftp_trans.rmtree = AsyncMock(return_value=None)
     session_trans = _make_session_with_sftp(sftp_trans)
-    ops_trans = _make_operations()
+    ops_trans = _make_output_downloader()
     _, _, transient2, permanent2 = await ops_trans.download_outputs(
-        session_trans, remote_dir="/r", local_dir=Path("/l"), files=["f1", "f2"]
+        session_trans,
+        remote_dir="/r",
+        local_dir=Path("/l"),
+        files=["f1", "f2"],
     )
     assert len(transient2) == 2
     assert permanent2 == []
@@ -298,8 +285,8 @@ async def test_download_outputs_rmtree_only_on_full_success() -> None:
 async def test_download_outputs_per_file_sftp_isolation() -> None:
     """A dropped SFTP client on file 2 does not fail-fast file 3 (fresh client per file)."""
     session = _make_state()
-    session._adapter.path = PurePosixPath  # type: ignore[method-assign,misc]  # noqa: SLF001
-    operations = _make_operations()
+    session._adapter.path = PurePosixPath  # type: ignore[method-assign,misc]
+    operations = _make_output_downloader()
 
     clients: list[AsyncMock] = []
 
@@ -316,7 +303,7 @@ async def test_download_outputs_per_file_sftp_isolation() -> None:
         clients.append(sftp)
         yield sftp
 
-    session._conn.start_sftp_client = fresh_sftp  # type: ignore[method-assign,misc,assignment]  # noqa: SLF001
+    session._conn.start_sftp_client = fresh_sftp  # type: ignore[method-assign,misc,assignment]
 
     _, _, transient_errors, permanent_errors = await operations.download_outputs(
         session,
@@ -341,15 +328,15 @@ async def test_download_outputs_per_file_sftp_isolation() -> None:
 async def test_download_outputs_session_level_failure_transient() -> None:
     """open_sftp OPEN failure -> outer handler -> session-level transient (remote dir preserved)."""
     session = _make_state()
-    session._adapter.path = PurePosixPath  # type: ignore[method-assign,misc]  # noqa: SLF001
-    operations = _make_operations()
+    session._adapter.path = PurePosixPath  # type: ignore[method-assign,misc]
+    operations = _make_output_downloader()
 
     @asynccontextmanager
     async def broken_sftp() -> AsyncGenerator[Any, None]:
         raise SFTPConnectionLost("no session")
         yield  # type: ignore[unreachable]
 
-    session._conn.start_sftp_client = broken_sftp  # type: ignore[method-assign,misc]  # noqa: SLF001
+    session._conn.start_sftp_client = broken_sftp  # type: ignore[method-assign,misc]
 
     (
         local_folder,

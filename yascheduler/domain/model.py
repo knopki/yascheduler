@@ -1,31 +1,17 @@
-# FILE: yascheduler/domain/model.py
-# VERSION: 1.22.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Domain entities.
-#   SCOPE: TaskStatus, MachineState enums; ProcessResult value object; TaskId, NewTask, Task, NewNode, Node, NodeId, ConnectedMachine entities; re-export Engine, EngineRepository, Deploy* from .engine for backward compatibility.
-#   DEPENDS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
-#   LINKS: M-DOMAIN-EXCEPTIONS, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TaskStatus - IntEnum: TO_DO=0, RUNNING=1, DONE=2
-#   MachineState - Enum: FREE, BUSY
-#   ProcessResult - Exit code and captured output from remote execution
-#   TaskId - Task primary-key value object (frozen dataclass wrapping int; validates >0; __str__ renders bare int)
-#   NewTask - Pre-persistence task record
-#   Task - Post-persistence task entity
-#   NodeId - Node primary-key value object
-#   NewNode - Pre-persistence node record
-#   Node - Post-persistence node record
-#   ConnectedMachine - Runtime connected machine with state transitions
-#   EngineRepository - Frozen collection of engines (re-exported from M-DOMAIN-ENGINE)
-#   LocalFilesDeploy / LocalArchiveDeploy / RemoteArchiveDeploy / Deploy - Deploy strategies (re-exported from M-DOMAIN-ENGINE)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.22.0 - drop-task-context-entity: TaskContext / TaskContextOverrides; typed fields folded onto Task / NewTask; Task.fail/reject simplified to direct replace(status=DONE, error=reason); new Task.with_remote_folder and Task.with_download_results methods; with_event reads self.webhook_url / self.webhook_custom_params directly.
-#   PREVIOUS_CHANGE: v1.21.0 - task-schema-and-entity-cleanup: Task/NewTask drop allocated_ip; Task gains created_at/updated_at: datetime
-# END_CHANGE_SUMMARY
+"""Domain entities."""
+# region MODULE_CONTRACT
+# PURPOSE: Encode the scheduler's core vocabulary — task and node entities, lifecycle state, and value objects — as immutable data with atomic transitions, so business rules are enforced in one place and shared safely across async components.
+# SCOPE:
+# - Lifecycle enums (TaskStatus, MachineState, NodeStatus) and ProcessResult; identity value objects TaskId/NodeId; pre/post-persistence records NewTask/Task, NewNode/Node; the ConnectedMachine runtime entity.
+# - NOT: persistence ports (domain.ports), events (domain.events), or exceptions (domain.exceptions).
+# INVARIANTS: Entities are frozen; every state change happens through transition methods that validate the source state, mutate via replace, and append the matching DomainEvent to events.
+# RATIONALE:
+# - Q: Why dedicated value objects (TaskId/NodeId) instead of bare int?
+#   A: Type safety — callers must unwrap .value at external boundaries (pg8000, JSON, argparse), preventing accidental mixing of ids with plain ints.
+# - Q: Why frozen dataclasses with replace-based transitions?
+#   A: Async-safe sharing — a task aggregate can be handed to concurrent coroutines without locks, since every change produces a new instance.
+# KEYWORDS: task, node, machine, lifecycle, value object, entity, allocation, ConnectedMachine
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -33,7 +19,8 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum, IntEnum, unique
-from typing import TypeVar, overload
+
+from yascheduler.shared import StrEnum
 
 from .engine import (
     Deploy,
@@ -53,24 +40,31 @@ from .events import (
 )
 from .exceptions import (
     MachineBusyError,
-    TaskAlreadyAllocatedError,
-    TaskNotAllocatedError,
     TaskNotRunningError,
     TaskNotTodoError,
 )
 
-# Re-exports from .engine for backward compatibility with
-# `from yascheduler.domain.model import Engine` / EngineRepository / Deploy*.
+# Module public API: own entities/value objects + engine re-exports for the canonical import path.
 __all__ = [
+    "ConnectedMachine",
     "Deploy",
     "Engine",
     "EngineRepository",
     "LocalArchiveDeploy",
     "LocalFilesDeploy",
+    "MachineState",
+    "NewNode",
+    "NewTask",
+    "Node",
+    "NodeId",
+    "NodeStatus",
+    "ProcessResult",
     "RemoteArchiveDeploy",
+    "Task",
+    "TaskId",
+    "TaskStatus",
+    "materialize_task",
 ]
-
-_E = TypeVar("_E", bound=DomainEvent)
 
 
 @unique
@@ -90,6 +84,13 @@ class MachineState(Enum):
     BUSY = 2
 
 
+@unique
+class NodeStatus(StrEnum):
+    """Node lifecycle states: OTHER (placeholder for future states)."""
+
+    OTHER = "OTHER"
+
+
 @dataclass(frozen=True)
 class ProcessResult:
     """Exit code and captured output from a remote process execution."""
@@ -99,14 +100,12 @@ class ProcessResult:
     stderr: str = ""
 
 
-# START_CONTRACT: TaskId
-#   PURPOSE: Task primary-key value object — frozen dataclass wrapping int; validates >0; __str__ renders bare int.
-#   INPUTS: { value: int - the database-generated task_id (SERIAL starts at 1) }
-#   OUTPUTS: { None - raises ValueError in __post_init__ when value <= 0 }
-#   SIDE_EFFECTS: None
-#   RAISES: ValueError - when value <= 0 (a non-positive id indicates a bug)
-#   LINKS: M-DOMAIN-MODEL
-# END_CONTRACT: TaskId
+# region CLASS_TaskId
+# PURPOSE: Wrap the database task id in a dedicated value object so transport/serialization boundaries must unwrap it explicitly, preventing accidental mixing with bare ints.
+# INVARIANTS: value > 0; frozen and hashable; not equal to a bare int.
+# RATIONALE:
+# - Q: Why a dedicated type instead of bare int, NewType('TaskId', int), or int subclass?
+#   A: A frozen dataclass wrapper enforces explicit .value unwrapping at every external boundary, preventing accidental id/int mixing that NewType wouldn't catch at runtime and an int subclass wouldn't prevent.
 @dataclass(frozen=True)
 class TaskId:
     """Task primary-key value object.
@@ -124,19 +123,19 @@ class TaskId:
 
     def __post_init__(self) -> None:
         if self.value <= 0:
-            raise ValueError(f"TaskId must be > 0, got {self.value}")
+            msg = f"TaskId must be > 0, got {self.value}"
+            raise ValueError(msg)
 
     def __str__(self) -> str:
         return str(self.value)
 
 
-# START_CONTRACT: NewTask
-#   PURPOSE: Pre-persistence task record — no identity yet; converted to Task only by TaskRepository.insert.
-#   INPUTS: { label: str, engine: str, local_folder: str | None, webhook_url: str | None, webhook_custom_params: dict, extra: dict, status: TaskStatus, allocated_node_id: NodeId | None }
-#   OUTPUTS: { None - dataclass }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert
-# END_CONTRACT: NewTask
+# endregion CLASS_TaskId
+
+
+# region CLASS_NewTask
+# PURPOSE: Carry the fields needed to insert a task before it has a database id, with no lifecycle methods — a pure data carrier.
+# INVARIANTS: No identity (task_id absent); no events, status, allocated_node_id, remote_folder, error, created_at/updated_at — these are all supplied post-insert by the DB or by Task transition methods.
 @dataclass(frozen=True)
 class NewTask:
     """Pre-persistence task record — no identity yet.
@@ -153,32 +152,47 @@ class NewTask:
     extra: dict[str, object] = field(default_factory=dict)
 
 
-# START_CONTRACT: Task
-#   PURPOSE: Post-persistence task entity — always carries its database-generated task_id (identity-first) and a status lifecycle.
-#   INPUTS: { task_id: TaskId, label: str, engine: str, remote_folder: str | None, local_folder: str | None, webhook_url: str | None, webhook_custom_params: dict, error: str | None, extra: dict, created_at: datetime, updated_at: datetime, status: TaskStatus, allocated_node_id: NodeId | None, _events: tuple }
-#   OUTPUTS: { None - dataclass }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: TaskRepository.insert (the only NewTask→Task conversion site)
-# END_CONTRACT: Task
+# endregion CLASS_NewTask
+
+
+# region CLASS_Task
+# PURPOSE: Represent a persisted task as an immutable aggregate whose status only changes through atomic transition methods, so invariants and event emission stay centralized.
+# INVARIANTS: Every transition validates the source status, returns a new Task via replace, and appends the matching DomainEvent to events; allocated_node_id is the sole allocation signal. No intermediate-state mutators exist.
+# RATIONALE:
+# - Q: Why does allocated_node_id cover both "unallocated" and "node was deleted"?
+#   A: Both states mean "no node currently assigned" — the distinction is irrelevant at the entity level; the node-resolved transport address comes from NodeRepository, not from Task.
+# - Q: Why are there no `record_event`/`with_event`/`pull_events` primitives on `Task`?
+#   A: Event construction lives inside the transition methods so the source-status check and the event payload stay atomically bound — splitting them would let a caller record an event without performing (or after performing) the transition, breaking the invariant that events reflect actual state changes.
 @dataclass(frozen=True)
 class Task:
-    """Post-persistence task entity with lifecycle methods and allocation state.
+    """Post-persistence task entity with atomic lifecycle transitions.
+
+    Every state change happens through one of transition methods
+    that validates the source state, sets all fields that
+    change, constructs and appends the matching :class:`DomainEvent` to
+    ``events``, and returns a new ``Task`` via :func:`replace`. No method
+    leaves the entity in a semantically-empty intermediate state.
 
     ``allocated_node_id`` is the sole allocation signal: it is ``None`` for
     unallocated tasks (TO_DO with no node bound) and for tasks whose node was
-    deleted (the DB FK is ``ON DELETE SET NULL``). It is set by
-    :meth:`allocate_to`.
+    deleted.
+
+    ``events`` is a public field; the UoW reads it directly.
+    ``remote_folder`` is ``None`` on a freshly-inserted
+    TO_DO task; it is set by :meth:`run` when the task transitions to RUNNING.
+    ``local_folder`` is ``None`` until :meth:`complete` or :meth:`fail` sets it
+    from the download results. ``error`` is ``None`` until :meth:`reject`,
+    :meth:`fail`, or :meth:`abandon` sets it.
 
     ``created_at``/``updated_at`` default to ``datetime.now()`` mirroring the
-    DB schema (``DEFAULT NOW()``; ``updated_at`` is advanced by the
-    ``yascheduler_tasks_touch_updated_at`` BEFORE UPDATE trigger).
+    DB schema (``DEFAULT NOW()``.
     The DB always overrides them via RETURNING on insert and on every read.
     """
 
     task_id: TaskId
     engine: str
-    created_at: datetime = field(default_factory=lambda: datetime.now())
-    updated_at: datetime = field(default_factory=lambda: datetime.now())
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
     label: str = ""
     local_folder: str | None = None
     remote_folder: str | None = None
@@ -188,190 +202,155 @@ class Task:
     status: TaskStatus = TaskStatus.TO_DO
     extra: dict[str, object] = field(default_factory=dict)
     allocated_node_id: NodeId | None = None
-    _events: tuple[DomainEvent, ...] = field(default=(), repr=False)
+    events: tuple[DomainEvent, ...] = field(default=(), repr=True)
 
-    # START_CONTRACT: Task.allocate_to
-    #   PURPOSE: Bind task to a Node if not already allocated — sets allocated_node_id in one replace() call.
-    #   INPUTS: { node: Node - the node to bind (carries node_id) }
-    #   OUTPUTS: { Task - new Task with allocated_node_id set }
-    #   SIDE_EFFECTS: None
-    #   RAISES: TaskAlreadyAllocatedError - if already allocated (guard checks self.allocated_node_id is not None)
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskAlreadyAllocatedError
-    # END_CONTRACT: Task.allocate_to
-    def allocate_to(self, node: Node) -> Task:
-        """Bind task to a node, raising TaskAlreadyAllocatedError if already allocated."""
-        # START_BLOCK_VALIDATE_NOT_ALLOCATED
-        if self.allocated_node_id is not None:
-            raise TaskAlreadyAllocatedError(self.task_id)
-        # END_BLOCK_VALIDATE_NOT_ALLOCATED
-        # START_BLOCK_APPLY_ALLOCATION
-        return replace(self, allocated_node_id=node.node_id)
-        # END_BLOCK_APPLY_ALLOCATION
-
-    # START_CONTRACT: Task.mark_running
-    #   PURPOSE: Transition task status to RUNNING.
-    #   INPUTS: { None }
-    #   OUTPUTS: { Task - New Task instance with status=RUNNING }
-    #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotAllocatedError - if not yet allocated to a node; TaskNotTodoError - if status is not TO_DO
-    #   LINKS:
-    # END_CONTRACT: Task.mark_running
-    def mark_running(self) -> Task:
-        """Transition task status to RUNNING."""
-        # START_BLOCK_VALIDATE_STATE
-        if self.allocated_node_id is None:
-            raise TaskNotAllocatedError(self.task_id)
+    # region METHOD_run
+    # PURPOSE: Bind the task to a node and begin remote execution, recording the allocation as an event.
+    # REQUIRES: status is TO_DO.
+    def run(self, node_id: NodeId, remote_folder: str) -> Task:
+        """Transition TO_DO→RUNNING, binding the node and setting remote_folder."""
         if self.status != TaskStatus.TO_DO:
             raise TaskNotTodoError(self.task_id)
-        # END_BLOCK_VALIDATE_STATE
-        return replace(self, status=TaskStatus.RUNNING)
-
-    # START_CONTRACT: Task.complete
-    #   PURPOSE: Mark task as DONE if currently RUNNING.
-    #   INPUTS: { None }
-    #   OUTPUTS: { Task - New Task instance with status=DONE }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotRunningError
-    # END_CONTRACT: Task.complete
-    def complete(self) -> Task:
-        """Mark task as DONE if currently RUNNING."""
-        # START_BLOCK_COMPLETE_VALIDATE_RUNNING
-        if self.status != TaskStatus.RUNNING:
-            raise TaskNotRunningError(self.task_id)
-        # END_BLOCK_COMPLETE_VALIDATE_RUNNING
-        return replace(self, status=TaskStatus.DONE)
-
-    # START_CONTRACT: Task.fail
-    #   PURPOSE: Mark task as DONE with error reason if currently RUNNING.
-    #   INPUTS: { reason: str - Failure description }
-    #   OUTPUTS: { Task - New Task instance with status=DONE and error set }
-    #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotRunningError - if not RUNNING
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotRunningError
-    # END_CONTRACT: Task.fail
-    def fail(self, reason: str) -> Task:
-        """Mark task as DONE with error reason if currently RUNNING."""
-        # START_BLOCK_FAIL_VALIDATE_RUNNING
-        if self.status != TaskStatus.RUNNING:
-            raise TaskNotRunningError(self.task_id)
-        # END_BLOCK_FAIL_VALIDATE_RUNNING
-        # START_BLOCK_MARK_FAILED
-        return replace(self, status=TaskStatus.DONE, error=reason)
-        # END_BLOCK_MARK_FAILED
-
-    # START_CONTRACT: Task.reject
-    #   PURPOSE: Mark a TO_DO task as DONE with error reason (e.g. unsupported engine).
-    #   INPUTS: { reason: str - Rejection description }
-    #   OUTPUTS: { Task - New Task instance with status=DONE and error set }
-    #   SIDE_EFFECTS: None
-    #   RAISES: TaskNotTodoError - if not TO_DO
-    #   LINKS: M-DOMAIN-EXCEPTIONS: TaskNotTodoError
-    # END_CONTRACT: Task.reject
-    def reject(self, reason: str) -> Task:
-        """Mark a TO_DO task as DONE with error reason."""
-        # START_BLOCK_VALIDATE_TODO
-        if self.status != TaskStatus.TO_DO:
-            raise TaskNotTodoError(self.task_id)
-        # END_BLOCK_VALIDATE_TODO
-        # START_BLOCK_MARK_REJECTED
-        return replace(self, status=TaskStatus.DONE, error=reason)
-        # END_BLOCK_MARK_REJECTED
-
-    # START_CONTRACT: Task.record_event
-    #   PURPOSE: Append a domain event to the task's event tuple, returning a new Task.
-    #   INPUTS: { event: DomainEvent }
-    #   OUTPUTS: { Task - New instance with event appended to _events }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EVENTS
-    # END_CONTRACT: Task.record_event
-    def record_event(self, event: DomainEvent) -> Task:
-        return replace(self, _events=self._events + (event,))
-
-    # START_CONTRACT: Task.with_remote_folder
-    #   PURPOSE: Set remote_folder post-insert
-    #   INPUTS: { remote_folder: str - the remote path assigned to the task }
-    #   OUTPUTS: { Task - new Task with remote_folder set }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-MODEL
-    # END_CONTRACT: Task.with_remote_folder
-    def with_remote_folder(self, remote_folder: str) -> Task:
-        """Return a new Task with remote_folder set (submit-time copy-with)."""
-        return replace(self, remote_folder=remote_folder)
-
-    # START_CONTRACT: Task.with_download_results
-    #   PURPOSE: Set local_folder and remote_folder post-download.
-    #   INPUTS: { local_folder: str - local output path (keyword-only), remote_folder: str - remote output path (keyword-only) }
-    #   OUTPUTS: { Task - new Task with local_folder and remote_folder set }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-MODEL
-    # END_CONTRACT: Task.with_download_results
-    def with_download_results(self, *, local_folder: str, remote_folder: str) -> Task:
-        """Return a new Task with local_folder and remote_folder set"""
-        return replace(self, local_folder=local_folder, remote_folder=remote_folder)
-
-    # START_CONTRACT: Task.with_event
-    #   PURPOSE: Construct an event of the given type with base fields (task_id, webhook_url, webhook_custom_params) populated from the typed task fields and subclass-specific fields from the caller, then append via record_event.
-    #   INPUTS: {
-    #     event_type: type[E] - Concrete event subclass to construct,
-    #     **fields: object - Subclass-specific fields (keyword-only via overloads); any base fields passed are silently dropped
-    #   }
-    #   OUTPUTS: { Task - New instance with the constructed event appended to _events }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EVENTS
-    # END_CONTRACT: Task.with_event
-    @overload
-    def with_event(
-        self, event_type: type[TaskCreated], *, engine_name: str
-    ) -> Task: ...
-    @overload
-    def with_event(
-        self, event_type: type[TaskAllocated], *, node_id: NodeId, engine_name: str
-    ) -> Task: ...
-    @overload
-    def with_event(
-        self, event_type: type[TaskCompleted], *, local_folder: str, has_errors: bool
-    ) -> Task: ...
-    @overload
-    def with_event(self, event_type: type[TaskFailed], *, reason: str) -> Task: ...
-    @overload
-    def with_event(
-        self, event_type: type[TaskAbandoned], *, node_id: NodeId
-    ) -> Task: ...
-    def with_event(self, event_type: type[_E], **fields: object) -> Task:
-        # START_BLOCK_DROP_BASE_FIELDS
-        fields.pop("task_id", None)
-        fields.pop("webhook_url", None)
-        fields.pop("webhook_custom_params", None)
-        # END_BLOCK_DROP_BASE_FIELDS
-        # START_BLOCK_CONSTRUCT_AND_RECORD
-        event = event_type(
+        event = TaskAllocated(
             task_id=self.task_id,
             webhook_url=self.webhook_url,
             webhook_custom_params=self.webhook_custom_params,
-            **fields,
+            node_id=node_id,
+            engine_name=self.engine,
         )
-        return self.record_event(event)
-        # END_BLOCK_CONSTRUCT_AND_RECORD
+        return replace(
+            self,
+            allocated_node_id=node_id,
+            remote_folder=remote_folder,
+            status=TaskStatus.RUNNING,
+            events=(*self.events, event),
+        )
 
-    # START_CONTRACT: Task.pull_events
-    #   PURPOSE: Extract accumulated events, returning a clean Task and the event tuple.
-    #   INPUTS: { None }
-    #   OUTPUTS: { tuple[Task, tuple[DomainEvent, ...]] - (clean_task, collected_events) }
-    #   SIDE_EFFECTS: None
-    #   LINKS: M-DOMAIN-EVENTS
-    # END_CONTRACT: Task.pull_events
-    def pull_events(self) -> tuple[Task, tuple[DomainEvent, ...]]:
-        return replace(self, _events=()), self._events
+    # endregion METHOD_run
+
+    # region METHOD_reject
+    # PURPOSE: Terminate a not-yet-started task with a reason (e.g. unsupported engine) without ever running it.
+    # REQUIRES: status is TO_DO.
+    def reject(self, reason: str) -> Task:
+        """Transition TO_DO→DONE with an error reason (e.g. unsupported engine)."""
+        if self.status != TaskStatus.TO_DO:
+            raise TaskNotTodoError(self.task_id)
+        event = TaskFailed(
+            task_id=self.task_id,
+            webhook_url=self.webhook_url,
+            webhook_custom_params=self.webhook_custom_params,
+            reason=reason,
+        )
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            error=reason,
+            events=(*self.events, event),
+        )
+
+    # endregion METHOD_reject
+
+    # region METHOD_complete
+    # PURPOSE: Finalize a running task on success, capturing output folders and emitting TaskCompleted.
+    # REQUIRES: status is RUNNING.
+    def complete(self, *, local_folder: str, remote_folder: str) -> Task:
+        """Transition RUNNING→DONE on successful completion, setting folders."""
+        if self.status != TaskStatus.RUNNING:
+            raise TaskNotRunningError(self.task_id)
+        event = TaskCompleted(
+            task_id=self.task_id,
+            webhook_url=self.webhook_url,
+            webhook_custom_params=self.webhook_custom_params,
+            local_folder=local_folder,
+        )
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            local_folder=local_folder,
+            remote_folder=remote_folder,
+            events=(*self.events, event),
+        )
+
+    # endregion METHOD_complete
+
+    # region METHOD_fail
+    # PURPOSE: End a running task on failure, recording the reason and whatever partial output was downloaded.
+    # REQUIRES: status is RUNNING.
+    def fail(self, reason: str, *, local_folder: str, remote_folder: str) -> Task:
+        """Transition RUNNING→DONE on failure, setting error and partial folders."""
+        if self.status != TaskStatus.RUNNING:
+            raise TaskNotRunningError(self.task_id)
+        event = TaskFailed(
+            task_id=self.task_id,
+            webhook_url=self.webhook_url,
+            webhook_custom_params=self.webhook_custom_params,
+            reason=reason,
+        )
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            error=reason,
+            local_folder=local_folder,
+            remote_folder=remote_folder,
+            events=(*self.events, event),
+        )
+
+    # endregion METHOD_fail
+
+    # region METHOD_abandon
+    # PURPOSE: Stop a running task whose node disappeared, emitting TaskAbandoned only when a concrete node_id is supplied.
+    # REQUIRES: status is RUNNING.
+    def abandon(self, node_id: NodeId | None, error: str = "node is gone") -> Task:
+        """Transition RUNNING→DONE when the node disappeared."""
+        if self.status != TaskStatus.RUNNING:
+            raise TaskNotRunningError(self.task_id)
+        new_events = self.events
+        if node_id is not None:
+            event = TaskAbandoned(
+                task_id=self.task_id,
+                webhook_url=self.webhook_url,
+                webhook_custom_params=self.webhook_custom_params,
+                node_id=node_id,
+            )
+            new_events = (*new_events, event)
+        return replace(
+            self,
+            status=TaskStatus.DONE,
+            error=error,
+            events=new_events,
+        )
+
+    # endregion METHOD_abandon
 
 
-# START_CONTRACT: NodeId
-#   PURPOSE: Node primary-key value object — frozen dataclass wrapping int; validates >0; __str__ renders bare int.
-#   INPUTS: { value: int - the database-generated node_id (SERIAL starts at 1) }
-#   OUTPUTS: { None - raises ValueError in __post_init__ when value <= 0 }
-#   SIDE_EFFECTS: None
-#   RAISES: ValueError - when value <= 0 (a non-positive id indicates a bug)
-#   LINKS: M-DOMAIN-MODEL
-# END_CONTRACT: NodeId
+# endregion CLASS_Task
+
+
+# region FUNC_materialize_task
+# PURPOSE: Attach the TaskCreated event to a freshly-inserted Task so the UoW dispatches it on commit.
+# RATIONALE:
+# - Q: Why a dedicated function instead of calling TaskCreated inside insert?
+#   A: Keeps the domain event construction in the domain layer and the SQL/ORM concern in the repository. The infrastructure layer never imports TaskCreated directly.
+def materialize_task(task: Task) -> Task:
+    """Return a Task with a TaskCreated event appended to events."""
+    event = TaskCreated(
+        task_id=task.task_id,
+        webhook_url=task.webhook_url,
+        webhook_custom_params=task.webhook_custom_params,
+        engine_name=task.engine,
+    )
+    return replace(task, events=(event,))
+
+
+# endregion FUNC_materialize_task
+
+
+# region CLASS_NodeId
+# PURPOSE: Wrap the database node id in a dedicated value object so transport/serialization boundaries must unwrap it explicitly, preventing accidental mixing with bare ints.
+# INVARIANTS: value > 0; frozen and hashable; not equal to a bare int.
+# RATIONALE:
+# - Q: Why a dedicated type instead of bare int, NewType('NodeId', int), or int subclass?
+#   A: A frozen dataclass wrapper enforces explicit .value unwrapping at every external boundary, preventing accidental id/int mixing.
 @dataclass(frozen=True)
 class NodeId:
     """Node primary-key value object.
@@ -389,42 +368,48 @@ class NodeId:
 
     def __post_init__(self) -> None:
         if self.value <= 0:
-            raise ValueError(f"NodeId must be > 0, got {self.value}")
+            msg = f"NodeId must be > 0, got {self.value}"
+            raise ValueError(msg)
 
     def __str__(self) -> str:
         return str(self.value)
 
 
-# START_CONTRACT: NewNode
-#   PURPOSE: Pre-persistence node record — no identity yet; converted to Node only by NodeRepository.insert.
-#   INPUTS: { ip: str = "", ncpus: int = 0, enabled: bool = True, cloud: str | None = None, username: str = "root", port: int = 22 }
-#   OUTPUTS: { None - dataclass }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: NodeRepository.insert
-# END_CONTRACT: NewNode
+# endregion CLASS_NodeId
+
+
+# region CLASS_NewNode
+# PURPOSE: Carry the fields needed to insert a node before it has a database id, mirroring Node minus identity.
+# INVARIANTS: No node_id field (absent by design). hostname="" is the empty-string sentinel for tmp rows. ncpus=None means no operator-set limit (discovered at spawn).
 @dataclass(frozen=True)
 class NewNode:
-    """Pre-persistence node record — no identity yet. Mirrors :class:`Node`
-    minus ``node_id``. ``ip``/``ncpus`` default so the tmp-reservation call
-    site omits them; converted to :class:`Node` only by
-    :meth:`NodeRepository.insert`.
+    """Pre-persistence node record — no identity yet; mirrors :class:`Node`.
+
+    minus ``node_id``.
     """
 
-    ip: str = ""
-    ncpus: int = 0
-    enabled: bool = True  # FIXME: should be False
-    cloud: str | None = None
+    enabled: bool = True
+    status: NodeStatus = NodeStatus.OTHER
+    hostname: str = ""
     username: str = "root"
     port: int = 22
+    jump_host: str | None = None
+    jump_port: int = 22
+    jump_username: str = "root"
+    ncpus: int | None = None
+    cloud: str | None = None
+    external_id: str | None = None
 
 
-# START_CONTRACT: Node
-#   PURPOSE: Post-persistence node record — always carries its database-generated node_id (identity-first).
-#   INPUTS: { node_id: NodeId, ip: str, ncpus: int, enabled: bool, cloud: str | None, username: str, port: int }
-#   OUTPUTS: { None - dataclass }
-#   SIDE_EFFECTS: None
-#   LINKS: M-DOMAIN-MODEL, M-DOMAIN-PORTS: NodeRepository.insert (the only NewNode→Node conversion site)
-# END_CONTRACT: Node
+# endregion CLASS_NewNode
+
+
+# region CLASS_Node
+# PURPOSE: Represent a persisted node, carrying its database identity as the first field so a Node instance always proves it was read from (or returned by) the database.
+# INVARIANTS: ncpus > 0. external_id is None for static nodes.
+# RATIONALE:
+# - Q: Why do created_at/updated_at default to datetime.now()?
+#   A: Mirrors the DB schema convention; the DB always overrides via RETURNING on insert/read.
 @dataclass(frozen=True)
 class Node:
     """Post-persistence node record — always carries its identity.
@@ -434,75 +419,68 @@ class Node:
     """
 
     node_id: NodeId
-    ip: str
-    ncpus: int
-    enabled: bool = True
-    cloud: str | None = None
+    hostname: str
+    ncpus: int | None
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
     username: str = "root"
     port: int = 22
+    jump_host: str | None = None
+    jump_port: int = 22
+    jump_username: str = "root"
+    enabled: bool = True
+    status: NodeStatus = NodeStatus.OTHER
+    cloud: str | None = None
+    external_id: str | None = None
 
 
+# endregion CLASS_Node
+
+
+# region CLASS_ConnectedMachine
+# PURPOSE: Track a runtime-connected machine's occupancy state with atomic FREE/BUSY transitions so allocation and release are concurrency-safe.
+# INVARIANTS: Frozen; state changes return new instances via replace; free_since is set on every transition to FREE. Platform is runtime-discovered.
+# RATIONALE:
+# - Q: Why is platform on ConnectedMachine instead of Node?
+#   A: It is runtime-discovered at connect time via the platform-package detector, not a persistent attribute of the node record. It feeds the is_compatible(engine.platforms) check and is meaningless outside a live connection.
 @dataclass(frozen=True)
 class ConnectedMachine:
-    """Runtime connected machine with state and platform info.
+    """Runtime connected machine.
 
-    ``node_id`` is the FIRST field (identity first); it identifies which
-    :class:`Node` this connected machine represents. ``occupy``/``release``/
-    ``replace()`` carry ``node_id`` through automatically (frozen dataclass —
-    ``replace(self, state=…)`` preserves all non-overridden fields, including
-    ``node_id``). The construction site is ``SSHMachineRepository._connect_impl``,
-    which passes ``node_id=node.node_id`` from the ``Node`` parameter of
-    ``connect``.
-
-    ``ip`` is the transport address (the asyncssh host), NOT the identity — two
-    instances sharing an ``ip`` but with different ``node_id`` are distinct (the
-    dup-IP configuration behind different jump hosts).
+    ``node_id`` identifies which :class:`Node` this connected machine represents.
     """
 
     node_id: NodeId
-    # FIXME: why ip is here but not port, username, etc? maybe ip is not needed?
-    ip: str
     platform: str
-    ncpus: int
     state: MachineState = MachineState.FREE
     free_since: float | None = None
 
-    # START_CONTRACT: ConnectedMachine.is_compatible
-    #   PURPOSE: Check if machine is FREE and its platform matches one of the given platforms.
-    #   INPUTS: { platforms: tuple[str, ...] - Supported platform identifiers }
-    #   OUTPUTS: { bool - True if FREE and platform matches, False otherwise }
-    #   SIDE_EFFECTS: None
-    #   LINKS:
-    # END_CONTRACT: ConnectedMachine.is_compatible
+    # region METHOD_is_compatible
+    # PURPOSE: Tell whether this machine can accept a task, i.e. is free and on a supported platform.
     def is_compatible(self, platforms: tuple[str, ...]) -> bool:
         """Check if machine is FREE and platform matches given platforms."""
         return self.state == MachineState.FREE and self.platform in platforms
 
-    # START_CONTRACT: ConnectedMachine.occupy
-    #   PURPOSE: Transition machine state to BUSY if currently FREE.
-    #   INPUTS: { None }
-    #   OUTPUTS: { ConnectedMachine - New instance with state=BUSY }
-    #   SIDE_EFFECTS: None
-    #   RAISES: MachineBusyError - if already BUSY
-    #   LINKS: M-DOMAIN-EXCEPTIONS: MachineBusyError
-    # END_CONTRACT: ConnectedMachine.occupy
+    # endregion METHOD_is_compatible
+
+    # region METHOD_occupy
+    # PURPOSE: Claim the machine for a task, refusing double-assignment.
+    # REQUIRES: state is FREE.
     def occupy(self) -> ConnectedMachine:
         """Transition machine state to BUSY if currently FREE."""
-        # START_BLOCK_VALIDATE_FREE
         if self.state == MachineState.BUSY:
-            raise MachineBusyError(self.ip)
-        # END_BLOCK_VALIDATE_FREE
-        # START_BLOCK_SET_BUSY
+            raise MachineBusyError(self.node_id)
         return replace(self, state=MachineState.BUSY)
-        # END_BLOCK_SET_BUSY
 
-    # START_CONTRACT: ConnectedMachine.release
-    #   PURPOSE: Transition machine state to FREE and record release timestamp.
-    #   INPUTS: { None }
-    #   OUTPUTS: { ConnectedMachine - New instance with state=FREE and free_since set }
-    #   SIDE_EFFECTS: None
-    #   LINKS:
-    # END_CONTRACT: ConnectedMachine.release
+    # endregion METHOD_occupy
+
+    # region METHOD_release
+    # PURPOSE: Return the machine to the free pool and stamp when it became available.
     def release(self) -> ConnectedMachine:
         """Transition machine state to FREE and record release timestamp."""
         return replace(self, state=MachineState.FREE, free_since=time.monotonic())
+
+    # endregion METHOD_release
+
+
+# endregion CLASS_ConnectedMachine

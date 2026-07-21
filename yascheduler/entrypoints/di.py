@@ -1,23 +1,12 @@
-# FILE: yascheduler/entrypoints/di.py
-# VERSION: 5.12.1
-# START_MODULE_CONTRACT
-#   PURPOSE: Dependency injection composition root — factories per entry point (daemon, CLI).
-#   SCOPE: make_daemon, make_cli_deps, CLIDeps dataclass.
-#   DEPENDS: M-APPLICATION-ORCHESTRATOR, M-APPLICATION-SUBMIT, M-APPLICATION-UOW, M-PERSISTENCE-UOW, M-ENTRYPOINTS-CONFIG, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-CLOUD-PROVISIONER, M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS, M-APPLICATION-ALLOCATION-TRACKER
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-ENTRYPOINTS-CLIENT, M-CLI-COMMANDS, M-APPLICATION-MESSAGE-BUS, M-APPLICATION-ALLOCATION-TRACKER, M-SSH-KEYS, M-DOMAIN-ENGINE, M-DOMAIN-PORTS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   make_daemon - Async factory creating Orchestrator with all daemon dependencies including MessageBus
-#   make_cli_deps - Sync factory creating lightweight CLIDeps for CLI commands
-#   _setup_domain_events - Create MessageBus, HTTP session and register webhook handlers
-#   CLIDeps - Lightweight dependency container for CLI submit operations
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v5.12.1 - CLIDeps.submit return type int -> TaskId (forwards submit_task which now returns TaskId); import TaskId (add-task-id-identity). The public Yascheduler.queue_submit_task_async facade extracts .value to preserve the public -> int contract.
-#   PREVIOUS_CHANGE: v5.12.0 - make_daemon now constructs SSHMachineRepository + SSHMachineOperations (two ports) instead of a single SSHMachineRepository / SSHMachineOperations (decompose-ssh-gateway). Both are shared between CloudProvisionerImpl (machine_repository + machine_operations) and Orchestrator (repository + operations) on the clouds is None branch. CloudProvisionerImpl.machine_gateway renamed to machine_repository; machine_operations parameter added.
-# END_CHANGE_SUMMARY
+"""Dependency injection composition root — factories per entry point (daemon, CLI)."""
+# region MODULE_CONTRACT
+# PURPOSE: Hand each entry point only the collaborators its use cases need, so the daemon wire-up stays separate from the CLI wire-up and the entry point owns lifecycle alone.
+# RATIONALE:
+# - Q: why does the composition root live in the entrypoints layer rather than in its own dedicated top-level package or in the application layer?
+#   A: hexagonal architecture places the composition root in the outermost layer (the driving-adapter layer) alongside the other entry points; the entrypoints layer is layer 1 in the import-linter layers contract, so its imports flow entrypoints → infra → application → domain — which is layer-legal. Placing the root here keeps wiring next to the entry points that consume it and avoids inventing a sixth architectural layer outside the contract.
+# SCOPE: Daemon orchestrator factory (make_daemon), CLI dependency container (CLIDeps + make_cli_deps), and domain event bus setup with webhook registration.
+# KEYWORDS: di, composition-root, factories, daemon, cli, dependency-injection
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -47,17 +36,20 @@ from yascheduler.domain import (
 from yascheduler.infra import (
     CloudAdapter,
     CloudProvisionerImpl,
+    OccupancyChecker,
+    OutputDownloader,
     PostgresUnitOfWork,
-    SSHMachineOperations,
     SSHMachineRepository,
+    TaskDeployer,
     list_private_keys,
     resolve_adapter,
     webhook_handler,
 )
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import PurePath
 
     from yascheduler.domain import EngineRepository
     from yascheduler.infra.cloud import ConfigCloud
@@ -65,49 +57,46 @@ if TYPE_CHECKING:
     from .config import Config
 
 
-# START_CONTRACT: CLIDeps
-#   PURPOSE: Lightweight dependency container for CLI submit operations.
-#   INPUTS: { engines, uow_factory, remote_tasks_dir }
-#   OUTPUTS: { CLIDeps instance }
-#   SIDE_EFFECTS: None
-#   LINKS: M-APPLICATION-SUBMIT, M-APPLICATION-UOW
-# END_CONTRACT: CLIDeps
+# region CLASS_CLIDeps
+# PURPOSE: Carry the minimum collaborators a CLI command needs (engine registry + UoW factory) so a CLI invocation can submit or query tasks without paying the daemon's SSH/cloud/event-bus wire-up cost.
+# RATIONALE:
+#   Q: Why does CLIDeps bundle a uow_factory callable instead of a ready AbstractUnitOfWork instance?
+#   A: Each CLI query needs a fresh UoW so its transaction boundary is its own; a callable lets the facade open + close the UoW per call without leaking a handle across calls.
 @dataclass
 class CLIDeps:
+    """Lightweight dependency container for CLI submit operations."""
+
     engines: EngineRepository
     uow_factory: Callable[[], AbstractUnitOfWork]
-    remote_tasks_dir: PurePath
 
-    # START_CONTRACT: CLIDeps.submit
-    #   PURPOSE: Submit a new task via the submit_task use case.
-    #   INPUTS: { label, metadata, engine_name }
-    #   OUTPUTS: { TaskId - the generated task_id (the public Yascheduler.queue_submit_task facade extracts .value to keep the public -> int contract; yasubmit prints str(TaskId) → bare integer) }
-    #   SIDE_EFFECTS: Creates task in database.
-    #   LINKS: M-APPLICATION-SUBMIT
-    # END_CONTRACT: CLIDeps.submit
+    # region METHOD_submit
+    # PURPOSE: Forward with two bundled collaborators into submit_task so the CLI call site stays one line and the boundary between CLI and use case stays explicit.
     async def submit(
         self,
         label: str,
         metadata: dict[str, object],
         engine_name: str,
     ) -> TaskId:
+        """Submit a new task via the submit_task use case."""
         return await submit_task(
             label,
             metadata,
             engine_name,
             self.engines,
             self.uow_factory,
-            self.remote_tasks_dir,
         )
 
+    # endregion METHOD_submit
 
-# START_CONTRACT: _setup_domain_events
-#   PURPOSE: Create MessageBus, HTTP client session, and register webhook handlers for all event types.
-#   INPUTS: { None }
-#   OUTPUTS: { tuple[MessageBus, aiohttp.ClientSession] - (bus, http_session) }
-#   SIDE_EFFECTS: Creates HTTP session; registers webhook_handler for each event type.
-#   LINKS: M-APPLICATION-MESSAGE-BUS, M-NOTIFIER-WEBHOOK, M-DOMAIN-EVENTS
-# END_CONTRACT: _setup_domain_events
+
+# endregion CLASS_CLIDeps
+
+
+# region FUNC__setup_domain_events
+# PURPOSE: Stand up the daemon's event-bus backbone so domain events emitted by the use-case layer are delivered to operator-configured webhooks without each use case re-wiring its own bus.
+# RATIONALE:
+#   Q: Why is the webhook handler bound to one shared aiohttp.ClientSession instead of one session per webhook delivery?
+#   A: An aiohttp.ClientSession owns a connection pool; reusing one across all webhook deliveries keeps the daemon's outbound connection count bounded and lets the pool keep-alive across events.
 def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
     bus = MessageBus()
     http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
@@ -122,22 +111,17 @@ def _setup_domain_events() -> tuple[MessageBus, aiohttp.ClientSession]:
     return bus, http
 
 
-# START_CONTRACT: make_daemon
-#   PURPOSE: Async factory creating Orchestrator with all daemon dependencies.
-#   INPUTS: { config: Config, log: Optional[Logger], clouds: Optional[CloudProvisionerImpl] }
-#   OUTPUTS: { Orchestrator - ready to await start() }
-#   SIDE_EFFECTS: Creates UoW factory, AllocationTracker, asyncio.Lock, CloudProvisionerImpl, SSHMachineRepository / SSHMachineOperations; injects list_private_keys_fn.
-#   LINKS: M-APPLICATION-ORCHESTRATOR, M-CLOUD-PROVISIONER, M-SSH-REPOSITORY, M-SSH-OPERATIONS, M-SSH-KEYS, M-APPLICATION-UOW, M-APPLICATION-ALLOCATION-TRACKER
-# END_CONTRACT: make_daemon
+# endregion FUNC__setup_domain_events
+
+
+# region FUNC_make_daemon
+# PURPOSE: Hand the daemon entry point one ready Orchestrator wired with UoW + SSH + cloud + event bus + collaborators so run_daemon owns only the start/stop lifecycle and the wire-up boundary stays in one place.
 async def make_daemon(
     config: Config,
-    log: logging.Logger | None = None,
     *,
     clouds: CloudProvisionerImpl | None = None,
 ) -> Orchestrator:
-    if log is None:
-        log = logging.getLogger("Orchestrator")
-
+    """Async factory creating Orchestrator with all daemon dependencies."""
     bus, http = _setup_domain_events()
     try:
 
@@ -147,15 +131,19 @@ async def make_daemon(
         allocation_tracker = AllocationTracker()
         allocation_lock = asyncio.Lock()
 
-        # Single SSHMachineRepository + SSHMachineOperations for the production
-        # path (clouds is None): shared between CloudProvisionerImpl
-        # (machine_repository + machine_operations) and Orchestrator
-        # (repository + operations) so _setup_vm connections are visible to the
-        # orchestrator (no double-connect) and reaped at shutdown. The
-        # pre-built-clouds branch still wires a fresh pair to the orchestrator;
-        # caller-supplied clouds keep their own.
-        repository = SSHMachineRepository(log=log)
-        operations = SSHMachineOperations(repository=repository, log=log)
+        # Single SSHMachineRepository for the production path (clouds is None):
+        # shared between CloudProvisionerImpl (machine_repository only — setup
+        # calls session pass-throughs directly) and Orchestrator (repository)
+        # so _setup_vm connections are visible to the orchestrator (no
+        # double-connect) and reaped at shutdown. The three stateless
+        # collaborators (TaskDeployer/OutputDownloader/OccupancyChecker) are
+        # constructed once each and passed to the orchestrator only.
+        # The pre-built-clouds branch still wires a fresh repository to the
+        # orchestrator; caller-supplied clouds keep their own.
+        repository = SSHMachineRepository()
+        task_deployer = TaskDeployer()
+        output_downloader = OutputDownloader()
+        occupancy_checker = OccupancyChecker()
 
         if clouds is None:
             active_clouds: list[ConfigCloud] = []
@@ -163,34 +151,31 @@ async def make_daemon(
             _configs: dict[str, ConfigCloud] = {}
             for cfg in config.clouds:
                 if cfg.max_nodes <= 0:
-                    log.warning(
+                    logger.warning(
                         "Cloud %s skipped: max_nodes=%d <= 0",
                         cfg.prefix,
                         cfg.max_nodes,
                     )
                     continue
-                adapter = resolve_adapter(cfg, log)
+                adapter = resolve_adapter(cfg)
                 if adapter is None:
                     continue
                 _adapters[adapter.name] = adapter
                 _configs[adapter.name] = cfg
                 active_clouds.append(cfg)
 
-            log.info("Active cloud APIs: %s", ", ".join(_adapters.keys()) or "-")
+            logger.info("Active cloud APIs: %s", ", ".join(_adapters.keys()) or "-")
             clouds = CloudProvisionerImpl(
                 adapters=_adapters,
                 configs=_configs,
                 machine_repository=repository,
-                machine_operations=operations,
                 local_config=config.local,
                 remote_config=config.remote,
                 engines=config.engines,
-                log=log,
             )
         else:
             # Caller-supplied clouds: filter by max_nodes > 0 AND adapter
-            # actually resolved (matches the primary path's contract from
-            # design D7). configs is keyed by adapter.name == cfg.prefix for
+            # actually resolved. configs is keyed by adapter.name == cfg.prefix for
             # every successfully resolved cloud, so its keys are the resolved
             # set. Without this, a pre-built-clouds caller would over-count
             # max_nodes in _clouds_get_capacity for any provider whose
@@ -211,9 +196,10 @@ async def make_daemon(
             uow_factory=uow_factory,
             clouds=clouds,
             repository=repository,
-            operations=operations,
+            task_deployer=task_deployer,
+            output_downloader=output_downloader,
+            occupancy_checker=occupancy_checker,
             engines=config.engines,
-            log=log,
             config_clouds=config.clouds,
             local_tasks_dir=config.local.tasks_dir,
             http_session=http,
@@ -227,15 +213,13 @@ async def make_daemon(
         raise
 
 
-# START_CONTRACT: make_cli_deps
-#   PURPOSE: Sync factory creating lightweight CLIDeps for CLI commands (no SSH/cloud).
-#   INPUTS: { config: Config }
-#   OUTPUTS: { CLIDeps }
-#   SIDE_EFFECTS: None — no connections created until use.
-#   LINKS: M-APPLICATION-SUBMIT, M-PERSISTENCE-UOW
-# END_CONTRACT: make_cli_deps
-def make_cli_deps(config: Config) -> CLIDeps:
+# endregion FUNC_make_daemon
 
+
+# region FUNC_make_cli_deps
+# PURPOSE: Build a CLIDeps with only the engine registry and a UoW factory so a CLI invocation pays neither the SSH-pool nor the cloud-adapter nor the event-bus wire-up cost.
+def make_cli_deps(config: Config) -> CLIDeps:
+    """Sync factory creating lightweight CLIDeps for CLI commands (no SSH/cloud)."""
     bus = MessageBus()
 
     def _uow_factory() -> AbstractUnitOfWork:
@@ -244,5 +228,7 @@ def make_cli_deps(config: Config) -> CLIDeps:
     return CLIDeps(
         engines=config.engines,
         uow_factory=_uow_factory,
-        remote_tasks_dir=config.remote.tasks_dir,
     )
+
+
+# endregion FUNC_make_cli_deps

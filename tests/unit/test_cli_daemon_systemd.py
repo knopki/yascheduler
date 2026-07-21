@@ -1,20 +1,8 @@
-# FILE: tests/unit/test_cli_daemon_systemd.py
-# VERSION: 1.0.0
-#
-# START_MODULE_CONTRACT
-#   PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_systemd.py — argparse and defaults.
-#   SCOPE: main() argparse behavior (--help exit 0, default --log-file None for journald, default --log-level INFO) with mocked daemon core.
-#   DEPENDS: M-DAEMON-SYSTEMD
-#   LINKS: M-DAEMON-SYSTEMD, M-DAEMON-COMMON
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   TestDaemonSystemdParsing - --help exit 0 prog=yascheduler; default --log-file None; default --log-level INFO
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Initial tests for relocated daemon_systemd (consolidate-daemon-entrypoints).
-# END_CHANGE_SUMMARY
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_systemd.py — argparse and defaults.
+# SCOPE: main() argparse behavior (--help exit 0, default --log-file None for journald, default --log-level INFO) with mocked daemon core.
+# KEYWORDS: daemon_systemd, argparse, journald, log-file defaults
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
@@ -40,7 +28,8 @@ class TestDaemonSystemdParsing:
     """--help exit 0 (prog=yascheduler); default --log-file None (journald); default --log-level INFO."""
 
     def test_help_exits_zero_prog_yascheduler(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         with pytest.raises(SystemExit) as exc:
             _run(["--help"])

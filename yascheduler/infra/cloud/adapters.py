@@ -1,42 +1,20 @@
-# FILE: yascheduler/infra/cloud/adapters.py
-# VERSION: 1.2.0
-# START_MODULE_CONTRACT
-#   PURPOSE: Mapping of cloud config types to create/delete callables.
-#   SCOPE: Adapter registry mapping provider config classes to their operations.
-#   DEPENDS: M-CLOUD-PROTOCOLS, M-CLOUD-PROVIDERS
-#   LINKS: M-CLOUD-ADAPTERS-NEW, M-CLOUD-PROVIDERS
-# END_MODULE_CONTRACT
-#
-# START_MODULE_MAP
-#   CloudAdapter                # Generic[TConfigCloud_co] - Frozen dataclass wrapping create/delete callables + platform checks
-#   can_debian_buster           # (platform: str) -> bool
-#   can_debian_bullseye         # (platform: str) -> bool
-#   can_win10                   # (platform: str) -> bool
-#   can_win11                   # (platform: str) -> bool
-#   get_azure_adapter           # (name: str) -> CloudAdapter
-#   get_hetzner_adapter         # (name: str) -> CloudAdapter
-#   get_upcloud_adapter         # (name: str) -> CloudAdapter
-#   get_vastai_adapter          # (name: str) -> CloudAdapter
-#   CLOUD_ADAPTER_GETTERS       # Registry mapping cloud prefix to adapter factory
-#   resolve_adapter             # Look up cloud adapter by prefix from registry (public; consumed by composition root)
-# END_MODULE_MAP
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.2.0 - Migrate CloudAdapter from attrs.define(frozen=True) to dataclasses.dataclass(frozen=True); drop 4× bare field(); remove stale FIXME marker (migrate-cloud-from-attrs).
-#   PREVIOUS_CHANGE: v1.1.1 - Relocated yascheduler/adapters/ -> yascheduler/infra/ (rename-adapters-to-infra); no behavioral change.
-# END_CHANGE_SUMMARY
-"""Cloud adapters"""
+"""Cloud adapters."""
+# region MODULE_CONTRACT
+# PURPOSE: Bind provider-specific create/delete operations to their config types so the allocator can resolve the right adapter at runtime without knowing provider internals.
+# SCOPE: Adapter registry mapping provider config classes to their operations.
+# DEPENDENCIES: LOADS: provider modules (az, hetzner, upcloud, vastai) lazily via inline import inside getter functions
+# KEYWORDS: cloud adapter, registry, create, delete, platform check, azure, hetzner, upcloud, vastai
+# endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from functools import cache
 from typing import TYPE_CHECKING, Generic
 
 if TYPE_CHECKING:
-    import logging
-
     from .cloud_configs import ConfigCloud
 
 from .protocols import (
@@ -46,57 +24,64 @@ from .protocols import (
     TConfigCloud_co,
 )
 
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "CLOUD_ADAPTER_GETTERS",
+    "CloudAdapter",
+    "get_azure_adapter",
+    "get_hetzner_adapter",
+    "get_upcloud_adapter",
+    "get_vastai_adapter",
+    "resolve_adapter",
+]
+
 
 def can_debian_buster(platform: str) -> bool:
-    "Platform is compatible with Debian Buster"
+    """Platform is compatible with Debian Buster."""
     return platform in ["debian-10", "debian", "debian-like", "linux"]
 
 
 def can_debian_bullseye(platform: str) -> bool:
-    "Platform is compatible with Debian Bullseye"
+    """Platform is compatible with Debian Bullseye."""
     return platform in ["debian-11", "debian", "debian-like", "linux"]
 
 
 def can_debian_bookworm(platform: str) -> bool:
-    "Platform is compatible with Debian Bookworm"
+    """Platform is compatible with Debian Bookworm."""
     return platform in ["debian-12", "debian", "debian-like", "linux"]
 
 
 def can_debian_trixie(platform: str) -> bool:
-    "Platform is compatible with Debian Trixie"
+    """Platform is compatible with Debian Trixie."""
     return platform in ["debian-13", "debian", "debian-like", "linux"]
 
 
 def can_debian_forky(platform: str) -> bool:
-    "Platform is compatible with Debian Forky"
+    """Platform is compatible with Debian Forky."""
     return platform in ["debian-14", "debian", "debian-like", "linux"]
 
 
 def can_debian_duke(platform: str) -> bool:
-    "Platform is compatible with Debian Duke"
+    """Platform is compatible with Debian Duke."""
     return platform in ["debian-13", "debian", "debian-like", "linux"]
 
 
 def can_win10(platform: str) -> bool:
-    "Platform is compatible with Windows 10"
+    """Platform is compatible with Windows 10."""
     return platform in ["windows-10", "windows"]
 
 
 def can_win11(platform: str) -> bool:
-    "Platform is compatible with Windows 11"
+    """Platform is compatible with Windows 11."""
     return platform in ["windows-11", "windows"]
 
 
-# START_CONTRACT: CloudAdapter.__init__
-#   PURPOSE: Initialize cloud adapter with provider ops, platform checks, and concurrency limits
-#   INPUTS: { name: str - provider name, supported_platform_checks: tuple[SupportedPlatformChecker, ...] - platform check functions, create_node: CreateNodeCallable - create function, delete_node: DeleteNodeCallable - delete function, op_limit: int - concurrent operation limit (default 1), create_node_conn_timeout: int - SSH connect timeout in s (default 10), create_node_timeout: int - total node creation timeout in s (default 300) }
-#   OUTPUTS: { CloudAdapter - frozen adapter instance }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS
-# END_CONTRACT: CloudAdapter.__init__
+# region CLASS_CloudAdapter
+# PURPOSE: Wrap a provider's identity (name, platform checks, create/delete callables, concurrency limit) so the provisioner can drive every provider through one uniform interface.
 @dataclass(frozen=True)
 class CloudAdapter(Generic[TConfigCloud_co]):
-    """Cloud adapter"""
+    """Cloud adapter."""
 
     name: str
     supported_platform_checks: tuple[SupportedPlatformChecker, ...]
@@ -106,25 +91,24 @@ class CloudAdapter(Generic[TConfigCloud_co]):
     create_node_conn_timeout: int = field(default=10)
     create_node_timeout: int = field(default=300)
 
-    @cache
+    @cache  # noqa: B019
     def get_op_semaphore(self) -> asyncio.Semaphore:
-        """
-        Cached semaphore getter.
+        """Get the cached semaphore.
+
         It's because you cannot create async semaphore outside the loop.
         "attached to a different loop" error.
         """
         return asyncio.Semaphore(self.op_limit)
 
 
-# START_CONTRACT: get_azure_adapter
-#   PURPOSE: Create CloudAdapter for Azure with Bullseye/Windows 11 platform support
-#   INPUTS: { name: str - cloud provider name }
-#   OUTPUTS: { CloudAdapter - configured Azure cloud adapter }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-AZ
-# END_CONTRACT: get_azure_adapter
+# endregion CLASS_CloudAdapter
+
+
+# region FUNC_get_azure_adapter
+# PURPOSE: Wire Azure SDK create/delete to a CloudAdapter so the provisioner can launch and terminate Azure VMs through the generic adapter interface.
 def get_azure_adapter(name: str) -> CloudAdapter:
-    from .providers.az import az_create_node, az_delete_node
+    """Create CloudAdapter for Azure with Bullseye/Windows 11 platform support."""
+    from .providers.az import az_create_node, az_delete_node  # noqa: PLC0415
 
     return CloudAdapter(
         name=name,
@@ -135,15 +119,17 @@ def get_azure_adapter(name: str) -> CloudAdapter:
     )
 
 
-# START_CONTRACT: get_hetzner_adapter
-#   PURPOSE: Create CloudAdapter for Hetzner with Trixie platform support
-#   INPUTS: { name: str - cloud provider name }
-#   OUTPUTS: { CloudAdapter - configured Hetzner cloud adapter }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-HETZNER
-# END_CONTRACT: get_hetzner_adapter
+# endregion FUNC_get_azure_adapter
+
+
+# region FUNC_get_hetzner_adapter
+# PURPOSE: Wire Hetzner SDK create/delete to a CloudAdapter so the provisioner can launch and terminate Hetzner servers through the generic adapter interface.
 def get_hetzner_adapter(name: str) -> CloudAdapter:
-    from .providers.hetzner import hetzner_create_node, hetzner_delete_node
+    """Create CloudAdapter for Hetzner with Trixie platform support."""
+    from .providers.hetzner import (  # noqa: PLC0415
+        hetzner_create_node,
+        hetzner_delete_node,
+    )
 
     return CloudAdapter(
         name=name,
@@ -159,34 +145,38 @@ def get_hetzner_adapter(name: str) -> CloudAdapter:
     )
 
 
-# START_CONTRACT: get_upcloud_adapter
-#   PURPOSE: Create CloudAdapter for UpCloud with Buster platform support, single op limit
-#   INPUTS: { name: str - cloud provider name }
-#   OUTPUTS: { CloudAdapter - configured UpCloud cloud adapter }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-UPCLOUD
-# END_CONTRACT: get_upcloud_adapter
+# endregion FUNC_get_hetzner_adapter
+
+
+# region FUNC_get_upcloud_adapter
+# PURPOSE: Wire UpCloud SDK create/delete to a CloudAdapter so the provisioner can launch and terminate UpCloud servers through the generic adapter interface.
 def get_upcloud_adapter(name: str) -> CloudAdapter:
-    from .providers.upcloud import upcload_delete_node, upcloud_create_node
+    """Create CloudAdapter for UpCloud with Buster platform support, single op limit."""
+    from .providers.upcloud import (  # noqa: PLC0415
+        upcloud_create_node,
+        upcloud_delete_node,
+    )
 
     return CloudAdapter(
         name=name,
         supported_platform_checks=(can_debian_buster,),
         create_node=upcloud_create_node,
-        delete_node=upcload_delete_node,
+        delete_node=upcloud_delete_node,
         op_limit=1,
     )
 
 
-# START_CONTRACT: get_vastai_adapter
-#   PURPOSE: Create CloudAdapter for VastAI with Bullseye platform support, single op limit
-#   INPUTS: { name: str - cloud provider name }
-#   OUTPUTS: { CloudAdapter - configured VastAI cloud adapter }
-#   SIDE_EFFECTS: None
-#   LINKS: M-CLOUD-ADAPTERS, M-CLOUD-VASTAI
-# END_CONTRACT: get_vastai_adapter
+# endregion FUNC_get_upcloud_adapter
+
+
+# region FUNC_get_vastai_adapter
+# PURPOSE: Wire VastAI SDK create/delete to a CloudAdapter so the provisioner can launch and terminate VastAI instances through the generic adapter interface.
 def get_vastai_adapter(name: str) -> CloudAdapter:
-    from .providers.vastai import vastai_create_node, vastai_delete_node
+    """Create CloudAdapter for VastAI with Bullseye platform support, single op limit."""
+    from .providers.vastai import (  # noqa: PLC0415
+        vastai_create_node,
+        vastai_delete_node,
+    )
 
     return CloudAdapter(
         name=name,
@@ -202,6 +192,9 @@ def get_vastai_adapter(name: str) -> CloudAdapter:
     )
 
 
+# endregion FUNC_get_vastai_adapter
+
+
 CLOUD_ADAPTER_GETTERS = {
     "az": get_azure_adapter,
     "hetzner": get_hetzner_adapter,
@@ -210,22 +203,22 @@ CLOUD_ADAPTER_GETTERS = {
 }
 
 
-# START_CONTRACT: resolve_adapter
-#   PURPOSE: Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry
-#   INPUTS: { cfg: ConfigCloud - cloud provider config with prefix, log: logging.Logger - logger instance }
-#   OUTPUTS: { Optional[CloudAdapter] - resolved adapter or None if prefix unknown or deps missing }
-#   SIDE_EFFECTS: Logs error on ImportError
-#   LINKS: M-CLOUD-ADAPTERS
-# END_CONTRACT: resolve_adapter
-def resolve_adapter(cfg: ConfigCloud, log: logging.Logger) -> CloudAdapter | None:
+# region FUNC_resolve_adapter
+# PURPOSE: Map a config's provider prefix to the matching CloudAdapter getter so the allocator resolves the right adapter at runtime without a hard-coded switch.
+# ENSURES: Returns None if prefix unknown or deps not installed (logs on ImportError).
+def resolve_adapter(cfg: ConfigCloud) -> CloudAdapter | None:
+    """Look up cloud adapter by prefix from the CLOUD_ADAPTER_GETTERS registry."""
     try:
         getter = CLOUD_ADAPTER_GETTERS[cfg.prefix]
         return getter(cfg.prefix)
     except KeyError:
         return None
     except ImportError:
-        log.error(
+        logger.exception(
             "The cloud %s is skipped because the dependencies are not installed",
             cfg.prefix,
         )
         return None
+
+
+# endregion FUNC_resolve_adapter
