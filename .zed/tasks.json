@@ -3,7 +3,7 @@
   {
     "label": "Init venv on worktree creation",
     "command": "uv",
-    "args": ["sync", "--locked", "--all-extas"],
+    "args": ["sync", "--locked", "--all-extras"],
     "hooks": ["create_worktree"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "reveal": "no_focus",
