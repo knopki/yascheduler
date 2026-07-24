@@ -6,7 +6,7 @@ DTOs" requires:
 - ConfigCloudHetzner.connect_grace == 60
 - ConfigCloudUpcloud.connect_grace == 60
 - ConfigCloudAzure.connect_grace == 120
-- ConfigCloudVastAI.connect_grace == 120
+- ConfigCloudVastAI.connect_grace == 300
 
 and that each DTO still satisfies CloudConfig via isinstance (the Protocol
 surface widened from 6 to 7 fields but the explicit inheritance means the
@@ -14,7 +14,7 @@ DTOs declare the field).
 """
 # region MODULE_CONTRACT
 # PURPOSE: Unit tests for the connect_grace defaults on the 4 ConfigCloud* DTOs.
-# SCOPE: Hetzner/Upcloud default to 60, Azure/VastAI default to 120; all 4 satisfy CloudConfig via isinstance.
+# SCOPE: Hetzner/Upcloud default to 60, Azure default to 120, VastAI default to 300; all 4 satisfy CloudConfig via isinstance.
 # KEYWORDS: connect_grace, ConfigCloud DTOs, CloudConfig Protocol
 # endregion MODULE_CONTRACT
 
@@ -44,7 +44,7 @@ def test_connect_grace_defaults_on_all_four_dtos() -> None:
     assert hetzner.connect_grace == 60, "Hetzner default should be 60s"
     assert upcloud.connect_grace == 60, "Upcloud default should be 60s"
     assert azure.connect_grace == 120, "Azure default should be 120s"
-    assert vastai.connect_grace == 120, "VastAI default should be 120s"
+    assert vastai.connect_grace == 300, "VastAI default should be 300s"
 
     for dto in (hetzner, upcloud, azure, vastai):
         assert isinstance(dto, CloudConfig), (

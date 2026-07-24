@@ -155,17 +155,16 @@ class ConfigCloudVastAI(CloudConfig):
     num_gpus: int = 1
     max_price_per_hr: float = 1.50
     max_nodes: int = 10
-    username: str = "root"
     priority: int = 0
     idle_tolerance: int = 300
-    connect_grace: int = 120
+    connect_grace: int = 300
     package_upgrade: bool = True
-    onstart_script: str = ""
-    docker_options: str = ""
-    env: dict = field(default_factory=dict)
+    onstart_script: str | None = None
+    docker_options: str | None = None
     jump_username: str | None = None
     jump_host: str | None = None
     jump_port: int = 22
+    label: str = "yascheduler"
 
 
 # endregion CLASS_ConfigCloudVastAI

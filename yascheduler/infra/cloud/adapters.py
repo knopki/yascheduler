@@ -90,6 +90,7 @@ class CloudAdapter(Generic[TConfigCloud_co]):
     op_limit: int = field(default=1)
     create_node_conn_timeout: int = field(default=10)
     create_node_timeout: int = field(default=300)
+    needs_cloud_init: bool = False
 
     @cache  # noqa: B019
     def get_op_semaphore(self) -> asyncio.Semaphore:
@@ -116,6 +117,7 @@ def get_azure_adapter(name: str) -> CloudAdapter:
         create_node=az_create_node,
         delete_node=az_delete_node,
         op_limit=5,
+        needs_cloud_init=True,
     )
 
 
@@ -142,6 +144,7 @@ def get_hetzner_adapter(name: str) -> CloudAdapter:
         create_node=hetzner_create_node,
         delete_node=hetzner_delete_node,
         op_limit=5,
+        needs_cloud_init=True,
     )
 
 
@@ -163,6 +166,7 @@ def get_upcloud_adapter(name: str) -> CloudAdapter:
         create_node=upcloud_create_node,
         delete_node=upcloud_delete_node,
         op_limit=1,
+        needs_cloud_init=True,
     )
 
 
@@ -170,7 +174,7 @@ def get_upcloud_adapter(name: str) -> CloudAdapter:
 
 
 # region FUNC_get_vastai_adapter
-# PURPOSE: Wire VastAI SDK create/delete to a CloudAdapter so the provisioner can launch and terminate VastAI instances through the generic adapter interface.
+# PURPOSE: Wire create/delete to a CloudAdapter so the provisioner can launch and terminate VastAI instances through the generic adapter interface.
 def get_vastai_adapter(name: str) -> CloudAdapter:
     """Create CloudAdapter for VastAI with Bullseye platform support, single op limit."""
     from .providers.vastai import (  # noqa: PLC0415
