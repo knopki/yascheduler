@@ -52,12 +52,9 @@ async def test_hetzner_create_node_returns_dto() -> None:
     mock_client.ssh_keys.create.return_value = MagicMock(id=123)
     mock_client.servers.create.return_value = MagicMock(server=mock_server)
 
-    with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.HClient",
-            return_value=mock_client,
-        ),
-        patch("yascheduler.infra.cloud.providers.hetzner._HETZNER_AVAILABLE", True),
+    with patch(
+        "yascheduler.infra.cloud.providers.hetzner.HClient",
+        return_value=mock_client,
     ):
         from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
 
@@ -89,12 +86,9 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
     mock_client.ssh_keys.create.return_value = MagicMock(id=123)
     mock_client.servers.create.return_value = MagicMock(server=mock_server)
 
-    with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.HClient",
-            return_value=mock_client,
-        ),
-        patch("yascheduler.infra.cloud.providers.hetzner._HETZNER_AVAILABLE", True),
+    with patch(
+        "yascheduler.infra.cloud.providers.hetzner.HClient",
+        return_value=mock_client,
     ):
         from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
 
@@ -117,12 +111,9 @@ async def test_hetzner_delete_node_accepts_external_id() -> None:
     mock_server = MagicMock()
     mock_client.servers.get_by_id.return_value = mock_server
 
-    with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.HClient",
-            return_value=mock_client,
-        ),
-        patch("yascheduler.infra.cloud.providers.hetzner._HETZNER_AVAILABLE", True),
+    with patch(
+        "yascheduler.infra.cloud.providers.hetzner.HClient",
+        return_value=mock_client,
     ):
         from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
@@ -148,12 +139,9 @@ async def test_hetzner_delete_node_api_not_found() -> None:
         details={},
     )
 
-    with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.HClient",
-            return_value=mock_client,
-        ),
-        patch("yascheduler.infra.cloud.providers.hetzner._HETZNER_AVAILABLE", True),
+    with patch(
+        "yascheduler.infra.cloud.providers.hetzner.HClient",
+        return_value=mock_client,
     ):
         from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
@@ -209,7 +197,6 @@ async def test_az_create_node_returns_dto() -> None:
             "yascheduler.infra.cloud.providers.az.ComputeManagementClient",
             return_value=mock_cmc,
         ),
-        patch("yascheduler.infra.cloud.providers.az._AZURE_AVAILABLE", True),
         patch(
             "yascheduler.infra.cloud.providers.az.create_node",
             new=AsyncMock(
@@ -267,7 +254,6 @@ async def test_az_delete_node_accepts_external_id() -> None:
             "yascheduler.infra.cloud.providers.az.ComputeManagementClient",
             return_value=mock_cmc,
         ),
-        patch("yascheduler.infra.cloud.providers.az._AZURE_AVAILABLE", True),
     ):
         from yascheduler.infra.cloud.providers.az import az_delete_node
 

@@ -15,12 +15,7 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from functools import cache
 from typing import TYPE_CHECKING, cast
 
-try:
-    from upcloud_api import CloudManager, Server, Storage, login_user_block
-
-    _UPCLOUD_AVAILABLE = True
-except ImportError:
-    _UPCLOUD_AVAILABLE = False
+from upcloud_api import CloudManager, Server, Storage, login_user_block
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO, get_rnd_name
 
@@ -59,9 +54,6 @@ def upcloud_create_node_sync(
     cloud_config: CloudInitConfig | None = None,
 ) -> CloudCreateNodeDTO:
     """Create node."""
-    if not _UPCLOUD_AVAILABLE:
-        msg = "UpCloud SDK not installed. Install upcloud-api package."
-        raise ImportError(msg)
     client = get_client(cfg)
 
     login_user = login_user_block(
@@ -106,9 +98,6 @@ async def upcloud_create_node(
     cloud_config: CloudInitConfig | None = None,
 ) -> CloudCreateNodeDTO:
     """Create node."""
-    if not _UPCLOUD_AVAILABLE:
-        msg = "UpCloud SDK not installed. Install upcloud-api package."
-        raise ImportError(msg)
     return await asyncio.get_running_loop().run_in_executor(
         executor,
         upcloud_create_node_sync,
@@ -130,9 +119,6 @@ def upcloud_delete_node_sync(
     external_id: str,
 ) -> None:
     """Delete node."""
-    if not _UPCLOUD_AVAILABLE:
-        msg = "UpCloud SDK not installed. Install upcloud-api package."
-        raise ImportError(msg)
     client = get_client(cfg)
     for server in client.get_servers():
         if server.get_public_ip() == external_id:
@@ -166,9 +152,6 @@ async def upcloud_delete_node(
     external_id: str,
 ) -> None:
     """Delete node."""
-    if not _UPCLOUD_AVAILABLE:
-        msg = "UpCloud SDK not installed. Install upcloud-api package."
-        raise ImportError(msg)
     return await asyncio.get_running_loop().run_in_executor(
         executor,
         upcloud_delete_node_sync,

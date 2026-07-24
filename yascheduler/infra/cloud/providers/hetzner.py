@@ -14,17 +14,12 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from functools import cache, partial
 from typing import TYPE_CHECKING, cast
 
-try:
-    from hcloud import APIException
-    from hcloud import Client as HClient
-    from hcloud.images.domain import Image
-    from hcloud.locations.domain import Location
-    from hcloud.server_types.domain import ServerType
-    from hcloud.ssh_keys.domain import SSHKey as HSSHKey
-
-    _HETZNER_AVAILABLE = True
-except ImportError:
-    _HETZNER_AVAILABLE = False
+from hcloud import APIException
+from hcloud import Client as HClient
+from hcloud.images.domain import Image
+from hcloud.locations.domain import Location
+from hcloud.server_types.domain import ServerType
+from hcloud.ssh_keys.domain import SSHKey as HSSHKey
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO, get_key_name, get_rnd_name
 
@@ -94,9 +89,6 @@ async def hetzner_create_node(
     cloud_config: CloudInitConfig | None = None,
 ) -> CloudCreateNodeDTO:
     """Create node."""
-    if not _HETZNER_AVAILABLE:
-        msg = "Hetzner SDK not installed. Install hcloud package."
-        raise ImportError(msg)
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)
     ssh_key_id = await loop.run_in_executor(executor, get_ssh_key_id, client, key)
@@ -139,9 +131,6 @@ async def hetzner_delete_node(
     external_id: str,
 ) -> None:
     """Delete node."""
-    if not _HETZNER_AVAILABLE:
-        msg = "Hetzner SDK not installed. Install hcloud package."
-        raise ImportError(msg)
     loop = asyncio.get_running_loop()
     client = await loop.run_in_executor(executor, get_client, cfg)
 

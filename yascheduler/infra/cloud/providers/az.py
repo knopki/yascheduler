@@ -14,43 +14,31 @@ from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, cast
 
-try:
-    from azure.core.exceptions import (
-        AzureError,
-        IncompleteReadError,
-        ServiceRequestTimeoutError,
-        ServiceResponseError,
-        ServiceResponseTimeoutError,
-    )
-    from azure.identity.aio import ClientSecretCredential
-    from azure.mgmt.compute.v2021_07_01.aio import ComputeManagementClient
-    from azure.mgmt.compute.v2021_07_01.models import (
-        BootDiagnostics,
-        DiagnosticsProfile,
-        DiskCreateOptionTypes,
-        DiskDeleteOptionTypes,
-        HardwareProfile,
-        ImageReference,
-        LinuxConfiguration,
-        NetworkProfile,
-        OSDisk,
-        OSProfile,
-        SshConfiguration,
-        SshPublicKey,
-        StorageProfile,
-        VirtualMachine,
-    )
-    from azure.mgmt.network.v2020_06_01.aio import NetworkManagementClient
-    from azure.mgmt.network.v2020_06_01.models import (
-        IPAllocationMethod,
-        NetworkInterface,
-        NetworkInterfaceIPConfiguration,
-        TagsObject,
-    )
-
-    _AZURE_AVAILABLE = True
-except ImportError:
-    _AZURE_AVAILABLE = False
+from azure.identity.aio import ClientSecretCredential
+from azure.mgmt.compute.v2021_07_01.aio import ComputeManagementClient
+from azure.mgmt.compute.v2021_07_01.models import (
+    BootDiagnostics,
+    DiagnosticsProfile,
+    DiskCreateOptionTypes,
+    DiskDeleteOptionTypes,
+    HardwareProfile,
+    ImageReference,
+    LinuxConfiguration,
+    NetworkProfile,
+    OSDisk,
+    OSProfile,
+    SshConfiguration,
+    SshPublicKey,
+    StorageProfile,
+    VirtualMachine,
+)
+from azure.mgmt.network.v2020_06_01.aio import NetworkManagementClient
+from azure.mgmt.network.v2020_06_01.models import (
+    IPAllocationMethod,
+    NetworkInterface,
+    NetworkInterfaceIPConfiguration,
+    TagsObject,
+)
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO, get_rnd_name
 
@@ -77,18 +65,6 @@ for logger_name in [
     logging.getLogger(logger_name).setLevel(logging.ERROR)
 
 ID_TAG_NAME = "yascheduler_ip"
-
-if _AZURE_AVAILABLE:
-    RETRY_AZURE_ERRORS = (
-        ServiceResponseError,
-        ServiceRequestTimeoutError,
-        ServiceResponseTimeoutError,
-        IncompleteReadError,
-    )
-    ALL_AZURE_ERRORS = (AzureError,)
-else:
-    RETRY_AZURE_ERRORS = ()
-    ALL_AZURE_ERRORS = ()
 
 
 # region FUNC__fetch_network_resources
@@ -296,11 +272,6 @@ async def az_create_node(
     cloud_config: CloudInitConfig | None = None,
 ) -> CloudCreateNodeDTO:
     """Create virtual machine with network interface."""
-    if not _AZURE_AVAILABLE:
-        msg = (
-            "Azure SDK not installed. Install azure-identity and azure-mgmt-* packages."
-        )
-        raise ImportError(msg)
     async with ClientSecretCredential(
         cfg.tenant_id,
         cfg.client_id,
@@ -374,11 +345,6 @@ async def az_delete_node(
     external_id: str,
 ) -> None:
     """Delete virtual machine with network interface."""
-    if not _AZURE_AVAILABLE:
-        msg = (
-            "Azure SDK not installed. Install azure-identity and azure-mgmt-* packages."
-        )
-        raise ImportError(msg)
     async with ClientSecretCredential(
         cfg.tenant_id,
         cfg.client_id,
