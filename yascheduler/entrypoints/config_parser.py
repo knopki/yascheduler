@@ -208,7 +208,7 @@ _HETZNER_INCLUDES = ["user", "jump_user"]
 _UPCLOUD_EXCLUDES = {"prefix", "username", "jump_username"}
 _UPCLOUD_INCLUDES = ["user", "jump_user"]
 _VASTAI_EXCLUDES = {"prefix", "username", "jump_username", "env"}
-_VASTAI_INCLUDES = ["user", "jump_user"]
+_VASTAI_INCLUDES = ["jump_user", "user"]
 
 
 # region FUNC_cloud_valid_fields
@@ -252,6 +252,11 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
         msg = f"az idle_tolerance must be >= 1, got {idle_tolerance}"
         raise ValueError(msg)
 
+    connect_grace = sec.getint(fmt("connect_grace"), fallback=120)
+    if connect_grace < 1:
+        msg = f"az connect_grace must be >= 1, got {connect_grace}"
+        raise ValueError(msg)
+
     jump_port = _check_port("az jump_port", sec.getint(fmt("jump_port"), fallback=22))
 
     return ConfigCloudAzure(
@@ -270,6 +275,7 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
         username=username,
         priority=sec.getint(fmt("priority"), fallback=0),
         idle_tolerance=idle_tolerance,
+        connect_grace=connect_grace,
         package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
@@ -297,6 +303,11 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
         msg = f"hetzner idle_tolerance must be >= 1, got {idle_tolerance}"
         raise ValueError(msg)
 
+    connect_grace = sec.getint(fmt("connect_grace"), fallback=60)
+    if connect_grace < 1:
+        msg = f"hetzner connect_grace must be >= 1, got {connect_grace}"
+        raise ValueError(msg)
+
     jump_port = _check_port(
         "hetzner jump_port",
         sec.getint(fmt("jump_port"), fallback=22),
@@ -311,6 +322,7 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
         location=sec.get(fmt("location"), None),
         image_name=sec.get(fmt("image_name"), "debian-13"),
         idle_tolerance=idle_tolerance,
+        connect_grace=60,
         package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
@@ -338,6 +350,11 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
         msg = f"upcloud idle_tolerance must be >= 1, got {idle_tolerance}"
         raise ValueError(msg)
 
+    connect_grace = sec.getint(fmt("connect_grace"), fallback=60)
+    if connect_grace < 1:
+        msg = f"upcloud connect_grace must be >= 1, got {connect_grace}"
+        raise ValueError(msg)
+
     jump_port = _check_port(
         "upcloud jump_port",
         sec.getint(fmt("jump_port"), fallback=22),
@@ -350,6 +367,7 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
         username=sec.get(fmt("user"), "root"),
         priority=sec.getint(fmt("priority"), fallback=0),
         idle_tolerance=idle_tolerance,
+        connect_grace=connect_grace,
         package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
@@ -396,6 +414,21 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
         msg = f"vastai idle_tolerance must be >= 1, got {idle_tolerance}"
         raise ValueError(msg)
 
+    connect_grace = sec.getint(fmt("connect_grace"), fallback=120)
+    if connect_grace < 1:
+        msg = f"vastai connect_grace must be >= 1, got {connect_grace}"
+        raise ValueError(msg)
+
+    onstart_script_path = sec.get(fmt("onstart_script"), fallback=None)
+    if onstart_script_path:
+        if not Path(onstart_script_path).exists():
+            msg = f"vastai onstart_script must be valid path of a readable file or empty, got {idle_tolerance}"
+            raise ValueError(msg)
+
+        onstart_script = Path(onstart_script_path).read_text()
+    else:
+        onstart_script = None
+
     jump_port = _check_port(
         "vastai jump_port",
         sec.getint(fmt("jump_port"), fallback=22),
@@ -409,16 +442,16 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
         num_gpus=num_gpus,
         max_price_per_hr=max_price_per_hr,
         max_nodes=max_nodes,
-        username=sec.get(fmt("user"), "root"),
         priority=sec.getint(fmt("priority"), fallback=0),
         idle_tolerance=idle_tolerance,
+        connect_grace=connect_grace,
         package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
-        onstart_script=sec.get(fmt("onstart_script"), ""),
-        docker_options=sec.get(fmt("docker_options"), ""),
-        env={},
+        onstart_script=onstart_script,
+        docker_options=sec.get(fmt("docker_options")),
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
         jump_port=jump_port,
+        label=sec.get(fmt("label"), "yascheduler"),
     )
 
 

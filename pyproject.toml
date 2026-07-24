@@ -116,6 +116,13 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = []
+filterwarnings = [
+  # Third-party libs: deprecated asyncio APIs in Python 3.14+, slated for 3.16
+  # pytest-asyncio 0.26.x uses asyncio.get_event_loop_policy()
+  # backoff 2.2.x uses asyncio.iscoroutinefunction()
+  "ignore::DeprecationWarning:pytest_asyncio.*",
+  "ignore::DeprecationWarning:backoff.*",
+]
 log_cli_format = "[%(name)s][%(funcName)s]:%(lineno)s %(message)s"
 log_format = "[%(name)s][%(funcName)s]:%(lineno)s %(message)s"
 markers = [

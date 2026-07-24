@@ -350,80 +350,79 @@ def test_upcloud_delete_node_is_renamed() -> None:
 
 @pytest.mark.asyncio
 async def test_vastai_create_node_returns_dto() -> None:
-    """vastai_create_node returns CloudCreateNodeDTO with IP-based identity."""
+    """vastai_create_node returns CloudCreateNodeDTO with instance id as external_id."""
+    from unittest.mock import patch
+
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
 
-    cfg = ConfigCloudVastAI(api_key="test-key", username="vauser")
+    cfg = ConfigCloudVastAI(api_key="test-key")
     mock_key = MagicMock()
+    mock_key.export_public_key.return_value = b"ssh-rsa AAAA..."
 
-    # Sequential JSON data matching API call order:
-    # 1. GET /bundles/ → offers
-    # 2. PUT /asks/{id}/ → new_contract
-    # 3. GET /instances/{id}/ → running with IP
-    response_data = [
-        {"offers": [{"id": 123, "dph_total": 0.5}]},
-        {"new_contract": 456},
-        {"instances": [{"actual_status": "running", "public_ipaddr": "10.0.0.3"}]},
-    ]
+    from yascheduler.infra.cloud.providers.vastai import vastai_create_node
 
-    def _make_resp(data):
-        m = MagicMock()
-        m.ok = True
-        m.json = AsyncMock(return_value=data)
-        return m
+    def make_mock_resp(status: int, json_data: object) -> MagicMock:
+        mock_resp = MagicMock()
+        mock_resp.status = status
+        mock_resp.json = AsyncMock(return_value=json_data)
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        return mock_resp
 
-    # session.request returns an async context manager whose __aenter__
-    # returns the response mock
+    resp1 = make_mock_resp(200, [{"public_key": "ssh-rsa AAAA..."}])
+    resp2 = make_mock_resp(200, {"offers": [{"id": 101, "dph_total": 0.5}]})
+    resp3 = make_mock_resp(200, {"new_contract": 42})
+    resp4 = make_mock_resp(
+        200,
+        {
+            "instances": {
+                "id": 42,
+                "actual_status": "running",
+                "ssh_host": "1.2.3.4",
+                "ssh_port": 2222,
+            },
+        },
+    )
+
     mock_session = MagicMock()
-    request_results = [
-        MagicMock(__aenter__=AsyncMock(return_value=_make_resp(d)))
-        for d in response_data
-    ]
-    mock_session.request = MagicMock(side_effect=request_results)
+    mock_session.request = MagicMock(side_effect=[resp1, resp2, resp3, resp4])
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
 
-    with (
-        patch(
-            "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
-        ) as mock_session_cls,
+    with patch(
+        "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+        return_value=mock_session,
     ):
-        mock_session_cls.return_value.__aenter__.return_value = mock_session
-
-        from yascheduler.infra.cloud.providers.vastai import vastai_create_node
-
         result = await vastai_create_node(cfg, mock_key)
 
-    assert isinstance(result, CloudCreateNodeDTO)
-    assert result.external_id == "10.0.0.3"
-    assert result.hostname == "10.0.0.3"
-    assert result.username == "vauser"
+    assert result.external_id == "42"
+    assert result.hostname == "1.2.3.4"
 
 
 @pytest.mark.asyncio
 async def test_vastai_delete_node_accepts_external_id() -> None:
     """vastai_delete_node accepts external_id parameter to locate the resource."""
+    from unittest.mock import patch
+
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
 
     cfg = ConfigCloudVastAI(api_key="test-key")
 
+    from yascheduler.infra.cloud.providers.vastai import vastai_delete_node
+
     mock_resp = MagicMock()
-    mock_resp.ok = True
-    mock_resp.json = AsyncMock(return_value={"instances": []})
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value={"success": True})
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
 
     mock_session = MagicMock()
-    mock_session.request = MagicMock(
-        return_value=MagicMock(
-            __aenter__=AsyncMock(return_value=mock_resp),
-        ),
-    )
+    mock_session.request = MagicMock(return_value=mock_resp)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
 
-    with (
-        patch(
-            "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
-        ) as mock_session_cls,
+    with patch(
+        "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+        return_value=mock_session,
     ):
-        mock_session_cls.return_value.__aenter__.return_value = mock_session
-
-        from yascheduler.infra.cloud.providers.vastai import vastai_delete_node
-
-        # Should not raise — external_id is accepted as keyword
         await vastai_delete_node(cfg, external_id="10.0.0.3")

@@ -252,7 +252,7 @@ Settings prefix is `hetzner`.
 
 #### Azure
 
-Azure Cloud should be pre-configured for `yascheduler`. See [Cloud Providers](CLOUD.md).
+Azure Cloud should be pre-configured for `yascheduler`. See [Azure setup](docs/AZURE.md).
 
 Settings prefix is `az`.
 
@@ -312,7 +312,7 @@ Settings prefix is `upcloud`.
 #### VastAI
 
 VastAI is a GPU marketplace for on-demand GPU instances.
-See [Cloud Providers](CLOUD.md) for setup instructions.
+See [VastAI setup](docs/VASTAI.md) for setup instructions.
 
 Settings prefix is `vastai`.
 

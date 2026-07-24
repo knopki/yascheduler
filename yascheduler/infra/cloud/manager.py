@@ -165,11 +165,12 @@ class CloudProvisionerImpl:
         )
         try:
             node = await self._setup_vm(node, adapter, config)
-        except CloudSetupError:
+        except CloudSetupError as err:
             logger.warning(
-                "cloud setup failed for %s node_id=%s — removing VM",
+                "cloud setup failed for %s node_id=%s — removing VM: %s",
                 node.hostname,
                 node.node_id,
+                err,
             )
             try:
                 await self.machine_repository.disconnect(node.node_id)
@@ -183,9 +184,10 @@ class CloudProvisionerImpl:
             raise
         except Exception as err:
             logger.warning(
-                "cloud setup failed for %s node_id=%s — removing VM",
+                "cloud setup failed for %s node_id=%s — removing VM: %s",
                 node.hostname,
                 node.node_id,
+                err,
             )
             try:
                 await self.machine_repository.disconnect(node.node_id)
@@ -309,9 +311,9 @@ class CloudProvisionerImpl:
     # endregion METHOD__get_cloud_config_data
 
     # region METHOD__setup_vm
-    # PURPOSE: Wait for cloud-init, install engines, and stamp the Node enabled so a freshly-created VM becomes a functional compute node ready for job execution.
+    # PURPOSE: Wait for cloud-init (if the provider needs it), install engines, and stamp the Node enabled so a freshly-created VM becomes a functional compute node ready for job execution.
     # REQUIRES: node has hostname/username set; adapter has timeout settings.
-    # ENSURES: Connects to VM, runs cloud-init, installs engines, stamps enabled=True.
+    # ENSURES: Connects to VM, runs cloud-init (if needed), installs engines, stamps enabled=True.
     # RAISES: CloudSetupError on any SSH/cloud-init/setup failure.
     async def _setup_vm(
         self,
@@ -319,38 +321,39 @@ class CloudProvisionerImpl:
         adapter: CloudAdapter,
         config: ConfigCloud,
     ) -> Node:
-        """Connect to VM, wait for cloud-init, install engines, return enabled Node via replace."""
+        """Connect to VM, wait for cloud-init (if needed), install engines, return enabled Node via replace."""
         # region BLOCK_ssh_connect_setup
         session = await self._connect_to_vm(node, adapter, config)
         # endregion BLOCK_ssh_connect_setup
 
         # region BLOCK_cloud_init
-        # `cloud-init status --wait` blocks until cloud-init finishes (or hangs).
-        # Bound it with adapter.create_node_timeout so a hung cloud-init cannot
-        # pin an allocator worker forever. The failure message includes both
-        # stdout and stderr — cloud-init writes its status line to stdout, so
-        # omitting stdout (the previous behavior) gave no clue why it failed.
-        logger.debug("CLOUD_INIT", extra={"hostname": node.hostname})
-        try:
-            result = await asyncio.wait_for(
-                session.run("cloud-init status --wait"),
-                timeout=adapter.create_node_timeout,
-            )
-        except asyncio.TimeoutError as err:
-            msg = (
-                f"cloud-init status --wait timed out on {node.hostname} "
-                f"after {adapter.create_node_timeout}s"
-            )
-            raise CloudSetupError(msg) from err
-        except Exception as err:
-            msg = f"cloud-init status --wait failed on {node.hostname}: {err}"
-            raise CloudSetupError(msg) from err
-        if result.exit_code != 0:
-            msg = (
-                f"cloud-init failed on {node.hostname}: exit={result.exit_code} "
-                f"stdout={result.stdout} stderr={result.stderr}"
-            )
-            raise CloudSetupError(msg)
+        if adapter.needs_cloud_init:
+            # `cloud-init status --wait` blocks until cloud-init finishes (or hangs).
+            # Bound it with adapter.create_node_timeout so a hung cloud-init cannot
+            # pin an allocator worker forever. The failure message includes both
+            # stdout and stderr — cloud-init writes its status line to stdout, so
+            # omitting stdout (the previous behavior) gave no clue why it failed.
+            logger.debug("CLOUD_INIT", extra={"hostname": node.hostname})
+            try:
+                result = await asyncio.wait_for(
+                    session.run("cloud-init status --wait"),
+                    timeout=adapter.create_node_timeout,
+                )
+            except asyncio.TimeoutError as err:
+                msg = (
+                    f"cloud-init status --wait timed out on {node.hostname} "
+                    f"after {adapter.create_node_timeout}s"
+                )
+                raise CloudSetupError(msg) from err
+            except Exception as err:
+                msg = f"cloud-init status --wait failed on {node.hostname}: {err}"
+                raise CloudSetupError(msg) from err
+            if result.exit_code != 0:
+                msg = (
+                    f"cloud-init failed on {node.hostname}: exit={result.exit_code} "
+                    f"stdout={result.stdout} stderr={result.stderr}"
+                )
+                raise CloudSetupError(msg)
         # endregion BLOCK_cloud_init
 
         # region BLOCK_setup_node

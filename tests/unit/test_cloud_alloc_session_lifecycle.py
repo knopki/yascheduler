@@ -466,6 +466,7 @@ def _make_real_adapter_config(
     adapter.name = name
     adapter.create_node_conn_timeout = 30
     adapter.create_node_timeout = create_node_timeout
+    adapter.needs_cloud_init = True
 
     async def _create_node(**kw: Any) -> CloudCreateNodeDTO:
         return CloudCreateNodeDTO(

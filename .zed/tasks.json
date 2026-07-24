@@ -2,8 +2,11 @@
 [
   {
     "label": "Init venv on worktree creation",
-    "command": "uv",
-    "args": ["sync", "--locked", "--all-extras"],
+    "command": "sh",
+    "args": [
+      "-c",
+      "uv sync --locked --all-extras --python-preference system; status=$?; command -v codegraph >/dev/null 2>&1 && { codegraph init || true; }; exit $status",
+    ],
     "hooks": ["create_worktree"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "reveal": "no_focus",

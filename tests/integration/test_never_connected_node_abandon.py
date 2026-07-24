@@ -235,4 +235,4 @@ async def test_connect_grace_lookup_uses_cloud_prefix(
     assert orch._connect_grace_for("az") == 120
     # Upcloud and VastAI also resolve correctly from the same instance.
     assert orch._connect_grace_for("upcloud") == 60
-    assert orch._connect_grace_for("vastai") == 120
+    assert orch._connect_grace_for("vastai") == 300
