@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, TypeVar
+
+from yascheduler.shared.compat import ParamSpec
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
