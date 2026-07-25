@@ -264,8 +264,10 @@ class TestSelectCheapestOffer:
             await select_cheapest_offer([], 1.0)
 
     @pytest.mark.asyncio
-    async def test_returns_first_offer_from_sorted_list(self) -> None:
-        """Returns the first (cheapest) offer from a sorted list."""
+    async def test_selects_random_offer_from_top_5_cheapest(self) -> None:
+        """Selects a random offer from the top-5 cheapest (avoids always hitting same provider)."""
+        from unittest.mock import patch
+
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIOffer,
             select_cheapest_offer,
@@ -274,9 +276,24 @@ class TestSelectCheapestOffer:
         offers: list[VastAIOffer] = [
             {"id": 101, "dph_total": 0.5},
             {"id": 102, "dph_total": 0.8},
+            {"id": 103, "dph_total": 0.9},
+            {"id": 104, "dph_total": 1.0},
+            {"id": 105, "dph_total": 1.1},
+            {"id": 106, "dph_total": 2.0},
         ]
-        result = await select_cheapest_offer(offers, 1.0)
-        assert result["id"] == 101
+        with patch(
+            "yascheduler.infra.cloud.providers.vastai.random.choice"
+        ) as mock_choice:
+            mock_choice.return_value = {"id": 103, "dph_total": 0.9}
+            result = await select_cheapest_offer(offers, 2.0)
+
+        # random.choice called with top-5 cheapest, sorted ascending
+        (candidates,) = mock_choice.call_args[0]
+        assert len(candidates) == 5
+        assert candidates[0]["id"] == 101
+        assert candidates[-1]["id"] == 105
+        # function returns whatever random.choice returned
+        assert result["id"] == 103
 
     @pytest.mark.asyncio
     async def test_price_over_limit_raises_invalid_offer_error(self) -> None:
