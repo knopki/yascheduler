@@ -1,8 +1,8 @@
 """Connected-machine entity handle owning SSH connection, machine state, and per-session monitor lifecycle."""
 # region MODULE_CONTRACT
 # PURPOSE: SSHMachineSession — concrete MachineSession entity handle owning an SSH connection, adapter, mutable machine snapshot, and per-session monitor task.
-# SCOPE: SSHMachineSession class and my_backoff_exc canonical partial.
-# DEPENDENCIES: USES API: asyncssh (SSHClientConnection, SFTPClient, process types), backoff (retry decorator)
+# SCOPE: SSHMachineSession class and my_retry canonical partial.
+# DEPENDENCIES: USES API: asyncssh (SSHClientConnection, SFTPClient)
 # KEYWORDS: session, ssh, machine, monitor, lifecycle, SSHMachineSession
 # endregion MODULE_CONTRACT
 
@@ -14,14 +14,10 @@ from contextlib import asynccontextmanager, suppress
 from functools import partial
 from typing import TYPE_CHECKING
 
-import backoff
-
 from yascheduler.domain import ConnectedMachine, ProcessResult
+from yascheduler.shared import retry
 
-from .platform import make_run_fn
-from .platform.protocol import AllSSHRetryExc, SSHRetryExc
-
-logger = logging.getLogger(__name__)
+from .platform import AllSSHRetryExc, SSHRetryExc, make_run_fn
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -46,14 +42,9 @@ if TYPE_CHECKING:
         RemoteMachineAdapter,
     )
 
-__all__ = ["SSHMachineSession", "my_backoff_exc"]
-
-my_backoff_exc = partial(
-    backoff.on_exception,
-    wait_gen=backoff.fibo,
-    max_time=60,
-    exception=SSHRetryExc,
-)
+__all__ = ["SSHMachineSession", "my_retry"]
+logger = logging.getLogger(__name__)
+my_retry = partial(retry, on=SSHRetryExc, max_time=60)
 
 
 # region CLASS_SSHMachineSession
@@ -207,7 +198,7 @@ class SSHMachineSession:
     # endregion METHOD_run
     # region METHOD_run_full
     # PURPOSE: Run command via self._adapter and return raw SSHCompletedProcess; retries on SSHRetryExc. Callers branching on exit_code/stdout/stderr should prefer run() for the structured ProcessResult.
-    @my_backoff_exc()
+    @my_retry()
     async def run_full(self, cmd: str) -> SSHCompletedProcess:
         """Run command via self._conn + self._adapter directly (no repository call)."""
         return await self._adapter.run(self._conn, self._adapter.quote, cmd)
@@ -242,7 +233,7 @@ class SSHMachineSession:
     # endregion METHOD_open_sftp
     # region METHOD_get_cpu_cores
     # PURPOSE: Return CPU core count, memoized per session. Cache miss invokes adapter with retry; cache hit returns without adapter invocation.
-    @my_backoff_exc()
+    @my_retry()
     async def get_cpu_cores(self) -> int:
         """Return CPU core count, memoized per session (cache miss invokes adapter with retry; cache hit returns without adapter invocation)."""
         # region BLOCK_check_cache
@@ -263,7 +254,7 @@ class SSHMachineSession:
     # PURPOSE: Install engine dependencies on the remote node via self._adapter.setup_node with make_run_fn(conn, adapter).
     async def setup_node(self, engines: EngineRepository) -> None:
         """Install engine dependencies on remote node."""
-        retry = my_backoff_exc(exception=AllSSHRetryExc)
+        retry = my_retry(on=AllSSHRetryExc)
         await retry(self._adapter.setup_node)(
             conn=self._conn,
             run=make_run_fn(self._conn, self._adapter),

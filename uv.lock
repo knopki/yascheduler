@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-14T00:50:11.049950173Z"
+exclude-newer = "2026-07-17T12:50:35.972206496Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -353,15 +353,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8c/c4/7ecb49ac70bc7f2ca73ffa69de63183d95716c642de0823294567a2e42bc/azure-mgmt-network-20.0.0.zip", hash = "sha256:9a78cfc82009fab94d819e2e9926237d555583cdc4a1b65863fceea720e37686", size = 8689151, upload-time = "2022-05-10T07:41:18.963Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4e/7a/3360f0fbc4d8b276ce3170ce2a2928c27a52e3caf768da941a10d8368a4d/azure_mgmt_network-20.0.0-py3-none-any.whl", hash = "sha256:e56ca31ddedc5c4492e243b0cec42096207f6fd640829aeae1e221a1732a10f0", size = 8525764, upload-time = "2022-05-10T07:41:15.036Z" },
-]
-
-[[package]]
-name = "backoff"
-version = "2.1.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3b/22/53182ff2977aa653cb61f30592cbfb5d3e0764368c8eaa8ec096e6899b7a/backoff-2.1.2.tar.gz", hash = "sha256:407f1bc0f22723648a8880821b935ce5df8475cf04f7b6b5017ae264d30f6069", size = 16632, upload-time = "2022-06-08T12:05:24.306Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/59/fbcbf9bdce46bc7a3ce6af140dadff9f9c8bd1a641e49ee0f1bfd21f830b/backoff-2.1.2-py3-none-any.whl", hash = "sha256:b135e6d7c7513ba2bfd6895bc32bc8c66c6f3b0279b4c6cd866053cfd7d3126b", size = 14894, upload-time = "2022-06-08T12:05:22.354Z" },
 ]
 
 [[package]]
@@ -4170,7 +4161,6 @@ dependencies = [
     { name = "asyncssh", version = "2.21.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "asyncssh", version = "2.23.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "asyncstdlib" },
-    { name = "backoff" },
     { name = "pg8000" },
     { name = "python-daemon" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
@@ -4222,7 +4212,6 @@ requires-dist = [
     { name = "azure-identity", marker = "extra == 'azure'", specifier = "~=1.10.0" },
     { name = "azure-mgmt-compute", marker = "extra == 'azure'", specifier = "~=27.2.0" },
     { name = "azure-mgmt-network", marker = "extra == 'azure'", specifier = "~=20.0.0" },
-    { name = "backoff", specifier = "~=2.1.2" },
     { name = "hcloud", marker = "extra == 'hetzner'", specifier = "~=2.0" },
     { name = "pg8000", specifier = "~=1.19" },
     { name = "python-daemon", specifier = "~=2.3" },

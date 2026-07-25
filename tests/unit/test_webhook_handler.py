@@ -7,14 +7,11 @@
 from __future__ import annotations
 
 import asyncio
-import datetime as _datetime
 import logging
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
-import backoff._async as _backoff_async
 import pytest
 
 from tests.log_assertions import extra_fields
@@ -33,26 +30,26 @@ URL = "https://example.com/hook"
 
 
 @pytest.fixture(autouse=True)
-def _fast_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+def _fast_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_sleep = asyncio.sleep
 
-    real_now = _datetime.datetime.now
-    calls = {"n": 0}
+    async def _noop_sleep(delay: float) -> None:
+        await original_sleep(0)
 
-    class _FastDateTime:
-        @staticmethod
-        def now(*args: object, **kwargs: object) -> _datetime.datetime:
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    calls: dict[str, int] = {"n": 0}
+    base_time = 1000.0
+
+    class _FakeLoop:
+        def time(self) -> float:
             calls["n"] += 1
-            base = real_now()
             if calls["n"] > 2:
-                return base + _datetime.timedelta(seconds=120)
-            return base
+                return base_time + 999
+            return base_time
 
-    monkeypatch.setattr(
-        _backoff_async,
-        "datetime",
-        types.SimpleNamespace(datetime=_FastDateTime),
-    )
+    _fake_loop = _FakeLoop()
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: _fake_loop)
 
 
 async def _call(event: DomainEvent) -> AsyncMock:

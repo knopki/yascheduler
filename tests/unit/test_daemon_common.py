@@ -82,10 +82,6 @@ class TestConfigureLogger:
         assert any(isinstance(h.formatter, LogFormatter) for h in sh)
         assert any(isinstance(h.formatter, LogFormatter) for h in fh)
 
-    def test_backoff_level_error(self) -> None:
-        daemon_common.configure_logger(None, logging.INFO)
-        assert logging.getLogger("backoff").level == logging.ERROR
-
     def test_asyncssh_level_error(self) -> None:
         daemon_common.configure_logger(None, logging.INFO)
         assert logging.getLogger("asyncssh").level == logging.ERROR

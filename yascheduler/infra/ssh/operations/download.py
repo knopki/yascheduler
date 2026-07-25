@@ -1,8 +1,8 @@
 """OutputDownloader — per-file SFTP-isolated download with retry, error classification, conservative post-loop rmtree. Stateless: takes (log) at construction, (session, ...) per call."""
 # region MODULE_CONTRACT
 # PURPOSE: Per-file SFTP-isolated download with retry, error classification, and conservative post-loop rmtree. Stateless: session passed per call.
-# SCOPE: OutputDownloader class and my_backoff_sftp partial (canonical location).
-# DEPENDENCIES: USES API: asyncssh (SFTPError), backoff (retry decorator)
+# SCOPE: OutputDownloader class and my_retry partial (canonical location).
+# DEPENDENCIES: USES API: asyncssh (SFTPError)
 # KEYWORDS: download, sftp, output, retry, rmtree, OutputDownloader
 # endregion MODULE_CONTRACT
 
@@ -12,26 +12,19 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING
 
-import backoff
 from asyncssh.sftp import SFTPError
 
 from yascheduler.infra.ssh.platform.protocol import SFTPRetryExc
+from yascheduler.shared import retry
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from yascheduler.domain import MachineSession, TaskId
 
-__all__ = ["OutputDownloader", "my_backoff_sftp"]
-
+__all__ = ["OutputDownloader", "my_retry"]
 logger = logging.getLogger(__name__)
-
-my_backoff_sftp = partial(
-    backoff.on_exception,
-    wait_gen=backoff.fibo,
-    max_time=60,
-    exception=SFTPRetryExc,
-)
+my_retry = partial(retry, on=SFTPRetryExc, max_time=60)
 
 
 # region CLASS_OutputDownloader
@@ -69,7 +62,7 @@ class OutputDownloader:
         transient_errors: list[tuple[str | None, Exception]] = []
         permanent_errors: list[tuple[str | None, Exception]] = []
         path_type = session.path
-        file_get_retry = my_backoff_sftp()
+        file_get_retry = my_retry()
 
         try:
             # region BLOCK_per_file_download

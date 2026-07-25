@@ -48,9 +48,8 @@ def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
     # endregion BLOCK_root_handlers
 
     # region BLOCK_suppress_noisy_third_party
-    # backoff retries and asyncssh key-exchange chatter are noisy below ERROR; let them
-    # propagate to the root handlers but suppress their DEBUG/INFO/WARNING output.
-    logging.getLogger("backoff").setLevel(logging.ERROR)
+    # asyncssh key-exchange chatter is noisy below ERROR; let it
+    # propagate to the root handlers but suppress its DEBUG/INFO/WARNING output.
     logging.getLogger("asyncssh").setLevel(logging.ERROR)
     # endregion BLOCK_suppress_noisy_third_party
 

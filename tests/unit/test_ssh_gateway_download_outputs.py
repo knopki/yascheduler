@@ -22,17 +22,17 @@ from yascheduler.infra.ssh.session import SSHMachineSession
 
 
 @pytest.fixture(autouse=True)
-def _no_sftp_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Neutralize my_backoff_sftp so per-file retry is a passthrough in unit tests.
+def _no_sftp_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize my_retry so per-file retry is a passthrough in unit tests.
 
-    file_get_retry = my_backoff_sftp() wraps sftp.get in a real 60s fibonacci
+    file_get_retry = my_retry() wraps sftp.get in a real 60s exponential
     backoff on SFTPRetryExc. Without this patch, a test that makes sftp.get raise
     a retryable SFTP exception (SFTPFailure / SFTPConnectionLost) blocks for 60s
     per file before the exception reaches the classifier — the unit-test timeout
     root cause. Unit tests verify classification/isolation logic, not real
-    backoff timing, so the retry is replaced with identity (raise immediately).
+    retry timing, so the retry is replaced with identity (raise immediately).
     """
-    monkeypatch.setattr(download_module, "my_backoff_sftp", lambda: lambda fn: fn)
+    monkeypatch.setattr(download_module, "my_retry", lambda: lambda fn: fn)
 
 
 def _wire_sftp(session: SSHMachineSession, sftp_mock: AsyncMock) -> SSHMachineSession:

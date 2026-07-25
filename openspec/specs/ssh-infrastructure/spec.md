@@ -10,9 +10,7 @@ output download, and occupancy check logic). Both implement the
 MachineRepository and MachineSession domain ports respectively using
 asyncssh for SSH connections and SFTP, with retry logic on idempotent
 operations.
-
 ## Requirements
-
 ### Requirement: MachineRepository port
 
 The system SHALL define a `@runtime_checkable` `MachineRepository` Protocol
@@ -119,20 +117,9 @@ when the check returns `False`.
 
 ### Requirement: SSHMachineSession implements MachineSession
 
-The system SHALL provide an `SSHMachineSession` class that satisfies the
-`MachineSession` Protocol. The session SHALL be constructed by
-`SSHMachineRepository.connect` with: `hostname`, an open `SSHClientConnection`,
-`SSHClientConnectionOptions`, a `ConnectedMachine` (initial snapshot with
-`state=FREE`, `free_since=time.monotonic()`), `adapter`, `platforms`,
-`data_dir`, `engines_dir`, `tasks_dir`.
+**Reason**: Replace `backoff` library with internal async retry utility. Fibonacci → exponential backoff. Retry semantics unchanged.
 
-The session SHALL own its own teardown, invoked only by
-`SSHMachineRepository.disconnect`. Close SHALL be idempotent and SHALL release
-the SSH connection and cancel the monitor task.
-
-`run_full` SHALL retry on retryable SSH errors with fibonacci backoff up to
-`max_time=60`. `setup_node(engines: EngineRepository) -> None` (async) SHALL
-delegate to `adapter.setup_node(...)`.
+`run_full` SHALL retry on retryable SSH errors with exponential backoff up to `max_time=60`. `setup_node(engines: EngineRepository) -> None` (async) SHALL delegate to `adapter.setup_node(...)`.
 
 #### Scenario: Session owns its monitor task
 
@@ -158,22 +145,9 @@ SHALL return the live session for `node_id` or `None` (after disconnect).
 
 ### Requirement: download_outputs per-file SFTP isolation and retry
 
-The system SHALL provide `OutputDownloader.download_outputs(session,
-remote_dir, local_dir, files, task_id)` returning
-`(local_folder: str, remote_folder: str, transient_errors, permanent_errors)`.
-Each per-file exception SHALL be classified into `transient_errors` (retryable
-SFTP errors and session-level failures) or `permanent_errors` (all other
-caught exceptions).
+**Reason**: Replace `backoff` library with internal async retry utility. Fibonacci → exponential backoff. Retry semantics unchanged.
 
-A FRESH SFTP client SHALL be opened per file in the per-file loop. Each file's
-`sftp.get` SHALL be wrapped individually with per-file retry (fibonacci,
-`max_time=60`).
-
-The remote directory tree SHALL be removed ONCE, after the per-file loop
-completes, and only when BOTH error lists are empty.
-
-The `local_folder` / `remote_folder` return values SHALL be `str(local_dir)`
-and `remote_dir` verbatim.
+A FRESH SFTP client SHALL be opened per file in the per-file loop. Each file's `sftp.get` SHALL be wrapped individually with per-file retry (exponential, `max_time=60`).
 
 #### Scenario: Download task outputs with per-file SFTP isolation and retry
 
@@ -212,22 +186,18 @@ propagated exception SHALL be the abort signal for `start_task_on_machine`.
 
 ### Requirement: Retry and backoff policy
 
-The system SHALL apply retry with fibonacci backoff, `max_time=60`, to
-idempotent operations: `get_cpu_cores` (pure read, cache miss path) and
-connection establishment. `download_outputs` SHALL continue to use per-file
-SFTP retry (fibonacci, `max_time=60`) inside the per-file loop.
+**Reason**: Replace `backoff` library with internal async retry utility. Fibonacci wait strategy replaced with exponential backoff — both produce comparable retry counts within a 60s window (~7-8 attempts). All other retry semantics (`max_time=60`, exception filtering, `giveup`) are preserved.
 
-SSH connections SHALL be retried on transient failures using fibonacci backoff
-with `max_time=60`. Exhausted failures SHALL surface as
-`MachineConnectionError`.
+The system SHALL apply retry with exponential backoff, `max_time=60`, to idempotent operations: `get_cpu_cores` (pure read, cache miss path) and connection establishment. `download_outputs` SHALL continue to use per-file SFTP retry (exponential, `max_time=60`) inside the per-file loop.
 
-The retry on `get_cpu_cores` applies only on a cache miss (the first call in a
-session lifetime, or the priming call from `SSHMachineRepository.connect`).
+SSH connections SHALL be retried on transient failures using exponential backoff with `max_time=60`. Exhausted failures SHALL surface as `MachineConnectionError`.
+
+The retry on `get_cpu_cores` applies only on a cache miss (the first call in a session lifetime, or the priming call from `SSHMachineRepository.connect`).
 
 #### Scenario: get_cpu_cores retries on SSH failure (cache miss)
 
 - **WHEN** `session.get_cpu_cores()` is called on a session whose cache is empty (miss) and the underlying adapter call fails with a retryable SSH exception
-- **THEN** the operation is retried with fibonacci backoff up to 60 seconds (idempotent read — retry is safe); the successful result is stored in the session cache
+- **THEN** the operation is retried with exponential backoff up to 60 seconds (idempotent read — retry is safe); the successful result is stored in the session cache
 
 #### Scenario: get_cpu_cores returns cached value without retry
 
@@ -295,3 +265,4 @@ exposed from the SSH platform package.
 #### Scenario: ProcessInfo defined in platform protocol module
 - **WHEN** the platform protocol module is inspected
 - **THEN** `ProcessInfo` is a frozen dataclass with fields `pid: int`, `name: str`, `command: str`
+

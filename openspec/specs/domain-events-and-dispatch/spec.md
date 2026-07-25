@@ -8,9 +8,7 @@ The domain event types emitted by the Task aggregate and use cases, the in-proce
 the registered side-effect handler that translates events into outbound HTTP
 webhook calls. Events are immutable value objects carrying webhook delivery
 metadata on the base class.
-
 ## Requirements
-
 ### Requirement: DomainEvent base type with webhook fields
 
 The system SHALL define a `DomainEvent` frozen dataclass base with fields
@@ -148,18 +146,11 @@ sourced from the `node_id` param of `abandon`.
 
 ### Requirement: Webhook handler — the registered side-effect handler
 
-`webhook_handler` SHALL be an async function that processes `TaskCreated`,
-`TaskAllocated`, `TaskCompleted`, `TaskFailed`, and `TaskAbandoned` events by
-sending webhook notifications. The HTTP POST body SHALL be the wire shape
-`{"task_id": int, "status": int, "custom_params": ...}`, where `task_id` is the
-bare `int` (the `TaskId.value`, not the `TaskId` dataclass) and `status` is the
-matching `TaskStatus` value for the event type.
+**Reason**: Replace `backoff` library with internal async retry utility. Fibonacci → exponential backoff. Retry semantics unchanged.
 
-When `webhook_url` is `None`, the event SHALL be skipped (no HTTP request).
-Webhook HTTP failures SHALL be logged and the exception suppressed so they
-never propagate back into the use-case layer. Delivery SHALL use
-fibonacci-backoff retry (`backoff.fibo`, `max_time=60`) with a semaphore for
-rate limiting.
+`webhook_handler` SHALL be an async function that processes `TaskCreated`, `TaskAllocated`, `TaskCompleted`, `TaskFailed`, and `TaskAbandoned` events by sending webhook notifications. The HTTP POST body SHALL be the wire shape `{"task_id": int, "status": int, "custom_params": ...}`, where `task_id` is the bare `int` (the `TaskId.value`, not the `TaskId` dataclass) and `status` is the matching `TaskStatus` value for the event type.
+
+When `webhook_url` is `None`, the event SHALL be skipped (no HTTP request). Webhook HTTP failures SHALL be logged and the exception suppressed so they never propagate back into the use-case layer. Delivery SHALL use exponential-backoff retry (`max_time=60`) with a semaphore for rate limiting.
 
 #### Scenario: TaskCreated sends TO_DO webhook
 - **WHEN** `webhook_handler(TaskCreated(task_id=TaskId(42), webhook_url="https://...", webhook_custom_params={}, engine_name="fleur"), http)` is called
@@ -183,4 +174,5 @@ rate limiting.
 
 #### Scenario: Retry on transient failure
 - **WHEN** the webhook endpoint returns 503
-- **THEN** the request is retried with fibonacci backoff up to `max_time=60` seconds
+- **THEN** the request is retried with exponential backoff up to `max_time=60` seconds
+

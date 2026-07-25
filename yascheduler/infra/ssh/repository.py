@@ -4,7 +4,7 @@
 # SCOPE:
 # - SSHMachineRepository: connected-machine collection lifecycle, connection-building helpers.
 # - MySSHClient, DEFAULT_CONN_OPTS, _build_tunnel_options connection-building bits.
-# DEPENDENCIES: USES API: asyncssh (SSHClient, connection, options), backoff (retry decorator)
+# DEPENDENCIES: USES API: asyncssh (SSHClient, connection, options)
 # KEYWORDS: repository, ssh, machine, collection, lifecycle, SSHMachineRepository
 # endregion MODULE_CONTRACT
 
@@ -28,9 +28,7 @@ from yascheduler.domain import (
 from yascheduler.domain.exceptions import MachineConnectionError
 
 from .platform import ADAPTERS, _detect_platform, _init_paths, make_run_fn
-from .session import SSHMachineSession, my_backoff_exc
-
-logger = logging.getLogger(__name__)
+from .session import SSHMachineSession, my_retry
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -38,11 +36,8 @@ if TYPE_CHECKING:
 
     from asyncssh.public_key import SSHKey
 
-__all__ = [
-    "DEFAULT_CONN_OPTS",
-    "MySSHClient",
-    "SSHMachineRepository",
-]
+__all__ = ["DEFAULT_CONN_OPTS", "MySSHClient", "SSHMachineRepository"]
+logger = logging.getLogger(__name__)
 
 
 # region CLASS_MySSHClient
@@ -130,7 +125,7 @@ class SSHMachineRepository:
 
     # region METHOD__open_connection
     # PURPOSE: Build SSH options and open connection via asyncssh with retry on SSHRetryExc.
-    @my_backoff_exc()
+    @my_retry()
     async def _open_connection(
         self,
         hostname: str,
@@ -190,7 +185,7 @@ class SSHMachineRepository:
         """Open SSH connection, detect platform, construct and register a session.
 
         Translates (asyncssh.misc.Error, OSError) into MachineConnectionError
-        after _connect_impl's backoff exhausts retries. ``hostname`` is read
+        after _connect_impl's retry exhausts. ``hostname`` is read
         from ``node.hostname`` (the asyncssh host) and threaded into
         ``MachineConnectionError`` at the raise site (transport-level error —
         the address is what the operator recognizes).
@@ -210,8 +205,8 @@ class SSHMachineRepository:
     # endregion METHOD_connect
 
     # region METHOD__connect_impl
-    # PURPOSE: Inner connection implementation with backoff retry on SSHRetryExc; constructs and registers the MachineSession.
-    @my_backoff_exc()
+    # PURPOSE: Inner connection implementation with retry on SSHRetryExc; constructs and registers the MachineSession.
+    @my_retry()
     async def _connect_impl(
         self,
         node: Node,
@@ -222,7 +217,7 @@ class SSHMachineRepository:
         engines_dir: PurePath | None = None,
         tasks_dir: PurePath | None = None,
     ) -> MachineSession:
-        """Open SSH connection, detect platform, construct SSHMachineSession (inner impl with backoff)."""
+        """Open SSH connection, detect platform, construct SSHMachineSession (inner impl with retry)."""
         # region BLOCK_build_tunnel
         tunnel_opts = _build_tunnel_options(node, client_keys, connect_timeout)
         # endregion BLOCK_build_tunnel

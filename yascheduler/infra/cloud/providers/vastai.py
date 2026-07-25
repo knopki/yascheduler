@@ -2,7 +2,7 @@
 # region MODULE_CONTRACT
 # PURPOSE: VastAI provider lifecycle — SSH key registration, offer search, cheapest selection, instance create/poll, delete.
 # SCOPE: cloud-side lifecycle only, NOT DB/UoW/SSH-setup/allocator.
-# DEPENDENCIES: USES API: cloud.vast.ai (aiohttp), backoff
+# DEPENDENCIES: USES API: cloud.vast.ai (aiohttp)
 # KEYWORDS: vastai, provider, create, delete, ssh key, offers, instances
 # endregion MODULE_CONTRACT
 
@@ -14,9 +14,9 @@ import random
 from typing import TYPE_CHECKING, TypedDict
 
 import aiohttp
-import backoff
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO
+from yascheduler.shared import retry
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
@@ -101,12 +101,11 @@ async def _request(
 
 
 # region FUNC__request_with_retry
-# PURPOSE: Wrapper around _request that retries on 429 (rate limit) with fibonacci backoff up to 60s.
+# PURPOSE: Wrapper around _request that retries on 429 (rate limit) with exponential backoff up to 60s.
 # REQUIRES: Same as _request.
 # ENSURES: Same as _request, but retries on 429.
-@backoff.on_exception(
-    backoff.fibo,
-    VastAIError,
+@retry(
+    on=VastAIError,
     max_time=60,
     giveup=lambda e: (
         not (isinstance(e, VastAIError) and e.status == _HTTP_TOO_MANY_REQUESTS)

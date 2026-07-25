@@ -32,7 +32,6 @@ dependencies = [
   "aiohttp~=3.8",
   "asyncssh~=2.11",
   "asyncstdlib~=3.10",
-  "backoff~=2.1.2",
   "pg8000~=1.19",
   "python-daemon~=2.3",
   "typing-extensions >= 4.6.0; python_version < '3.11'",
@@ -117,11 +116,8 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 addopts = []
 filterwarnings = [
-  # Third-party libs: deprecated asyncio APIs in Python 3.14+, slated for 3.16
   # pytest-asyncio 0.26.x uses asyncio.get_event_loop_policy()
-  # backoff 2.2.x uses asyncio.iscoroutinefunction()
   "ignore::DeprecationWarning:pytest_asyncio.*",
-  "ignore::DeprecationWarning:backoff.*",
 ]
 log_cli_format = "[%(name)s][%(funcName)s]:%(lineno)s %(message)s"
 log_format = "[%(name)s][%(funcName)s]:%(lineno)s %(message)s"
@@ -136,6 +132,7 @@ asyncio_mode = "auto"
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
+  "COM812",  # missing-trailing-comma (conflicts with formatter)
   "C901",  # complexity - FIXME: enable and refactor bad code
   "BLE",  # blind except
   "D105",  # undocumented magic method
