@@ -85,8 +85,11 @@ async def linux_list_processes(
         skipped_broken = 0
         skipped_self = 0
         async for line in proc.stdout:
+            raw = str(line).strip()
+            if not raw:
+                continue
             line_count += 1
-            parts = [x.strip() for x in filter(None, str(line).split(" " * 10))]
+            parts = [x.strip() for x in filter(None, raw.split(" " * 10))]
             min_parts = 3
             if len(parts) < min_parts:
                 skipped_broken += 1
