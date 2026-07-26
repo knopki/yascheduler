@@ -136,7 +136,7 @@ class TaskDeployer:
         self,
         session: MachineSession,
         engine: Engine,
-        task: Task,  # noqa:  ARG002 Unused method argument
+        task: Task,
         task_dir: PurePath,
         eng_path: PurePath,
         ncpus: int,
@@ -147,6 +147,15 @@ class TaskDeployer:
                 engine_path=str(eng_path),
                 task_path=session.quote(str(task_dir)),
                 ncpus=ncpus,
+            )
+            logger.debug(
+                "SPAWN",
+                extra={
+                    "hostname": session.hostname,
+                    "task_id": task.task_id,
+                    "cmd": run_cmd,
+                    "cwd": str(task_dir),
+                },
             )
             await session.run_bg(run_cmd, cwd=str(task_dir))
         except Exception:

@@ -1,7 +1,7 @@
 # region MODULE_CONTRACT
-# PURPOSE: Unit tests for _write_remote_file exception contract (fix-write-remote-file-swallow).
-# SCOPE: Non-SFTP exception propagates (not swallowed); asyncssh.misc.Error logged with structured code/reason and re-raised; start_task_on_machine aborts spawn on upload failure; successful write returns normally and the per-file loop continues.
-# KEYWORDS: _write_remote_file, exception contract, spawn abort
+# PURPOSE: Unit tests for _write_remote_file exception contract (fix-write-remote-file-swallow) and _exec_spawn_command SPAWN log contract.
+# SCOPE: Non-SFTP exception propagates (not swallowed); asyncssh.misc.Error logged with structured code/reason and re-raised; start_task_on_machine aborts spawn on upload failure; successful write returns normally and the per-file loop continues; _exec_spawn_command emits SPAWN debug log with hostname/task_id/cmd/cwd.
+# KEYWORDS: _write_remote_file, exception contract, spawn abort, spawn log
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import asyncssh
 import pytest
 
+from tests.log_assertions import extra_fields
 from yascheduler.domain import Engine
 from yascheduler.domain.model import Task, TaskId
 from yascheduler.infra.ssh.operations import TaskDeployer
@@ -378,3 +379,47 @@ class TestSuccessfulWrite:
         assert ok is True
         # Both files were written (the loop did not bail after the first).
         assert sftp._file.write.await_count == 2
+
+
+# =============================================================================
+# SPAWN log contract
+# =============================================================================
+
+
+class TestExecSpawnCommandLog:
+    """_exec_spawn_command SHALL emit a SPAWN debug log with hostname, task_id, cmd, cwd."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_log_emitted(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """After run_bg, a SPAWN debug record is present with structured fields."""
+        from tests.unit.test_ssh_gateway import _make_state
+
+        deployer = TaskDeployer()
+        session = _make_state(hostname="10.0.0.1", node_id=1, platform="linux")
+        engine = Engine(
+            name="dummy",
+            spawn="{engine_path}/dummyengine *",
+        )
+        task = _make_task()
+
+        with caplog.at_level(logging.DEBUG):
+            await deployer._exec_spawn_command(
+                session=session,
+                engine=engine,
+                task=task,
+                task_dir=PurePosixPath("data/tasks/7"),
+                eng_path=PurePosixPath("data/engines/dummy"),
+                ncpus=4,
+            )
+
+        spawn_records = [r for r in caplog.records if r.getMessage() == "SPAWN"]
+        assert len(spawn_records) == 1, "expected exactly one SPAWN record"
+
+        fields = extra_fields(spawn_records[0])
+        assert fields["hostname"] == "10.0.0.1"
+        assert fields["task_id"].value == 7
+        assert fields["cmd"] == "data/engines/dummy/dummyengine *"
+        assert fields["cwd"] == "data/tasks/7"
