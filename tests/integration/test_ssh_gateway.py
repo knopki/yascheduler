@@ -43,11 +43,12 @@ async def ssh_container(tmp_path_factory: Any) -> AsyncGenerator[dict[str, Any],
     public_key_str = key.export_public_key("openssh").decode().strip()
     key.write_private_key(str(key_path))
 
-    container = DockerContainer("lscr.io/linuxserver/openssh-server:10.2_p1-r0-ls222")
-    container.with_env("USER_NAME", "testuser")
-    container.with_env("PUBLIC_KEY", public_key_str)
+    container = DockerContainer("serversideup/docker-ssh")
+    container.with_env("SSH_USER", "testuser")
+    container.with_env("AUTHORIZED_KEYS", public_key_str)
+    container.with_env("ALLOWED_IPS", "AllowUsers testuser")
     container.with_exposed_ports(2222)
-    container.waiting_for(LogMessageWaitStrategy("sshd is listening"))
+    container.waiting_for(LogMessageWaitStrategy("Server listening on"))
 
     container.start()
     try:
@@ -85,11 +86,12 @@ async def ssh_container_2(
     public_key_str = key.export_public_key("openssh").decode().strip()
     key.write_private_key(str(key_path))
 
-    container = DockerContainer("lscr.io/linuxserver/openssh-server:10.2_p1-r0-ls222")
-    container.with_env("USER_NAME", "testuser")
-    container.with_env("PUBLIC_KEY", public_key_str)
+    container = DockerContainer("serversideup/docker-ssh")
+    container.with_env("SSH_USER", "testuser")
+    container.with_env("AUTHORIZED_KEYS", public_key_str)
+    container.with_env("ALLOWED_IPS", "AllowUsers testuser")
     container.with_exposed_ports(2222)
-    container.waiting_for(LogMessageWaitStrategy("sshd is listening"))
+    container.waiting_for(LogMessageWaitStrategy("Server listening on"))
 
     container.start()
     try:

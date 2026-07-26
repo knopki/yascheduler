@@ -9,7 +9,7 @@ End-to-end test infrastructure and full-cycle tests that validate the scheduler'
 ### Requirement: E2E test fixtures
 The project SHALL provide session-scoped and function-scoped pytest fixtures that set up a complete test environment:
 - Session-scoped PostgreSQL container (testcontainers) with schema applied
-- Session-scoped `ssh_pool` fixture: a list of TWO SSH containers (testcontainers `openssh-server`) started from ONE generated keypair (shared `PUBLIC_KEY` env). Each container yields its own `get_container_host_ip()` and mapped port 2222. Both containers share the same `username`.
+- Session-scoped `ssh_pool` fixture: a list of TWO SSH containers (testcontainers `serversideup/docker-ssh`, Debian-based glibc) started from ONE generated keypair (shared `AUTHORIZED_KEYS` env). Each container yields its own `get_container_host_ip()` and mapped port 2222. Both containers share the same `username`.
 - Session-scoped config fixture that creates a temp directory with minimal INI file (`[db]` + `[engine.test_shell]`), test engine script (`run.sh`) in `data/engines/test_shell/`, and a SINGLE SSH private key symlink in `data/keys/` (the shared keypair used by both `ssh_pool` containers)
 - Session-scoped `Config` instance parsed from the generated INI
 - Function-scoped persistence fixtures: a raw pg8000 connection (`pg_conn`), a single-worker executor, and a `uow_factory` callable returning a `PostgresUnitOfWork`. Teardown SHALL `TRUNCATE yascheduler_tasks, yascheduler_nodes CASCADE` via `pg_conn`.

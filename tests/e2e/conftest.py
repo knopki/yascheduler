@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from yascheduler.entrypoints import Config
 
 
-_SSH_IMAGE = "lscr.io/linuxserver/openssh-server:10.2_p1-r0-ls222"
+_SSH_IMAGE = "serversideup/docker-ssh"
 _SSH_USERNAME = "testuser"
 _YASCHEDULER_LOGGER = "yascheduler"
 
@@ -110,10 +110,11 @@ async def ssh_pool(
     try:
         for _ in range(2):
             c = DockerContainer(_SSH_IMAGE)
-            c.with_env("USER_NAME", _SSH_USERNAME)
-            c.with_env("PUBLIC_KEY", public_key_str)
+            c.with_env("SSH_USER", _SSH_USERNAME)
+            c.with_env("AUTHORIZED_KEYS", public_key_str)
+            c.with_env("ALLOWED_IPS", "AllowUsers testuser")
             c.with_exposed_ports(2222)
-            c.waiting_for(LogMessageWaitStrategy("sshd is listening"))
+            c.waiting_for(LogMessageWaitStrategy("Server listening on"))
             c.start()
             containers.append(c)
 
