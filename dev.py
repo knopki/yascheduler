@@ -323,7 +323,6 @@ def register_node() -> None:
     r = uv(
         "yasetnode",
         "testuser@localhost:2222",
-        "--skip-setup",
         capture=True,
         check=False,
     )
