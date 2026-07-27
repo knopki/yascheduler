@@ -1,6 +1,6 @@
 # region MODULE_CONTRACT
-# PURPOSE: Assert the 4 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol (D1).
-# SCOPE: MRO + isinstance checks for the 4 DTOs; AzureImageReference negative case.
+# PURPOSE: Assert the 5 ConfigCloud* DTOs explicitly inherit the domain CloudConfig Protocol (D1).
+# SCOPE: MRO + isinstance checks for the 5 DTOs; AzureImageReference negative case.
 # KEYWORDS: CloudConfig Protocol, MRO, isinstance, DTO inheritance
 # endregion MODULE_CONTRACT
 
@@ -15,6 +15,7 @@ from yascheduler.infra.cloud.cloud_configs import (
     ConfigCloudHetzner,
     ConfigCloudUpcloud,
     ConfigCloudVastAI,
+    ConfigCloudVultr,
 )
 from yascheduler.infra.cloud.protocols import CreateNodeCallable, DeleteNodeCallable
 
@@ -23,10 +24,11 @@ DTO_CLASSES = (
     ConfigCloudHetzner,
     ConfigCloudUpcloud,
     ConfigCloudVastAI,
+    ConfigCloudVultr,
 )
 
 
-def test_all_four_dtos_inherit_cloud_config() -> None:
+def test_all_dtos_inherit_cloud_config() -> None:
     """Each DTO's __mro__ includes CloudConfig (explicit inheritance, not just structural)."""
     for dto_cls in DTO_CLASSES:
         assert CloudConfig in dto_cls.__mro__, (

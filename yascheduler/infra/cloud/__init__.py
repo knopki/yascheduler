@@ -19,6 +19,7 @@ from .cloud_configs import (
     ConfigCloudHetzner,
     ConfigCloudUpcloud,
     ConfigCloudVastAI,
+    ConfigCloudVultr,
 )
 from .cloud_init import CloudInitConfig
 from .dto import CloudCreateNodeDTO
@@ -43,6 +44,7 @@ __all__ = [
     "ConfigCloudHetzner",
     "ConfigCloudUpcloud",
     "ConfigCloudVastAI",
+    "ConfigCloudVultr",
     "CreateNodeCallable",
     "DeleteNodeCallable",
     "get_azure_adapter",

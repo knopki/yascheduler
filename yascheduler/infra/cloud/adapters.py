@@ -33,6 +33,7 @@ __all__ = [
     "get_hetzner_adapter",
     "get_upcloud_adapter",
     "get_vastai_adapter",
+    "get_vultr_adapter",
     "resolve_adapter",
 ]
 
@@ -199,11 +200,38 @@ def get_vastai_adapter(name: str) -> CloudAdapter:
 # endregion FUNC_get_vastai_adapter
 
 
+# region FUNC_get_vultr_adapter
+# PURPOSE: Wire Vultr REST API create/delete to a CloudAdapter so the provisioner can launch and terminate Vultr bare-metal instances through the generic adapter interface.
+# RATIONALE:
+# - Q: Why op_limit=2 and create_node_timeout=1200?
+#   A: Bare metal provisions slowly (up to ~20 min); op_limit=2 allows one in-flight create + one queued request; 1200 s timeout accommodates the longest observed boot+cloud-init cycles.
+def get_vultr_adapter(name: str) -> CloudAdapter:
+    """Create CloudAdapter for Vultr with Bullseye platform support, slow bare-metal timeouts."""
+    from .providers.vultr import (  # noqa: PLC0415
+        vultr_create_node,
+        vultr_delete_node,
+    )
+
+    return CloudAdapter(
+        name=name,
+        supported_platform_checks=(can_debian_bullseye,),
+        create_node=vultr_create_node,
+        delete_node=vultr_delete_node,
+        op_limit=2,
+        create_node_timeout=1200,
+        needs_cloud_init=True,
+    )
+
+
+# endregion FUNC_get_vultr_adapter
+
+
 CLOUD_ADAPTER_GETTERS = {
     "az": get_azure_adapter,
     "hetzner": get_hetzner_adapter,
     "upcloud": get_upcloud_adapter,
     "vastai": get_vastai_adapter,
+    "vultr": get_vultr_adapter,
 }
 
 

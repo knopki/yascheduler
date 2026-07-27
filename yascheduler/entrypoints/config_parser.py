@@ -32,6 +32,7 @@ from yascheduler.infra.cloud.cloud_configs import (
     ConfigCloudHetzner,
     ConfigCloudUpcloud,
     ConfigCloudVastAI,
+    ConfigCloudVultr,
 )
 from yascheduler.infra.persistence import PostgresDbConfig
 
@@ -209,6 +210,8 @@ _UPCLOUD_EXCLUDES = {"prefix", "username", "jump_username"}
 _UPCLOUD_INCLUDES = ["user", "jump_user"]
 _VASTAI_EXCLUDES = {"prefix", "username", "jump_username", "env"}
 _VASTAI_INCLUDES = ["jump_user", "user"]
+_VULTR_EXCLUDES = {"prefix", "username", "jump_username"}
+_VULTR_INCLUDES = ["jump_user", "user"]
 
 
 # region FUNC_cloud_valid_fields
@@ -458,12 +461,66 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
 # endregion FUNC__parse_vastai_section
 
 
+# region FUNC__parse_vultr_section
+# PURPOSE: Build ConfigCloudVultr from a [clouds] INI section.
+def _parse_vultr_section(sec: SectionProxy) -> ConfigCloudVultr:
+    prefix = "vultr"
+    fmt = partial(_fmt_key, prefix)
+
+    warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
+
+    max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
+    if max_nodes < 0:
+        msg = f"vultr max_nodes must be >= 0, got {max_nodes}"
+        raise ValueError(msg)
+    idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=1800)
+    if idle_tolerance < 1:
+        msg = f"vultr idle_tolerance must be >= 1, got {idle_tolerance}"
+        raise ValueError(msg)
+
+    connect_grace = sec.getint(fmt("connect_grace"), fallback=300)
+    if connect_grace < 1:
+        msg = f"vultr connect_grace must be >= 1, got {connect_grace}"
+        raise ValueError(msg)
+
+    image_name = sec.getint(fmt("image_name"), fallback=2284)
+    if image_name < 1:
+        msg = f"vultr image_name must be >= 1, got {image_name}"
+        raise ValueError(msg)
+
+    jump_port = _check_port(
+        "vultr jump_port",
+        sec.getint(fmt("jump_port"), fallback=22),
+    )
+
+    return ConfigCloudVultr(
+        api_key=sec.get(fmt("api_key"), ""),
+        location=sec.get(fmt("location"), "ams"),
+        server_type=sec.get(fmt("server_type"), "vbm-24c-256gb-amd"),
+        image_name=image_name,
+        need_raid=sec.getboolean(fmt("need_raid"), fallback=True),
+        max_nodes=max_nodes,
+        username=sec.get(fmt("user"), "root"),
+        priority=sec.getint(fmt("priority"), fallback=0),
+        idle_tolerance=idle_tolerance,
+        connect_grace=connect_grace,
+        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
+        jump_username=sec.get(fmt("jump_user"), None),
+        jump_host=sec.get(fmt("jump_host"), None),
+        jump_port=jump_port,
+    )
+
+
+# endregion FUNC__parse_vultr_section
+
+
 # Open/closed registry: adding a provider = one parser function + one entry here.
 CLOUD_CONFIG_PARSERS: dict[str, Callable[[SectionProxy], ConfigCloud]] = {
     "az": _parse_azure_section,
     "hetzner": _parse_hetzner_section,
     "upcloud": _parse_upcloud_section,
     "vastai": _parse_vastai_section,
+    "vultr": _parse_vultr_section,
 }
 
 _CLOUD_DTO_BY_PREFIX: dict[str, type] = {
@@ -471,12 +528,14 @@ _CLOUD_DTO_BY_PREFIX: dict[str, type] = {
     "hetzner": ConfigCloudHetzner,
     "upcloud": ConfigCloudUpcloud,
     "vastai": ConfigCloudVastAI,
+    "vultr": ConfigCloudVultr,
 }
 _CLOUD_FIELD_RULES: dict[str, tuple[set[str], list[str]]] = {
     "az": (_AZ_EXCLUDES, _AZ_INCLUDES),
     "hetzner": (_HETZNER_EXCLUDES, _HETZNER_INCLUDES),
     "upcloud": (_UPCLOUD_EXCLUDES, _UPCLOUD_INCLUDES),
     "vastai": (_VASTAI_EXCLUDES, _VASTAI_INCLUDES),
+    "vultr": (_VULTR_EXCLUDES, _VULTR_INCLUDES),
 }
 
 _ALL_CLOUD_VALID_FIELDS: list[str] = [
@@ -484,6 +543,7 @@ _ALL_CLOUD_VALID_FIELDS: list[str] = [
     *cloud_valid_fields("hetzner"),
     *cloud_valid_fields("upcloud"),
     *cloud_valid_fields("vastai"),
+    *cloud_valid_fields("vultr"),
 ]
 
 

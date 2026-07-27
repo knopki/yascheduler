@@ -1,8 +1,8 @@
 """Cloud provider config DTOs."""
 # region MODULE_CONTRACT
 # PURPOSE: Define per-provider configuration contracts so the provisioner can read VM parameters (image, size, credentials, limits) without depending on provider-specific SDK types.
-# SCOPE: ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, AzureImageReference, ConfigCloud union.
-# KEYWORDS: config, dto, azure, hetzner, upcloud, vastai, cloud config, image reference
+# SCOPE: ConfigCloudAzure, ConfigCloudHetzner, ConfigCloudUpcloud, ConfigCloudVastAI, ConfigCloudVultr, AzureImageReference, ConfigCloud union.
+# KEYWORDS: config, dto, azure, hetzner, upcloud, vastai, vultr, cloud config, image reference
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ __all__ = [
     "ConfigCloudHetzner",
     "ConfigCloudUpcloud",
     "ConfigCloudVastAI",
+    "ConfigCloudVultr",
 ]
 
 
@@ -170,9 +171,41 @@ class ConfigCloudVastAI(CloudConfig):
 # endregion CLASS_ConfigCloudVastAI
 
 
+# region CLASS_ConfigCloudVultr
+# PURPOSE: Carry Vultr bare-metal credentials, plan, region, and RAID flag so the Vultr provider can be configured from INI without leaking aiohttp types into other providers.
+# RATIONALE:
+# - Q: Why is need_raid a config field rather than derived from server_type?
+#   A: Vultr bare-metal plans differ in NVMe layout (e.g. vbm-24c-256gb-amd ships NVMe unformatted vs vbm-8c-132gb where NVMe is the main disk); the operator knows which plan they configured.
+@dataclass(frozen=True)
+class ConfigCloudVultr(CloudConfig):
+    """Vultr bare-metal cloud configuration."""
+
+    prefix = "vultr"
+
+    api_key: str = ""
+    location: str = "ams"
+    server_type: str = "vbm-24c-256gb-amd"
+    # Vultr OS id (integer, sent as `os_id` in the API). 2284 = Ubuntu 24.04 LTS x64, 2136 = Debian 12.
+    image_name: int = 2284
+    need_raid: bool = True
+    max_nodes: int = 10
+    username: str = "root"
+    priority: int = 0
+    idle_tolerance: int = 1800
+    connect_grace: int = 300
+    package_upgrade: bool = True
+    jump_username: str | None = None
+    jump_host: str | None = None
+    jump_port: int = 22
+
+
+# endregion CLASS_ConfigCloudVultr
+
+
 ConfigCloud = Union[
     ConfigCloudAzure,
     ConfigCloudHetzner,
     ConfigCloudUpcloud,
     ConfigCloudVastAI,
+    ConfigCloudVultr,
 ]

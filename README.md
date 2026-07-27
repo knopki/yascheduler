@@ -352,6 +352,48 @@ Settings prefix is `vastai`.
   Environment variables for the container.
   *Default*: empty
 
+#### Vultr
+
+Vultr provides **bare-metal** instances suitable for heavy `ab initio`
+calculations. This integration uses the Vultr REST API v2 directly via `aiohttp`
+(no extra Python dependency is required — `aiohttp` and `asyncssh` are already
+core dependencies).
+
+See [Vultr setup](docs/VULTR.md) for details on bare-metal provisioning,
+RAID0 NVMe setup, and cloud-init configuration.
+
+Settings prefix is `vultr`.
+
+- `vultr_api_key`
+  Vultr API key (required). Create one in the
+  [Vultr customer portal](https://my.vultr.com/settings/#settingsapi).
+
+- `vultr_location`
+  Datacenter region (Vultr API `region`).
+  *Default*: `ams`
+
+- `vultr_server_type`
+  Bare-metal plan id (Vultr API `plan`).
+  *Default*: `vbm-24c-256gb-amd`
+
+- `vultr_image_name`
+  Vultr OS id (integer, sent as `os_id` in the API). For example, `2284` =
+  Ubuntu 24.04 LTS x64, `2136` = Debian 12.
+  *Default*: `2284`
+
+- `vultr_need_raid`
+  Whether cloud-init sets up RAID0 NVMe + `/dev/shm`. Set to `false` for plans
+  where NVMe is already the main disk (e.g. `vbm-8c-132gb`).
+  *Default*: `true`
+
+- `vultr_max_nodes`
+  Maximum number of concurrent Vultr nodes.
+  *Default*: `10`
+
+- `vultr_idle_tolerance`
+  Seconds of idleness before auto-deletion.
+  *Default*: `1800` (30 min)
+
 ### Engines `[engine.*]`
 
 Supported engines should be defined in the section(s) `[engine.name]`.
