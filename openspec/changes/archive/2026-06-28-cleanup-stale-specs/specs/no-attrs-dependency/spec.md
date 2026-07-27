@@ -1,5 +1,0 @@
-## REMOVED Requirements
-
-### Requirement: No direct attrs dependency
-**Reason**: The `attrs` migration is complete (per `2026-06-26-drop-attrs-dependency`). `attrs` is not in `pyproject.toml` dependencies; all record types in `yascheduler/` are stdlib `dataclasses`. The canary test `tests/unit/test_no_attrs_dependency.py` is the authoritative guard — it walks every `.py` file under `yascheduler/` with `ast` and fails on any `attrs`/`attr` import. A spec restating "don't import attrs" adds no contract the test does not already enforce; keeping it creates maintenance burden (the spec must track the test) for zero behavioral gain.
-**Migration**: The canary test `tests/unit/test_no_attrs_dependency.py` remains the guard. Contributors who need the rationale read the test's docstring and the archived `2026-06-26-drop-attrs-dependency` proposal.

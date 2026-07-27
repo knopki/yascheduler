@@ -1,3 +1,0 @@
-# ssh-infrastructure-spec-trim
-
-Trim `ssh-infrastructure` spec to requirements-only; relocate invented `SHALL NOT` negative-space language, design rationale, layering narrative, duplicate orchestrator-side guidance, and module-placement prose into GRACE markup across `yascheduler/infra/ssh/**/*.py`. Also wrap the currently-unwrapped public/private classes (`MySSHClient`, `MyPureWindowsPath`, `RemoteMachineAdapter`, `ProcessInfo`, the 6 callable `Protocol` classes in `platform/protocol.py`, `PlatformGuessFailedError`) and the unwrapped non-trivial private helpers (`_build_tunnel_options`, `_prime_ncpus_cache`) and base-primitive methods (`run`, `run_bg`, `upload`, `open_sftp`, `pgrep`, `list_processes`) required by the GRACE Python rule.

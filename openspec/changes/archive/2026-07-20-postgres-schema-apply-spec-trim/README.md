@@ -1,3 +1,0 @@
-# postgres-schema-apply-spec-trim
-
-Trim the `postgres-schema-apply` spec to behavioral SHALL contracts and observable scenarios; relocate the `SHALL NOT be declared as SERIAL` negative-space guard, the procedural SQL ordering narrative (enum types before CREATE TABLE, triggers after CREATE TABLE), the `yascheduler_nodes.username/port` redundant column enumeration, the `magic 0 sentinel` ncpus migration-history rationale, and the `Schema evolution is expressed via migration files` design rationale into GRACE markup on `yascheduler/infra/persistence/postgres_schema.py` (the sole consumer of `schema.sql`).

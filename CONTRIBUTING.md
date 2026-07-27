@@ -166,6 +166,18 @@ If you're working outside the OpenSpec workflow, that's fine — but consider
 opening a proposal for non-trivial changes. After any modification to
 `openspec/specs/`, `openspec validate --all --json` must pass.
 
+## Architectural decisions
+
+Architectural trade-offs (module boundaries, data ownership, protocols,
+tech/library selection, security model, failure/error handling,
+identity/lifecycle design, dependency direction) are recorded as ADRs in
+`docs/decisions/`. Consult that set before architectural work. If a change
+introduces a new trade-off with viable alternatives, add a new ADR using
+`docs/decisions/_template.md`; numbering starts at the next free slot.
+
+Bug fixes, file relocations, test additions, spec maintenance, and feature work
+are not ADRs.
+
 ## Project structure
 
 ```txt

@@ -40,6 +40,22 @@ OpenSpec via `/opsx-propose`, but do not block or refuse the requested work.
 
 <!-- #endregion SECTION_OpenSpec_Rule -->
 
+<!-- #region SECTION_ADR_Rule -->
+
+## Architectural Decisions Rule
+
+Architectural trade-offs (module boundaries, data ownership, protocols,
+tech/library selection, security model, failure/error handling,
+identity/lifecycle design, dependency direction) must consult `docs/decisions/`
+before implementation.
+
+If a change introduces a new architectural trade-off with viable alternatives,
+record it as a new ADR in `docs/decisions/` using `_template.md`. Sequential
+numbering starts at the next free slot; no numbers are reserved. Bug fixes, file
+relocations, test additions, spec maintenance, and feature work are not ADRs.
+
+<!-- #endregion SECTION_ADR_Rule -->
+
 <!-- #region SECTION_Verification -->
 
 ## Verification
@@ -139,6 +155,7 @@ yascheduler/
 <rule>Minimal changes; NEVER compatibility layers without concrete need</rule>
 <rule>Conventional Commits when committing</rule>
 <rule>Consult openspec/specs, update specs; use openspec/changes for proposals</rule>
+<rule>Consult docs/decisions/ before architectural work; new trade-off → new ADR</rule>
 <rule>Offer /opsx-propose if outside OpenSpec, NEVER block requested work</rule>
 <rule>Unit tests for core logic; integration/e2e tests for DB, SSH</rule>
 <rule>Run: uv run pytest -m unit / -m integration / -m e2e (assume Docker running)</rule>

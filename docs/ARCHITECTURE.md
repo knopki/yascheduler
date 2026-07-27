@@ -1,9 +1,9 @@
 # ARCHITECTURE.md — yascheduler
 
-> **Authoritative structure reference**: `docs/knowledge-graph.xml` is the
-> canonical source for the module inventory, dependency edges, and data flows.
-> This document provides the architectural rationale behind that graph. When
-> the two diverge, the graph is correct; update this document afterwards.
+> **Decision records**: architectural trade-offs (module boundaries, data
+> ownership, protocols, tech/library selection, failure semantics) live in
+> `docs/decisions/` as ADRs. Consult that set before architectural work;
+> record new architectural trade-offs as a new ADR using `_template.md`.
 
 ---
 
