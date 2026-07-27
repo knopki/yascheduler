@@ -185,10 +185,11 @@ async def _download_convergence_snippet(
     session: MachineSession,
     remote_folder: str,
     local_path: Path,
+    output_file: str = "OUTPUT",
 ) -> bool:
     """Download OUTPUT file via SFTP for convergence parsing. Returns True on success."""
     try:
-        r_output = session.path(remote_folder) / "OUTPUT"
+        r_output = session.path(remote_folder) / output_file
         async with session.open_sftp() as sftp:
             await sftp.get([str(r_output)], local_path)
     except OSError:
@@ -255,8 +256,8 @@ async def _display_remote_output(
     task: Task,
     node: Node | None,
     config: Config,
-) -> tuple[MachineSession, str, SSHMachineRepository] | None:
-    """Connect to machine via repository (under node.node_id), display tail of remote OUTPUT."""
+) -> tuple[MachineSession, str, SSHMachineRepository, str] | None:
+    """Connect to machine via repository (under node.node_id), display tail of remote output file (engine.output_files[0] if defined, else 'OUTPUT')."""
     if node is None:
         sys.stdout.write("NO ALLOCATED HOSTNAME\n")
         return None
@@ -277,7 +278,10 @@ async def _display_remote_output(
     if session.is_closed:
         sys.stdout.write("CAN'T CONNECT\n")
         return None
-    r_output = session.path(remote_folder) / "OUTPUT"
+    engine = config.engines.get(task.engine)
+    # NB master output is given first
+    output_file = engine.output_files[0] if engine and engine.output_files else "OUTPUT"
+    r_output = session.path(remote_folder) / output_file
     result = await session.run_full(
         f"tail -n15 {session.quote(str(r_output))}",
     )
@@ -285,7 +289,7 @@ async def _display_remote_output(
         sys.stdout.write("OUTDATED TASK, SKIPPING\n")
     else:
         sys.stdout.write(f"{result.stdout}\n")
-    return session, remote_folder, repository
+    return session, remote_folder, repository, output_file
 
 
 # endregion FUNC__display_remote_output
@@ -335,13 +339,14 @@ async def _render_view(
             conn = await _display_remote_output(task, node, config)
             if conn is None:
                 continue
-            session, remote_folder, repository = conn
+            session, remote_folder, repository, output_file = conn
             try:
                 if fetch_convergence and snippet is not None:
                     success = await _download_convergence_snippet(
                         session,
                         remote_folder,
                         snippet,
+                        output_file,
                     )
                     if success:
                         output = _parse_convergence(snippet)
