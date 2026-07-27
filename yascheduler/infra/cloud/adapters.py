@@ -14,9 +14,6 @@ from dataclasses import dataclass, field
 from functools import cache
 from typing import TYPE_CHECKING, Generic
 
-if TYPE_CHECKING:
-    from .cloud_configs import ConfigCloud
-
 from .protocols import (
     CreateNodeCallable,
     DeleteNodeCallable,
@@ -24,7 +21,8 @@ from .protocols import (
     TConfigCloud_co,
 )
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from .cloud_configs import ConfigCloud
 
 __all__ = [
     "CLOUD_ADAPTER_GETTERS",
@@ -36,6 +34,7 @@ __all__ = [
     "get_vultr_adapter",
     "resolve_adapter",
 ]
+logger = logging.getLogger(__name__)
 
 
 def can_debian_buster(platform: str) -> bool:
