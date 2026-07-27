@@ -1,7 +1,7 @@
 [project]
 name = "yascheduler"
 # version should be changed by automation, not by hand - DON'T TOUCH
-version = "1.6.0"
+version = "1.8.0"
 description = """Yet another computing scheduler and cloud orchestration engine"""
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
@@ -10,8 +10,10 @@ license-files = ["LICENSE"]
 authors = [
   { name = "Sergei Korolev", email = "knopki@duck.com" },
   { name = "Andrey Sobolev", email = "as@tilde.pro" },
-  { name = "Evgeny Blokhin", email = "eb@tilde.pro" },
   { name = "Anton Domnin", email = "a.v.daomnin@gmail.com" },
+  { name = "Aljaz Lee", email = "uyscuti0513@gmail.com" },
+  { name = "Alina Zhidkovskaya", email = "alina@mpds.io" },
+  { name = "Evgeny Blokhin", email = "eb@tilde.pro" },
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -23,6 +25,8 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Topic :: Scientific/Engineering :: Chemistry",
   "Topic :: Scientific/Engineering :: Information Analysis",
   "Topic :: Scientific/Engineering :: Physics",
