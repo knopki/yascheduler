@@ -60,236 +60,149 @@ wires the graph per entry point are the load-bearing ideas of the design.
 
 ## 2. Component Reference
 
+For each subsystem: responsibility, load-bearing contracts, and where the
+public surface lives. Method/field enumerations live in `__all__` and
+docstrings — not duplicated here.
+
 ### 2.1 Domain (`yascheduler/domain/`)
 
-Pure stdlib. Frozen dataclasses for entities, `typing.Protocol` for ports, a
-`DomainError` hierarchy, and domain events.
+Pure stdlib: frozen-dataclass entities, async `typing.Protocol` ports, a
+`DomainError` hierarchy (§4.2), and domain events. No `yascheduler.*`
+imports.
 
-- **`model.py`** — `Task`, `NewTask`, `Node`, `ConnectedMachine`, `TaskStatus`
-  (`IntEnum`: `TO_DO=0`, `RUNNING=1`, `DONE=2`), `MachineState`,
-  `ProcessResult`. `Task` stores events in a private `_events` tuple and exposes
-  immutable lifecycle transitions (`allocate_to`, `mark_running`, `complete`,
-  `fail`, `reject`, `with_remote_folder`, `with_download_results`, `with_event`,
-  `record_event`, `pull_events`), each returning a new frozen instance.
-- **`engine.py`** — `Engine` value object with `validate_inputs(extra)` (reads
-  input-file payloads from the task's `extra: Mapping[str, object]`), the frozen
-  `EngineRepository` collection, and `Deploy` strategies
-  (`LocalFilesDeploy`, `LocalArchiveDeploy`, `RemoteArchiveDeploy`).
-- **`ports.py`** — async ports `TaskRepository`, `NodeRepository`,
-  `MachineRepository`, `MachineSession`, `MachineOperations`,
-  `CloudProvisioner`, plus the structural `CloudConfig` Protocol (7-field
-  surface: `prefix`, `max_nodes`, `idle_tolerance`, `connect_grace`,
-  `username`, `jump_username`, `jump_host`) that cloud DTOs satisfy.
-- **`settings.py`** — `LocalSettings` (daemon paths, webhook, concurrency
-  limits) and `RemoteDefaults` (SSH paths, username, jump host), frozen
-  dataclasses with validation in `__post_init__`.
-- **`services.py`** — `match_task_to_node(task, engine, free_machines)`.
-- **`events.py`** — `DomainEvent` base + `TaskCreated`, `TaskAllocated`,
-  `TaskCompleted`, `TaskFailed`, `TaskAbandoned`; `Event` is the union alias.
-- **`exceptions.py`** — `DomainError` hierarchy (see §4.2).
+**Load-bearing contract — `Task` aggregate.** State changes only through
+transition methods (`run`/`reject`/`complete`/`fail`/`abandon`); each
+validates the source status, appends the matching `DomainEvent` to the
+public `events` tuple, and returns a new frozen instance. There is no
+separate `record_event`/`pull_events` API — source-status check and event
+payload stay atomically bound (see `model.py` rationale). The UoW reads
+`events` directly on commit (§4.4).
 
-I/O ports declare `async def`. This does not couple the domain to asyncio —
-the domain only declares the contract and never awaits.
+**Ports declare `async def`, the domain never awaits** — only the contract
+is declared. The `CloudConfig` Protocol is the structural surface every
+`ConfigCloud*` DTO satisfies (8 fields incl. `jump_port`).
+
+Public surface: `domain/__init__.py::__all__`.
 
 ### 2.2 Application (`yascheduler/application/`)
 
-Use cases orchestrate domain objects and adapter ports through
-dependency-injected parameters. Every use case is UoW-based.
+Async use cases that orchestrate domain objects and adapter ports via
+dependency-injected parameters. Every write-side use case is UoW-based;
+events flow out through `uow.collect_events()` → `MessageBus` (§4.3, §4.4).
 
-- **`submit_task.py`** — validates engine/inputs, creates a `TO_DO` task via
-  `uow.tasks.insert()`, records `TaskCreated`, commits.
-- **`query_tasks.py`** — read-only query by statuses XOR job IDs within a
-  single UoW; no commit. Backs the client and `yastatus`/`yanodes`.
-- **`allocate_task.py`** — matches a `TO_DO` task to a free compatible machine
-  (or owns the cloud-fallback flow) and starts it. Records `TaskAllocated`
-  (or `TaskFailed` on unsupported engine).
-- **`consume_task.py`** — downloads outputs, finalizes the task
-  (`complete`/`fail`), records `TaskCompleted`/`TaskFailed`, discards the
-  allocation-tracker slot. Returns `bool`: `True` when finalised (DONE
-  applied, remote dir cleaned, tracker slot discarded) or the task row no
-  longer exists (tracker slot discarded); `False` when deferred —
-  transient-only SFTP failures leave the task `RUNNING`, preserve the
-  remote dir, and retain the tracker slot so the orchestrator re-consumes
-  on the next tick.
-- **`abandon_node.py`** —
-  `abandon_node(node, repository, clouds, uow_factory, tracker)`
-  cleans up a never-connected cloud node: best-effort
-  `clouds.deallocate`, `uow.nodes.remove + commit`, then locates the
-  originating `TO_DO` task by `allocated_ip == ip` (via
-  `uow.tasks.list_by_status({TO_DO})` + in-memory filter) and calls
-  `tracker.discard(task_id)` so the task re-enters allocation on the next
-  cycle.
-- **`deallocate_nodes.py`** — disables idle cloud nodes past `idle_tolerance`
-  (`deallocate_nodes`) and deletes them (`deallocate_node`: session
-  disconnect → UoW disable → `clouds.deallocate` → UoW remove).
-- **`orchestrator.py`** — long-running daemon driving four producer-consumer
-  loop pairs over de-duplicating queues (see §3), plus a per-IP
-  never-connected-node failure timer (`connect_grace`) that dispatches to
-  `abandon_node`, an in-flight consume guard (`self._consuming: set[int]`)
-  preventing two workers from concurrently consuming the same `RUNNING`
-  task, and producer/consumer error resilience (see §4.7).
-- **`uow.py`** — `AbstractUnitOfWork` Protocol (`tasks`, `nodes`, `commit`,
-  `rollback`).
-- **`message_bus.py`** — type-keyed handler registry; `dispatch(events)`
-  awaits async handlers and logs failures without skipping later handlers.
-- **`allocation_tracker.py`** — in-memory set of `task_id`s with in-flight
-  cloud allocations, owned by the orchestrator and injected into the
-  allocate/consume use cases for dedup.
-- **`queue.py`** — `UniqueQueue`/`UMessage`: async queue that skips duplicate
-  messages by ID, used by every orchestrator loop. `put()` is serialised
-  by an `asyncio.Lock` so the check-then-act dedup window cannot admit a
-  duplicate under concurrent `put()` on a full queue.
+**Task lifecycle use cases** (drive the `TO_DO → RUNNING → DONE` arc of
+§3): `submit_task`, `allocate_task` (free-machine match + cloud fallback),
+`consume_task` (download + finalise; returns `False` to defer on
+transient-only SFTP failures, `True` when finalised), `abandon_node`
+(never-connected cloud-node cleanup: best-effort VM delete + row remove +
+`tracker.discard_by_node`), `deallocate_nodes` (idle cloud-node disable +
+delete), `query_tasks` (read-only, no commit — backs the client and
+`yastatus`/`yanodes`).
 
-`application/__init__.py` is the sole public surface, re-exporting
-`AbstractUnitOfWork`, `Orchestrator`, `MessageBus`, `submit_task`,
-`query_tasks`, `abandon_node`, `AllocationTracker`.
+**Daemon plumbing** (used by `Orchestrator`, §3): `AbstractUnitOfWork`
+Protocol, `MessageBus`, `AllocationTracker` (in-flight cloud-allocation
+dedup, owned by the orchestrator and injected into allocate/consume),
+`UniqueQueue`/`UMessage` (deduplicating async queue; `put()` serialised by
+an `asyncio.Lock` so the check-then-act dedup window cannot admit a
+duplicate under concurrent producers).
+
+Public surface: `application/__init__.py::__all__` re-exports
+`AbstractUnitOfWork`, `Orchestrator`, `MessageBus`, `AllocationTracker`,
+`submit_task`, `query_tasks`, `abandon_node`.
 
 ### 2.3 Persistence Adapter (`yascheduler/infra/persistence/`)
 
-- **`postgres.py`** — `PostgresTaskRepository`, `PostgresNodeRepository`
-  implementing the domain ports via pg8000. Each method runs a
-  `load_query(name)` SQL file in a `ThreadPoolExecutor` and maps rows to
-  domain entities.
-- **`postgres_uow.py`** — `PostgresUnitOfWork`: one `pg8000.Connection` and
-  one `ThreadPoolExecutor(max_workers=1)` per instance; runs `BEGIN` on enter,
-  `COMMIT`/`ROLLBACK` on exit; dispatches events pulled from saved aggregates
-  via the `MessageBus` **after** a successful commit.
-- **`postgres_schema.py`** — `apply_schema(config_db)` applies `schema.sql`
-  in a `BEGIN/COMMIT` transaction (used by `yainit` and test fixtures).
-  `schema.sql` is the **full latest snapshot**: every `CREATE TABLE` carries
-  all current columns, no inline `ALTER`s, and it begins with a PL/pgSQL DO
-  block that bootstraps the `yascheduler_migrations` tracker with three-case
-  logic (seed to latest on a fresh DB; create empty on a legacy DB that
-  already has `yascheduler_nodes`; no-op on a modern DB that already has the
-  tracker).
-- **`postgres_migrations.py`** — `apply_migrations(config_db)` is the
-  forward-only migration runner. It scans `sql/migrations/` for `*.sql` and
-  `*.py` files named `{prefix_id}_{rest}.{sql,py}`, reads
-  `SELECT MAX(migration_id) FROM yascheduler_migrations`, and applies pending
-  migrations in string-sorted `prefix_id` order, each in its own transaction,
-  recording each in the tracker after success. `.sql` migrations run as a
-  multi-statement string (pg8000 Simple Query); `.py` migrations define
-  exactly one `Migration` subclass (discovered via `inspect`) instantiated
-  with `(config, conn, log)`. `yainit` calls `apply_migrations` immediately
-  after `apply_schema`. There is no "down"/rollback path and no generation
-  tool. `prefix_id` uniqueness is enforced by a unit test, not the runner.
-- **`migration_base.py`** — `Migration` base class for `.py` migrations:
-  injected `(config, conn, log)` with `begin()`/`commit()` helpers for
-  non-transactional operations (`CREATE INDEX CONCURRENTLY`, `VACUUM`).
-- **`db_config.py`** — `PostgresDbConfig` frozen dataclass.
-- **`sql_loader.py`** — `load_query(name)` with `@functools.cache`.
-- **`sql/`** — one file per query (`task/*.sql`, `node/*.sql`, `schema.sql`).
-  `task/update_by_id.sql` and `task/update_status.sql` use
-  `RETURNING task_id` so the repository can detect a 0-row outcome and
-  raise `TaskRowNotFoundError`. `sql/migrations/` holds the migration files
-  (`001_add_username_port.sql` is the first; the inline ALTERs that used to
-  live in `schema.sql` were moved here).
-- **`exceptions.py`** — `UnitOfWorkNotInitializedError`,
-  `TaskRowNotFoundError`. The latter is raised by
-  `PostgresTaskRepository.save`/`update_status` when an `UPDATE` targets a
-  non-existent `task_id` (the SQL uses `RETURNING task_id` so a 0-row
-  outcome is detectable). Programming-error / contract precondition
-  violation, not a domain exception — callers SHALL NOT catch it.
+pg8000 backing for `TaskRepository`/`NodeRepository` and
+`AbstractUnitOfWork`. Repositories run one `load_query(name)` SQL file per
+operation in a `ThreadPoolExecutor` and map rows to domain entities.
+`PostgresUnitOfWork` holds one connection + one single-worker executor
+(serialised DB access per UoW; concurrent use cases each get their own UoW
+— intentional, adequate for current load), `BEGIN` on enter,
+`COMMIT`/`ROLLBACK` on exit, event dispatch **after** commit (§4.4).
 
-When adding a migration, three edits are required (documented in the
-`db-migrations` spec): create the file under `sql/migrations/`, update the
-`last_migration` CONSTANT in the `schema.sql` DO block, and — if the
-migration changes the schema — update the snapshot DDL in `schema.sql`. A
-unit test asserts the CONSTANT matches the latest migration's `prefix_id`.
+**SQL in files** (§4.5): `sql/{task,node}/*.sql` cached via
+`load_query`/`@functools.cache`; `task/update_by_id.sql` and
+`task/update_status.sql` use `RETURNING task_id` so a 0-row outcome is
+detectable and raises `TaskRowNotFoundError` — a programming-error /
+contract precondition violation (callers SHALL NOT catch it; not a domain
+exception).
 
-pg8000 is synchronous. The single-worker executor serializes DB access within
-one UoW; concurrent use cases each create their own UoW and executor. This is
-intentional and adequate for current load.
+**Schema + migrations.** `schema.sql` is the full latest DDL snapshot
+(every `CREATE TABLE` carries all current columns, no inline `ALTER`s) and
+begins with a PL/pgSQL DO block that bootstraps the `yascheduler_migrations`
+tracker with three-case logic (fresh DB → seed to latest; legacy DB with
+`yascheduler_nodes` → create empty; modern DB → no-op). `apply_migrations`
+is the forward-only runner: scans `sql/migrations/{prefix_id}_*.{sql,py}`
+in string-sorted order, applies each in its own transaction, records in the
+tracker. `.sql` migrations run as a multi-statement string (pg8000 Simple
+Query); `.py` migrations define exactly one `Migration` subclass
+(discovered via `inspect`) instantiated with `(config, conn, log)`. No
+"down"/rollback path, no generation tool. `prefix_id` uniqueness is
+enforced by a unit test. `yainit` runs `apply_schema` then
+`apply_migrations`.
+
+**Adding a migration** (documented in the `db-migrations` spec): create the
+file under `sql/migrations/`, update the `last_migration` CONSTANT in the
+`schema.sql` DO block, and — if the schema changes — update the snapshot
+DDL in `schema.sql`. A unit test asserts the CONSTANT matches the latest
+migration's `prefix_id`.
 
 ### 2.4 SSH Adapter (`yascheduler/infra/ssh/`)
 
-The SSH adapter splits the connected-machine collection from operations on
-a single machine. Three concrete modules (`repository.py`, `session.py`,
-`operations/`) implement three domain ports (`MachineRepository`,
-`MachineSession`, `MachineOperations`).
+Collection/session split: `SSHMachineRepository` (`repository.py`) owns the
+connected-machine collection (keyed by node id) and implements
+`MachineRepository`; `SSHMachineSession` (`session.py`) is the per-connection
+handle implementing `MachineSession` — it carries domain identity, state
+transitions (`occupy`/`release`/`update`), base SSH primitives, and owns its
+own monitor task. `_close()` is private, called only by
+`SSHMachineRepository.disconnect` — `disconnect(ip)` SHALL NOT touch any
+other session's monitor.
 
-- **`repository.py`** — `SSHMachineRepository` implements `MachineRepository`.
-  Owns the connected-machine collection
-  (`_sessions: dict[str, MachineSession]`).
-  Seven-method surface: `connect → MachineSession`,
-  `disconnect(ip)`, `disconnect_all()`,
-  `list_free(platforms) → list[MachineSession]`,
-  `list_connected() → list[MachineSession]`,
-  `get_session(ip) → MachineSession \| None`,
-  plus `**contains**`/`**len**`.
-  State transitions (`occupy`/`release`/`update`), accessor getters
-  (`path`/`quote`/`hostname`), and the monitor mechanism live on the
-  session — the repository only hands sessions out and tracks them by IP.
-  `disconnect(ip)` pops `_sessions[ip]` and delegates teardown to
-  `session._close()`; it SHALL NOT touch any other session's monitor.
-  Connection-building bits (`MySSHClient`, `DEFAULT_CONN_OPTS`,
-  `_build_tunnel_options`) live here.
-- **`session.py`** — `SSHMachineSession` implements `MachineSession`, the
-  connected-machine entity handle. Carries domain identity (`ip`, mutable
-  `machine` snapshot, `occupy`/`release`/`update` transitions), read-only
-  connect-time config (`adapter`, `platforms`, `data_dir`, `engines_dir`,
-  `tasks_dir`), adapter-derived accessors (`path`, `quote`, `hostname`),
-  base SSH primitives (`run`, `run_full`, `run_bg`, `upload`, `open_sftp`,
-  `get_cpu_cores`, `setup_node`, `pgrep`, `list_processes`), and the
-  per-session monitor mechanism (`install_monitor`/`cancel_monitor`). The
-  session owns its own monitor task — the repository holds no `_monitors`
-  dict. `_close()` is private, called only by
-  `SSHMachineRepository.disconnect`.
-- **`operations/`** — `SSHMachineOperations` (the `MachineOperations`
-  facade) composes three stateless sibling collaborators:
-  `TaskDeployer` (`start_task_on_machine` + upload + spawn + rollback,
-  `_write_remote_file`, `_safe_b64decode`),
-  `OutputDownloader` (`download_outputs` + error classification, with
-  per-file SFTP isolation and a single post-loop `rmtree` gate on
-  `not transient_errors AND not permanent_errors`),
-  `OccupancyChecker` (`occupancy_check`, `_by_pgrep`, `_by_cmd`,
-  `start_occupancy_check` — calls `session.occupy()` +
-  `session.install_monitor(...)`). The facade also exposes pass-throughs
-  (`run`/`run_full`/`run_bg`/`get_cpu_cores`/`setup_node`) that delegate
-  to the `session`. All machine-reference parameters are typed
-  `session: MachineSession`; the orchestrator resolves a session per
-  tick via `repository.get_session(ip)` before calling an operations
-  method. `run_bg`, `upload`, and `download` are single-attempt (spawn,
-  `sftp.put`, and `sftp.get` are non-idempotent); `get_cpu_cores` keeps its
-  backoff (idempotent read).
-- **`platform/`** — platform detection (Linux and Windows adapters behind a
-  `RemoteMachineAdapter` registry) and `checks.py` (OS detection),
-  `common.py`/`linux.py`/`windows.py` (OS-specific commands),
-  `paths.py` (path normalization), `registry.py`/`detect.py`/`run_fn.py`
-  (adapter registry, platform detection, run-fn closure).
-- **`keys.py`** — the pure `list_private_keys(keys_dir)` discovery function
-  the orchestrator consumes via injection.
+**Stateless operations collaborators** (`operations/`: `TaskDeployer`,
+`OutputDownloader`, `OccupancyChecker`) — three classes, each taking a
+`session: MachineSession` per call. There is no `MachineOperations` port or
+facade; the orchestrator receives them as separate dependencies and
+resolves a session per tick via `repository.get_session(ip)`. Deployment,
+download, and `run_bg`/`upload` are single-attempt (non-idempotent spawn /
+`sftp.put` / `sftp.get`); `get_cpu_cores` keeps its backoff (idempotent
+read). Download isolates failures per-file and gates the remote-`rmtree`
+on `not transient_errors AND not permanent_errors`.
+
+**Platform detection** (`platform/`): `RemoteMachineAdapter` registry
+(`adapters.py` + `registry.py`) of Linux/Windows variants; `detect.py` runs
+adapter checks concurrently; OS-specific commands in `linux.py`/
+`windows.py`; callable Protocols and retry exception tuples in
+`protocol.py`. `keys.py` exposes the pure `list_private_keys(keys_dir)`
+the orchestrator consumes via injection.
 
 ### 2.5 Cloud Adapter (`yascheduler/infra/cloud/`)
 
 `CloudProvisionerImpl` (`manager.py`) implements `CloudProvisioner` — pure
-cloud-API adapter (create/delete VM, setup, SSH keys), no DB access.
+cloud-API adapter (create/delete VM, setup, SSH keys), **no DB access**.
 `provider_selection.py` picks the best provider by priority, capacity, and
-platform support.
+platform support. Provider SDK integration lives in `providers/`
+(**Azure, Hetzner, UpCloud, VastAI**); `adapters.py` registers provider
+factories and resolves them by config prefix. Azure/Hetzner/UpCloud SDKs
+are optional extras; VastAI uses a REST API with no extra dependency.
 
-Provider SDK integration lives in `providers/` (**Azure, Hetzner, UpCloud,
-VastAI**); `adapters.py` registers provider factories and resolves them by
-config prefix. `cloud_configs.py` holds the frozen cloud-config DTOs (one per
-provider) that satisfy the domain `CloudConfig` Protocol (each declares a
-per-provider `connect_grace` default: Hetzner/UpCloud = 60s, Azure/VastAI =
-120s); `cloud_init.py` renders cloud-init user-data; `ssh_keys.py` loads or
-generates SSH keys. `protocols.py` defines the node create/delete callables
-and `provider_selection.py` picks the best provider by priority, capacity, and
-platform support. Azure/Hetzner/UpCloud SDKs are optional extras; VastAI uses a
-REST API with no extra dependency.
+`cloud_configs.py` holds the frozen cloud-config DTOs (one per provider)
+that satisfy the domain `CloudConfig` Protocol, each with a per-provider
+`connect_grace` default (Hetzner/UpCloud = 60s, Azure = 120s, VastAI =
+300s). `cloud_init.py` renders user-data; `ssh_keys.py` loads or generates
+keys; `dto.py` carries the `CloudCreateNodeDTO` across the adapter
+boundary.
 
 ### 2.6 Notifier (`yascheduler/infra/notifier/`)
 
-`webhook_handler(event, http)` is registered on the `MessageBus` for all five
-event types. It maps each event to a `WebhookPayload`, POSTs to
+`webhook_handler(event, http)` is registered on the `MessageBus` for all
+five event types. Maps each event to a `WebhookPayload`, POSTs to
 `event.webhook_url` over a shared `aiohttp.ClientSession` with fibonacci
-backoff (`max_time=60`) and a 10-concurrent `Semaphore`. Failures are logged
-and swallowed after backoff exhausts.
+backoff (`max_time=60`) and a 10-concurrent `Semaphore`. Failures are
+logged and swallowed after backoff exhausts.
 
 ### 2.7 CLI & Daemon (`yascheduler/entrypoints/cli/`)
 
-Six per-command modules, each parsing argparse, calling use cases via DI, and
-formatting output:
+Six per-command modules (argparse → use cases via DI → formatted output):
 
 | Script | Module | Purpose |
 | --- | --- | --- |
@@ -300,65 +213,56 @@ formatting output:
 | `yainit` | `init.py` | Install service unit files and/or apply schema + migrations |
 | `yascheduler` | `daemonize.py` | Start the daemon in the foreground |
 
-Three daemon launchers (`daemonize.py`, `daemon_systemd.py`, `daemon_sysv.py`)
-share the daemon core in `daemon_common.py` (`configure_logger` + `run_daemon`)
-and the argparse helpers in `args.py` (`existing_path`, `add_config_arg`,
-`add_log_level_arg`, `add_log_file_arg`). All commands accept `--config` and
-`--log-level`. `daemon_systemd` runs in the foreground (stderr → journald);
-`daemon_sysv` opens a `DaemonContext` (double-fork, pidfile); `daemonize`
-runs in the foreground for debug/container use. Each launcher registers
-SIGTERM/SIGINT handlers that call `orch.stop()`.
+Three daemon launchers (`daemonize.py`, `daemon_systemd.py`,
+`daemon_sysv.py`) share the daemon core in `daemon_common.py`
+(`configure_logger` + `run_daemon`) and argparse helpers in `args.py`.
+`daemon_systemd` runs in the foreground (stderr → journald); `daemon_sysv`
+opens a `DaemonContext` (double-fork, pidfile); `daemonize` runs in the
+foreground for debug/container use. Each launcher registers SIGTERM/SIGINT
+handlers that call `orch.stop()`.
 
 ### 2.8 Composition Root (`yascheduler/entrypoints/di.py`)
 
-- **`make_daemon(config, log, *, clouds=None)`** — builds the `MessageBus`
-  (registers `webhook_handler` for all event types), an aiohttp session, a
-  `PostgresUnitOfWork` factory, `CloudProvisionerImpl`, one
-  `SSHMachineRepository` and one `SSHMachineOperations` (shared between
-  `CloudProvisionerImpl.machine_repository`/`machine_operations` and the
-  `Orchestrator.repository`/`operations` ports so `_setup_vm` connections
-  are visible to the orchestrator), the `AllocationTracker`, the
-  `allocation_lock`, and injects `list_private_keys` as
-  `list_private_keys_fn`. Returns a wired `Orchestrator`. Does not create a
-  DB or run schema migration (the operator runs `yainit` first). Accepts
-  pre-built `clouds` for tests.
-- **`make_cli_deps(config)`** — returns a lightweight `CLIDeps` container
-  (`engines`, `uow_factory`, `remote_tasks_dir`, `submit()`). No
-  SSH/cloud/daemon dependencies.
+- **`async make_daemon(config, *, clouds=None)`** — wires the full daemon
+  graph: `MessageBus` (webhook handler registered for all event types),
+  shared aiohttp session, `PostgresUnitOfWork` factory,
+  `CloudProvisionerImpl`, **one** `SSHMachineRepository` shared between
+  `CloudProvisionerImpl` and `Orchestrator.repository` so `_setup_vm`
+  connections are visible to the orchestrator (no double-connect), the
+  three stateless SSH collaborators, `AllocationTracker`, `allocation_lock`,
+  and `list_private_keys` injected as `list_private_keys_fn`. Does not
+  create a DB or run schema migration — the operator runs `yainit` first.
+  Accepts pre-built `clouds` for tests.
+- **`make_cli_deps(config)`** — lightweight `CLIDeps` container
+  (`engines`, `uow_factory`, `submit()`). No SSH/cloud/daemon dependencies.
 
 ### 2.9 Public API & AiiDA Plugin
 
-- **`entrypoints/client.py`** — the real public API. `class Yascheduler` lives
-  here. `queue_submit_task_async()` → `make_cli_deps()` → `CLIDeps.submit()`
-  → `submit_task` use case over a UoW (no daemon graph). Query methods route
-  through the `query_tasks` use case over a UoW. Sync wrappers use a private
-  `to_sync` helper.
-- **`client.py`** (package root) — compat shim re-exporting `Yascheduler`
-  from `entrypoints.client`, preserving `from yascheduler.client import Yascheduler`.
-- **`entrypoints/paths.py`** — `CONFIG_FILE`/`LOG_FILE`/`PID_FILE`.
-- **`entrypoints/aiida_plugin.py`** — AiiDA scheduler plugin (`YaScheduler`).
-  Talks to yascheduler over SSH transport (runs `yasubmit`/`yastatus`
-  remotely); it does **not** use the `Yascheduler` client. Discovered by AiiDA
-  via `[project.entry-points."aiida.schedulers"]` under the name
-  `yascheduler` → `yascheduler.entrypoints.aiida_plugin:YaScheduler`.
+- **`entrypoints/client.py`** — `class Yascheduler`, the real public API.
+  `queue_submit_task_async()` → `make_cli_deps()` → `CLIDeps.submit()` →
+  `submit_task` over a UoW (no daemon graph). Query methods route through
+  `query_tasks`. Sync wrappers use a private `to_sync` helper.
+- **`client.py`** (package root) — compat shim re-exporting `Yascheduler`,
+  preserving `from yascheduler.client import Yascheduler`.
+- **`entrypoints/aiida_plugin.py`** — AiiDA scheduler plugin (`YaScheduler`),
+  discovered via `[project.entry-points."aiida.schedulers"]` under the name
+  `yascheduler`. Talks to yascheduler over SSH transport (runs
+  `yasubmit`/`yastatus` remotely); it does **not** use the `Yascheduler`
+  client.
+- **`entrypoints/paths.py`** — `CONFIG_FILE`/`LOG_FILE`/`PID_FILE`
+  (env-overridable).
 
 ### 2.10 Configuration
 
 INI-parsed configuration assembled entirely as **frozen stdlib dataclasses**
-(no attrs). `entrypoints/config_parser.py` (`parse_config`) reads the INI and
-builds:
-
-- `domain/settings.py` — `LocalSettings`, `RemoteDefaults`
-- `infra/persistence/db_config.py` — `PostgresDbConfig`
-- `infra/cloud/cloud_configs.py` — `ConfigCloudAzure`, `ConfigCloudHetzner`,
-  `ConfigCloudUpcloud`, `ConfigCloudVastAI` (union `ConfigCloud`)
-- `domain/engine.py` — `Engine` per `[engine.*]` section, gathered into an
-  `EngineRepository`
-
-These are bundled by `entrypoints/config.py` into the `Config` aggregate
-(`db`, `local`, `remote`, `clouds`, `engines`), consumed only by the
-composition root. The INI format (including `[engine.*]` sections and
-`%(key)s` interpolation) is a stable public interface.
+(no attrs). `parse_config` (`entrypoints/config_parser.py`) reads the INI
+and builds the settings (`LocalSettings`/`RemoteDefaults`), `PostgresDbConfig`,
+per-provider `ConfigCloud*` DTOs (union `ConfigCloud`), and per-section
+`Engine`s gathered into an `EngineRepository`. `entrypoints/config.py`
+bundles them into the `Config` aggregate (`db`, `local`, `remote`,
+`clouds`, `engines`), consumed only by the composition root. The INI format
+(including `[engine.*]` sections and `%(key)s` interpolation) is a stable
+public interface (§4.6).
 
 ---
 
@@ -446,8 +350,6 @@ DomainError                              (domain/exceptions.py)
 │   ├── UnsupportedEngineError
 │   └── MissingInputFileError
 ├── TaskError
-│   ├── TaskAlreadyAllocatedError
-│   ├── TaskNotAllocatedError
 │   ├── TaskNotTodoError
 │   └── TaskNotRunningError
 ├── MachineBusyError
@@ -477,32 +379,34 @@ cases catch `ValidationError` → mark the task with an error, `SchedulingError`
 - The UoW manages the transaction: `commit()` on success, `rollback()` on
   exception. Repositories within one UoW share one connection and one
   transaction.
-- Aggregates record events via `Task.record_event(...)`. On `uow.commit()`,
-  the UoW pulls events via `pull_events()` and dispatches them through the
-  `MessageBus` **after** the commit succeeds — so notifications never fire for
-  rolled-back work.
+- Transition methods append events to `Task.events` inline (no separate
+  `record_event` API — source-status check and event payload stay
+  atomically bound). On `uow.commit()`, the UoW reads `task.events` from
+  saved aggregates via `collect_events()` and dispatches them through the
+  `MessageBus` **after** the commit succeeds — so notifications never fire
+  for rolled-back work.
 
 ### 4.4 Domain Events
 
 ```txt
-Task aggregate ──record_event──> _events tuple
-                                         │
-PostgresUnitOfWork.commit() ─pull_events─┘
+Task transition methods ──append──> events tuple (public field)
+                                            │
+PostgresUnitOfWork.commit() ─collect_events┘
                   │
                   ▼
            MessageBus.dispatch(events)
                   │
                   ▼  (per event type)
-        webhook_handler (notifier adapter)
+         webhook_handler (notifier adapter)
                   │
                   ▼
-     HTTP POST (fibonacci backoff, 10-concurrent semaphore)
+      HTTP POST (fibonacci backoff, 10-concurrent semaphore)
 ```
 
-Events decouple side effects from use cases. The orchestrator and use cases
-only record events; the message bus dispatches them to handlers registered by
-the composition root. Adding a side effect (metrics, audit log) means
-registering a new handler — no use case changes.
+Events decouple side effects from use cases. Transition methods emit events
+as part of state changes; the message bus dispatches them to handlers
+registered by the composition root. Adding a side effect (metrics, audit
+log) means registering a new handler — no use case changes.
 
 ### 4.5 SQL in Files
 
@@ -601,7 +505,7 @@ Tests are split into three pytest markers (`unit`, `integration`, `e2e`):
 
 - **Unit** (`tests/unit`) — use cases driven by in-memory fakes for every port
   (`TaskRepository`, `NodeRepository`, `MachineRepository`,
-  `MachineSession`, `MachineOperations`, `CloudProvisioner`). No real DB,
+  `MachineSession`, `CloudProvisioner`). No real DB,
   SSH, or cloud.
 - **Integration** (`tests/integration`) — persistence and use cases against
   real PostgreSQL and Docker SSH servers via `testcontainers[postgres]`.
