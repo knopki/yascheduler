@@ -34,6 +34,7 @@ from yascheduler.infra.cloud import (
     ConfigCloudHetzner,
     ConfigCloudUpcloud,
     ConfigCloudVastAI,
+    ConfigCloudVultr,
 )
 from yascheduler.infra.persistence import PostgresDbConfig
 
@@ -254,6 +255,62 @@ def test_config_cloud_azure_rejects_root() -> None:
     cfg.read_string("[clouds]\naz_tenant_id=tid\naz_user=root\n")
     with pytest.raises(ValueError, match="Root user is forbidden on Azure"):
         parse_cloud_section(cfg["clouds"], "az")
+
+
+def test_config_cloud_hetzner_rejects_missing_token() -> None:
+    """[clouds] without hetzner_token raises ValueError (parser-side presence check)."""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nhetzner_user=root\n")
+    with pytest.raises(ValueError, match="hetzner token is required"):
+        parse_clouds(cfg, RemoteDefaults())
+
+
+def test_config_cloud_upcloud_rejects_missing_login() -> None:
+    """[clouds] without upcloud_login raises ValueError."""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nupcloud_password=pass\n")
+    with pytest.raises(ValueError, match="upcloud login is required"):
+        parse_clouds(cfg, RemoteDefaults())
+
+
+def test_config_cloud_upcloud_rejects_missing_password() -> None:
+    """[clouds] with upcloud_login but no upcloud_password raises ValueError."""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nupcloud_login=user\n")
+    with pytest.raises(ValueError, match="upcloud password is required"):
+        parse_clouds(cfg, RemoteDefaults())
+
+
+def test_config_cloud_vastai_rejects_missing_api_key() -> None:
+    """[clouds] without vastai_api_key raises ValueError."""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nvastai_user=root\n")
+    with pytest.raises(ValueError, match="vastai api_key is required"):
+        parse_clouds(cfg, RemoteDefaults())
+
+
+def test_config_cloud_vultr_rejects_missing_api_key() -> None:
+    """[clouds] without vultr_api_key raises ValueError."""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\nvultr_user=root\n")
+    with pytest.raises(ValueError, match="vultr api_key is required"):
+        parse_clouds(cfg, RemoteDefaults())
+
+
+def test_config_cloud_azure_rejects_missing_tenant_id() -> None:
+    """[clouds] without az_tenant_id raises ValueError."""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\naz_user=admin\n")
+    with pytest.raises(ValueError, match="az tenant_id is required"):
+        parse_clouds(cfg, RemoteDefaults())
+
+
+def test_config_cloud_azure_rejects_missing_client_secret() -> None:
+    """[clouds] with az_tenant_id/client_id but no az_client_secret raises ValueError."""
+    cfg = ConfigParser()
+    cfg.read_string("[clouds]\naz_tenant_id=tid\naz_client_id=cid\naz_user=admin\n")
+    with pytest.raises(ValueError, match="az client_secret is required"):
+        parse_clouds(cfg, RemoteDefaults())
 
 
 @pytest.mark.filterwarnings(
@@ -499,6 +556,20 @@ def test_config_local_is_frozen_dataclass_without_get_private_keys() -> None:
     assert hasattr(instance, "keys_dir")
 
 
+CLOUD_DTO_KWARGS: dict = {
+    ConfigCloudAzure: {
+        "tenant_id": "test-tid",
+        "client_id": "test-cid",
+        "client_secret": "test-secret",
+        "subscription_id": "test-sub",
+    },
+    ConfigCloudHetzner: {"token": "test-token"},
+    ConfigCloudUpcloud: {"login": "test", "password": "test"},
+    ConfigCloudVastAI: {"api_key": "test-key"},
+    ConfigCloudVultr: {"api_key": "test-key"},
+}
+
+
 def test_config_cloud_dtos_jump_port_default() -> None:
     """Each ConfigCloud* DTO has jump_port == 22 by default"""
     for dto_cls in (
@@ -507,7 +578,7 @@ def test_config_cloud_dtos_jump_port_default() -> None:
         ConfigCloudUpcloud,
         ConfigCloudVastAI,
     ):
-        instance = dto_cls()
+        instance = dto_cls(**CLOUD_DTO_KWARGS.get(dto_cls, {}))
         assert instance.jump_port == 22, (
             f"{dto_cls.__name__}.jump_port should be 22, got {instance.jump_port}"
         )
@@ -523,7 +594,7 @@ def test_config_cloud_dtos_are_frozen_dataclasses_without_parser_methods() -> No
         AzureImageReference,
     ):
         assert is_dataclass(dto_cls), f"{dto_cls.__name__} is not a dataclass"
-        instance = dto_cls()
+        instance = dto_cls(**CLOUD_DTO_KWARGS.get(dto_cls, {}))
         # frozen: assigning to a declared field must raise FrozenInstanceError
         first_field = next(iter(dto_cls.__dataclass_fields__))
         with pytest.raises(FrozenInstanceError):

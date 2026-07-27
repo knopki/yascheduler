@@ -27,6 +27,20 @@ DTO_CLASSES = (
     ConfigCloudVultr,
 )
 
+# Test credential kwargs for DTOs whose fields are now required (no default).
+_DTO_KWARGS: dict = {
+    ConfigCloudAzure: {
+        "tenant_id": "test-tid",
+        "client_id": "test-cid",
+        "client_secret": "test-secret",
+        "subscription_id": "test-sub",
+    },
+    ConfigCloudHetzner: {"token": "test-token"},
+    ConfigCloudUpcloud: {"login": "test", "password": "test"},
+    ConfigCloudVastAI: {"api_key": "test-key"},
+    ConfigCloudVultr: {"api_key": "test-key"},
+}
+
 
 def test_all_dtos_inherit_cloud_config() -> None:
     """Each DTO's __mro__ includes CloudConfig (explicit inheritance, not just structural)."""
@@ -40,7 +54,7 @@ def test_all_dtos_inherit_cloud_config() -> None:
 def test_isinstance_returns_true_for_each_dto() -> None:
     """isinstance(dto_instance, CloudConfig) is True for each DTO (runtime_checkable Protocol)."""
     for dto_cls in DTO_CLASSES:
-        instance = dto_cls()
+        instance = dto_cls(**_DTO_KWARGS[dto_cls])
         assert isinstance(instance, CloudConfig), (
             f"isinstance({dto_cls.__name__}(), CloudConfig) should be True"
         )

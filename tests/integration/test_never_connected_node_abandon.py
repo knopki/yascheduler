@@ -130,7 +130,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
 ) -> None:
     """Real-DB abandon: dead node row removed, cloud delete called, task still TO_DO + re-allocatable."""
     # Hetzner has connect_grace=60; we'll advance monotonic past it in one cycle.
-    config_clouds = [ConfigCloudHetzner()]
+    config_clouds = [ConfigCloudHetzner(token="test-token")]
 
     # Use a TEST-NET-1 address so the gateway mock's failure is realistic.
     # The task is persisted as TO_DO with allocated_node_id = NULL — the real
@@ -222,10 +222,15 @@ async def test_connect_grace_lookup_uses_cloud_prefix(
 ) -> None:
     """Orchestrator wired with real ConfigCloud DTOs resolves per-cloud connect_grace by prefix."""
     config_clouds = [
-        ConfigCloudHetzner(),
-        ConfigCloudUpcloud(),
-        ConfigCloudAzure(),
-        ConfigCloudVastAI(),
+        ConfigCloudHetzner(token="test-token"),
+        ConfigCloudUpcloud(login="test", password="test"),
+        ConfigCloudAzure(
+            tenant_id="test-tid",
+            client_id="test-cid",
+            client_secret="test-secret",
+            subscription_id="test-sub",
+        ),
+        ConfigCloudVastAI(api_key="test-key"),
     ]
     orch = _build_orchestrator(uow_factory, config_clouds=config_clouds)
 

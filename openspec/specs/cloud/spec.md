@@ -60,8 +60,8 @@ Each `ConfigCloud*` DTO SHALL declare `package_upgrade: bool = True` and
 
 The system SHALL define
 `CLOUD_CONFIG_PARSERS: dict[str, Callable[[SectionProxy], CloudConfig]]` mapping
-each cloud provider prefix (`az`, `hetzner`, `upcloud`, `vastai`) to its parser
-function.
+each cloud provider prefix (`az`, `hetzner`, `upcloud`, `vastai`, `vultr`) to its
+parser function.
 
 `parse_clouds(cfg, remote) -> list[CloudConfig]` SHALL derive `cloud_prefixes`
 from `[clouds]` section options (split on `_`, take the first segment), inherit
@@ -97,9 +97,34 @@ raise `ValueError` for `jump_port` outside 1–65535 or for non-integer values.
 
 #### Scenario: per-prefix parser rejects jump_port at or above 65536
 
-- **GIVEN** an INI with `[clouds] upcloud_jump_port = 70000`
+- **GIVEN** an INI with a `[clouds]` section carrying `upcloud_jump_port = 70000`
 - **WHEN** `parse_config(path)` is called
 - **THEN** `ValueError` is raised
+
+### Requirement: Cloud config credentials are required and validated at parse time
+
+Provider credentials SHALL be modeled as REQUIRED dataclass fields (no default)
+on each `ConfigCloud*` DTO, so a DTO cannot be constructed with a missing
+credential.
+
+Each per-prefix parser SHALL validate credential presence in the `[clouds]`
+section BEFORE constructing the DTO and SHALL raise `ValueError` for any
+credential that is absent or empty. A missing credential SHALL fail at config
+load (daemon startup), NOT be deferred to node allocation time. The error
+message SHALL identify the offending field by its `{prefix} {field}` label, e.g.
+`"hetzner token is required"`, `"az tenant_id is required"`.
+
+#### Scenario: parser rejects missing hetzner token
+
+- **GIVEN** an INI with a `[clouds]` section that lacks `hetzner_token`
+- **WHEN** `parse_clouds(cfg, remote)` is called
+- **THEN** `ValueError` is raised matching `"hetzner token is required"`
+
+#### Scenario: parser rejects empty hetzner token
+
+- **GIVEN** an INI with `[clouds] hetzner_token =` (empty value)
+- **WHEN** `parse_clouds(cfg, remote)` is called
+- **THEN** `ValueError` is raised matching `"hetzner token is required"`
 
 ### Requirement: Provider VM lifecycle modules
 
@@ -301,4 +326,3 @@ SHALL be idempotent (an already-deleted instance is handled without raising).
 
 - **WHEN** `vastai_delete_node(cfg, external_id="<instance_id>")` is called
 - **THEN** the instance identified by `external_id` is deleted and billing stops; an already-deleted instance is handled without raising (idempotent delete)
-

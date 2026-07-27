@@ -40,7 +40,7 @@ async def test_hetzner_create_node_returns_dto() -> None:
     """hetzner_create_node returns CloudCreateNodeDTO with server ID as external_id and IP as hostname."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
 
-    cfg = ConfigCloudHetzner(username="testuser")
+    cfg = ConfigCloudHetzner(username="testuser", token="test-token")
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
@@ -72,6 +72,7 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
 
     cfg = ConfigCloudHetzner(
         username="testuser",
+        token="test-token",
         jump_host="jump.example.com",
         jump_port=2222,
         jump_username="jumper",
@@ -168,7 +169,13 @@ async def test_az_create_node_returns_dto() -> None:
     """az_create_node returns CloudCreateNodeDTO with IP-based identity."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudAzure
 
-    cfg = ConfigCloudAzure(username="azuser")
+    cfg = ConfigCloudAzure(
+        username="azuser",
+        tenant_id="test-tid",
+        client_id="test-cid",
+        client_secret="test-secret",
+        subscription_id="test-sub",
+    )
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
@@ -223,7 +230,12 @@ async def test_az_delete_node_accepts_external_id() -> None:
     """az_delete_node accepts external_id parameter to locate the resource."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudAzure
 
-    cfg = ConfigCloudAzure()
+    cfg = ConfigCloudAzure(
+        tenant_id="test-tid",
+        client_id="test-cid",
+        client_secret="test-secret",
+        subscription_id="test-sub",
+    )
 
     mock_cred = MagicMock()
     mock_cred.__aenter__ = AsyncMock(return_value=mock_cred)

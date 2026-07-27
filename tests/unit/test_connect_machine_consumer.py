@@ -255,24 +255,32 @@ class TestConnectGraceFor:
 
     def test_known_cloud_returns_dto_default(self) -> None:
         """Hetzner config → connect_grace=60."""
-        orch = make_orchestrator(config_clouds=[ConfigCloudHetzner()])
+        orch = make_orchestrator(config_clouds=[ConfigCloudHetzner(token="test-token")])
         assert orch._connect_grace_for("hetzner") == 60
 
     def test_azure_returns_120(self) -> None:
         """Azure (prefix 'az') → connect_grace=120."""
         orch = make_orchestrator(
-            config_clouds=[ConfigCloudHetzner(), ConfigCloudAzure()],
+            config_clouds=[
+                ConfigCloudHetzner(token="test-token"),
+                ConfigCloudAzure(
+                    tenant_id="test-tid",
+                    client_id="test-cid",
+                    client_secret="test-secret",
+                    subscription_id="test-sub",
+                ),
+            ],
         )
         assert orch._connect_grace_for("az") == 120
 
     def test_unknown_cloud_falls_back_to_120s_grace(self) -> None:
         """cloud='unknown' (no matching prefix) → 120."""
-        orch = make_orchestrator(config_clouds=[ConfigCloudHetzner()])
+        orch = make_orchestrator(config_clouds=[ConfigCloudHetzner(token="test-token")])
         assert orch._connect_grace_for("unknown") == 120
 
     def test_none_cloud_falls_back_to_120s_grace(self) -> None:
         """cloud=None → 120."""
-        orch = make_orchestrator(config_clouds=[ConfigCloudHetzner()])
+        orch = make_orchestrator(config_clouds=[ConfigCloudHetzner(token="test-token")])
         assert orch._connect_grace_for(None) == 120
 
     def test_empty_config_clouds_falls_back_to_120(self) -> None:

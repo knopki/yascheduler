@@ -184,7 +184,7 @@ class TestGenerateOnstart:
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
         from yascheduler.infra.cloud.providers.vastai import generate_onstart
 
-        cfg = ConfigCloudVastAI(onstart_script="echo hello")
+        cfg = ConfigCloudVastAI(onstart_script="echo hello", api_key="test-key")
         result = await generate_onstart(cfg)
         assert result == "echo hello"
 
@@ -195,7 +195,7 @@ class TestGenerateOnstart:
         from yascheduler.infra.cloud.cloud_init import CloudInitConfig
         from yascheduler.infra.cloud.providers.vastai import generate_onstart
 
-        cfg = ConfigCloudVastAI(image="ubuntu:22.04")
+        cfg = ConfigCloudVastAI(image="ubuntu:22.04", api_key="test-key")
         cloud_config = CloudInitConfig(
             package_upgrade=True,
             packages=["curl", "git"],
@@ -211,7 +211,7 @@ class TestGenerateOnstart:
         from yascheduler.infra.cloud.cloud_init import CloudInitConfig
         from yascheduler.infra.cloud.providers.vastai import generate_onstart
 
-        cfg = ConfigCloudVastAI(image="fedora:latest")
+        cfg = ConfigCloudVastAI(image="fedora:latest", api_key="test-key")
         cloud_config = CloudInitConfig(
             package_upgrade=True,
             packages=["curl", "git"],
@@ -227,7 +227,7 @@ class TestGenerateOnstart:
         from yascheduler.infra.cloud.cloud_init import CloudInitConfig
         from yascheduler.infra.cloud.providers.vastai import generate_onstart
 
-        cfg = ConfigCloudVastAI(image="ubuntu:22.04")
+        cfg = ConfigCloudVastAI(image="ubuntu:22.04", api_key="test-key")
         cloud_config = CloudInitConfig(
             bootcmd=(["echo hello", "echo world"],),
         )
@@ -236,12 +236,12 @@ class TestGenerateOnstart:
 
     @pytest.mark.asyncio
     async def test_kvm_shebang_added(self) -> None:
-        """KVM images get a #!/bin/bash shebang."""
+
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
         from yascheduler.infra.cloud.cloud_init import CloudInitConfig
         from yascheduler.infra.cloud.providers.vastai import generate_onstart
 
-        cfg = ConfigCloudVastAI(image="vastai/kvm:ubuntu")
+        cfg = ConfigCloudVastAI(image="vastai/kvm:ubuntu", api_key="test-key")
         cloud_config = CloudInitConfig(
             bootcmd=(["echo hi"],),
         )
@@ -460,6 +460,7 @@ class TestSearchOffers:
             min_vram_mb=16384,
             num_gpus=1,
             max_price_per_hr=1.0,
+            api_key="test-key",
         )
 
         offers = await search_offers(mock_session, cfg)

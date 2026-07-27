@@ -479,7 +479,6 @@ def detect_launch_mode(
 
 # region FUNC_vastai_create_node
 # PURPOSE: Provision a VastAI GPU instance via the CloudAdapter interface so the generic provisioner can launch VastAI compute nodes.
-# REQUIRES: cfg.api_key is a non-empty string; key.export_public_key() returns a valid SSH public key.
 # ENSURES: Returns CloudCreateNodeDTO with external_id = instance id, hostname = SSH host, port = SSH port.
 # INVARIANTS: external_id = instance id; session closed on all paths.
 async def vastai_create_node(

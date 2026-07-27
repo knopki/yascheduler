@@ -93,6 +93,13 @@ def _check_port(name: str, value: int) -> int:
     return value
 
 
+def _require_str(name: str, value: str | None) -> str:
+    if not value:
+        msg = f"{name} is required"
+        raise ValueError(msg)
+    return value
+
+
 # region FUNC_engine_valid_fields
 # PURPOSE: Tell the unknown-field warning which `[engine.*]` INI keys are legitimate so a typo in an engine section surfaces as a warning at config load instead of silently being dropped on the floor.
 def engine_valid_fields() -> Sequence[str]:
@@ -262,11 +269,18 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
 
     jump_port = _check_port("az jump_port", sec.getint(fmt("jump_port"), fallback=22))
 
+    tenant_id = _require_str("az tenant_id", sec.get(fmt("tenant_id")))
+    client_id = _require_str("az client_id", sec.get(fmt("client_id")))
+    client_secret = _require_str("az client_secret", sec.get(fmt("client_secret")))
+    subscription_id = _require_str(
+        "az subscription_id", sec.get(fmt("subscription_id"))
+    )
+
     return ConfigCloudAzure(
-        tenant_id=sec.get(fmt("tenant_id"), ""),
-        client_id=sec.get(fmt("client_id"), ""),
-        client_secret=sec.get(fmt("client_secret"), ""),
-        subscription_id=sec.get(fmt("subscription_id"), ""),
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+        subscription_id=subscription_id,
         resource_group=sec.get(fmt("resource_group"), "yascheduler-rg"),
         location=sec.get(fmt("location"), "westeurope"),
         vnet=sec.get(fmt("vnet"), "yascheduler-vnet"),
@@ -316,8 +330,10 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
         sec.getint(fmt("jump_port"), fallback=22),
     )
 
+    token = _require_str("hetzner token", sec.get(fmt("token")))
+
     return ConfigCloudHetzner(
-        token=sec.get(fmt("token"), ""),
+        token=token,
         max_nodes=max_nodes,
         username=sec.get(fmt("user"), "root"),
         priority=sec.getint(fmt("priority"), fallback=0),
@@ -363,9 +379,12 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
         sec.getint(fmt("jump_port"), fallback=22),
     )
 
+    login = _require_str("upcloud login", sec.get(fmt("login")))
+    password = _require_str("upcloud password", sec.get(fmt("password")))
+
     return ConfigCloudUpcloud(
-        login=sec.get(fmt("login"), ""),
-        password=sec.get(fmt("password"), ""),
+        login=login,
+        password=password,
         max_nodes=max_nodes,
         username=sec.get(fmt("user"), "root"),
         priority=sec.getint(fmt("priority"), fallback=0),
@@ -437,8 +456,10 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
         sec.getint(fmt("jump_port"), fallback=22),
     )
 
+    api_key = _require_str("vastai api_key", sec.get(fmt("api_key")))
+
     return ConfigCloudVastAI(
-        api_key=sec.get(fmt("api_key"), ""),
+        api_key=api_key,
         image=sec.get(fmt("image"), "pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel"),
         disk_gb=disk_gb,
         min_vram_mb=min_vram_mb,
@@ -493,8 +514,10 @@ def _parse_vultr_section(sec: SectionProxy) -> ConfigCloudVultr:
         sec.getint(fmt("jump_port"), fallback=22),
     )
 
+    api_key = _require_str("vultr api_key", sec.get(fmt("api_key")))
+
     return ConfigCloudVultr(
-        api_key=sec.get(fmt("api_key"), ""),
+        api_key=api_key,
         location=sec.get(fmt("location"), "ams"),
         server_type=sec.get(fmt("server_type"), "vbm-24c-256gb-amd"),
         image_name=image_name,

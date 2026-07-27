@@ -305,7 +305,6 @@ async def _wait_ssh_port(instance_id: str, ip_addr: str) -> None:
 
 # region FUNC_vultr_create_node
 # PURPOSE: Provision a Vultr bare-metal instance via the CloudAdapter interface so the generic provisioner can launch Vultr compute nodes.
-# REQUIRES: cfg.api_key is a non-empty string; key.export_public_key() returns a valid SSH public key.
 # ENSURES: Returns CloudCreateNodeDTO with external_id = hostname = instance public IP; SSH auth verified before return.
 # INVARIANTS:
 # - external_id = hostname = instance public IP (delete_node looks up by IP via find_baremetal)

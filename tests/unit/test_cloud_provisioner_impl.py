@@ -714,7 +714,7 @@ class TestCloudConfigGeneration:
     ) -> None:
         """Returns CloudInitConfig with packages from matched engines."""
         adapter, _config = _make_mock_adapter(name="test")
-        cloud_config = ConfigCloudHetzner(package_upgrade=True)
+        cloud_config = ConfigCloudHetzner(package_upgrade=True, token="test-token")
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": cloud_config},
@@ -736,7 +736,7 @@ class TestCloudConfigGeneration:
     ) -> None:
         """package_upgrade is sourced from config.package_upgrade (False propagates)."""
         adapter, _config = _make_mock_adapter(name="test")
-        cloud_config = ConfigCloudHetzner(package_upgrade=False)
+        cloud_config = ConfigCloudHetzner(package_upgrade=False, token="test-token")
         prov = make_provisioner(
             adapters={"test": adapter},
             configs={"test": cloud_config},

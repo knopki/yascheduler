@@ -38,11 +38,16 @@ def test_connect_grace_defaults_on_all_dtos() -> None:
     Protocol-surface widening (6 → 7 fields) keeps the explicit inheritance
     parity intact.
     """
-    hetzner = ConfigCloudHetzner()
-    upcloud = ConfigCloudUpcloud()
-    azure = ConfigCloudAzure()
-    vastai = ConfigCloudVastAI()
-    vultr = ConfigCloudVultr()
+    hetzner = ConfigCloudHetzner(token="test-token")
+    upcloud = ConfigCloudUpcloud(login="test", password="test")
+    azure = ConfigCloudAzure(
+        tenant_id="test-tid",
+        client_id="test-cid",
+        client_secret="test-secret",
+        subscription_id="test-sub",
+    )
+    vastai = ConfigCloudVastAI(api_key="test-key")
+    vultr = ConfigCloudVultr(api_key="test-key")
 
     assert hetzner.connect_grace == 60, "Hetzner default should be 60s"
     assert upcloud.connect_grace == 60, "Upcloud default should be 60s"

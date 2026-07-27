@@ -66,10 +66,10 @@ class ConfigCloudAzure(CloudConfig):
     # Class attr — not a dataclass field; identifies the provider prefix in INI keys.
     prefix = "az"
 
-    tenant_id: str = ""
-    client_id: str = ""
-    client_secret: str = ""
-    subscription_id: str = ""
+    tenant_id: str
+    client_id: str
+    client_secret: str
+    subscription_id: str
     resource_group: str = "yascheduler-rg"
     location: str = "westeurope"
     vnet: str = "yascheduler-vnet"
@@ -99,7 +99,7 @@ class ConfigCloudHetzner(CloudConfig):
 
     prefix = "hetzner"
 
-    token: str = ""
+    token: str
     max_nodes: int = 10
     username: str = "root"
     priority: int = 0
@@ -125,8 +125,8 @@ class ConfigCloudUpcloud(CloudConfig):
 
     prefix = "upcloud"
 
-    login: str = ""
-    password: str = ""
+    login: str
+    password: str
     max_nodes: int = 10
     username: str = "root"
     priority: int = 0
@@ -149,7 +149,7 @@ class ConfigCloudVastAI(CloudConfig):
 
     prefix = "vastai"
 
-    api_key: str = ""
+    api_key: str
     image: str = "pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel"
     disk_gb: int = 80
     min_vram_mb: int = 80 * 1024
@@ -182,7 +182,7 @@ class ConfigCloudVultr(CloudConfig):
 
     prefix = "vultr"
 
-    api_key: str = ""
+    api_key: str
     location: str = "ams"
     server_type: str = "vbm-24c-256gb-amd"
     # Vultr OS id (integer, sent as `os_id` in the API). 2284 = Ubuntu 24.04 LTS x64, 2136 = Debian 12.
