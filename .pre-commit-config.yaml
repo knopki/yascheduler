@@ -12,7 +12,7 @@ repos:
         language: system
         entry: uv run ruff format
         pass_filenames: true
-        types: [python]
+        types: [python, markdown]
 
       - id: ruff-ckeck
         name: ruff check

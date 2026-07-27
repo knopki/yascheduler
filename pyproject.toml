@@ -131,7 +131,6 @@ asyncio_mode = "auto"
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-  "COM812",  # missing-trailing-comma (conflicts with formatter)
   "C901",  # complexity - FIXME: enable and refactor bad code
   "BLE",  # blind except
   "D105",  # undocumented magic method
@@ -143,6 +142,22 @@ ignore = [
   "FBT",  # boolean positional args are fine
   "FIX002",  # we have TODOs
   "S101",  # FIXME: asserts are evil, use TypeGuard
+
+  # When using Ruff as a formatter, we recommend avoiding the following lint rules:
+  "W191",  # tab-indentation
+  "E111",  # indentation-with-invalid-multiple
+  "E114",  # indentation-with-invalid-multiple-comment
+  "E117",  # over-indented
+  "D203",  # incorrect-blank-line-before-class
+  "D206",  # docstring-tab-indentation
+  "D300",  # triple-single-quotes
+  "Q000",  # bad-quotes-inline-string
+  "Q001",  # bad-quotes-multiline-string
+  "Q002",  # bad-quotes-docstring
+  "Q003",  # avoidable-escaped-quote
+  "Q004",  # unnecessary-escaped-quote
+  "COM812",  # missing-trailing-comma
+  "COM819",  # prohibited-trailing-comma
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -177,13 +192,7 @@ ignore = [
   "TC",  # third-party imports in type-checking blocks not needed in tests
   "TRY",  # log/exception style not enforced in tests
 ]
-"examples/**" = [
-  "D",  # examples don't need docstrings
-  "INP",  # implicit namespace package
-  "PTH",  # os.path is fine in standalone scripts
-  "S101",  # asserts validate example preconditions
-  "T201",  # print is the right tool for example CLI output
-]
+"examples/**" = ["D", "INP", "PERF", "PTH", "S", "T201"]
 "docs/_semantic_template_reference.py" = ["D", "INP"]
 
 [tool.ruff.lint.pylint]
