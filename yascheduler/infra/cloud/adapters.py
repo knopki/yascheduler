@@ -205,7 +205,7 @@ def get_vastai_adapter(name: str) -> CloudAdapter:
 # - Q: Why op_limit=2 and create_node_timeout=1200?
 #   A: Bare metal provisions slowly (up to ~20 min); op_limit=2 allows one in-flight create + one queued request; 1200 s timeout accommodates the longest observed boot+cloud-init cycles.
 def get_vultr_adapter(name: str) -> CloudAdapter:
-    """Create CloudAdapter for Vultr with Bullseye platform support, slow bare-metal timeouts."""
+    """Create CloudAdapter for Vultr with Bookworm platform support, slow bare-metal timeouts."""
     from .providers.vultr import (  # noqa: PLC0415
         vultr_create_node,
         vultr_delete_node,
@@ -213,7 +213,7 @@ def get_vultr_adapter(name: str) -> CloudAdapter:
 
     return CloudAdapter(
         name=name,
-        supported_platform_checks=(can_debian_bullseye,),
+        supported_platform_checks=(can_debian_bookworm,),
         create_node=vultr_create_node,
         delete_node=vultr_delete_node,
         op_limit=2,

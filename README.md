@@ -377,9 +377,9 @@ Settings prefix is `vultr`.
   *Default*: `vbm-24c-256gb-amd`
 
 - `vultr_image_name`
-  Vultr OS id (integer, sent as `os_id` in the API). For example, `2284` =
-  Ubuntu 24.04 LTS x64, `2136` = Debian 12.
-  *Default*: `2284`
+  Vultr OS id (integer, sent as `os_id` in the API). For example, `2136` =
+  Debian 12 (bookworm), `2284` = Ubuntu 24.04 LTS x64.
+  *Default*: `2136`
 
 - `vultr_need_raid`
   Whether cloud-init sets up RAID0 NVMe + `/dev/shm`. Set to `false` for plans

@@ -148,7 +148,7 @@ async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
 
 
 # region FUNC_build_baremetal_user_data
-# PURPOSE: Build a cloud-init user-data string for bare-metal provisioning so a freshly launched Vultr instance has /data, ulimit, apt packages, RAID0 NVMe (when need_raid), and the ScaLAPACK symlink ready before the scheduler connects.
+# PURPOSE: Build a cloud-init user-data string for bare-metal provisioning so a freshly launched Vultr instance has /data, ulimit, apt packages, RAID0 NVMe (when need_raid), and the ScaLAPACK symlinks ready before the scheduler connects.
 # RATIONALE:
 # - Q: Why is /data a fixed absolute path and not ~/data?
 #   A: On bare metal /data is either a RAID0 NVMe mount (need_raid=True) or the root disk (need_raid=False); engines and tasks require a dedicated mount point (/data/engines, /data/tasks), and cloud-init must guarantee /data exists before the scheduler connects.
@@ -159,7 +159,7 @@ def build_baremetal_user_data(
     """Build a cloud-init user-data string for bare metal provisioning.
 
     Always creates /data, sets ulimit, installs apt packages, and adds the
-    ScaLAPACK symlink. When need_raid is True, also sets up RAID0 over NVMe
+    ScaLAPACK symlinks. When need_raid is True, also sets up RAID0 over NVMe
     drives and resizes /dev/shm — needed for vbm-24c-256gb-amd where NVMe
     disks ship unformatted. For plans where NVMe is already the main disk
     (e.g. vbm-8c-132gb), pass need_raid=False to skip RAID and /dev/shm.
@@ -212,7 +212,9 @@ def build_baremetal_user_data(
         "printf '* soft nofile 65536\\n* hard nofile 65536\\n"
         "root soft nofile 65536\\nroot hard nofile 65536\\n' "
         ">> /etc/security/limits.conf",
-        "ln -sf /usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.1 "
+        "ln -sf /usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2.1 "
+        "/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.1",
+        "ln -sf /usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2.1 "
         "/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2",
     ]
 

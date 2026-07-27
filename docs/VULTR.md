@@ -20,8 +20,8 @@ API v2 directly via `aiohttp` (no extra Python dependency is required —
    vultr_location = ams
    # Bare-metal plan id (Vultr API `plan`).
    vultr_server_type = vbm-24c-256gb-amd
-   # Vultr OS id (integer, sent as `os_id`). 2284 = Ubuntu 24.04 LTS x64, 2136 = Debian 12.
-   vultr_image_name = 2284
+   # Vultr OS id (integer, sent as `os_id`). 2136 = Debian 12 (bookworm), 2284 = Ubuntu 24.04 LTS x64.
+   vultr_image_name = 2136
    # Set False for plans where NVMe is already the main disk (e.g. vbm-8c-132gb).
    vultr_need_raid = true
    # Max concurrent Vultr nodes (>= 0).
@@ -33,14 +33,14 @@ API v2 directly via `aiohttp` (no extra Python dependency is required —
 ## Defaults
 
 The default plan is `vbm-24c-256gb-amd` (AMD EPYC 7443P, 24C/48T, 256 GB RAM,
-2x 480 GB SSD + 2x 1.92 TB NVMe) in the `ams` location on Ubuntu 24.04 LTS
-(`vultr_image_name=2284`, the Vultr OS id). Bare-metal provisioning is slow
+2x 480 GB SSD + 2x 1.92 TB NVMe) in the `ams` location on Debian 12 (bookworm)
+(`vultr_image_name=2136`, the Vultr OS id). Bare-metal provisioning is slow
 (up to ~20 minutes), so `create_node_timeout` is set to 1200 s and `op_limit`
 to 2.
 
-> **Note:** `vultr_image_name=2284` is Ubuntu 24.04 LTS x64, not Debian 12.
-> Debian 12 (bookworm) is `2136`. The cloud-init setup works on both, but
-> Ubuntu 24.04 is recommended (newer packages).
+> **Note:** `vultr_image_name=2136` is Debian 12 (bookworm) x64, better suited
+> for headless bare-metal instances. Ubuntu 24.04 LTS x64 is `2284`. The
+> cloud-init setup works on both, but Debian 12 is recommended for servers.
 
 ## RAID0 and disk setup (`vultr_need_raid`)
 
@@ -74,8 +74,8 @@ The following steps from the
   Seebeck/TDF runs.
 - **ulimit 65536** — required by FLEUR/CRYSTAL parallel runs that open many
   files simultaneously.
-- **ScaLAPACK symlink** — `libscalapack-openmpi.so.2.2 -> .so.2.1` expected
-  by FLEUR and CRYSTAL.
+- **ScaLAPACK symlinks** — `libscalapack-openmpi.so.2.1` and `.so.2.2` both
+  symlinked to `.so.2.2.1`, expected by FLEUR and CRYSTAL.
 - **apt packages** — `openmpi-bin`, `libopenmpi-dev`, `libscalapack-openmpi-dev`,
   `libxml2-dev`, `libblas-dev`, `liblapack-dev`, `build-essential`, `gfortran`,
   `cmake`, `git` (`mdadm` only when `vultr_need_raid = True`), plus

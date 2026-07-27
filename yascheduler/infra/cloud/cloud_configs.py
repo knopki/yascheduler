@@ -185,8 +185,8 @@ class ConfigCloudVultr(CloudConfig):
     api_key: str
     location: str = "ams"
     server_type: str = "vbm-24c-256gb-amd"
-    # Vultr OS id (integer, sent as `os_id` in the API). 2284 = Ubuntu 24.04 LTS x64, 2136 = Debian 12.
-    image_name: int = 2284
+    # Vultr OS id (integer, sent as `os_id` in the API). 2136 = Debian 12 (bookworm), 2284 = Ubuntu 24.04 LTS x64.
+    image_name: int = 2136
     need_raid: bool = True
     max_nodes: int = 10
     username: str = "root"
