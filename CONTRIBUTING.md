@@ -116,7 +116,8 @@ together. This contract is enforced by `uv run lint-imports`.
 
 Before writing code:
 
-1. Define module contracts (purpose, scope, keywords) in a `# region MODULE_CONTRACT` block.
+1. Define module contracts (purpose, scope, keywords) in a `# region
+   MODULE_CONTRACT` block.
 2. Specify contracts for public classes, methods, and functions.
 3. Create stubs.
 4. Implement inside the contracted regions.

@@ -66,7 +66,8 @@ relocations, test additions, spec maintenance, and feature work are not ADRs.
   orchestrator flow, also add or update integration/e2e tests per the relevant
   OpenSpec specs.
 - Run tests: `uv run pytest -m unit`, `uv run pytest -m integration`,
-  `uv run pytest -m e2e`. Assume Docker is available and running, no pre-flight checks.
+  `uv run pytest -m e2e`. Assume Docker is available and running, no pre-flight
+  checks.
 - Static checks: `uv run zuban check`, `uv run ruff check .`,
   `uv run ruff format --check .`, `uv run lint-imports`
 - Spec validation: `openspec validate --all --json` must pass after creating a

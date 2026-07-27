@@ -62,14 +62,6 @@ repos:
         pass_filenames: true
         types: [sql]
 
-      - id: mdlint-format
-        name: mdlint format
-        description: "Run 'mdlint format' for consistent, reliable Markdown formatting."
-        entry: uv run mdlint format
-        language: system
-        types: [markdown]
-        args: []
-
       - id: mdlint-check
         name: mdlint check
         description: "Run 'mdlint check' for consistent, reliable Markdown linting."

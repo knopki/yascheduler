@@ -58,8 +58,9 @@ show the image ID. Remember this ID - you will need to specify it in
 As a result, we have an OS image (snapshot) with the usual
 Debian 12 with `inpgen` and `fleur` already installed.
 
-Let's configure `yascheduler` to use our OS image.
-Setup `db`, `local` and `remote` sections in `yascheduler.conf` as usual. Add `clouds` and engines sections:
+Let's configure `yascheduler` to use our OS image. Setup `db`, `local` and
+`remote` sections in `yascheduler.conf` as usual. Add `clouds` and engines
+sections:
 
 ```ini
 [engine.inpgen]

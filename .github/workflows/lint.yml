@@ -50,6 +50,4 @@ jobs:
           uv run sqlfluff lint --dialect postgres yascheduler/infra/persistence/sql
 
       - name: Markdown lint
-        run: |
-          uv run mdlint format --check
-          uv run mdlint check
+        run: uv run mdlint check

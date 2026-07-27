@@ -7,11 +7,11 @@
 **Yascheduler** is a simple job scheduler designed for submitting scientific
 calculations and copying back the results from the computing clouds.
 
-Currently it supports several scientific simulation codes in chemistry
-and solid state physics.
-Any other scientific simulation code can be supported via the declarative
-control template system (see `yascheduler.conf` settings file).
-There is an [example dummy C++ code](https://github.com/tilde-lab/dummy-engine) with its configuration template.
+Currently it supports several scientific simulation codes in chemistry and solid
+state physics. Any other scientific simulation code can be supported via the
+declarative control template system (see `yascheduler.conf` settings file).
+There is an [example dummy C++ code](https://github.com/tilde-lab/dummy-engine)
+with its configuration template.
 
 ## Installation
 
@@ -434,8 +434,9 @@ Once set, it cannot be changed later.
 
 ## Aiida Integration
 
-See the detailed instructions for the [MPDS-AiiDA-CRYSTAL workflows](https://github.com/mpds-io/mpds-aiida)
-as well as the [ansible-mpds](https://github.com/mpds-io/ansible-mpds) repository. In essence:
+See the detailed instructions for the [MPDS-AiiDA-CRYSTAL
+workflows](https://github.com/mpds-io/mpds-aiida) as well as the
+[ansible-mpds](https://github.com/mpds-io/ansible-mpds) repository. In essence:
 
 ```sh
 ssh aiidauser@localhost # important

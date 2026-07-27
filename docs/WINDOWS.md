@@ -90,7 +90,8 @@ New-ItemProperty -Path $registryPath -Name DefaultShell `
     -PropertyType String -Force | Out-Null
 ```
 
-(NB we have observed that on some machines only a manual registry edition with `regedit` works.)
+(NB we have observed that on some machines only a manual registry edition with
+`regedit` works.)
 
 Enable and start OpenSSH service:
 
@@ -99,9 +100,11 @@ Set-Service -Name sshd -StartupType 'Automatic'
 Start-Service sshd
 ```
 
-Finally, add the public key to `$env:PROGRAMDATA\ssh\administrators_authorized_keys` file.
+Finally, add the public key to
+`$env:PROGRAMDATA\ssh\administrators_authorized_keys` file.
 
-NB if you are preparing a cloud image, do not forget to delete all the SSH keys before capture:
+NB if you are preparing a cloud image, do not forget to delete all the SSH keys
+before capture:
 
 ```powershell
 Clear-Content "$env:PROGRAMDATA\ssh\administrators_authorized_keys"
