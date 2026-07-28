@@ -1,181 +1,131 @@
-# Database Migrations
-
 ## Purpose
 
-Define the forward-only database migration system: the `apply_migrations()`
-runner, the `Migration` base class for `.py` migrations, the
-`yascheduler_migrations` tracker table, the migrations directory file format,
-and the migration edit procedure. The runner is called by `yainit` (and test
-fixtures) immediately after `apply_schema()`, bringing legacy and intermediate
-databases up to the latest snapshot in `schema.sql`.
+Define the forward-only database migration system: the schema bootstrap,
+the migration runner, the Python migration base class, the migration
+tracker, the migrations directory file format, and the migration edit
+procedure. `yainit` invokes the bootstrap, which applies the canonical
+schema snapshot in one transactional apply, then the runner brings
+legacy and intermediate databases forward to that snapshot.
 
 ## Requirements
 
+### Requirement: Schema bootstrap is idempotent
+
+The system SHALL apply the canonical schema snapshot in a single
+transaction. The snapshot SHALL guard every object creation so that
+re-applying it on an initialized database leaves the schema unchanged.
+The snapshot SHALL create the migration tracker: seeded to the latest
+migration prefix on a fresh database (no tables present), so the runner
+treats it as fully migrated; empty on a legacy database (tables present,
+no tracker), so the runner applies every migration.
+
+#### Scenario: bootstrap is idempotent across database states
+
+- **WHEN** the schema bootstrap is applied to a database
+- **THEN** a fresh database receives every table, type, and constraint
+  plus a tracker seeded to the latest prefix, an initialized database is
+  left unchanged, and a legacy database with tables but no tracker gets an
+  empty tracker
+
 ### Requirement: Migration runner applies pending migrations sequentially
 
-The system SHALL provide a synchronous function
-`apply_migrations(config: PostgresDbConfig)` that opens a pg8000 connection
-from the config, reads the last applied migration id from the
-`yascheduler_migrations` tracker (`NULL` when the tracker is empty), scans
-the migrations directory for `*.sql` and `*.py` files, filters to those whose
-`prefix_id` is greater than the last applied id (or all files when the last
-applied id is `NULL`), and applies them in string-sorted filename order, each
-in its own transaction.
+The system SHALL apply pending migrations in sorted filename order,
+recording each in the migration tracker after success. The system is
+forward-only and the tracker is idempotent: once a prefix is recorded, the
+runner SHALL never delete the record, reverse the migration, or apply the
+same prefix twice. A migration is pending when its filename prefix token
+is greater than the last recorded id, or when the tracker is empty.
 
-`prefix_id` is the token before the first `_` in the filename.
+#### Scenario: the runner applies only pending migrations
 
-#### Scenario: Fresh tracker applies all migrations
-- **WHEN** `apply_migrations(config)` is called on a database where `yascheduler_migrations` exists and is empty (or `MAX(migration_id)` returns `NULL`)
-- **THEN** every migration file in the migrations directory is applied in string-sorted `prefix_id` order, each recorded in `yascheduler_migrations` after success
+- **WHEN** the migration runner is invoked against a database
+- **THEN** every file whose prefix token is greater than the last recorded
+  id (or every file when the tracker is empty) is applied in sorted
+  filename order and recorded in the tracker exactly once
 
-#### Scenario: Non-empty tracker applies only pending migrations
-- **WHEN** `apply_migrations(config)` is called on a database where `MAX(migration_id)` returns a non-NULL value
-- **THEN** only migration files with `prefix_id > last_applied` are applied, in string-sorted order
+### Requirement: SQL migrations run in their own transaction
 
-### Requirement: SQL migrations execute as a multi-statement string
+The system SHALL apply each SQL migration file as a multi-statement string
+inside a single transaction and insert its tracker row on the same commit.
+On any error the transaction SHALL roll back and the error SHALL re-raise;
+no tracker row SHALL be inserted for the failed migration.
 
-For a `*.sql` migration file, the runner SHALL apply the file inside a single
-transaction: the migration's SQL text is executed as a multi-statement string
-in one round-trip, a row is inserted into `yascheduler_migrations` with the
-migration's `prefix_id` as `migration_id`, and the transaction commits. On any
-error during execution, the runner SHALL roll back (best-effort) and re-raise;
-the tracker row is NOT inserted for the failed migration.
+#### Scenario: SQL migrations commit atomically or roll back
 
-#### Scenario: SQL migration applies and is recorded
-- **WHEN** a `*.sql` migration file with `prefix_id = "001"` is applied successfully
-- **THEN** a row `("001", <timestamp>)` exists in `yascheduler_migrations` and the migration's SQL is committed
+- **WHEN** an SQL migration file is applied
+- **THEN** its SQL text and its tracker row commit together in one
+  transaction, and on error the transaction rolls back, the error
+  re-raises, and no tracker row is inserted
 
-#### Scenario: SQL migration failure rolls back and is not recorded
-- **WHEN** a `*.sql` migration file's SQL raises an error mid-execution
-- **THEN** the transaction is rolled back (best-effort), the error is re-raised, and no row for that `prefix_id` is inserted into `yascheduler_migrations`
+### Requirement: Python migrations receive dependencies and control their own transaction
 
-### Requirement: Python migrations use a Migration base class with injected dependencies
+The system SHALL load each Python migration as a subclass of the migration
+base class and inject the database configuration, the connection, and a
+logger. The migration body SHALL control its own transaction lifecycle,
+including the ability to commit and reopen a transaction mid-run for
+operations that cannot run inside one. Migrations are NOT required to be
+idempotent; the tracker guards against re-application.
 
-The system SHALL provide a `Migration` base class with an
-`__init__(self, config: PostgresDbConfig, conn, log)` that stores all three as
-instance attributes (`self.config`, `self.conn`, `self.log`), a
-`migrate(self) -> None` method that raises `NotImplementedError`, and
-`begin()` / `commit()` helper methods. A `*.py` migration file SHALL define
-exactly one subclass of `Migration` (excluding `Migration` itself) and
-implement `migrate(self)`. The runner instantiates the subclass with
-`(config, conn, log)` and calls `migrate()`.
+#### Scenario: a Python migration receives deps and owns its transaction
 
-#### Scenario: Migration subclass receives injected dependencies
-- **WHEN** a `*.py` migration file defines `class MyMigration(Migration)` with a `migrate(self)` that uses `self.config`, `self.conn`, and `self.log`
-- **THEN** the runner instantiates `MyMigration(config, conn, log)` and all three attributes are available inside `migrate()`
+- **WHEN** a Python migration file is applied
+- **THEN** its migration class receives the database configuration, the
+  connection, and a logger, and the migration body commits and reopens its
+  own transactions as needed
 
-#### Scenario: Migration helpers control the transaction
-- **WHEN** a `*.py` migration calls `self.commit()` then runs `CREATE INDEX CONCURRENTLY ...` then calls `self.begin()`
-- **THEN** the `CREATE INDEX CONCURRENTLY` runs outside a transaction, and a new transaction is open when `migrate()` returns
+### Requirement: Exactly one migration subclass per Python file
 
-#### Scenario: Migrations are not required to be idempotent
-- **WHEN** a migration's correctness is considered
-- **THEN** the system does NOT require the migration to be safe to re-apply; the tracker guards against re-application (each `prefix_id` is applied at most once per database)
+Each Python migration file SHALL define exactly one subclass of the
+migration base class. A file that defines zero or more than one SHALL
+raise an error that identifies the file.
 
-### Requirement: Python migration class discovery
+#### Scenario: exactly one subclass per file
 
-The runner SHALL discover the `Migration` subclass in each `*.py` migration
-file. Each file SHALL define exactly one `Migration` subclass. Zero subclasses
-or more than one SHALL be treated as an error naming the file.
-
-#### Scenario: Python migration file with one subclass is loaded
-- **WHEN** the runner scans a `*.py` migration file that defines exactly one `Migration` subclass
-- **THEN** the subclass is instantiated and `migrate()` is called
-
-#### Scenario: Python migration file with zero or multiple subclasses errors
-- **WHEN** the runner scans a `*.py` migration file that defines zero or more than one `Migration` subclass
-- **THEN** an error is raised identifying the file
+- **WHEN** the runner loads a Python migration file
+- **THEN** the single subclass is instantiated and run, or an error
+  identifying the file is raised when the file defines zero or more than
+  one subclass
 
 ### Requirement: Python migration tracker recording
 
-After `migration.migrate()` returns, the runner SHALL record the migration in
-`yascheduler_migrations` and commit. The tracker record SHALL land in both the
-normal case (migrate's work and the tracker row commit atomically together)
-and the `self.commit()`-closed case (when migrate closed the runner's
-transaction for a non-transactional operation and did not reopen one).
+After a Python migration body returns, the runner SHALL record the
+migration in the tracker and commit, whether the migration left the
+runner's transaction open or closed and reopened it. A transient database
+error on that commit SHALL retry once in a fresh transaction. Any other
+error SHALL roll back, re-raise, and insert no tracker row.
 
-As a defensive guard, if the tracker record commit raises a
-`DatabaseError`, the runner SHALL retry the record once in a fresh
-transaction. A non-transient failure (e.g. a duplicate-`prefix_id` primary-key
-violation) is re-raised by the retry.
+#### Scenario: the tracker records atomically and retries transient errors
 
-On any other error during `migrate()` or the tracker recording, the runner
-SHALL roll back (best-effort) and re-raise; the tracker row is NOT inserted
-for the failed migration.
-
-#### Scenario: Normal Python migration records tracker atomically
-- **WHEN** `migration.migrate()` returns successfully with the runner's transaction still open
-- **THEN** the tracker `INSERT` and `COMMIT` happen inside the same transaction as `migrate()`, committing atomically
-
-#### Scenario: Python migration with self.commit() still records tracker
-- **WHEN** `migration.migrate()` calls `self.commit()` (closing the runner's transaction) and does not reopen one
-- **THEN** the tracker `INSERT` still records the migration, and the trailing `COMMIT` is a no-op warning
-
-#### Scenario: Tracker INSERT retries on transient DatabaseError
-- **WHEN** the tracker record commit raises a transient `DatabaseError`
-- **THEN** the runner opens a fresh transaction, retries the record, and commits
-
-#### Scenario: Python migration failure rolls back and is not recorded
-- **WHEN** `migrate()` or the tracker recording raises an error
-- **THEN** the runner rolls back (best-effort) and re-raises, and no tracker row is inserted for the failed migration
+- **WHEN** a Python migration body returns
+- **THEN** a tracker row is recorded on commit, a transient database error
+  on that commit retries once in a fresh transaction, and any other error
+  rolls back, re-raises, and inserts no tracker row
 
 ### Requirement: Migrations directory and file format
 
-The system SHALL load migrations from the migrations directory. Migration
-filenames SHALL match the pattern `{prefix_id}_{rest}.{sql,py}`, where
-`prefix_id` is the token before the first `_`, is unique across all migration
-files (`.sql` and `.py` combined), and determines application order by string
-sort on the filename.
+Migration filenames SHALL match the pattern `{prefix}_{rest}.{sql,py}`,
+where the prefix token is the part before the first underscore, is unique
+across every migration file, and determines application order by string
+sort on the filename. Prefix uniqueness is an authoring constraint; the
+runner SHALL NOT detect duplicate prefixes at apply time.
 
-The `prefix_id` format is NOT fixed by this spec (e.g. `001`, `20260701120000`,
-or any other token is acceptable); only the uniqueness, before-first-`_`, and
-string-sortability constraints are required.
+#### Scenario: duplicate prefix tokens are not rejected at apply time
 
-#### Scenario: prefix_id is the token before the first underscore
-- **WHEN** a migration file is named `001_add_username_port.sql`
-- **THEN** its `prefix_id` is `"001"`
-
-#### Scenario: String sort determines application order
-- **WHEN** the migrations directory contains `001_....sql`, `010_....sql`, `002_....sql`
-- **THEN** they are applied in the order `001`, `002`, `010` (string sort on the filename)
-
-#### Scenario: prefix_id uniqueness is enforced by a unit test, not the runner
-- **WHEN** two migration files share the same `prefix_id`
-- **THEN** the runner does NOT detect this at runtime; a unit test that scans the migrations directory and asserts uniqueness SHALL fail
-
-#### Scenario: prefix_id format is not fixed
-- **WHEN** a migration file is named `20260701120000_add_index.sql`
-- **THEN** its `prefix_id` is `"20260701120000"` and it is accepted (the spec does not require a specific format)
+- **WHEN** two migration files share the same prefix token
+- **THEN** the runner applies the pending files in sorted order without
+  reporting the collision; uniqueness is enforced off the apply path
 
 ### Requirement: Migration edit procedure
 
-When a new migration is added, three edits SHALL be made:
+Adding a migration SHALL perform three edits: create the migration file in
+the migrations directory; set the snapshot's last-migration constant to the
+new prefix token; and, when the migration changes the schema (DDL), update
+the snapshot's table and type definitions to match. A data-only migration
+needs no snapshot DDL edit.
 
-1. Create the migration file in the migrations directory with name
-   `{prefix_id}_{rest}.sql` or `.py`.
-2. Update the `last_migration` CONSTANT in the `schema.sql` DO block to the
-   new `prefix_id`.
-3. If the migration changes the schema (DDL), update the snapshot DDL in
-   `schema.sql` (e.g. add a new column to the relevant `CREATE TABLE`).
+#### Scenario: a new migration updates file, constant, and snapshot
 
-#### Scenario: Adding a schema-changing migration
-- **WHEN** a developer adds a migration `002_add_status_index.sql` that creates an index
-- **THEN** the developer creates the file, updates `last_migration` to `"002"` in `schema.sql`, and (if the migration changes a table's columns) updates the `CREATE TABLE` snapshot
-
-#### Scenario: Adding a data-only migration
-- **WHEN** a developer adds a migration `003_backfill_metadata.py` that only transforms existing rows (no DDL change)
-- **THEN** the developer creates the file and updates `last_migration` to `"003"` in `schema.sql`; no `schema.sql` DDL edit is needed
-
-### Requirement: Migration system is forward-only
-
-The migration system SHALL be forward-only. Once a migration is recorded in
-`yascheduler_migrations`, the tracker row SHALL persist (the runner applies
-pending migrations in `prefix_id` order on every invocation).
-
-#### Scenario: No down/rollback path
-- **WHEN** a migration has been applied and recorded in `yascheduler_migrations`
-- **THEN** there is no runner mechanism to reverse it; the tracker row is never deleted by the runner
-
-#### Scenario: No generation tool
 - **WHEN** a developer adds a migration
-- **THEN** the developer writes the migration file and updates `schema.sql` by hand; no tool generates either
+- **THEN** a migration file is created, the snapshot's last-migration
+  constant is set to the new prefix token, and the snapshot's table and
+  type definitions are updated only when the migration changes the schema

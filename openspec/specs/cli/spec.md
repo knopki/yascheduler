@@ -1,788 +1,308 @@
 ## Purpose
 
-The six CLI command entry points (`yasubmit`, `yastatus`, `yanodes`, `yasetnode`,
-`yainit`, `yascheduler`), the three daemon launchers (`daemonize`,
-`daemon_systemd`, `daemon_sysv`), the shared argparse helpers, and the async
-daemon core. Each CLI command is a synchronous `def` entry point that calls
-`asyncio.run(_<name>_async(argv))` and delegates to use cases via dependency
-injection (`yainit` is a bootstrap exception).
+Define the operator-facing CLI surface: commands and three daemon
+launchers. Each command has a stable name, a fixed set of flags, an
+exit-code contract, and a defined output. Scripts and the AiiDA plugin
+read this output. The daemon launchers start the same daemon under three
+process supervisors.
 
 ## Requirements
 
-### Requirement: Shared argparse helpers
-
-The system SHALL provide reusable argparse helpers consumed by all six CLI
-command entry points and the three daemon launchers:
-
-- `existing_path(s: str) -> Path` — argparse type validator returning `Path(s)`
-  if `s` is an existing file, else raising `argparse.ArgumentTypeError` (→ exit
-  2).
-- `add_config_arg(parser, *, default=CONFIG_FILE, dest="config")` — adds
-  `--config PATH` with `type=existing_path`.
-- `add_log_level_arg(parser, *, default="WARNING", short=None)` — adds
-  `--log-level` with explicit
-  `choices=["DEBUG","INFO","WARNING","ERROR","CRITICAL"]`. When `short` is
-  given (e.g. `"-l"`), it registers the short flag as alias.
-- `add_log_file_arg(parser, *, default=None)` — adds `--log-file PATH` (path
-  string, no existence check).
-
-#### Scenario: existing_path returns Path for an existing file
-- **WHEN** `existing_path("/etc/yascheduler/yascheduler.conf")` is called and the file exists
-- **THEN** it returns `Path("/etc/yascheduler/yascheduler.conf")`
-
-#### Scenario: existing_path raises ArgumentTypeError for a missing file
-- **WHEN** `existing_path("/nonexistent.conf")` is called
-- **THEN** it raises `argparse.ArgumentTypeError` with a message containing `not a file: /nonexistent.conf`
-
-#### Scenario: add_log_level_arg rejects WARN alias
-- **WHEN** a parser built with `add_log_level_arg(parser)` is given `--log-level WARN`
-- **THEN** argparse rejects it with exit 2 (only `WARNING` is accepted, not the `WARN` alias)
-
-#### Scenario: add_log_level_arg registers a short alias
-- **WHEN** a parser built with `add_log_level_arg(parser, short="-l")` is given `-l DEBUG`
-- **THEN** `args.log_level == "DEBUG"` (the `-l` short flag is an alias for `--log-level`)
-
-#### Scenario: add_log_level_arg long-only by default
-- **WHEN** a parser built with `add_log_level_arg(parser)` (no `short`) is given `-l DEBUG`
-- **THEN** argparse rejects it with exit 2 (no short flag registered)
-
-### Requirement: Shared daemon core for entry points
-
-The system SHALL provide the shared daemon runtime consumed by all three daemon
-entry points:
-
-- `configure_logger(log_file: str | Path | None, level: int, *, timestamp: bool = False) -> logging.Logger`
-  — configures the ROOT logger: always adds a `StreamHandler(sys.stderr)`, adds
-  a `FileHandler(log_file)` only when `log_file is not None`, wires a
-  `LogFormatter` (with timestamping enabled iff `timestamp=True`) onto both
-  handlers as a single shared instance, sets `backoff` and `asyncssh` loggers to
-  `ERROR`, and calls `logging.captureWarnings(True)`.
-- `async def run_daemon(config: Config, logger: logging.Logger) -> None` — the
-  async daemon core: awaits `make_daemon(config)` to build the
-  `Orchestrator`, registers SIGTERM/SIGINT handlers on the running event loop
-  (cancel outstanding tasks, sleep 250ms for SSL close, log "Done"), then
-  awaits `orch.start()` wrapped in a `try/finally` whose `finally` clause awaits
-  `orch.stop()`.
-
-Each daemon entry point SHALL be a synchronous `def` that builds its own
-argparse parser via the shared helpers, calls `configure_logger`, loads
-`Config.from_config_parser(args.config)`, and invokes
-`asyncio.run(run_daemon(config, logger))`.
-
-Each daemon entry point SHALL pass `timestamp=True` to `configure_logger` when
-its output is NOT captured by journald (i.e. the foreground launcher
-`daemonize` and the file-logging launcher `daemon_sysv`), and SHALL pass
-`timestamp=False` (or omit it) when its stderr is captured by journald (i.e.
-the `daemon_systemd` launcher), because journald stamps records itself.
-
-#### Scenario: configure_logger writes to stderr when log_file is None
-- **WHEN** `configure_logger(log_file=None, level=logging.INFO)` is called
-- **THEN** the root logger has a `StreamHandler(sys.stderr)` and no `FileHandler`
-- **AND** the `StreamHandler` is configured with a `LogFormatter`
-
-#### Scenario: configure_logger writes to file and stderr when log_file is set
-- **WHEN** `configure_logger(log_file="/tmp/y.log", level=logging.INFO)` is called
-- **THEN** the root logger has both a `StreamHandler(sys.stderr)` and a `FileHandler` pointed at `/tmp/y.log`
-- **AND** both handlers are configured with a `LogFormatter` (single formatter, no per-handler format variants)
-
-#### Scenario: configure_logger timestamp defaults to off
-- **WHEN** `configure_logger(log_file=None, level=logging.INFO)` is called without a `timestamp` argument
-- **THEN** the wired `LogFormatter` does NOT prepend a timestamp to rendered records
-
-#### Scenario: configure_logger timestamp=True enables ISO 8601 prefix on both handlers
-- **WHEN** `configure_logger(log_file="/tmp/y.log", level=logging.INFO, timestamp=True)` is called
-- **THEN** both the `StreamHandler(sys.stderr)` and the `FileHandler` are wired with a `LogFormatter` that prepends an ISO 8601 local-time timestamp to every rendered record
-
-#### Scenario: configure_logger does not call basicConfig
-- **WHEN** `configure_logger(...)` is invoked
-- **THEN** `logging.basicConfig` is NOT called (handlers and level are set explicitly)
-
-#### Scenario: run_daemon is async
-- **WHEN** `run_daemon` is inspected
-- **THEN** it is declared `async def run_daemon(config, logger) -> None`
-
-#### Scenario: run_daemon awaits make_daemon and orch.start
-- **WHEN** `run_daemon(config, logger)` is awaited
-- **THEN** `make_daemon(config)` is awaited (without forwarding `logger`), SIGTERM/SIGINT handlers are registered on the running event loop, `orch.start()` is awaited, and the `finally` block awaits `orch.stop()`
-
-#### Scenario: start() exception propagates after cleanup
-- **WHEN** `orch.start()` raises an exception
-- **THEN** the `finally` block's `orch.stop()` still runs (cancelling early background jobs, closing the HTTP session) before the exception propagates out of `run_daemon`
-
-#### Scenario: entry points call asyncio.run
-- **WHEN** any of `daemonize`, `daemon_systemd`, `daemon_sysv` is inspected
-- **THEN** the entry point is a synchronous `def` that calls `asyncio.run(run_daemon(...))`
-
-#### Scenario: daemonize enables the ISO 8601 timestamp
-- **WHEN** `daemonize` (the foreground `yascheduler` launcher) calls `configure_logger`
-- **THEN** it passes `timestamp=True`, so foreground output lines begin with a local ISO 8601 timestamp
-
-#### Scenario: daemon_sysv enables the ISO 8601 timestamp
-- **WHEN** `daemon_sysv` (the file-logging launcher) calls `configure_logger`
-- **THEN** it passes `timestamp=True`, so file output lines begin with a local ISO 8601 timestamp
-
-#### Scenario: daemon_systemd does NOT enable the ISO 8601 timestamp
-- **WHEN** `daemon_systemd` (the journald-supervised launcher) calls `configure_logger`
-- **THEN** it passes `timestamp=False` (or omits the argument), so stderr-into-journald output lines do NOT carry a duplicate leading timestamp
-
-### Requirement: CLI commands call use cases via DI
-
-Each CLI command SHALL obtain dependencies from DI and delegate to use cases.
-All six commands and three daemon launchers SHALL accept `--config` and
-`--log-level` via shared helpers. The five non-daemon CLI commands SHALL be
-synchronous `def` entry points calling
-`asyncio.run(_<name>_async(argv))` with `argv: list[str] | None = None` for
-testability.
-
-`yainit` performs infrastructure setup directly (no DI, no use case): service
-file install and/or `apply_schema(config.db)` + `apply_migrations(config.db)`.
-
-#### Scenario: yasubmit calls SubmitTask
-- **WHEN** yasubmit is invoked with valid arguments
-- **THEN** `make_cli_deps()` is called, `SubmitTask` use case is invoked via `CLIDeps.submit`, task_id is printed to stdout
-
-#### Scenario: yainit is a bootstrap entrypoint without DI
-- **WHEN** `yainit` is invoked (with any combination of `--schema` / `--daemon` / no flags)
-- **THEN** `init()` performs infrastructure setup (service install and/or schema apply + migration apply) directly via `apply_schema(config.db)` and `apply_migrations(config.db)`, and service-template file writes, without calling `make_cli_deps` or any use case
-
-#### Scenario: missing config file exits 2
-- **WHEN** any CLI command or daemon launcher is invoked with `--config /nonexistent.conf`
-- **THEN** argparse prints `not a file: /nonexistent.conf` to stderr and exits 2 (via the `existing_path` validator)
-
-#### Scenario: invalid log level exits 2
-- **WHEN** any CLI command or daemon launcher is invoked with `--log-level WARN`
-- **THEN** argparse rejects it with exit 2 (only `WARNING` is accepted, not the `WARN` alias)
-
-#### Scenario: five CLI commands use asyncio.run
-- **WHEN** `submit`, `show_nodes`, `manage_node`, or `check_status` is inspected
-- **THEN** the entry point is a synchronous `def f(argv: list[str] | None = None)` that calls `asyncio.run(_f_async(argv))`
-
-#### Scenario: yainit with no flags installs service and applies schema and migrations
-- **WHEN** `yainit` is invoked with no flags
-- **THEN** the systemd or sysv service file is installed (auto-detected) and `apply_schema(config.db)` followed by `apply_migrations(config.db)` is called synchronously to initialize the database; the process exits `0` on success
-
-#### Scenario: yainit --daemon installs only the service
-- **WHEN** `yainit --daemon` is invoked
-- **THEN** the auto-detected service file (systemd or sysv) is written, `apply_schema` and `apply_migrations` are NOT called, and `init()` exits `0` on success
-
-#### Scenario: yainit --config honors the path
-- **WHEN** `yainit --config /custom/yascheduler.conf` is invoked
-- **THEN** `Config.from_config_parser("/custom/yascheduler.conf")` is called (passed through to `apply_schema(config.db)` and `apply_migrations(config.db)`)
-
-#### Scenario: yainit initializes database idempotently
-- **WHEN** `yainit --schema` (or the default invocation) is run against an already-initialized database
-- **THEN** `apply_schema(config.db)` succeeds (because `schema.sql` uses `CREATE TABLE IF NOT EXISTS` and the DO block `to_regclass` guard) and `apply_migrations(config.db)` succeeds (the tracker already records all applied migrations, so none are pending), and `init()` exits `0`
-
-#### Scenario: yainit exits 1 on DatabaseError from apply_schema or apply_migrations
-- **WHEN** `apply_schema(config.db)` or `apply_migrations(config.db)` raises `DatabaseError` (e.g. connection refused, authentication failure, migration SQL error)
-- **THEN** `init()` prints the error and exits `1`
-
-#### Scenario: yainit exits 1 on service file write failure
-- **WHEN** writing the service file raises `OSError` (e.g. permission denied, missing `/etc/systemd/system/` or `/etc/init.d/` parent directory, disk full)
-- **THEN** `init()` prints `Error: cannot write to <path>: <error>` and exits `1`
-
-#### Scenario: yainit installs systemd unit on a systemd host
-- **WHEN** `yainit` service install is requested on a host managed by systemd
-- **THEN** the systemd unit template is rendered and written to `/etc/systemd/system/yascheduler.service`
-
-#### Scenario: yainit installs sysv init script on a non-systemd host
-- **WHEN** `yainit` service install is requested on a host NOT managed by systemd
-- **THEN** the sysv init script template is rendered and written to `/etc/init.d/yascheduler` with `chmod 0755`
-
-#### Scenario: yasubmit parses AiiDA script and submits task
-- **WHEN** yasubmit is invoked with a valid script file path
-- **THEN** the script is parsed, the engine is validated against `config.engines`, input files are read, metadata is built, and `deps.submit(...)` is called
-
-#### Scenario: yasubmit entry point uses asyncio.run
-- **WHEN** the `submit` callable is inspected
-- **THEN** it is a synchronous `def submit(argv: list[str] | None = None)` that calls `asyncio.run(_submit_async(argv))`
-
-### Requirement: yasubmit parses flags via argparse
-
-`submit()` SHALL parse `argv` with `argparse.ArgumentParser(prog="yasubmit",
-description="Submit task to yascheduler via AiiDA script")` exposing one
-positional argument:
-- `script` (positional, type validator that returns `Path(s)` if `s` is an
-  existing file or raises `argparse.ArgumentTypeError`): the path to the AiiDA
-  script file. A missing file is an argparse error (exit `2`), not a runtime
-  error (exit `1`).
-
-#### Scenario: yasubmit prog is yasubmit in help and errors
-- **WHEN** `yasubmit --help` or any argparse error is shown
-- **THEN** the program name displayed is `yasubmit` (NOT the console_script path derived from `sys.argv[0]`)
-
-### Requirement: yasubmit validates script content in the body
-
-After argparse succeeds, `submit()` SHALL validate the script *content* in the
-body (exit `1` on failure, NOT exit `2`). The validations are:
-- The script's parsed `script_params` dict MUST contain an `ENGINE` key. If
-  absent, `submit()` SHALL raise `ValueError("Script has not defined an
-  engine")`, print `Error: Script has not defined an engine` to stderr, and
-  exit `1`.
-- The `ENGINE` value MUST be a known engine name in `config.engines`. If
-  `config.engines.get(engine_name)` returns `None`, `submit()` SHALL raise
-  `ValueError(f"Engine {engine_name} is not supported")`, print the message to
-  stderr, and exit `1`.
-
-#### Scenario: yasubmit exits 1 when ENGINE key is missing
-- **WHEN** `yasubmit script.in` is invoked with a script containing `LABEL = Test` but no `ENGINE = ...` line
-- **THEN** `Error: Script has not defined an engine` is printed to stderr, nothing is printed to stdout, and the process exits `1`
-
-#### Scenario: yasubmit exits 1 when engine is unknown
-- **WHEN** `yasubmit script.in` is invoked with a script containing `ENGINE = unknown` and `config.engines.get("unknown")` returns `None`
-- **THEN** `Error: Engine unknown is not supported` is printed to stderr, nothing is printed to stdout, and the process exits `1`
-
-### Requirement: yasubmit preserves AiiDA stdout compatibility
-
-The success path of `yasubmit` SHALL print exactly `str(task_id)` to stdout —
-no prefix, suffix, JSON envelope, or decoration. The failure path SHALL print
-nothing to stdout and an error message to stderr.
-
-#### Scenario: yasubmit success prints only the task id
-- **WHEN** `yasubmit script.in` succeeds and `deps.submit(...)` returns `42`
-- **THEN** stdout contains exactly `42` (possibly with a trailing newline from `print`), with no prefix, suffix, JSON envelope, or other decoration
-
-#### Scenario: yasubmit failure prints nothing to stdout
-- **WHEN** `yasubmit script.in` fails (ENGINE key missing, engine unknown, DB error, or any exception)
-- **THEN** stdout is empty; the error message is on stderr; the process exits `1` (or `2` for argparse errors)
-
-#### Scenario: AiiDA plugin is unchanged
-- **WHEN** the AiiDA scheduler entrypoint is inspected
-- **THEN** the entrypoint still returns `f"yasubmit {submit_script}"` and parses `int(stdout.strip())` (the AiiDA contract is not touched)
-
-### Requirement: Daemon launcher argparse and defaults
-
-Each daemon launcher SHALL build its own argparse parser via the shared helpers
-and call `run_daemon` with ready arguments. The three launchers are `daemonize`,
-`daemon_systemd`, and `daemon_sysv`. Each SHALL set `prog="yascheduler"` so
-`--help` shows the product name. Each SHALL accept `--config` (default
-`CONFIG_FILE`, `type=existing_path`) and `--log-level` (default `INFO`, choices
-`["DEBUG","INFO","WARNING","ERROR","CRITICAL"]`). Each SHALL accept `--log-file`
-(default `None` → stderr for `daemonize` and `daemon_systemd`; default
-`LOG_FILE` for `daemon_sysv`).
-
-`daemonize` (the foreground `yascheduler` console_script) SHALL accept the short
-flag `-l`/`--log-level`.
-
-`daemon_sysv` SHALL additionally accept `-p`/`--pid-file` (default `PID_FILE`)
-and SHALL keep the short flag `-l`/`--log-file`. `--config` and
-`--log-level` SHALL be long-only in `daemon_sysv`.
-
-`daemon_sysv` SHALL wrap the daemon execution in a `python-daemon`
-`DaemonContext` with `working_directory="/"`. `daemonize` and `daemon_systemd`
-SHALL run in the foreground (no `python-daemon`).
-
-#### Scenario: daemonize accepts -l as --log-level alias
-- **WHEN** `yascheduler -l DEBUG` is invoked
-- **THEN** `args.log_level == "DEBUG"` (the `-l` short flag aliases `--log-level`; backward compatibility)
-
-#### Scenario: daemonize default log-file is None (stderr)
-- **WHEN** `yascheduler` is invoked with no `--log-file`
-- **THEN** `configure_logger(log_file=None, ...)` is called; the root logger has only a `StreamHandler(sys.stderr)`, no `FileHandler`
-
-#### Scenario: daemon_systemd default log-file is None (journald)
-- **WHEN** `python daemon_systemd.py` is invoked with no `--log-file`
-- **THEN** `configure_logger(log_file=None, ...)` is called; logs go to stderr, which systemd captures into journald
-
-#### Scenario: daemon_sysv default log-file is LOG_FILE
-- **WHEN** `python daemon_sysv.py` is invoked with no `--log-file`
-- **THEN** `configure_logger(log_file=LOG_FILE, ...)` is called; the daemon writes to `/var/log/yascheduler.log` (or the `YASCHEDULER_LOG_PATH` override)
-
-#### Scenario: daemon_sysv preserves -p and -l short flags
-- **WHEN** `python daemon_sysv.py -p /var/run/yascheduler.pid -l /var/log/yascheduler.log` is invoked
-- **THEN** `args.pid_file == "/var/run/yascheduler.pid"` and `args.log_file == "/var/log/yascheduler.log"` (compatible with the installed `yascheduler.sh` init script)
-
-#### Scenario: daemon_sysv --log-level is long-only (no -l collision)
-- **WHEN** `python daemon_sysv.py --log-level DEBUG -l /var/log/yascheduler.log` is invoked
-- **THEN** `args.log_level == "DEBUG"` and `args.log_file == "/var/log/yascheduler.log"` (no collision: `-l` is `--log-file`, `--log-level` is long-only)
-
-#### Scenario: daemon_sysv working_directory is root
-- **WHEN** `daemon_sysv.py` builds its `DaemonContext`
-- **THEN** `working_directory="/"` is passed (NOT `os.path.dirname(__file__)`); the daemon's CWD is `/`
-
-#### Scenario: daemon_sysv configure_logger inside DaemonContext
-- **WHEN** `daemon_sysv.py` runs
-- **THEN** `configure_logger(args.log_file, level)` is called INSIDE the `with daemon.DaemonContext(...)` block, so the `FileHandler` opens the file in the daemon's context
-
-#### Scenario: daemonize accepts argv parameter for tests
-- **WHEN** `daemonize(argv=["--config", "/tmp/test.conf", "--log-level", "DEBUG"])` is called from a test
-- **THEN** the parser reads the explicit argv (NOT `sys.argv`); `args.config == "/tmp/test.conf"` and `args.log_level == "DEBUG"`
-
-### Requirement: Daemon and CLI exit-code contract
-
-All six CLI commands and the three daemon launchers SHALL follow the uniform
-exit-code contract:
-
-- `0` — success (clean shutdown for daemons, completed operation for CLI
-  commands), and `--help`.
-- `1` — runtime error caught by the top-level `try/except Exception`; the entry
-  point prints `Error: <exception>` to stderr and calls `sys.exit(1)`.
-- `2` — argparse error (unknown flag, missing positional, invalid choice) or
-  `existing_path` `ArgumentTypeError` (missing `--config` file). argparse and
-  the type validator handle this natively; the `except Exception` block does
-  not catch `SystemExit` (which is not an `Exception` subclass), so argparse's
-  exit propagates.
-
-#### Scenario: daemon runtime error exits 1 with Error message
-- **WHEN** `make_daemon(config)` raises `Exception("db connection refused")`
-- **THEN** the daemon entry point prints `Error: db connection refused` to stderr and exits `1` (NOT a bare traceback)
-
-#### Scenario: daemon argparse error exits 2
-- **WHEN** `yascheduler --bogus` is invoked
-- **THEN** argparse prints a usage error to stderr and exits `2`; the `except Exception` block is not reached
-
-#### Scenario: daemon --help exits 0
-- **WHEN** `yascheduler --help` is invoked
-- **THEN** argparse prints the usage text to stdout and exits `0`
-
-#### Scenario: CLI runtime error exits 1 with Error message
-- **WHEN** `make_cli_deps(config)` raises `Exception("db unreachable")`
-- **THEN** the CLI entry point prints `Error: db unreachable` to stderr and exits `1`
-
-#### Scenario: SystemExit propagates past except Exception
-- **WHEN** argparse calls `sys.exit(2)` inside the `try` block of an entry point
-- **THEN** the `except Exception` block does NOT catch it (`SystemExit` is not an `Exception` subclass); the exit code is `2`
+### Requirement: Command surface and shared flags
+
+The system SHALL install these CLI commands and daemon launchers:
+
+| command      | prog         | purpose                                                  |
+| ------------ | ------------ | -------------------------------------------------------- |
+| yasubmit     | yasubmit     | Submit a task from an AiiDA script.                      |
+| yastatus     | yastatus     | Query and display task status.                           |
+| yanodes      | yanodes      | List nodes and their running tasks.                      |
+| yasetnode    | yasetnode    | Add, soft-remove, or hard-remove a node.                 |
+| yainit       | yainit       | Install the service unit and apply the DB schema.        |
+| yascheduler  | yascheduler  | Start the daemon (foreground launcher).                  |
+| daemon_systemd | yascheduler | Start the daemon under systemd, logs to journald.        |
+| daemon_sysv  | yascheduler  | Start the daemon under SysV init, detached with a pidfile. |
+
+Every command and launcher SHALL accept `--config PATH` and
+`--log-level`. `--config` SHALL point at an existing file; a missing
+file SHALL exit `2` with a message of the form `not a file: <path>`.
+`--log-level` SHALL accept only `DEBUG`, `INFO`, `WARNING`, `ERROR`,
+and `CRITICAL`. The daemon launchers SHALL also accept `--log-file`.
+
+#### Scenario: a missing config file exits 2
+
+- **WHEN** any command or launcher is invoked with `--config /nonexistent.conf`
+- **THEN** a usage error is printed to stderr and the process exits `2`
+
+#### Scenario: an unknown log level exits 2
+
+- **WHEN** any command or launcher is invoked with `--log-level WARN`
+- **THEN** a usage error is printed to stderr and the process exits `2`
+
+### Requirement: Exit-code contract
+
+Every command and launcher SHALL use one exit code:
+
+| code | meaning                                                                |
+| ---- | ---------------------------------------------------------------------- |
+| `0`  | Success, or `--help`.                                                  |
+| `1`  | Runtime error. The entry point prints `Error: <message>` to stderr.    |
+| `2`  | Argument error: unknown flag, bad choice, missing positional, mutex violation, or a `--config` file that does not exist. |
+
+#### Scenario: a runtime error exits 1 with an Error message
+
+- **WHEN** a command fails because the database is unreachable
+- **THEN** a line of the form `Error: <message>` is printed to stderr and the process exits `1`
+
+#### Scenario: an argument error exits 2
+
+- **WHEN** a command is invoked with an unknown flag
+- **THEN** a usage error is printed to stderr and the process exits `2`
+
+### Requirement: yasubmit parses an AiiDA script
+
+`yasubmit` SHALL take one positional argument: the path to an AiiDA
+script. The path SHALL point at an existing file; otherwise the process
+exits `2`. `yasubmit` SHALL read `KEY = VALUE` lines from the script.
+It SHALL require an `ENGINE` key whose value is a known engine name.
+Validation failures SHALL print nothing to stdout.
+
+| script condition                     | stderr message                              | exit |
+| ------------------------------------ | ------------------------------------------- | ---- |
+| No `ENGINE` key                      | `Error: Script has not defined an engine`   | `1`  |
+| `ENGINE` value is not a known engine | `Error: Engine <name> is not supported`     | `1`  |
+
+#### Scenario: a missing ENGINE key exits 1
+
+- **WHEN** `yasubmit` is run against a script that has no `ENGINE = ...` line
+- **THEN** `Error: Script has not defined an engine` is printed to stderr, stdout stays empty, and the process exits `1`
+
+#### Scenario: an unknown engine exits 1
+
+- **WHEN** `yasubmit` is run against a script with `ENGINE = unknown` and the engine is not configured
+- **THEN** `Error: Engine unknown is not supported` is printed to stderr, stdout stays empty, and the process exits `1`
+
+### Requirement: yasubmit stdout is the AiiDA task-id contract
+
+On success, `yasubmit` SHALL print only the task id as a bare number to
+stdout. The AiiDA scheduler plugin reads this number. No prefix,
+suffix, decoration, or envelope SHALL be added.
+
+#### Scenario: success prints only the task id
+
+- **WHEN** `yasubmit` submits a task and the new task id is `42`
+- **THEN** stdout contains exactly `42` (with no other text) and the process exits `0`
 
 ### Requirement: yanodes lists nodes and their running tasks
 
-The `yanodes` command SHALL list nodes and their currently running tasks. The
-command is a synchronous entry point that calls
-`asyncio.run(_show_nodes_async(argv))` with `argv: list[str] | None = None`.
-Output row order SHALL preserve the order returned by `uow.nodes.list_all()`
-(no sorting). Each node SHALL produce exactly one output row (table) or one
-output object (JSON).
+`yanodes` SHALL list every node and the single task running on it, if
+any. Each node SHALL produce one output row or one JSON object, in the
+order the node repository returns (by node identity ascending).
 
-#### Scenario: yanodes entry point uses asyncio.run
-- **WHEN** the `show_nodes` callable is inspected
-- **THEN** it is a synchronous `def show_nodes(argv: list[str] | None = None)` that calls `asyncio.run(_show_nodes_async(argv))`
+`yanodes` SHALL accept these filters. Filters SHALL compose by AND: a
+node is shown only when it passes every active filter.
 
-#### Scenario: yanodes joins nodes to tasks by node_id
-- **WHEN** the in-memory join runs
-- **THEN** each node is matched to its running task by matching `allocated_node_id` to `node.node_id` (the join key is `node_id`, not `ip`)
+| flag           | keeps nodes where...                                  |
+| -------------- | ----------------------------------------------------- |
+| `--enabled`    | enabled is true.                                      |
+| `--disabled`   | enabled is false.                                     |
+| `--busy`       | a running task is allocated to the node.             |
+| `--free`       | no running task is allocated to the node.            |
+| `--cloud NAME` | cloud equals NAME (exact match).                     |
+| `--no-cloud`   | cloud is unset.                                       |
 
-### Requirement: yanodes parses flags via argparse
+`--cloud` and `--no-cloud` SHALL be mutually exclusive. The
+`--enabled`/`--disabled` and `--busy`/`--free` pairs SHALL be subset
+selectors: when both members of a pair are given, the pair selects all
+nodes on that axis.
 
-`show_nodes()` SHALL parse `argv` with `argparse.ArgumentParser(prog="yanodes",
-description="Show nodes and their running tasks")` exposing:
-- `--json` (`store_true`): emit JSON instead of the default table. Selects the
-  renderer; not a filter.
-- `--enabled` (`store_true`): include only nodes where `node.enabled` is True.
-- `--disabled` (`store_true`): include only nodes where `node.enabled` is False.
-- `--busy` (`store_true`): include only nodes that have ≥1 RUNNING task with
-  `allocated_node_id == node.node_id`.
-- `--free` (`store_true`): include only nodes with no such RUNNING task.
-- `--cloud NAME` (`str`): include only nodes where `node.cloud == NAME` (exact
-  string equality).
-- `--no-cloud` (`store_true`): include only nodes where `node.cloud is None`.
+#### Scenario: filters compose by AND
 
-`--enabled` and `--disabled` SHALL be subset selectors, NOT mutually exclusive:
-`--enabled --disabled` selects all nodes (= the default, no enabled-axis
-filtering). `--busy` and `--free` SHALL be subset selectors, NOT mutually
-exclusive: `--busy --free` selects all nodes. `--cloud` and `--no-cloud` SHALL
-be in a `mutually_exclusive_group`: `--cloud NAME --no-cloud` is an argparse
-error (exit `2`). All filters SHALL compose by AND: a row is emitted iff it
-passes every active filter.
-
-#### Scenario: yanodes --cloud and --no-cloud are mutually exclusive
-- **WHEN** `yanodes --cloud hetzner --no-cloud` is invoked
-- **THEN** argparse prints a usage error to stderr and exits `2` (mutex group violation)
-
-#### Scenario: yanodes filters compose by AND
 - **WHEN** `yanodes --enabled --busy --cloud hetzner` is invoked
-- **THEN** only nodes that are enabled AND busy AND have `cloud == "hetzner"` are listed
+- **THEN** only nodes that are enabled, busy, and have cloud `hetzner` are listed
 
-#### Scenario: yanodes --enabled lists only enabled nodes
-- **WHEN** `yanodes --enabled` is invoked against a node set containing both enabled and disabled nodes
-- **THEN** only the enabled nodes appear in the output
+#### Scenario: cloud and no-cloud are mutually exclusive
 
-### Requirement: yanodes default table output format
+- **WHEN** `yanodes --cloud hetzner --no-cloud` is invoked
+- **THEN** a usage error is printed to stderr and the process exits `2`
 
-The default output of `yanodes` (when `--json` is not given) SHALL be a
-fixed-width text table rendered with stdlib string formatting only (no external
-dependencies such as `rich` or `tabulate`). The table SHALL have a header row
-followed by one data row per node, in the order returned by
-`uow.nodes.list_all()` (which is `ORDER BY node_id`). Column widths SHALL be
-computed from the data so the table is self-aligning regardless of value
-lengths.
+### Requirement: yanodes default table output
 
-The columns SHALL be: `NODE_ID`, `HOSTNAME`, `PORT`, `NCPUS`, `ENABLED`, `CLOUD`,
-`TASK_ID`, `LABEL`. `NODE_ID` is the first column (identity first). Display-only
-transformations SHALL apply to the table cells:
+When `--json` is not given, `yanodes` SHALL print a header row followed
+by one data row per node. The columns SHALL be, in order: `NODE_ID`,
+`HOSTNAME`, `PORT`, `NCPUS`, `ENABLED`, `CLOUD`, `TASK_ID`, `LABEL`.
+Column widths SHALL be computed from the data so the table is
+self-aligning. The cells SHALL apply these display transformations:
 
-| column   | raw value       | table cell                       |
-| -------- | --------------- | -------------------------------- |
-| NODE_ID  | `node.node_id`    | `str(node.node_id)` (the bare int, via `NodeId.__str__`) |
-| HOSTNAME | `node.hostname`   | as-is                            |
-| PORT     | `node.port`       | `-` when `22`, else the int      |
-| NCPUS    | `node.ncpus`      | `MAX` when `None` (or legacy `0`), else the int |
-| ENABLED  | `node.enabled`    | `yes` when True, `no` when False |
-| CLOUD    | `node.cloud`      | `-` when None, else the string   |
-| TASK_ID  | `task.task_id`     | `-` when free, else the int      |
-| LABEL    | `task.label`       | `-` when free, else the string   |
+| column   | cell value                                                  |
+| -------- | ----------------------------------------------------------- |
+| NODE_ID  | the node identity                                           |
+| HOSTNAME | the hostname                                                |
+| PORT     | `-` when the port is `22`, else the port                    |
+| NCPUS    | `MAX` when the count is unset (or the legacy `0`), else the count |
+| ENABLED  | `yes` or `no`                                               |
+| CLOUD    | `-` when cloud is unset, else the cloud name               |
+| TASK_ID  | `-` when no running task is allocated, else the task id     |
+| LABEL    | `-` when no running task is allocated, else the label       |
 
-A node is "free" when no RUNNING task has `allocated_node_id == node.node_id`;
-it is "busy" when exactly one RUNNING task does (the one-task-per-node
-invariant).
+#### Scenario: a busy node renders a full row
 
-#### Scenario: yanodes table has a header row
-- **WHEN** `yanodes` is invoked (with or without filter flags)
-- **THEN** the first line of output is the header row `NODE_ID`, `HOSTNAME`, `PORT`, `NCPUS`, `ENABLED`, `CLOUD`, `TASK_ID`, `LABEL` (column separators and exact spacing follow the fixed-width computation)
+- **WHEN** `yanodes` lists an enabled node on port `22` with a running task `7` labeled `my_job`
+- **THEN** the row shows `NODE_ID` set, `PORT` `-`, `NCPUS` set, `ENABLED` `yes`, `CLOUD` `-`, `TASK_ID` `7`, `LABEL` `my_job`
 
-#### Scenario: yanodes table shows a busy node
-- **WHEN** a node with `node_id=1`, `hostname="[IP]"`, `port=22`, `ncpus=4`, `enabled=True`, `cloud=None` has a RUNNING task with `task_id=7`, `label="my_job"`
-- **THEN** one row is emitted with NODE_ID=`1`, HOSTNAME=`[IP]`, PORT=`-`, NCPUS=`4`, ENABLED=`yes`, CLOUD=`-`, TASK_ID=`7`, LABEL=`my_job`
+### Requirement: yanodes JSON output
 
-#### Scenario: yanodes table shows MAX for None ncpus
-- **WHEN** a node has `ncpus=None`
-- **THEN** the NCPUS cell is `MAX`
-
-#### Scenario: yanodes table shows MAX for legacy zero ncpus
-- **WHEN** a node has `ncpus=0` (a pre-migration row viewed before migration 013 runs)
-- **THEN** the NCPUS cell is `MAX` (backward-compatible with the legacy sentinel)
-
-#### Scenario: yanodes table no external deps
-- **WHEN** the implementation of the table renderer is inspected
-- **THEN** it uses only stdlib string formatting (f-string width specifiers, `str.ljust`, or equivalent) and does NOT import `rich`, `tabulate`, or any other third-party formatting library
-
-### Requirement: yanodes --json output format
-
-When `--json` is given, `yanodes` SHALL emit `json.dumps(list_of_objects)` where
-each object represents one node with raw domain values (NO display
-transformations — no `-`, no `MAX`, no `yes`/`no`). The object schema SHALL be:
+When `--json` is given, `yanodes` SHALL print one JSON object per node
+with raw domain values and no display tokens (no `-`, no `MAX`, no
+`yes`/`no`). The object SHALL carry these fields:
 
 ```
-{"node_id": int, "hostname": str, "port": int, "ncpus": int | null, "enabled": bool,
- "cloud": str | null, "jump_host": str | null, "jump_port": int,
- "jump_username": str, "external_id": str | null, "status": str,
- "created_at": str, "updated_at": str,
+{"node_id": int, "hostname": str, "port": int, "ncpus": int | null,
+ "enabled": bool, "cloud": str | null, "jump_host": str | null,
+ "jump_port": int, "jump_username": str, "external_id": str | null,
+ "status": str, "created_at": str, "updated_at": str,
  "occupied_by": {"task_id": int, "label": str} | null}
 ```
 
-One object per node, in the order returned by `uow.nodes.list_all()`.
+`occupied_by` SHALL be the running task on that node, or `null` when
+the node is free. An empty result SHALL print `[]`.
 
-#### Scenario: yanodes --json emits a list of objects
-- **WHEN** `yanodes --json` is invoked against a non-empty node set
-- **THEN** the output is valid JSON parseable as a list of objects, one per node, in `list_all()` order
+#### Scenario: a node with a running task emits raw values
 
-#### Scenario: yanodes --json includes node_id
-- **WHEN** a node with `node_id=NodeId(5)` is listed
-- **THEN** the JSON object's `node_id` field is `5` (the bare int via `.value`)
+- **WHEN** `yanodes --json` lists a node with an unset CPU count and a running task
+- **THEN** the object has `ncpus: null`, `occupied_by` set to `{"task_id": ..., "label": ...}`, and no display tokens
 
-#### Scenario: yanodes --json uses hostname key not ip
-- **WHEN** a node with `hostname="10.0.0.1"` is listed via `yanodes --json`
-- **THEN** the JSON object has a `"hostname"` key with value `"10.0.0.1"` and does NOT have an `"ip"` key
+#### Scenario: an empty result prints an empty list
 
-#### Scenario: yanodes --json emits null ncpus for None
-- **WHEN** a node with `ncpus=None` is listed via `yanodes --json`
-- **THEN** its object's `"ncpus"` is JSON `null`
-
-#### Scenario: yanodes --json emits positive int ncpus
-- **WHEN** a node with `ncpus=8` is listed via `yanodes --json`
-- **THEN** its object's `"ncpus"` is the int `8`
-
-#### Scenario: yanodes --json includes new node fields
-- **WHEN** a node with `jump_host=None`, `jump_port=22`, `jump_username="root"`, `external_id=None`, `status=NodeStatus.OTHER`, `created_at=<datetime>`, `updated_at=<datetime>` is listed via `yanodes --json`
-- **THEN** the JSON object includes `jump_host: null`, `jump_port: 22`, `jump_username: "root"`, `external_id: null`, `status: "OTHER"`, `created_at: <isoformat>`, `updated_at: <isoformat>`
-
-#### Scenario: yanodes --json empty result is empty list
 - **WHEN** `yanodes --json` is invoked and no node matches the filters
 - **THEN** the output is `[]` and the process exits `0`
 
-### Requirement: yanodes joins nodes to running tasks in memory
-
-`show_nodes()` SHALL perform the node-to-running-task join in memory within a
-single UoW: it SHALL read `uow.nodes.list_all()` and
-`uow.tasks.list_by_status({TaskStatus.RUNNING})` (two reads within one UoW),
-  build a `tasks_by_node_id` dict mapping `allocated_node_id` to the single
-  running task on that node, and look up each node's task via
-  `tasks_by_node_id.get(node.node_id)`.
+### Requirement: yasetnode host grammar
 
-#### Scenario: yanodes join is O(n+m)
-- **WHEN** the implementation of the in-memory join is inspected
-- **THEN** it builds a `tasks_by_node_id` dict once and looks up each node's task by `node_id` via dict access, rather than scanning the full task list per node
-
-#### Scenario: yanodes join key is node_id not ip
-- **WHEN** the in-memory join is built
-- **THEN** the dict is `tasks_by_node_id = {t.allocated_node_id: t for t in tasks if t.allocated_node_id is not None}` and each node is matched via `tasks_by_node_id.get(node.node_id)`; no `allocated_ip` or `ip`-keyed dict is used
-
-#### Scenario: yanodes reads nodes and tasks within one UoW
-- **WHEN** `show_nodes()` is invoked
-- **THEN** both `uow.nodes.list_all()` and `uow.tasks.list_by_status({TaskStatus.RUNNING})` are called within the same `async with deps.uow_factory() as uow:` block
-
-### Requirement: --json is the machine-readable CLI output convention
-
-The `--json` flag on `yanodes` and `yastatus` SHALL establish the project
-convention for machine-readable CLI output: query-oriented CLI commands SHALL
-offer a `--json` flag that emits raw domain values as JSON (no display
-transformations), so that scripts can consume the output without reverse-mapping
-display tokens. `yanodes --json` is the first instance of the convention;
-`yastatus --json` is the second instance.
-
-#### Scenario: yanodes --json is the first instance of the convention
-- **WHEN** `yanodes --json` is invoked
-- **THEN** the output is raw-domain-value JSON (no display tokens), establishing the convention
-
-#### Scenario: yastatus --json is the second instance of the convention
-- **WHEN** `yastatus --json` is invoked
-- **THEN** the output is raw-domain-value JSON (no display tokens), the second instance of the convention established by `yanodes`
-
-#### Scenario: --json convention does not retroactively require changes to other commands
-- **WHEN** `yasubmit`, `yasetnode`, or `yascheduler` is inspected
-- **THEN** no `--json` flag is required on `yasubmit`, `yasetnode`, or `yascheduler`; the convention is forward-looking (yastatus is the second instance, not a retroactive mandate)
-
-### Requirement: yasetnode parses host grammar via argparse type
-
-The `yasetnode` command SHALL accept a single positional `host` argument whose
-argparse type validator parses the grammar
-`[user@]host[:port][~ncpus]` where host is IPv4 or bracketed IPv6, port is
-1..65535 (default 22), ncpus is non-negative (absent or ~0 → None). Malformed
-input raises `argparse.ArgumentTypeError` (exit 2).
-
-#### Scenario: yasetnode full spec user@host:port~ncpus
-- **WHEN** a positional argument `"deploy@[IP]:2222~4"` is parsed
-- **THEN** the result carries `host_spec` with host `[IP]`, username `deploy`, port `2222`, ncpus `4`
-
-#### Scenario: yasetnode bracketed IPv6 with port
-- **WHEN** a positional argument `"[fe80::1]:2222"` is parsed
-- **THEN** the result carries `host_spec` with host `"fe80::1"`, username `None`, port `2222`, ncpus `None`
-
-#### Scenario: yasetnode tilde-zero maps to None ncpus
-- **WHEN** a positional argument `"[IP]~0"` is parsed
-- **THEN** the result carries `host_spec` with host `[IP]`, username `None`, port `22`, ncpus `None` (the `0` is normalized to unlimited sentinel)
-
-#### Scenario: yasetnode malformed host exits 2
-- **WHEN** `yasetnode ::1` is invoked (unbracketed IPv6)
-- **THEN** the positional type validator raises `argparse.ArgumentTypeError`, argparse prints a usage error to stderr, and the process exits `2`
-
-#### Scenario: yasetnode prog is yasetnode in help and errors
-- **WHEN** `yasetnode --help` or any argparse error is shown
-- **THEN** the program name displayed is `yasetnode` (NOT the console_script path derived from `sys.argv[0]`)
-
-### Requirement: yasetnode parses flags via argparse
-
-`manage_node()` SHALL parse `argv` with `argparse.ArgumentParser(prog="yasetnode")`
-exposing:
-- `host` (positional, host-grammar type): node target — node_id or host spec.
-- `--skip-setup` (`store_true`): skip remote setup. Valid ONLY on add path.
-- `--remove-soft` / `--remove-hard` (`store_true`, mutually exclusive): soft or
-  hard remove.
-
-`--skip-setup` with either remove flag, or node_id positional on add path, SHALL
-call `parser.error(...)` (exit 2). Flags use `action="store_true"`. Parser
-accepts `argv: list[str] | None = None` (None → `sys.argv`).
+`yasetnode` SHALL take one positional argument. A pure-digit argument
+SHALL be read as a node identity. Any other argument SHALL be parsed as
+a host spec with the grammar `[user@]host[:port][~ncpus]`:
 
-#### Scenario: yasetnode --remove-soft --remove-hard exits 2
-- **WHEN** `yasetnode [IP] --remove-soft --remove-hard` is invoked
-- **THEN** argparse prints a usage error to stderr (mutex group violation) and exits `2`
+- `user` is optional.
+- `host` is an IPv4 address or a bracketed IPv6 address (for example,
+  `[fe80::1]`). An unbracketed IPv6 address SHALL be rejected.
+- `port` is `1`..`65535`; it defaults to `22`.
+- `ncpus` is a non-negative integer; absent or `~0` SHALL mean
+  unlimited (no stored count).
 
-#### Scenario: yasetnode --skip-setup --remove-hard exits 2
-- **WHEN** `yasetnode [IP] --skip-setup --remove-hard` is invoked
-- **THEN** the body-level `parser.error(...)` fires, argparse prints a usage error to stderr, and the process exits `2`
+A malformed argument SHALL exit `2`. A node identity SHALL be allowed
+only on a remove path; an identity on the add path SHALL exit `2`.
 
-#### Scenario: yasetnode node_id positional with add path exits 2
-- **WHEN** `yasetnode 5` is invoked (a node_id positional with no `--remove-soft`/`--remove-hard`)
-- **THEN** the body-level `parser.error(...)` fires (a node cannot be added by id), argparse prints a usage error to stderr, and the process exits `2`
+#### Scenario: a full host spec parses
 
-#### Scenario: yasetnode argv parameter reads sys.argv when None
-- **WHEN** `manage_node()` is invoked with `argv=None` (the console_script default)
-- **THEN** `parser.parse_args(None)` is called, which reads `sys.argv[1:]`
+- **WHEN** the positional argument `deploy@[10.0.0.1]:2222~4` is parsed
+- **THEN** the resolved target has host `10.0.0.1`, username `deploy`, port `2222`, and count `4`
 
-#### Scenario: yasetnode argv parameter accepts explicit list
-- **WHEN** `manage_node(["[IP]", "--remove-hard"])` is invoked
-- **THEN** `parser.parse_args(["[IP]", "--remove-hard"])` is called, with no reading of `sys.argv`
+#### Scenario: an unbracketed IPv6 address exits 2
 
-### Requirement: yasetnode output channels and verbatim success messages
+- **WHEN** `yasetnode ::1` is invoked
+- **THEN** a usage error is printed to stderr and the process exits `2`
 
-On success, `manage_node()` SHALL print the following messages verbatim to
-stdout, emitted **after** `await uow.commit()` succeeds:
+#### Scenario: adding by identity exits 2
 
-| path | message (verbatim) |
-| --- | --- |
-| add, before setup | `Setup host...` |
-| add, after commit | `Added host to yascheduler: {host}:{port}` |
-| remove-hard, per task | `An associated task {task_id} at {host} is now marked done!` |
-| remove-hard, after commit | `Removed host from yascheduler: {host}` |
-| remove-soft, has tasks | `A task associated, prevent from assigning the new tasks` / `Prevented from assigning the new tasks: {host}` |
-| remove-soft, no tasks | `No tasks associated, remove node immediately` / `Removed host from yascheduler: {host}` |
+- **WHEN** `yasetnode 5` is invoked with no remove flag
+- **THEN** a usage error is printed to stderr and the process exits `2`
 
-`{host}` is the parsed `HostSpec.host` (host spec path) or resolved `node.hostname`
-(node_id path). On failure, print `Error: <message>` to stderr and exit 1.
+### Requirement: yasetnode add and remove paths
 
-#### Scenario: yasetnode add success prints verbatim messages to stdout after commit
-- **WHEN** `yasetnode [IP]` succeeds (without `--skip-setup`)
-- **THEN** stdout contains `Setup host...` and `Added host to yascheduler: [IP]:22`, in that order
+`yasetnode` SHALL dispatch to exactly one path. The add path SHALL
+create a node, connect to it, optionally run remote setup, then mark
+the node enabled. The remove-hard path SHALL mark each running task on
+the node `DONE`, then remove the node. The remove-soft path SHALL
+disable the node when it has running tasks, otherwise remove it.
 
-#### Scenario: yasetnode remove-hard prints per-task messages after commit
-- **WHEN** `yasetnode [IP] --remove-hard` succeeds against a node with RUNNING task ids `[1, 2]`
-- **THEN** stdout contains `An associated task 1 at [IP] is now marked done!` and `An associated task 2 at [IP] is now marked done!` and `Removed host from yascheduler: [IP]`, all emitted after `uow.commit()` returns
+On the add path, the jump host, jump username, and jump port SHALL be
+read from the remote section of the config and stored on the node. When
+the connection fails, the created node row SHALL be removed and no
+enabled row SHALL remain.
 
-### Requirement: yasetnode positional discriminates node_id from host
+On success, `yasetnode` SHALL print these messages verbatim to stdout,
+after the commit succeeds:
 
-The positional argument parser SHALL discriminate:
-- if the input is pure-digit, it is a `node_id`;
-- otherwise it is a host spec matching the grammar `[user@]host[:port][~ncpus]`.
+| path                | message (verbatim)                                                        |
+| ------------------- | ------------------------------------------------------------------------- |
+| add, before setup   | `Setup host...`                                                           |
+| add, after commit   | `Added host to yascheduler: {host}:{port}`                                |
+| remove-hard, per task | `An associated task {task_id} at {host} is now marked done!`            |
+| remove-hard, after commit | `Removed host from yascheduler: {host}`                            |
+| remove-soft, has tasks | `A task associated, prevent from assigning the new tasks` followed by `Prevented from assigning the new tasks: {host}` |
+| remove-soft, no tasks  | `No tasks associated, remove node immediately` followed by `Removed host from yascheduler: {host}` |
 
-A node cannot be added by id (adding requires a real host). On the add path,
-a pure-digit positional with no remove flag SHALL call
-`parser.error(...)` (exit `2`).
+`{host}` is the parsed host, `{port}` is the parsed port, and
+`{task_id}` is a running task identity on the node.
 
-On the remove path, the validation UoW resolves the `Node` early —
-`uow.nodes.get_by_id(node_id)` on the node_id path, or listing all nodes and
-filtering by `hostname` on the host spec path (hostname is not a unique key).
-If the node is not found, a "not in DB" error exits `1`. If found, the `Node`
-is passed to the remove helpers, which use `node.node_id` for mutators and
-`node.hostname` for stdout messages.
+#### Scenario: add success prints the verbatim messages after commit
 
-#### Scenario: yasetnode pure-digit positional is a node_id
-- **WHEN** a positional `"5"` is parsed
-- **THEN** the result identifies `node_id=5`
+- **WHEN** `yasetnode [10.0.0.1]` succeeds without `--skip-setup`
+- **THEN** stdout contains `Setup host...` followed by `Added host to yascheduler: 10.0.0.1:22`
 
-#### Scenario: yasetnode add-by-id is rejected
-- **WHEN** `yasetnode 5` is invoked (no `--remove-soft`/`--remove-hard`)
-- **THEN** argparse surfaces `parser.error(...)` with exit `2` and a message stating a node cannot be added by id
+#### Scenario: a connect failure leaves no enabled node
 
-#### Scenario: yasetnode remove-by-id unknown id is a body error
-- **WHEN** `yasetnode 999 --remove-hard` is invoked and no node with node_id=999 exists
-- **THEN** `get_by_id` returns `None` and the body raises a "not in DB" error with exit `1`
+- **WHEN** the add path cannot connect to the host
+- **THEN** the created row is removed and no enabled row for that host remains
 
-### Requirement: yasetnode gateway lifecycle and resource safety
+### Requirement: yasetnode rejects invalid combinations
 
-On the add path, `manage_node()` SHALL create a node in the DB, connect to it
-via SSH, perform optional remote setup, and mark the node enabled. The jump
-host, jump username, and jump port are read from `config.remote` (with
-sensible defaults) and stored on the `Node`.
+`--remove-soft` and `--remove-hard` SHALL be mutually exclusive.
+`--skip-setup` SHALL be valid only on the add path. Removing a node
+that is not in the database SHALL exit `1` with an `Error:` message.
+The flag-combination violations above SHALL exit `2`.
 
-On connect failure, the partially-created row SHALL be removed (no residual
-`enabled=FALSE` row). Gateway/jump resources SHALL be released when the add
-path completes or fails (no leak). On the update path (setting `enabled=True`),
-a second commit SHALL confirm the final state.
+#### Scenario: both remove flags exit 2
 
-#### Scenario: yasetnode constructs repository once and passes to add helper
+- **WHEN** `yasetnode [10.0.0.1] --remove-soft --remove-hard` is invoked
+- **THEN** a usage error is printed to stderr and the process exits `2`
 
-- **WHEN** `yasetnode [IP]` is invoked on the add path
-- **THEN** exactly one `SSHMachineRepository()` is constructed (at the top of `manage_node`), and that instance is passed as a parameter to the add helper
+#### Scenario: removing an unknown node exits 1
 
-#### Scenario: yasetnode add-path stamps jump from config.remote before insert
+- **WHEN** `yasetnode 999 --remove-hard` is invoked and no node `999` exists
+- **THEN** an `Error:` message is printed to stderr and the process exits `1`
 
-- **WHEN** the add helper is called with a valid host spec and `config.remote.jump_host="bastion.example.com"`, `config.remote.jump_username="jumper"`, `config.remote.jump_port=2222`
-- **THEN** the `NewNode` passed to `insert` carries `jump_host="bastion.example.com"`, `jump_username="jumper"`, `jump_port=2222`; the subsequent `repository.connect(node=T, client_keys=...)` call passes no `jump_host` / `jump_username` arguments, and the tunnel leg is built from `T.jump_*`
+### Requirement: yastatus task query and renderers
 
-#### Scenario: yasetnode add-path uses default jump_port when [remote] key absent
+`yastatus` SHALL query tasks and render them. The flags SHALL be:
 
-- **WHEN** the add helper is called with a valid host spec and the `[remote]` section does NOT set `jump_port`
-- **THEN** the `NewNode` passed to `insert` carries `jump_port=22` (the `RemoteDefaults.jump_port` default)
+| flag             | behavior                                                              |
+| ---------------- | --------------------------------------------------------------------- |
+| `-j`/`--jobs ID...` | Filter to the given task ids. When absent, the default query returns `RUNNING` and `TO_DO` tasks. |
+| `-v`/`--view`    | Verbose renderer: connect to each running task's node and tail its remote output. |
+| `-i`/`--info`    | One-line, tab-separated renderer.                                     |
+| `--json`         | JSON renderer with raw domain values.                                 |
+| `-o`/`--convergence` | With `-v`, also download and print a CRYSTAL convergence snippet.  |
 
-#### Scenario: yasetnode add-path encodes absent ncpus as None
+`-v`, `-i`, and `--json` SHALL be mutually exclusive. When none is
+given, the default AiiDA-compatible renderer SHALL run. `-o` SHALL be
+valid only with `-v`; `-o` without `-v` SHALL exit `2`.
 
-- **WHEN** the add helper is called with a host spec whose `~ncpus` clause is absent (so `HostSpec.ncpus is None`)
-- **THEN** the `NewNode` passed to `insert` carries `ncpus=None` (the value is NOT coerced to `0`); the persisted tmp row stores SQL `NULL`
+The default renderer SHALL print one line per task: the task id, three
+spaces, and the status name. `DONE` tasks SHALL appear only when the
+query is by id (with `-j`).
 
-#### Scenario: yasetnode add-path encodes explicit ncpus
+#### Scenario: the default output is two columns
 
-- **WHEN** the add helper is called with a host spec `host~8` (so `HostSpec.ncpus == 8`)
-- **THEN** the `NewNode` passed to `insert` carries `ncpus=8`; the persisted tmp row stores `8`
+- **WHEN** `yastatus` is invoked against tasks `1` (RUNNING), `2` (TO_DO), and `3` (DONE)
+- **THEN** the output has a line `1   RUNNING` and a line `2   TO_DO`, and no line for task `3`
 
-#### Scenario: yasetnode add-path insert-create-connect lifecycle
+#### Scenario: conflicting renderers exit 2
 
-- **WHEN** the add helper is called with a valid host spec
-- **THEN** the row is inserted FIRST (before any SSH work) with `enabled=False`; after successful connect and optionally `session.setup_node(config.engines)`, the node's `enabled` is updated to `True`
-
-#### Scenario: yasetnode add-path rolls back tmp row on connect failure
-
-- **WHEN** `repository.connect(node=T, client_keys=...)` raises `MachineConnectionError` (or any `Exception`) during the add helper
-- **THEN** the tmp row is best-effort removed; no `enabled=TRUE` row remains; the orchestrator never saw the row (it was `enabled=FALSE`)
-
-### Requirement: yasetnode dispatches add and remove paths
-
-After argparse succeeds, `manage_node()` SHALL open a short read-only validation
-UoW, resolve the target `Node`, and close it. It SHALL then dispatch to exactly
-one helper, each opening its OWN UoW:
-- If `already_there` and no remove flag: raise `ValueError` → exit 1.
-- If NOT `already_there` and a remove flag: raise `ValueError` → exit 1.
-- If `--remove-hard`: list RUNNING task ids, mark DONE, remove node, commit.
-- If `--remove-soft`: disable if RUNNING tasks exist, else remove; commit.
-- Otherwise (add): resolve username, call the add helper.
-
-The remove helpers SHALL accept `node: Node` (not `ip: str`).
-
-#### Scenario: yasetnode opens a validation UoW then dispatches via per-helper UoW
-- **WHEN** `yasetnode` is invoked with a valid host spec and a add/remove flag combination
-- **THEN** `Config.from_config_parser(args.config)` is called, `make_cli_deps(config)` is called to obtain `CLIDeps`, an `SSHMachineRepository` is constructed at the top of `manage_node` (before any UoW is opened), a short read-only UoW is opened to resolve the target `Node`, and the body dispatches to exactly one helper; each helper opens its OWN UoW via `deps.uow_factory()` to perform its mutations, commit, and print. On the add path, the repository is passed to the add helper.
-
-### Requirement: yastatus queries task status
-
-The `yastatus` command SHALL query and display task status, optionally with
-remote machine output (verbose mode) and convergence info, resolving nodes via
-a single batch lookup by `allocated_node_id`. In view/json mode, the command
-SHALL open a single query-phase UoW, read tasks, and read nodes via
-`uow.nodes.get_by_ids(...)`. The UoW is closed before any SSH work. The JSON
-output SHALL emit a nested `node` object (NOT flat `allocated_ip`/`port`/`cloud`
-fields).
-
-#### Scenario: yastatus queries tasks and resolves nodes
-- **WHEN** yastatus is invoked
-- **THEN** it opens a single query-phase UoW, reads tasks, reads nodes via batch lookup, and renders the output
-
-### Requirement: yastatus default output format (AiiDA compatibility)
-
-`_MAP_STATUS_YASCHEDULER` SHALL have keys `{TO_DO, RUNNING, DONE}`.
-
-The default renderer SHALL be `print(f"{task.task_id}   {task.status.name}")`
-per task.
-
-#### Scenario: yastatus default output is two-column
-- **WHEN** `yastatus` is invoked against tasks with ids 1 (RUNNING), 2 (TO_DO), 3 (DONE)
-- **THEN** the default invocation (no `-j`) excludes DONE and prints exactly `1   RUNNING` and `2   TO_DO` (one line per RUNNING/TO_DO task, in the order returned by `list_by_status`)
-
-#### Scenario: yastatus -j includes DONE tasks in default format
-- **WHEN** `yastatus -j 3` is invoked and task 3 has status DONE
-- **THEN** the default renderer prints `3   DONE` (DONE is a valid AiiDA state and is included because `-j` queries by id, not by status)
-
-#### Scenario: AiiDA plugin is unchanged
-- **WHEN** the AiiDA scheduler entrypoint is inspected
-- **THEN** the joblist command still returns `yastatus` or `yastatus --jobs <ids>` and the joblist output parser still does `for job_id, status in job.split()` with `_MAP_STATUS_YASCHEDULER` (the AiiDA contract is not touched)
-
-### Requirement: yastatus parses flags via argparse
-
-`check_status()` SHALL parse `argv` with `argparse.ArgumentParser(prog="yastatus",
-description="Show status of tasks")`. The flag matrix SHALL be:
-- `-j/--jobs` (`nargs="*"`, `default=None`): orthogonal filter; composes with
-  any renderer. With no `-j`, the default query `list_by_status({RUNNING,
-  TO_DO})` is used; with `-j ID...`, `list_by_jobs(job_ids=ID...)` is used.
-- A `mutually_exclusive_group` containing exactly:
-  - `-v/--view` (`action="store_true"`): verbose renderer (tail remote OUTPUT,
-    optional convergence).
-  - `-i/--info` (`action="store_true"`): tab-separated one-line-per-task
-    renderer.
-  - `--json` (`action="store_true"`): JSON renderer with raw domain values.
-  At most one renderer is selected; none means the default AiiDA-compatible
-  renderer.
-- `-o/--convergence` (`action="store_true"`): NOT in the mutex group (it
-  modifies `-v`, so `-o -v` must remain valid). A body-check after `parse_args`
-  SHALL reject `-o` without `-v` via `parser.error("--convergence requires --view")`
-  (exit 2).
-
-`--help` shows the standard argparse help screen (argparse default). The parser
-SHALL use `action="store_true"` for all boolean flags.
-
-#### Scenario: yastatus -v -i mutually exclusive
 - **WHEN** `yastatus -v -i` is invoked
-- **THEN** argparse prints a usage error to stderr (mutex group violation) and exits `2`
+- **THEN** a usage error is printed to stderr and the process exits `2`
 
-#### Scenario: yastatus -o without -v exits 2
-- **WHEN** `yastatus -o` is invoked (without `-v`)
-- **THEN** the body-check calls `parser.error("--convergence requires --view")`, argparse prints a usage error to stderr, and the process exits `2`
+#### Scenario: convergence without view exits 2
 
-#### Scenario: yastatus prog is yastatus in help and errors
-- **WHEN** `yastatus --help` or any argparse error is shown
-- **THEN** the program name displayed is `yastatus` (NOT the console_script path derived from `sys.argv[0]`)
+- **WHEN** `yastatus -o` is invoked without `-v`
+- **THEN** a usage error is printed to stderr and the process exits `2`
 
-### Requirement: yastatus --json output format
+### Requirement: yastatus JSON output
 
-When `--json` is given, `yastatus` SHALL emit `json.dumps(list_of_objects)` where
-each object represents one task with raw domain values (NO display
-transformations — no `MAX`, no `-`, no banner). The object schema SHALL be
-exactly these fields:
+When `--json` is given, `yastatus` SHALL print one JSON object per task
+with raw domain values and no display tokens. Each object SHALL carry a
+nested `node` object (not flat fields). The schemas SHALL be:
 
 ```
 {"task_id": int, "status": str, "label": str, "engine": str,
@@ -795,124 +315,110 @@ exactly these fields:
           "created_at": str, "updated_at": str} | null}
 ```
 
-The `node` object is `null` when the task has no allocated node; otherwise it
-carries the resolved `Node` fields. One object per task, in the order returned
-by the query (`list_by_status` or `list_by_jobs`).
+The `node` object SHALL be `null` when the task has no allocated node.
+An empty result SHALL print `[]`.
 
-#### Scenario: yastatus --json emits a list of objects
-- **WHEN** `yastatus --json` is invoked against a non-empty task set
-- **THEN** the output is valid JSON parseable as a list of objects, one per task, in query order
+#### Scenario: an allocated node renders as a nested object
 
-#### Scenario: yastatus --json empty result is empty list
+- **WHEN** `yastatus --json` lists a task allocated to a node with hostname `10.0.0.1`
+- **THEN** the object has a `node` field containing `{"hostname": "10.0.0.1", ...}` and no flat `ip`/`port`/`cloud` fields on the task object
+
+#### Scenario: an empty result prints an empty list
+
 - **WHEN** `yastatus --json` is invoked and the query returns no tasks
 - **THEN** the output is `[]` and the process exits `0`
 
-#### Scenario: yastatus --json composes with -j
-- **WHEN** `yastatus -j 1 2 --json` is invoked
-- **THEN** `list_by_jobs(job_ids=["1", "2"])` is called and the JSON renderer prints the result (the `-j` filter composes with `--json`)
+### Requirement: yastatus view mode connects with node parameters
 
-#### Scenario: yastatus --json node object uses hostname key
-- **WHEN** a task with an allocated node that has `hostname="10.0.0.1"` is rendered via `yastatus --json`
-- **THEN** the `node` object has a `"hostname"` key with value `"10.0.0.1"` and does NOT have an `"ip"` key
+In view mode, `yastatus` SHALL connect to each running task's node over
+SSH and print a tail of the remote output file. The login username, the
+port, and the jump-leg parameters SHALL come from the node record, not
+from the live cloud configuration. The convergence snippet SHALL be
+cleaned up after display.
 
-### Requirement: yastatus view mode connects via SSH with correct node params
+#### Scenario: connection parameters come from the node, not from cloud config
 
-When `-v` (or `-v -o`) is given, `yastatus` SHALL, for each RUNNING task with
-an allocated node, connect to the remote machine via `SSHMachineRepository`
-(resolving a `MachineSession` via `repository.get_session` / a fresh
-`repository.connect`), display a tail of the remote `OUTPUT` file, optionally
-download and parse a CRYSTAL convergence snippet (when `-o` is also given), and
-disconnect. The connection SHALL use the `Node` values for login user, port,
-and jump-leg parameters — `connect` reads them from the node. The convergence
-snippet SHALL be cleaned up after display (no leaked temp files).
+- **WHEN** `yastatus -v` connects to a task whose node has username `yascheduler` and jump host `bastion.example.com`, while the cloud config has a different username and jump host
+- **THEN** the connection uses the node's username `yascheduler` and the node's jump host `bastion.example.com`
 
-#### Scenario: yastatus -v uses node.username not cloud username
+### Requirement: yainit bootstraps the service and the database
 
-- **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a node with `username="yascheduler"` and `cloud="hetzner"`, and the `hetzner` cloud config has `username="hcloud-user"`
-- **THEN** `repository.connect(node=node, ...)` is called with a `node` whose `username == "yascheduler"` (the node's username, NOT the cloud's), and no separate `username` argument is passed
+`yainit` SHALL install the service unit and apply the database schema.
+`--schema` and `--daemon` SHALL be subset selectors:
 
-#### Scenario: yastatus -v reads jump from Node not from CloudConfig
+| invocation      | service unit   | schema + migrations |
+| --------------- | -------------- | ------------------- |
+| no flag         | installed      | applied             |
+| `--schema`      | skipped        | applied             |
+| `--daemon`      | installed      | skipped             |
+| `--schema --daemon` | installed  | applied             |
 
-- **WHEN** `yastatus -v` is invoked against a RUNNING task allocated to a node with `cloud="hetzner"` and `jump_host="jump.example.com"` (stamped at creation), and the `hetzner` cloud config still has `jump_host="jump.example.com"` (unchanged)
-- **THEN** `repository.connect(node=node, client_keys=...)` is called with no `jump_host` / `jump_username` arguments, and the tunnel leg is built from `node.jump_host` / `node.jump_username`
+The service unit SHALL be systemd on a host that has
+`/run/systemd/system`, otherwise SysV. The schema apply SHALL be
+idempotent: running `yainit` against an already-initialized database
+SHALL succeed and exit `0`. A database error or a service-file write
+failure SHALL exit `1` with an `Error:` message.
 
-#### Scenario: yastatus -v follows Node jump even when CloudConfig changed
+#### Scenario: default invocation installs the service and applies the schema
 
-- **WHEN** `yastatus -v` is invoked against a node with `jump_host="old-bastion.example.com"` (stamped at creation), and the `hetzner` cloud config has since been edited to `jump_host="new-bastion.example.com"`
-- **THEN** the tunnel leg uses `node.jump_host == "old-bastion.example.com"` (Node is the source of truth, not the live config)
+- **WHEN** `yainit` is invoked with no flags on an uninitialized host
+- **THEN** the service unit is written, the schema and migrations are applied, and the process exits `0`
 
-### Requirement: Non-daemon CLI commands render through the structured log formatter
+#### Scenario: a repeated run is idempotent
 
-The five non-daemon CLI commands SHALL configure the ROOT logger through a
-single shared non-daemon logger setup function before any other work, instead
-of inlining root-logger configuration per command. The five commands are
-yasubmit, yanodes, yastatus, yasetnode, and yainit.
+- **WHEN** `yainit` is run again against the already-initialized database
+- **THEN** the schema and migrations apply without error and the process exits `0`
 
-The shared non-daemon logger setup SHALL: set the ROOT logger level to the
-resolved `--log-level` value; ensure a `StreamHandler(sys.stderr)` exists on the
-ROOT logger only when no handler is already present (so an outer test harness
-that pre-attaches a handler remains authoritative); wire a `LogFormatter`
-(timestamping disabled) onto any `StreamHandler` it adds; and call
-`logging.captureWarnings(True)` so `warnings.warn(...)` output is routed
-through logging.
+#### Scenario: a database error exits 1
 
-The non-daemon logger setup SHALL NOT set the `asyncssh` logger to `ERROR` and
-SHALL NOT add a `FileHandler`; the daemon-only side effects belong exclusively
-to `configure_logger`.
+- **WHEN** the database is unreachable during `yainit`
+- **THEN** an `Error:` message is printed to stderr and the process exits `1`
 
-When a non-daemon CLI emits a structured DEBUG trace record via
-`logger.debug(msg, extra={...})` on its module-local logger, the rendered
-output SHALL match the trace layout produced by `LogFormatter`, NOT the stdlib
-default format. When a non-daemon CLI emits an INFO/WARN/ERROR record, the
-rendered output SHALL match the regular layout produced by `LogFormatter`.
+### Requirement: Daemon launcher roster
 
-#### Scenario: yasubmit renders DEBUG trace records through LogFormatter
+The three daemon launchers SHALL share the program name `yascheduler`
+and the `--config` and `--log-level` flags. They SHALL differ as
+follows:
 
-- **WHEN** `yasubmit` is invoked with `--log-level DEBUG` and its execution emits a structured DEBUG record via `logger.debug(msg, extra={...})`
-- **THEN** the stderr line is the `LogFormatter` trace layout `[<module>][<funcName>]:<lineno> <message> <sorted key=value pairs>`, not the stdlib default format
+| launcher        | process mode                | short flags              | default `--log-file`        | timestamp |
+| --------------- | --------------------------- | ------------------------ | --------------------------- | --------- |
+| `daemonize`     | foreground                  | `-l` aliases `--log-level` | unset (stderr)            | on        |
+| `daemon_systemd` | foreground, stderr to journald | none                  | unset (stderr)            | off       |
+| `daemon_sysv`   | detached with a pidfile     | `-l` aliases `--log-file`, `-p` aliases `--pid-file` | `/var/log/yascheduler.log` (or the `YASCHEDULER_LOG_PATH` override) | on        |
 
-#### Scenario: yanodes renders INFO records through LogFormatter
+`daemon_sysv` SHALL keep `--config` and `--log-level` long-only. The
+timestamp prefix SHALL be on for launchers whose output is not stamped
+by journald, and off for `daemon_systemd`.
 
-- **WHEN** `yanodes` is invoked with `--log-level INFO` and its execution emits an INFO record
-- **THEN** the stderr line is the `LogFormatter` regular layout `<LEVEL> <name>: <message>`, not the stdlib default format
+#### Scenario: daemonize accepts -l as the log-level alias
 
-#### Scenario: yastatus renders DEBUG trace records through LogFormatter
+- **WHEN** `yascheduler -l DEBUG` is invoked
+- **THEN** the daemon runs at log level `DEBUG`
 
-- **WHEN** `yastatus` is invoked with `--log-level DEBUG` and its execution emits a structured DEBUG record
-- **THEN** the stderr line is the `LogFormatter` trace layout, not the stdlib default format
+#### Scenario: daemon_sysv writes to the configured log file by default
 
-#### Scenario: yasetnode renders DEBUG trace records through LogFormatter
+- **WHEN** the SysV launcher is started with no `--log-file`
+- **THEN** the daemon logs to `/var/log/yascheduler.log` (or the `YASCHEDULER_LOG_PATH` override)
 
-- **WHEN** `yasetnode` is invoked with `--log-level DEBUG` and its execution emits a structured DEBUG record
-- **THEN** the stderr line is the `LogFormatter` trace layout, not the stdlib default format
+### Requirement: Logger configuration
 
-#### Scenario: yainit renders WARNING records through LogFormatter
+The daemon launchers SHALL configure the root logger to always emit to
+stderr, and to a file only when `--log-file` is set. Both handlers
+SHALL share one formatter, with the timestamp prefix enabled or
+disabled per the launcher table. The `asyncssh` logger SHALL be set to
+`ERROR` and `warnings.warn` output SHALL be routed through logging.
 
-- **WHEN** `yainit` is invoked with `--log-level WARNING` (or higher) and its execution emits a WARNING record
-- **THEN** the stderr line is the `LogFormatter` regular layout `<LEVEL> <name>: <message>`
+The five non-daemon commands SHALL share a separate logger setup. It
+SHALL emit to stderr with the timestamp prefix off, SHALL add no file
+handler, and SHALL leave the `asyncssh` logger unchanged. It SHALL not
+remove a handler that an outer harness attached before the command ran.
 
-#### Scenario: non-daemon CLI LogFormatter does NOT prepend a timestamp
+#### Scenario: a set log file is written alongside stderr with a timestamp
 
-- **WHEN** any of the five non-daemon CLI commands renders a record via its wired `LogFormatter`
-- **THEN** the output line does NOT carry a leading ISO 8601 timestamp (timestamping is reserved for non-journald daemon output)
+- **WHEN** a daemon launcher is started with `--log-file /tmp/y.log`
+- **THEN** log records reach both stderr and `/tmp/y.log`, and each rendered line carries a leading timestamp
 
-#### Scenario: non-daemon CLI logger setup does NOT suppress asyncssh
+#### Scenario: non-daemon log records render without a timestamp
 
-- **WHEN** any of the five non-daemon CLI commands runs its shared logger setup
-- **THEN** the `asyncssh` logger level is NOT changed (it is left at its inherited default), unlike `configure_logger` which sets `asyncssh` to `ERROR`
-
-#### Scenario: non-daemon CLI logger setup does NOT add a FileHandler
-
-- **WHEN** any of the five non-daemon CLI commands runs its shared logger setup
-- **THEN** the ROOT logger has at most a `StreamHandler(sys.stderr)` and NO `FileHandler`
-
-#### Scenario: non-daemon CLI logger setup preserves a pre-attached handler
-
-- **GIVEN** an outer test harness has already attached a handler to the ROOT logger
-- **WHEN** a non-daemon CLI command runs its shared logger setup
-- **THEN** the pre-attached handler is NOT removed and NO additional `StreamHandler(sys.stderr)` is added (the `if not root.handlers` guard holds)
-
-#### Scenario: non-daemon CLI logger setup enables captureWarnings
-
-- **WHEN** any of the five non-daemon CLI commands runs its shared logger setup
-- **THEN** `logging.captureWarnings(True)` is in effect, so subsequent `warnings.warn(...)` calls are routed through logging instead of being printed directly to stderr
+- **WHEN** any non-daemon command runs at `--log-level DEBUG` and emits a record
+- **THEN** the rendered stderr line carries no leading timestamp

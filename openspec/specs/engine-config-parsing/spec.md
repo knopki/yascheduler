@@ -1,36 +1,36 @@
 ## Purpose
 
-Decouple engine INI parsing from the domain model so the domain spec does not reference an entrypoints module.
+Parse engine INI sections into engine value objects. Keeps INI
+parsing in the entrypoints layer so the domain model does not
+reference an entrypoints module.
 
 ## Requirements
 
-### Requirement: Engine INI parser functions
+### Requirement: Engine INI parser
 
-The system SHALL provide three free functions in
-`yascheduler.entrypoints.config_parser`:
-`parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine`,
-`parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository`,
-and `engine_valid_fields() -> Sequence[str]`.
+The system SHALL provide an engine INI parser that reads engine
+sections from the configuration and builds the engine collection.
+Each section SHALL be validated. An invalid section SHALL raise a
+value error before any engine is built.
 
-`parse_engine_section` SHALL validate the section and raise `ValueError` on
-invalid INI.
+The parser SHALL reject a spawn template that references an unknown
+placeholder. The parser SHALL require at least one check method
+(check command or process name) per engine.
 
-#### Scenario: parse_engine_section builds Engine from INI
-- **WHEN** `parse_engine_section(cfg["engine.fleur"], engines_dir)` is called with a section containing `spawn`, `input_files`, `output_files`, `platforms`, `check_cmd`, `deploy_local_archive=fleur.tar`
-- **THEN** an `Engine` is returned with `name="fleur"`, `deployable=(LocalArchiveDeploy(file=engines_dir/"fleur"/"fleur.tar"),)`, and the other fields populated from the section
+The parser SHALL report the set of INI keys it accepts, so unknown
+keys can be warned about.
 
-#### Scenario: parse_engine_section rejects unknown spawn placeholders
-- **WHEN** `parse_engine_section` is called with a `spawn` value containing `{unknown_placeholder}`
-- **THEN** `ValueError` is raised by the parser-side validator
+#### Scenario: a valid section builds an engine
 
-#### Scenario: parse_engine_section rejects missing check methods
-- **WHEN** `parse_engine_section` is called with neither `check_cmd` nor `check_pname` set
-- **THEN** `ValueError` is raised by the parser-side validator
+- **WHEN** a section is parsed with a spawn template, input files, output files, platforms, a check method, and a deploy source
+- **THEN** an engine is built with the section's values, including the deploy source resolved against the engines directory
 
-#### Scenario: parse_engines collects all engine sections
-- **WHEN** `parse_engines(cfg, engines_dir)` is called with a `ConfigParser` containing `[engine.fleur]` and `[engine.cp2k]` sections
-- **THEN** an `EngineRepository` is returned with `data` containing both engines keyed by name
+#### Scenario: an invalid section is rejected
 
-#### Scenario: engine_valid_fields returns INI key list
-- **WHEN** `engine_valid_fields()` is called
-- **THEN** the returned sequence includes `spawn`, `input_files`, `output_files`, `platforms`, `platform_packages`, `check_cmd`, `check_pname`, `check_cmd_code`, `sleep_interval`, `deploy_local_files`, `deploy_local_archive`, `deploy_remote_archive` and excludes `name` and `deployable`
+- **WHEN** a section is parsed with a spawn template that references an unknown placeholder, or with no check method set
+- **THEN** the parser raises a value error and no engine is built
+
+#### Scenario: all engine sections collect into the engine collection
+
+- **WHEN** the configuration contains multiple engine sections
+- **THEN** the parser returns an engine collection keyed by engine name, with one entry per section

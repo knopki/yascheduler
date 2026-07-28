@@ -1,265 +1,149 @@
-# Use Cases
-
 ## Purpose
 
-Application-layer use cases that orchestrate domain operations for task
-submission, allocation, consumption, and node deallocation.
+Application-layer use cases orchestrate task submission, allocation,
+consumption, and node deallocation. They drive the domain entities
+through the repository, SSH, and cloud ports. They do not own business
+rules; the domain entities do.
 
 ## Requirements
 
-### Requirement: SubmitTask use case
+### Requirement: Submit a task
 
-The system SHALL provide a `submit_task` async function that creates a new
-task in the database after validating the engine and inputs. The function
-SHALL return the generated `TaskId`.
+The system SHALL create a new task in `TO_DO` state when the engine is
+known and the inputs are valid. The system SHALL reject an unknown
+engine before any write to the task store.
 
-#### Scenario: Successful task submission
+#### Scenario: a known engine creates a TO_DO task
 
-- **WHEN** `submit_task(...)` is called with valid inputs
-- **THEN** a `NewTask` is constructed, persisted via `uow.tasks.insert` → `Task`, saved, committed, and the `TaskId` is returned; the persisted task has status `TO_DO` and `remote_folder=None`
+- **WHEN** a task is submitted with a known engine and valid inputs
+- **THEN** a task is persisted in `TO_DO` state, the change is committed, and the new task identity is returned
 
-#### Scenario: Unsupported engine
+#### Scenario: an unknown engine prevents the write
 
-- **WHEN** `submit_task(...)` is called with an `engine_name` not in the `EngineRepository`
-- **THEN** `UnsupportedEngineError` is raised before any DB write
+- **WHEN** a task is submitted with an engine the system does not know
+- **THEN** the submission fails before any write and no task is persisted
 
-#### Scenario: Submit constructs NewTask, not Task
+### Requirement: Allocate a task
 
-- **WHEN** `submit_task(...)` builds the pre-persistence record
-- **THEN** it constructs `NewTask(...)` (no `task_id=0` sentinel, no `remote_folder`, no `error`)
+The system SHALL match a TO_DO task to a free compatible machine. When
+a match is found, the task SHALL transition to RUNNING on that machine.
+When no match is found, the system SHALL request cloud provisioning and
+the task SHALL stay pending.
 
-#### Scenario: Submit does not construct TaskCreated
+Concurrent allocations SHALL be serialised at the capacity check so
+they do not over-provision. A failure inside the cloud-fallback path
+SHALL remove the temporary node row and SHALL NOT leave a partial
+allocation.
 
-- **WHEN** `submit_task(...)` is inspected for `TaskCreated` construction or `with_event` / `record_event` calls
-- **THEN** none are present; `TaskCreated` is attached by `uow.tasks.insert` internally
+When the task engine is unknown or has no platforms, the task SHALL be
+marked as failed and no provisioning SHALL be requested.
 
-### Requirement: AllocateTask use case
+#### Scenario: a free compatible machine runs the task
 
-The system SHALL provide an `allocate_task` async function that matches a
-TO_DO task to a free compatible machine or requests cloud provisioning.
-Provider selection is delegated to `clouds.select_provider`. The
-`allocation_lock` SHALL serialize the capacity-read through tmp-insert
-sequence so concurrent `allocate_task` calls for overlapping capacity do not
-over-provision. On any failure path inside the cloud-fallback critical
-section, the tmp-node row SHALL be cleaned up via `uow.nodes.remove`.
+- **WHEN** a TO_DO task is allocated and a free compatible machine exists
+- **THEN** the task transitions to RUNNING on that machine and the change is committed
 
-#### Scenario: Successful allocation to a free machine
+#### Scenario: no free machine triggers cloud fallback
 
-- **WHEN** `allocate_task(...)` is called and a free compatible machine exists
-- **THEN** the task transitions TO_DO → RUNNING via `task.run(node.node_id, remote_folder)` (emitting `TaskAllocated` inline), the occupancy check is started, the task is saved and committed, and the function returns `True`
+- **WHEN** a TO_DO task is allocated and no free compatible machine exists
+- **THEN** cloud provisioning is requested and the task stays pending
 
-#### Scenario: No free machine matches, cloud-fallback attempted
+#### Scenario: a cloud-fallback failure cleans up the temporary node
 
-- **WHEN** `allocate_task(...)` is called and no free compatible machine matches
-- **THEN** the cloud-fallback path is attempted (tracker dedup, capacity check under `allocation_lock`, provider selection via `clouds.select_provider`, tmp-node insert, cloud allocation, final node persistence); the function returns `False` whether the cloud path initiated provisioning or no provider was available
+- **WHEN** a failure occurs after the temporary node is inserted but before the allocation completes
+- **THEN** the temporary node row is removed and no partial allocation is committed
 
-#### Scenario: Duplicate allocation rejected by tracker
+### Requirement: Deallocate idle nodes
 
-- **WHEN** `allocate_task(...)` is called for a `task_id` already in the `AllocationTracker`
-- **THEN** `tracker.add(task_id)` returns `False` and the cloud-fallback path returns immediately without inserting a tmp node or writing to the DB
+The system SHALL disable each enabled cloud node whose idle time
+exceeds the configured tolerance. Each disabled node SHALL be torn
+down in this order: SSH disconnect, DB disable, cloud VM deletion, DB
+row removal. The system SHALL return the disabled nodes so their VMs
+can be deleted.
 
-#### Scenario: Unsupported engine rejected via task.reject
+#### Scenario: an idle cloud node is disabled and torn down
 
-- **WHEN** `allocate_task(...)` is called and the task's engine is not in `EngineRepository`
-- **THEN** the use case calls `task.reject("unsupported engine")` (emitting `TaskFailed` inline), saves, commits, and the function returns `False`
+- **WHEN** an enabled cloud node's idle time exceeds its configured tolerance
+- **THEN** the node is disabled, its SSH session is disconnected, its VM is deleted, and its DB row is removed
 
-#### Scenario: Empty-platforms engine short-circuits cloud-fallback
+### Requirement: Abandon a node
 
-- **WHEN** `allocate_task(...)` is called for a task whose `engine.platforms` is empty and no free machine matched
-- **THEN** the use case logs a warning and returns `False` without entering the cloud-fallback critical section
+The system SHALL remove a cloud node that never established its SSH
+connection. VM deletion SHALL be best-effort: a VM-deletion failure
+SHALL be logged and SHALL NOT block DB-row removal. The DB row SHALL
+be removed; if that removal fails, the failure SHALL be reported. All
+in-flight allocation entries linked to the node SHALL be released, and
+the count released SHALL be reported.
 
-#### Scenario: Occupancy check started via occupancy_checker
+When the node has no cloud, the system SHALL skip VM deletion and SHALL
+still remove the DB row and release the in-flight allocation entries.
 
-- **WHEN** `allocate_task(...)` successfully starts a task on a machine
-- **THEN** `occupancy_checker.start_occupancy_check(session, engine)` is called
+#### Scenario: an abandoned cloud node is fully cleaned up
 
-### Requirement: DeallocateIdleNodes use case
+- **WHEN** an abandoned cloud node with one in-flight allocation entry is cleaned up
+- **THEN** its VM is deleted, its DB row is removed, and its in-flight allocation entry is released
 
-The system SHALL provide a `deallocate_nodes` async function that disables
-idle cloud nodes exceeding tolerance and returns the disabled `Node` objects
-so the orchestrator can delete the VMs. The system SHALL also provide a
-`deallocate_node` async helper that performs the per-node teardown (SSH
-disconnect, DB disable, cloud delete, DB remove) for a single node.
+#### Scenario: a VM-deletion failure does not block DB cleanup
 
-`deallocate_nodes` SHALL return `list[Node]`. The returned `Node` objects
-SHALL each carry their `node_id` so the orchestrator can call
-`deallocate_node(node, ...)` directly without a DB round-trip.
+- **WHEN** VM deletion fails during cleanup
+- **THEN** the failure is logged, the DB row is still removed, and the in-flight allocation entries are still released
 
-#### Scenario: Idle cloud node disabled
+### Requirement: Consume a task
 
-- **WHEN** `deallocate_nodes(...)` is called and an enabled cloud node's free-since timestamp exceeds its config's `idle_tolerance`
-- **THEN** the node is disabled via `uow.nodes.disable(node.node_id)` and committed; the `Node` is included in the returned `list[Node]`
+The system SHALL download a RUNNING task's outputs from its remote
+machine. When the download succeeds or fails permanently, the system
+SHALL finalise the task: apply the terminal transition, clean the
+remote directory, and release the in-flight allocation slot. When the
+download fails transiently, the system SHALL defer the task: leave it
+RUNNING, preserve the remote directory, and keep the slot.
 
-#### Scenario: Returns disabled Node objects carrying node_id
+#### Scenario: a completed or permanently failed download finalises the task
 
-- **WHEN** `deallocate_nodes(...)` completes
-- **THEN** a `list[Node]` is returned; each returned `Node` is a disabled cloud node whose `node_id` is not in `busy_node_ids`
+- **WHEN** the download completes with no transient errors
+- **THEN** the task reaches a terminal state, the remote directory is cleaned, and the in-flight allocation slot is released
 
-#### Scenario: Deallocate node brackets cloud delete with disable + remove
+#### Scenario: a transient download failure defers the task
 
-- **WHEN** `deallocate_node(node, repository, clouds, uow_factory)` is called for a cloud node
-- **THEN** SSH disconnect runs first (only if `repository.contains(node.node_id)`), then `uow.nodes.disable` + commit, then `clouds.deallocate(node)`, then `uow.nodes.remove` + commit
+- **WHEN** the download fails with only transient errors
+- **THEN** the task is left RUNNING, the remote directory is preserved, and the in-flight allocation slot is kept
 
-### Requirement: AbandonNode use case
+### Requirement: Query tasks
 
-The system SHALL provide an `abandon_node` async function that cleans up a
-cloud node that never established its SSH connection, releasing any tracker
-entries linked to that node. The function SHALL accept `node`, `clouds`,
-`uow_factory`, and `tracker`.
+The system SHALL return the tasks that match a supplied jobs filter or
+a supplied statuses filter, together with the nodes allocated to those
+tasks. The system SHALL reject a query that supplies both filters. The
+system SHALL return no tasks when neither filter is supplied. The
+query SHALL be read-only: it SHALL NOT commit changes.
 
-Cloud VM deletion (`clouds.deallocate(node)`) SHALL be best-effort: failures
-SHALL be logged with `node_id`, `hostname`, `cloud`, and the exception; the
-subsequent DB-row removal SHALL proceed regardless of the cloud-deletion
-outcome. DB-row removal (`uow.nodes.remove(node.node_id)`) failure SHALL be
-logged with `node_id`, `hostname`, and the exception and re-raised. Tracker
-cleanup SHALL run via `tracker.discard_by_node(node.node_id)` after
-successful DB-row removal; a returned count greater than 1 SHALL be logged
-as an ambiguous-tracker warning.
+#### Scenario: a supplied filter returns matching tasks with their nodes
 
-#### Scenario: Happy path — VM deleted, DB row removed, tracker released
+- **WHEN** a query supplies a jobs filter or a statuses filter, but not both
+- **THEN** the matching tasks are returned together with the nodes allocated to them, and no change is committed
 
-- **WHEN** `abandon_node(node, clouds, uow_factory, tracker)` is called for a cloud node with one tracker entry linked to that node
-- **THEN** `clouds.deallocate(node)` is called, `uow.nodes.remove(node.node_id)` is called and committed, `tracker.discard_by_node(node.node_id)` returns 1, and the function returns without raising
+#### Scenario: both filters supplied is rejected
 
-#### Scenario: Non-cloud node skips VM deletion
+- **WHEN** a query supplies both a jobs filter and a statuses filter
+- **THEN** the query is rejected and no data is read
 
-- **WHEN** `abandon_node(node, clouds, uow_factory, tracker)` is called for a node with `node.cloud is None`
-- **THEN** `clouds.deallocate(node)` is NOT called, `uow.nodes.remove(node.node_id)` is still called and committed, and `tracker.discard_by_node(node.node_id)` is still called
+#### Scenario: neither filter supplied returns no tasks
 
-#### Scenario: Cloud deletion failure does not block DB cleanup
+- **WHEN** a query supplies neither a jobs filter nor a statuses filter
+- **THEN** no tasks are returned and no data is read
 
-- **WHEN** `clouds.deallocate(node)` raises an exception
-- **THEN** the exception is logged (with `node_id`, `hostname`, `cloud`), `uow.nodes.remove(node.node_id)` is still called and committed, `tracker.discard_by_node(node.node_id)` is still called, and the function returns without raising
+### Requirement: Track in-flight cloud allocations
 
-#### Scenario: DB-row removal failure is re-raised
+The system SHALL track in-flight cloud allocations by task identity.
+An allocation SHALL be tracked once per task identity: a duplicate add
+SHALL be rejected. The system SHALL release an allocation by task
+identity. The system SHALL release every allocation linked to a node
+and SHALL report the count released.
 
-- **WHEN** `uow.nodes.remove(node.node_id)` raises an exception
-- **THEN** the exception is logged (with `node_id`, `hostname`) and re-raised; `tracker.discard_by_node(...)` is NOT called (it runs after the remove block)
+#### Scenario: an allocation is deduplicated by task identity
 
-#### Scenario: Ambiguous tracker entry count logs a warning
+- **WHEN** an allocation is tracked for a task that is already tracked
+- **THEN** the duplicate is rejected and the existing entry is kept
 
-- **WHEN** `tracker.discard_by_node(node.node_id)` returns a count greater than 1 (corruption: multiple tracker entries linked to the same node)
-- **THEN** an `AMBIGUOUS_TRACKER` warning is logged with `node_id`, `hostname`, and the count; the function returns without raising
+#### Scenario: release by node releases every linked allocation
 
-### Requirement: ConsumeTask use case
-
-The system SHALL provide a `consume_task` async function that downloads
-outputs from a remote machine and finalises or defers the task. The function
-SHALL return `bool`: `True` when the task is finalised (DONE applied, remote
-directory cleaned, in-flight allocation slot released via
-`tracker.discard(task_id)`); `False` when the task is deferred for retry
-(status unchanged, remote directory preserved, in-flight allocation slot
-preserved).
-
-The function SHALL delegate SFTP download and error classification to
-`output_downloader.download_outputs(session, ...)`. Finalise SHALL apply the
-terminal transition (`task.complete(...)` on full success or `task.fail(...)`
-on any permanent error) emitting the matching event (`TaskCompleted` or
-`TaskFailed`) inline; defer SHALL leave the task in `RUNNING`.
-
-#### Scenario: Successful consumption
-
-- **WHEN** `consume_task(...)` is called and `download_outputs` returns empty `transient_errors` and empty `permanent_errors`
-- **THEN** `task.complete(local_folder=str(store_folder), remote_folder=...)` is called (emitting `TaskCompleted` inline), the task is saved and committed, `tracker.discard(task_id)` is called, and the function returns `True`
-
-#### Scenario: Permanent download error finalises with fail
-
-- **WHEN** `download_outputs` returns non-empty `permanent_errors`
-- **THEN** `task.fail(error_msg, local_folder=..., remote_folder=...)` is called (emitting `TaskFailed` inline, setting folders from partial download), the task is saved and committed, `tracker.discard(task_id)` is called, and the function returns `True`
-
-#### Scenario: Transient-only download error defers for retry
-
-- **WHEN** `download_outputs` returns non-empty `transient_errors` and empty `permanent_errors`
-- **THEN** the task is left in `RUNNING`, no `tracker.discard` is called, and the function returns `False`
-
-### Requirement: QueryTasks use case
-
-The system SHALL provide a `query_tasks` async function that returns domain
-`Task` aggregates matching a jobs- or statuses-based read query, alongside a
-`dict[NodeId, Node]` of the nodes allocated to those tasks. The function
-SHALL raise `ValueError` if both `jobs` and `statuses` are supplied and SHALL
-return `([], {})` when neither is supplied.
-
-The return type is `tuple[list[Task], dict[NodeId, Node]]`. The use case
-returns raw domain objects; projection of a nested `node` field into task
-dicts is the responsibility of the public facade.
-
-#### Scenario: Query by statuses dispatches to list_by_status
-
-- **WHEN** `query_tasks(jobs=None, statuses=[TaskStatus.TO_DO], uow_factory=f)` is called
-- **THEN** a UoW is opened via `f()`, `uow.tasks.list_by_status({TaskStatus.TO_DO})` is awaited, `uow.nodes.get_by_ids(...)` is called with the `allocated_node_id`s of the returned tasks, the UoW closes without `commit`, and the returned `(list[Task], dict[NodeId, Node])` tuple is forwarded to the caller
-
-#### Scenario: Query by jobs dispatches to list_by_jobs
-
-- **WHEN** `query_tasks(jobs=[TaskId(1), TaskId(2), TaskId(3)], statuses=None, uow_factory=f)` is called
-- **THEN** a UoW is opened via `f()`, `uow.tasks.list_by_jobs([TaskId(1), TaskId(2), TaskId(3)])` is awaited, `uow.nodes.get_by_ids(...)` is called with the `allocated_node_id`s of the returned tasks, the UoW closes without `commit`, and the returned `list[Task]` is forwarded to the caller
-
-#### Scenario: Both jobs and statuses supplied raises ValueError
-
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=[TaskStatus.TO_DO], uow_factory=f)` is called
-- **THEN** `ValueError` is raised and no UoW is opened
-
-#### Scenario: Neither jobs nor statuses returns empty tuple
-
-- **WHEN** `query_tasks(jobs=None, statuses=None, uow_factory=f)` is called
-- **THEN** `([], {})` is returned without dispatching to either repository method and without opening a UoW
-
-#### Scenario: Query returns nodes_by_id with resolved nodes
-
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=NodeId(1)`
-- **THEN** `uow.nodes.get_by_ids([NodeId(1)])` is called, the returned dict `{NodeId(1): node}` is included in the `(tasks, nodes_by_id)` tuple
-
-#### Scenario: Query skips get_by_ids when all tasks unallocated
-
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` is called and task 1 has `allocated_node_id=None`
-- **THEN** `uow.nodes.get_by_ids` is NOT called (no node IDs to resolve), and the return is `([task], {})`
-
-#### Scenario: Use case is read-only
-
-- **WHEN** `query_tasks(jobs=[TaskId(1)], statuses=None, uow_factory=f)` runs to completion successfully
-- **THEN** `uow.commit()` is never called on the opened UoW
-
-### Requirement: AllocationTracker tracks in-flight cloud allocations
-
-The system SHALL provide an `AllocationTracker` class that tracks task_ids
-with in-flight cloud allocations. The class SHALL expose:
-
-- `add(task_id: TaskId, node_id: NodeId | None = None) -> bool` — returns
-  True if newly added, False if already tracked.
-- `set_node(task_id: TaskId, node_id: NodeId) -> None` — links a node to a
-  tracked task; no-op if the task is not tracked.
-- `discard(task_id: TaskId) -> None` — removes the entry by `task_id`
-  (no-op if absent).
-- `discard_by_node(node_id: NodeId) -> int` — removes ALL entries whose
-  linked node matches `node_id` and returns the count removed.
-- `__contains__(task_id: TaskId) -> bool`.
-
-#### Scenario: AllocationTracker is a dict[TaskId, NodeId|None] deduplication helper
-
-- **WHEN** `tracker.add(TaskId(42))` is called for an untracked task_id
-- **THEN** returns True and `TaskId(42)` is in `tracker`; a second `add(TaskId(42))` returns False; `discard(TaskId(42))` removes it; `discard` of an untracked id is a no-op
-
-#### Scenario: set_node patches the node link into an existing entry
-
-- **WHEN** `tracker.add(TaskId(42))` is called (returning True), then `tracker.set_node(TaskId(42), NodeId(7))` is called
-- **THEN** `tracker.discard_by_node(NodeId(7))` returns 1 and `TaskId(42)` is no longer in `tracker`
-
-#### Scenario: set_node on an untracked task is a no-op
-
-- **WHEN** `tracker.set_node(TaskId(99), NodeId(7))` is called for a task_id that was never added
-- **THEN** `tracker.discard_by_node(NodeId(7))` returns 0 and `TaskId(99)` is not in `tracker`
-
-#### Scenario: discard_by_node removes the matching entry and returns the count
-
-- **WHEN** `tracker.add(TaskId(1), NodeId(5))` and `tracker.add(TaskId(2), NodeId(6))` are called, then `tracker.discard_by_node(NodeId(5))` is called
-- **THEN** returns 1, `TaskId(1)` is no longer in `tracker`, and `TaskId(2)` is still in `tracker`
-
-#### Scenario: discard_by_node with no matching entry returns 0
-
-- **WHEN** `tracker.discard_by_node(NodeId(99))` is called on a tracker with entries for other nodes
-- **THEN** returns 0 and no entries are removed
-
-#### Scenario: discard_by_node removes multiple entries for the same node
-
-- **WHEN** two entries link to the same `NodeId(5)` (corruption state), then `tracker.discard_by_node(NodeId(5))` is called
-- **THEN** returns 2 and both entries are removed (defensive — all matching entries cleaned)
+- **WHEN** allocations linked to a node are released
+- **THEN** every allocation linked to that node is removed and the count removed is reported

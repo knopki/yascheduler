@@ -2,271 +2,144 @@
 
 ## Purpose
 
-Orchestrator class that manages concurrent producer-consumer loops for
-connecting machines, allocating tasks, consuming results, and deallocating
-idle cloud nodes.
+Run four concurrent loops that connect machines, allocate tasks, consume
+results, and deallocate idle cloud nodes. Each loop polls the database on a
+tick, dispatches work within a configured concurrency limit, and survives
+transient errors. The daemon starts all loops together and shuts them down
+together.
+
 ## Requirements
-### Requirement: Orchestrator manages producer-consumer loops
 
-The system SHALL provide an `Orchestrator` class that runs 4 producer-consumer
-loops (connect machine, allocate, consume, deallocate). The orchestrator owns
-the `AllocationTracker`, the filtered `active_clouds` list, and the
-`allocation_lock`, constructing them once and injecting them into use cases.
+### Requirement: Four concurrent loops
 
-The orchestrator's `_start_task_on_machine` SHALL resolve `ncpus` via
-`uow.nodes.get_by_id(task.allocated_node_id)`: if the resolved `Node` exists
-AND its `ncpus` is not `None`, the stored value is used; otherwise the
-orchestrator falls back to `session.get_cpu_cores()` and delegates the upload +
-spawn to `task_deployer.start_task_on_machine(session, ...)`.
+The system SHALL run four loops concurrently: connect, allocate, consume, and
+deallocate. Each loop SHALL poll the database on a tick and SHALL dispatch at
+most its configured number of items at the same time.
 
-Provider selection is delegated to `clouds.select_provider`.
+#### Scenario: the daemon lifecycle runs and tears down all loops
 
-#### Scenario: Orchestrator starts all loops
+- **WHEN** the daemon starts and later stops
+- **THEN** all four loops run together while the daemon is up, and on stop the in-flight items drain and all SSH connections close
 
-- **WHEN** `await orchestrator.start()` is called
-- **THEN** all 4 loops begin executing concurrently, using `uow_factory` for all persistence queries and `repository` for all SSH collection operations
+### Requirement: Task CPU count resolution
 
-#### Scenario: Graceful shutdown
+The orchestrator SHALL use the stored CPU count of the allocated node when that
+count is set, and SHALL discover the count from the remote machine at deploy
+time when it is not set.
 
-- **WHEN** `await orchestrator.stop()` is called
-- **THEN** all loops receive cancellation, pending queue items are drained, and connections are closed via `repository.disconnect_all()`
+#### Scenario: stored CPU count is used
 
-#### Scenario: No adapter imports at runtime
+- **WHEN** the allocated node carries a stored CPU count
+- **THEN** that count is used for the task deploy
 
-- **WHEN** `orchestrator.py` is imported
-- **THEN** it does NOT import `AllSSHRetryExc`, `SFTPRetryExc`, or `backoff` from `yascheduler.infra` at runtime (TYPE_CHECKING imports are allowed)
+#### Scenario: CPU count is discovered when unset
 
-#### Scenario: Task deployment delegated to TaskDeployer resolves session by allocated_node_id
+- **WHEN** the allocated node has no stored CPU count
+- **THEN** the count is read from the remote machine and used for the deploy
 
-- **WHEN** the orchestrator allocates a task to a machine
-- **THEN** the orchestrator resolves a `session` via `repository.get_session(task.allocated_node_id)`, resolves `ncpus` via `uow.nodes.get_by_id(task.allocated_node_id)` — using the stored value when `node.ncpus is not None`, falling back to `session.get_cpu_cores()` when the node is absent OR `node.ncpus is None` — and calls `task_deployer.start_task_on_machine(session, engine, task, ncpus, remote_defaults.engines_dir)`
+### Requirement: Cloud capacity limits provisioning
 
-#### Scenario: Orchestrator uses static ncpus when node carries a positive value
+The orchestrator SHALL compute available cloud capacity as the difference
+between the maximum node count and the current node count across active clouds.
+The allocator SHALL provision cloud nodes only up to the available capacity.
 
-- **WHEN** the orchestrator deploys a task whose allocated `Node.ncpus == 8`
-- **THEN** `session.get_cpu_cores()` is NOT called and `8` is passed to `task_deployer.start_task_on_machine`
+#### Scenario: capacity caps provisioning
 
-#### Scenario: Orchestrator discovers ncpus when node carries None
+- **WHEN** the current node count across active clouds equals the maximum node count
+- **THEN** the allocator requests no new cloud node
 
-- **WHEN** the orchestrator deploys a task whose allocated `Node.ncpus is None`
-- **THEN** `session.get_cpu_cores()` is called (returning the session-cached value on cache hits) and its result is passed to `task_deployer.start_task_on_machine`
+### Requirement: Per-node occupancy and in-flight tracking
 
-#### Scenario: Orchestrator constructed with unpacked settings and three collaborators
+The orchestrator SHALL track per-node occupancy state across consume ticks and
+SHALL start each allocated node's occupancy check exactly once. A task already
+being consumed SHALL be skipped on later ticks until its consume attempt
+completes.
 
-- **WHEN** `Orchestrator(...)` is constructed by the composition root
-- **THEN** the call passes `local_settings=` and `remote_defaults=` keyword arguments (instances of `LocalSettings` and `RemoteDefaults`); the `list_private_keys_fn` callable is passed as before; `repository=`, `task_deployer=`, `output_downloader=`, and `occupancy_checker=` are passed as separate keyword arguments
+#### Scenario: an in-flight task is skipped, then released
 
-### Requirement: Allocate loop
+- **WHEN** a task is selected for consume while a consume for the same task is already in flight
+- **THEN** the task is skipped, and when the in-flight consume completes the task becomes selectable again
 
-The system SHALL poll TO_DO tasks via UoW and dispatch to the
-`allocate_task` use case with configured concurrency limits. The producer
-SHALL compute cloud capacity via an inline method that opens a UoW,
-reads `uow.nodes.list_all()`, and counts nodes per cloud over
-`active_clouds`. The orchestrator SHALL pass its `occupancy_checker`
-instance into each `allocate_task` invocation.
+### Requirement: Deallocate teardown without a database lookup
 
-#### Scenario: Task allocated in order
-- **WHEN** multiple TO_DO tasks exist
-- **THEN** tasks are allocated up to the configured `allocate_limit` concurrently
+The deallocate loop SHALL tear down a disabled node from the data carried in the
+queue, with no database round-trip lookup. A teardown failure SHALL be logged
+and SHALL NOT stop the loop.
 
-#### Scenario: Cloud capacity computed inline
-- **WHEN** the allocator producer determines the task limit
-- **THEN** it opens a UoW, reads `uow.nodes.list_all()`, counts nodes per cloud, and returns `max(0, sum(max_nodes for c in active_clouds) - sum(current_counts for c in active_clouds))`
+#### Scenario: a teardown failure is logged and the loop continues
 
-### Requirement: Consume loop
+- **WHEN** the teardown of a queued node raises an error
+- **THEN** the error and the node identity are logged and the loop moves to the next queued node
 
-The system SHALL poll RUNNING tasks via UoW and dispatch to the `consume_task`
-use case when the remote machine reports completion. The orchestrator SHALL
-pass its `output_downloader` instance into each `consume_task` invocation. The
-`session` is resolved via `repository.get_session(task.allocated_node_id)`.
+### Requirement: Connect retry and grace window
 
-The orchestrator SHALL guard against concurrent re-consume of the same task
-(within one daemon lifetime) and SHALL start an occupancy check exactly once
-per allocated node across consume ticks.
+A static node SHALL retry connection on every tick without limit. A cloud node
+SHALL retry within its configured connect-grace window and SHALL be abandoned
+past it. A successful connect SHALL clear the recorded failure age for the node.
 
-#### Scenario: Consume task in-flight guard
+#### Scenario: within-policy retry and success clears failure age
 
-- **WHEN** the consume producer is about to yield a task whose id is in the in-flight set
-- **THEN** the producer skips it and moves to the next RUNNING task
+- **GIVEN** a node has recorded a connection failure
+- **WHEN** the node connects on a later tick
+- **THEN** the recorded failure age for that node is cleared
 
-#### Scenario: Consume task id removed after completion
+#### Scenario: a cloud node past grace is abandoned
 
-- **WHEN** `consume_task` returns (either `True` or `False`)
-- **THEN** the in-flight guard for that task id is released, allowing a future producer cycle to yield the task again if it is still RUNNING
+- **GIVEN** a cloud node has failed connection for longer than its connect-grace window
+- **WHEN** the connect loop evaluates the node
+- **THEN** the node is abandoned
 
-#### Scenario: Session resolved by allocated_node_id
+### Requirement: Loop error resilience
 
-- **WHEN** the consume consumer runs for a task with `allocated_node_id=NodeId(7)`
-- **THEN** it calls `repository.get_session(NodeId(7))` once at the top; if `None`, the machine-gone path runs; if a session is returned, it is threaded through the consumer body
+The orchestrator SHALL catch a transient error from any loop producer or
+consumer, log it, and continue on the next tick. A cancellation SHALL propagate
+to graceful shutdown.
 
-#### Scenario: occupancy_started keyed by NodeId
+#### Scenario: a transient error is logged and the loop continues
 
-- **WHEN** the consume consumer starts an occupancy check for a task with `allocated_node_id=NodeId(7)`
-- **THEN** `NodeId(7)` is recorded as occupancy-started; on finalised consume, `NodeId(7)` is released
+- **WHEN** a producer or consumer raises a transient error
+- **THEN** the error is logged and the loop continues on the next tick
 
-### Requirement: Deallocate loop
+#### Scenario: cancellation triggers graceful shutdown
 
-The system SHALL identify idle cloud nodes via UoW, call `deallocate_nodes`
-to disable them, then handle SSH disconnect and cloud deallocation for
-returned nodes via `MachineRepository` and `CloudProvisioner`. The consumer
-SHALL call `deallocate_node(node, repository, clouds, uow_factory)` directly
-with the `Node` taken from the queue message payload (no DB round-trip
-lookup) and SHALL use `repository.list_connected()`.
+- **WHEN** a loop receives a cancellation during shutdown
+- **THEN** the cancellation propagates to the shutdown drain path
 
-#### Scenario: Cloud node idle too long
-- **WHEN** a cloud node has been free longer than `idle_tolerance` seconds
-- **THEN** `deallocate_nodes` disables the node in DB and returns the `Node` for SSH cleanup and cloud deletion
+### Requirement: Periodic stats logging
 
-#### Scenario: Deallocator queue keyed on NodeId, consumer takes Node from payload
-- **WHEN** the deallocate producer enqueues disabled nodes
-- **THEN** the queue dedup key is `node.node_id` (a `NodeId`), and the payload carries the full `Node` so the consumer takes it directly without a DB round-trip lookup
+The orchestrator SHALL log queue sizes, node counts, and task counts at a
+configurable interval. Missing or partial count data SHALL be tolerated, and a
+stats error SHALL be logged without stopping the stats job.
 
-#### Scenario: Deallocator consumer wraps deallocate_node in try/except
-- **WHEN** `deallocate_node(node, repository, clouds, uow_factory)` raises an `Exception` during the consumer's processing
-- **THEN** the consumer logs `node_id`, `hostname` (when present), and the error, and continue to the next queued node without re-raising
+#### Scenario: partial count data is tolerated
 
-#### Scenario: Deallocator consumer does not duplicate SSH teardown
-- **WHEN** the deallocate consumer processes a node
-- **THEN** it does NOT call `repository.contains`/`repository.disconnect` directly; SSH teardown is owned by `deallocate_node`'s internal calls
+- **WHEN** a count source returns no data for a key
+- **THEN** a zero is used and no error is raised
 
-### Requirement: Connect machine loop
+### Requirement: Graceful shutdown is idempotent and exception-safe
 
-The system SHALL poll enabled nodes from `NodeRepository` via UoW and establish
-SSH connections via `MachineRepository`. Connection failures SHALL be caught as
-`MachineConnectionError` (domain exception), not `asyncssh.misc.Error`.
+A stop request SHALL run the cleanup steps exactly once. A failure in one
+cleanup step SHALL be logged and SHALL NOT skip the remaining steps.
 
-Static operator-managed nodes (`cloud is None`) SHALL retry indefinitely on
-every producer cycle and SHALL NEVER reach the `abandon_node` use case. For
-cloud nodes, the orchestrator SHALL apply the matching `CloudConfig`'s
-`connect_grace` window: failures within grace retry, failures past grace
-trigger `abandon_node`.
+#### Scenario: stop runs once and runs every step
 
-#### Scenario: New node connected
+- **WHEN** stop is called twice and a cleanup step raises an error
+- **THEN** the cleanup runs exactly once, the second call does nothing, and the error is logged while the remaining steps still run
 
-- **WHEN** a new enabled node appears in the database
-- **THEN** an SSH connection is established via `repository.connect(node, client_keys, ...)` with no `jump_host` / `jump_username` arguments (the repository reads them from `node`)
+### Requirement: Free-machine selection
 
-#### Scenario: Connection failure within grace retries, past grace triggers abandon
+Free-machine selection SHALL consider only machines whose node is enabled in the
+database and not busy with a running task. A single session failure SHALL be
+isolated: the failed session SHALL be logged and the selection SHALL continue
+with the remaining sessions. When no free session succeeds, the selection SHALL
+report no match so the caller requests a cloud node.
 
-- **WHEN** `repository.connect(node, client_keys, ...)` raises `MachineConnectionError` for a cloud node
-- **THEN** if elapsed failure age < `connect_grace`, the orchestrator emits a trace DEBUG record plus a narrative record and returns (retry next cycle); if age >= `connect_grace`, the orchestrator emits a trace DEBUG record plus a narrative record, calls `abandon_node` (which discards the tracker entry by node via `discard_by_node`), and releases the failure-timer entry for the `node_id`
+#### Scenario: only an enabled, non-busy node is selectable
 
-#### Scenario: Static node connection failure retries indefinitely
+- **WHEN** the allocator selects a free machine
+- **THEN** only machines whose node is enabled in the database and not busy with a running task are candidates
 
-- **GIVEN** a static node (`cloud is None`) raises `MachineConnectionError`
-- **WHEN** the connect-machine producer handles the failure
-- **THEN** a trace DEBUG record and a separate `warning(...)` narrative record are emitted
-- **AND** the orchestrator returns early BEFORE the grace-check
-- **AND** the node never reaches `abandon_node`
+#### Scenario: one session fails and the cloud branch is reached
 
-#### Scenario: Successful connect resets the failure timer
-
-- **WHEN** `repository.connect(node, client_keys, ...)` succeeds for a node that had a prior `MachineConnectionError`
-- **THEN** the failure-timer entry for that `node_id` is released
-
-#### Scenario: Connect reads jump identity from Node
-
-- **WHEN** the orchestrator calls `repository.connect(node, client_keys, connect_timeout=10, data_dir=..., engines_dir=..., tasks_dir=...)` for a node with `jump_host="bastion.example.com"`
-- **THEN** no inline resolution loop runs (no iteration over `config.clouds`, no read of `config.remote.jump_host`), and the tunnel leg is built from `node.jump_host` / `node.jump_username` / `node.jump_port` inside the repository
-
-### Requirement: Stats logging
-
-The system SHALL periodically log queue sizes, node counts, and task counts
-at a configurable interval using `repository.list_connected()`. When the
-stats background job raises a non-`CancelledError` exception, the orchestrator
-SHALL log the error and continue on the next tick.
-
-#### Scenario: Stats tolerates empty or partial count mappings
-- **WHEN** the stats logger reads `nodes.count_by_status()` and the mapping lacks the `True` key
-- **THEN** it uses `Mapping.get(key, 0)` and does NOT raise `KeyError`
-
-#### Scenario: Stats error is logged and job continues on next tick
-- **GIVEN** the stats background job raises a non-`CancelledError` exception
-- **WHEN** the error is logged
-- **THEN** the stats job continues on the next tick
-
-### Requirement: Orchestrator concurrency limits
-
-The system SHALL enforce configurable concurrency limits for each loop:
-`conn_machine_limit`, `allocate_limit`, `consume_limit`, `deallocate_limit`.
-
-#### Scenario: Allocation concurrency respected
-- **WHEN** `allocate_limit=3` and 10 TO_DO tasks exist
-- **THEN** at most 3 allocations proceed concurrently
-
-### Requirement: Producer error resilience
-
-The orchestrator SHALL catch non-`CancelledError` exceptions raised by
-producer and consumer coroutines, log the error, and continue the loop on the
-next tick. A consumer exception SHALL NOT silently kill the worker
-`asyncio.Task` — the queue item is still dequeued and the worker continues.
-
-`CancelledError` (a `BaseException`) SHALL propagate past the `except
-Exception` clauses to the graceful-shutdown drain path. The stats background
-job SHALL catch non-`CancelledError` exceptions from its reads, log, and
-continue on its next tick.
-
-#### Scenario: Transient producer error does not kill the loop
-- **WHEN** a producer coroutine raises an `Exception` (e.g. DB timeout)
-- **THEN** the orchestrator emits a trace DEBUG record plus an `error(...)` narrative record, and the loop continues on the next tick
-
-#### Scenario: Transient consumer error does not kill the worker
-- **WHEN** the consumer callable raises an `Exception` while processing a queue message
-- **THEN** the orchestrator emits a trace DEBUG record plus an `error(...)` narrative record, the queue item is dequeued, and the worker continues
-
-#### Scenario: CancelledError preserves graceful shutdown
-- **WHEN** the producer or consumer receives `asyncio.CancelledError` during shutdown
-- **THEN** `CancelledError` propagates past `except Exception` to the graceful-drain path
-
-### Requirement: Orchestrator.stop is idempotent and exception-safe
-
-`Orchestrator.stop()` SHALL be idempotent: callable multiple times safely;
-the second invocation returns immediately with no effect.
-
-`stop()` SHALL be exception-safe: a failure in one cleanup step
-(`clouds.stop()`, `repository.disconnect_all()`, `http_session.close()`)
-SHALL NOT skip the remaining steps. A cleanup-step failure SHALL be logged.
-Background jobs that died with a non-`CancelledError` exception before
-shutdown SHALL be caught and logged without aborting the cleanup chain.
-
-#### Scenario: stop() runs cleanup body exactly once
-- **WHEN** `orch.stop()` is called twice
-- **THEN** the cleanup body executes exactly once; the second invocation returns immediately
-
-#### Scenario: failing cleanup step does not skip remaining steps
-- **WHEN** `await clouds.stop()` raises an `Exception` during `orch.stop()`
-- **THEN** the failure is logged, and `stop()` proceeds to `repository.disconnect_all()` and `http_session.close()`
-
-### Requirement: Free-machine selection gated on DB-enabled nodes
-
-The `allocate_task` use case SHALL only consider a machine allocatable
-when its `node_id` is enabled in `yascheduler_nodes`. The free-machine
-selection helper SHALL read `uow.nodes.list_enabled()` in the same Unit of
-Work it opens for `uow.tasks.list_by_status({RUNNING})`, and filter
-`MachineRepository.list_free(platforms)` down to sessions whose
-`machine.node_id` is in the enabled set AND not in the busy-node node_ids
-derived from RUNNING tasks.
-
-#### Scenario: Setup-in-flight tmp-node is invisible to the allocator
-- **WHEN** a `FREE` session is registered under `tmp_node_id` but the DB row is still `enabled=FALSE`
-- **THEN** the free-machine selection excludes that session because `tmp_node_id not in nodes_by_id`
-
-#### Scenario: Enabled node is allocatable after setup completes
-- **WHEN** `clouds.allocate` returned successfully and the persist step flipped the DB row to `enabled=TRUE`
-- **THEN** on the next allocator tick the free-machine selection includes the session
-
-#### Scenario: Gate lives in the use case, not the repository
-- **WHEN** `MachineRepository.list_free` is inspected for persistence references
-- **THEN** none are present; the enabled-node_id intersection is applied by the free-machine selection in the application layer
-
-### Requirement: Free-machine loop isolates per-session failures
-
-The free-machine selection helper SHALL isolate per-session failures: a
-single stale session's exception is caught and logged, and the loop continues
-to the next free session. If no free session succeeds, the helper SHALL return
-`False` so the caller proceeds to the cloud-provisioning branch.
-
-#### Scenario: Stale session failure does not abort the loop
-- **WHEN** `free_sessions` contains two sessions and the first raises during per-session invocation
-- **THEN** the exception is caught and logged, the loop continues to the second session, and the allocator does not propagate the exception
-
+- **WHEN** one free session raises an error during selection and no other session succeeds
+- **THEN** the error is logged and the selection reports no match

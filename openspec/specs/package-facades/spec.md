@@ -1,239 +1,85 @@
 ## Purpose
 
-Define the package-facade import discipline for `yascheduler`: clean-architecture layer direction (R3, enforced via `import-linter`), within-package relative imports (R1), cross-package facade imports via the layer's `__init__.py` (R2), the lazy-publication policy, outside-layer-set exemptions, residual-edge documentation, and the extended facade contents required for R2 retroactive compliance across the codebase.
+Define the package-facade discipline for `yascheduler`: the static
+import layering, the layer facades as the sole cross-layer public
+surface, the public Python client's stable JSON contract, and the
+backward-compatibility guarantees for downstream consumers.
 
 ## Requirements
 
-### Requirement: Layer direction (R3)
+### Requirement: Package layering
 
 The system SHALL enforce the import direction
-`yascheduler.entrypoints → yascheduler.infra → yascheduler.application → yascheduler.domain → yascheduler.shared`
-via an `import-linter` `layers` contract configured in `pyproject.toml`.
-Both direct and indirect imports are checked. `yascheduler.shared` is the
-bottom layer and SHALL NOT import from any other `yascheduler` layer.
+`entrypoints → infra → application → domain → shared` statically. The
+`[tool.importlinter]` layers contract in `pyproject.toml` is the
+authority for both direct and indirect imports, and `yascheduler.shared`
+is the bottom layer that imports nothing from a higher `yascheduler`
+layer.
 
-The contract is enforced by `import-linter` at lint time. Per-symbol
-violations are not enumerated as separate scenarios — the contract is the
-guard.
+#### Scenario: an import against the layer direction fails the build
 
-#### Scenario: Adapter imports from domain — allowed
-- **WHEN** a module in `yascheduler.infra` imports a symbol from `yascheduler.domain`
-- **THEN** the `layers` contract reports no violation
+- **WHEN** a module in a lower layer imports from a higher layer
+- **THEN** the import linter reports a contract violation and the build fails
 
-#### Scenario: Domain imports from application or adapters — violation
-- **WHEN** any module in `yascheduler.domain` imports from `yascheduler.application` or `yascheduler.infra`
-- **THEN** the `layers` contract reports a violation
+### Requirement: Layer facades as public surface
 
-#### Scenario: yascheduler.shared imports only stdlib and third-party
-- **WHEN** any module in `yascheduler.shared` is inspected for its imports
-- **THEN** it imports only from the standard library, third-party packages, and sibling modules within `yascheduler.shared`
+Each architectural layer SHALL expose its cross-layer public surface
+through the layer facade only. The domain, application, and infra
+facades SHALL re-export the entities, ports, use cases, and adapters
+their consumers need. Symbols are added to a facade lazily — only when
+an external consumer needs them — and an empty facade is valid.
 
-### Requirement: Within-package relative imports (R1)
+#### Scenario: a consumer resolves a symbol through the layer facade
 
-Modules within the same package SHALL use relative imports
-(`from .xxx import yyy`) for symbols from sibling modules in the same
-package. Only single-level sibling relative imports (`from .`) are
-permitted — parent-traversal (`from ..`, `from ...`, deeper) SHALL NOT
-appear.
+- **WHEN** an adapter or the composition root needs a symbol from another layer
+- **THEN** the symbol resolves through that layer's facade, not through a deep submodule path
 
-#### Scenario: Domain modules use relative imports
-- **WHEN** a domain module imports from another module in the domain package
-- **THEN** it uses `from .exceptions import ...` style, not `from yascheduler.domain.exceptions import ...`
+### Requirement: Yascheduler public client contract
 
-#### Scenario: No parent-traversal relative imports anywhere
-- **WHEN** any `.py` file under `yascheduler/` is inspected
-- **THEN** no `from .. import`, `from ... import`, `from .... import` (or deeper) relative imports appear — only `from .` (single-level sibling) relative imports are permitted
+The `Yascheduler` client SHALL expose queue methods to submit and query
+tasks. `queue_submit_task` SHALL return the new task's identity as an
+integer. The query methods (`queue_get_tasks`, `queue_get_task`) SHALL
+return one mapping per matched task — a sequence for the list variant, a
+single mapping or none for the single-task variant — with this stable
+shape:
 
-### Requirement: Cross-package facade imports (R2)
+```json
+{
+  "task_id": <int>,
+  "label": <str>,
+  "status": <status enum member>,
+  "metadata": { "engine": <str>, "...non-null typed fields...": ..., "...extra payload...": ... },
+  "node": { "hostname": <str>, "port": <int>, "username": <str>, "cloud": <str|null>, "...": ... } | null
+}
+```
 
-The system SHALL import symbols from another package via that package's
-`__init__.py` only. For the architectural layers, each layer's `__init__.py`
-is the sole public surface for cross-layer consumers:
+`task_id` is a bare integer (not the typed identity); `status` is the
+task-status enum (not a bare integer). `metadata` is the flat dict of
+the task's non-null typed fields merged with its extra payload. `node`
+is null when the task has no allocated node; when present, the node
+object is keyed by `hostname`. This contract is identical across the
+package facade, the entrypoints facade, and the public client shim.
 
-- `yascheduler.infra` — sole entry point for `application` and composition root.
-- `yascheduler.application` — sole entry point for adapters and composition root.
-- `yascheduler.domain` — sole entry point for adapters, application, and composition root.
+#### Scenario: a query returns the documented task shape
 
-#### Scenario: Adapter imports Task via domain facade
-- **WHEN** a module in `yascheduler.infra` needs `Task`
-- **THEN** it uses `from yascheduler.domain import Task`, not `from yascheduler.domain.model import Task`
-
-#### Scenario: Composition root imports use layer facades
-- **WHEN** a module in the composition root imports a symbol from any layer
-- **THEN** the import goes through the layer's `__init__.py` (e.g. `from yascheduler.infra import webhook_handler`), not through a subpackage facade or deep submodule path
-
-### Requirement: Package facade as public surface (lazy publication)
-
-Each subpackage of `yascheduler` SHALL designate its `__init__.py` as
-the only public surface. Symbols are added to the facade lazily —
-only when an external consumer actually needs them. Empty facades
-(no symbols re-exported yet) are valid. Adding a symbol to a facade is a
-deliberate act, not an automatic re-export of all non-underscore names.
-
-#### Scenario: Empty facade is valid
-- **WHEN** a subpackage's `__init__.py` is empty of public re-exports because no external consumer needs any of its symbols
-- **THEN** the empty facade is the valid public surface for that subpackage
-
-#### Scenario: Symbol added when consumer needs it
-- **WHEN** an adapter needs `submit_task` from `yascheduler.application`
-- **THEN** the application layer facade is updated to re-export `submit_task` from its defining submodule, and the adapter imports it via `from yascheduler.application import submit_task`
-
-### Requirement: Outside-layer-set exemptions
-
-The following modules SHALL be outside the `layers` contract (not
-checked for layer direction by R3) but SHALL still be subject to R2
-(must use facades for cross-package imports):
-
-- `yascheduler.data` — shared infrastructure, may be imported by any layer.
-- `yascheduler.client` — compat shim re-exporting `Yascheduler`.
-
-`yascheduler.shared` SHALL contain only typing shims consumed by ≥2
-architectural layers.
-
-#### Scenario: Outside-set modules not flagged for layer direction
-- **WHEN** the `layers` contract runs
-- **THEN** modules in the outside-set list are not checked for R3 violations
-
-#### Scenario: yascheduler.shared contains only cross-layer typing shims
-- **WHEN** a module under `yascheduler/shared/` is inspected
-- **THEN** it contains only typing shims consumed by ≥2 architectural layers
-
-### Requirement: Domain package facade contents
-
-The domain layer facade SHALL re-export events, model, engine types,
-exceptions, and ports as the public surface of the domain layer.
-
-#### Scenario: Domain facade exposes all required categories
-- **WHEN** a consumer imports `from yascheduler.domain import Task, TaskCreated, DomainError, TaskRepository, NodeRepository, MachineRepository, MachineSession, CloudProvisioner`
-- **THEN** all symbols resolve without ImportError
-
-### Requirement: Extended facade contents (lazy publication driven by consumers)
-
-The system SHALL re-export symbols from the infra layer facade, application
-layer facade, and subpackage facades that external consumers already import
-from their deep submodules. The exhaustive re-export list lives in the
-facade modules' `MODULE_CONTRACT` SCOPE — the spec keeps only the
-behavioral rule.
-
-#### Scenario: Infra layer facade exposes the cross-layer surface
-- **WHEN** a consumer imports `from yascheduler.infra import SSHMachineRepository, TaskDeployer, OutputDownloader, OccupancyChecker, AllSSHRetryExc, SFTPRetryExc, CloudProvisionerImpl, CloudAdapter, apply_schema, webhook_handler, PostgresUnitOfWork`
-- **THEN** all eleven symbols resolve without ImportError
-
-#### Scenario: Application facade exposes UoW, Orchestrator, MessageBus, submit_task
-- **WHEN** a consumer imports `from yascheduler.application import AbstractUnitOfWork, Orchestrator, MessageBus, submit_task`
-- **THEN** all four symbols resolve without ImportError
+- **WHEN** a consumer queries an existing task through any `Yascheduler` facade
+- **THEN** the returned mapping has exactly the top-level keys `task_id`, `label`, `status`, `metadata`, and `node`; `node` is null for an unallocated task, otherwise it carries `hostname` with the node's connection fields
 
 ### Requirement: Public API stability
 
-The system SHALL preserve the existing public API surface of the
-`yascheduler` package across changes. Public API is defined as: exported
-symbols resolvable via `from yascheduler import <name>`, constructor and
-method signatures (parameter positions and names, return shapes), and
-documented behavior.
+The system SHALL preserve the existing public API surface across
+changes. Backward-compatible extensions (new optional parameters, new
+public symbols) are permitted; breaking changes (removing or
+repositioning parameters, changing a return shape, removing an exported
+symbol) SHALL be treated as a new capability requiring explicit spec
+coverage.
 
-Backward-compatible extensions (adding keyword-only optional parameters,
-refining internal implementation, adding new public symbols) are
-permitted; breaking changes (removing or repositioning parameters,
-changing return shapes, removing exported symbols) SHALL be treated as a
-new capability requiring explicit spec coverage.
+#### Scenario: the public client resolves through the compat shim
 
-Key stability rules:
-- The package facade exports (`Yascheduler`, `CONFIG_FILE`,
-  `LOG_FILE`, `PID_FILE`, `__version__`) SHALL remain resolvable.
-- The deep import path `from yascheduler.client import Yascheduler` SHALL
-  remain resolvable via the compat shim.
-- The AiiDA scheduler entrypoint SHALL remain registered under the
-  entry-point name `yascheduler` in `[project.entry-points."aiida.schedulers"]`.
+- **WHEN** a downstream consumer imports the public client through the backward-compatibility shim
+- **THEN** the symbol resolves without error
 
-#### Scenario: Yascheduler symbol resolves with backward-compatible signature
-- **WHEN** a downstream consumer imports `from yascheduler import Yascheduler`
-- **THEN** the symbol resolves and the zero-arg and positional constructors remain valid
+#### Scenario: the AiiDA scheduler plugin loads under its entry point
 
-#### Scenario: Deep import path resolves via compat shim
-- **WHEN** a downstream consumer imports `from yascheduler.client import Yascheduler`
-- **THEN** the symbol resolves without ImportError
-
-#### Scenario: AiiDA plugin still loads under its entry-point name
-- **WHEN** the AiiDA scheduler plugin is discovered via `importlib.metadata.entry_points(group="aiida.schedulers")`
-- **THEN** the entry-point named `yascheduler` resolves to the object path `yascheduler.entrypoints.aiida_plugin:YaScheduler`
-
-### Requirement: Yascheduler facade public contract
-
-The `Yascheduler` facade SHALL expose the query methods (`queue_get_tasks`,
-`queue_get_tasks_async`, `queue_get_task`, `queue_get_task_async`) and the
-submission method (`queue_submit_task`) with the public contract below.
-Each query method SHALL return Mappings with EXACTLY the keys
-`{task_id, label, status, metadata, node}`.
-
-- `queue_get_tasks(jobs, status)`, `queue_get_tasks_async(jobs, status)`,
-  `queue_get_task(task_id)`, and `queue_get_task_async(task_id)` signatures
-  SHALL NOT change; their public `task_id`/`jobs` parameters stay `int` /
-  `list[int]`.
-  - Each query method SHALL return Mappings (a `Sequence[Mapping]` for the
-    list variants `queue_get_tasks` / `queue_get_tasks_async`, an
-    `Optional[Mapping]` for the single-task variants `queue_get_task` /
-    `queue_get_task_async`) with EXACTLY the keys
-    `{task_id, label, status, metadata, node}`. The flat `ip` and `cloud` keys
-    are NOT part of the shape.
-  - The `task_id` value in each returned Mapping SHALL be a bare `int` (NOT a
-    `TaskId`).
-- `queue_submit_task(...) -> int` SHALL stay `int`.
-- `status` SHALL be a `domain.TaskStatus` enum member (preserves `.name`
-  access and cross-class IntEnum equality; NOT a plain `int`).
-- `label` SHALL be the raw `task.label` string.
-- `metadata` SHALL be a flat dict reconstructed from the typed `Task` fields
-  plus `extra`: the six typed fields (`engine`, `remote_folder`,
-  `local_folder`, `webhook_url`, `webhook_custom_params`, `error`) with `None`
-  values omitted, then `**task.extra` merged.
-- `node` SHALL be an object built from `nodes_by_id.get(task.allocated_node_id)`,
-  or `null` when the task has no allocated node. When non-null, the object
-  has exactly `{hostname, port, username, cloud}`:
-  - `hostname`: the raw `node.hostname` string.
-  - `port`: the raw `node.port` int.
-  - `username`: the raw `node.username` string.
-  - `cloud`: the raw `node.cloud` string, or `null` for static nodes.
-
-The public contract applies identically across the package facade
-(`from yascheduler import Yascheduler`), the entrypoints layer facade
-(`from yascheduler.entrypoints import Yascheduler`), and the compat shim
-(`from yascheduler.client import Yascheduler`).
-
-#### Scenario: metadata dict is reconstructed from typed fields plus extra
-- **WHEN** the extraction helper is called on a Task with `engine="cp2k"`, `remote_folder="/r"`, `local_folder=None`, `webhook_url=None`, `webhook_custom_params={"parent": 42}`, `error=None`, `extra={"input.in": "ATOMS"}`
-- **THEN** the returned Mapping's `metadata` value is `{"engine": "cp2k", "remote_folder": "/r", "webhook_custom_params": {"parent": 42}, "input.in": "ATOMS"}` (None-valued `local_folder`/`webhook_url`/`error` omitted; `extra` merged in)
-
-#### Scenario: metadata dict omits all None typed fields
-- **WHEN** the extraction helper is called on a Task with `remote_folder=None`, `local_folder=None`, `webhook_url=None`, `error=None`, `extra={}`
-- **THEN** the returned Mapping's `metadata` value contains only the non-None typed fields (e.g. `{"engine": "cp2k", "webhook_custom_params": {}}`)
-
-#### Scenario: Zero-arg construction remains valid
-- **WHEN** `Yascheduler()` is called with no arguments
-- **THEN** the client is constructed successfully and `queue_get_tasks_async` is invokable
-
-#### Scenario: deps_factory is keyword-only
-- **WHEN** `Yascheduler(config_path, logger, make_cli_deps)` is called with `deps_factory` as a positional argument
-- **THEN** `TypeError` is raised (the parameter is keyword-only via `*,`)
-
-#### Scenario: task_id in returned Mapping is bare int
-- **WHEN** `queue_get_tasks_async(jobs=[1])` returns a non-empty result
-- **THEN** each Mapping has exactly the keys `{task_id, label, status, metadata, node}`; the flat `ip` and `cloud` keys are ABSENT (replaced by the nested `node` key)
-
-#### Scenario: task_id value is bare int not TaskId
-- **WHEN** the `task_id` value in a returned Mapping is inspected
-- **THEN** it is a bare `int` (NOT a `TaskId` instance)
-
-#### Scenario: queue_get_task single-task returns Optional Mapping
-- **WHEN** `queue_get_task(42)` is called and the task exists
-- **THEN** it returns a Mapping with exactly `{task_id, label, status, metadata, node}` (NOT a list); `queue_get_task(99999)` for a missing task returns `None`
-
-#### Scenario: node object shape when allocated
-- **WHEN** the extraction helper is called on a Task with `allocated_node_id=NodeId(7)` and `nodes_by_id={NodeId(7): Node(node_id=NodeId(7), hostname="10.0.0.1", port=22, username="u", cloud="hetzner", ...)}`
-- **THEN** the `node` value is `{"hostname": "10.0.0.1", "port": 22, "username": "u", "cloud": "hetzner"}`
-
-#### Scenario: node is null when not allocated
-- **WHEN** the extraction helper is called on a Task with `allocated_node_id=None`
-- **THEN** the `node` value is `None` (null)
-
-#### Scenario: queue_submit_task returns bare int
-- **WHEN** `queue_submit_task(...)` is called
-- **THEN** it returns a bare `int` (NOT a `TaskId`)
+- **WHEN** the AiiDA scheduler plugin is discovered through its scheduler entry-point group
+- **THEN** the entry point named `yascheduler` resolves to the plugin

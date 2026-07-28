@@ -1,100 +1,61 @@
-# PostgreSQL Schema Application
-
 ## Purpose
 
-Define the synchronous `apply_schema()` function that reads `schema.sql` and applies it transactionally to a PostgreSQL database.
+Define the behavior of applying the PostgreSQL schema (`schema.sql`)
+transactionally and bootstrapping the migrations tracker. The migration
+framework is specified in `db-migrations`.
 
 ## Requirements
 
-### Requirement: Transactional schema application
+### Requirement: Schema application is transactional and idempotent
 
-The system SHALL provide a synchronous function `apply_schema(config: PostgresDbConfig)`
-that reads `schema.sql` and executes it within a `BEGIN/COMMIT` transaction.
-On failure, the function SHALL execute `ROLLBACK` and re-raise the exception.
+The system SHALL apply `schema.sql` inside a single transaction using
+idempotent DDL: every object creation SHALL guard against the object
+already existing. A guarded bootstrap SHALL seed the migrations
+tracker. On failure the transaction SHALL roll back and the error
+SHALL propagate.
 
-#### Scenario: Schema applies cleanly on empty database
-- **WHEN** `apply_schema(config)` is called with a valid `PostgresDbConfig` pointing to an empty PostgreSQL database
-- **THEN** the bootstrap logic creates `yascheduler_migrations` and seeds it to the latest migration (because `yascheduler_nodes` is absent), all tables from `schema.sql` are created with their latest columns and the `task_status_field_invariants` `CHECK` constraint on `yascheduler_tasks`, and the function returns without error
+#### Scenario: re-run on an already-initialized database
 
-#### Scenario: Schema applies cleanly on legacy database
-- **WHEN** `apply_schema(config)` is called on a database that has `yascheduler_nodes` but not `yascheduler_migrations`
-- **THEN** the bootstrap logic creates `yascheduler_migrations` and does NOT seed it (because `yascheduler_nodes` exists), `CREATE TABLE IF NOT EXISTS` skips existing tables, and the function returns without error; subsequent `apply_migrations(config)` advances the database from its current state
+- **WHEN** the schema is applied to a database that already has it
+- **THEN** existing tables are not recreated, the tracker is not re-seeded, and the call completes without error
 
-### Requirement: Error reporting on existing schema
+#### Scenario: failure rolls back and propagates
 
-The system SHALL catch `DatabaseError` when tables already exist, print
-"Database already initialized!", and re-raise the exception.
+- **WHEN** schema application fails mid-way
+- **THEN** the transaction is rolled back and the original error is raised
 
-#### Scenario: Database already initialized
-- **WHEN** `apply_schema(config)` is called on a database where tables already exist
-- **THEN** "Database already initialized!" is printed and `DatabaseError` is raised
+### Requirement: Migrations-tracker bootstrap
 
-### Requirement: Bootstrap DO block
+`schema.sql` SHALL bootstrap the `yascheduler_migrations` tracker with
+one branching rule: fresh databases get a tracker seeded to the latest
+migration; legacy databases (pre-tracker) get an empty tracker; modern
+databases are left untouched. The seeded value is a single edit point
+in `schema.sql`, updated when a new migration is added.
 
-`schema.sql` SHALL begin with a DO block (before any `CREATE TABLE`
-statement) that bootstraps the `yascheduler_migrations` tracker table. The DO
-block SHALL distinguish three database states:
+#### Scenario: a fresh database starts at the latest migration
 
-1. **Fresh database**: neither `yascheduler_migrations` nor `yascheduler_nodes` exist
-   → create the tracker and seed it to the latest migration.
-2. **Legacy database**: `yascheduler_nodes` exists but `yascheduler_migrations` does not
-   → create the tracker but do NOT seed it (all migrations will run).
-3. **Modern database**: `yascheduler_migrations` already exists
-   → no-op.
+- **WHEN** the schema is applied to an empty database
+- **THEN** the tracker is created and seeded to the latest migration, so subsequent migrations find nothing to apply
 
-The `last_migration` value SHALL be a single edit point in `schema.sql`,
-updated when a new migration is added.
+### Requirement: schema.sql is the full latest snapshot
 
-#### Scenario: Fresh database is seeded to the latest migration
-- **WHEN** `apply_schema(config)` runs on a database with neither `yascheduler_migrations` nor `yascheduler_nodes`
-- **THEN** the DO block creates `yascheduler_migrations`, inserts a row with the latest `migration_id`, and subsequent `apply_migrations` skips all migrations
+`schema.sql` SHALL be the full latest snapshot of the schema: every
+table definition SHALL include all current columns. Schema evolution
+SHALL be expressed via migration files (see `db-migrations`).
 
-#### Scenario: Legacy database is not seeded
-- **WHEN** `apply_schema(config)` runs on a database with `yascheduler_nodes` but no `yascheduler_migrations`
-- **THEN** the DO block creates `yascheduler_migrations` and inserts no seed row; subsequent `apply_migrations` finds no migration rows and applies all migrations
+#### Scenario: a fresh apply carries every current column
 
-#### Scenario: Modern database skips the DO block
-- **WHEN** `apply_schema(config)` runs on a database that already has `yascheduler_migrations`
-- **THEN** the DO block guard is false, the block is a no-op, and the tracker is left untouched
+- **WHEN** the schema is applied to a fresh database and the current migration set is inspected
+- **THEN** each table in the snapshot carries every column introduced by the migration set; no column is added out of band
 
-#### Scenario: last_migration is a single edit point
-- **WHEN** a new migration is added
-- **THEN** the `last_migration` value in the DO block is updated to the new migration identifier (one manual edit in `schema.sql`)
+### Requirement: Schema enforces the domain entity contract
 
-### Requirement: Full latest snapshot with no inline ALTERs
+The schema SHALL enforce the domain entity contract through table-level
+`CHECK` constraints and column nullabilities. Per-status field
+invariants and column nullabilities match the domain entity
+definitions.
 
-`schema.sql` SHALL be the full latest snapshot of the database schema: every
-`CREATE TABLE` statement includes all current columns, and no inline
-`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements appear.
+#### Scenario: a row that violates the contract is rejected
 
-The primary-key columns `yascheduler_nodes.node_id` and
-`yascheduler_tasks.task_id` SHALL be declared as
-`INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY`.
-
-The `CREATE TABLE IF NOT EXISTS yascheduler_tasks` statement SHALL include a
-table-level `CHECK` constraint named `task_status_field_invariants` enforcing
-the exhaustive per-status field contract:
-`status='TO_DO' AND allocated_node_id IS NULL AND error IS NULL`, OR
-`status='RUNNING' AND allocated_node_id IS NOT NULL AND error IS NULL AND remote_folder IS NOT NULL`,
-OR `status='DONE'`.
-
-The `yascheduler_nodes.ncpus` column SHALL be declared `SMALLINT DEFAULT NULL`
-and the `CREATE TABLE yascheduler_nodes` statement SHALL include a table-level
-`CHECK` constraint named `node_ncpus_positive` enforcing
-`(ncpus IS NULL OR ncpus > 0)`.
-
-#### Scenario: schema.sql has no inline ALTER TABLE ADD COLUMN
-- **WHEN** `schema.sql` is inspected for `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements
-- **THEN** none are present (schema evolution is expressed via migration files, not inline ALTERs)
-
-#### Scenario: Fresh database has the task_status_field_invariants CHECK
-- **WHEN** `apply_schema(config)` runs on an empty database
-- **THEN** the `task_status_field_invariants` `CHECK` constraint exists on `yascheduler_tasks` (visible in `information_schema.table_constraints` / `pg_constraint`) and enforces the exhaustive per-status field contract
-
-#### Scenario: Fresh database has the node_ncpus_positive CHECK
-- **WHEN** `apply_schema(config)` runs on a fresh database (neither `yascheduler_migrations` nor `yascheduler_nodes` exist) and the bootstrap seeds to the latest migration
-- **THEN** the `node_ncpus_positive` `CHECK` constraint is present on `yascheduler_nodes`, enforcing `(ncpus IS NULL OR ncpus > 0)`
-
-#### Scenario: Fresh database ncpus column is nullable
-- **WHEN** the `CREATE TABLE yascheduler_nodes` statement in `schema.sql` is inspected after the latest migration
-- **THEN** `ncpus` is declared `SMALLINT DEFAULT NULL` (the column accepts `NULL`; `0` is rejected by the CHECK)
+- **WHEN** a row is written that violates the per-status field contract or a column nullability rule
+- **THEN** the write is rejected by the schema

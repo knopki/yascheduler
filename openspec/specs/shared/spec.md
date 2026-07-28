@@ -1,46 +1,41 @@
-# shared Specification
-
 ## Purpose
-TBD - created by archiving change replace-backoff-with-internal-retry. Update Purpose after archive.
+
+Cross-cutting utilities shared across layers. Holds the internal
+async retry utility that replaces the former `backoff` dependency.
+
 ## Requirements
+
 ### Requirement: Internal async retry utility
 
-The system SHALL provide an internal async retry utility in `yascheduler/shared/retry.py` that covers the patterns currently served by the `backoff` library: decorator form, partial form, and direct-call form. The utility SHALL support exponential backoff, time-based deadline (`max_time`), exception filtering (`on`), and optional `giveup` callback.
+The system SHALL provide an internal async retry utility. The utility
+SHALL retry a failing async operation on a matching exception, with
+exponential backoff, up to a time-based deadline. A non-matching
+exception SHALL propagate immediately. An optional giveup callback
+SHALL stop retry early.
 
-The utility SHALL be async-only (no sync variant). It SHALL NOT depend on any third-party library.
+The utility SHALL be async-only and SHALL NOT depend on any
+third-party library. The decision to keep retries internal is recorded
+in ADR-0014.
 
-#### Scenario: Decorator retries on matching exception
+The utility SHALL be invokable as a function wrapper, with partial
+configuration, and as a direct call.
 
-- **WHEN** a function decorated with `@retry(on=ValueError, max_time=10)` raises `ValueError` and the deadline has not expired
-- **THEN** the function is retried with exponential backoff until it succeeds or the deadline expires
+#### Scenario: matching exception is retried until success or deadline
 
-#### Scenario: Non-matching exception propagates immediately
+- **WHEN** a retried operation raises a matching exception and the deadline has not expired
+- **THEN** the operation is retried with exponential backoff until it succeeds or the deadline expires
 
-- **WHEN** a function decorated with `@retry(on=ValueError, max_time=10)` raises `TypeError`
-- **THEN** the `TypeError` propagates immediately without retry
+#### Scenario: non-matching exception propagates immediately
 
-#### Scenario: giveup stops retry
+- **WHEN** a retried operation raises an exception that does not match the filter
+- **THEN** the exception propagates immediately, with no retry
 
-- **WHEN** a function decorated with `@retry(on=ValueError, max_time=60, giveup=lambda e: True)` raises `ValueError`
-- **THEN** the exception propagates immediately (giveup returns True, no retry)
+#### Scenario: deadline expires and the last exception propagates
 
-#### Scenario: max_time deadline is honored
+- **WHEN** a retried operation keeps raising a matching exception until the deadline expires
+- **THEN** the last exception propagates
 
-- **WHEN** a function decorated with `@retry(on=ValueError, max_time=1)` keeps raising `ValueError`
-- **THEN** the last `ValueError` propagates after approximately `max_time` seconds
+#### Scenario: giveup callback stops retry early
 
-#### Scenario: Successful call returns result
-
-- **WHEN** a function decorated with `@retry(on=ValueError, max_time=10)` raises `ValueError` once then succeeds
-- **THEN** the return value of the successful call is returned
-
-#### Scenario: Partial form works
-
-- **WHEN** `my_retry = partial(retry, on=ValueError, max_time=10)` is used as a decorator `@my_retry()`
-- **THEN** it behaves identically to `@retry(on=ValueError, max_time=10)`
-
-#### Scenario: Direct-call form works
-
-- **WHEN** `file_get_retry = my_retry()` is called and the result is used as `await file_get_retry(some_fn)(arg)`
-- **THEN** `some_fn(arg)` is retried with the same backoff policy
-
+- **WHEN** a retried operation raises a matching exception and the giveup callback returns true
+- **THEN** the exception propagates immediately, with no retry

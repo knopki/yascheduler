@@ -1,162 +1,42 @@
 ## Purpose
 
-Defines the domain exception hierarchy for business-level error handling: a `DomainError` base class with sub-hierarchies for validation, task lifecycle, machine state, scheduling, and cloud-provider operational failures.
+Define one typed error vocabulary for domain failures. Callers catch
+specific business errors instead of parsing messages.
 
 ## Requirements
 
-### Requirement: DomainError base class
+### Requirement: Single hierarchy root
 
-The system SHALL provide a `DomainError(Exception)` base class for all
-business-level exceptions. All domain exception classes SHALL be exposed via
-`yascheduler.domain.exceptions` and `yascheduler.domain`.
+The system SHALL expose one root exception for every domain failure.
+Every domain exception SHALL descend from that root, so a caller
+catches the full set with a single handler.
 
-#### Scenario: DomainError is catchable as Exception
-- **WHEN** a `DomainError` subclass is raised
-- **THEN** it is caught by `except DomainError` and `except Exception`
+#### Scenario: every domain failure is catchable via the root
 
-### Requirement: ValidationError hierarchy
+- **WHEN** any domain exception is raised
+- **THEN** a handler on the domain root catches it
 
-The system SHALL provide `ValidationError(DomainError)` with subclasses:
-`UnsupportedEngineError` and `MissingInputFileError`.
+### Requirement: Exception catalog
 
-#### Scenario: UnsupportedEngineError carries engine name
-- **WHEN** `UnsupportedEngineError("gaussian")` is raised
-- **THEN** the exception message contains "gaussian" and `e.engine_name == "gaussian"`
+The system SHALL expose the domain exceptions below. Each exception
+SHALL carry the identity listed in the third column and pass it to the
+caller. For task and node failures, the message SHALL contain the bare
+integer identity.
 
-#### Scenario: MissingInputFileError carries engine and filename
-- **WHEN** `MissingInputFileError("fleur", "inp.xml")` is raised
-- **THEN** `e.engine_name == "fleur"` and `e.filename == "inp.xml"`
+| Exception | Failure mode | Carried identity |
+| --- | --- | --- |
+| UnsupportedEngineError | Requested engine is unknown. | `engine_name` |
+| MissingInputFileError | Required engine input file is absent. | `engine_name`, `filename` |
+| TaskNotTodoError | Task is not in TODO status. | `task_id` |
+| TaskNotRunningError | Task is not in RUNNING status. | `task_id` |
+| MachineBusyError | Operation targets a busy machine. | `node_id` only |
+| MachineConnectionError | SSH connection to a machine failed. | `node_id`, `hostname`, `reason` |
+| NoCompatibleNodeError | No node matches the task. | `task_id`, `platforms` |
+| CloudCapacityExhaustedError | No cloud provider has capacity. | `task_id` |
+| CloudAllocateError | Provider selection or VM creation failed. | free-form message |
+| CloudSetupError | VM setup (SSH, cloud-init, engine install) failed. | free-form message |
 
-### Requirement: TaskError hierarchy
+#### Scenario: identity survives to the caller
 
-The system SHALL provide `TaskError(DomainError)` with subclasses
-`TaskNotTodoError` and `TaskNotRunningError`. Each SHALL take a `TaskId` and
-render the bare integer in its message.
-
-#### Scenario: TaskNotTodoError carries TaskId
-- **WHEN** `TaskNotTodoError(TaskId(42))` is raised
-- **THEN** `e.task_id == TaskId(42)` and the message contains `"42"`
-
-#### Scenario: TaskNotRunningError carries TaskId
-- **WHEN** `TaskNotRunningError(TaskId(42))` is raised
-- **THEN** `e.task_id == TaskId(42)` and the message contains `"42"`
-
-#### Scenario: TaskError messages render bare integer
-- **WHEN** `str(TaskNotTodoError(TaskId(42)))` is evaluated
-- **THEN** the result contains `"42"` (NOT `"TaskId(value=42)"`)
-
-### Requirement: MachineBusyError
-
-The system SHALL provide `MachineBusyError(DomainError)` for operations
-attempted on a busy machine. The constructor SHALL take `node_id: NodeId` as
-the sole argument and store it as an instance attribute.
-
-#### Scenario: MachineBusyError carries node_id only
-
-- **WHEN** `MachineBusyError(NodeId(1))` is raised
-- **THEN** `e.node_id == NodeId(1)`, the exception message contains the bare integer `"1"` (NOT `"NodeId(value=1)"`), the exception does NOT have a `hostname` attribute, and the message format is `"machine (1) is busy"`
-
-#### Scenario: MachineBusyError is catchable as DomainError
-
-- **WHEN** a `MachineBusyError` is raised
-- **THEN** it is caught by `except DomainError` and `except Exception`
-
-### Requirement: MachineConnectionError
-
-The system SHALL provide `MachineConnectionError(DomainError)` for
-connection failures when establishing SSH connections to remote machines.
-The constructor SHALL take `node_id: NodeId` as the first argument,
-`hostname: str` as the second, and `reason: str` as the third, storing all
-three as instance attributes.
-
-#### Scenario: MachineConnectionError carries node_id, hostname, and reason
-- **WHEN** `MachineConnectionError(NodeId(1), "10.0.0.1", "Connection refused")` is raised
-- **THEN** `e.node_id == NodeId(1)`, `e.hostname == "10.0.0.1"`, `e.reason == "Connection refused"`, and the exception message contains the node_id, hostname, and reason
-
-#### Scenario: MachineConnectionError is catchable as DomainError
-- **WHEN** a `MachineConnectionError` is raised
-- **THEN** it is caught by `except DomainError` and `except Exception`
-
-### Requirement: SchedulingError hierarchy
-
-The system SHALL provide `SchedulingError(DomainError)` with subclasses
-`NoCompatibleNodeError` and `CloudCapacityExhaustedError`. Each SHALL take a
-`TaskId` and render the bare integer in its message.
-
-#### Scenario: NoCompatibleNodeError carries TaskId and platforms
-- **WHEN** `NoCompatibleNodeError(TaskId(42), ["linux", "debian-12"])` is raised
-- **THEN** `e.task_id == TaskId(42)` and `e.platforms == ["linux", "debian-12"]`
-
-#### Scenario: CloudCapacityExhaustedError carries TaskId
-- **WHEN** `CloudCapacityExhaustedError(TaskId(42))` is raised
-- **THEN** `e.task_id == TaskId(42)`
-
-#### Scenario: CloudCapacityExhaustedError stays under SchedulingError
-- **WHEN** the class hierarchy is inspected
-- **THEN** `issubclass(CloudCapacityExhaustedError, SchedulingError)` is true
-- **AND** `issubclass(CloudCapacityExhaustedError, CloudError)` is false
-
-### Requirement: CloudError hierarchy
-
-The system SHALL provide `CloudError(DomainError)` as an intermediate root for
-operational cloud-provider failures, with subclasses `CloudAllocateError` and
-`CloudSetupError`. `CloudError` and its subclasses SHALL be catchable via
-`except DomainError`.
-
-`CloudError` SHALL be exported from `yascheduler.domain` (NOT from
-`yascheduler.infra.cloud`). The leaf classes `CloudAllocateError` and
-`CloudSetupError` remain re-exported from `yascheduler.infra.cloud`.
-
-#### Scenario: CloudError is a DomainError
-
-- **WHEN** the class hierarchy is inspected
-- **THEN** `issubclass(CloudError, DomainError)` is true
-
-#### Scenario: CloudAllocateError subclasses CloudError
-
-- **WHEN** `CloudAllocateError("create failed")` is raised
-- **THEN** it is caught by `except CloudError`, `except DomainError`, and
-  `except Exception`
-- **AND** `issubclass(CloudAllocateError, CloudError)` is true
-
-#### Scenario: CloudSetupError subclasses CloudError
-
-- **WHEN** `CloudSetupError("setup failed")` is raised
-- **THEN** it is caught by `except CloudError`, `except DomainError`, and
-  `except Exception`
-- **AND** `issubclass(CloudSetupError, CloudError)` is true
-
-#### Scenario: Cloud exceptions carry a free-form message
-
-- **WHEN** `CloudAllocateError("Unknown provider: foo")` is raised
-- **THEN** `str(e)` equals `"Unknown provider: foo"`
-
-#### Scenario: CloudError is not a SchedulingError
-
-- **WHEN** the class hierarchy is inspected
-- **THEN** `issubclass(CloudError, SchedulingError)` is false
-
-#### Scenario: Import CloudError from domain.exceptions
-
-- **WHEN** a module imports `from yascheduler.domain.exceptions import CloudError`
-- **THEN** the class is available
-
-#### Scenario: Import CloudError from domain package
-
-- **WHEN** a module imports `from yascheduler.domain import CloudError`
-- **THEN** the class is available and present in `yascheduler.domain.__all__`
-
-#### Scenario: infra.cloud does not re-export CloudError
-
-- **WHEN** a module attempts `from yascheduler.infra.cloud import CloudError`
-- **THEN** the import raises `ImportError`
-
-#### Scenario: infra.cloud still re-exports the leaf cloud exceptions
-
-- **WHEN** a module imports `from yascheduler.infra.cloud import CloudAllocateError, CloudSetupError`
-- **THEN** both classes are available
-
-#### Scenario: Import domain exceptions
-
-- **WHEN** a module imports `from yascheduler.domain.exceptions import DomainError, ValidationError`
-- **THEN** the classes are available
+- **WHEN** a domain exception listed in the catalog is raised
+- **THEN** the caller reads each carried identity attribute named in the catalog, and the message carries the bare integer form of any task or node identity
