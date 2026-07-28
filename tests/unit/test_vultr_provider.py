@@ -466,6 +466,7 @@ class TestCheckSshAuth:
     ) -> None:
         from yascheduler.infra.cloud.providers.vultr import _check_ssh_auth
 
+        sleep_mock = AsyncMock()
         with (
             patch(
                 "yascheduler.infra.cloud.providers.vultr.asyncssh.connect",
@@ -473,7 +474,7 @@ class TestCheckSshAuth:
             ),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
-                AsyncMock(),
+                sleep_mock,
             ),
         ):
             result = await _check_ssh_auth(
@@ -493,6 +494,15 @@ class TestCheckSshAuth:
         assert fields["instance_id"] == "inst-1"
         assert fields["attempt"] == 1
         assert fields["attempts"] == 2
+        # Exhaustion emits an info marker carrying instance_id + attempts
+        exhausted = [r for r in log_records if r.getMessage() == "SSH_AUTH_EXHAUSTED"]
+        assert len(exhausted) == 1
+        assert exhausted[0].levelno == logging.INFO
+        exhausted_fields = extra_fields(exhausted[0])
+        assert exhausted_fields["instance_id"] == "inst-1"
+        assert exhausted_fields["attempts"] == 2
+        # Sleep runs only between attempts — never after the last one.
+        assert sleep_mock.await_count == 1
 
 
 # =============================================================================

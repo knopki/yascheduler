@@ -271,7 +271,7 @@ def build_baremetal_user_data(
 
 # region FUNC__check_ssh_auth
 # PURPOSE: Poll SSH auth until it succeeds or attempts run out so a bare-metal node whose port opened before cloud-init installed authorized_keys is not declared failed (asyncssh.PermissionDenied is NOT in SSHRetryExc, so without this poll the node would be deleted on the first Permission denied, triggering a redundant provisioning cycle).
-# ENSURES: Returns True on successful connect+close, False after exhausting attempts.
+# ENSURES: Returns True on successful connect+close, False after exhausting attempts (with SSH_AUTH_EXHAUSTED info marker). Sleep only between attempts, not after the last.
 async def _check_ssh_auth(
     instance_id: str,
     ip_addr: str,
@@ -304,7 +304,8 @@ async def _check_ssh_auth(
                     "error": str(exc),
                 },
             )
-            await asyncio.sleep(interval)
+            if attempt < attempts:
+                await asyncio.sleep(interval)
             continue
         conn.close()
         logger.info(
@@ -314,6 +315,10 @@ async def _check_ssh_auth(
             attempts,
         )
         return True
+    logger.info(
+        "SSH_AUTH_EXHAUSTED",
+        extra={"instance_id": instance_id, "attempts": attempts},
+    )
     return False
 
 
