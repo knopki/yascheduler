@@ -1,7 +1,7 @@
 # region MODULE_CONTRACT
-# PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_common.py — configure_logger and run_daemon with mocked DI (no real DB/SSH).
-# SCOPE: configure_logger handler/level/suppression/captureWarnings behavior; run_daemon shape (async, awaits make_daemon + orch.start, owns signal handlers) with mocked make_daemon.
-# KEYWORDS: daemon_common, configure_logger, run_daemon, signal handlers
+# PURPOSE: Unit tests for yascheduler/entrypoints/cli/daemon_common.py — run_daemon with mocked DI (no real DB/SSH).
+# SCOPE: run_daemon shape (async, awaits make_daemon + orch.start, owns signal handlers) with mocked make_daemon.
+# KEYWORDS: daemon_common, run_daemon, signal handlers
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -9,18 +9,15 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import sys
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from yascheduler.entrypoints.cli import daemon_common
-from yascheduler.shared.log import LogFormatter
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 pytestmark = pytest.mark.unit
 
@@ -36,71 +33,6 @@ def _reset_root_logger() -> Iterator[None]:
     finally:
         root.setLevel(original_level)
         root.handlers = list(original_handlers)
-
-
-def _handler_types(logger: logging.Logger) -> list[type]:
-    return [type(h) for h in logger.handlers]
-
-
-class TestConfigureLogger:
-    """configure_logger: handlers, levels, suppression, captureWarnings, no basicConfig."""
-
-    def test_stderr_only_when_log_file_none(self) -> None:
-        root = daemon_common.configure_logger(None, logging.INFO)
-        types_ = _handler_types(root)
-        assert logging.StreamHandler in types_
-        assert logging.FileHandler not in types_
-        # The StreamHandler streams to stderr.
-        sh = [h for h in root.handlers if isinstance(h, logging.StreamHandler)]
-        assert any(h.stream is sys.stderr for h in sh)
-        # The StreamHandler carries a LogFormatter per the reform-grace-logging spec.
-        assert any(isinstance(h.formatter, LogFormatter) for h in sh)
-
-    def test_file_and_stderr_when_log_file_set(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "y.log"
-        root = daemon_common.configure_logger(str(log_path), logging.INFO)
-        types_ = _handler_types(root)
-        assert logging.StreamHandler in types_
-        assert logging.FileHandler in types_
-        # A FileHandler pointed at the requested log_path was added (other FileHandlers
-        # may exist from pytest's log capturing — filter by baseFilename).
-        fh = [
-            h
-            for h in root.handlers
-            if isinstance(h, logging.FileHandler)
-            and getattr(h, "baseFilename", None) == str(log_path)
-        ]
-        assert len(fh) == 1
-        # The StreamHandler streams to stderr.
-        sh = [
-            h
-            for h in root.handlers
-            if isinstance(h, logging.StreamHandler)
-            and not isinstance(h, logging.FileHandler)
-        ]
-        # Both handlers carry a LogFormatter per the reform-grace-logging spec.
-        assert any(isinstance(h.formatter, LogFormatter) for h in sh)
-        assert any(isinstance(h.formatter, LogFormatter) for h in fh)
-
-    def test_asyncssh_level_error(self) -> None:
-        daemon_common.configure_logger(None, logging.INFO)
-        assert logging.getLogger("asyncssh").level == logging.ERROR
-
-    def test_capture_warnings_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        spy = MagicMock()
-        monkeypatch.setattr(logging, "captureWarnings", spy)
-        daemon_common.configure_logger(None, logging.INFO)
-        spy.assert_called_once_with(True)
-
-    def test_basic_config_not_called(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        spy = MagicMock()
-        monkeypatch.setattr(logging, "basicConfig", spy)
-        daemon_common.configure_logger(None, logging.INFO)
-        spy.assert_not_called()
-
-    def test_root_level_set(self) -> None:
-        root = daemon_common.configure_logger(None, logging.DEBUG)
-        assert root.level == logging.DEBUG
 
 
 class TestRunDaemonShape:

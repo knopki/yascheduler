@@ -191,6 +191,8 @@ class Orchestrator:
     # region METHOD_print_stats
     # PURPOSE: Surface daemon health at-a-glance — queue backlogs, node busy/idle ratios, and task throughput — so operators can detect stalls without external monitoring.
     async def _print_stats(self) -> None:
+        last_msg: str | None = None
+        last_qmsg: str | None = None
         while not self._cancellation_event.is_set():
             end_time = datetime.now(timezone.utc) + timedelta(seconds=10)
             # region BLOCK_stats_resilience
@@ -217,7 +219,9 @@ class Orchestrator:
                     t_todo=tcounters.get(TaskStatus.TO_DO, 0),
                     t_done=tcounters.get(TaskStatus.DONE, 0),
                 )
-                logger.info(msg)
+                if msg != last_msg:
+                    last_msg = msg
+                    logger.info(msg)
 
                 queues = [
                     self._conn_machine_q,
@@ -225,8 +229,11 @@ class Orchestrator:
                     self._deallocate_q,
                     self._consume_q,
                 ]
-                qmsgs = [f"{q.name}: {q.psize()}/{q.qsize()}" for q in queues]
-                logger.info("QUEUES: %s", " ".join(qmsgs))
+                qmsg = " ".join([f"{q.name}: {q.psize()}/{q.qsize()}" for q in queues])
+                if qmsg != last_qmsg:
+                    last_qmsg = qmsg
+                    logger.info("QUEUES: %s", qmsg)
+
             # CancelledError is a BaseException — do NOT broaden to
             # `except BaseException` or shutdown will be swallowed.
             except Exception as err:

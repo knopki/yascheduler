@@ -16,8 +16,8 @@ from dataclasses import dataclass, replace
 from yascheduler.domain import NewNode, Node, NodeId, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.infra import SSHMachineRepository
-from yascheduler.infra.ssh.keys import list_private_keys
+from yascheduler.entrypoints.logger import configure_cli_logger
+from yascheduler.infra import SSHMachineRepository, list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -393,11 +393,7 @@ async def _manage_node_async(argv: list[str] | None) -> None:
     target: NodeTarget = args.host
     # region BLOCK_handle_failure
     try:
-        logging.captureWarnings(True)
-        log = logging.getLogger()
-        log.setLevel(logging.getLevelName(args.log_level))
-        if not log.handlers:
-            log.addHandler(logging.StreamHandler(sys.stderr))
+        configure_cli_logger(logging.getLevelName(args.log_level))
 
         # region BLOCK_configure
         config = parse_config(args.config)

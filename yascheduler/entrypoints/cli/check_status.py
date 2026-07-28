@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import NodeId, TaskId, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
-from yascheduler.infra import SSHMachineRepository
-from yascheduler.infra.ssh.keys import list_private_keys
+from yascheduler.entrypoints.logger import configure_cli_logger
+from yascheduler.infra import SSHMachineRepository, list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -376,12 +376,9 @@ async def _check_status_async(argv: list[str] | None) -> None:
     # region BLOCK_handle_failure
     try:
         args = _parse_status_args(argv)
-        # region BLOCK_configure_logger
-        root = logging.getLogger()
-        root.setLevel(logging.getLevelName(args.log_level))
-        if not root.handlers:
-            root.addHandler(logging.StreamHandler(sys.stderr))
-        # endregion BLOCK_configure_logger
+        # region BLOCK_configure_cli_logger
+        configure_cli_logger(logging.getLevelName(args.log_level))
+        # endregion BLOCK_configure_cli_logger
 
         config = parse_config(args.config)
         deps = make_cli_deps(config)

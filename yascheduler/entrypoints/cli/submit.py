@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from yascheduler.entrypoints import Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.entrypoints.logger import configure_cli_logger
 
 from .args import (
     add_config_arg,
@@ -133,11 +134,7 @@ async def _submit_async(argv: list[str] | None) -> None:
 
     # region BLOCK_handle_failure
     try:
-        logging.captureWarnings(True)
-        log = logging.getLogger()
-        log.setLevel(logging.getLevelName(args.log_level))
-        if not log.handlers:
-            log.addHandler(logging.StreamHandler(sys.stderr))
+        configure_cli_logger(logging.getLevelName(args.log_level))
 
         # region BLOCK_configure
         config = parse_config(args.config)

@@ -200,7 +200,7 @@ def test_single_formatter_serves_both_handlers() -> None:
     import logging
     import tempfile
 
-    from yascheduler.entrypoints.cli.daemon_common import configure_logger
+    from yascheduler.entrypoints.logger import configure_logger
     from yascheduler.shared.log import LogFormatter
 
     root = logging.getLogger()
@@ -231,3 +231,151 @@ def test_single_formatter_serves_both_handlers() -> None:
         root.handlers.clear()
         for h in saved_handlers:
             root.addHandler(h)
+
+
+# ── Test 9: Gherkin scenario — timestamp-enabled trace record prepends ISO 8601 prefix ──
+
+
+def test_timestamp_enabled_trace_record_prepends_iso8601_prefix() -> None:
+    """A timestamp-enabled LogFormatter prepends an ISO 8601 prefix to a trace record."""
+    import re
+
+    from yascheduler.shared.log import LogFormatter
+
+    formatter = LogFormatter(timestamp=True)
+    logger, collector = _make_logger("yascheduler.application.allocate_task")
+
+    logger.debug("ALLOCATED", extra={"task_id": 7})
+
+    assert len(collector.records) == 1
+    output = formatter.format(collector.records[0])
+
+    # ISO 8601 prefix, then space, then the trace layout.
+    m = re.match(
+        r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d{3}) ",
+        output,
+    )
+    assert m is not None, f"Expected ISO 8601 prefix, got: {output!r}"
+    # Trace layout follows after the space.
+    assert output[len(m.group(0)) :].startswith("[application.allocate_task]"), (
+        f"Expected trace layout after timestamp, got: {output!r}"
+    )
+
+
+# ── Test 10: Gherkin scenario — timestamp-enabled regular record prepends ISO 8601 prefix ──
+
+
+def test_timestamp_enabled_regular_record_prepends_iso8601_prefix() -> None:
+    """A timestamp-enabled LogFormatter prepends an ISO 8601 prefix to a regular record."""
+    import re
+
+    from yascheduler.shared.log import LogFormatter
+
+    formatter = LogFormatter(timestamp=True)
+    logger, collector = _make_logger("yascheduler.test.module")
+
+    logger.warning("webhook retry to %s", "https://example.com/hook")
+
+    assert len(collector.records) == 1
+    output = formatter.format(collector.records[0])
+
+    m = re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d{3} ", output)
+    assert m is not None, f"Expected ISO 8601 prefix, got: {output!r}"
+    assert output[len(m.group(0)) :].startswith("WARNING yascheduler.test.module:"), (
+        f"Expected regular layout after timestamp, got: {output!r}"
+    )
+
+
+# ── Test 11: Gherkin scenario — timestamp-disabled formatter renders without a prefix ──
+
+
+def test_timestamp_disabled_renders_without_prefix() -> None:
+    """A timestamp-disabled LogFormatter renders trace and regular layouts with NO leading timestamp."""
+    from yascheduler.shared.log import LogFormatter
+
+    formatter = LogFormatter(timestamp=False)
+    trace_logger, trace_collector = _make_logger("yascheduler.test.trace_module")
+    regular_logger, regular_collector = _make_logger("yascheduler.test.regular_module")
+
+    trace_logger.debug("B", extra={"k": 1})
+    regular_logger.warning("plain")
+
+    trace_out = formatter.format(trace_collector.records[0])
+    regular_out = formatter.format(regular_collector.records[0])
+
+    assert trace_out.startswith("[test.trace_module]"), (
+        f"Expected no timestamp prefix on trace, got: {trace_out!r}"
+    )
+    assert regular_out.startswith("WARNING "), (
+        f"Expected no timestamp prefix on regular, got: {regular_out!r}"
+    )
+
+
+# ── Test 12: Gherkin scenario — timestamp matches the exact YYYY-MM-DDTHH:MM:SS,mmm pattern ──
+
+
+def test_timestamp_matches_exact_pattern() -> None:
+    """The timestamp prefix matches YYYY-MM-DDTHH:MM:SS,mmm (10 digits-dash-... with comma-ms, no offset)."""
+    import re
+
+    from yascheduler.shared.log import LogFormatter
+
+    # Pin a known created value so the date/time parts are deterministic.
+    fixed = 1_750_000_000.123456  # 2025-06-15T... in UTC; local varies, but pattern is fixed.
+    rendered = LogFormatter._iso8601(fixed)
+
+    pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d{3}$")
+    assert pattern.match(rendered), (
+        f"Timestamp rendering {rendered!r} does not match YYYY-MM-DDTHH:MM:SS,mmm"
+    )
+    # Sanity: ensure NO offset sign leaks in.
+    assert "+" not in rendered, f"Unexpected utc offset in timestamp: {rendered!r}"
+    assert rendered.count("-") == 2, (
+        f"Expected exactly two date dashes, got: {rendered!r}"
+    )
+
+
+# ── Test 13: Gherkin scenario — timestamp reflects the record emit time, not the render time ──
+
+
+def test_timestamp_reflects_record_emit_time_not_render_time() -> None:
+    """The leading timestamp derives from record.created (emit time), not format()-time."""
+    import logging
+    import re
+    import time
+
+    from yascheduler.shared.log import LogFormatter
+
+    formatter = LogFormatter(timestamp=True)
+
+    # Construct a record whose created time is pinned far in the past.
+    past_created = time.time() - 90 * 24 * 3600  # ~3 months ago.
+    record = logging.LogRecord(
+        name="yascheduler.test.module",
+        level=logging.DEBUG,
+        pathname=__file__,
+        lineno=1,
+        msg="EMITTED",
+        args=(),
+        exc_info=None,
+    )
+    record.created = past_created
+    record.funcName = "test_func"
+
+    output = formatter.format(record)
+    emit_local = (
+        __import__("datetime")
+        .datetime.fromtimestamp(past_created)
+        .astimezone()
+        .strftime("%Y-%m-%d")
+    )
+    render_local = time.strftime("%Y-%m-%d")
+
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})T", output)
+    assert m is not None, f"Expected timestamp prefix, got: {output!r}"
+    assert m.group(1) == emit_local, (
+        f"Timestamp {m.group(1)!r} != emit-time date {emit_local!r}; output={output!r}"
+    )
+    assert emit_local != render_local, (
+        "Test precondition: emit date and render date must differ for this assertion to be meaningful"
+    )

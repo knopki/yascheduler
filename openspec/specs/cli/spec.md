@@ -51,10 +51,11 @@ command entry points and the three daemon launchers:
 The system SHALL provide the shared daemon runtime consumed by all three daemon
 entry points:
 
-- `configure_logger(log_file: str | Path | None, level: int) -> logging.Logger`
+- `configure_logger(log_file: str | Path | None, level: int, *, timestamp: bool = False) -> logging.Logger`
   — configures the ROOT logger: always adds a `StreamHandler(sys.stderr)`, adds
   a `FileHandler(log_file)` only when `log_file is not None`, wires a
-  `LogFormatter` onto both handlers, sets `backoff` and `asyncssh` loggers to
+  `LogFormatter` (with timestamping enabled iff `timestamp=True`) onto both
+  handlers as a single shared instance, sets `backoff` and `asyncssh` loggers to
   `ERROR`, and calls `logging.captureWarnings(True)`.
 - `async def run_daemon(config: Config, logger: logging.Logger) -> None` — the
   async daemon core: awaits `make_daemon(config)` to build the
@@ -68,6 +69,12 @@ argparse parser via the shared helpers, calls `configure_logger`, loads
 `Config.from_config_parser(args.config)`, and invokes
 `asyncio.run(run_daemon(config, logger))`.
 
+Each daemon entry point SHALL pass `timestamp=True` to `configure_logger` when
+its output is NOT captured by journald (i.e. the foreground launcher
+`daemonize` and the file-logging launcher `daemon_sysv`), and SHALL pass
+`timestamp=False` (or omit it) when its stderr is captured by journald (i.e.
+the `daemon_systemd` launcher), because journald stamps records itself.
+
 #### Scenario: configure_logger writes to stderr when log_file is None
 - **WHEN** `configure_logger(log_file=None, level=logging.INFO)` is called
 - **THEN** the root logger has a `StreamHandler(sys.stderr)` and no `FileHandler`
@@ -77,6 +84,14 @@ argparse parser via the shared helpers, calls `configure_logger`, loads
 - **WHEN** `configure_logger(log_file="/tmp/y.log", level=logging.INFO)` is called
 - **THEN** the root logger has both a `StreamHandler(sys.stderr)` and a `FileHandler` pointed at `/tmp/y.log`
 - **AND** both handlers are configured with a `LogFormatter` (single formatter, no per-handler format variants)
+
+#### Scenario: configure_logger timestamp defaults to off
+- **WHEN** `configure_logger(log_file=None, level=logging.INFO)` is called without a `timestamp` argument
+- **THEN** the wired `LogFormatter` does NOT prepend a timestamp to rendered records
+
+#### Scenario: configure_logger timestamp=True enables ISO 8601 prefix on both handlers
+- **WHEN** `configure_logger(log_file="/tmp/y.log", level=logging.INFO, timestamp=True)` is called
+- **THEN** both the `StreamHandler(sys.stderr)` and the `FileHandler` are wired with a `LogFormatter` that prepends an ISO 8601 local-time timestamp to every rendered record
 
 #### Scenario: configure_logger does not call basicConfig
 - **WHEN** `configure_logger(...)` is invoked
@@ -97,6 +112,18 @@ argparse parser via the shared helpers, calls `configure_logger`, loads
 #### Scenario: entry points call asyncio.run
 - **WHEN** any of `daemonize`, `daemon_systemd`, `daemon_sysv` is inspected
 - **THEN** the entry point is a synchronous `def` that calls `asyncio.run(run_daemon(...))`
+
+#### Scenario: daemonize enables the ISO 8601 timestamp
+- **WHEN** `daemonize` (the foreground `yascheduler` launcher) calls `configure_logger`
+- **THEN** it passes `timestamp=True`, so foreground output lines begin with a local ISO 8601 timestamp
+
+#### Scenario: daemon_sysv enables the ISO 8601 timestamp
+- **WHEN** `daemon_sysv` (the file-logging launcher) calls `configure_logger`
+- **THEN** it passes `timestamp=True`, so file output lines begin with a local ISO 8601 timestamp
+
+#### Scenario: daemon_systemd does NOT enable the ISO 8601 timestamp
+- **WHEN** `daemon_systemd` (the journald-supervised launcher) calls `configure_logger`
+- **THEN** it passes `timestamp=False` (or omits the argument), so stderr-into-journald output lines do NOT carry a duplicate leading timestamp
 
 ### Requirement: CLI commands call use cases via DI
 
@@ -813,3 +840,79 @@ snippet SHALL be cleaned up after display (no leaked temp files).
 
 - **WHEN** `yastatus -v` is invoked against a node with `jump_host="old-bastion.example.com"` (stamped at creation), and the `hetzner` cloud config has since been edited to `jump_host="new-bastion.example.com"`
 - **THEN** the tunnel leg uses `node.jump_host == "old-bastion.example.com"` (Node is the source of truth, not the live config)
+
+### Requirement: Non-daemon CLI commands render through the structured log formatter
+
+The five non-daemon CLI commands SHALL configure the ROOT logger through a
+single shared non-daemon logger setup function before any other work, instead
+of inlining root-logger configuration per command. The five commands are
+yasubmit, yanodes, yastatus, yasetnode, and yainit.
+
+The shared non-daemon logger setup SHALL: set the ROOT logger level to the
+resolved `--log-level` value; ensure a `StreamHandler(sys.stderr)` exists on the
+ROOT logger only when no handler is already present (so an outer test harness
+that pre-attaches a handler remains authoritative); wire a `LogFormatter`
+(timestamping disabled) onto any `StreamHandler` it adds; and call
+`logging.captureWarnings(True)` so `warnings.warn(...)` output is routed
+through logging.
+
+The non-daemon logger setup SHALL NOT set the `asyncssh` logger to `ERROR` and
+SHALL NOT add a `FileHandler`; the daemon-only side effects belong exclusively
+to `configure_logger`.
+
+When a non-daemon CLI emits a structured DEBUG trace record via
+`logger.debug(msg, extra={...})` on its module-local logger, the rendered
+output SHALL match the trace layout produced by `LogFormatter`, NOT the stdlib
+default format. When a non-daemon CLI emits an INFO/WARN/ERROR record, the
+rendered output SHALL match the regular layout produced by `LogFormatter`.
+
+#### Scenario: yasubmit renders DEBUG trace records through LogFormatter
+
+- **WHEN** `yasubmit` is invoked with `--log-level DEBUG` and its execution emits a structured DEBUG record via `logger.debug(msg, extra={...})`
+- **THEN** the stderr line is the `LogFormatter` trace layout `[<module>][<funcName>]:<lineno> <message> <sorted key=value pairs>`, not the stdlib default format
+
+#### Scenario: yanodes renders INFO records through LogFormatter
+
+- **WHEN** `yanodes` is invoked with `--log-level INFO` and its execution emits an INFO record
+- **THEN** the stderr line is the `LogFormatter` regular layout `<LEVEL> <name>: <message>`, not the stdlib default format
+
+#### Scenario: yastatus renders DEBUG trace records through LogFormatter
+
+- **WHEN** `yastatus` is invoked with `--log-level DEBUG` and its execution emits a structured DEBUG record
+- **THEN** the stderr line is the `LogFormatter` trace layout, not the stdlib default format
+
+#### Scenario: yasetnode renders DEBUG trace records through LogFormatter
+
+- **WHEN** `yasetnode` is invoked with `--log-level DEBUG` and its execution emits a structured DEBUG record
+- **THEN** the stderr line is the `LogFormatter` trace layout, not the stdlib default format
+
+#### Scenario: yainit renders WARNING records through LogFormatter
+
+- **WHEN** `yainit` is invoked with `--log-level WARNING` (or higher) and its execution emits a WARNING record
+- **THEN** the stderr line is the `LogFormatter` regular layout `<LEVEL> <name>: <message>`
+
+#### Scenario: non-daemon CLI LogFormatter does NOT prepend a timestamp
+
+- **WHEN** any of the five non-daemon CLI commands renders a record via its wired `LogFormatter`
+- **THEN** the output line does NOT carry a leading ISO 8601 timestamp (timestamping is reserved for non-journald daemon output)
+
+#### Scenario: non-daemon CLI logger setup does NOT suppress asyncssh
+
+- **WHEN** any of the five non-daemon CLI commands runs its shared logger setup
+- **THEN** the `asyncssh` logger level is NOT changed (it is left at its inherited default), unlike `configure_logger` which sets `asyncssh` to `ERROR`
+
+#### Scenario: non-daemon CLI logger setup does NOT add a FileHandler
+
+- **WHEN** any of the five non-daemon CLI commands runs its shared logger setup
+- **THEN** the ROOT logger has at most a `StreamHandler(sys.stderr)` and NO `FileHandler`
+
+#### Scenario: non-daemon CLI logger setup preserves a pre-attached handler
+
+- **GIVEN** an outer test harness has already attached a handler to the ROOT logger
+- **WHEN** a non-daemon CLI command runs its shared logger setup
+- **THEN** the pre-attached handler is NOT removed and NO additional `StreamHandler(sys.stderr)` is added (the `if not root.handlers` guard holds)
+
+#### Scenario: non-daemon CLI logger setup enables captureWarnings
+
+- **WHEN** any of the five non-daemon CLI commands runs its shared logger setup
+- **THEN** `logging.captureWarnings(True)` is in effect, so subsequent `warnings.warn(...)` calls are routed through logging instead of being printed directly to stderr

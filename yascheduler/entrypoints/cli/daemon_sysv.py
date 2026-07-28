@@ -19,9 +19,10 @@ from daemon import pidfile
 
 from yascheduler.entrypoints import LOG_FILE, PID_FILE
 from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.entrypoints.logger import configure_logger
 
 from .args import add_config_arg, add_log_level_arg
-from .daemon_common import configure_logger, run_daemon
+from .daemon_common import run_daemon
 
 __all__ = ["main"]
 
@@ -71,6 +72,7 @@ def main(argv: list[str] | None = None) -> None:
             logger = configure_logger(
                 args.log_file,
                 logging.getLevelName(args.log_level),
+                timestamp=True,
             )
             config = parse_config(args.config)
             asyncio.run(run_daemon(config, logger))

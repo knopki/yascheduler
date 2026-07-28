@@ -12,13 +12,15 @@ import asyncio
 import logging
 import sys
 
-from yascheduler.entrypoints.cli.args import (
+from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.entrypoints.logger import configure_logger
+
+from .args import (
     add_config_arg,
     add_log_file_arg,
     add_log_level_arg,
 )
-from yascheduler.entrypoints.cli.daemon_common import configure_logger, run_daemon
-from yascheduler.entrypoints.config_parser import parse_config
+from .daemon_common import run_daemon
 
 __all__ = ["daemonize"]
 
@@ -48,7 +50,9 @@ def daemonize(argv: list[str] | None = None) -> None:
     # region BLOCK_handle_failure
     try:
         # region BLOCK_configure
-        logger = configure_logger(args.log_file, logging.getLevelName(args.log_level))
+        logger = configure_logger(
+            args.log_file, logging.getLevelName(args.log_level), timestamp=True
+        )
         config = parse_config(args.config)
         # endregion BLOCK_configure
         asyncio.run(run_daemon(config, logger))

@@ -16,6 +16,7 @@ from pg8000 import DatabaseError
 
 from yascheduler.entrypoints import CONFIG_FILE
 from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.entrypoints.logger import configure_cli_logger
 from yascheduler.infra import apply_migrations, apply_schema
 
 from .args import add_config_arg, add_log_level_arg
@@ -124,12 +125,9 @@ def init(argv: list[str] | None = None) -> None:
 
     # region BLOCK_handle_failure
     try:
-        # region BLOCK_configure_logger
-        root = logging.getLogger()
-        root.setLevel(logging.getLevelName(args.log_level))
-        if not root.handlers:
-            root.addHandler(logging.StreamHandler(sys.stderr))
-        # endregion BLOCK_configure_logger
+        # region BLOCK_configure_cli_logger
+        configure_cli_logger(logging.getLevelName(args.log_level))
+        # endregion BLOCK_configure_cli_logger
 
         # region BLOCK_dispatch
         run_daemon = not args.schema or args.daemon

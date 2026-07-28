@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import NodeId, NodeStatus, TaskId, TaskStatus
 from yascheduler.entrypoints import make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.entrypoints.logger import configure_cli_logger
 
 from .args import add_config_arg, add_log_level_arg
 
@@ -275,12 +276,9 @@ async def _show_nodes_async(argv: list[str] | None) -> None:
     args = _parse_nodes_args(argv)
     # region BLOCK_handle_failure
     try:
-        # region BLOCK_configure_logger
-        root = logging.getLogger()
-        root.setLevel(logging.getLevelName(args.log_level))
-        if not root.handlers:
-            root.addHandler(logging.StreamHandler(sys.stderr))
-        # endregion BLOCK_configure_logger
+        # region BLOCK_configure_cli_logger
+        configure_cli_logger(logging.getLevelName(args.log_level))
+        # endregion BLOCK_configure_cli_logger
 
         config = parse_config(args.config)
         deps = make_cli_deps(config)

@@ -1,68 +1,26 @@
-"""Shared daemon core — configure_logger and run_daemon, consumed by all three daemon entry points (daemonize, daemon_systemd, daemon_sysv)."""
+"""Shared daemon core — run_daemon, consumed by daemon entry points."""
 # region MODULE_CONTRACT
-# PURPOSE: Abstract the async daemon lifecycle — logger setup, orchestrator startup, signal handling, and cleanup — into a single shared core so all three daemon launchers  behave identically and reliably.
-# SCOPE: Root-logger configuration and async daemon core lifecycle — orchestrator startup, signal handling, and cleanup.
-# KEYWORDS: daemon, logger, signal, orchestration, common
+# PURPOSE: Abstract the async daemon lifecycle into a single shared core so all daemon launchers behave identically and reliably.
+# SCOPE: Async daemon core lifecycle — orchestrator startup, signal handling, and cleanup.
+# KEYWORDS: daemon, signal, orchestration, common
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import signal
-import sys
 from typing import TYPE_CHECKING, Any
 
 from yascheduler.entrypoints import make_daemon
-from yascheduler.shared import LogFormatter
 
 if TYPE_CHECKING:
+    import logging
     from collections.abc import Callable, Sequence
-    from pathlib import Path
 
     from yascheduler.application import Orchestrator
     from yascheduler.entrypoints import Config
 
 __all__ = ["run_daemon"]
-
-
-# region FUNC_configure_logger
-# PURPOSE: Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file.
-# INVARIANTS:
-# - Configures ROOT logger, not yascheduler.
-# - Always adds StreamHandler(sys.stderr).
-# - Adds FileHandler(log_file) only when log_file is not None.
-# - Both handlers share a single LogFormatter instance.
-def configure_logger(log_file: str | Path | None, level: int) -> logging.Logger:
-    """Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file (not just yascheduler + 2 third-party loggers)."""
-    # region BLOCK_root_handlers
-    root = logging.getLogger()
-    root.setLevel(level)
-    # Always log to stderr; systemd captures it into journald, sysv uses the file below.
-    formatter = LogFormatter()
-    sh = logging.StreamHandler(sys.stderr)
-    sh.setFormatter(formatter)
-    root.addHandler(sh)
-    if log_file is not None:
-        fh = logging.FileHandler(log_file)
-        fh.setFormatter(formatter)
-        root.addHandler(fh)
-    # endregion BLOCK_root_handlers
-
-    # region BLOCK_suppress_noisy_third_party
-    # asyncssh key-exchange chatter is noisy below ERROR; let it
-    # propagate to the root handlers but suppress its DEBUG/INFO/WARNING output.
-    logging.getLogger("asyncssh").setLevel(logging.ERROR)
-    # endregion BLOCK_suppress_noisy_third_party
-
-    # region BLOCK_capture_warnings
-    logging.captureWarnings(True)
-    # endregion BLOCK_capture_warnings
-
-    return root
-
-
-# endregion FUNC_configure_logger
 
 
 # region FUNC_run_daemon

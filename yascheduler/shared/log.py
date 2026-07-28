@@ -1,7 +1,7 @@
 """LogFormatter with extra-diff trace discriminator for stdlib structured DEBUG tracing."""
 # region MODULE_CONTRACT
 # PURPOSE: Make internal trace flow observable via structured DEBUG logs without polluting user-facing output.
-# SCOPE: LogFormatter only — renders trace records (DEBUG + in-package + extra-diff) as [module][funcName]:lineno msg sorted k=v; regular records as LEVEL name: message.
+# SCOPE: LogFormatter only
 # INVARIANTS:
 # - every `extra={...}` callsite uses flat user-supplied keys — no nested sentinel container such as `extra={"trace": {...}}`
 # - every `extra={...}` callsite uses keys that do NOT collide with native `LogRecord` attribute names (enforced by the static guard in `tests/unit/test_log_scope_discipline.py`)
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 __all__ = ["LogFormatter"]
 
@@ -42,17 +43,43 @@ class LogFormatter(logging.Formatter):
 
     Regular records render as:
         <LEVEL> <name>: <message>
+
+    When timestamp=True, both layouts are prefixed with
+    `<YYYY-MM-DDTHH:MM:SS,mmm> ` (local time, millisecond precision), derived
+    from the record's emit time (`record.created`).
     """
+
+    # region METHOD___init__
+    # PURPOSE: Store the timestamp flag so format() can prepend an ISO 8601 prefix.
+    def __init__(self, *, timestamp: bool = False) -> None:
+        """Initialize the formatter; prepend an ISO 8601 timestamp to every record iff timestamp."""
+        self._timestamp = timestamp
+        super().__init__()
+
+    # endregion METHOD___init__
 
     # region METHOD_format
     # PURPOSE: Route log records to trace or user-facing format based on the extra-diff discriminator.
     def format(self, record: logging.LogRecord) -> str:
         """Format a log record; trace records get the structured format."""
-        if self._is_trace(record):
-            return self._format_trace(record)
-        return self._format_user(record)
+        body = (
+            self._format_trace(record)
+            if self._is_trace(record)
+            else self._format_user(record)
+        )
+        if self._timestamp:
+            return f"{self._iso8601(record.created)} {body}"
+        return body
 
     # endregion METHOD_format
+
+    @staticmethod
+    def _iso8601(created: float) -> str:
+        """Render record.created (epoch seconds) as local `YYYY-MM-DDTHH:MM:SS,mmm`."""
+        # comma before milliseconds matches stdlib asctime/LogRecord.msec convention.
+        # Local time only (no utc offset).
+        dt = datetime.fromtimestamp(created).astimezone()
+        return f"{dt.strftime('%Y-%m-%dT%H:%M:%S')},{dt.microsecond // 1000:03d}"
 
     def _is_trace(self, record: logging.LogRecord) -> bool:
         """Check all three trace discriminator conditions."""

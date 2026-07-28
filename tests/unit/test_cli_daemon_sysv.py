@@ -246,7 +246,9 @@ class TestDaemonSysvContext:
         cfg.write_text("[local]")
         inside_when_called: list[bool] = []
 
-        def spy_configure_logger(log_file: object, level: object) -> MagicMock:
+        def spy_configure_logger(
+            log_file: object, level: object, **kwargs: object
+        ) -> MagicMock:
             inside_when_called.append(_stub_daemon_module["entered"])
             return MagicMock()
 

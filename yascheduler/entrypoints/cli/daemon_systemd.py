@@ -15,13 +15,14 @@ import logging
 import sys
 
 from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.entrypoints.logger import configure_logger
 
 from .args import (
     add_config_arg,
     add_log_file_arg,
     add_log_level_arg,
 )
-from .daemon_common import configure_logger, run_daemon
+from .daemon_common import run_daemon
 
 __all__ = ["main"]
 
