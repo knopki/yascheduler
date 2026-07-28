@@ -47,4 +47,5 @@ yascheduler.conf
 #vscode
 .vscode/
 
-.ruff_check
+.ruff_cache
+.import_linter_cache
