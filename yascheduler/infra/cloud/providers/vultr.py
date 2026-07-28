@@ -19,12 +19,17 @@ from typing import TYPE_CHECKING, cast
 import aiohttp
 import asyncssh
 
-from yascheduler.infra.cloud import CloudCreateNodeDTO, get_key_name, get_rnd_name
+from yascheduler.infra.cloud import (
+    CloudCreateNodeDTO,
+    CloudInitConfig,
+    build_cloud_init_users,
+    get_key_name,
+    get_rnd_name,
+)
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
 
-    from yascheduler.infra.cloud import CloudInitConfig
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
 
 __all__ = ["vultr_create_node", "vultr_delete_node"]
@@ -190,11 +195,11 @@ def build_baremetal_user_data(
     disks ship unformatted. For plans where NVMe is already the main disk
     (e.g. vbm-8c-132gb), pass need_raid=False to skip RAID and /dev/shm.
 
-    Always emits a `users` section so cloud-init installs authorized_keys
-    for root (Vultr's sshkey_id only injects into root's authorized_keys,
-    but we set it explicitly for determinism) and, when username is not
-    root, additionally creates that user without sudo and installs the same
-    key. The scheduler then polls SSH auth as cfg.username.
+    Engine packages and package_upgrade are sourced from cloud_config when
+    provided; bare-metal base packages are always merged in (deduped).
+    Always emits a `users` section (root, and a no-sudo non-root user when
+    username != root) so cloud-init installs authorized_keys before the
+    scheduler polls SSH auth as cfg.username.
     """
     base_packages = [
         "openmpi-bin",
@@ -212,11 +217,13 @@ def build_baremetal_user_data(
     if need_raid:
         base_packages.append("mdadm")
 
-    engine_packages: list[str] = []
+    engine_packages = []
     package_upgrade = False
+    engine_bootcmd = ()
     if cloud_config:
         engine_packages = list(cloud_config.packages)
         package_upgrade = cloud_config.package_upgrade
+        engine_bootcmd = cloud_config.bootcmd
 
     packages = list(dict.fromkeys(base_packages + engine_packages))
 
@@ -250,18 +257,13 @@ def build_baremetal_user_data(
         "/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2",
     ]
 
-    config: dict[str, object] = {
-        "package_upgrade": package_upgrade,
-        "packages": packages,
-        "runcmd": runcmd,
-    }
-
-    users = [{"name": "root", "ssh_authorized_keys": [pub_key]}]
-    if username != "root":
-        users.append({"name": username, "ssh_authorized_keys": [pub_key]})
-    config["users"] = users
-
-    return "#cloud-config\n" + json.dumps(config)
+    return CloudInitConfig(
+        bootcmd=engine_bootcmd,
+        runcmd=tuple(runcmd),
+        package_upgrade=package_upgrade,
+        packages=packages,
+        users=build_cloud_init_users(username, pub_key),
+    ).render()
 
 
 # endregion FUNC_build_baremetal_user_data

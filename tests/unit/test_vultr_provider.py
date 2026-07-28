@@ -212,6 +212,16 @@ class TestBuildBaremetalUserData:
         assert data["packages"].count("git") == 1
         assert "custom-pkg" in data["packages"]
 
+    def test_engine_bootcmd_propagated(self) -> None:
+        """cloud_config.bootcmd is rendered (previously vultr ignored it)."""
+        from yascheduler.infra.cloud.cloud_init import CloudInitConfig
+        from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
+
+        cc = CloudInitConfig(bootcmd=(["echo", "engine-boot"],))
+        out = build_baremetal_user_data("root", self.PUB, cc, need_raid=False)
+        data = json.loads(out.removeprefix("#cloud-config\n"))
+        assert data["bootcmd"] == [["echo", "engine-boot"]]
+
     def test_root_username_adds_root_authorized_keys(self) -> None:
         """username='root' → users has root with the key."""
         from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
