@@ -126,6 +126,19 @@ cleanup step SHALL be logged and SHALL NOT skip the remaining steps.
 - **WHEN** stop is called twice and a cleanup step raises an error
 - **THEN** the cleanup runs exactly once, the second call does nothing, and the error is logged while the remaining steps still run
 
+### Requirement: Connect scope covers draining nodes
+
+The connect loop SHALL connect every enabled node and SHALL additionally
+connect a disabled node that still carries a RUNNING task, so a daemon restart
+does not orphan in-progress work. After the task finishes and the node is no
+longer busy, the deallocate loop SHALL tear it down.
+
+#### Scenario: a disabled node with a running task is reconnected after restart
+
+- **GIVEN** a node is disabled and has a RUNNING task allocated to it
+- **WHEN** the daemon restarts and the connect loop runs
+- **THEN** the node is connected, its task is consumed to completion, and the node is torn down by the deallocate loop once it is no longer busy
+
 ### Requirement: Free-machine selection
 
 Free-machine selection SHALL consider only machines whose node is enabled in the

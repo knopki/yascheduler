@@ -248,26 +248,44 @@ class Orchestrator:
     # ---- Producers / Consumers ----
 
     # region METHOD_connect_machine_producer
-    # PURPOSE: Yield every enabled node not currently registered in the gateway (static or cloud-provisioned) so the connect consumer can establish an SSH session for it — the static-node never-abandon guarantee is enforced downstream in the consumer.
-    # REQUIRES: _connect_machine_consumer enforces the indefinite-retry path for cloud=None nodes before the grace-check; self._uow_factory yields a UnitOfWork whose nodes.list_enabled() returns the operator-defined enabled set from DB.
-    # ENSURES: Every yielded UMessage<NodeId, Node> corresponds to a node that is enabled in yascheduler_nodes and whose node_id is absent from self._repository (not already connected).
+    # PURPOSE: Yield enabled nodes and disabled nodes that still carry a RUNNING task, all not currently registered in the gateway, so the connect consumer can establish an SSH session — the static-node never-abandon guarantee is enforced downstream in the consumer.
+    # REQUIRES: _connect_machine_consumer enforces the indefinite-retry path for cloud=None nodes before the grace-check; self._uow_factory yields a UnitOfWork whose nodes.list_enabled() returns the operator-defined enabled set from DB, nodes.list_disabled() returns disabled nodes with a real hostname, and tasks.list_by_status({RUNNING}) returns tasks carrying allocated_node_id.
+    # ENSURES: Every yielded UMessage<NodeId, Node> corresponds to a node that is either enabled in yascheduler_nodes or disabled with at least one RUNNING task, and whose node_id is absent from self._repository (not already connected).
     # INVARIANTS: The producer does not filter on cloud type; the consumer separates their fate.
     # RATIONALE:
     # - Q: Why do static and cloud nodes share the same producer filter instead of splitting into two producers?
     #   A: The separation happens in the consumer where node.cloud is already available on the message payload — a single producer avoids duplicating the enabled+not-connected filter logic.
+    # - Q: Why does the producer also yield disabled nodes with a RUNNING task?
+    #   A: After a daemon restart, the in-memory session dict is empty. A disabled node (operator-initiated drain or idle-tolerance deallocate) may still carry a RUNNING task whose results have not been downloaded. Reconnecting lets the consume loop finish the task; the deallocator picks up the node for teardown once the task completes and the node is no longer busy.
     async def _connect_machine_producer(
         self,
     ) -> AsyncGenerator[UMessage[NodeId, Node], None]:
         async with self._uow_factory() as uow:
             enabled_nodes = await uow.nodes.list_enabled()
+            # region BLOCK_draining_nodes
+            # A disabled node may still carry a RUNNING task (operator-initiated
+            # drain via _remove_node_soft, or idle-tolerance disable that raced
+            # with a long-running task). Reconnect so the consume loop can
+            # finish the task and download outputs; the deallocator tears the
+            # node down once it is no longer busy.
+            running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
+            busy_node_ids = {
+                t.allocated_node_id for t in running_tasks if t.allocated_node_id
+            }
+            draining_nodes = [
+                n for n in await uow.nodes.list_disabled() if n.node_id in busy_node_ids
+            ]
+            # endregion BLOCK_draining_nodes
         # region BLOCK_filter_not_connected
-        # Yield every enabled node not currently registered in the gateway,
+        # Yield every candidate not currently registered in the gateway,
         # regardless of cloud. Static (cloud is None) and cloud-provisioned
         # nodes are both connected here; the never-abandon guarantee for
         # static nodes is enforced in _connect_machine_consumer before the
         # grace-check (see BLOCK_static_node_retry).
         new_nodes = [
-            n for n in enabled_nodes if not self._repository.contains(n.node_id)
+            n
+            for n in (*enabled_nodes, *draining_nodes)
+            if not self._repository.contains(n.node_id)
         ]
         # endregion BLOCK_filter_not_connected
         for node in new_nodes:

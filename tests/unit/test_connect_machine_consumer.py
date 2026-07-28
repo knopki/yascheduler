@@ -384,6 +384,110 @@ class TestConnectMachineProducerYieldsStaticNodes:
         assert yielded_ips == []
 
     @pytest.mark.asyncio
+    async def test_disabled_node_with_running_task_is_yielded(self) -> None:
+        """A disabled node carrying a RUNNING task is yielded for reconnection.
+
+        After a daemon restart the in-memory session dict is empty. A disabled
+        node (operator drain or idle-tolerance disable) may still carry a
+        RUNNING task whose outputs have not been downloaded. The producer MUST
+        yield it so the consume loop can finish the task.
+        """
+        from yascheduler.domain.model import Node, Task, TaskId, TaskStatus
+
+        disabled_node = Node(
+            node_id=NodeId(3),
+            hostname="10.0.0.3",
+            ncpus=2,
+            cloud="vultr",
+            username="root",
+            port=22,
+            enabled=False,
+        )
+        running_task = Task(
+            task_id=TaskId(7),
+            engine="test_shell",
+            status=TaskStatus.RUNNING,
+            allocated_node_id=NodeId(3),
+        )
+
+        orch = make_orchestrator(config_clouds=[])
+        orch._repository.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
+        orch._uow_factory = MagicMock(  # type: ignore[method-assign]
+            return_value=_uow_with_nodes(
+                [],
+                disabled_nodes=[disabled_node],
+                running_tasks=[running_task],
+            ),
+        )
+
+        yielded_ids = [msg.id async for msg in orch._connect_machine_producer()]
+        assert NodeId(3) in yielded_ids
+
+    @pytest.mark.asyncio
+    async def test_disabled_node_without_running_task_not_yielded(self) -> None:
+        """A disabled node with no RUNNING task is NOT yielded (no work to drain)."""
+        from yascheduler.domain.model import Node
+
+        disabled_node = Node(
+            node_id=NodeId(4),
+            hostname="10.0.0.4",
+            ncpus=2,
+            cloud="vultr",
+            username="root",
+            port=22,
+            enabled=False,
+        )
+
+        orch = make_orchestrator(config_clouds=[])
+        orch._repository.contains = MagicMock(return_value=False)  # type: ignore[method-assign]
+        orch._uow_factory = MagicMock(  # type: ignore[method-assign]
+            return_value=_uow_with_nodes(
+                [],
+                disabled_nodes=[disabled_node],
+                running_tasks=[],
+            ),
+        )
+
+        yielded_ids = [msg.id async for msg in orch._connect_machine_producer()]
+        assert yielded_ids == []
+
+    @pytest.mark.asyncio
+    async def test_disabled_node_with_running_task_skipped_if_connected(
+        self,
+    ) -> None:
+        """A disabled node already connected is not re-yielded."""
+        from yascheduler.domain.model import Node, Task, TaskId, TaskStatus
+
+        disabled_node = Node(
+            node_id=NodeId(5),
+            hostname="10.0.0.5",
+            ncpus=2,
+            cloud="vultr",
+            username="root",
+            port=22,
+            enabled=False,
+        )
+        running_task = Task(
+            task_id=TaskId(9),
+            engine="test_shell",
+            status=TaskStatus.RUNNING,
+            allocated_node_id=NodeId(5),
+        )
+
+        orch = make_orchestrator(config_clouds=[])
+        orch._repository.contains = MagicMock(return_value=True)  # type: ignore[method-assign]
+        orch._uow_factory = MagicMock(  # type: ignore[method-assign]
+            return_value=_uow_with_nodes(
+                [],
+                disabled_nodes=[disabled_node],
+                running_tasks=[running_task],
+            ),
+        )
+
+        yielded_ids = [msg.id async for msg in orch._connect_machine_producer()]
+        assert yielded_ids == []
+
+    @pytest.mark.asyncio
     async def test_static_node_failure_retries_without_abandon(
         self,
         caplog: pytest.LogCaptureFixture,
@@ -661,11 +765,24 @@ class TestMissingKeysDirTranslation:
         assert "keys_dir does not exist" in str(extra.get("err"))
 
 
-def _uow_with_nodes(nodes: list) -> AsyncMock:
-    """Build a UoW mock whose nodes.list_enabled returns the given nodes."""
+def _uow_with_nodes(
+    nodes: list,
+    *,
+    disabled_nodes: list | None = None,
+    running_tasks: list | None = None,
+) -> AsyncMock:
+    """Build a UoW mock whose nodes.list_enabled returns the given nodes.
+
+    Optional ``disabled_nodes`` populates nodes.list_disabled (defaults to
+    empty) and ``running_tasks`` populates tasks.list_by_status (defaults to
+    empty) so the connect producer's drain path can be exercised.
+    """
     uow = AsyncMock()
     uow.nodes = AsyncMock()
     uow.nodes.list_enabled = AsyncMock(return_value=nodes)
+    uow.nodes.list_disabled = AsyncMock(return_value=disabled_nodes or [])
+    uow.tasks = AsyncMock()
+    uow.tasks.list_by_status = AsyncMock(return_value=running_tasks or [])
     uow.__aenter__ = AsyncMock(return_value=uow)
     uow.__aexit__ = AsyncMock(return_value=False)
     return uow
