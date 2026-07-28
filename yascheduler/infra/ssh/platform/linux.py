@@ -98,7 +98,12 @@ async def linux_list_processes(
                     extra={"line": line_count, "parts": len(parts), "raw": line},
                 )
                 continue
-            if parts[2].startswith(f"bash -c {ps_cmd}"):
+            # The wrapper process executing ps_cmd appears as
+            # `<login-shell> -c <ps_cmd>` in ps output. Match the ps_cmd
+            # substring instead of hardcoding `bash -c` — the login shell
+            # may be sh/dash/zsh, in which case the self-process leaked
+            # through, pgrep self-matched, and occupancy stuck BUSY.
+            if ps_cmd in parts[2]:
                 skipped_self += 1
                 continue
             logger.debug(
