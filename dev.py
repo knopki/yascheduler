@@ -371,9 +371,10 @@ def containers_healthy() -> bool:
 
 
 # region FUNC_cmd_up
-# PURPOSE: Entry point for `dev.py up` — bootstrap on cold start, then replace the Python process with the daemon so Ctrl-C flows straight through.
-# INVARIANTS: If both containers are already healthy, skips bootstrap and starts the daemon immediately (warm restart).
+# PURPOSE: Entry point for `dev.py up` — re-render the dev config, bootstrap on cold start, then replace the Python process with the daemon so Ctrl-C flows straight through.
+# INVARIANTS: ensure_config() runs unconditionally so a stale yascheduler.conf (e.g. left over from a moved repo or an older dev.py layout) is healed on every invocation, including warm restarts. If both containers are already healthy, skips bootstrap and starts the daemon immediately.
 def cmd_up() -> None:
+    ensure_config()
     if containers_healthy():
         print("Dev environment already up.")
     else:
@@ -395,6 +396,10 @@ def cmd_down() -> None:
 def cmd_run(args: list[str]) -> None:
     if not args:
         die("usage: ./dev.py run <tool> [args...]")
+    # Heal a stale yascheduler.conf on warm CLI invocations too — a moved
+    # repo or older dev.py layout would otherwise leave data_dir pointing at
+    # a path that no longer exists.
+    ensure_config()
     os.chdir(ROOT)
     env = dict(os.environ, YASCHEDULER_CONF_PATH=str(CONF_PATH))
     os.execvpe("uv", ["uv", "run", *args], env)  # noqa: S606
