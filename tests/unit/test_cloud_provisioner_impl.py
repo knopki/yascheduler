@@ -776,6 +776,8 @@ class TestCloudConfigGeneration:
         payload = json.loads(CloudInitConfig().render()[len("#cloud-config\n") :])
         assert "bootcmd" not in payload
         assert "packages" not in payload
+        assert "runcmd" not in payload
+        assert "users" not in payload
 
     def test_render_keeps_non_empty_lists(self) -> None:
         """Non-empty bootcmd/packages are preserved when present."""
@@ -783,6 +785,46 @@ class TestCloudConfigGeneration:
         payload = json.loads(cc.render()[len("#cloud-config\n") :])
         assert payload["bootcmd"] == [["echo", "hi"]]
         assert payload["packages"] == ["vim"]
+
+    def test_render_keeps_runcmd_and_users(self) -> None:
+        """Non-empty runcmd/users are preserved and serialized as JSON."""
+        cc = CloudInitConfig(
+            runcmd=("mkdir -p /data", "echo hi"),
+            users=({"name": "root", "ssh_authorized_keys": ["ssh-rsa AAA"]},),
+        )
+        payload = json.loads(cc.render()[len("#cloud-config\n") :])
+        assert payload["runcmd"] == ["mkdir -p /data", "echo hi"]
+        assert payload["users"] == [
+            {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAA"]}
+        ]
+
+    def test_render_omits_empty_runcmd_and_users(self) -> None:
+        """Empty runcmd/users omitted — same minItems contract as bootcmd/packages."""
+        cc = CloudInitConfig(runcmd=(), users=())
+        payload = json.loads(cc.render()[len("#cloud-config\n") :])
+        assert "runcmd" not in payload
+        assert "users" not in payload
+
+
+class TestBuildUsers:
+    """build_users: root always, non-root appended without sudo."""
+
+    def test_root_only(self) -> None:
+        from yascheduler.infra.cloud import build_cloud_init_users
+
+        users = build_cloud_init_users("root", "ssh-rsa AAA")
+        assert users == ({"name": "root", "ssh_authorized_keys": ["ssh-rsa AAA"]},)
+
+    def test_non_root_appends_user_without_sudo(self) -> None:
+        from yascheduler.infra.cloud import build_cloud_init_users
+
+        users = build_cloud_init_users("myuser", "ssh-rsa AAA")
+        assert users == (
+            {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAA"]},
+            {"name": "myuser", "ssh_authorized_keys": ["ssh-rsa AAA"]},
+        )
+        for entry in users:
+            assert "sudo" not in entry
 
 
 class TestSelectProvider:

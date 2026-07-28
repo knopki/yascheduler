@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from concurrent.futures.thread import ThreadPoolExecutor
+from dataclasses import replace
 from functools import cache, partial
 from typing import TYPE_CHECKING, cast
 
@@ -21,12 +22,18 @@ from hcloud.locations.domain import Location
 from hcloud.server_types.domain import ServerType
 from hcloud.ssh_keys.domain import SSHKey as HSSHKey
 
-from yascheduler.infra.cloud import CloudCreateNodeDTO, get_key_name, get_rnd_name
+from yascheduler.infra.cloud import (
+    CloudCreateNodeDTO,
+    CloudInitConfig,
+    build_cloud_init_users,
+    get_key_name,
+    get_rnd_name,
+)
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
 
-    from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudHetzner
+    from yascheduler.infra.cloud import ConfigCloudHetzner
 
 __all__ = ["hetzner_create_node", "hetzner_delete_node"]
 logger = logging.getLogger(__name__)
@@ -82,6 +89,9 @@ def get_ssh_key_id(client: HClient, key: ASSHKey) -> int:
 
 # region FUNC_hetzner_create_node
 # PURPOSE: Provision a Hetzner server via the CloudAdapter interface so the generic provisioner can launch Hetzner compute nodes.
+# RATIONALE:
+# - Q: Why inject `users` into cloud-init when ssh_keys already passes the key?
+#   A: Hetzner's ssh_keys only inject into root; a non-root cfg.username must be created by cloud-init. root is listed too for determinism. Mirrors vultr's build_users.
 async def hetzner_create_node(
     cfg: ConfigCloudHetzner,
     key: ASSHKey,
@@ -92,6 +102,12 @@ async def hetzner_create_node(
     client = await loop.run_in_executor(executor, get_client, cfg)
     ssh_key_id = await loop.run_in_executor(executor, get_ssh_key_id, client, key)
 
+    pub_key = key.export_public_key("openssh").decode("utf-8")
+    user_data = replace(
+        cloud_config or CloudInitConfig(),
+        users=build_cloud_init_users(cfg.username, pub_key),
+    ).render()
+
     create_server = partial(
         client.servers.create,
         name=get_rnd_name("node"),
@@ -99,7 +115,7 @@ async def hetzner_create_node(
         image=Image(name=cfg.image_name),
         location=Location(name=cfg.location) if cfg.location else None,
         ssh_keys=[HSSHKey(id=ssh_key_id, name=get_key_name(key))],
-        user_data=cloud_config.render() if cloud_config else None,
+        user_data=user_data,
     )
     response = await loop.run_in_executor(executor, create_server)
     server = response.server

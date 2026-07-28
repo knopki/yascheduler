@@ -159,6 +159,91 @@ def test_hetzner_find_srv_removed() -> None:
     assert not hasattr(hetzner_mod, "find_srv")
 
 
+@pytest.mark.asyncio
+async def test_hetzner_create_node_user_data_has_root_users() -> None:
+    """hetzner_create_node injects a cloud-init `users` section with root + the SSH key."""
+    import json
+
+    from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+
+    cfg = ConfigCloudHetzner(token="test-users")
+    mock_key = MagicMock()
+    mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
+
+    captured = {}
+
+    mock_server = MagicMock()
+    mock_server.id = 42
+    mock_server.public_net.ipv4.ip = "1.2.3.4"
+
+    mock_client = MagicMock()
+    mock_client.ssh_keys.create.return_value = MagicMock(id=123)
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return MagicMock(server=mock_server)
+
+    mock_client.servers.create.side_effect = _capture
+
+    with patch(
+        "yascheduler.infra.cloud.providers.hetzner.HClient",
+        return_value=mock_client,
+    ):
+        from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
+
+        await hetzner_create_node(cfg, mock_key)
+
+    user_data = captured["user_data"]
+    assert user_data.startswith("#cloud-config\n")
+    payload = json.loads(user_data[len("#cloud-config\n") :])
+    assert payload["users"] == [
+        {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
+    """Non-root cfg.username is created via cloud-init users (no sudo)."""
+    import json
+
+    from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+
+    cfg = ConfigCloudHetzner(username="compute", token="test-users-nr")
+    mock_key = MagicMock()
+    mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
+
+    captured = {}
+
+    mock_server = MagicMock()
+    mock_server.id = 42
+    mock_server.public_net.ipv4.ip = "1.2.3.4"
+
+    mock_client = MagicMock()
+    mock_client.ssh_keys.create.return_value = MagicMock(id=123)
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return MagicMock(server=mock_server)
+
+    mock_client.servers.create.side_effect = _capture
+
+    with patch(
+        "yascheduler.infra.cloud.providers.hetzner.HClient",
+        return_value=mock_client,
+    ):
+        from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
+
+        await hetzner_create_node(cfg, mock_key)
+
+    payload = json.loads(captured["user_data"][len("#cloud-config\n") :])
+    assert payload["users"] == [
+        {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},
+        {"name": "compute", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},
+    ]
+    for entry in payload["users"]:
+        assert "sudo" not in entry
+
+
 # =============================================================================
 # Azure
 # =============================================================================

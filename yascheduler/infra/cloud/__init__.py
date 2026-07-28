@@ -21,7 +21,7 @@ from .cloud_configs import (
     ConfigCloudVastAI,
     ConfigCloudVultr,
 )
-from .cloud_init import CloudInitConfig
+from .cloud_init import CloudInitConfig, build_cloud_init_users
 from .dto import CloudCreateNodeDTO
 from .manager import CloudAllocateError, CloudProvisionerImpl, CloudSetupError
 from .protocols import (
@@ -47,6 +47,7 @@ __all__ = [
     "ConfigCloudVultr",
     "CreateNodeCallable",
     "DeleteNodeCallable",
+    "build_cloud_init_users",
     "get_azure_adapter",
     "get_hetzner_adapter",
     "get_key_name",
