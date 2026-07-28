@@ -170,11 +170,15 @@ async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
 
 
 # region FUNC_build_baremetal_user_data
-# PURPOSE: Build a cloud-init user-data string for bare-metal provisioning so a freshly launched Vultr instance has /data, ulimit, apt packages, RAID0 NVMe (when need_raid), the ScaLAPACK symlinks.
+# PURPOSE: Build a cloud-init user-data string for bare-metal provisioning so a freshly launched Vultr instance has /data, ulimit, apt packages, RAID0 NVMe (when need_raid), the ScaLAPACK symlinks, and authorized_keys for root (and a non-root SSH user when configured) ready before the scheduler connects.
 # RATIONALE:
 # - Q: Why is /data a fixed absolute path and not ~/data?
 #   A: On bare metal /data is either a RAID0 NVMe mount (need_raid=True) or the root disk (need_raid=False); engines and tasks require a dedicated mount point (/data/engines, /data/tasks), and cloud-init must guarantee /data exists before the scheduler connects.
+# - Q: Why emit a `users` section when sshkey_id already injects the key for root?
+#   A: Vultr's sshkey_id only injects into /root/.ssh/authorized_keys. For non-root username, cloud-init must create the user and install the key itself; root is also listed for determinism. The created user has no sudo.
 def build_baremetal_user_data(
+    username: str,
+    pub_key: str,
     cloud_config: CloudInitConfig | None,
     need_raid: bool = True,
 ) -> str:
@@ -185,6 +189,12 @@ def build_baremetal_user_data(
     drives and resizes /dev/shm — needed for vbm-24c-256gb-amd where NVMe
     disks ship unformatted. For plans where NVMe is already the main disk
     (e.g. vbm-8c-132gb), pass need_raid=False to skip RAID and /dev/shm.
+
+    Always emits a `users` section so cloud-init installs authorized_keys
+    for root (Vultr's sshkey_id only injects into root's authorized_keys,
+    but we set it explicitly for determinism) and, when username is not
+    root, additionally creates that user without sudo and installs the same
+    key. The scheduler then polls SSH auth as cfg.username.
     """
     base_packages = [
         "openmpi-bin",
@@ -240,11 +250,17 @@ def build_baremetal_user_data(
         "/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2",
     ]
 
-    config = {
+    config: dict[str, object] = {
         "package_upgrade": package_upgrade,
         "packages": packages,
         "runcmd": runcmd,
     }
+
+    users = [{"name": "root", "ssh_authorized_keys": [pub_key]}]
+    if username != "root":
+        users.append({"name": username, "ssh_authorized_keys": [pub_key]})
+    config["users"] = users
+
     return "#cloud-config\n" + json.dumps(config)
 
 
@@ -335,9 +351,7 @@ async def _wait_ssh_port(instance_id: str, ip_addr: str) -> None:
 # - SSH port open AND key-based auth verified before returning (cloud-init may install authorized_keys after the port first opens)
 # - Post-instance-create failures (poll timeout, SSH port/auth failure) trigger best-effort DELETE of the instance id before the exception propagates, so no billable resource leaks when create_node raises.
 async def vultr_create_node(
-    cfg: ConfigCloudVultr,
-    key: ASSHKey,
-    cloud_config: CloudInitConfig | None = None,
+    cfg: ConfigCloudVultr, key: ASSHKey, cloud_config: CloudInitConfig | None = None
 ) -> CloudCreateNodeDTO:
     """Provision a bare-metal instance and wait until SSH is ready.
 
@@ -353,7 +367,10 @@ async def vultr_create_node(
     ssh_key_id = await get_ssh_key_id(client, key)
 
     label = get_rnd_name("yascheduler")
-    user_data = build_baremetal_user_data(cloud_config, cfg.need_raid)
+    pub_key = key.export_public_key("openssh").decode("utf-8")
+    user_data = build_baremetal_user_data(
+        cfg.username, pub_key, cloud_config, cfg.need_raid
+    )
     user_data_b64 = base64.b64encode(user_data.encode()).decode()
 
     body = {

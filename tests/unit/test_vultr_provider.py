@@ -149,16 +149,18 @@ class TestSshKeyFingerprint:
 class TestBuildBaremetalUserData:
     """build_baremetal_user_data: cloud-init payload shape per need_raid + cloud_config."""
 
+    PUB = "ssh-rsa AAAAB3NzaC1yc2E= test"
+
     def test_returns_cloud_config_prefix(self) -> None:
         from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
 
-        out = build_baremetal_user_data(None, need_raid=True)
+        out = build_baremetal_user_data("root", self.PUB, None, need_raid=True)
         assert out.startswith("#cloud-config\n")
 
     def test_strips_to_valid_json(self) -> None:
         from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
 
-        out = build_baremetal_user_data(None, need_raid=True)
+        out = build_baremetal_user_data("root", self.PUB, None, need_raid=True)
         data = json.loads(out.removeprefix("#cloud-config\n"))
         assert "runcmd" in data
         assert "packages" in data
@@ -166,7 +168,7 @@ class TestBuildBaremetalUserData:
     def test_need_raid_true_includes_mdadm_commands(self) -> None:
         from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
 
-        out = build_baremetal_user_data(None, need_raid=True)
+        out = build_baremetal_user_data("root", self.PUB, None, need_raid=True)
         assert "mdadm" in out
         assert "mdadm --create" in out
         assert "/dev/shm" in out
@@ -174,7 +176,7 @@ class TestBuildBaremetalUserData:
     def test_need_raid_false_skips_raid(self) -> None:
         from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
 
-        out = build_baremetal_user_data(None, need_raid=False)
+        out = build_baremetal_user_data("root", self.PUB, None, need_raid=False)
         data = json.loads(out.removeprefix("#cloud-config\n"))
         assert "mdadm" not in data["packages"]
         runcmd_str = " ".join(data["runcmd"])
@@ -184,7 +186,7 @@ class TestBuildBaremetalUserData:
     def test_none_cloud_config_no_package_upgrade(self) -> None:
         from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
 
-        out = build_baremetal_user_data(None, need_raid=True)
+        out = build_baremetal_user_data("root", self.PUB, None, need_raid=True)
         data = json.loads(out.removeprefix("#cloud-config\n"))
         assert data["package_upgrade"] is False
 
@@ -193,7 +195,7 @@ class TestBuildBaremetalUserData:
         from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
 
         cc = CloudInitConfig(packages=["foo", "bar"], package_upgrade=True)
-        out = build_baremetal_user_data(cc, need_raid=True)
+        out = build_baremetal_user_data("root", self.PUB, cc, need_raid=True)
         data = json.loads(out.removeprefix("#cloud-config\n"))
         assert "foo" in data["packages"]
         assert "bar" in data["packages"]
@@ -205,10 +207,38 @@ class TestBuildBaremetalUserData:
 
         # "git" is already in base packages; passing it via cloud_config must not duplicate.
         cc = CloudInitConfig(packages=["git", "custom-pkg"])
-        out = build_baremetal_user_data(cc, need_raid=True)
+        out = build_baremetal_user_data("root", self.PUB, cc, need_raid=True)
         data = json.loads(out.removeprefix("#cloud-config\n"))
         assert data["packages"].count("git") == 1
         assert "custom-pkg" in data["packages"]
+
+    def test_root_username_adds_root_authorized_keys(self) -> None:
+        """username='root' → users has root with the key."""
+        from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
+
+        out = build_baremetal_user_data("root", self.PUB, None, need_raid=False)
+        data = json.loads(out.removeprefix("#cloud-config\n"))
+        assert data["users"] == [{"name": "root", "ssh_authorized_keys": [self.PUB]}]
+
+    def test_non_root_username_adds_root_and_user(self) -> None:
+        """username!='root' → users has root AND the custom user, both with the key."""
+        from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
+
+        out = build_baremetal_user_data("myuser", self.PUB, None, need_raid=False)
+        data = json.loads(out.removeprefix("#cloud-config\n"))
+        assert data["users"] == [
+            {"name": "root", "ssh_authorized_keys": [self.PUB]},
+            {"name": "myuser", "ssh_authorized_keys": [self.PUB]},
+        ]
+
+    def test_non_root_user_has_no_sudo(self) -> None:
+        """Custom user must NOT have sudo (operator said no privilege escalation)."""
+        from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
+
+        out = build_baremetal_user_data("myuser", self.PUB, None, need_raid=False)
+        data = json.loads(out.removeprefix("#cloud-config\n"))
+        for entry in data["users"]:
+            assert "sudo" not in entry
 
 
 # =============================================================================
@@ -475,7 +505,7 @@ class TestVultrCreateNode:
             jump_username="jumpuser",
         )
         mock_key = MagicMock()
-
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
         mock_client.request = AsyncMock(
             side_effect=[
@@ -528,7 +558,7 @@ class TestVultrCreateNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_key = MagicMock()
-
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
         mock_client.request = AsyncMock(return_value={})  # POST: no id
 
@@ -566,7 +596,7 @@ class TestVultrCreateNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_key = MagicMock()
-
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
         mock_client.request = AsyncMock(
             side_effect=[
@@ -627,7 +657,7 @@ class TestVultrCreateNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_key = MagicMock()
-
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
         mock_client.request = AsyncMock(
             side_effect=[
@@ -690,7 +720,7 @@ class TestVultrCreateNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_key = MagicMock()
-
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
         mock_client.request = AsyncMock(
             side_effect=[
@@ -745,7 +775,7 @@ class TestVultrCreateNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_key = MagicMock()
-
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         transient_err = APIError("HTTP 500: Internal server error", status=500)
         mock_client = MagicMock()
         mock_client.request = AsyncMock(
@@ -793,6 +823,82 @@ class TestVultrCreateNode:
         assert result.external_id == "1.2.3.4"
 
     @pytest.mark.asyncio
+    async def test_user_data_carries_users_section_and_auth_uses_cfg_username(
+        self,
+    ) -> None:
+        """create_node forwards pub_key to user_data and polls auth as cfg.username.
+
+        Regression for non-root provisioning: Vultr sshkey_id only injects into
+        root's authorized_keys, so a non-root user is created via cloud-init
+        and the auth poll MUST use cfg.username.
+        """
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key", username="myuser")
+        pub = "ssh-rsa AAAAB3NzaC1yc2E= test"
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = pub.encode()
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {"bare_metal": {"id": "inst-1"}},
+                {
+                    "bare_metal": {
+                        "id": "inst-1",
+                        "status": "active",
+                        "main_ip": "1.2.3.4",
+                    },
+                },
+            ],
+        )
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="test-node",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr._wait_ssh_port",
+                AsyncMock(),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr._check_ssh_auth",
+                AsyncMock(return_value=True),
+            ) as auth_mock,
+        ):
+            result = await vultr_create_node(cfg, mock_key)
+
+        # create-node body MUST contain user_data with a `users` section carrying pub.
+        post_call = mock_client.request.call_args_list[0]
+        body = post_call.args[2]
+        import base64 as b64m
+
+        decoded = b64m.b64decode(body["user_data"]).decode()
+        data = json.loads(decoded.removeprefix("#cloud-config\n"))
+        assert data["users"] == [
+            {"name": "root", "ssh_authorized_keys": [pub]},
+            {"name": "myuser", "ssh_authorized_keys": [pub]},
+        ]
+
+        # Auth poll MUST use cfg.username, not "root".
+        auth_kwargs = auth_mock.call_args
+        assert auth_kwargs.kwargs.get("username") == "myuser" or (
+            "username" not in auth_kwargs.kwargs
+            and auth_mock.call_args.args[-1] == "myuser"
+        )
+        assert result.username == "myuser"
+
+    @pytest.mark.asyncio
     async def test_get_poll_permanent_4xx_does_not_retry(self) -> None:
         """A 4xx on GET must surface immediately — it is permanent, not a flap."""
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
@@ -800,7 +906,7 @@ class TestVultrCreateNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_key = MagicMock()
-
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         permanent_err = APIError("HTTP 404: Not found", status=404)
         mock_client = MagicMock()
         mock_client.request = AsyncMock(
