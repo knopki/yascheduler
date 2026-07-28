@@ -271,20 +271,40 @@ class Orchestrator:
     # PURPOSE: Establish SSH connections for enabled nodes and handle failures — resetting the failure timer on success, retrying indefinitely for static nodes (cloud is None), retrying cloud nodes within their connect_grace window, and abandoning cloud nodes whose grace window has been exceeded.
     # REQUIRES: self._connect_failures is an in-memory dict (not persisted — daemon restart resets grace windows); self._repository.connect reads jump_host/jump_port/jump_username from the Node itself (no config.remote lookup); self._connect_grace_for resolves grace by matching node.cloud against self._config_clouds prefixes (default 120s on mismatch).
     # ENSURES: On successful connect, the node_id entry is popped from _connect_failures and self._machine_connected_event is set; for static nodes (cloud is None), a trace DEBUG + warning(...) record is emitted and the method returns before the grace-check (NEVER reaches abandon_node); for cloud nodes with age < grace, a trace DEBUG + warning(...) record is emitted and the method returns; for cloud nodes with age >= grace, abandon_node() is called and the failure-timer entry is released.
-    # INVARIANTS: _connect_failures is mutated exclusively in this method (setdefault on first failure, pop on success or after abandon); static nodes never write to _connect_failures because the early return before BLOCK_connect_grace_check avoids the setdefault call; no config.remote lookup or CloudConfig prefix-match loop for jump identity runs in the orchestrator — connection identity comes exclusively from the Node.
+    # INVARIANTS: _connect_failures is mutated exclusively in this method (setdefault on first failure, pop on success or after abandon); static nodes never write to _connect_failures because the early return before BLOCK_connect_grace_check avoids the setdefault call; no config.remote lookup or CloudConfig prefix-match loop for jump identity runs in the orchestrator — connection identity comes exclusively from the Node; a missing keys_dir is translated to MachineConnectionError in BLOCK_load_private_keys before the connect try-block, so it follows the same retry path as SSH-level failures rather than escaping to the worker wrapper as a contextless CONSUMER_ERROR.
     # RATIONALE:
     # - Q: Why do static nodes retry indefinitely instead of entering the grace/abandon path?
     #   A: A transient SSH outage after a daemon restart must not silently delete an operator's static-node row — static nodes retry indefinitely rather than entering the grace window or abandon path.
     # - Q: Why is the default grace 120 seconds for unrecognised cloud prefixes?
     #   A: The conservative fallback ensures the abandon path still fires for misconfigured or renamed cloud prefixes rather than silently retrying forever.
+    # - Q: Why translate FileNotFoundError from list_private_keys into MachineConnectionError instead of letting it bubble to the worker wrapper?
+    #   A: bubbling would surface as a contextless CONSUMER_ERROR/`consumer error on queue conn_machine` (no node_id/hostname, no actionable reason) and bypass the never-abandon guarantee for static nodes; translating keeps the error on the designed retry path and surfaces a WARNING naming the node and the missing keys_dir.
     async def _connect_machine_consumer(self, msg: UMessage[NodeId, Node]) -> None:
         node = msg.payload
-        keys = await asyncio.get_running_loop().run_in_executor(
-            None,
-            self._list_private_keys_fn,
-            self._local_settings.keys_dir,
-        )
         try:
+            # region BLOCK_load_private_keys
+            # list_private_keys() raises FileNotFoundError when keys_dir does
+            # not exist; translate that into MachineConnectionError so it is
+            # caught by the shared `except MachineConnectionError` below and
+            # routes through the same retry path as SSH failures
+            # (BLOCK_static_node_retry for static nodes, grace/abandon for
+            # cloud nodes), surfacing a contextual WARNING with
+            # node_id/hostname instead of a contextless CONSUMER_ERROR. See
+            # _parse_local_section's BLOCK_warn_missing_data_dir for the
+            # parse-time counterpart.
+            try:
+                keys = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    self._list_private_keys_fn,
+                    self._local_settings.keys_dir,
+                )
+            except FileNotFoundError as err:
+                raise MachineConnectionError(
+                    node.node_id,
+                    node.hostname,
+                    f"keys_dir does not exist: {self._local_settings.keys_dir}",
+                ) from err
+            # endregion BLOCK_load_private_keys
             await self._repository.connect(
                 node=node,
                 client_keys=keys,

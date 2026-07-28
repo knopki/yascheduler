@@ -4,6 +4,7 @@
 # KEYWORDS: INI config parsing, PostgresDbConfig, Engine, CloudConfigs
 # endregion MODULE_CONTRACT
 
+import warnings
 from configparser import ConfigParser
 from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path, PurePath
@@ -65,12 +66,44 @@ def test_config_db_defaults() -> None:
     assert db.port == 5432
 
 
-def test_config_local_custom_data_dir() -> None:
-    """Derived paths resolve under custom data_dir"""
+def test_config_local_custom_data_dir(tmp_path: Path) -> None:
+    """Derived paths resolve under custom data_dir; no warn when data_dir exists"""
     cfg = ConfigParser()
-    cfg.read_string("[local]\ndata_dir=/opt/data\n")
-    local = _parse_local_section(cfg["local"])
-    assert str(local.data_dir).endswith("data") or "/opt/data" in str(local.data_dir)
+    cfg.read_string(f"[local]\ndata_dir={tmp_path}\n")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ConfigWarning)
+        local = _parse_local_section(cfg["local"])
+    assert str(local.data_dir) == str(tmp_path)
+
+
+def test_config_local_missing_data_dir_warns(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A data_dir that does not exist on disk emits a logger.warning naming the path.
+
+    Routed through the module logger (not warnings.warn) so it joins the
+    daemon's configured log stream; ConfigWarning is reserved for structural
+    config errors (unknown INI keys), not operational/environment conditions.
+    """
+    import logging
+
+    missing = tmp_path / "does-not-exist"
+    cfg = ConfigParser()
+    cfg.read_string(f"[local]\ndata_dir={missing}\n")
+    with caplog.at_level(
+        logging.WARNING, logger="yascheduler.entrypoints.config_parser"
+    ):
+        local = _parse_local_section(cfg["local"])
+    # parser still returns a LocalSettings so cloud flows (lazy keys_dir) keep working
+    assert str(local.data_dir) == str(missing)
+    warning_records = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "data_dir does not exist" in r.getMessage()
+    ]
+    assert len(warning_records) == 1
+    assert str(missing) in warning_records[0].getMessage()
 
 
 def test_config_local_defaults() -> None:

@@ -538,6 +538,129 @@ class TestConnectNewNode:
         )
 
 
+class TestMissingKeysDirTranslation:
+    """BLOCK_load_private_keys translates FileNotFoundError from list_private_keys
+    into MachineConnectionError so a missing keys_dir routes through the same
+    retry path as SSH failures instead of escaping as a contextless
+    CONSUMER_ERROR.
+
+    Covers the regression where a missing data_dir/keys_dir produced a spammed
+    `consumer error on queue conn_machine` ERROR with no node context, because
+    list_private_keys was called outside the connect try-block. The translation
+    sits before the try-block so both static and cloud nodes hit their designed
+    retry/abandon handlers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_static_node_missing_keys_dir_translated_to_machine_error(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """list_private_keys FileNotFoundError on a static node → MachineConnectionError
+        routed through BLOCK_static_node_retry (never abandon, contextual WARNING)."""
+        import logging
+
+        from yascheduler.domain.model import Node
+
+        static_node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.9",
+            ncpus=2,
+            cloud=None,
+            username="root",
+            port=22,
+            enabled=True,
+        )
+
+        orch = make_orchestrator(config_clouds=[])
+        orch._list_private_keys_fn = MagicMock(  # type: ignore[method-assign]
+            side_effect=FileNotFoundError(2, "No such file or directory"),
+        )
+        orch._repository.connect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch(
+                "yascheduler.application.orchestrator.abandon_node",
+                new=AsyncMock(),
+            ) as mock_abandon,
+            caplog.at_level(logging.DEBUG),
+        ):
+            await orch._connect_machine_consumer(UMessage(NodeId(1), static_node))
+
+        # repository.connect never reached: the translation raised before it.
+        orch._repository.connect.assert_not_called()
+        # Static node → never abandon, never enters the failure timer.
+        mock_abandon.assert_not_called()
+        assert NodeId(1) not in orch._connect_failures
+        # Contextual trace + user-visible WARNING both fire.
+        trace_records = [
+            r for r in caplog.records if r.getMessage() == "CONNECT_RETRY_STATIC"
+        ]
+        assert len(trace_records) == 1
+        extra = extra_fields(trace_records[0])
+        assert extra.get("hostname") == "10.0.0.9"
+        assert "keys_dir does not exist" in str(extra.get("err"))
+        warning_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+            and "static node 10.0.0.9 connect failed" in r.getMessage()
+        ]
+        assert len(warning_records) == 1
+        assert "keys_dir does not exist" in warning_records[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_cloud_node_missing_keys_dir_translated_to_machine_error(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """list_private_keys FileNotFoundError on a cloud node → MachineConnectionError
+        routed through BLOCK_connect_grace_check (no abandon within grace)."""
+        import logging
+
+        from yascheduler.domain.model import Node
+
+        cloud_node = Node(
+            node_id=NodeId(2),
+            hostname="10.0.0.10",
+            ncpus=2,
+            cloud="hetzner",
+            username="root",
+            port=22,
+            enabled=True,
+        )
+
+        cfg_cloud = MagicMock(prefix="hetzner", connect_grace=60)
+        orch = make_orchestrator(config_clouds=[cfg_cloud])
+        orch._list_private_keys_fn = MagicMock(  # type: ignore[method-assign]
+            side_effect=FileNotFoundError(2, "No such file or directory"),
+        )
+        orch._repository.connect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch(
+                "yascheduler.application.orchestrator.time.monotonic",
+                return_value=110.0,
+            ),
+            patch(
+                "yascheduler.application.orchestrator.abandon_node",
+                new=AsyncMock(),
+            ) as mock_abandon,
+            caplog.at_level(logging.DEBUG),
+        ):
+            await orch._connect_machine_consumer(UMessage(NodeId(2), cloud_node))
+
+        orch._repository.connect.assert_not_called()
+        # Within grace → no abandon, IP stays in timer.
+        mock_abandon.assert_not_called()
+        assert NodeId(2) in orch._connect_failures
+        trace_records = [r for r in caplog.records if r.getMessage() == "CONNECT_RETRY"]
+        assert len(trace_records) == 1
+        extra = extra_fields(trace_records[0])
+        assert extra.get("hostname") == "10.0.0.10"
+        assert "keys_dir does not exist" in str(extra.get("err"))
+
+
 def _uow_with_nodes(nodes: list) -> AsyncMock:
     """Build a UoW mock whose nodes.list_enabled returns the given nodes."""
     uow = AsyncMock()

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from configparser import ConfigParser
 from functools import partial
 from pathlib import Path, PurePath
@@ -43,6 +44,9 @@ if TYPE_CHECKING:
     from configparser import SectionProxy
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloud
+
+__all__ = ["parse_config"]
+logger = logging.getLogger(__name__)
 
 
 # region FUNC__check_spawn
@@ -642,9 +646,19 @@ def _local_valid_fields() -> Sequence[str]:
 
 # region FUNC__parse_local_section
 # PURPOSE: Build a frozen LocalSettings from a [local] INI section.
+# INVARIANTS: A data_dir that does not exist on the filesystem at parse time emits a logger.warning naming the missing path; the parser still returns a LocalSettings so cloud-only flows (which lazily create keys_dir via get_or_create_ssh_key) are not broken.
 def _parse_local_section(sec: SectionProxy) -> LocalSettings:
     warn_unknown_fields(_local_valid_fields(), sec)
     data_dir = Path(sec.get("data_dir", "./data")).resolve()
+    # region BLOCK_warn_missing_data_dir
+    # data_dir is the parent of keys_dir/tasks_dir/engines_dir; if it does not
+    # exist, list_private_keys() will raise FileNotFoundError on every connect
+    # attempt for static nodes (whose keys must be pre-provisioned by the
+    # operator). Warn — do not raise — so cloud flows that lazily create
+    # keys_dir via get_or_create_ssh_key keep working.
+    if not data_dir.exists():
+        logger.warning("[local] data_dir does not exist: %s", data_dir)
+    # endregion BLOCK_warn_missing_data_dir
     return LocalSettings(
         data_dir=data_dir,
         tasks_dir=Path(sec.get("tasks_dir", str(data_dir / "tasks"))).resolve(),
