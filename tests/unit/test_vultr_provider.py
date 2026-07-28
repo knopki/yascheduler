@@ -73,6 +73,33 @@ class TestExceptionHierarchy:
 
         assert str(APIError("boom")) == "boom"
 
+    def test_api_error_default_status_is_none(self) -> None:
+        """APIError without explicit status has status=None (transport-level)."""
+        from yascheduler.infra.cloud.providers.vultr import APIError
+
+        err = APIError("boom")
+        assert err.status is None
+
+    def test_api_error_5xx_is_transient(self) -> None:
+        """5xx APIError is transient — worth retrying."""
+        from yascheduler.infra.cloud.providers.vultr import APIError
+
+        assert APIError("HTTP 500", status=500).transient is True
+        assert APIError("HTTP 503", status=503).transient is True
+
+    def test_api_error_4xx_is_not_transient(self) -> None:
+        """4xx APIError is permanent — not retried."""
+        from yascheduler.infra.cloud.providers.vultr import APIError
+
+        assert APIError("HTTP 404", status=404).transient is False
+        assert APIError("HTTP 400", status=400).transient is False
+
+    def test_api_error_transport_failure_is_transient(self) -> None:
+        """APIError with status=None (transport failure) is transient."""
+        from yascheduler.infra.cloud.providers.vultr import APIError
+
+        assert APIError("HTTP request failed: timeout").transient is True
+
 
 # =============================================================================
 # ssh_key_fingerprint_md5
@@ -522,6 +549,12 @@ class TestVultrCreateNode:
         ):
             await vultr_create_node(cfg, mock_key)
 
+        # Instance was never created (no id in POST response) → no cleanup.
+        delete_calls = [
+            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
+        ]
+        assert delete_calls == []
+
     @pytest.mark.asyncio
     async def test_never_active_raises_apierror(self) -> None:
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
@@ -545,11 +578,15 @@ class TestVultrCreateNode:
                         "main_ip": "0.0.0.0",
                     },
                 },
+                {},  # DELETE cleanup accepted
+                APIError("HTTP 404", status=404),  # GET verify: gone
             ],
         )
 
         loop = MagicMock()
-        loop.time = MagicMock(side_effect=[0, 0, POLL_TIMEOUT + 1])
+        # create-poll consumes 3 (deadline, while-check, while-check-exit);
+        # verify consumes 2 (deadline, while-check) then 404 returns.
+        loop.time = MagicMock(side_effect=[0, 0, POLL_TIMEOUT + 1, 0, 1])
 
         with (
             patch(
@@ -576,6 +613,13 @@ class TestVultrCreateNode:
         ):
             await vultr_create_node(cfg, mock_key)
 
+        # Instance was created → cleanup MUST have deleted it (BUG-1 regression).
+        delete_calls = [
+            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
+        ]
+        assert len(delete_calls) == 1
+        assert delete_calls[0].args[1] == "/bare-metals/inst-1"
+
     @pytest.mark.asyncio
     async def test_ssh_auth_failure_raises_apierror(self) -> None:
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
@@ -595,6 +639,8 @@ class TestVultrCreateNode:
                         "main_ip": "1.2.3.4",
                     },
                 },
+                {},  # DELETE cleanup accepted
+                APIError("HTTP 404", status=404),  # GET verify: gone
             ],
         )
 
@@ -619,9 +665,20 @@ class TestVultrCreateNode:
                 "yascheduler.infra.cloud.providers.vultr._check_ssh_auth",
                 AsyncMock(return_value=False),
             ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=MagicMock(time=MagicMock(side_effect=[0, 0, 1, 1])),
+            ),
             pytest.raises(APIError),
         ):
             await vultr_create_node(cfg, mock_key)
+
+        # Instance was created → cleanup MUST have deleted it (BUG-1 regression).
+        delete_calls = [
+            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
+        ]
+        assert len(delete_calls) == 1
+        assert delete_calls[0].args[1] == "/bare-metals/inst-1"
 
     @pytest.mark.asyncio
     async def test_emits_poll_status_marker(
@@ -678,6 +735,370 @@ class TestVultrCreateNode:
         assert fields["instance_id"] == "inst-1"
         assert fields["status"] == "active"
         assert fields["ip"] == "1.2.3.4"
+
+    @pytest.mark.asyncio
+    async def test_get_poll_retries_transient_500_then_succeeds(self) -> None:
+        """A flapping 5xx on GET status must not abort create_node — the
+        instance is alive and the poll should recover on the next tick."""
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import APIError, vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_key = MagicMock()
+
+        transient_err = APIError("HTTP 500: Internal server error", status=500)
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {"bare_metal": {"id": "inst-1"}},  # POST
+                transient_err,  # GET 1: flap
+                {  # GET 2: recovered
+                    "bare_metal": {
+                        "id": "inst-1",
+                        "status": "active",
+                        "main_ip": "1.2.3.4",
+                    },
+                },
+            ],
+        )
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="test-node",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr._wait_ssh_port",
+                AsyncMock(),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr._check_ssh_auth",
+                AsyncMock(return_value=True),
+            ),
+        ):
+            result = await vultr_create_node(cfg, mock_key)
+
+        assert result.external_id == "1.2.3.4"
+
+    @pytest.mark.asyncio
+    async def test_get_poll_permanent_4xx_does_not_retry(self) -> None:
+        """A 4xx on GET must surface immediately — it is permanent, not a flap."""
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import APIError, vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_key = MagicMock()
+
+        permanent_err = APIError("HTTP 404: Not found", status=404)
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {"bare_metal": {"id": "inst-1"}},  # POST
+                permanent_err,  # GET create-poll: 404 — permanent, raise
+                {},  # DELETE cleanup accepted
+                APIError("HTTP 404", status=404),  # GET verify: gone
+            ],
+        )
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="test-node",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=MagicMock(time=MagicMock(side_effect=[0, 1, 0, 1])),
+            ),
+            pytest.raises(APIError) as exc_info,
+        ):
+            await vultr_create_node(cfg, mock_key)
+
+        # The 404 propagated, not swallowed.
+        assert exc_info.value.status == 404
+        # Instance was created → cleanup DELETE fired once.
+        delete_calls = [
+            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
+        ]
+        assert len(delete_calls) == 1
+
+
+# =============================================================================
+# _delete_and_verify
+# =============================================================================
+
+
+class TestDeleteAndVerify:
+    """_delete_and_verify: DELETE + verify-poll semantics."""
+
+    @pytest.mark.asyncio
+    async def test_delete_accepted_then_verify_404(self) -> None:
+        """2xx DELETE → verify GET polls until 404 (confirmed gone)."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _delete_and_verify,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {},  # DELETE accepted (2xx)
+                {"bare_metal": {"id": "inst-1"}},  # GET 1: still present
+                APIError("HTTP 404", status=404),  # GET 2: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch("yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()),
+        ):
+            result = await _delete_and_verify(mock_client, "inst-1")
+
+        assert result is True
+
+        # 1 DELETE + 2 GETs (present then gone).
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods == ["DELETE", "GET", "GET"]
+
+    @pytest.mark.asyncio
+    async def test_delete_404_means_already_gone_no_verify(self) -> None:
+        """DELETE returns 404 → already gone → no verify-poll needed."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _delete_and_verify,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=APIError("HTTP 404", status=404),
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
+        ):
+            result = await _delete_and_verify(mock_client, "inst-1")
+
+        assert result is True
+
+        # Only the DELETE — no verify GET.
+        assert mock_client.request.call_count == 1
+        assert mock_client.request.call_args.args[0] == "DELETE"
+
+    @pytest.mark.asyncio
+    async def test_delete_500_retried_then_accepted(self) -> None:
+        """DELETE 5xx is transient → retry DELETE; then 2xx accepted → verify."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _delete_and_verify,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                APIError("HTTP 500", status=500),  # DELETE 1: transient
+                {},  # DELETE 2: accepted
+                APIError("HTTP 404", status=404),  # GET: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch("yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()),
+        ):
+            result = await _delete_and_verify(mock_client, "inst-1")
+
+        assert result is True
+
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods == ["DELETE", "DELETE", "GET"]
+
+    @pytest.mark.asyncio
+    async def test_delete_500_exhausts_retries_no_verify(self) -> None:
+        """Persistent 5xx on DELETE exhausts retries → no verify (never accepted)."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            CLEANUP_DELETE_ATTEMPTS,
+            APIError,
+            _delete_and_verify,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=APIError("HTTP 500", status=500),
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
+        ):
+            result = await _delete_and_verify(mock_client, "inst-1")
+
+        assert result is False
+
+        # All calls are DELETE retries — no verify GET ever issued.
+        assert mock_client.request.call_count == CLEANUP_DELETE_ATTEMPTS
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert all(m == "DELETE" for m in methods)
+
+    @pytest.mark.asyncio
+    async def test_delete_permanent_4xx_no_retry_no_verify(self) -> None:
+        """DELETE 4xx (non-404) is permanent → no retry, no verify."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _delete_and_verify,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=APIError("HTTP 403", status=403),
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
+        ):
+            result = await _delete_and_verify(mock_client, "inst-1")
+
+        assert result is False
+
+        assert mock_client.request.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_verify_timeout_logs_error_still_present(
+        self,
+        log_records: list,
+    ) -> None:
+        """DELETE accepted but instance never goes 404 → ERROR log for manual intervention."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            CLEANUP_VERIFY_TIMEOUT,
+            _delete_and_verify,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {},  # DELETE accepted
+                *[{"bare_metal": {"id": "inst-1"}}] * 100,  # GET: always present
+            ],
+        )
+
+        # Simulate verify-timeout: time() jumps past deadline after first GET.
+        call_count = [0]
+
+        def fake_time() -> float:
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return 0  # deadline = 0 + CLEANUP_VERIFY_TIMEOUT; while: 0 < deadline
+            return CLEANUP_VERIFY_TIMEOUT + 1  # expire on second while-check
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=fake_time)
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch("yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()),
+        ):
+            result = await _delete_and_verify(mock_client, "inst-1")
+
+        assert result is False
+
+        # Must NOT claim success — escalate to ERROR.
+        error_records = [
+            r
+            for r in log_records
+            if r.levelno >= logging.ERROR and "STILL PRESENT" in r.getMessage()
+        ]
+        assert len(error_records) == 1
+
+    @pytest.mark.asyncio
+    async def test_verify_get_transient_error_keeps_polling(self) -> None:
+        """Transient GET error during verify → keep polling (uncertain), not abort."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _delete_and_verify,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {},  # DELETE accepted
+                APIError("HTTP 500", status=500),  # GET 1: transient
+                APIError("HTTP 404", status=404),  # GET 2: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch("yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()),
+        ):
+            result = await _delete_and_verify(mock_client, "inst-1")
+
+        assert result is True
+
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods == ["DELETE", "GET", "GET"]
+
+    @pytest.mark.asyncio
+    async def test_never_raises(self) -> None:
+        """Cleanup must never raise even when everything fails."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _delete_and_verify,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=APIError("HTTP 500", status=500),
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
+        ):
+            # Must not raise.
+            result = await _delete_and_verify(mock_client, "inst-1")
+
+        assert result is False
 
 
 # =============================================================================
@@ -736,7 +1157,7 @@ class TestFindBaremetal:
 
 
 class TestVultrDeleteNode:
-    """vultr_delete_node: found → DELETE + log; unknown → skip + log."""
+    """vultr_delete_node: found → DELETE + verify + log; unknown → skip + log."""
 
     @pytest.mark.asyncio
     async def test_found_calls_delete_and_logs(
@@ -744,11 +1165,22 @@ class TestVultrDeleteNode:
         log_records: list,
     ) -> None:
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
-        from yascheduler.infra.cloud.providers.vultr import vultr_delete_node
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            vultr_delete_node,
+        )
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(return_value={})
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {},  # DELETE accepted
+                APIError("HTTP 404", status=404),  # GET verify: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
 
         with (
             patch(
@@ -759,6 +1191,11 @@ class TestVultrDeleteNode:
                 "yascheduler.infra.cloud.providers.vultr.find_baremetal",
                 AsyncMock(return_value="inst-1"),
             ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch("yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()),
         ):
             await vultr_delete_node(cfg, "1.2.3.4")
 
@@ -768,7 +1205,7 @@ class TestVultrDeleteNode:
         ]
         assert len(delete_calls) == 1
         assert delete_calls[0].args[1] == "/bare-metals/inst-1"
-        # DELETED info marker emitted
+        # DELETED info marker emitted only after verify confirms gone
         deleted_records = [r for r in log_records if "DELETED" in r.getMessage()]
         assert len(deleted_records) == 1
 

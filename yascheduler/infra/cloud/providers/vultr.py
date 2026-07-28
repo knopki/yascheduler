@@ -36,11 +36,33 @@ POLL_INTERVAL = 20
 POLL_TIMEOUT = 1200
 SSH_AUTH_ATTEMPTS = 12
 SSH_AUTH_INTERVAL = 15
+# DELETE retries on transient (5xx) failures; the DELETE call itself.
+CLEANUP_DELETE_ATTEMPTS = 3
+CLEANUP_DELETE_INTERVAL = 5
+# After a 2xx DELETE, poll GET until the instance is confirmed gone (404).
+# Vultr bare-metal deletion is asynchronous: a 2xx means "accepted", not "gone".
+CLEANUP_VERIFY_TIMEOUT = 180
+CLEANUP_VERIFY_INTERVAL = 10
 _HTTP_BAD_REQUEST_CODE = 400
+_HTTP_INTERNAL_ERROR_CODE = 500
+_HTTP_NOT_FOUND_CODE = 404
 
 
 class APIError(Exception):
-    """Vultr API error."""
+    """Vultr API error.
+
+    `status` is the HTTP status when the error originated from an HTTP
+    response, or None for transport-level failures.
+    """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def transient(self) -> bool:
+        """True for 5xx responses and transport failures — worth retrying."""
+        return self.status is None or self.status >= _HTTP_INTERNAL_ERROR_CODE
 
 
 # region CLASS_VultrClient
@@ -80,7 +102,7 @@ class VultrClient:
                 raw = await resp.text()
                 if resp.status >= _HTTP_BAD_REQUEST_CODE:
                     msg = f"HTTP {resp.status}: {raw}"
-                    raise APIError(msg)
+                    raise APIError(msg, status=resp.status)
                 if not raw:
                     return {}
                 return cast("dict", json.loads(raw))
@@ -148,7 +170,7 @@ async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
 
 
 # region FUNC_build_baremetal_user_data
-# PURPOSE: Build a cloud-init user-data string for bare-metal provisioning so a freshly launched Vultr instance has /data, ulimit, apt packages, RAID0 NVMe (when need_raid), and the ScaLAPACK symlinks ready before the scheduler connects.
+# PURPOSE: Build a cloud-init user-data string for bare-metal provisioning so a freshly launched Vultr instance has /data, ulimit, apt packages, RAID0 NVMe (when need_raid), the ScaLAPACK symlinks.
 # RATIONALE:
 # - Q: Why is /data a fixed absolute path and not ~/data?
 #   A: On bare metal /data is either a RAID0 NVMe mount (need_raid=True) or the root disk (need_raid=False); engines and tasks require a dedicated mount point (/data/engines, /data/tasks), and cloud-init must guarantee /data exists before the scheduler connects.
@@ -307,10 +329,11 @@ async def _wait_ssh_port(instance_id: str, ip_addr: str) -> None:
 
 # region FUNC_vultr_create_node
 # PURPOSE: Provision a Vultr bare-metal instance via the CloudAdapter interface so the generic provisioner can launch Vultr compute nodes.
-# ENSURES: Returns CloudCreateNodeDTO with external_id = hostname = instance public IP; SSH auth verified before return.
+# ENSURES: Returns CloudCreateNodeDTO with external_id = hostname = instance public IP; SSH auth verified before return. On any failure AFTER the instance is created, the instance is best-effort deleted before re-raising (no billable orphan).
 # INVARIANTS:
 # - external_id = hostname = instance public IP (delete_node looks up by IP via find_baremetal)
 # - SSH port open AND key-based auth verified before returning (cloud-init may install authorized_keys after the port first opens)
+# - Post-instance-create failures (poll timeout, SSH port/auth failure) trigger best-effort DELETE of the instance id before the exception propagates, so no billable resource leaks when create_node raises.
 async def vultr_create_node(
     cfg: ConfigCloudVultr,
     key: ASSHKey,
@@ -322,11 +345,14 @@ async def vultr_create_node(
     then waits for the SSH port to open and for key-based auth to succeed
     (cloud-init may not have installed authorized_keys yet when the port
     first opens). Returns the instance IP address.
+
+    If any step after instance creation fails, the instance is best-effort
+    deleted before re-raising so no billable orphan leaks.
     """
     client = get_client(cfg)
     ssh_key_id = await get_ssh_key_id(client, key)
 
-    label = get_rnd_name("node")
+    label = get_rnd_name("yascheduler")
     user_data = build_baremetal_user_data(cloud_config, cfg.need_raid)
     user_data_b64 = base64.b64encode(user_data.encode()).decode()
 
@@ -349,62 +375,190 @@ async def vultr_create_node(
 
     logger.info("CREATING bare-metal %s (id=%s)", label, instance_id)
 
-    deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT
-    last_status: str | None = None
-    ip_addr: str | None = None
-    while asyncio.get_running_loop().time() < deadline:
-        data = await client.request("GET", f"/bare-metals/{instance_id}")
-        bm = data.get("bare_metal", data)
-        status = bm.get("status", "")
-        ip_addr = bm.get("main_ip", "")
-        if status != last_status:
-            logger.debug(
-                "POLL_STATUS",
-                extra={
-                    "instance_id": instance_id,
-                    "status": status,
-                    "ip": ip_addr,
-                },
-            )
-            last_status = status
-        if status == "active" and ip_addr and ip_addr != "0.0.0.0":  # noqa: S104
-            break
-        await asyncio.sleep(POLL_INTERVAL)
-    else:
-        msg = f"Bare-metal {instance_id} did not become active in {POLL_TIMEOUT}s"
-        raise APIError(msg)
+    # The instance now exists and bills. Any failure below MUST best-effort
+    # delete it so create_node never leaks a billable orphan.
+    try:
+        deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT
+        last_status: str | None = None
+        ip_addr: str | None = None
+        while asyncio.get_running_loop().time() < deadline:
+            # Vultr API occasionally flaps with 5xx on an instance that actually
+            # exists and is progressing. Treat transient errors as "no data this
+            # tick" and keep polling; a permanent error (4xx) or a transport
+            # failure that persists until deadline will surface as APIError below.
+            try:
+                data = await client.request("GET", f"/bare-metals/{instance_id}")
+            except APIError as err:
+                if err.transient:
+                    logger.debug(
+                        "POLL_TRANSIENT_RETRY",
+                        extra={
+                            "instance_id": instance_id,
+                            "error": str(err),
+                        },
+                    )
+                    await asyncio.sleep(POLL_INTERVAL)
+                    continue
+                raise
+            bm = data.get("bare_metal", data)
+            status = bm.get("status", "")
+            ip_addr = bm.get("main_ip", "")
+            if status != last_status:
+                logger.debug(
+                    "POLL_STATUS",
+                    extra={
+                        "instance_id": instance_id,
+                        "status": status,
+                        "ip": ip_addr,
+                    },
+                )
+                last_status = status
+            if status == "active" and ip_addr and ip_addr != "0.0.0.0":  # noqa: S104
+                break
+            await asyncio.sleep(POLL_INTERVAL)
+        else:
+            msg = f"Bare-metal {instance_id} did not become active in {POLL_TIMEOUT}s"
+            raise APIError(msg)  # noqa: TRY301
 
-    assert ip_addr is not None
-    logger.info("Bare-metal %s active, waiting for SSH on %s", instance_id, ip_addr)
-    await _wait_ssh_port(instance_id, ip_addr)
+        assert ip_addr is not None
+        logger.info("Bare-metal %s active, waiting for SSH on %s", instance_id, ip_addr)
+        await _wait_ssh_port(instance_id, ip_addr)
 
-    # SSH port may open before cloud-init finishes installing authorized_keys,
-    # causing Permission denied on first connect. Poll auth with the configured
-    # key so create_node doesn't fail and trigger redundant instance creation.
-    logger.info(
-        "Bare-metal %s SSH port open, waiting for cloud-init to install keys",
-        instance_id,
-    )
-    ssh_ok = await _check_ssh_auth(instance_id, ip_addr, key, cfg.username)
-    if not ssh_ok:
-        msg = (
-            f"Bare-metal {instance_id} SSH auth failed on {ip_addr} "
-            f"after {SSH_AUTH_ATTEMPTS} attempts"
+        # SSH port may open before cloud-init finishes installing authorized_keys,
+        # causing Permission denied on first connect. Poll auth with the configured
+        # key so create_node doesn't fail and trigger redundant instance creation.
+        logger.info(
+            "Bare-metal %s SSH port open, waiting for cloud-init to install keys",
+            instance_id,
         )
-        raise APIError(msg)
+        ssh_ok = await _check_ssh_auth(instance_id, ip_addr, key, cfg.username)
+        if not ssh_ok:
+            msg = (
+                f"Bare-metal {instance_id} SSH auth failed on {ip_addr} "
+                f"after {SSH_AUTH_ATTEMPTS} attempts"
+            )
+            raise APIError(msg)  # noqa: TRY301
 
-    logger.info("CREATED %s", ip_addr)
-    return CloudCreateNodeDTO(
-        external_id=ip_addr,
-        hostname=ip_addr,
-        username=cfg.username,
-        jump_host=cfg.jump_host,
-        jump_port=cfg.jump_port,
-        jump_username=cfg.jump_username or "root",
-    )
+        logger.info("CREATED %s", ip_addr)
+        return CloudCreateNodeDTO(
+            external_id=ip_addr,
+            hostname=ip_addr,
+            username=cfg.username,
+            jump_host=cfg.jump_host,
+            jump_port=cfg.jump_port,
+            jump_username=cfg.jump_username or "root",
+        )
+    except Exception:
+        logger.exception(
+            "Bare-metal %s create_node failed before returning", instance_id
+        )
+        await _delete_and_verify(client, instance_id)
+        raise
 
 
 # endregion FUNC_vultr_create_node
+
+
+# region FUNC__delete_and_verify
+# PURPOSE: Delete a Vultr bare-metal instance with transient retry and async-deletion verification so neither create_node cleanup nor deallocate leaks a billable orphan when Vultr flaps or returns 2xx without immediately removing the instance.
+# ENSURES: Returns True iff the instance is confirmed gone (DELETE 404 or verify GET 404). Returns False if DELETE permanently fails, retries exhaust, or verify times out. Never raises. Timeout-verified still-present instances are escalated to ERROR for manual intervention. The log NEVER claims success without a 404 confirmation.
+# MODEL: Vultr bare-metal DELETE is asynchronous — 2xx means "accepted", not "gone". A 404 on DELETE means already gone. A 5xx is transient and retried. A 4xx (non-404) is permanent. After an accepted DELETE, poll GET until 404 or CLEANUP_VERIFY_TIMEOUT.
+async def _delete_and_verify(
+    client: VultrClient,
+    instance_id: str,
+) -> bool:
+    """Delete a bare-metal instance with retry + async-deletion verification.
+
+    Returns True iff confirmed gone (404). Never raises.
+    """
+    # region BLOCK_delete
+    delete_accepted = False
+    for attempt in range(1, CLEANUP_DELETE_ATTEMPTS + 1):
+        try:
+            await client.request("DELETE", f"/bare-metals/{instance_id}")
+        except APIError as err:
+            if err.status == _HTTP_NOT_FOUND_CODE:
+                # Already gone — nothing to verify.
+                logger.warning("Bare-metal %s already gone (DELETE 404)", instance_id)
+                return True
+            if err.transient and attempt < CLEANUP_DELETE_ATTEMPTS:
+                logger.debug(
+                    "DELETE_TRANSIENT_RETRY",
+                    extra={
+                        "instance_id": instance_id,
+                        "attempt": attempt,
+                        "attempts": CLEANUP_DELETE_ATTEMPTS,
+                        "error": str(err),
+                    },
+                )
+                await asyncio.sleep(CLEANUP_DELETE_INTERVAL)
+                continue
+            logger.warning(
+                "Bare-metal %s delete failed after %s attempts: %s",
+                instance_id,
+                attempt,
+                err,
+                exc_info=True,
+            )
+            return False
+        except Exception as err:
+            logger.warning(
+                "Bare-metal %s delete failed: %s", instance_id, err, exc_info=True
+            )
+            return False
+        delete_accepted = True
+        break
+    # endregion BLOCK_delete
+
+    if not delete_accepted:
+        return False
+
+    # region BLOCK_verify
+    return await _verify_instance_gone(client, instance_id)
+    # endregion BLOCK_verify
+
+
+# endregion FUNC__delete_and_verify
+
+
+# region FUNC__verify_instance_gone
+# PURPOSE: Poll GET /bare-metals/{id} until 404 (confirmed gone) so delete never claims success on a still-billing orphan after an async Vultr deletion.
+# ENSURES: Returns True on 404 (logs success), False on CLEANUP_VERIFY_TIMEOUT expiry (logs ERROR for manual intervention). Never raises. Transient GET errors during polling are treated as "uncertain, keep polling".
+async def _verify_instance_gone(client: VultrClient, instance_id: str) -> bool:
+    """Poll GET until the instance returns 404 or CLEANUP_VERIFY_TIMEOUT expires.
+
+    Returns True iff confirmed gone. Never raises.
+    """
+    deadline = asyncio.get_running_loop().time() + CLEANUP_VERIFY_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            await client.request("GET", f"/bare-metals/{instance_id}")
+        except APIError as err:
+            if err.status == _HTTP_NOT_FOUND_CODE:
+                logger.warning("Bare-metal %s delete confirmed gone", instance_id)
+                return True
+            # Transient GET error or unexpected status — uncertain, keep polling.
+            logger.debug(
+                "VERIFY_GET_RETRY",
+                extra={"instance_id": instance_id, "error": str(err)},
+            )
+        except Exception as err:
+            logger.debug(
+                "VERIFY_GET_RETRY",
+                extra={"instance_id": instance_id, "error": str(err)},
+            )
+        await asyncio.sleep(CLEANUP_VERIFY_INTERVAL)
+    # Timeout: instance still present after accepted DELETE + full verify window.
+    logger.error(
+        "Bare-metal %s STILL PRESENT %ss after accepted DELETE — "
+        "manual deletion required via Vultr console",
+        instance_id,
+        CLEANUP_VERIFY_TIMEOUT,
+    )
+    return False
+
+
+# endregion FUNC__verify_instance_gone
 
 
 # region FUNC_find_baremetal
@@ -426,6 +580,7 @@ async def find_baremetal(client: VultrClient, host: str) -> str | None:
 # INVARIANTS:
 # - external_id = instance public IP (matches CloudCreateNodeDTO.external_id from vultr_create_node)
 # - Idempotent: unknown IP returns without raising.
+# - Resolves IP→instance_id via find_baremetal, then delegates to _delete_and_verify (retry + async-deletion verify) so the public delete path inherits the same orphan-prevention guarantees as create_node cleanup.
 async def vultr_delete_node(
     cfg: ConfigCloudVultr,
     external_id: str,
@@ -433,11 +588,11 @@ async def vultr_delete_node(
     """Delete a bare-metal instance by its IP address (stored as external_id)."""
     client = get_client(cfg)
     instance_id = await find_baremetal(client, external_id)
-    if instance_id:
-        await client.request("DELETE", f"/bare-metals/{instance_id}")
-        logger.info("DELETED %s", external_id)
-    else:
+    if not instance_id:
         logger.info("NODE %s NOT DELETED AS UNKNOWN", external_id)
+        return
+    if await _delete_and_verify(client, instance_id):
+        logger.info("DELETED %s", external_id)
 
 
 # endregion FUNC_vultr_delete_node
