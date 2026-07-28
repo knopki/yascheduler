@@ -114,6 +114,14 @@ def _decide_finalisation(
             local_folder=str(store_folder),
             remote_folder=final_remote_folder,
         )
+    logger.debug(
+        "FINALISE_DECISION",
+        extra={
+            "will_fail": bool(combined_errors),
+            "permanent": len(permanent_errors),
+            "transient": len(transient_errors),
+        },
+    )
     # endregion BLOCK_finalise
     return task
 
@@ -157,12 +165,34 @@ async def _finalize_task(
         await uow.tasks.save(finalised_task)
         await uow.commit()
 
-    logger.info(
-        "task_id=%s %s done and saved in %s",
-        finalised_task.task_id,
-        finalised_task.label,
-        store_folder,
-    )
+    if finalised_task.error:
+        logger.warning(
+            "task_id=%s failed: %s", finalised_task.task_id, finalised_task.error
+        )
+        logger.debug(
+            "FINALISE_FAIL",
+            extra={
+                "task_id": finalised_task.task_id,
+                "label": finalised_task.label,
+                "local_folder": str(store_folder),
+                "error": finalised_task.error,
+            },
+        )
+    else:
+        logger.info(
+            "task_id=%s %s done and saved in %s",
+            finalised_task.task_id,
+            finalised_task.label,
+            store_folder,
+        )
+        logger.debug(
+            "FINALISE_OK",
+            extra={
+                "task_id": finalised_task.task_id,
+                "label": finalised_task.label,
+                "local_folder": str(store_folder),
+            },
+        )
 
     tracker.discard(finalised_task.task_id)
     # endregion BLOCK_set_status

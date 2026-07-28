@@ -746,7 +746,7 @@ class Orchestrator:
         """Start all producer-consumer loops for the daemon."""
         logger.debug(
             "START",
-            extra={"engines": ", ".join(e.name for e in self._engines.values())},
+            extra={"engines": [e.name for e in self._engines.values()]},
         )
 
         self._bg_jobs.add(asyncio.create_task(self._print_stats()))

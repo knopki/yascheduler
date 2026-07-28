@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from subprocess import DEVNULL
+from subprocess import DEVNULL, PIPE
 from typing import TYPE_CHECKING, AnyStr
 
 if TYPE_CHECKING:
@@ -73,7 +73,7 @@ async def run_bg(
         **kwargs,
         stdin=DEVNULL,
         stdout=DEVNULL,
-        stderr=DEVNULL,
+        stderr=PIPE,
     )
 
 

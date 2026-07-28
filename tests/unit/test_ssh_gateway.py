@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -72,7 +73,13 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     adapter.run = _run
 
     async def _run_bg(*args: object, **kwargs: Any) -> MagicMock:
-        return MagicMock()
+        proc = MagicMock()
+        # run_bg best-effort early-exit detection awaits proc.wait(timeout=...).
+        # Default mock: process keeps running past the grace window (timeout).
+        proc.wait = AsyncMock(side_effect=asyncio.TimeoutError())
+        # On timeout, run_bg redirects stderr to DEVNULL — async.
+        proc.redirect_stderr = AsyncMock()
+        return proc
 
     adapter.run_bg = _run_bg
 

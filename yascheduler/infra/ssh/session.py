@@ -12,6 +12,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
 from functools import partial
+from subprocess import DEVNULL
 from typing import TYPE_CHECKING
 
 from yascheduler.domain import ConnectedMachine, ProcessResult
@@ -45,6 +46,11 @@ if TYPE_CHECKING:
 __all__ = ["SSHMachineSession", "my_retry"]
 logger = logging.getLogger(__name__)
 my_retry = partial(retry, on=SSHRetryExc, max_time=60)
+
+# Grace window (seconds) for best-effort early-exit detection in run_bg.
+# A process still running past this is considered a normal spawn; a process
+# that dies with non-zero exit within it triggers a user-visible WARNING.
+_SPAWN_GRACE_SECONDS = 1.0
 
 
 # region CLASS_SSHMachineSession
@@ -208,9 +214,58 @@ class SSHMachineSession:
     # region METHOD_run_bg
     # PURPOSE: Spawn a background process on the remote machine — single attempt, no retry — so daemon-style processes stay running after the SSH call returns.
     # INVARIANTS: Single attempt — spawn is non-idempotent; a successful remote side-effect followed by a lost client confirmation would produce a duplicate on retry; delegates to self._adapter.run_bg(self._conn, self._adapter.quote, cmd, cwd=cwd) — no hostname-keyed lookup, no call into the repository.
+    # ENSURES: Best-effort early-exit detection — awaits proc.wait() with a short grace window; a process that dies with non-zero exit within that window emits a user-visible WARNING with returncode and stderr so a missing/broken binary is diagnosed at spawn time, not later as missing output files.
     async def run_bg(self, cmd: str, *, cwd: str | None = None) -> None:
         """Start background process on remote machine (single attempt — spawn is non-idempotent)."""
-        await self._adapter.run_bg(self._conn, self._adapter.quote, cmd, cwd=cwd)
+        proc = await self._adapter.run_bg(self._conn, self._adapter.quote, cmd, cwd=cwd)
+        # region BLOCK_run_bg_early_exit
+        # PURPOSE: detect a process that dies on startup (missing binary,
+        # crash, permission denied).
+        # A short grace window distinguishes "never started" from "running". proc.wait()
+        # does not kill the process on timeout — it keeps running on the remote. stderr
+        # is captured via PIPE so the early-exit path can surface the remote shell's
+        # error text (e.g. "No such file or directory"). Only a non-zero exit is
+        # reported — a clean exit within the window is a legitimately short task, not an
+        # early-exit failure.
+        try:
+            completed = await proc.wait(timeout=_SPAWN_GRACE_SECONDS)
+        except asyncio.TimeoutError:
+            # Process still running past the grace window — normal spawn.
+            # Drop the stderr PIPE so it does not accumulate indefinitely and
+            # back-pressure the remote process once the SSH channel window
+            # fills. redirect_stderr(DEVNULL) tells the remote to stop sending
+            # stderr over the channel; the process keeps running.
+            await proc.redirect_stderr(DEVNULL)
+            return
+        if completed.returncode == 0:
+            # Clean exit within grace — short task, not a failure.
+            return
+        stderr = (
+            completed.stderr
+            if isinstance(completed.stderr, str)
+            else str(
+                completed.stderr or "",
+            )
+        )
+        logger.warning(
+            "Spawn on %s exited immediately with code %s (cmd=%s): %s",
+            self._hostname,
+            completed.returncode,
+            cmd,
+            stderr.strip() or "<no stderr>",
+        )
+        logger.debug(
+            "SPAWN_EARLY_EXIT",
+            extra={
+                "hostname": self._hostname,
+                "cmd": cmd,
+                "cwd": cwd,
+                "returncode": completed.returncode,
+                "exit_signal": completed.exit_signal,
+                "stderr": stderr,
+            },
+        )
+        # endregion BLOCK_run_bg_early_exit
 
     # endregion METHOD_run_bg
     # region METHOD_upload
