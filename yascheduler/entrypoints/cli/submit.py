@@ -27,6 +27,8 @@ from .args import (
 if TYPE_CHECKING:
     from yascheduler.domain import Engine
 
+__all__ = ["submit"]
+
 
 class EngineNotDefinedError(ValueError):
     """Script has not defined an engine."""

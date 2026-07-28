@@ -23,6 +23,8 @@ from yascheduler.entrypoints.config_parser import parse_config
 from .args import add_config_arg, add_log_level_arg
 from .daemon_common import configure_logger, run_daemon
 
+__all__ = ["main"]
+
 
 # region FUNC_main
 # PURPOSE: Start the daemon detached via python-daemon with PID file management; exit 0/1/2.

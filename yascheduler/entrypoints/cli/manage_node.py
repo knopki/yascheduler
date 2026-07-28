@@ -21,6 +21,7 @@ from yascheduler.infra.ssh.keys import list_private_keys
 
 from .args import add_config_arg, add_log_level_arg
 
+__all__ = ["manage_node"]
 logger = logging.getLogger(__name__)
 
 MAX_PORT = 65535

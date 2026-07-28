@@ -15,12 +15,8 @@ from asyncssh.public_key import SSHKey, generate_private_key, read_private_key
 
 from .utils import get_rnd_name
 
+__all__ = ["get_key_name", "get_or_create_ssh_key"]
 logger = logging.getLogger(__name__)
-
-__all__ = [
-    "get_key_name",
-    "get_or_create_ssh_key",
-]
 
 
 # region FUNC_get_or_create_ssh_key

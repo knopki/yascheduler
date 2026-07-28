@@ -35,8 +35,6 @@ if TYPE_CHECKING:
     from asyncssh.connection import SSHClientConnection
     from asyncssh.sftp import SFTPClient
 
-logger = logging.getLogger(__name__)
-
 __all__ = [
     "MyPureWindowsPath",
     "deploy_local_archive",
@@ -49,6 +47,7 @@ __all__ = [
     "windows_quote",
     "windows_setup_node",
 ]
+logger = logging.getLogger(__name__)
 
 
 # region CLASS_MyPureWindowsPath

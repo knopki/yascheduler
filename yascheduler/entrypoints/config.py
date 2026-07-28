@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from yascheduler.infra.cloud.cloud_configs import ConfigCloud
     from yascheduler.infra.persistence import PostgresDbConfig
 
+__all__ = ["Config"]
+
 
 # region CLASS_Config
 # PURPOSE: Give the composition root a single immutable bag of every layer's settings so the orchestrator and CLI entry points receive one validated object instead of re-reading INI or threading five separate values through their constructors.

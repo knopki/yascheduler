@@ -25,8 +25,6 @@ from .cloud_init import CloudInitConfig
 from .provider_selection import select_provider_pure
 from .ssh_keys import get_or_create_ssh_key
 
-logger = logging.getLogger(__name__)
-
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import PurePath
@@ -41,6 +39,7 @@ if TYPE_CHECKING:
     from .dto import CloudCreateNodeDTO
 
 __all__ = ["CloudProvisionerImpl"]
+logger = logging.getLogger(__name__)
 
 
 # region CLASS_CloudProvisionerImpl

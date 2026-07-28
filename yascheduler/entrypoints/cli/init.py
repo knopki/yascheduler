@@ -20,6 +20,8 @@ from yascheduler.infra import apply_migrations, apply_schema
 
 from .args import add_config_arg, add_log_level_arg
 
+__all__ = ["init"]
+
 
 # region FUNC__init_systemd
 # PURPOSE: Install/reinstall the systemd service unit so systemd can start, stop, and supervise the yascheduler daemon.

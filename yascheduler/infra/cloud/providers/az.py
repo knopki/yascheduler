@@ -42,8 +42,6 @@ from azure.mgmt.network.v2020_06_01.models import (
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO, get_rnd_name
 
-logger = logging.getLogger(__name__)
-
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
     from azure.core.credentials_async import AsyncTokenCredential
@@ -55,6 +53,7 @@ if TYPE_CHECKING:
     )
 
 __all__ = ["az_create_node", "az_delete_node"]
+logger = logging.getLogger(__name__)
 
 # Azure SDK is too noisy
 for logger_name in [

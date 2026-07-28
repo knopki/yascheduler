@@ -20,6 +20,8 @@ from yascheduler.entrypoints.cli.args import (
 from yascheduler.entrypoints.cli.daemon_common import configure_logger, run_daemon
 from yascheduler.entrypoints.config_parser import parse_config
 
+__all__ = ["daemonize"]
+
 
 # region FUNC_daemonize
 # PURPOSE: Start the yascheduler daemon in the foreground via the shared daemon core.

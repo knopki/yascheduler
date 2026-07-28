@@ -21,9 +21,8 @@ from pg8000.native import Connection
 from .db_config import PostgresDbConfig
 from .sql_loader import load_query
 
-logger = logging.getLogger(__name__)
-
 __all__ = ["apply_schema"]
+logger = logging.getLogger(__name__)
 
 
 # region FUNC_apply_schema

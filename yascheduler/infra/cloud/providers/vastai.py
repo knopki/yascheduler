@@ -25,14 +25,13 @@ if TYPE_CHECKING:
     from yascheduler.infra.cloud.cloud_init import CloudInitConfig
     from yascheduler.shared import TypeGuard
 
+__all__ = ["vastai_create_node", "vastai_delete_node", "vastai_list_instances"]
 logger = logging.getLogger(__name__)
 
 _VASTAI_BASE_URL = "https://cloud.vast.ai/api/v0"
 _HTTP_BAD_REQUEST = 400
 _HTTP_NOT_FOUND = 404
 _HTTP_TOO_MANY_REQUESTS = 429
-
-__all__ = ["vastai_create_node", "vastai_delete_node", "vastai_list_instances"]
 
 
 class VastAIError(Exception):

@@ -12,6 +12,8 @@ from pathlib import Path
 
 from yascheduler.entrypoints import CONFIG_FILE
 
+__all__ = ["add_config_arg", "add_log_file_arg", "add_log_level_arg", "existing_path"]
+
 LOG_LEVEL_CHOICES = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 

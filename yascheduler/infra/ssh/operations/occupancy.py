@@ -16,9 +16,8 @@ from yascheduler.infra.ssh.platform.protocol import SSHRetryExc
 if TYPE_CHECKING:
     from yascheduler.domain import Engine, MachineSession
 
-logger = logging.getLogger(__name__)
-
 __all__ = ["OccupancyChecker"]
+logger = logging.getLogger(__name__)
 
 
 # region CLASS_OccupancyChecker

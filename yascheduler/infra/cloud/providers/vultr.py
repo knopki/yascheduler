@@ -27,9 +27,9 @@ if TYPE_CHECKING:
     from yascheduler.infra.cloud import CloudInitConfig
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
 
+__all__ = ["vultr_create_node", "vultr_delete_node"]
 logger = logging.getLogger(__name__)
 
-__all__ = ["vultr_create_node", "vultr_delete_node"]
 
 API_BASE = "https://api.vultr.com/v2"
 POLL_INTERVAL = 20

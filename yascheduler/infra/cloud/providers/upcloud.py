@@ -19,14 +19,13 @@ from upcloud_api import CloudManager, Server, Storage, login_user_block
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO, get_rnd_name
 
-logger = logging.getLogger(__name__)
-
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey
 
     from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudUpcloud
 
 __all__ = ["upcloud_create_node", "upcloud_delete_node"]
+logger = logging.getLogger(__name__)
 
 executor = ThreadPoolExecutor(max_workers=5)
 

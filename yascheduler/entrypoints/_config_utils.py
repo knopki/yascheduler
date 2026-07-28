@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from configparser import SectionProxy
 
+__all__ = ["ConfigWarning", "opt_str_val", "warn_unknown_fields"]
+
 
 class ConfigWarning(Warning):
     """Warning about config (e.g. unknown INI keys)."""

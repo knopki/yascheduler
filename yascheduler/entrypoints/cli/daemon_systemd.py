@@ -23,6 +23,8 @@ from .args import (
 )
 from .daemon_common import configure_logger, run_daemon
 
+__all__ = ["main"]
+
 
 # region FUNC_main
 # PURPOSE: Start the daemon under systemd supervision (foreground, stderr → journald); exit 0/1/2.

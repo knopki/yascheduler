@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from yascheduler.application import AbstractUnitOfWork
     from yascheduler.domain import Task
 
+__all__ = ["show_nodes"]
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SSH_PORT = 22

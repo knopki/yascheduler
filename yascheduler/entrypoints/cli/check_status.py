@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from yascheduler.application import AbstractUnitOfWork
     from yascheduler.domain import MachineSession, Node, Task
 
+__all__ = ["check_status"]
+
 
 # region FUNC__parse_status_args
 # PURPOSE: Declare the yastatus argparse grammar — prog="yastatus", the -j filter, the three-renderer mutex group, and the -o convergence modifier — so the flag matrix is observable in one place.

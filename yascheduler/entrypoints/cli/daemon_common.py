@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from yascheduler.application import Orchestrator
     from yascheduler.entrypoints import Config
 
+__all__ = ["run_daemon"]
+
 
 # region FUNC_configure_logger
 # PURPOSE: Configure the ROOT logger so warnings from aiohttp/pg8000/asyncio reach the log file.

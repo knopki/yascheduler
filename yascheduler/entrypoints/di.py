@@ -46,8 +46,6 @@ from yascheduler.infra import (
     webhook_handler,
 )
 
-logger = logging.getLogger(__name__)
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -55,6 +53,9 @@ if TYPE_CHECKING:
     from yascheduler.infra.cloud import ConfigCloud
 
     from .config import Config
+
+__all__ = ["CLIDeps", "make_cli_deps", "make_daemon"]
+logger = logging.getLogger(__name__)
 
 
 # region CLASS_CLIDeps

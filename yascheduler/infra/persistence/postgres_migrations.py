@@ -30,14 +30,13 @@ from pg8000.native import Connection
 
 from .migration_base import Migration
 
-logger = logging.getLogger(__name__)
-
 if TYPE_CHECKING:
     from types import ModuleType
 
     from .db_config import PostgresDbConfig
 
 __all__ = ["apply_migrations"]
+logger = logging.getLogger(__name__)
 
 _MIGRATIONS_DIR = Path(__file__).parent / "sql" / "migrations"
 

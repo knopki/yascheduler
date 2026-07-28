@@ -8,9 +8,7 @@
 import random
 import string
 
-__all__ = [
-    "get_rnd_name",
-]
+__all__ = ["get_rnd_name"]
 
 
 def get_rnd_name(prefix: str) -> str:

@@ -23,6 +23,8 @@ from aiida.schedulers.datastructures import (
 )
 from aiida.schedulers.scheduler import SchedulerError
 
+__all__ = ["YaScheduler", "YaschedJobResource"]
+
 
 class _JobNotFoundError(SchedulerError):
     def __init__(self) -> None:

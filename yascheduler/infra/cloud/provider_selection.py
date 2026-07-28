@@ -14,9 +14,8 @@ if TYPE_CHECKING:
     from .adapters import CloudAdapter
     from .cloud_configs import ConfigCloud
 
-logger = logging.getLogger(__name__)
-
 __all__ = ["select_provider_pure"]
+logger = logging.getLogger(__name__)
 
 
 # region FUNC_select_provider_pure

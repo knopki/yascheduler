@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -16,6 +15,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from yascheduler.application import query_tasks
 from yascheduler.domain import Node, NodeId, Task, TaskId, TaskStatus
 from yascheduler.entrypoints.config_parser import parse_config
+from yascheduler.shared import ParamSpec
 
 from .di import CLIDeps, make_cli_deps
 from .paths import CONFIG_FILE
@@ -26,17 +26,10 @@ if TYPE_CHECKING:
 
     from yascheduler.entrypoints.config import Config
 
-if sys.version_info < (3, 10):
-    from typing_extensions import ParamSpec
-else:
-    from typing import ParamSpec
+__all__ = ["Yascheduler"]
 
 ReturnT_co = TypeVar("ReturnT_co", covariant=True)
 ParamT = ParamSpec("ParamT")
-
-__all__ = [
-    "Yascheduler",
-]
 
 
 # region FUNC_to_sync

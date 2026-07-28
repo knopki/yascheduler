@@ -23,14 +23,13 @@ from hcloud.ssh_keys.domain import SSHKey as HSSHKey
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO, get_key_name, get_rnd_name
 
-logger = logging.getLogger(__name__)
-
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
 
     from yascheduler.infra.cloud import CloudInitConfig, ConfigCloudHetzner
 
 __all__ = ["hetzner_create_node", "hetzner_delete_node"]
+logger = logging.getLogger(__name__)
 
 executor = ThreadPoolExecutor(max_workers=5)
 
