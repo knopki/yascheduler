@@ -64,7 +64,7 @@ def can_debian_forky(platform: str) -> bool:
 
 def can_debian_duke(platform: str) -> bool:
     """Platform is compatible with Debian Duke."""
-    return platform in ["debian-13", "debian", "debian-like", "linux"]
+    return platform in ["debian-15", "debian", "debian-like", "linux"]
 
 
 def can_win10(platform: str) -> bool:
