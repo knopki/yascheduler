@@ -176,7 +176,7 @@ def ensure_ssh_key() -> None:
     key.chmod(0o600)
     # endregion BLOCK_publish_authorized_keys
     # list_private_keys() scans keys_dir; keep ONLY the private key there.
-    link = KEYS_DIR / "id_ed25519"
+    link = KEYS_DIR / "yakey-container-id_ed25519"
     if not link.exists():
         link.symlink_to(key)
 
