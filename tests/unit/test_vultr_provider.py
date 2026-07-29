@@ -304,6 +304,35 @@ class TestBuildBaremetalUserData:
         for entry in data["users"]:
             assert "sudo" not in entry
 
+    def test_non_root_user_gets_chown_data(self) -> None:
+        """Non-root ssh user can't write root-owned /data; runcmd chowns it."""
+        from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
+
+        out = build_baremetal_user_data("myuser", self.PUB, None, need_raid=False)
+        data = json.loads(out.removeprefix("#cloud-config\n"))
+        runcmd_str = " ".join(data["runcmd"])
+        assert "chown -R myuser:myuser /data" in runcmd_str
+
+    def test_root_user_no_chown_data(self) -> None:
+        """Root already owns /data; no chown emitted."""
+        from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
+
+        out = build_baremetal_user_data("root", self.PUB, None, need_raid=True)
+        data = json.loads(out.removeprefix("#cloud-config\n"))
+        runcmd_str = " ".join(data["runcmd"])
+        assert "chown" not in runcmd_str
+
+    def test_non_root_chown_after_raid_mount(self) -> None:
+        """chown /data must come after the RAID mount so it owns the mounted fs."""
+        from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
+
+        out = build_baremetal_user_data("myuser", self.PUB, None, need_raid=True)
+        data = json.loads(out.removeprefix("#cloud-config\n"))
+        runcmd = data["runcmd"]
+        mount_idx = next(i for i, c in enumerate(runcmd) if "mount /data" in c)
+        chown_idx = next(i for i, c in enumerate(runcmd) if "chown -R myuser" in c)
+        assert chown_idx > mount_idx
+
 
 # =============================================================================
 # VultrClient.get_ssh_keys

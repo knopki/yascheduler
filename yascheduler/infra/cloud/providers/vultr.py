@@ -395,6 +395,11 @@ def build_baremetal_user_data(
             "mount -o remount /dev/shm",
         ]
 
+    # Non-root ssh user can't write to root-owned /data.
+    # chown it after the mount so the scheduler user owns /data/engines and /data/tasks.
+    if username != "root":
+        runcmd.append(f"chown -R {username}:{username} /data")
+
     runcmd += [
         "printf '* soft nofile 65536\\n* hard nofile 65536\\n"
         "root soft nofile 65536\\nroot hard nofile 65536\\n' "
