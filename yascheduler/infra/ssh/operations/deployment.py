@@ -144,7 +144,7 @@ class TaskDeployer:
         # region BLOCK_spawn
         try:
             run_cmd = engine.spawn.format(
-                engine_path=str(eng_path),
+                engine_path=session.quote(str(eng_path)),
                 task_path=session.quote(str(task_dir)),
                 ncpus=ncpus,
             )
