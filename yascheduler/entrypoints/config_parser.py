@@ -448,7 +448,7 @@ def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
     onstart_script_path = sec.get(fmt("onstart_script"), fallback=None)
     if onstart_script_path:
         if not Path(onstart_script_path).exists():
-            msg = f"vastai onstart_script must be valid path of a readable file or empty, got {idle_tolerance}"
+            msg = f"vastai onstart_script must be valid path of a readable file or empty, got {onstart_script_path}"
             raise ValueError(msg)
 
         onstart_script = Path(onstart_script_path).read_text()
