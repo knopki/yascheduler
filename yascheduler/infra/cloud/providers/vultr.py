@@ -11,9 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import json
 import logging
-from functools import cache
 from typing import TYPE_CHECKING, TypedDict
 
 import aiohttp
@@ -27,10 +25,12 @@ from yascheduler.infra.cloud import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from asyncssh.public_key import SSHKey as ASSHKey
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
-    from yascheduler.shared import TypeGuard
+    from yascheduler.shared import Required, Self, TypeGuard, Unpack
 
 __all__ = ["vultr_create_node", "vultr_delete_node"]
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ class VultrSSHKeyCreateResponse(TypedDict):
 
 
 class VultrBareMetal(TypedDict, total=False):
-    id: str
+    id: Required[str]
     label: str
     status: str
     main_ip: str
@@ -88,17 +88,19 @@ class VultrBareMetalResponse(TypedDict):
     bare_metal: VultrBareMetal
 
 
+class VultrBareMetalsCreate(TypedDict):
+    region: str
+    plan: str
+    os_id: int
+    label: str
+    hostname: str
+    sshkey_id: list[str]
+    user_data: str
+    enable_ipv6: bool
+
+
 class VultrBareMetalsResponse(TypedDict, total=False):
-    bare_metals: list[VultrBareMetal]
-    meta: VultrMeta
-
-
-class VultrMeta(TypedDict, total=False):
-    links: VultrMetaLinks
-
-
-class VultrMetaLinks(TypedDict, total=False):
-    next: str
+    bare_metals: Required[list[VultrBareMetal]]
 
 
 def _is_ssh_key(x: object) -> TypeGuard[VultrSSHKey]:
@@ -122,7 +124,7 @@ def _is_ssh_key_create_resp(
 def _is_bare_metal(x: object) -> TypeGuard[VultrBareMetal]:
     if not isinstance(x, dict):
         return False
-    if "id" in x and not isinstance(x["id"], str):
+    if not isinstance(x.get("id"), str):
         return False
     if "label" in x and not isinstance(x["label"], str):
         return False
@@ -144,21 +146,6 @@ def _is_bare_metals_resp(resp: object) -> TypeGuard[VultrBareMetalsResponse]:
             "meta" not in resp or isinstance(resp["meta"], dict)
         )
     )
-
-
-def _extract_bare_metal(resp: object) -> VultrBareMetal | None:
-    """Return the bare-metal entity from a single-instance response.
-
-    Vultr envelopes single entities under ``bare_metal`` but some endpoints
-    return the entity at the top level. Accept either; return None if the
-    shape doesn't match. ``id`` is required — a bare-metal without id is not
-    actionable.
-    """
-    if _is_bare_metal_resp(resp):
-        return resp["bare_metal"]
-    if _is_bare_metal(resp) and "id" in resp:
-        return resp
-    return None
 
 
 # endregion BLOCK_API_response_shapes
@@ -190,67 +177,115 @@ class APIError(Exception):
 class VultrClient:
     """Async Vultr REST API client (aiohttp-based)."""
 
-    def __init__(
-        self, api_key: str, session: aiohttp.ClientSession | None = None
-    ) -> None:
+    def __init__(self, api_key: str) -> None:
         self.api_key = api_key
-        self._session: aiohttp.ClientSession | None = session
+        self._session = aiohttp.ClientSession(
+            base_url=API_BASE,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            timeout=aiohttp.ClientTimeout(total=60),
+        )
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=aiohttp.ClientTimeout(total=60),
-            )
-        return self._session
+    async def close(self) -> None:
+        await self._session.close()
 
-    async def request(
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self, exc_type: object, exc_val: object, exc_tb: object
+    ) -> None:
+        await self.close()
+
+    async def _request(
         self,
         method: str,
         path: str,
-        body: dict | None = None,
+        params: aiohttp.typedefs.Query | None = None,
+        data: dict | None = None,
     ) -> object:
-        """Send an async HTTP request to the Vultr API v2 and return parsed JSON.
-
-        Returns the parsed JSON value (dict/list/None) untyped; callers
-        validate the shape via the ``_is_*`` TypeGuards. Keeps the HTTP
-        boundary free of ``cast``/``Any``.
-        """
-        url = API_BASE + path
-        session = await self._get_session()
-        data = json.dumps(body).encode("utf-8") if body is not None else None
+        """Send an async HTTP request to the Vultr API v2 and return parsed JSON."""
         try:
-            async with session.request(method, url, data=data) as resp:
-                raw = await resp.text()
+            async with self._session.request(
+                method, path, params=params, json=data
+            ) as resp:
                 if resp.status >= _HTTP_BAD_REQUEST_CODE:
-                    msg = f"HTTP {resp.status}: {raw}"
+                    msg = f"HTTP {resp.status}: {await resp.text()}"
                     raise APIError(msg, status=resp.status)
-                if not raw:
-                    return {}
-                try:
-                    return json.loads(raw)
-                except json.JSONDecodeError as exc:
-                    msg = f"Invalid JSON response: {exc}"
-                    raise APIError(msg) from exc
-        except aiohttp.ClientError as err:
-            msg = f"HTTP request failed: {err}"
-            raise APIError(msg) from err
+                return await resp.json()
+        except aiohttp.ClientResponseError as exc:
+            msg = f"HTTP request failed: {exc.message}"
+            raise APIError(msg, status=exc.status) from exc
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            msg = f"Transport error: {exc}"
+            raise APIError(msg) from exc
 
-    async def close(self) -> None:
-        if self._session is not None and not self._session.closed:
-            await self._session.close()
+    def _get_next_cursor(self, resp: dict) -> str | None:
+        "Return meta.links.next cursor path or None."
+        return resp.get("meta", {}).get("links", {}).get("next")
+
+    async def get_ssh_keys(
+        self, per_page: int = LIST_PAGE_SIZE
+    ) -> AsyncIterator[VultrSSHKey]:
+        """Yield SSH keys one at a time, paginating through all pages."""
+        params: dict[str, str | int] = {"per_page": per_page}
+        for _ in range(LIST_MAX_PAGES):
+            resp = await self._request("GET", "/ssh-keys", params=params)
+            if not _is_ssh_keys_resp(resp):
+                msg = f"Invalid SSH keys list response: {resp}"
+                raise APIError(msg)
+            for key in resp["ssh_keys"]:
+                yield key
+            if not (cursor := self._get_next_cursor(dict(resp))):
+                break
+            params["cursor"] = cursor
+
+    async def create_ssh_key(self, name: str, pub_key: str) -> str:
+        data = {"name": name, "ssh_key": pub_key}
+        resp = await self._request("POST", "/ssh-keys", data=data)
+        if not _is_ssh_key_create_resp(resp):
+            msg = f"Cannot create SSH key: {resp}"
+            raise APIError(msg)
+        return resp["ssh_key"]["id"]
+
+    async def create_bare_metal(
+        self, **params: Unpack[VultrBareMetalsCreate]
+    ) -> VultrBareMetal:
+        resp = await self._request("POST", "/bare-metals", data=dict(params))
+        if not _is_bare_metal_resp(resp):
+            msg = f"Invalid create Bare Metal response: {resp}"
+            raise APIError(msg)
+        return resp["bare_metal"]
+
+    async def get_bare_metal(self, instance_id: str) -> VultrBareMetal:
+        resp = await self._request("GET", f"/bare-metals/{instance_id}")
+        if not _is_bare_metal_resp(resp):
+            msg = f"Invalid get Bare Metal response: {resp}"
+            raise APIError(msg)
+        return resp["bare_metal"]
+
+    async def get_bare_metals(
+        self, per_page: int = LIST_PAGE_SIZE
+    ) -> AsyncIterator[VultrBareMetal]:
+        """Yield bare metals one at a time, paginating through all pages."""
+        params: dict[str, str | int] = {"per_page": per_page}
+        for _ in range(LIST_MAX_PAGES):
+            resp = await self._request("GET", "/bare-metals", params=params)
+            if not _is_bare_metals_resp(resp):
+                msg = f"Invalid bare-metals list response: {resp}"
+                raise APIError(msg)
+            for bm in resp["bare_metals"]:
+                yield bm
+            if not (cursor := self._get_next_cursor(dict(resp))):
+                break
+            params["cursor"] = cursor
+
+    async def delete_bare_metal(self, instance_id: str) -> None:
+        await self._request("DELETE", f"/bare-metals/{instance_id}")
 
 
 # endregion CLASS_VultrClient
-
-
-@cache
-def get_client(cfg: ConfigCloudVultr) -> VultrClient:
-    """Get Vultr client."""
-    return VultrClient(cfg.api_key)
 
 
 # region FUNC_ssh_key_fingerprint_md5
@@ -277,23 +312,11 @@ async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
     pub_key = key.export_public_key("openssh").decode("utf-8")
     fingerprint = ssh_key_fingerprint_md5(pub_key)
 
-    resp = await client.request("GET", "/ssh-keys?per_page=500")
-    if not _is_ssh_keys_resp(resp):
-        msg = f"Invalid SSH keys list response: {resp}"
-        raise APIError(msg)
-    for existing in resp["ssh_keys"]:
+    async for existing in client.get_ssh_keys():
         if existing["fingerprint"].lower() == fingerprint.lower():
             return existing["id"]
 
-    resp = await client.request(
-        "POST",
-        "/ssh-keys",
-        {"name": key_name, "ssh_key": pub_key},
-    )
-    if not _is_ssh_key_create_resp(resp):
-        msg = f"Cannot create SSH key: {resp}"
-        raise APIError(msg)
-    return resp["ssh_key"]["id"]
+    return await client.create_ssh_key(key_name, pub_key)
 
 
 # endregion FUNC_get_ssh_key_id
@@ -396,26 +419,24 @@ def build_baremetal_user_data(
 
 # region FUNC_vultr_create_node
 # PURPOSE: Provision a Vultr bare-metal instance via the CloudAdapter interface so the generic provisioner can launch Vultr compute nodes.
-# ENSURES: Returns CloudCreateNodeDTO with external_id = hostname = instance public IP once the instance is active and has a public IP. On any failure AFTER the instance is created (POST ambiguity included), the instance is best-effort reconciled/deleted before re-raising (no billable orphan).
+# ENSURES: Returns CloudCreateNodeDTO with external_id = bare-metal instance id, hostname = instance public IP, once the instance is active and has a public IP. On any failure AFTER the instance is created (POST ambiguity included), the instance is best-effort reconciled/deleted before re-raising (no billable orphan).
 # INVARIANTS:
-# - external_id = hostname = instance public IP (delete_node looks up by IP via find_baremetal)
+# - external_id = bare-metal instance id
+# - hostname = instance public IP
 # - create_node returns as soon as the instance status is "active" with a non-zero public IP
 # - Post-instance-create failures (poll timeout) trigger best-effort DELETE of the instance id before the exception propagates.
 # - POST /bare-metals is NOT idempotent: a transport timeout/break AFTER the server accepted the create leaves an instance we have no id for. The label (generated pre-POST) is used to reconcile such orphans (see _reconcile_orphan_by_label) so no billable resource leaks when the POST call itself fails.
 async def vultr_create_node(
     cfg: ConfigCloudVultr, key: ASSHKey, cloud_config: CloudInitConfig | None = None
 ) -> CloudCreateNodeDTO:
-    """Provision a bare-metal instance and return its IP once active.
+    """Provision a bare-metal instance and return its id + IP once active.
 
     Creates the instance via Vultr API and polls until it becomes active
-    with a public IP, then returns the IP.
+    with a public IP.
 
     If any step after instance creation fails, the instance is best-effort
     deleted before re-raising so no billable orphan leaks.
     """
-    client = get_client(cfg)
-    ssh_key_id = await get_ssh_key_id(client, key)
-
     label = get_rnd_name("yascheduler")
     pub_key = key.export_public_key("openssh").decode("utf-8")
     user_data = build_baremetal_user_data(
@@ -423,159 +444,98 @@ async def vultr_create_node(
     )
     user_data_b64 = base64.b64encode(user_data.encode()).decode()
 
-    body = {
-        "region": cfg.location,
-        "plan": cfg.server_type,
-        "os_id": cfg.image_name,
-        "label": label,
-        "hostname": label,
-        "sshkey_id": [ssh_key_id],
-        "user_data": user_data_b64,
-        "enable_ipv6": True,
-    }
+    async with VultrClient(cfg.api_key) as client:
+        ssh_key_id = await get_ssh_key_id(client, key)
 
-    # POST /bare-metals is not idempotent: if the transport breaks after the
-    # server accepted the create, an instance exists that we have no id for.
-    # Reconcile by the label generated above before re-raising the POST error
-    # so a created instance is deleted, not orphaned.
-    try:
-        resp = await client.request("POST", "/bare-metals", body)
-    except Exception as err:
-        logger.warning(
-            "POST bare-metal failed (%s) — reconciling by label %s",
-            err,
-            label,
-        )
-        await _reconcile_orphan_by_label(client, label)
-        raise
-    bm = _extract_bare_metal(resp)
-    instance_id = bm["id"] if bm else ""
-    if not instance_id:
-        # 2xx received but no id: the instance was likely created but the
-        # body is unusable. Reconcile by label before failing.
-        logger.warning(
-            "POST bare-metal 2xx without instance id — reconciling by label %s: %s",
-            label,
-            resp,
-        )
-        await _reconcile_orphan_by_label(client, label)
-        msg = f"No instance id in response: {resp}"
-        raise APIError(msg)
+        # POST /bare-metals is not idempotent: if the transport breaks after the
+        # server accepted the create, an instance exists that we have no id for.
+        # Reconcile by the label generated above before re-raising the POST error
+        # so a created instance is deleted, not orphaned.
+        try:
+            bm = await client.create_bare_metal(
+                region=cfg.location,
+                plan=cfg.server_type,
+                os_id=cfg.image_name,
+                label=label,
+                hostname=label,
+                sshkey_id=[ssh_key_id],
+                user_data=user_data_b64,
+                enable_ipv6=True,
+            )
+        except Exception as err:
+            logger.warning(
+                "POST bare-metal failed (%s) — reconciling by label %s",
+                err,
+                label,
+            )
+            await _reconcile_orphan_by_label(client, label)
+            raise
+        instance_id = bm["id"]
 
-    logger.info("CREATING bare-metal %s (id=%s)", label, instance_id)
+        logger.info("CREATING bare-metal %s (id=%s)", label, instance_id)
 
-    # The instance now exists and bills. Any failure below MUST best-effort
-    # delete it so create_node never leaks a billable orphan.
-    try:
-        deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT
-        last_status: str | None = None
-        ip_addr: str | None = None
-        while asyncio.get_running_loop().time() < deadline:
-            # Vultr API occasionally flaps with 5xx on an instance that actually
-            # exists and is progressing. Treat transient errors as "no data this
-            # tick" and keep polling; a permanent error (4xx) or a transport
-            # failure that persists until deadline will surface as APIError below.
-            try:
-                resp = await client.request("GET", f"/bare-metals/{instance_id}")
-            except APIError as err:
-                if err.transient:
+        # The instance now exists and bills. Any failure below MUST best-effort
+        # delete it so create_node never leaks a billable orphan.
+        try:
+            deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT
+            last_status: str | None = None
+            ip_addr: str | None = None
+            while asyncio.get_running_loop().time() < deadline:
+                # Vultr API occasionally flaps with 5xx on an instance that actually
+                # exists and is progressing. Treat transient errors as "no data this
+                # tick" and keep polling; a permanent error (4xx) or a transport
+                # failure that persists until deadline will surface as APIError below.
+                try:
+                    bm = await client.get_bare_metal(instance_id)
+                except APIError as err:
+                    if err.transient:
+                        logger.debug(
+                            "POLL_TRANSIENT_RETRY",
+                            extra={"instance_id": instance_id, "error": str(err)},
+                        )
+                        await asyncio.sleep(POLL_INTERVAL)
+                        continue
+                    raise
+                status = bm.get("status", "")
+                ip_addr = bm.get("main_ip", "")
+                if status != last_status:
                     logger.debug(
-                        "POLL_TRANSIENT_RETRY",
+                        "POLL_STATUS",
                         extra={
                             "instance_id": instance_id,
-                            "error": str(err),
+                            "status": status,
+                            "ip": ip_addr,
                         },
                     )
-                    await asyncio.sleep(POLL_INTERVAL)
-                    continue
-                raise
-            bm = _extract_bare_metal(resp)
-            if bm is None:
-                msg = f"Invalid bare-metal response: {resp}"
-                raise APIError(msg)  # noqa: TRY301
-            status = bm.get("status", "")
-            ip_addr = bm.get("main_ip", "")
-            if status != last_status:
-                logger.debug(
-                    "POLL_STATUS",
-                    extra={
-                        "instance_id": instance_id,
-                        "status": status,
-                        "ip": ip_addr,
-                    },
+                    last_status = status
+                if status == "active" and ip_addr and ip_addr != "0.0.0.0":  # noqa: S104
+                    break
+                await asyncio.sleep(POLL_INTERVAL)
+            else:
+                msg = (
+                    f"Bare-metal {instance_id} did not become active in {POLL_TIMEOUT}s"
                 )
-                last_status = status
-            if status == "active" and ip_addr and ip_addr != "0.0.0.0":  # noqa: S104
-                break
-            await asyncio.sleep(POLL_INTERVAL)
-        else:
-            msg = f"Bare-metal {instance_id} did not become active in {POLL_TIMEOUT}s"
-            raise APIError(msg)  # noqa: TRY301
+                raise APIError(msg)  # noqa: TRY301
 
-        assert ip_addr is not None
-        logger.info("CREATED %s", ip_addr)
-        return CloudCreateNodeDTO(
-            external_id=ip_addr,
-            hostname=ip_addr,
-            username=cfg.username,
-            jump_host=cfg.jump_host,
-            jump_port=cfg.jump_port,
-            jump_username=cfg.jump_username or "root",
-        )
-    except Exception:
-        logger.exception(
-            "Bare-metal %s create_node failed before returning", instance_id
-        )
-        await _delete_and_verify(client, instance_id)
-        raise
+            assert ip_addr is not None
+            logger.info("CREATED %s (id=%s)", ip_addr, instance_id)
+            return CloudCreateNodeDTO(
+                external_id=instance_id,
+                hostname=ip_addr,
+                username=cfg.username,
+                jump_host=cfg.jump_host,
+                jump_port=cfg.jump_port,
+                jump_username=cfg.jump_username or "root",
+            )
+        except Exception:
+            logger.exception(
+                "Bare-metal %s create_node failed before returning", instance_id
+            )
+            await _delete_and_verify(client, instance_id)
+            raise
 
 
 # endregion FUNC_vultr_create_node
-
-
-# region FUNC__list_all_bare_metals
-# PURPOSE: Paginate GET /bare-metals so label/IP lookups see every instance, not just the first per_page batch. Closes the orphan-miss window when an account holds more than LIST_PAGE_SIZE bare-metals.
-# ENSURES: Returns the concatenated bare_metals list across cursor pages (cap LIST_MAX_PAGES). Raises APIError on listing failure so callers decide retry-vs-surface.
-async def _list_all_bare_metals(client: VultrClient) -> list[VultrBareMetal]:
-    """List all bare-metals across cursor pages.
-
-    Vultr paginates at 500; accounts with more need cursor following via
-    meta.links.next. Returns the concatenated list.
-    """
-    out: list[VultrBareMetal] = []
-    path = f"/bare-metals?per_page={LIST_PAGE_SIZE}"
-    for _page in range(LIST_MAX_PAGES):
-        resp = await client.request("GET", path)
-        if not _is_bare_metals_resp(resp):
-            msg = f"Invalid bare-metals list response: {resp}"
-            raise APIError(msg)
-        out.extend(resp["bare_metals"])
-        nxt = _get_next_cursor(resp)
-        if not nxt:
-            break
-        # meta.links.next is a full path starting with /bare-metals?...&cursor=
-        path = nxt if nxt.startswith("/") else f"/bare-metals{nxt}"
-    else:
-        logger.warning(
-            "LIST_TRUNCATED — %s pages hit; %s bare-metals so far, more may exist",
-            LIST_MAX_PAGES,
-            len(out),
-        )
-    return out
-
-
-def _get_next_cursor(resp: VultrBareMetalsResponse) -> str | None:
-    """Return meta.links.next cursor path or None."""
-    meta = resp.get("meta")
-    if meta is None:
-        return None
-    links = meta.get("links")
-    if links is None:
-        return None
-    return links.get("next")
-
-
-# endregion FUNC__list_all_bare_metals
 
 
 # region FUNC__reconcile_orphan_by_label
@@ -590,8 +550,12 @@ async def _reconcile_orphan_by_label(client: VultrClient, label: str) -> None:
     it. Never raises.
     """
     for attempt in range(1, RECONCILE_ATTEMPTS + 1):
+        orphan_id: str | None = None
         try:
-            bare_metals = await _list_all_bare_metals(client)
+            async for bm in client.get_bare_metals():
+                if bm.get("label") == label and bm.get("id"):
+                    orphan_id = bm["id"]
+                    break
         except Exception:
             logger.debug(
                 "RECONCILE_LIST_TRANSIENT",
@@ -609,11 +573,6 @@ async def _reconcile_orphan_by_label(client: VultrClient, label: str) -> None:
                 extra={"label": label},
             )
             return
-        orphan_id: str | None = None
-        for bm in bare_metals:
-            if bm.get("label") == label and bm.get("id"):
-                orphan_id = bm["id"]
-                break
         if orphan_id is not None:
             logger.warning(
                 "RECONCILE_DELETE_ORPHAN",
@@ -653,7 +612,7 @@ async def _delete_and_verify(
     delete_accepted = False
     for attempt in range(1, CLEANUP_DELETE_ATTEMPTS + 1):
         try:
-            await client.request("DELETE", f"/bare-metals/{instance_id}")
+            await client.delete_bare_metal(instance_id)
         except APIError as err:
             if err.status == _HTTP_NOT_FOUND_CODE:
                 # Already gone — nothing to verify.
@@ -671,18 +630,12 @@ async def _delete_and_verify(
                 )
                 await asyncio.sleep(CLEANUP_DELETE_INTERVAL)
                 continue
-            logger.warning(
-                "Bare-metal %s delete failed after %s attempts: %s",
-                instance_id,
-                attempt,
-                err,
-                exc_info=True,
+            logger.exception(
+                "Bare-metal %s delete failed after %s attempts", instance_id, attempt
             )
             return False
-        except Exception as err:
-            logger.warning(
-                "Bare-metal %s delete failed: %s", instance_id, err, exc_info=True
-            )
+        except Exception:
+            logger.exception("Bare-metal %s delete failed", instance_id)
             return False
         delete_accepted = True
         break
@@ -710,7 +663,7 @@ async def _verify_instance_gone(client: VultrClient, instance_id: str) -> bool:
     deadline = asyncio.get_running_loop().time() + CLEANUP_VERIFY_TIMEOUT
     while asyncio.get_running_loop().time() < deadline:
         try:
-            await client.request("GET", f"/bare-metals/{instance_id}")
+            await client.get_bare_metal(instance_id)
         except APIError as err:
             if err.status == _HTTP_NOT_FOUND_CODE:
                 logger.warning("Bare-metal %s delete confirmed gone", instance_id)
@@ -739,46 +692,29 @@ async def _verify_instance_gone(client: VultrClient, instance_id: str) -> bool:
 # endregion FUNC__verify_instance_gone
 
 
-# region FUNC_find_baremetal
-# PURPOSE: Resolve a Vultr bare-metal instance id from its public IP so delete_node can target the right instance even though nodes are keyed in DB by IP.
-async def find_baremetal(client: VultrClient, host: str) -> str | None:
-    """Find a bare-metal instance id by its IP address."""
-    bare_metals = await _list_all_bare_metals(client)
-    for bm in bare_metals:
-        if bm.get("main_ip") == host and bm.get("id"):
-            return bm["id"]
-    return None
-
-
-# endregion FUNC_find_baremetal
-
-
 # region FUNC_vultr_delete_node
-# PURPOSE: Tear down a Vultr bare-metal instance by its IP-derived external_id so billing stops and the node slot is freed for reallocation.
+# PURPOSE: Tear down a Vultr bare-metal instance by its instance id (external_id) so billing stops and the node slot is freed for reallocation.
 # INVARIANTS:
-# - external_id = instance public IP (matches CloudCreateNodeDTO.external_id from vultr_create_node)
-# - Idempotent: unknown IP returns without raising (nothing to clean).
-# - Resolves IP→instance_id via find_baremetal, then delegates to _delete_and_verify (retry + async-deletion verify) so the public delete path inherits the same orphan-prevention guarantees as create_node cleanup.
-# - On _delete_and_verify returning False (permanent failure / exhausted retries / verify timeout) RAISES APIError so the caller's failure handling kicks in. In the orchestrator path, deallocate_node re-raises, the row stays disabled, and the next cycle's deallocate_nodes (which collects list_disabled()) retries — no permanent orphan from a swallowed False.
+# - external_id = bare-metal instance id
+# - Idempotent: a 404 on DELETE means already gone — logged and returned without raising.
+# - delegates to _delete_and_verify (retry + async-deletion verify) so the public delete path inherits the same orphan-prevention guarantees as create_node cleanup.
+# - On _delete_and_verify returning False RAISES APIError so the caller's failure handling kicks in.
 async def vultr_delete_node(
     cfg: ConfigCloudVultr,
     external_id: str,
 ) -> None:
-    """Delete a bare-metal instance by its IP address (stored as external_id).
+    """Delete a bare-metal instance by its instance id (stored as external_id).
 
     Raises APIError when deletion cannot be confirmed gone, so the caller can
-    leave the DB row intact for cross-cycle retry. Unknown IPs are a no-op.
+    leave the DB row intact for cross-cycle retry. A 404 (already gone) is a
+    no-op.
     """
-    client = get_client(cfg)
-    instance_id = await find_baremetal(client, external_id)
-    if not instance_id:
-        logger.info("NODE %s NOT DELETED AS UNKNOWN", external_id)
-        return
-    if await _delete_and_verify(client, instance_id):
-        logger.info("DELETED %s", external_id)
-        return
+    async with VultrClient(cfg.api_key) as client:
+        if await _delete_and_verify(client, external_id):
+            logger.info("DELETED %s", external_id)
+            return
     msg = (
-        f"Bare-metal {instance_id} ({external_id}) delete not confirmed gone "
+        f"Bare-metal {external_id} delete not confirmed gone "
         "— cloud VM may still bill; orchestrator will retry next cycle"
     )
     raise APIError(msg)

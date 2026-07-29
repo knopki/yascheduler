@@ -14,11 +14,46 @@ import hashlib
 import json
 import logging
 from collections.abc import Generator
+from contextlib import AbstractContextManager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from yascheduler.shared.log import _NATIVE_KEYS
+
+
+def _bm_stream(items: list, exc: Exception | None = None):
+    """Build an async generator mimicking VultrClient.get_bare_metals.
+
+    If exc is set, the iterator raises on first __anext__ (transient listing
+    failure). Otherwise yields items one by one.
+    """
+
+    async def gen():
+        if exc is not None:
+            raise exc
+        for bm in items:
+            yield bm
+
+    return gen()
+
+
+async def _collect(agen):
+    """Collect all items from an async generator into a list."""
+    out: list = []
+    async for item in agen:
+        out.append(item)
+    return out
+
+
+def _ssh_key_stream(items: list):
+    """Build an async generator mimicking VultrClient.get_ssh_keys."""
+
+    async def gen():
+        for key in items:
+            yield key
+
+    return gen()
 
 
 class LogCaptureHandler(logging.Handler):
@@ -51,6 +86,19 @@ def log_records() -> Generator[list[logging.LogRecord], None, None]:
 def extra_fields(record: logging.LogRecord) -> dict[str, object]:
     """Reconstruct structured fields from a log record."""
     return {k: getattr(record, k) for k in record.__dict__ if k not in _NATIVE_KEYS}
+
+
+def _patch_vultr_client(
+    mock_client: MagicMock,
+) -> AbstractContextManager[MagicMock]:
+    """Patch VultrClient so ``async with VultrClient(...)`` yields mock_client."""
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_client
+    mock_cm.__aexit__.return_value = None
+    return patch(
+        "yascheduler.infra.cloud.providers.vultr.VultrClient",
+        return_value=mock_cm,
+    )
 
 
 # =============================================================================
@@ -258,8 +306,397 @@ class TestBuildBaremetalUserData:
 
 
 # =============================================================================
-# get_ssh_key_id
+# VultrClient.get_ssh_keys
 # =============================================================================
+
+
+class TestVultrClientGetSshKeys:
+    """VultrClient.get_ssh_keys: GET /ssh-keys shape validation + pagination."""
+
+    @pytest.mark.asyncio
+    async def test_single_page_returns_ssh_keys_list(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with patch.object(
+            client,
+            "_request",
+            AsyncMock(
+                return_value={
+                    "ssh_keys": [
+                        {"id": "k1", "fingerprint": "aa:bb"},
+                        {"id": "k2", "fingerprint": "cc:dd"},
+                    ]
+                },
+            ),
+        ) as mock_request:
+            result = await _collect(client.get_ssh_keys())
+
+        assert result == [
+            {"id": "k1", "fingerprint": "aa:bb"},
+            {"id": "k2", "fingerprint": "cc:dd"},
+        ]
+        mock_request.assert_awaited_once_with(
+            "GET", "/ssh-keys", params={"per_page": 500}
+        )
+
+    @pytest.mark.asyncio
+    async def test_custom_per_page_forwarded(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with patch.object(
+            client, "_request", AsyncMock(return_value={"ssh_keys": []})
+        ) as mock_request:
+            await _collect(client.get_ssh_keys(per_page=100))
+
+        mock_request.assert_awaited_once_with(
+            "GET", "/ssh-keys", params={"per_page": 100}
+        )
+
+    @pytest.mark.asyncio
+    async def test_follows_cursor_until_no_next(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        page1 = {
+            "ssh_keys": [{"id": "k1", "fingerprint": "aa:bb"}],
+            "meta": {"links": {"next": "cursor-abc"}},
+        }
+        page2 = {
+            "ssh_keys": [{"id": "k2", "fingerprint": "cc:dd"}],
+            "meta": {"links": {"next": "cursor-def"}},
+        }
+        page3 = {"ssh_keys": [{"id": "k3", "fingerprint": "ee:ff"}]}
+        snapshots: list[dict] = []
+
+        async def fake_request(method, path, params=None, data=None):
+            snapshots.append(dict(params) if params else {})
+            return [page1, page2, page3][len(snapshots) - 1]
+
+        with patch.object(client, "_request", side_effect=fake_request) as mock_request:
+            result = await _collect(client.get_ssh_keys())
+
+        assert [k["id"] for k in result] == ["k1", "k2", "k3"]
+        assert mock_request.call_count == 3
+        # page 1: no cursor; page 2: cursor=cursor-abc; page 3: cursor=cursor-def.
+        assert snapshots[0] == {"per_page": 500}
+        assert snapshots[1] == {"per_page": 500, "cursor": "cursor-abc"}
+        assert snapshots[2] == {"per_page": 500, "cursor": "cursor-def"}
+
+    @pytest.mark.asyncio
+    async def test_missing_meta_stops_after_first_page(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with patch.object(
+            client,
+            "_request",
+            AsyncMock(
+                return_value={"ssh_keys": [{"id": "k1", "fingerprint": "aa:bb"}]}
+            ),
+        ) as mock_request:
+            result = await _collect(client.get_ssh_keys())
+
+        assert [k["id"] for k in result] == ["k1"]
+        mock_request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_invalid_shape_raises_apierror(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(
+                client, "_request", AsyncMock(return_value={"not_ssh_keys": []})
+            ),
+            pytest.raises(APIError, match="Invalid SSH keys list response"),
+        ):
+            await _collect(client.get_ssh_keys())
+
+    @pytest.mark.asyncio
+    async def test_missing_id_in_entry_raises_apierror(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(
+                client,
+                "_request",
+                AsyncMock(
+                    return_value={"ssh_keys": [{"fingerprint": "aa:bb"}]},  # no id
+                ),
+            ),
+            pytest.raises(APIError, match="Invalid SSH keys list response"),
+        ):
+            await _collect(client.get_ssh_keys())
+
+
+# =============================================================================
+# VultrClient.create_ssh_key
+# =============================================================================
+
+
+class TestVultrClientCreateSshKey:
+    """VultrClient.create_ssh_key: POST /ssh-keys shape validation."""
+
+    @pytest.mark.asyncio
+    async def test_returns_ssh_key_id(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with patch.object(
+            client,
+            "_request",
+            AsyncMock(return_value={"ssh_key": {"id": "new-id"}}),
+        ) as mock_request:
+            result = await client.create_ssh_key("my-key", "ssh-rsa AAAA= test")
+
+        assert result == "new-id"
+        mock_request.assert_awaited_once_with(
+            "POST",
+            "/ssh-keys",
+            data={"name": "my-key", "ssh_key": "ssh-rsa AAAA= test"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_response_without_ssh_key_raises(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(client, "_request", AsyncMock(return_value={})),
+            pytest.raises(APIError, match="Cannot create SSH key"),
+        ):
+            await client.create_ssh_key("my-key", "ssh-rsa AAAA= test")
+
+    @pytest.mark.asyncio
+    async def test_response_ssh_key_without_id_raises(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(client, "_request", AsyncMock(return_value={"ssh_key": {}})),
+            pytest.raises(APIError, match="Cannot create SSH key"),
+        ):
+            await client.create_ssh_key("my-key", "ssh-rsa AAAA= test")
+
+
+# =============================================================================
+# VultrClient.create_bare_metal
+# =============================================================================
+
+
+class TestVultrClientCreateBareMetal:
+    """VultrClient.create_bare_metal: POST /bare-metals shape validation."""
+
+    @pytest.mark.asyncio
+    async def test_returns_bare_metal_entity(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        bm_resp = {"bare_metal": {"id": "inst-1", "label": "test"}}
+        with patch.object(
+            client, "_request", AsyncMock(return_value=bm_resp)
+        ) as mock_request:
+            result = await client.create_bare_metal(
+                region="ams",
+                plan="vbm-24c-256gb-amd",
+                os_id=2136,
+                label="test",
+                hostname="test",
+                sshkey_id=["k1"],
+                user_data="data",
+                enable_ipv6=True,
+            )
+
+        assert result == {"id": "inst-1", "label": "test"}
+        mock_request.assert_awaited_once_with(
+            "POST",
+            "/bare-metals",
+            data={
+                "region": "ams",
+                "plan": "vbm-24c-256gb-amd",
+                "os_id": 2136,
+                "label": "test",
+                "hostname": "test",
+                "sshkey_id": ["k1"],
+                "user_data": "data",
+                "enable_ipv6": True,
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_response_without_bare_metal_key_raises(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(
+                client, "_request", AsyncMock(return_value={"not_bare_metal": {}})
+            ),
+            pytest.raises(APIError, match="Invalid create Bare Metal response"),
+        ):
+            await client.create_bare_metal(
+                region="ams",
+                plan="p",
+                os_id=1,
+                label="t",
+                hostname="t",
+                sshkey_id=["k"],
+                user_data="d",
+                enable_ipv6=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_response_bare_metal_without_id_raises(self) -> None:
+        """create_bare_metal rejects a bare_metal without id — id is required
+        by VultrBareMetal and validated via _is_bare_metal_resp."""
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(
+                client,
+                "_request",
+                AsyncMock(return_value={"bare_metal": {"label": "no-id"}}),
+            ),
+            pytest.raises(APIError, match="Invalid create Bare Metal response"),
+        ):
+            await client.create_bare_metal(
+                region="ams",
+                plan="p",
+                os_id=1,
+                label="t",
+                hostname="t",
+                sshkey_id=["k"],
+                user_data="d",
+                enable_ipv6=True,
+            )
+
+
+# =============================================================================
+# VultrClient.get_bare_metals
+# =============================================================================
+
+
+class TestVultrClientGetBareMetals:
+    """VultrClient.get_bare_metals: GET /bare-metals shape validation + pagination."""
+
+    @pytest.mark.asyncio
+    async def test_single_page_returns_bare_metals_list(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with patch.object(
+            client,
+            "_request",
+            AsyncMock(
+                return_value={
+                    "bare_metals": [
+                        {"id": "bm-1", "label": "n1"},
+                        {"id": "bm-2", "label": "n2"},
+                    ]
+                },
+            ),
+        ) as mock_request:
+            result = await _collect(client.get_bare_metals())
+
+        assert result == [
+            {"id": "bm-1", "label": "n1"},
+            {"id": "bm-2", "label": "n2"},
+        ]
+        mock_request.assert_awaited_once_with(
+            "GET", "/bare-metals", params={"per_page": 500}
+        )
+
+    @pytest.mark.asyncio
+    async def test_custom_per_page_forwarded(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with patch.object(
+            client, "_request", AsyncMock(return_value={"bare_metals": []})
+        ) as mock_request:
+            await _collect(client.get_bare_metals(per_page=50))
+
+        mock_request.assert_awaited_once_with(
+            "GET", "/bare-metals", params={"per_page": 50}
+        )
+
+    @pytest.mark.asyncio
+    async def test_follows_cursor_until_no_next(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        page1 = {
+            "bare_metals": [{"id": "bm-1", "label": "n1"}],
+            "meta": {"links": {"next": "cursor-abc"}},
+        }
+        page2 = {
+            "bare_metals": [{"id": "bm-2", "label": "n2"}],
+            "meta": {"links": {"next": "cursor-def"}},
+        }
+        page3 = {"bare_metals": [{"id": "bm-3", "label": "n3"}]}
+        snapshots: list[dict] = []
+
+        async def fake_request(method, path, params=None, data=None):
+            snapshots.append(dict(params) if params else {})
+            return [page1, page2, page3][len(snapshots) - 1]
+
+        with patch.object(client, "_request", side_effect=fake_request) as mock_request:
+            result = await _collect(client.get_bare_metals())
+
+        assert [bm["id"] for bm in result] == ["bm-1", "bm-2", "bm-3"]
+        assert mock_request.call_count == 3
+        assert snapshots[0] == {"per_page": 500}
+        assert snapshots[1] == {"per_page": 500, "cursor": "cursor-abc"}
+        assert snapshots[2] == {"per_page": 500, "cursor": "cursor-def"}
+
+    @pytest.mark.asyncio
+    async def test_missing_meta_stops_after_first_page(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with patch.object(
+            client,
+            "_request",
+            AsyncMock(return_value={"bare_metals": [{"id": "bm-1"}]}),
+        ) as mock_request:
+            result = await _collect(client.get_bare_metals())
+
+        assert [bm["id"] for bm in result] == ["bm-1"]
+        mock_request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_invalid_shape_raises_apierror(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(
+                client, "_request", AsyncMock(return_value={"not_bare_metals": []})
+            ),
+            pytest.raises(APIError, match="Invalid bare-metals list response"),
+        ):
+            await _collect(client.get_bare_metals())
+
+    @pytest.mark.asyncio
+    async def test_entry_without_id_raises_apierror(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(
+                client,
+                "_request",
+                AsyncMock(
+                    return_value={"bare_metals": [{"label": "no-id"}]},  # no id
+                ),
+            ),
+            pytest.raises(APIError, match="Invalid bare-metals list response"),
+        ):
+            await _collect(client.get_bare_metals())
 
 
 class TestGetSshKeyId:
@@ -281,16 +718,18 @@ class TestGetSshKeyId:
         mock_key.export_public_key.return_value = pubkey.encode()
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            return_value={"ssh_keys": [{"id": "existing-id", "fingerprint": fp}]},
+        mock_client.get_ssh_keys = MagicMock(
+            return_value=_ssh_key_stream(
+                [{"id": "existing-id", "fingerprint": fp}],
+            ),
         )
+        mock_client.request = AsyncMock()
 
         result = await get_ssh_key_id(mock_client, mock_key)
         assert result == "existing-id"
-        # Only GET happened — no POST
-        assert mock_client.request.call_count == 1
-        call_args = mock_client.request.call_args
-        assert call_args.args[0] == "GET"
+        # Only GET happened via get_ssh_keys — no POST
+        mock_client.get_ssh_keys.assert_called_once()
+        mock_client.request.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_match_uploads_and_returns_new_id(self) -> None:
@@ -300,16 +739,15 @@ class TestGetSshKeyId:
         mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {"ssh_keys": []},  # GET: no existing keys
-                {"ssh_key": {"id": "new-id"}},  # POST: uploaded
-            ],
+        mock_client.get_ssh_keys = MagicMock(
+            return_value=_ssh_key_stream([]),  # no existing keys
         )
+        mock_client.create_ssh_key = AsyncMock(return_value="new-id")
 
         result = await get_ssh_key_id(mock_client, mock_key)
         assert result == "new-id"
-        assert mock_client.request.call_count == 2
+        mock_client.get_ssh_keys.assert_called_once()
+        mock_client.create_ssh_key.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_post_without_id_raises_apierror(self) -> None:
@@ -319,12 +757,11 @@ class TestGetSshKeyId:
         mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {"ssh_keys": []},
-                {"ssh_key": {}},  # POST: no id in response
-            ],
+        mock_client.get_ssh_keys = MagicMock(
+            return_value=_ssh_key_stream([]),
         )
+        # create_ssh_key raises APIError when POST response has no ssh_key.id
+        mock_client.create_ssh_key = AsyncMock(side_effect=APIError("no id"))
 
         with pytest.raises(APIError):
             await get_ssh_key_id(mock_client, mock_key)
@@ -352,24 +789,14 @@ class TestVultrCreateNode:
         mock_key = MagicMock()
         mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {"bare_metal": {"id": "inst-1"}},  # POST /bare-metals
-                {  # GET poll — active immediately
-                    "bare_metal": {
-                        "id": "inst-1",
-                        "status": "active",
-                        "main_ip": "1.2.3.4",
-                    },
-                },
-            ],
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        mock_client.get_bare_metal = AsyncMock(
+            return_value={"id": "inst-1", "status": "active", "main_ip": "1.2.3.4"},
         )
+        mock_client.delete_bare_metal = AsyncMock()
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
                 AsyncMock(return_value="key-1"),
@@ -381,7 +808,7 @@ class TestVultrCreateNode:
         ):
             result = await vultr_create_node(cfg, mock_key)
 
-        assert result.external_id == "1.2.3.4"
+        assert result.external_id == "inst-1"
         assert result.hostname == "1.2.3.4"
         assert result.username == "root"
         assert result.jump_host == "jump.example.com"
@@ -401,6 +828,10 @@ class TestVultrCreateNode:
 
     @pytest.mark.asyncio
     async def test_post_without_instance_id_raises_apierror(self) -> None:
+        """create_bare_metal itself rejects a 2xx response without a usable
+        bare_metal.id (shape validation via _is_bare_metal_resp). The
+        reconcile-by-label path runs before the error propagates so a
+        possibly-created instance is not orphaned."""
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
         from yascheduler.infra.cloud.providers.vultr import APIError, vultr_create_node
 
@@ -408,13 +839,17 @@ class TestVultrCreateNode:
         mock_key = MagicMock()
         mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(return_value={})  # POST: no id
+        # create_bare_metal raises APIError on invalid shape (no bare_metal.id)
+        mock_client.create_bare_metal = AsyncMock(
+            side_effect=APIError("Invalid Bare Metal create response")
+        )
+        mock_client.get_bare_metals = MagicMock(
+            return_value=_bm_stream([]),  # reconcile GET list: no match
+        )
+        mock_client.delete_bare_metal = AsyncMock()
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
                 AsyncMock(return_value="key-1"),
@@ -423,15 +858,16 @@ class TestVultrCreateNode:
                 "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
                 return_value="test-node",
             ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
             pytest.raises(APIError),
         ):
             await vultr_create_node(cfg, mock_key)
 
-        # Instance was never created (no id in POST response) → no cleanup.
-        delete_calls = [
-            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
-        ]
-        assert delete_calls == []
+        # Reconcile ran (best-effort) but found no orphan — no DELETE.
+        mock_client.delete_bare_metal.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_never_active_raises_apierror(self) -> None:
@@ -446,20 +882,14 @@ class TestVultrCreateNode:
         mock_key = MagicMock()
         mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        mock_client.get_bare_metal = AsyncMock(
             side_effect=[
-                {"bare_metal": {"id": "inst-1"}},  # POST
-                {  # GET: always pending
-                    "bare_metal": {
-                        "id": "inst-1",
-                        "status": "pending",
-                        "main_ip": "0.0.0.0",
-                    },
-                },
-                {},  # DELETE cleanup accepted
-                APIError("HTTP 404", status=404),  # GET verify: gone
+                {"id": "inst-1", "status": "pending", "main_ip": "0.0.0.0"},
+                APIError("HTTP 404", status=404),  # verify: gone
             ],
         )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
 
         loop = MagicMock()
         # create-poll consumes 3 (deadline, while-check, while-check-exit);
@@ -467,10 +897,7 @@ class TestVultrCreateNode:
         loop.time = MagicMock(side_effect=[0, 0, POLL_TIMEOUT + 1, 0, 1])
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
                 AsyncMock(return_value="key-1"),
@@ -492,11 +919,7 @@ class TestVultrCreateNode:
             await vultr_create_node(cfg, mock_key)
 
         # Instance was created → cleanup MUST have deleted it (BUG-1 regression).
-        delete_calls = [
-            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
-        ]
-        assert len(delete_calls) == 1
-        assert delete_calls[0].args[1] == "/bare-metals/inst-1"
+        mock_client.delete_bare_metal.assert_awaited_once_with("inst-1")
 
     @pytest.mark.asyncio
     async def test_emits_poll_status_marker(
@@ -510,24 +933,14 @@ class TestVultrCreateNode:
         mock_key = MagicMock()
         mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {"bare_metal": {"id": "inst-1"}},
-                {
-                    "bare_metal": {
-                        "id": "inst-1",
-                        "status": "active",
-                        "main_ip": "1.2.3.4",
-                    },
-                },
-            ],
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        mock_client.get_bare_metal = AsyncMock(
+            return_value={"id": "inst-1", "status": "active", "main_ip": "1.2.3.4"},
         )
+        mock_client.delete_bare_metal = AsyncMock()
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
                 AsyncMock(return_value="key-1"),
@@ -558,25 +971,21 @@ class TestVultrCreateNode:
         mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         transient_err = APIError("HTTP 500: Internal server error", status=500)
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        mock_client.get_bare_metal = AsyncMock(
             side_effect=[
-                {"bare_metal": {"id": "inst-1"}},  # POST
                 transient_err,  # GET 1: flap
-                {  # GET 2: recovered
-                    "bare_metal": {
-                        "id": "inst-1",
-                        "status": "active",
-                        "main_ip": "1.2.3.4",
-                    },
-                },
+                {
+                    "id": "inst-1",
+                    "status": "active",
+                    "main_ip": "1.2.3.4",
+                },  # GET 2: recovered
             ],
         )
+        mock_client.delete_bare_metal = AsyncMock()
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
                 AsyncMock(return_value="key-1"),
@@ -592,7 +1001,8 @@ class TestVultrCreateNode:
         ):
             result = await vultr_create_node(cfg, mock_key)
 
-        assert result.external_id == "1.2.3.4"
+        assert result.external_id == "inst-1"
+        assert result.hostname == "1.2.3.4"
 
     @pytest.mark.asyncio
     async def test_user_data_carries_users_section_with_cfg_username(
@@ -614,24 +1024,14 @@ class TestVultrCreateNode:
         mock_key.export_public_key.return_value = pub.encode()
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {"bare_metal": {"id": "inst-1"}},
-                {
-                    "bare_metal": {
-                        "id": "inst-1",
-                        "status": "active",
-                        "main_ip": "1.2.3.4",
-                    },
-                },
-            ],
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        mock_client.get_bare_metal = AsyncMock(
+            return_value={"id": "inst-1", "status": "active", "main_ip": "1.2.3.4"},
         )
+        mock_client.delete_bare_metal = AsyncMock()
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
                 AsyncMock(return_value="key-1"),
@@ -644,8 +1044,8 @@ class TestVultrCreateNode:
             result = await vultr_create_node(cfg, mock_key)
 
         # create-node body MUST contain user_data with a `users` section carrying pub.
-        post_call = mock_client.request.call_args_list[0]
-        body = post_call.args[2]
+        create_call = mock_client.create_bare_metal.call_args
+        body = create_call.kwargs
         import base64 as b64m
 
         decoded = b64m.b64decode(body["user_data"]).decode()
@@ -680,27 +1080,20 @@ class TestVultrCreateNode:
         post_err = APIError("HTTP request failed: timeout")  # transport-level
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                post_err,  # POST /bare-metals — transport failure (no id)
-                {  # reconcile GET list: orphan with matching label
-                    "bare_metals": [
-                        {"id": "orphan-1", "label": "test-node"},
-                    ],
-                },
-                {},  # reconcile DELETE accepted
-                APIError("HTTP 404", status=404),  # reconcile verify: gone
-            ],
+        mock_client.create_bare_metal = AsyncMock(side_effect=post_err)
+        mock_client.get_bare_metals = MagicMock(
+            return_value=_bm_stream([{"id": "orphan-1", "label": "test-node"}]),
         )
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[APIError("HTTP 404", status=404)],  # verify: gone
+        )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
 
         loop = MagicMock()
         loop.time = MagicMock(side_effect=[0, 0, 1, 1])
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
                 AsyncMock(return_value="key-1"),
@@ -721,13 +1114,13 @@ class TestVultrCreateNode:
         ):
             await vultr_create_node(cfg, mock_key)
 
-        # POST was attempted once.
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods[0] == "POST"
-        # Reconcile fired: GET list + DELETE + GET verify.
-        assert methods[1:] == ["GET", "DELETE", "GET"]
-        # DELETE targeted the orphan matched by label.
-        assert mock_client.request.call_args_list[2].args[1] == "/bare-metals/orphan-1"
+        # POST was attempted once via create_bare_metal.
+        mock_client.create_bare_metal.assert_awaited_once()
+        # Reconcile fired: get_bare_metals found the orphan, DELETE on delete_bare_metal.
+        mock_client.get_bare_metals.assert_called_once()
+        mock_client.delete_bare_metal.assert_awaited_once_with("orphan-1")
+        # Verify poll ran on get_bare_metal.
+        assert mock_client.get_bare_metal.call_count == 1
 
     @pytest.mark.asyncio
     async def test_get_poll_permanent_4xx_does_not_retry(self) -> None:
@@ -740,20 +1133,17 @@ class TestVultrCreateNode:
         mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
         permanent_err = APIError("HTTP 404: Not found", status=404)
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        mock_client.get_bare_metal = AsyncMock(
             side_effect=[
-                {"bare_metal": {"id": "inst-1"}},  # POST
                 permanent_err,  # GET create-poll: 404 — permanent, raise
-                {},  # DELETE cleanup accepted
                 APIError("HTTP 404", status=404),  # GET verify: gone
             ],
         )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
                 AsyncMock(return_value="key-1"),
@@ -777,10 +1167,7 @@ class TestVultrCreateNode:
         # The 404 propagated, not swallowed.
         assert exc_info.value.status == 404
         # Instance was created → cleanup DELETE fired once.
-        delete_calls = [
-            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
-        ]
-        assert len(delete_calls) == 1
+        mock_client.delete_bare_metal.assert_awaited_once_with("inst-1")
 
 
 # =============================================================================
@@ -800,10 +1187,10 @@ class TestDeleteAndVerify:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)  # DELETE 2xx
+        mock_client.get_bare_metal = AsyncMock(
             side_effect=[
-                {},  # DELETE accepted (2xx)
-                {"bare_metal": {"id": "inst-1"}},  # GET 1: still present
+                {"id": "inst-1"},  # GET 1: still present
                 APIError("HTTP 404", status=404),  # GET 2: gone
             ],
         )
@@ -822,9 +1209,9 @@ class TestDeleteAndVerify:
 
         assert result is True
 
-        # 1 DELETE + 2 GETs (present then gone).
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["DELETE", "GET", "GET"]
+        # 1 DELETE on delete_bare_metal + 2 GETs on get_bare_metal (present then gone).
+        mock_client.delete_bare_metal.assert_awaited_once()
+        assert mock_client.get_bare_metal.call_count == 2
 
     @pytest.mark.asyncio
     async def test_delete_404_means_already_gone_no_verify(self) -> None:
@@ -835,9 +1222,10 @@ class TestDeleteAndVerify:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.delete_bare_metal = AsyncMock(
             side_effect=APIError("HTTP 404", status=404),
         )
+        mock_client.get_bare_metal = AsyncMock()
 
         with patch(
             "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
@@ -847,8 +1235,8 @@ class TestDeleteAndVerify:
         assert result is True
 
         # Only the DELETE — no verify GET.
-        assert mock_client.request.call_count == 1
-        assert mock_client.request.call_args.args[0] == "DELETE"
+        mock_client.delete_bare_metal.assert_awaited_once()
+        mock_client.get_bare_metal.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_delete_500_retried_then_accepted(self) -> None:
@@ -859,12 +1247,14 @@ class TestDeleteAndVerify:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.delete_bare_metal = AsyncMock(
             side_effect=[
                 APIError("HTTP 500", status=500),  # DELETE 1: transient
-                {},  # DELETE 2: accepted
-                APIError("HTTP 404", status=404),  # GET: gone
+                None,  # DELETE 2: accepted
             ],
+        )
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[APIError("HTTP 404", status=404)],  # GET: gone
         )
 
         loop = MagicMock()
@@ -881,8 +1271,9 @@ class TestDeleteAndVerify:
 
         assert result is True
 
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["DELETE", "DELETE", "GET"]
+        # 2 DELETEs on delete_bare_metal, 1 GET verify on get_bare_metal.
+        assert mock_client.delete_bare_metal.call_count == 2
+        assert mock_client.get_bare_metal.call_count == 1
 
     @pytest.mark.asyncio
     async def test_delete_500_exhausts_retries_no_verify(self) -> None:
@@ -894,9 +1285,10 @@ class TestDeleteAndVerify:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.delete_bare_metal = AsyncMock(
             side_effect=APIError("HTTP 500", status=500),
         )
+        mock_client.get_bare_metal = AsyncMock()
 
         with patch(
             "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
@@ -906,9 +1298,8 @@ class TestDeleteAndVerify:
         assert result is False
 
         # All calls are DELETE retries — no verify GET ever issued.
-        assert mock_client.request.call_count == CLEANUP_DELETE_ATTEMPTS
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert all(m == "DELETE" for m in methods)
+        assert mock_client.delete_bare_metal.call_count == CLEANUP_DELETE_ATTEMPTS
+        mock_client.get_bare_metal.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_delete_permanent_4xx_no_retry_no_verify(self) -> None:
@@ -919,9 +1310,10 @@ class TestDeleteAndVerify:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.delete_bare_metal = AsyncMock(
             side_effect=APIError("HTTP 403", status=403),
         )
+        mock_client.get_bare_metal = AsyncMock()
 
         with patch(
             "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
@@ -930,7 +1322,8 @@ class TestDeleteAndVerify:
 
         assert result is False
 
-        assert mock_client.request.call_count == 1
+        mock_client.delete_bare_metal.assert_awaited_once()
+        mock_client.get_bare_metal.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_verify_timeout_logs_error_still_present(
@@ -944,11 +1337,9 @@ class TestDeleteAndVerify:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {},  # DELETE accepted
-                *[{"bare_metal": {"id": "inst-1"}}] * 100,  # GET: always present
-            ],
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+        mock_client.get_bare_metal = AsyncMock(
+            return_value={"id": "inst-1"},  # always present
         )
 
         # Simulate verify-timeout: time() jumps past deadline after first GET.
@@ -991,9 +1382,9 @@ class TestDeleteAndVerify:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.delete_bare_metal = AsyncMock(side_effect=[None])
+        mock_client.get_bare_metal = AsyncMock(
             side_effect=[
-                {},  # DELETE accepted
                 APIError("HTTP 500", status=500),  # GET 1: transient
                 APIError("HTTP 404", status=404),  # GET 2: gone
             ],
@@ -1013,8 +1404,9 @@ class TestDeleteAndVerify:
 
         assert result is True
 
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["DELETE", "GET", "GET"]
+        # 1 DELETE on delete_bare_metal, 2 GETs on get_bare_metal.
+        mock_client.delete_bare_metal.assert_awaited_once()
+        assert mock_client.get_bare_metal.call_count == 2
 
     @pytest.mark.asyncio
     async def test_never_raises(self) -> None:
@@ -1025,9 +1417,10 @@ class TestDeleteAndVerify:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.delete_bare_metal = AsyncMock(
             side_effect=APIError("HTTP 500", status=500),
         )
+        mock_client.get_bare_metal = AsyncMock()
 
         with patch(
             "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
@@ -1036,145 +1429,7 @@ class TestDeleteAndVerify:
             result = await _delete_and_verify(mock_client, "inst-1")
 
         assert result is False
-
-
-# =============================================================================
-# find_baremetal
-# =============================================================================
-
-
-class TestFindBaremetal:
-    """find_baremetal: IP lookup against the bare-metals list."""
-
-    @pytest.mark.asyncio
-    async def test_match_returns_id(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import find_baremetal
-
-        mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            return_value={
-                "bare_metals": [
-                    {"id": "bm-1", "main_ip": "1.2.3.4"},
-                    {"id": "bm-2", "main_ip": "5.6.7.8"},
-                ],
-            },
-        )
-
-        result = await find_baremetal(mock_client, "1.2.3.4")
-        assert result == "bm-1"
-
-    @pytest.mark.asyncio
-    async def test_no_match_returns_none(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import find_baremetal
-
-        mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            return_value={
-                "bare_metals": [{"id": "bm-1", "main_ip": "1.2.3.4"}],
-            },
-        )
-
-        result = await find_baremetal(mock_client, "9.9.9.9")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_empty_list_returns_none(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import find_baremetal
-
-        mock_client = MagicMock()
-        mock_client.request = AsyncMock(return_value={"bare_metals": []})
-
-        result = await find_baremetal(mock_client, "1.2.3.4")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_match_on_second_page_returns_id(self) -> None:
-        """Accounts with >500 bare-metals paginate: a target on page 2 must
-        still be found, not missed by the old single-page lookup."""
-        from yascheduler.infra.cloud.providers.vultr import (
-            LIST_PAGE_SIZE,
-            find_baremetal,
-        )
-
-        page1 = {
-            "bare_metals": [
-                {"id": f"bm-{i}", "main_ip": f"10.0.0.{i}"}
-                for i in range(LIST_PAGE_SIZE)
-            ],
-            "meta": {"links": {"next": "/bare-metals?per_page=500&cursor=abc"}},
-        }
-        page2 = {
-            "bare_metals": [{"id": "bm-target", "main_ip": "9.9.9.9"}],
-        }
-
-        mock_client = MagicMock()
-        mock_client.request = AsyncMock(side_effect=[page1, page2])
-
-        result = await find_baremetal(mock_client, "9.9.9.9")
-        assert result == "bm-target"
-        assert mock_client.request.call_count == 2
-
-
-# =============================================================================
-# _list_all_bare_metals
-# =============================================================================
-
-
-class TestListAllBareMetals:
-    """_list_all_bare_metals: cursor pagination over the bare-metals listing."""
-
-    @pytest.mark.asyncio
-    async def test_single_page_no_cursor(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import _list_all_bare_metals
-
-        mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            return_value={"bare_metals": [{"id": "bm-1"}], "meta": {"links": {}}},
-        )
-
-        result = await _list_all_bare_metals(mock_client)
-        assert [bm["id"] for bm in result] == ["bm-1"]
-        assert mock_client.request.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_follows_cursor_until_no_next(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import _list_all_bare_metals
-
-        mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {
-                    "bare_metals": [{"id": "bm-1"}],
-                    "meta": {"links": {"next": "/bare-metals?per_page=500&cursor=a"}},
-                },
-                {
-                    "bare_metals": [{"id": "bm-2"}],
-                    "meta": {"links": {"next": "/bare-metals?per_page=500&cursor=b"}},
-                },
-                {
-                    "bare_metals": [{"id": "bm-3"}],
-                    "meta": {"links": {}},
-                },
-            ],
-        )
-
-        result = await _list_all_bare_metals(mock_client)
-        assert [bm["id"] for bm in result] == ["bm-1", "bm-2", "bm-3"]
-        assert mock_client.request.call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_missing_meta_stops_after_first_page(self) -> None:
-        """A response without meta.links is treated as the last page."""
-        from yascheduler.infra.cloud.providers.vultr import _list_all_bare_metals
-
-        mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            return_value={"bare_metals": [{"id": "bm-1"}]},  # no meta key
-        )
-
-        result = await _list_all_bare_metals(mock_client)
-        assert [bm["id"] for bm in result] == ["bm-1"]
-        assert mock_client.request.call_count == 1
+        mock_client.get_bare_metal.assert_not_awaited()
 
 
 # =============================================================================
@@ -1199,17 +1454,17 @@ class TestReconcileOrphanByLabel:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {  # GET list: orphan with matching label present
-                    "bare_metals": [
-                        {"id": "orphan-1", "label": "test-node"},
-                        {"id": "other-2", "label": "unrelated"},
-                    ],
-                },
-                {},  # DELETE accepted
-                APIError("HTTP 404", status=404),  # GET verify: gone
-            ],
+        mock_client.get_bare_metals = MagicMock(
+            return_value=_bm_stream(
+                [
+                    {"id": "orphan-1", "label": "test-node"},
+                    {"id": "other-2", "label": "unrelated"},
+                ],
+            ),
+        )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[APIError("HTTP 404", status=404)],  # verify: gone
         )
 
         loop = MagicMock()
@@ -1227,10 +1482,10 @@ class TestReconcileOrphanByLabel:
         ):
             await _reconcile_orphan_by_label(mock_client, "test-node")
 
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["GET", "DELETE", "GET"]
-        # DELETE targeted the matched orphan.
-        assert mock_client.request.call_args_list[1].args[1] == "/bare-metals/orphan-1"
+        # get_bare_metals called once; DELETE on delete_bare_metal; GET verify on get_bare_metal.
+        mock_client.get_bare_metals.assert_called_once()
+        mock_client.delete_bare_metal.assert_awaited_once_with("orphan-1")
+        assert mock_client.get_bare_metal.call_count == 1
 
     @pytest.mark.asyncio
     async def test_no_match_no_delete(self) -> None:
@@ -1240,26 +1495,29 @@ class TestReconcileOrphanByLabel:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            return_value={"bare_metals": [{"id": "x", "label": "unrelated"}]},
+        mock_client.get_bare_metals = MagicMock(
+            return_value=_bm_stream([{"id": "x", "label": "unrelated"}]),
         )
+        mock_client.delete_bare_metal = AsyncMock()
+        mock_client.get_bare_metal = AsyncMock()
 
         with patch(
             "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
         ):
             await _reconcile_orphan_by_label(mock_client, "test-node")
 
-        # Only lookup GETs (one per retry attempt); no DELETE.
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["GET"] * RECONCILE_ATTEMPTS
+        # get_bare_metals retried RECONCILE_ATTEMPTS times; no DELETE, no verify.
+        assert mock_client.get_bare_metals.call_count == RECONCILE_ATTEMPTS
+        mock_client.delete_bare_metal.assert_not_awaited()
+        assert mock_client.get_bare_metal.call_count == 0
 
     @pytest.mark.asyncio
     async def test_listing_lag_orphan_appears_on_retry(
         self,
         log_records: list,
     ) -> None:
-        """Listing-lag: the orphan is not visible on the first GET (Vultr not
-        yet consistent after POST) but appears on the second attempt. The
+        """Listing-lag: the orphan is not visible on the first listing (Vultr
+        not yet consistent after POST) but appears on the second attempt. The
         retry loop must catch it and delete it, not give up after attempt 1."""
         from yascheduler.infra.cloud.providers.vultr import (
             APIError,
@@ -1267,15 +1525,15 @@ class TestReconcileOrphanByLabel:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.get_bare_metals = MagicMock(
             side_effect=[
-                {"bare_metals": []},  # attempt 1: not yet visible (lag)
-                {  # attempt 2: orphan now visible
-                    "bare_metals": [{"id": "orphan-1", "label": "test-node"}],
-                },
-                {},  # DELETE accepted
-                APIError("HTTP 404", status=404),  # GET verify: gone
+                _bm_stream([]),  # attempt 1: not yet visible (lag)
+                _bm_stream([{"id": "orphan-1", "label": "test-node"}]),  # attempt 2
             ],
+        )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[APIError("HTTP 404", status=404)],  # verify: gone
         )
 
         loop = MagicMock()
@@ -1293,9 +1551,10 @@ class TestReconcileOrphanByLabel:
         ):
             await _reconcile_orphan_by_label(mock_client, "test-node")
 
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["GET", "GET", "DELETE", "GET"]
-        assert mock_client.request.call_args_list[2].args[1] == "/bare-metals/orphan-1"
+        # get_bare_metals called twice (lag then match); DELETE on delete_bare_metal.
+        assert mock_client.get_bare_metals.call_count == 2
+        mock_client.delete_bare_metal.assert_awaited_once_with("orphan-1")
+        assert mock_client.get_bare_metal.call_count == 1
 
     @pytest.mark.asyncio
     async def test_listing_transient_failure_then_success_deletes_orphan(
@@ -1311,15 +1570,19 @@ class TestReconcileOrphanByLabel:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.get_bare_metals = MagicMock(
             side_effect=[
-                APIError("HTTP 502", status=502),  # attempt 1: listing down
-                {  # attempt 2: listing recovered, orphan visible
-                    "bare_metals": [{"id": "orphan-1", "label": "test-node"}],
-                },
-                {},  # DELETE accepted
-                APIError("HTTP 404", status=404),  # GET verify: gone
+                _bm_stream(
+                    [], exc=APIError("HTTP 502", status=502)
+                ),  # attempt 1: listing down
+                _bm_stream(
+                    [{"id": "orphan-1", "label": "test-node"}]
+                ),  # attempt 2: recovered
             ],
+        )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[APIError("HTTP 404", status=404)],  # verify: gone
         )
 
         loop = MagicMock()
@@ -1337,8 +1600,10 @@ class TestReconcileOrphanByLabel:
         ):
             await _reconcile_orphan_by_label(mock_client, "test-node")
 
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["GET", "GET", "DELETE", "GET"]
+        # get_bare_metals called twice (fail then recover); DELETE on delete_bare_metal.
+        assert mock_client.get_bare_metals.call_count == 2
+        mock_client.delete_bare_metal.assert_awaited_once_with("orphan-1")
+        assert mock_client.get_bare_metal.call_count == 1
 
     @pytest.mark.asyncio
     async def test_orphan_on_second_page_is_found(
@@ -1346,31 +1611,27 @@ class TestReconcileOrphanByLabel:
         log_records: list,
     ) -> None:
         """Accounts with >500 bare-metals paginate: the orphan sits on page 2
-        and must still be matched and deleted."""
+        and must still be matched and deleted. get_bare_metals paginates
+        internally as it yields, so the orphan is visible to the caller once
+        the iterator advances to page 2."""
         from yascheduler.infra.cloud.providers.vultr import (
             LIST_PAGE_SIZE,
             APIError,
             _reconcile_orphan_by_label,
         )
 
-        page1 = {
-            "bare_metals": [
-                {"id": f"bm-{i}", "label": f"other-{i}"} for i in range(LIST_PAGE_SIZE)
-            ],
-            "meta": {"links": {"next": "/bare-metals?per_page=500&cursor=abc"}},
-        }
-        page2 = {
-            "bare_metals": [{"id": "orphan-1", "label": "test-node"}],
-        }
+        page1 = [
+            {"id": f"bm-{i}", "label": f"other-{i}"} for i in range(LIST_PAGE_SIZE)
+        ]
+        page2 = [{"id": "orphan-1", "label": "test-node"}]
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                page1,  # page 1: no match
-                page2,  # page 2: orphan found
-                {},  # DELETE accepted
-                APIError("HTTP 404", status=404),  # GET verify: gone
-            ],
+        mock_client.get_bare_metals = MagicMock(
+            return_value=_bm_stream(page1 + page2),
+        )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[APIError("HTTP 404", status=404)],  # verify: gone
         )
 
         loop = MagicMock()
@@ -1388,15 +1649,10 @@ class TestReconcileOrphanByLabel:
         ):
             await _reconcile_orphan_by_label(mock_client, "test-node")
 
-        methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["GET", "GET", "DELETE", "GET"]
-        # First GET hits page 1 with per_page, second follows the cursor.
-        assert (
-            mock_client.request.call_args_list[0]
-            .args[1]
-            .startswith("/bare-metals?per_page=")
-        )
-        assert "cursor" in mock_client.request.call_args_list[1].args[1]
+        # get_bare_metals flattened both pages; DELETE on delete_bare_metal.
+        mock_client.get_bare_metals.assert_called_once()
+        mock_client.delete_bare_metal.assert_awaited_once_with("orphan-1")
+        assert mock_client.get_bare_metal.call_count == 1
 
     @pytest.mark.asyncio
     async def test_lookup_failure_never_raises(
@@ -1410,9 +1666,13 @@ class TestReconcileOrphanByLabel:
         )
 
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=APIError("HTTP 500", status=500),
+        mock_client.get_bare_metals = MagicMock(
+            side_effect=lambda *a, **kw: _bm_stream(
+                [], exc=APIError("HTTP 500", status=500)
+            ),
         )
+        mock_client.delete_bare_metal = AsyncMock()
+        mock_client.get_bare_metal = AsyncMock()
 
         with patch(
             "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
@@ -1421,6 +1681,8 @@ class TestReconcileOrphanByLabel:
             await _reconcile_orphan_by_label(mock_client, "test-node")
 
         assert any("RECONCILE_LOOKUP_FAILED" in r.getMessage() for r in log_records)
+        assert mock_client.get_bare_metal.call_count == 0
+        mock_client.delete_bare_metal.assert_not_awaited()
 
 
 # =============================================================================
@@ -1429,10 +1691,16 @@ class TestReconcileOrphanByLabel:
 
 
 class TestVultrDeleteNode:
-    """vultr_delete_node: found → DELETE + verify + log; unknown → skip + log."""
+    """vultr_delete_node: DELETE /bare-metals/{external_id} + verify + log.
+
+    external_id is the bare-metal instance id (not the IP). A 404 on DELETE
+    means already gone (idempotent no-op). A 2xx DELETE triggers verify-poll
+    until 404. _delete_and_verify returning False raises APIError for
+    cross-cycle retry.
+    """
 
     @pytest.mark.asyncio
-    async def test_found_calls_delete_and_logs(
+    async def test_delete_accepted_then_verify_404_logs_deleted(
         self,
         log_records: list,
     ) -> None:
@@ -1444,77 +1712,68 @@ class TestVultrDeleteNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {},  # DELETE accepted
-                APIError("HTTP 404", status=404),  # GET verify: gone
-            ],
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[APIError("HTTP 404", status=404)],  # verify: gone
         )
 
         loop = MagicMock()
         loop.time = MagicMock(side_effect=[0, 0, 1, 1])
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.find_baremetal",
-                AsyncMock(return_value="inst-1"),
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
                 return_value=loop,
             ),
             patch("yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()),
         ):
-            await vultr_delete_node(cfg, "1.2.3.4")
+            await vultr_delete_node(cfg, "inst-1")
 
-        # DELETE was called on the client
-        delete_calls = [
-            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
-        ]
-        assert len(delete_calls) == 1
-        assert delete_calls[0].args[1] == "/bare-metals/inst-1"
+        # DELETE targeted external_id directly (no IP lookup).
+        mock_client.delete_bare_metal.assert_awaited_once_with("inst-1")
         # DELETED info marker emitted only after verify confirms gone
         deleted_records = [r for r in log_records if "DELETED" in r.getMessage()]
         assert len(deleted_records) == 1
 
     @pytest.mark.asyncio
-    async def test_unknown_skips_delete_and_logs(
+    async def test_delete_404_already_gone_is_noop(
         self,
         log_records: list,
     ) -> None:
+        """DELETE returns 404 -> already gone -> no verify, no raise. Vultr
+        DELETE 404 is idempotent (matches hetzner contract)."""
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
-        from yascheduler.infra.cloud.providers.vultr import vultr_delete_node
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            vultr_delete_node,
+        )
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(return_value={})
+        mock_client.delete_bare_metal = AsyncMock(
+            side_effect=APIError("HTTP 404", status=404),  # DELETE: already gone
+        )
+        mock_client.get_bare_metal = AsyncMock()
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.find_baremetal",
-                AsyncMock(return_value=None),
-            ),
+            _patch_vultr_client(mock_client),
+            patch("yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()),
         ):
-            await vultr_delete_node(cfg, "9.9.9.9")
+            await vultr_delete_node(cfg, "inst-gone")
 
-        # No DELETE call
-        delete_calls = [
-            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
+        # Only the DELETE call — no verify GET.
+        mock_client.delete_bare_metal.assert_awaited_once_with("inst-gone")
+        mock_client.get_bare_metal.assert_not_awaited()
+        # Already-gone (404) is confirmed gone -> DELETED logged + already-gone warning.
+        deleted_records = [
+            r for r in log_records if r.getMessage() == "DELETED inst-gone"
         ]
-        assert len(delete_calls) == 0
-        # NOT DELETED AS UNKNOWN marker emitted
-        unknown_records = [
-            r for r in log_records if "NOT DELETED AS UNKNOWN" in r.getMessage()
+        assert len(deleted_records) == 1
+        already_gone_records = [
+            r for r in log_records if "already gone" in r.getMessage()
         ]
-        assert len(unknown_records) == 1
+        assert len(already_gone_records) == 1
 
     @pytest.mark.asyncio
     async def test_delete_not_confirmed_raises_to_enable_cross_cycle_retry(
@@ -1532,26 +1791,22 @@ class TestVultrDeleteNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
+        mock_client.delete_bare_metal = AsyncMock(
             side_effect=APIError("HTTP 403", status=403),  # DELETE: permanent
         )
+        mock_client.get_bare_metal = AsyncMock()
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.find_baremetal",
-                AsyncMock(return_value="inst-1"),
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
                 AsyncMock(),
             ),
             pytest.raises(APIError, match="delete not confirmed"),
         ):
-            await vultr_delete_node(cfg, "1.2.3.4")
+            await vultr_delete_node(cfg, "inst-1")
+
+        mock_client.get_bare_metal.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_delete_verify_timeout_raises(
@@ -1570,11 +1825,9 @@ class TestVultrDeleteNode:
 
         cfg = ConfigCloudVultr(api_key="test-key")
         mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {},  # DELETE accepted
-                *[{"bare_metal": {"id": "inst-1"}}] * 100,  # always present
-            ],
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+        mock_client.get_bare_metal = AsyncMock(
+            return_value={"id": "inst-1"},  # always present
         )
 
         call_count = [0]
@@ -1589,14 +1842,7 @@ class TestVultrDeleteNode:
         loop.time = MagicMock(side_effect=fake_time)
 
         with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.find_baremetal",
-                AsyncMock(return_value="inst-1"),
-            ),
+            _patch_vultr_client(mock_client),
             patch(
                 "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
                 return_value=loop,
@@ -1607,7 +1853,7 @@ class TestVultrDeleteNode:
             ),
             pytest.raises(APIError, match="delete not confirmed"),
         ):
-            await vultr_delete_node(cfg, "1.2.3.4")
+            await vultr_delete_node(cfg, "inst-1")
 
         # Escalation log preserved for manual reconciliation.
         error_records = [

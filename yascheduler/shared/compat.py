@@ -10,12 +10,27 @@ from enum import Enum
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
-    from typing import ParamSpec, Self, TypeGuard, Unpack
+    from typing import NotRequired, ParamSpec, Required, Self, TypeGuard, Unpack
 else:
-    from typing_extensions import ParamSpec, Self, TypeGuard, Unpack
+    from typing_extensions import (
+        NotRequired,
+        ParamSpec,
+        Required,
+        Self,
+        TypeGuard,
+        Unpack,
+    )
 
     class StrEnum(str, Enum):
         """Backport of enum.StrEnum for Python < 3.11."""
 
 
-__all__ = ["ParamSpec", "Self", "StrEnum", "TypeGuard", "Unpack"]
+__all__ = [
+    "NotRequired",
+    "ParamSpec",
+    "Required",
+    "Self",
+    "StrEnum",
+    "TypeGuard",
+    "Unpack",
+]
