@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from yascheduler.domain.exceptions import MachineConnectionError
 from yascheduler.domain.model import Node, NodeId
 from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
 from yascheduler.infra.cloud.cloud_init import CloudInitConfig
@@ -506,6 +507,154 @@ class TestAllocate:
             await prov.allocate("test", _tmp_node(1))
 
         adapter.delete_node.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
+
+    @pytest.mark.asyncio
+    async def test_allocate_connect_retry_within_grace(
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
+    ) -> None:
+        """Setup connect fails with MachineConnectionError then succeeds within connect_grace — completes setup and returns enabled node."""
+        adapter, config = _make_mock_adapter(name="test", priority=10)
+        config.connect_grace = 60  # Short grace window for fast test
+        repo = MagicMock()
+        repo.connect_calls = []
+
+        # First call fails, second succeeds
+        call_count = 0
+
+        async def _connect(**kw: Any) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise MachineConnectionError(
+                    NodeId(999),
+                    "10.0.0.1",
+                    "Permission denied",
+                )
+            machine = MagicMock()
+            machine.hostname = "10.0.0.1"
+            machine.run = AsyncMock(
+                return_value=MagicMock(exit_code=0, stdout="", stderr=""),
+            )
+            machine.setup_node = AsyncMock()
+            machine.get_cpu_cores = AsyncMock(return_value=4)
+            return machine
+
+        repo.connect = _connect
+        repo.disconnect = AsyncMock()
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        adapter.delete_node = AsyncMock()
+
+        with patch(
+            "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            node = await prov.allocate("test", _tmp_node(999))
+
+        assert isinstance(node, Node)
+        assert node.enabled is True
+        assert node.node_id == NodeId(999)
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_allocate_connect_retry_exhausted_grace(
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
+    ) -> None:
+        """Setup connect fails past connect_grace raises CloudSetupError and cleans up VM."""
+        adapter, config = _make_mock_adapter(name="test", priority=10)
+        config.connect_grace = 0.01  # Very short grace — retry exhausts immediately
+        repo = MagicMock()
+
+        async def _connect_always_fail(**kw: Any) -> Any:
+            raise MachineConnectionError(
+                NodeId(1),
+                "10.0.0.1",
+                "Permission denied",
+            )
+
+        repo.connect = _connect_always_fail
+        repo.disconnect = AsyncMock()
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        adapter.delete_node = AsyncMock()
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            pytest.raises(CloudSetupError, match="SSH connect to"),
+        ):
+            await prov.allocate("test", _tmp_node(1))
+
+        repo.disconnect.assert_awaited_once_with(NodeId(1))
+        adapter.delete_node.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
+
+    @pytest.mark.asyncio
+    async def test_allocate_connect_retry_bound_from_config(
+        self,
+        mock_engines: MagicMock,
+        mock_local_config: MagicMock,
+    ) -> None:
+        """Retry max_time is read from config.connect_grace, not hardcoded — zero grace means no retry."""
+        adapter, config = _make_mock_adapter(name="test", priority=10)
+        config.connect_grace = 0  # Zero grace — no retry window
+        repo = MagicMock()
+
+        call_count = 0
+
+        async def _connect(**kw: Any) -> Any:
+            nonlocal call_count
+            call_count += 1
+            raise MachineConnectionError(
+                NodeId(1),
+                "10.0.0.1",
+                "Permission denied",
+            )
+
+        repo.connect = _connect
+        repo.disconnect = AsyncMock()
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        adapter.delete_node = AsyncMock()
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            pytest.raises(CloudSetupError, match="SSH connect to"),
+        ):
+            await prov.allocate("test", _tmp_node(1))
+
+        # With connect_grace=0, the retry deadline is already past on first attempt
+        # so only one connect call is made before giving up
+        assert call_count == 1
 
 
 class TestDeallocate:

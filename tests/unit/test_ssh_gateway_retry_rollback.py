@@ -1,7 +1,7 @@
 # region MODULE_CONTRACT
-# PURPOSE: Unit tests for non-idempotent retry removal (run_bg/upload/download single-attempt) and start_task_on_machine BUSY rollback.
-# SCOPE: run_bg/upload/download no longer retry on transient SSH/SFTP errors; start_task_on_machine rolls back gateway BUSY on upload/spawn/Cancelled/unexpected-state/concurrent-disconnect failures.
-# KEYWORDS: non-idempotent retry, BUSY rollback, start_task_on_machine
+# PURPOSE: Unit tests for non-idempotent retry removal (run_bg/upload/download single-attempt), start_task_on_machine BUSY rollback, and SSHRetryExc shape invariants.
+# SCOPE: run_bg/upload/download no longer retry on transient SSH/SFTP errors; start_task_on_machine rolls back gateway BUSY on upload/spawn/Cancelled/unexpected-state/concurrent-disconnect failures; SSHRetryExc does not include PermissionDenied.
+# KEYWORDS: non-idempotent retry, BUSY rollback, start_task_on_machine, SSHRetryExc, PermissionDenied
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from asyncssh.misc import PermissionDenied
 
 from tests.unit.test_ssh_gateway import _make_state
 from yascheduler.domain import Engine
@@ -27,6 +28,7 @@ from yascheduler.infra.ssh.operations import TaskDeployer
 from yascheduler.infra.ssh.platform.protocol import (
     ChannelOpenError,
     SFTPConnectionLost,
+    SSHRetryExc,
 )
 from yascheduler.infra.ssh.repository import SSHMachineRepository
 
@@ -340,3 +342,16 @@ class TestStartTaskRollback:
         # occupy was called exactly once (the initial occupy); no release call.
         assert spy.call_count == 1
         assert "already disconnected" in caplog.text
+
+
+# =============================================================================
+# SSHRetryExc shape invariants
+# =============================================================================
+
+
+class TestSSHRetryExcShape:
+    """SSHRetryExc tuple invariants — regression pins against accidental policy changes."""
+
+    def test_permission_denied_not_in_ssh_retry_exc(self) -> None:
+        """PermissionDenied is NOT in SSHRetryExc — steady-state SSH retry policy unchanged."""
+        assert PermissionDenied not in SSHRetryExc

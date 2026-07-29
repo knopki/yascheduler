@@ -15,8 +15,8 @@ shared inheritance hierarchy. Application code reads only this surface.
 
 The port SHALL carry the cloud prefix, the node-count limit, the idle
 tolerance, the connect-grace window, the SSH username, and the three
-jump-host fields. The connect-grace window governs connection retry; its
-semantics live in the `orchestrator` spec.
+jump-host fields. The connect-grace window governs how long the system
+tolerates a cloud node's connections failing.
 
 The system SHALL support these providers:
 
@@ -88,11 +88,15 @@ SSH username, SSH port, and three jump fields SHALL come from the cloud
 provider response. The jump fields are stamped here once; the
 authoritative source-selection rule lives in the `domain-entities` spec.
 
+Transient SSH connect failures during setup SHALL be retried before the
+connect is treated as a setup failure.
+
 On VM creation failure, provisioning SHALL raise a cloud allocation
-error so the caller discards the placeholder node. On setup failure
-(SSH, cloud-init, or engine install), provisioning SHALL disconnect the
-SSH session for that node, delete the VM to stop billing, and raise a
-cloud setup error.
+error so the caller discards the placeholder node. On a setup failure
+that persists — SSH connect failure that persists, cloud-init failure, or
+engine install failure — provisioning SHALL disconnect the SSH session
+for that node, delete the VM to stop billing, and raise a cloud setup
+error.
 
 #### Scenario: a successful provisioning returns an enabled node
 
@@ -103,7 +107,7 @@ cloud setup error.
 
 #### Scenario: a setup failure tears down the VM
 
-- **WHEN** SSH, cloud-init, or engine setup fails after the VM is created
+- **WHEN** setup does not succeed after the VM is created
 - **THEN** the SSH session for that node is disconnected
 - **AND** the VM is deleted on the provider to stop billing
 - **AND** a cloud setup error is raised

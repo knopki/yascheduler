@@ -1,8 +1,8 @@
 """Tests for Vultr provider module."""
 # region MODULE_CONTRACT
 # PURPOSE: Unit tests for Vultr provider: exception hierarchy, fingerprint,
-#          cloud-init user-data, SSH key registration, SSH readiness polling,
-#          create/delete orchestration, and log-marker emission.
+#          cloud-init user-data, SSH key registration, create/delete
+#          orchestration, and log-marker emission.
 # SCOPE: vultr.py module-level behavior; VultrClient and SSH helpers via mocks.
 # KEYWORDS: vultr, provider, unit, exceptions, fingerprint, cloud-init, ssh
 # endregion MODULE_CONTRACT
@@ -325,187 +325,6 @@ class TestGetSshKeyId:
 
 
 # =============================================================================
-# _wait_ssh_port
-# =============================================================================
-
-
-class TestWaitSshPort:
-    """_wait_ssh_port: success on first connect, retry on refusal, timeout raises."""
-
-    @pytest.mark.asyncio
-    async def test_succeeds_on_first_connect(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import _wait_ssh_port
-
-        writer = MagicMock()
-        writer.close = MagicMock()
-        writer.wait_closed = AsyncMock()
-        loop = MagicMock()
-        loop.time = MagicMock(return_value=0)
-
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.open_connection",
-                AsyncMock(return_value=(MagicMock(), writer)),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
-                AsyncMock(),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
-                return_value=loop,
-            ),
-        ):
-            await _wait_ssh_port("inst-1", "1.2.3.4")
-
-        writer.close.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_retries_on_refused_then_succeeds(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import _wait_ssh_port
-
-        writer = MagicMock()
-        writer.close = MagicMock()
-        writer.wait_closed = AsyncMock()
-        loop = MagicMock()
-        # deadline = 0 + 1200 = 1200; while checks: 0 < 1200 (enter), 0 < 1200 (enter), then exit
-        loop.time = MagicMock(return_value=0)
-
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.open_connection",
-                AsyncMock(
-                    side_effect=[ConnectionRefusedError, (MagicMock(), writer)],
-                ),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
-                AsyncMock(),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
-                return_value=loop,
-            ),
-        ):
-            await _wait_ssh_port("inst-1", "1.2.3.4")
-
-        # First connect refused, second succeeded → writer.close called once
-        writer.close.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_timeout_raises_apierror(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import (
-            POLL_TIMEOUT,
-            APIError,
-            _wait_ssh_port,
-        )
-
-        loop = MagicMock()
-        # First call sets deadline = 0 + POLL_TIMEOUT; second call (while check) exceeds it.
-        loop.time = MagicMock(side_effect=[0, POLL_TIMEOUT + 1])
-
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
-                return_value=loop,
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.open_connection",
-                AsyncMock(side_effect=ConnectionRefusedError),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
-                AsyncMock(),
-            ),
-            pytest.raises(APIError),
-        ):
-            await _wait_ssh_port("inst-1", "1.2.3.4")
-
-
-# =============================================================================
-# _check_ssh_auth
-# =============================================================================
-
-
-class TestCheckSshAuth:
-    """_check_ssh_auth: success closes conn, failure exhausts attempts."""
-
-    @pytest.mark.asyncio
-    async def test_success_returns_true_and_closes(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import _check_ssh_auth
-
-        conn = MagicMock()
-        conn.close = MagicMock()
-
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncssh.connect",
-                AsyncMock(return_value=conn),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
-                AsyncMock(),
-            ),
-        ):
-            result = await _check_ssh_auth(
-                "inst-1",
-                "1.2.3.4",
-                MagicMock(),
-                "root",
-                attempts=2,
-                interval=0,
-            )
-
-        assert result is True
-        conn.close.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_failure_returns_false_after_attempts(
-        self,
-        log_records: list,
-    ) -> None:
-        from yascheduler.infra.cloud.providers.vultr import _check_ssh_auth
-
-        sleep_mock = AsyncMock()
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncssh.connect",
-                AsyncMock(side_effect=OSError("refused")),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
-                sleep_mock,
-            ),
-        ):
-            result = await _check_ssh_auth(
-                "inst-1",
-                "1.2.3.4",
-                MagicMock(),
-                "root",
-                attempts=2,
-                interval=0,
-            )
-
-        assert result is False
-        # Each failed attempt emits a SSH_AUTH_RETRY debug marker
-        retries = [r for r in log_records if r.getMessage() == "SSH_AUTH_RETRY"]
-        assert len(retries) == 2
-        fields = extra_fields(retries[0])
-        assert fields["instance_id"] == "inst-1"
-        assert fields["attempt"] == 1
-        assert fields["attempts"] == 2
-        # Exhaustion emits an info marker carrying instance_id + attempts
-        exhausted = [r for r in log_records if r.getMessage() == "SSH_AUTH_EXHAUSTED"]
-        assert len(exhausted) == 1
-        assert exhausted[0].levelno == logging.INFO
-        exhausted_fields = extra_fields(exhausted[0])
-        assert exhausted_fields["instance_id"] == "inst-1"
-        assert exhausted_fields["attempts"] == 2
-        # Sleep runs only between attempts — never after the last one.
-        assert sleep_mock.await_count == 1
-
-
-# =============================================================================
 # vultr_create_node
 # =============================================================================
 
@@ -553,14 +372,6 @@ class TestVultrCreateNode:
                 "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
                 return_value="test-node",
             ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._wait_ssh_port",
-                AsyncMock(),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._check_ssh_auth",
-                AsyncMock(return_value=True),
-            ),
         ):
             result = await vultr_create_node(cfg, mock_key)
 
@@ -570,6 +381,17 @@ class TestVultrCreateNode:
         assert result.jump_host == "jump.example.com"
         assert result.jump_port == 2222
         assert result.jump_username == "jumpuser"
+
+    @pytest.mark.asyncio
+    async def test_create_node_does_not_poll_ssh_readiness(self) -> None:
+        """SSH readiness is delegated to the cloud manager's setup connect
+        retry — vultr_create_node returns once the instance is active with an
+        IP, without polling the SSH port or key-based auth itself."""
+        import yascheduler.infra.cloud.providers.vultr as vultr_mod
+
+        assert not hasattr(vultr_mod, "_wait_ssh_port")
+        assert not hasattr(vultr_mod, "_check_ssh_auth")
+        assert not hasattr(vultr_mod, "asyncssh")
 
     @pytest.mark.asyncio
     async def test_post_without_instance_id_raises_apierror(self) -> None:
@@ -671,66 +493,6 @@ class TestVultrCreateNode:
         assert delete_calls[0].args[1] == "/bare-metals/inst-1"
 
     @pytest.mark.asyncio
-    async def test_ssh_auth_failure_raises_apierror(self) -> None:
-        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
-        from yascheduler.infra.cloud.providers.vultr import APIError, vultr_create_node
-
-        cfg = ConfigCloudVultr(api_key="test-key")
-        mock_key = MagicMock()
-        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
-        mock_client = MagicMock()
-        mock_client.request = AsyncMock(
-            side_effect=[
-                {"bare_metal": {"id": "inst-1"}},
-                {
-                    "bare_metal": {
-                        "id": "inst-1",
-                        "status": "active",
-                        "main_ip": "1.2.3.4",
-                    },
-                },
-                {},  # DELETE cleanup accepted
-                APIError("HTTP 404", status=404),  # GET verify: gone
-            ],
-        )
-
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_client",
-                return_value=mock_client,
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
-                AsyncMock(return_value="key-1"),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
-                return_value="test-node",
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._wait_ssh_port",
-                AsyncMock(),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._check_ssh_auth",
-                AsyncMock(return_value=False),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
-                return_value=MagicMock(time=MagicMock(side_effect=[0, 0, 1, 1])),
-            ),
-            pytest.raises(APIError),
-        ):
-            await vultr_create_node(cfg, mock_key)
-
-        # Instance was created → cleanup MUST have deleted it (BUG-1 regression).
-        delete_calls = [
-            c for c in mock_client.request.call_args_list if c.args[0] == "DELETE"
-        ]
-        assert len(delete_calls) == 1
-        assert delete_calls[0].args[1] == "/bare-metals/inst-1"
-
-    @pytest.mark.asyncio
     async def test_emits_poll_status_marker(
         self,
         log_records: list,
@@ -767,14 +529,6 @@ class TestVultrCreateNode:
             patch(
                 "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
                 return_value="test-node",
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._wait_ssh_port",
-                AsyncMock(),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._check_ssh_auth",
-                AsyncMock(return_value=True),
             ),
         ):
             await vultr_create_node(cfg, mock_key)
@@ -829,28 +583,21 @@ class TestVultrCreateNode:
                 "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
                 AsyncMock(),
             ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._wait_ssh_port",
-                AsyncMock(),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._check_ssh_auth",
-                AsyncMock(return_value=True),
-            ),
         ):
             result = await vultr_create_node(cfg, mock_key)
 
         assert result.external_id == "1.2.3.4"
 
     @pytest.mark.asyncio
-    async def test_user_data_carries_users_section_and_auth_uses_cfg_username(
+    async def test_user_data_carries_users_section_with_cfg_username(
         self,
     ) -> None:
-        """create_node forwards pub_key to user_data and polls auth as cfg.username.
+        """create_node forwards pub_key to user_data and stamps cfg.username on
+        the returned DTO.
 
         Regression for non-root provisioning: Vultr sshkey_id only injects into
         root's authorized_keys, so a non-root user is created via cloud-init
-        and the auth poll MUST use cfg.username.
+        and the returned DTO carries cfg.username.
         """
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
         from yascheduler.infra.cloud.providers.vultr import vultr_create_node
@@ -887,14 +634,6 @@ class TestVultrCreateNode:
                 "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
                 return_value="test-node",
             ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._wait_ssh_port",
-                AsyncMock(),
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vultr._check_ssh_auth",
-                AsyncMock(return_value=True),
-            ) as auth_mock,
         ):
             result = await vultr_create_node(cfg, mock_key)
 
@@ -910,12 +649,6 @@ class TestVultrCreateNode:
             {"name": "myuser", "ssh_authorized_keys": [pub]},
         ]
 
-        # Auth poll MUST use cfg.username, not "root".
-        auth_kwargs = auth_mock.call_args
-        assert auth_kwargs.kwargs.get("username") == "myuser" or (
-            "username" not in auth_kwargs.kwargs
-            and auth_mock.call_args.args[-1] == "myuser"
-        )
         assert result.username == "myuser"
 
     @pytest.mark.asyncio

@@ -2,7 +2,7 @@
 # region MODULE_CONTRACT
 # PURPOSE: Provision and decommission Vultr servers so the scheduler can run compute workloads on Vultr through the generic CloudAdapter contract.
 # SCOPE: cloud-side lifecycle only, NOT DB/UoW/SSH-setup/allocator.
-# DEPENDENCIES: USES API: api.vultr.com/v2 (aiohttp); USES: asyncssh for SSH auth polling.
+# DEPENDENCIES: USES API: api.vultr.com/v2 (aiohttp).
 # KEYWORDS: vultr, provider, bare metal, create, delete, ssh key, raid, cloud-init
 # endregion MODULE_CONTRACT
 
@@ -17,7 +17,6 @@ from functools import cache
 from typing import TYPE_CHECKING, cast
 
 import aiohttp
-import asyncssh
 
 from yascheduler.infra.cloud import (
     CloudCreateNodeDTO,
@@ -39,8 +38,6 @@ logger = logging.getLogger(__name__)
 API_BASE = "https://api.vultr.com/v2"
 POLL_INTERVAL = 20
 POLL_TIMEOUT = 1200
-SSH_AUTH_ATTEMPTS = 12
-SSH_AUTH_INTERVAL = 15
 # DELETE retries on transient (5xx) failures; the DELETE call itself.
 CLEANUP_DELETE_ATTEMPTS = 3
 CLEANUP_DELETE_INTERVAL = 5
@@ -269,103 +266,20 @@ def build_baremetal_user_data(
 # endregion FUNC_build_baremetal_user_data
 
 
-# region FUNC__check_ssh_auth
-# PURPOSE: Poll SSH auth until it succeeds or attempts run out so a bare-metal node whose port opened before cloud-init installed authorized_keys is not declared failed (asyncssh.PermissionDenied is NOT in SSHRetryExc, so without this poll the node would be deleted on the first Permission denied, triggering a redundant provisioning cycle).
-# ENSURES: Returns True on successful connect+close, False after exhausting attempts (with SSH_AUTH_EXHAUSTED info marker). Sleep only between attempts, not after the last.
-async def _check_ssh_auth(
-    instance_id: str,
-    ip_addr: str,
-    key: ASSHKey,
-    username: str,
-    attempts: int = SSH_AUTH_ATTEMPTS,
-    interval: int = SSH_AUTH_INTERVAL,
-) -> bool:
-    """Poll SSH auth until it succeeds or attempts run out."""
-    for attempt in range(1, attempts + 1):
-        try:
-            conn = await asyncio.wait_for(
-                asyncssh.connect(
-                    ip_addr,
-                    port=22,
-                    username=username,
-                    client_keys=[key],
-                    known_hosts=None,
-                    connect_timeout=10,
-                ),
-                timeout=15,
-            )
-        except Exception as exc:
-            logger.debug(
-                "SSH_AUTH_RETRY",
-                extra={
-                    "instance_id": instance_id,
-                    "attempt": attempt,
-                    "attempts": attempts,
-                    "error": str(exc),
-                },
-            )
-            if attempt < attempts:
-                await asyncio.sleep(interval)
-            continue
-        conn.close()
-        logger.info(
-            "Bare-metal %s SSH auth OK on attempt %s/%s",
-            instance_id,
-            attempt,
-            attempts,
-        )
-        return True
-    logger.info(
-        "SSH_AUTH_EXHAUSTED",
-        extra={"instance_id": instance_id, "attempts": attempts},
-    )
-    return False
-
-
-# endregion FUNC__check_ssh_auth
-
-
-# region FUNC__wait_ssh_port
-# PURPOSE: Wait until the SSH port (22) accepts a TCP connection so subsequent auth polling does not fail on a not-yet-listening port.
-# ENSURES: Returns when a TCP connection succeeds; raises APIError on POLL_TIMEOUT expiry.
-async def _wait_ssh_port(instance_id: str, ip_addr: str) -> None:
-    """Wait until the SSH port (22) accepts a TCP connection."""
-    deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT
-    while asyncio.get_running_loop().time() < deadline:
-        try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip_addr, 22),
-                timeout=10,
-            )
-            writer.close()
-            await writer.wait_closed()
-        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):  # noqa: PERF203
-            await asyncio.sleep(10)
-        else:
-            return
-    msg = f"Bare-metal {instance_id} SSH not ready on {ip_addr} in time"
-    raise APIError(msg)
-
-
-# endregion FUNC__wait_ssh_port
-
-
 # region FUNC_vultr_create_node
 # PURPOSE: Provision a Vultr bare-metal instance via the CloudAdapter interface so the generic provisioner can launch Vultr compute nodes.
-# ENSURES: Returns CloudCreateNodeDTO with external_id = hostname = instance public IP; SSH auth verified before return. On any failure AFTER the instance is created, the instance is best-effort deleted before re-raising (no billable orphan).
+# ENSURES: Returns CloudCreateNodeDTO with external_id = hostname = instance public IP once the instance is active and has a public IP. On any failure AFTER the instance is created, the instance is best-effort deleted before re-raising (no billable orphan).
 # INVARIANTS:
 # - external_id = hostname = instance public IP (delete_node looks up by IP via find_baremetal)
-# - SSH port open AND key-based auth verified before returning (cloud-init may install authorized_keys after the port first opens)
-# - Post-instance-create failures (poll timeout, SSH port/auth failure) trigger best-effort DELETE of the instance id before the exception propagates, so no billable resource leaks when create_node raises.
+# - create_node returns as soon as the instance status is "active" with a non-zero public IP
+# - Post-instance-create failures (poll timeout) trigger best-effort DELETE of the instance id before the exception propagates, so no billable resource leaks when create_node raises.
 async def vultr_create_node(
     cfg: ConfigCloudVultr, key: ASSHKey, cloud_config: CloudInitConfig | None = None
 ) -> CloudCreateNodeDTO:
-    """Provision a bare-metal instance and wait until SSH is ready.
+    """Provision a bare-metal instance and return its IP once active.
 
-    Creates the instance via Vultr API, polls until it becomes active,
-    then waits for the SSH port to open and for key-based auth to succeed
-    (cloud-init may not have installed authorized_keys yet when the port
-    first opens). Returns the instance IP address.
+    Creates the instance via Vultr API and polls until it becomes active
+    with a public IP, then returns the IP.
 
     If any step after instance creation fails, the instance is best-effort
     deleted before re-raising so no billable orphan leaks.
@@ -445,24 +359,6 @@ async def vultr_create_node(
             raise APIError(msg)  # noqa: TRY301
 
         assert ip_addr is not None
-        logger.info("Bare-metal %s active, waiting for SSH on %s", instance_id, ip_addr)
-        await _wait_ssh_port(instance_id, ip_addr)
-
-        # SSH port may open before cloud-init finishes installing authorized_keys,
-        # causing Permission denied on first connect. Poll auth with the configured
-        # key so create_node doesn't fail and trigger redundant instance creation.
-        logger.info(
-            "Bare-metal %s SSH port open, waiting for cloud-init to install keys",
-            instance_id,
-        )
-        ssh_ok = await _check_ssh_auth(instance_id, ip_addr, key, cfg.username)
-        if not ssh_ok:
-            msg = (
-                f"Bare-metal {instance_id} SSH auth failed on {ip_addr} "
-                f"after {SSH_AUTH_ATTEMPTS} attempts"
-            )
-            raise APIError(msg)  # noqa: TRY301
-
         logger.info("CREATED %s", ip_addr)
         return CloudCreateNodeDTO(
             external_id=ip_addr,

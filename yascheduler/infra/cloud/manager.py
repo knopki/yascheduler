@@ -16,10 +16,12 @@ from typing import TYPE_CHECKING
 from yascheduler.domain import (
     CloudAllocateError,
     CloudSetupError,
+    MachineConnectionError,
     MachineSession,
     Node,
 )
 from yascheduler.infra.ssh.keys import list_private_keys
+from yascheduler.shared import retry
 
 from .cloud_init import CloudInitConfig
 from .provider_selection import select_provider_pure
@@ -373,7 +375,7 @@ class CloudProvisionerImpl:
     # endregion METHOD__setup_vm
 
     # region METHOD__connect_to_vm
-    # PURPOSE: Establish SSH connectivity to the new VM so setup operations (cloud-init check, engine install) can proceed.
+    # PURPOSE: Establish SSH connectivity to the new VM so setup operations (cloud-init check, engine install) can proceed. Retries transient MachineConnectionError within the cloud config's connect_grace window.
     # REQUIRES: node has hostname/username; adapter has timeout settings.
     # ENSURES: Opens SSH connection to VM (session registered under node.node_id).
     # RAISES: CloudSetupError if SSH connection fails.
@@ -381,7 +383,7 @@ class CloudProvisionerImpl:
         self,
         node: Node,
         adapter: CloudAdapter,
-        config: ConfigCloud,  # noqa:  ARG002 Unused method argument
+        config: ConfigCloud,
     ) -> MachineSession:
         """Connect to VM via SSH gateway with retry-friendly error wrapping."""
         # region BLOCK_get_keys
@@ -402,14 +404,19 @@ class CloudProvisionerImpl:
             },
         )
         try:
-            session = await self.machine_repository.connect(
-                node=node,
-                client_keys=keys,
-                connect_timeout=adapter.create_node_conn_timeout,
-                data_dir=self.remote_config.data_dir,
-                engines_dir=self.remote_config.engines_dir,
-                tasks_dir=self.remote_config.tasks_dir,
-            )
+
+            @retry(on=MachineConnectionError, max_time=config.connect_grace)
+            async def _connect_with_retry() -> MachineSession:
+                return await self.machine_repository.connect(
+                    node=node,
+                    client_keys=keys,
+                    connect_timeout=adapter.create_node_conn_timeout,
+                    data_dir=self.remote_config.data_dir,
+                    engines_dir=self.remote_config.engines_dir,
+                    tasks_dir=self.remote_config.tasks_dir,
+                )
+
+            session = await _connect_with_retry()
         except Exception as err:
             msg = f"SSH connect to {node.hostname} failed: {err}"
             raise CloudSetupError(
