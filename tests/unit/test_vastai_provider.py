@@ -725,7 +725,7 @@ class TestVastaiDeleteNode:
 
     @pytest.mark.asyncio
     async def test_issues_delete_and_returns_none(self) -> None:
-        """Issues DELETE /instances/{external_id}/ and returns None."""
+        """Issues DELETE /instances/{external_id}/, verifies gone, returns None."""
         from unittest.mock import patch
 
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
@@ -733,27 +733,46 @@ class TestVastaiDeleteNode:
 
         cfg = ConfigCloudVastAI(api_key="test-key")
 
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={"success": True})
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        def make_resp(status: int, body: object) -> MagicMock:
+            mock_resp = MagicMock()
+            mock_resp.status = status
+            mock_resp.json = AsyncMock(return_value=body)
+            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+            mock_resp.__aexit__ = AsyncMock(return_value=False)
+            return mock_resp
 
+        # 1. DELETE accepted (2xx)
+        # 2. verify GET → 404 (confirmed gone)
         mock_session = MagicMock()
-        mock_session.request = MagicMock(return_value=mock_resp)
+        mock_session.request = MagicMock(
+            side_effect=[
+                make_resp(200, {"success": True}),
+                make_resp(404, {"msg": "not found"}),
+            ],
+        )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch(
-            "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
-            return_value=mock_session,
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL",
+                0.0,
+            ),
         ):
             await vastai_delete_node(cfg, "42")
 
-        # Verify DELETE was called with the correct path
-        call_args = mock_session.request.call_args
-        assert call_args[0][0] == "DELETE"
-        assert "/instances/42/" in call_args[0][1]
+        # First call: DELETE with the correct path
+        delete_call = mock_session.request.call_args_list[0]
+        assert delete_call[0][0] == "DELETE"
+        assert "/instances/42/" in delete_call[0][1]
+        # Second call: verify GET
+        verify_call = mock_session.request.call_args_list[1]
+        assert verify_call[0][0] == "GET"
+        assert "/instances/42/" in verify_call[0][1]
 
     @pytest.mark.asyncio
     async def test_404_returns_none_idempotent(self) -> None:
@@ -843,12 +862,14 @@ class TestVastaiDeleteNodeNon2xx:
             return mock_resp
 
         # Fail a few times, then succeed — proves 5xx is retried on DELETE.
+        # Verify GET then confirms gone (404).
         mock_session = MagicMock()
         mock_session.request = MagicMock(
             side_effect=[
                 make_resp(503, {"msg": "unavailable"}),
                 make_resp(502, {"msg": "bad gateway"}),
                 make_resp(200, {"success": True}),
+                make_resp(404, {"msg": "not found"}),
             ],
         )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -863,8 +884,8 @@ class TestVastaiDeleteNodeNon2xx:
         ):
             await vastai_mod.vastai_delete_node(cfg, "42")
 
-        # Retried twice before succeeding.
-        assert mock_session.request.call_count == 3
+        # Retried twice before succeeding, then verify GET (404).
+        assert mock_session.request.call_count == 4
 
 
 class TestVastaiCreateNodeApiKeyRedaction:
@@ -1375,6 +1396,7 @@ class TestDeleteNodeTransportRobustness:
             side_effect=[
                 aiohttp.ClientConnectionError("flap"),
                 self._resp(200, {"success": True}),
+                self._resp(404, {"msg": "not found"}),  # verify GET: gone
             ],
         )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -1389,7 +1411,8 @@ class TestDeleteNodeTransportRobustness:
         ):
             await vastai_mod.vastai_delete_node(cfg, "42")
 
-        assert mock_session.request.call_count == 2
+        # DELETE retried-then-accepted (2 calls) + verify GET (1 call).
+        assert mock_session.request.call_count == 3
 
     @pytest.mark.asyncio
     async def test_persistent_transport_wrapped_into_delete_error(self) -> None:
@@ -1417,3 +1440,450 @@ class TestDeleteNodeTransportRobustness:
             pytest.raises(vastai_mod.VastAIDeleteError),
         ):
             await vastai_mod.vastai_delete_node(cfg, "42")
+
+
+def _make_resp(status: int, json_data: object) -> MagicMock:
+    """Build a mock aiohttp response usable as an async context manager."""
+    mock_resp = MagicMock()
+    mock_resp.status = status
+    mock_resp.json = AsyncMock(return_value=json_data)
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    return mock_resp
+
+
+class TestCreateNodeOrphanReconcile:
+    """vastai_create_node: ambiguous/failed PUT reconciles by unique label.
+
+    Closes the non-idempotent-create orphan window. PUT /asks/{offer_id}/ is
+    not retried on transport/5xx (no double-create); when it fails after the
+    server may have accepted the create, the adapter reconciles by the unique
+    per-create label and best-effort deletes any matching instance before
+    re-raising.
+    """
+
+    @pytest.mark.asyncio
+    async def test_put_transport_failure_reconciles_orphan(
+        self,
+    ) -> None:
+        """Transport break on PUT (after server may have accepted) → reconcile
+        by the unique label finds the orphan and best-effort deletes it before
+        the PUT error re-raises. No billable orphan leaks."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAA..."
+
+        # Fixed unique label so the orphan listing response can match it.
+        create_label = "yascheduler-test-fixed"
+        orphan_id = 99
+        # 1. GET /ssh/ → key present
+        # 2. POST /bundles/ → offers
+        # 3. PUT /asks/101/ → transport break (ambiguous; instance may exist)
+        # 4. reconcile: GET /instances/ → orphan with the unique label
+        # 5. reconcile: DELETE /instances/{id}/ → accepted
+        # Best-effort delete does NOT verify (only the public delete_node path
+        # verifies), so no further calls.
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                _make_resp(200, [{"public_key": "ssh-rsa AAAA..."}]),
+                _make_resp(200, {"offers": [{"id": 101, "dph_total": 0.5}]}),
+                aiohttp.ClientConnectionError("break after accept"),
+                _make_resp(
+                    200,
+                    {"instances": [{"id": orphan_id, "label": create_label}]},
+                ),
+                _make_resp(200, {"success": True}),
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            patch.object(vastai_mod, "get_rnd_name", return_value=create_label),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+            pytest.raises(vastai_mod.VastAIError),
+        ):
+            await vastai_mod.vastai_create_node(cfg, mock_key)
+
+        calls = [c[0] for c in mock_session.request.call_args_list]
+        methods = [c[0] for c in calls]
+        # GET /ssh/, POST /bundles/, PUT /asks/, GET /instances/, DELETE orphan
+        assert methods == ["GET", "POST", "PUT", "GET", "DELETE"]
+        # DELETE targeted the orphan id, not the offer.
+        delete_path = calls[4][1]
+        assert f"/instances/{orphan_id}/" in delete_path
+
+    @pytest.mark.asyncio
+    async def test_put_2xx_without_new_contract_reconciles_orphan(
+        self,
+    ) -> None:
+        """2xx PUT response without new_contract → instance may have been
+        created; reconcile by label before re-raising."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAA..."
+
+        create_label = "yascheduler-test-fixed"
+        orphan_id = 77
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                _make_resp(200, [{"public_key": "ssh-rsa AAAA..."}]),
+                _make_resp(200, {"offers": [{"id": 101, "dph_total": 0.5}]}),
+                # 2xx but no new_contract — malformed response, instance unknown
+                _make_resp(200, {"unexpected": True}),
+                _make_resp(
+                    200,
+                    {"instances": [{"id": orphan_id, "label": create_label}]},
+                ),
+                _make_resp(200, {"success": True}),
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            patch.object(vastai_mod, "get_rnd_name", return_value=create_label),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+            pytest.raises(vastai_mod.VastAIError),
+        ):
+            await vastai_mod.vastai_create_node(cfg, mock_key)
+
+        calls = [c[0] for c in mock_session.request.call_args_list]
+        delete_path = calls[4][1]
+        assert f"/instances/{orphan_id}/" in delete_path
+
+    @pytest.mark.asyncio
+    async def test_put_failure_no_orphan_does_not_delete(
+        self,
+    ) -> None:
+        """PUT fails but reconcile listing finds no matching instance → no
+        DELETE issued; the PUT error still re-raises."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAA..."
+
+        create_label = "yascheduler-test-fixed"
+        # Single reconcile listing attempt (patched to 1) returning no match.
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                _make_resp(200, [{"public_key": "ssh-rsa AAAA..."}]),
+                _make_resp(200, {"offers": [{"id": 101, "dph_total": 0.5}]}),
+                aiohttp.ClientConnectionError("break before accept"),
+                _make_resp(200, {"instances": []}),  # nothing matches label
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            patch.object(vastai_mod, "get_rnd_name", return_value=create_label),
+            patch.object(vastai_mod, "_RECONCILE_ATTEMPTS", 1),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+            pytest.raises(vastai_mod.VastAIError),
+        ):
+            await vastai_mod.vastai_create_node(cfg, mock_key)
+
+        calls = [c[0] for c in mock_session.request.call_args_list]
+        methods = [c[0] for c in calls]
+        # GET, POST, PUT, GET(reconcile) — no DELETE because no orphan matched.
+        assert methods == ["GET", "POST", "PUT", "GET"]
+
+    @pytest.mark.asyncio
+    async def test_create_label_is_unique_per_call(self) -> None:
+        """The PUT body label is a unique per-create marker, not the static
+        configured label, so reconcile targets only this create's instance."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k", label="yascheduler")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAA..."
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                _make_resp(200, [{"public_key": "ssh-rsa AAAA..."}]),
+                _make_resp(200, {"offers": [{"id": 101, "dph_total": 0.5}]}),
+                _make_resp(200, {"new_contract": 42}),
+                _make_resp(
+                    200,
+                    {
+                        "instances": {
+                            "id": 42,
+                            "actual_status": "running",
+                            "ssh_host": "1.2.3.4",
+                            "ssh_port": 22,
+                        },
+                    },
+                ),
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+            return_value=mock_session,
+        ):
+            await vastai_mod.vastai_create_node(cfg, mock_key)
+
+        # PUT is the 3rd call; inspect the json body label.
+        put_call = mock_session.request.call_args_list[2]
+        put_label = put_call.kwargs["json"]["label"]
+        assert put_label.startswith("yascheduler-")
+        assert put_label != "yascheduler"
+
+
+class TestWaitUntilReadyAllPathCleanup:
+    """wait_until_ready: any show-instance failure that leaves the poll loop
+    best-effort deletes the known instance — not only timeout/terminal.
+    """
+
+    @pytest.mark.asyncio
+    async def test_show_instance_4xx_raises_and_deletes(self) -> None:
+        """A persistent 4xx on GET /instances/{id}/ propagates out of the poll
+        loop; the known instance is best-effort deleted before re-raising."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                # show-instance GET → 403 (forbidden): non-retryable, surfaces
+                _make_resp(403, {"msg": "forbidden"}),
+                # best-effort DELETE
+                _make_resp(200, {"success": True}),
+            ],
+        )
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            pytest.raises(vastai_mod.VastAIInstanceCreateError),
+        ):
+            await vastai_mod.wait_until_ready(mock_session, 42, 300.0)
+
+        calls = [c[0] for c in mock_session.request.call_args_list]
+        methods = [c[0] for c in calls]
+        assert methods == ["GET", "DELETE"]
+
+    @pytest.mark.asyncio
+    async def test_show_instance_invalid_shape_raises_and_deletes(self) -> None:
+        """A 2xx with an invalid response shape (malformed) propagates out of
+        the poll loop; the known instance is best-effort deleted."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                # 2xx but shape invalid → _show_instance raises VastAIError
+                _make_resp(200, {"instances": {}}),
+                # best-effort DELETE
+                _make_resp(200, {"success": True}),
+            ],
+        )
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            pytest.raises(vastai_mod.VastAIInstanceCreateError),
+        ):
+            await vastai_mod.wait_until_ready(mock_session, 42, 300.0)
+
+        calls = [c[0] for c in mock_session.request.call_args_list]
+        assert calls[-1][0] == "DELETE"
+
+
+class TestDeleteNodeVerifyAfterDelete:
+    """vastai_delete_node: verifies the instance is gone after DELETE accepted.
+
+    VastAI removal is eventually consistent — a 2xx DELETE means "accepted",
+    not "gone". The adapter polls GET until 404/null before reporting success;
+    a 2xx that never resolves to gone raises so the row stays disabled and the
+    next deallocate cycle retries.
+    """
+
+    @pytest.mark.asyncio
+    async def test_verify_404_confirms_gone(self) -> None:
+        """DELETE accepted, verify GET → 404 → confirmed gone, returns."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                _make_resp(200, {"success": True}),  # DELETE accepted
+                _make_resp(404, {"msg": "not found"}),  # verify: gone
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL",
+                0.0,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+        ):
+            await vastai_mod.vastai_delete_node(cfg, "42")
+
+        assert mock_session.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_verify_null_instances_confirms_gone(self) -> None:
+        """DELETE accepted, verify GET → 200 with instances=null (eventual
+        consistency) → treated as gone, returns."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                _make_resp(200, {"success": True}),  # DELETE accepted
+                _make_resp(200, {"instances": None}),  # verify: null = gone
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL",
+                0.0,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+        ):
+            await vastai_mod.vastai_delete_node(cfg, "42")
+
+        assert mock_session.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_verify_timeout_still_present_raises(self) -> None:
+        """DELETE accepted, but the instance never confirms gone within the
+        verify window → VastAIDeleteError so the row stays disabled for
+        cross-cycle retry. No false success on a billed orphan."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+        # verify GET always returns a still-present instance → never 404/null.
+        present_resp = _make_resp(
+            200,
+            {
+                "instances": {
+                    "id": 42,
+                    "actual_status": "running",
+                    "ssh_host": "1.2.3.4",
+                    "ssh_port": 22,
+                },
+            },
+        )
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                _make_resp(200, {"success": True}),  # DELETE accepted
+                present_resp,  # verify: still present (every poll)
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.object(vastai_mod, "_DELETE_VERIFY_TIMEOUT", 0.0),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL",
+                0.0,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+            pytest.raises(vastai_mod.VastAIDeleteError),
+        ):
+            await vastai_mod.vastai_delete_node(cfg, "42")
+
+    @pytest.mark.asyncio
+    async def test_verify_transient_get_keeps_polling(self) -> None:
+        """Transient GET errors during verify are not treated as gone: the
+        poll loop keeps going until 404 confirms the instance is actually
+        removed (no false success on a network blip)."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                _make_resp(200, {"success": True}),  # DELETE accepted
+                aiohttp.ClientConnectionError("flap"),  # verify: transient
+                _make_resp(503, {"msg": "unavailable"}),  # verify: transient
+                _make_resp(404, {"msg": "not found"}),  # verify: gone
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL",
+                0.0,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+        ):
+            await vastai_mod.vastai_delete_node(cfg, "42")
+
+        # DELETE + 3 verify GETs.
+        assert mock_session.request.call_count == 4

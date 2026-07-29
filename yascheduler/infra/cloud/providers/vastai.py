@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, TypedDict
 import aiohttp
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO
+from yascheduler.infra.cloud.utils import get_rnd_name
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
@@ -38,6 +39,17 @@ _RETRY_MAX_TIME = 60.0
 _RETRY_INITIAL_DELAY = 1.0
 _RETRY_MAX_DELAY = 30.0
 _RETRY_FACTOR = 1.5
+
+# Best-effort orphan reconcile after an ambiguous non-idempotent create.
+# Covers listing-lag (instance not yet visible after PUT) and transient
+# listing failures; matched by the unique per-create label.
+_RECONCILE_ATTEMPTS = 3
+_RECONCILE_INTERVAL = 5.0
+
+# Verify-after-delete: poll GET /instances/{id}/ until 404 so a 2xx DELETE
+# (accepted, not gone) cannot leave a billed orphan. Mirrors Vultr/Hetzner.
+_DELETE_VERIFY_TIMEOUT = 180.0
+_DELETE_VERIFY_INTERVAL = 10.0
 
 
 class VastAIError(Exception):
@@ -413,6 +425,112 @@ async def _best_effort_delete(
         logger.warning("NODE %s NOT DELETED", instance_id)
 
 
+# region FUNC__reconcile_orphan_by_label
+# PURPOSE: Close the non-idempotent-create orphan window by matching and best-effort deleting an instance created during a failed/ambiguous PUT, using the unique label generated pre-PUT.
+# ENSURES: Never raises — the original create error propagates regardless. Retries the listing _RECONCILE_ATTEMPTS times with a delay to cover listing-lag (instance not yet visible after PUT) and transient listing failures; on each tick a label match triggers best-effort delete, exhausting all attempts without a match logs a warning for manual reconciliation.
+async def _reconcile_orphan_by_label(
+    session: aiohttp.ClientSession,
+    label: str,
+) -> None:
+    """Best-effort delete of an instance created during an ambiguous PUT.
+
+    PUT /asks/{offer_id}/ is not idempotent: if the transport breaks after the
+    server accepted the create, an instance exists that we never got an id for.
+    Match it by the unique label generated pre-PUT and delete it. Never raises.
+    """
+    for attempt in range(1, _RECONCILE_ATTEMPTS + 1):
+        try:
+            instances = await _list_all_instances(session)
+        except Exception:
+            logger.debug(
+                "RECONCILE_LIST_TRANSIENT",
+                extra={"label": label, "attempt": attempt},
+            )
+            if attempt < _RECONCILE_ATTEMPTS:
+                await asyncio.sleep(_RECONCILE_INTERVAL)
+                continue
+            logger.warning(
+                "RECONCILE_LOOKUP_FAILED — potential orphan billing; manual check needed",
+                extra={"label": label},
+            )
+            return
+        orphan_id: int | float | None = None
+        for inst in instances:
+            if (
+                isinstance(inst, dict)
+                and inst.get("label") == label
+                and isinstance(inst.get("id"), (int, float))
+            ):
+                orphan_id = inst["id"]
+                break
+        if orphan_id is not None:
+            logger.warning(
+                "RECONCILE_DELETE_ORPHAN",
+                extra={"label": label, "instance_id": orphan_id},
+            )
+            await _best_effort_delete(session, int(orphan_id))
+            return
+        logger.debug(
+            "RECONCILE_NO_ORPHAN",
+            extra={"label": label, "attempt": attempt},
+        )
+        if attempt < _RECONCILE_ATTEMPTS:
+            await asyncio.sleep(_RECONCILE_INTERVAL)
+    logger.warning(
+        "RECONCILE_NO_ORPHAN — %s listing attempts found no match for label %s",
+        _RECONCILE_ATTEMPTS,
+        label,
+    )
+
+
+# endregion FUNC__reconcile_orphan_by_label
+
+
+# region FUNC__verify_instance_gone
+# PURPOSE: Poll GET /instances/{id}/ until 404 (confirmed gone) so delete never claims success on a still-billing orphan after an accepted DELETE.
+# ENSURES: Returns True on 404 (confirmed gone). Returns False on timeout (logs ERROR for manual intervention). Never raises. Transient GET errors during polling are treated as "uncertain, keep polling".
+async def _verify_instance_gone(
+    session: aiohttp.ClientSession,
+    instance_id: str,
+) -> bool:
+    """Poll GET until the instance returns 404 or _DELETE_VERIFY_TIMEOUT expires.
+
+    Returns True iff confirmed gone. Never raises.
+    """
+    deadline = asyncio.get_running_loop().time() + _DELETE_VERIFY_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            resp = await _request(session, "GET", f"/instances/{instance_id}/")
+        except VastAIError as err:
+            if err.status == _HTTP_NOT_FOUND:
+                logger.info("INSTANCE %s delete confirmed gone (404)", instance_id)
+                return True
+            logger.debug(
+                "VERIFY_GET_RETRY",
+                extra={"instance_id": instance_id, "status": err.status},
+            )
+            await asyncio.sleep(_DELETE_VERIFY_INTERVAL)
+            continue
+        # VastAI returns 200 with instances=null shortly after deletion (eventual
+        # consistency): treat a missing/null instances field as gone.
+        if not isinstance(resp, dict) or resp.get("instances") is None:
+            logger.info(
+                "INSTANCE %s delete confirmed gone (instances null)", instance_id
+            )
+            return True
+        await asyncio.sleep(_DELETE_VERIFY_INTERVAL)
+    logger.error(
+        "INSTANCE %s STILL PRESENT %ss after accepted DELETE — "
+        "manual deletion required via VastAI console",
+        instance_id,
+        _DELETE_VERIFY_TIMEOUT,
+    )
+    return False
+
+
+# endregion FUNC__verify_instance_gone
+
+
 class VastAIInstance(TypedDict):
     id: int | float
     actual_status: str | None
@@ -455,7 +573,7 @@ async def _show_instance(
 # region FUNC_wait_until_ready
 # PURPOSE: Return instance info when it's ready or remove failed instance.
 # REQUIRES: session is an open aiohttp.ClientSession; instance_id is a valid instance id.
-# ENSURES: raises VastAIInstanceCreateError on timeout or terminal status.
+# ENSURES: raises VastAIInstanceCreateError on timeout, terminal status, or any show-instance failure that leaves the poll loop. Every exit path other than ready best-effort deletes the known instance id so no billable orphan leaks.
 async def wait_until_ready(
     session: aiohttp.ClientSession,
     instance_id: int,
@@ -473,7 +591,22 @@ async def wait_until_ready(
             msg = f"Instance {instance_id} did not become ready within {timeout}s"
             raise VastAIInstanceCreateError(msg)
 
-        inst = await _show_instance(session, instance_id)
+        try:
+            inst = await _show_instance(session, instance_id)
+        except asyncio.CancelledError:
+            raise
+        except VastAIError as err:
+            # Any show-instance failure (persistent transport after retry
+            # budget, 4xx, malformed response) leaves the poll loop without
+            # the existing timeout/terminal cleanup. Delete the known
+            # instance so it does not bill unbound, then re-raise.
+            logger.debug(
+                "POLL_SHOW_FAILED",
+                extra={"instance_id": instance_id, "status": err.status},
+            )
+            await _best_effort_delete(session, instance_id)
+            msg = f"Instance {instance_id} status query failed: {err}"
+            raise VastAIInstanceCreateError(msg) from err
         status = inst["actual_status"]
 
         logger.debug(
@@ -523,7 +656,10 @@ def detect_launch_mode(
 # region FUNC_vastai_create_node
 # PURPOSE: Provision a VastAI GPU instance via the CloudAdapter interface so the generic provisioner can launch VastAI compute nodes.
 # ENSURES: Returns CloudCreateNodeDTO with external_id = instance id, hostname = SSH host, port = SSH port.
-# INVARIANTS: external_id = instance id; session closed on all paths.
+# INVARIANTS:
+# - external_id = instance id; session closed on all paths.
+# - Never raises after an instance was created without best-effort removing it: a failed create call (transport ambiguity or malformed response) reconciles any instance matching the unique per-create label before re-raising.
+# - Readiness polling cleans up the known instance on every failure path that leaves the poll loop (timeout, terminal status, show-instance failure).
 async def vastai_create_node(
     cfg: ConfigCloudVastAI,
     key: ASSHKey,
@@ -547,16 +683,35 @@ async def vastai_create_node(
         onstart = await generate_onstart(cfg, cloud_config)
         mode = detect_launch_mode(cfg.image)
 
-        instance_id = await _create_instance(
-            session,
-            offer_id=offer["id"],
-            image=cfg.image,
-            disk_gb=cfg.disk_gb,
-            env=cfg.docker_options,
-            vm=mode == "kvm",
-            onstart=onstart,
-            label=cfg.label,
-        )
+        # Unique per-create label: PUT /asks is not idempotent, so a transport
+        # break after the server accepted the create loses the returned id. The
+        # unique label lets _reconcile_orphan_by_label target only the instance
+        # this create produced, never other instances on the same account. The
+        # configured cfg.label prefix is retained so broad filters (e2e cleanup)
+        # still match via startswith.
+        create_label = get_rnd_name(cfg.label)
+        try:
+            instance_id = await _create_instance(
+                session,
+                offer_id=offer["id"],
+                image=cfg.image,
+                disk_gb=cfg.disk_gb,
+                env=cfg.docker_options,
+                vm=mode == "kvm",
+                onstart=onstart,
+                label=create_label,
+            )
+        except Exception:
+            # Transport ambiguity (break after accept) or malformed create
+            # response (2xx without new_contract): the instance may exist with
+            # no captured id. Reconcile by the unique label before re-raising so
+            # no billable orphan leaks.
+            logger.warning(
+                "CREATE_INSTANCE_FAILED — reconciling by label %s",
+                create_label,
+            )
+            await _reconcile_orphan_by_label(session, create_label)
+            raise
         logger.debug("INSTANCE_CREATE", extra={"offer_id": offer["id"]})
 
         instance = await wait_until_ready(session, instance_id, cfg.connect_grace)
@@ -580,12 +735,13 @@ async def vastai_create_node(
 # PURPOSE: Tear down a VastAI instance by instance id so billing stops and the node slot is freed for reallocation.
 # INVARIANTS:
 # - external_id = instance id
-# - Idempotent: already-deleted instance returns without raising.
+# - Idempotent: already-deleted instance (DELETE 404) returns without raising.
+# - Verifies the instance is gone after the DELETE is accepted: polls GET until 404. A 2xx DELETE (accepted, async removal) that never resolves to gone raises VastAIDeleteError so the caller leaves the DB row disabled for cross-cycle retry — no billable orphan from a falsely reported success.
 async def vastai_delete_node(
     cfg: ConfigCloudVastAI,
     external_id: str,
 ) -> None:
-    """Delete a VastAI GPU instance."""
+    """Delete a VastAI GPU instance and verify it is gone."""
     async with aiohttp.ClientSession(
         headers={"Authorization": f"Bearer {cfg.api_key}"},
     ) as session:
@@ -597,10 +753,20 @@ async def vastai_delete_node(
                 f"/instances/{external_id}/",
             )
         except VastAIError as exc:
-            # 404 / already-deleted is idempotent success
+            # 404 / already-deleted is idempotent success — nothing to verify.
             if exc.status == _HTTP_NOT_FOUND:
                 return
             raise VastAIDeleteError(str(exc)) from exc
+
+        # DELETE accepted (2xx). VastAI removal is eventually consistent: poll
+        # GET until 404 so a 2xx does not imply a removed, non-billing instance.
+        if not await _verify_instance_gone(session, external_id):
+            msg = (
+                f"Instance {external_id} delete not confirmed gone within "
+                f"{_DELETE_VERIFY_TIMEOUT}s — cloud VM may still bill; "
+                "orchestrator will retry next cycle"
+            )
+            raise VastAIDeleteError(msg)
 
 
 # endregion FUNC_vastai_delete_node
@@ -609,6 +775,25 @@ async def vastai_delete_node(
 # region FUNC_vastai_list_instances
 # PURPOSE: List all VastAI instances matching cfg.label so the test can find and clean up orphaned billable instances that were not captured in observed_instance_ids.
 # ENSURES: Returns a list of instance dicts with at least "id" and "actual_status".
+async def _list_all_instances(session: aiohttp.ClientSession) -> list[dict]:
+    """Return all VastAI instances (raw, unfiltered)."""
+    resp = await _request_with_retry(session, "GET", "/instances/")
+    if not isinstance(resp, dict) or "instances" not in resp:
+        logger.warning(
+            "LIST_INSTANCES_UNEXPECTED",
+            extra={"response_type": type(resp).__name__},
+        )
+        return []
+    instances = resp["instances"]
+    if not isinstance(instances, list):
+        logger.warning(
+            "LIST_INSTANCES_UNEXPECTED",
+            extra={"response_type": type(instances).__name__},
+        )
+        return []
+    return instances
+
+
 async def vastai_list_instances(
     cfg: ConfigCloudVastAI,
 ) -> list[dict]:
@@ -616,20 +801,7 @@ async def vastai_list_instances(
     async with aiohttp.ClientSession(
         headers={"Authorization": f"Bearer {cfg.api_key}"},
     ) as session:
-        resp = await _request_with_retry(session, "GET", "/instances/")
-        if not isinstance(resp, dict) or "instances" not in resp:
-            logger.warning(
-                "LIST_INSTANCES_UNEXPECTED",
-                extra={"response_type": type(resp).__name__},
-            )
-            return []
-        instances = resp["instances"]
-        if not isinstance(instances, list):
-            logger.warning(
-                "LIST_INSTANCES_UNEXPECTED",
-                extra={"response_type": type(instances).__name__},
-            )
-            return []
+        instances = await _list_all_instances(session)
         matched = [
             inst
             for inst in instances

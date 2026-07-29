@@ -26,6 +26,21 @@ through one HTTP client; blocking calls are never offloaded to a thread pool.
 - **WHEN** the adapter deletes an instance that no longer exists
 - **THEN** the call returns without raising
 
+#### Scenario: create never leaks a billed orphan on a failed or ambiguous create call
+
+- **WHEN** the non-idempotent create call fails after the server accepted it (transport break, 5xx) or returns a 2xx response without a usable instance id
+- **THEN** the adapter reconciles any instance it may have created by matching a unique per-create label and best-effort deletes it before re-raising, so no billed instance exists in the cloud that the scheduler cannot account for
+
+#### Scenario: each create carries a unique reconcile marker
+
+- **WHEN** the adapter creates a node
+- **THEN** the instance is created with a unique per-create label derived from the configured label, so orphan reconcile targets only the instance this create produced, never other instances on the same account
+
+#### Scenario: delete verifies the instance is gone before reporting success
+
+- **WHEN** the adapter deletes an instance and the delete is accepted (2xx)
+- **THEN** the adapter polls the instance until it is confirmed gone (404 or a missing/null instance record) before returning; a 2xx that never resolves to gone raises so the caller leaves the node disabled for cross-cycle retry, so no billed orphan remains after a falsely reported success
+
 ### Requirement: VastAI SSH key handling
 
 The adapter SHALL ensure the configured SSH public key is registered on the
@@ -84,15 +99,16 @@ verbatim and cloud-init translation SHALL be skipped.
 
 The adapter SHALL poll the instance until it reaches the ready state before
 returning the SSH address. Polling SHALL be bounded by the configured
-connect grace period. On timeout, or on the instance entering a terminal
-non-ready state, the adapter SHALL best-effort delete the known instance id
-to prevent orphans and SHALL raise; it SHALL NOT retry against a different
-offer within the same call.
+connect grace period. On timeout, on the instance entering a terminal
+non-ready state, or on any show-instance failure that leaves the poll loop,
+the adapter SHALL best-effort delete the known instance id to prevent
+orphans and SHALL raise; it SHALL NOT retry against a different offer within
+the same call.
 
-#### Scenario: instance polled until ready; timeout or terminal status cleans up and raises
+#### Scenario: instance polled until ready; timeout, terminal status, or show failure cleans up and raises
 
 - **WHEN** the adapter waits for the instance to become ready
-- **THEN** the SSH address is returned once the ready state is reached within the connect grace period; otherwise the known instance is best-effort deleted and the adapter raises
+- **THEN** the SSH address is returned once the ready state is reached within the connect grace period; otherwise — on timeout, terminal status, or a persistent show-instance failure — the known instance is best-effort deleted and the adapter raises
 
 ### Requirement: VastAI failure model
 
