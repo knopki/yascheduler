@@ -121,30 +121,45 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
 @requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_accepts_external_id() -> None:
-    """hetzner_delete_node resolves by server ID via get_by_id, not by iteration."""
+    """hetzner_delete_node deletes by numeric server ID via DomainServer, not by iteration."""
+    from hcloud import APIException
+
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
     from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
     cfg = ConfigCloudHetzner(token="test-del-accept")
     mock_client = MagicMock()
-    mock_server = MagicMock()
-    mock_client.servers.get_by_id.return_value = mock_server
+    # DELETE succeeds; verify loop polls get_by_id until not_found.
+    mock_client.servers.delete.return_value = MagicMock()
+    mock_client.servers.get_by_id.side_effect = APIException(
+        code="not_found",
+        message="server not found",
+        details={},
+    )
 
-    with patch(
-        "yascheduler.infra.cloud.providers.hetzner.HClient",
-        return_value=mock_client,
+    with (
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.HClient",
+            return_value=mock_client,
+        ),
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.time.sleep",
+            return_value=None,
+        ),
     ):
         await hetzner_delete_node(cfg, external_id="42")
 
-    mock_client.servers.get_by_id.assert_called_once_with(42)
+    # Delete called directly with a domain Server carrying id=42 (no pre-GET).
+    mock_client.servers.delete.assert_called_once()
+    deleted_server = mock_client.servers.delete.call_args.args[0]
+    assert deleted_server.id == 42
     mock_client.servers.get_all.assert_not_called()
-    mock_server.delete.assert_called_once()
 
 
 @requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_api_not_found() -> None:
-    """hetzner_delete_node handles APIException not_found from get_by_id gracefully."""
+    """hetzner_delete_node handles APIException not_found from DELETE gracefully."""
     from hcloud import APIException
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
@@ -152,7 +167,8 @@ async def test_hetzner_delete_node_api_not_found() -> None:
 
     cfg = ConfigCloudHetzner(token="test-del-api404")
     mock_client = MagicMock()
-    mock_client.servers.get_by_id.side_effect = APIException(
+    # DELETE itself raises not_found (server already gone) — idempotent no-op.
+    mock_client.servers.delete.side_effect = APIException(
         code="not_found",
         message="server not found",
         details={},
@@ -165,7 +181,11 @@ async def test_hetzner_delete_node_api_not_found() -> None:
         # Should not raise — APIException not_found is caught
         await hetzner_delete_node(cfg, external_id="152213839")
 
-    mock_client.servers.get_by_id.assert_called_once_with(152213839)
+    mock_client.servers.delete.assert_called_once()
+    deleted_server = mock_client.servers.delete.call_args.args[0]
+    assert deleted_server.id == 152213839
+    # No verify polling when DELETE itself reports not_found.
+    mock_client.servers.get_by_id.assert_not_called()
 
 
 @requires_hetzner
