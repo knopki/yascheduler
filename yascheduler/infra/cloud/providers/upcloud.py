@@ -64,7 +64,7 @@ def upcloud_create_node_sync(
         Server(
             core_number=8,
             memory_amount=4096,
-            hostname=get_rnd_name("node"),
+            hostname=get_rnd_name(cfg.label),
             zone="uk-lon1",
             storage_devices=[Storage(os="Debian 10.0", size=40)],
             login_user=login_user,

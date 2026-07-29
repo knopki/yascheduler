@@ -86,6 +86,7 @@ class ConfigCloudAzure(CloudConfig):
     jump_username: str | None = None
     jump_host: str | None = None
     jump_port: int = 22
+    label: str = "yascheduler"
 
 
 # endregion CLASS_ConfigCloudAzure
@@ -112,6 +113,7 @@ class ConfigCloudHetzner(CloudConfig):
     jump_username: str | None = None
     jump_host: str | None = None
     jump_port: int = 22
+    label: str = "yascheduler"
 
 
 # endregion CLASS_ConfigCloudHetzner
@@ -136,6 +138,7 @@ class ConfigCloudUpcloud(CloudConfig):
     jump_username: str | None = None
     jump_host: str | None = None
     jump_port: int = 22
+    label: str = "yascheduler"
 
 
 # endregion CLASS_ConfigCloudUpcloud
@@ -197,6 +200,7 @@ class ConfigCloudVultr(CloudConfig):
     jump_username: str | None = None
     jump_host: str | None = None
     jump_port: int = 22
+    label: str = "yascheduler"
 
 
 # endregion CLASS_ConfigCloudVultr

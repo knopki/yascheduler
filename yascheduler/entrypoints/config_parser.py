@@ -301,6 +301,7 @@ def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
         jump_port=jump_port,
+        label=sec.get(fmt("label"), "yascheduler"),
     )
 
 
@@ -350,6 +351,7 @@ def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
         jump_port=jump_port,
+        label=sec.get(fmt("label"), "yascheduler"),
     )
 
 
@@ -398,6 +400,7 @@ def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
         jump_port=jump_port,
+        label=sec.get(fmt("label"), "yascheduler"),
     )
 
 
@@ -535,6 +538,7 @@ def _parse_vultr_section(sec: SectionProxy) -> ConfigCloudVultr:
         jump_username=sec.get(fmt("jump_user"), None),
         jump_host=sec.get(fmt("jump_host"), None),
         jump_port=jump_port,
+        label=sec.get(fmt("label"), "yascheduler"),
     )
 
 

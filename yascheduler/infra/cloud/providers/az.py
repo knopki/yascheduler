@@ -226,7 +226,7 @@ async def create_node(
     cloud_config: CloudInitConfig | None = None,
 ) -> CloudCreateNodeDTO:
     """Create virtual machine with nic."""
-    vm_name = get_rnd_name("yascheduler-vm")
+    vm_name = get_rnd_name(cfg.label)
     nic, ip_addr = await create_nic(cfg=cfg, client=nmc, vm_name=vm_name)
     vm_params = create_vm_params(
         location=cfg.location,
@@ -242,7 +242,7 @@ async def create_node(
 
     poller = await cmc.virtual_machines.begin_create_or_update(
         resource_group_name=cfg.resource_group,
-        vm_name=get_rnd_name("yascheduler-vm"),
+        vm_name=vm_name,
         parameters=vm_params,
     )
     await poller.wait()

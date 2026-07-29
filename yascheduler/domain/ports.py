@@ -170,6 +170,7 @@ class CloudConfig(Protocol):
     jump_username: str | None
     jump_host: str | None
     jump_port: int
+    label: str
 
 
 # endregion CLASS_CloudConfig

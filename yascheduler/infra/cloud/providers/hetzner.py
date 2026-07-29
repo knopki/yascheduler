@@ -386,7 +386,7 @@ async def hetzner_create_node(
         # avoid double-creating a billed server. Hetzner accepts ssh_keys as
         # an array of integer IDs.
         create_body: dict = {
-            "name": get_rnd_name("node"),
+            "name": get_rnd_name(cfg.label),
             "server_type": cfg.server_type,
             "image": cfg.image_name,
             "ssh_keys": [ssh_key_id],
