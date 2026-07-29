@@ -421,7 +421,6 @@ async def allocate_task(
     # (VM provisioned, awaiting consume_task / next-cycle free-machine start).
     cloud_allocated = False
     tmp_node_id: NodeId | None = None
-    tmp_owned_by_provisioner = False
     try:
         selected = await _select_and_insert_tmp(
             clouds,
@@ -434,7 +433,6 @@ async def allocate_task(
             return False
         selected_name = selected.name
         tmp_node_id = selected.node.node_id
-        tmp_owned_by_provisioner = True
         tracker.set_node(task.task_id, tmp_node_id)
         node = await _allocate_cloud_node(
             clouds,
@@ -455,7 +453,12 @@ async def allocate_task(
     finally:
         if not cloud_allocated:
             tracker.discard(task.task_id)
-            if tmp_node_id is not None and not tmp_owned_by_provisioner:
+            # Safety net for cancellation at the await between the tmp-node
+            # commit and helper entry: step2/step3 clean up the tmp-node on
+            # their own failure paths, so a redundant call here is a silent
+            # 0-row DELETE no-op; only the cancellation gap would otherwise
+            # leak the capacity slot.
+            if tmp_node_id is not None:
                 await _cleanup_tmp_node_best_effort(
                     uow_factory,
                     tmp_node_id,

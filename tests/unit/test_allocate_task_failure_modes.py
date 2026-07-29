@@ -255,6 +255,54 @@ class TestAllocateTaskFailureModes:
         assert uow.nodes.remove.call_count >= 1
         uow.nodes.get.assert_not_called()
 
+    async def test_cancellation_after_tmp_insert_cleans_up_tmp_node(
+        self,
+        todo_task: Task,
+        engine: Engine,
+    ) -> None:
+        """Cancellation (BaseException) during the cloud-allocate await bypasses the helpers' `except Exception` cleanup, so the outer finally is the sole cleanup path and MUST remove the tmp-node — no capacity-slot leak on daemon shutdown."""
+        engines = MagicMock(spec=EngineRepository)
+        engines.get.return_value = engine
+
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        occupancy_checker = MagicMock()
+
+        uow = _make_uow(todo_task)
+        uow.nodes.remove = AsyncMock()
+
+        tracker = MagicMock(spec=AllocationTracker)
+        tracker.add.return_value = True
+
+        # CancelledError is a BaseException (Py>=3.8), so _allocate_cloud_node's
+        # `except Exception:` does not run its tmp-node cleanup — modelling the
+        # cancellation gap between the tmp-node commit and helper entry.
+        clouds = _make_clouds(
+            "aws",
+            allocate_side_effect=asyncio.CancelledError(),
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await allocate_task(
+                task_id=todo_task.task_id,
+                engines=engines,
+                uow_factory=lambda: uow,
+                repository=repository,
+                occupancy_checker=occupancy_checker,
+                clouds=clouds,
+                start_task_on_machine=AsyncMock(),
+                tracker=tracker,
+                allocation_lock=asyncio.Lock(),
+                remote_tasks_dir=PurePath("/remote/tasks"),
+            )
+
+        tracker.discard.assert_called_once_with(todo_task.task_id)
+        # Cancellation reached step 2 entry (tmp-node already committed).
+        clouds.allocate.assert_called_once()
+        # The finally safety net removed the tmp-node row (NodeId(2) from _make_uow);
+        # exactly once because the helper's `except Exception` cleanup was bypassed.
+        uow.nodes.remove.assert_called_once_with(NodeId(2))
+
     async def test_empty_platforms_short_circuits_cloud_fallback(
         self,
         todo_task: Task,
