@@ -1087,6 +1087,95 @@ class TestFindBaremetal:
         result = await find_baremetal(mock_client, "1.2.3.4")
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_match_on_second_page_returns_id(self) -> None:
+        """Accounts with >500 bare-metals paginate: a target on page 2 must
+        still be found, not missed by the old single-page lookup."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            LIST_PAGE_SIZE,
+            find_baremetal,
+        )
+
+        page1 = {
+            "bare_metals": [
+                {"id": f"bm-{i}", "main_ip": f"10.0.0.{i}"}
+                for i in range(LIST_PAGE_SIZE)
+            ],
+            "meta": {"links": {"next": "/bare-metals?per_page=500&cursor=abc"}},
+        }
+        page2 = {
+            "bare_metals": [{"id": "bm-target", "main_ip": "9.9.9.9"}],
+        }
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(side_effect=[page1, page2])
+
+        result = await find_baremetal(mock_client, "9.9.9.9")
+        assert result == "bm-target"
+        assert mock_client.request.call_count == 2
+
+
+# =============================================================================
+# _list_all_bare_metals
+# =============================================================================
+
+
+class TestListAllBareMetals:
+    """_list_all_bare_metals: cursor pagination over the bare-metals listing."""
+
+    @pytest.mark.asyncio
+    async def test_single_page_no_cursor(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import _list_all_bare_metals
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            return_value={"bare_metals": [{"id": "bm-1"}], "meta": {"links": {}}},
+        )
+
+        result = await _list_all_bare_metals(mock_client)
+        assert [bm["id"] for bm in result] == ["bm-1"]
+        assert mock_client.request.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_follows_cursor_until_no_next(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import _list_all_bare_metals
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {
+                    "bare_metals": [{"id": "bm-1"}],
+                    "meta": {"links": {"next": "/bare-metals?per_page=500&cursor=a"}},
+                },
+                {
+                    "bare_metals": [{"id": "bm-2"}],
+                    "meta": {"links": {"next": "/bare-metals?per_page=500&cursor=b"}},
+                },
+                {
+                    "bare_metals": [{"id": "bm-3"}],
+                    "meta": {"links": {}},
+                },
+            ],
+        )
+
+        result = await _list_all_bare_metals(mock_client)
+        assert [bm["id"] for bm in result] == ["bm-1", "bm-2", "bm-3"]
+        assert mock_client.request.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_missing_meta_stops_after_first_page(self) -> None:
+        """A response without meta.links is treated as the last page."""
+        from yascheduler.infra.cloud.providers.vultr import _list_all_bare_metals
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            return_value={"bare_metals": [{"id": "bm-1"}]},  # no meta key
+        )
+
+        result = await _list_all_bare_metals(mock_client)
+        assert [bm["id"] for bm in result] == ["bm-1"]
+        assert mock_client.request.call_count == 1
+
 
 # =============================================================================
 # _reconcile_orphan_by_label
@@ -1145,7 +1234,10 @@ class TestReconcileOrphanByLabel:
 
     @pytest.mark.asyncio
     async def test_no_match_no_delete(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import _reconcile_orphan_by_label
+        from yascheduler.infra.cloud.providers.vultr import (
+            RECONCILE_ATTEMPTS,
+            _reconcile_orphan_by_label,
+        )
 
         mock_client = MagicMock()
         mock_client.request = AsyncMock(
@@ -1157,9 +1249,154 @@ class TestReconcileOrphanByLabel:
         ):
             await _reconcile_orphan_by_label(mock_client, "test-node")
 
-        # Only the lookup GET; no DELETE.
+        # Only lookup GETs (one per retry attempt); no DELETE.
         methods = [c.args[0] for c in mock_client.request.call_args_list]
-        assert methods == ["GET"]
+        assert methods == ["GET"] * RECONCILE_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_listing_lag_orphan_appears_on_retry(
+        self,
+        log_records: list,
+    ) -> None:
+        """Listing-lag: the orphan is not visible on the first GET (Vultr not
+        yet consistent after POST) but appears on the second attempt. The
+        retry loop must catch it and delete it, not give up after attempt 1."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _reconcile_orphan_by_label,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {"bare_metals": []},  # attempt 1: not yet visible (lag)
+                {  # attempt 2: orphan now visible
+                    "bare_metals": [{"id": "orphan-1", "label": "test-node"}],
+                },
+                {},  # DELETE accepted
+                APIError("HTTP 404", status=404),  # GET verify: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+        ):
+            await _reconcile_orphan_by_label(mock_client, "test-node")
+
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods == ["GET", "GET", "DELETE", "GET"]
+        assert mock_client.request.call_args_list[2].args[1] == "/bare-metals/orphan-1"
+
+    @pytest.mark.asyncio
+    async def test_listing_transient_failure_then_success_deletes_orphan(
+        self,
+        log_records: list,
+    ) -> None:
+        """Transient listing failure (5xx) on attempt 1 must not abort
+        reconcile — the loop retries and deletes the orphan once the listing
+        recovers."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _reconcile_orphan_by_label,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                APIError("HTTP 502", status=502),  # attempt 1: listing down
+                {  # attempt 2: listing recovered, orphan visible
+                    "bare_metals": [{"id": "orphan-1", "label": "test-node"}],
+                },
+                {},  # DELETE accepted
+                APIError("HTTP 404", status=404),  # GET verify: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+        ):
+            await _reconcile_orphan_by_label(mock_client, "test-node")
+
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods == ["GET", "GET", "DELETE", "GET"]
+
+    @pytest.mark.asyncio
+    async def test_orphan_on_second_page_is_found(
+        self,
+        log_records: list,
+    ) -> None:
+        """Accounts with >500 bare-metals paginate: the orphan sits on page 2
+        and must still be matched and deleted."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            LIST_PAGE_SIZE,
+            APIError,
+            _reconcile_orphan_by_label,
+        )
+
+        page1 = {
+            "bare_metals": [
+                {"id": f"bm-{i}", "label": f"other-{i}"} for i in range(LIST_PAGE_SIZE)
+            ],
+            "meta": {"links": {"next": "/bare-metals?per_page=500&cursor=abc"}},
+        }
+        page2 = {
+            "bare_metals": [{"id": "orphan-1", "label": "test-node"}],
+        }
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                page1,  # page 1: no match
+                page2,  # page 2: orphan found
+                {},  # DELETE accepted
+                APIError("HTTP 404", status=404),  # GET verify: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+        ):
+            await _reconcile_orphan_by_label(mock_client, "test-node")
+
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods == ["GET", "GET", "DELETE", "GET"]
+        # First GET hits page 1 with per_page, second follows the cursor.
+        assert (
+            mock_client.request.call_args_list[0]
+            .args[1]
+            .startswith("/bare-metals?per_page=")
+        )
+        assert "cursor" in mock_client.request.call_args_list[1].args[1]
 
     @pytest.mark.asyncio
     async def test_lookup_failure_never_raises(

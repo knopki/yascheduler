@@ -45,6 +45,16 @@ CLEANUP_DELETE_INTERVAL = 5
 # Vultr bare-metal deletion is asynchronous: a 2xx means "accepted", not "gone".
 CLEANUP_VERIFY_TIMEOUT = 180
 CLEANUP_VERIFY_INTERVAL = 10
+# Listing pagination + orphan-reconcile retry. Vultr caps per_page at 500;
+# accounts with more bare-metals need cursor pagination via meta.links.next.
+# Reconcile retries the listing a few times with a delay to cover both
+# listing-lag (instance not yet visible after a POST) and transient listing
+# failures (5xx/transport) — without this, a freshly created orphan could be
+# missed and left billing.
+LIST_PAGE_SIZE = 500
+LIST_MAX_PAGES = 20
+RECONCILE_ATTEMPTS = 3
+RECONCILE_INTERVAL = 5
 _HTTP_BAD_REQUEST_CODE = 400
 _HTTP_INTERNAL_ERROR_CODE = 500
 _HTTP_NOT_FOUND_CODE = 404
@@ -407,9 +417,40 @@ async def vultr_create_node(
 # endregion FUNC_vultr_create_node
 
 
+# region FUNC__list_all_bare_metals
+# PURPOSE: Paginate GET /bare-metals so label/IP lookups see every instance, not just the first per_page batch. Closes the orphan-miss window when an account holds more than LIST_PAGE_SIZE bare-metals.
+# ENSURES: Returns the concatenated bare_metals list across cursor pages (cap LIST_MAX_PAGES). Raises APIError on listing failure so callers decide retry-vs-surface.
+async def _list_all_bare_metals(client: VultrClient) -> list[dict]:
+    """List all bare-metals across cursor pages.
+
+    Vultr paginates at 500; accounts with more need cursor following via
+    meta.links.next. Returns the concatenated list.
+    """
+    out: list[dict] = []
+    path = f"/bare-metals?per_page={LIST_PAGE_SIZE}"
+    for _page in range(LIST_MAX_PAGES):
+        data = await client.request("GET", path)
+        out.extend(data.get("bare_metals", []))
+        nxt = data.get("meta", {}).get("links", {}).get("next")
+        if not nxt:
+            break
+        # meta.links.next is a full path starting with /bare-metals?...&cursor=
+        path = nxt if nxt.startswith("/") else f"/bare-metals{nxt}"
+    else:
+        logger.warning(
+            "LIST_TRUNCATED — %s pages hit; %s bare-metals so far, more may exist",
+            LIST_MAX_PAGES,
+            len(out),
+        )
+    return out
+
+
+# endregion FUNC__list_all_bare_metals
+
+
 # region FUNC__reconcile_orphan_by_label
 # PURPOSE: Close the POST-ambiguity orphan window by matching and best-effort deleting an instance created during a failed/ambiguous POST, using the label generated pre-POST.
-# ENSURES: Never raises — the original POST error propagates regardless. On lookup failure logs ERROR for manual reconciliation. Match is by exact label equality against the listed bare-metals.
+# ENSURES: Never raises — the original POST error propagates regardless. Retries the listing RECONCILE_ATTEMPTS times with a delay to cover listing-lag (instance not yet visible after POST) and transient listing failures; on each tick a label match triggers delete+verify, exhausting all attempts without a match logs a warning for manual reconciliation.
 async def _reconcile_orphan_by_label(client: VultrClient, label: str) -> None:
     """Best-effort delete of an instance created during an ambiguous POST.
 
@@ -418,27 +459,49 @@ async def _reconcile_orphan_by_label(client: VultrClient, label: str) -> None:
     never got an id for. Match it by the label generated pre-POST and delete
     it. Never raises.
     """
-    try:
-        data = await client.request("GET", "/bare-metals?per_page=500")
-    except Exception:
-        logger.exception(
-            "RECONCILE_LOOKUP_FAILED — potential orphan billing; manual check needed",
-            extra={"label": label},
+    for attempt in range(1, RECONCILE_ATTEMPTS + 1):
+        try:
+            bare_metals = await _list_all_bare_metals(client)
+        except Exception:
+            logger.debug(
+                "RECONCILE_LIST_TRANSIENT",
+                extra={
+                    "label": label,
+                    "attempt": attempt,
+                    "attempts": RECONCILE_ATTEMPTS,
+                },
+            )
+            if attempt < RECONCILE_ATTEMPTS:
+                await asyncio.sleep(RECONCILE_INTERVAL)
+                continue
+            logger.exception(
+                "RECONCILE_LOOKUP_FAILED — potential orphan billing; manual check needed",
+                extra={"label": label},
+            )
+            return
+        orphan_id: str | None = None
+        for bm in bare_metals:
+            if bm.get("label") == label and bm.get("id"):
+                orphan_id = cast("str", bm["id"])
+                break
+        if orphan_id is not None:
+            logger.warning(
+                "RECONCILE_DELETE_ORPHAN",
+                extra={"label": label, "instance_id": orphan_id},
+            )
+            await _delete_and_verify(client, orphan_id)
+            return
+        logger.debug(
+            "RECONCILE_NO_ORPHAN",
+            extra={"label": label, "attempt": attempt, "attempts": RECONCILE_ATTEMPTS},
         )
-        return
-    orphan_id: str | None = None
-    for bm in data.get("bare_metals", []):
-        if bm.get("label") == label and bm.get("id"):
-            orphan_id = cast("str", bm["id"])
-            break
-    if orphan_id is None:
-        logger.debug("RECONCILE_NO_ORPHAN", extra={"label": label})
-        return
+        if attempt < RECONCILE_ATTEMPTS:
+            await asyncio.sleep(RECONCILE_INTERVAL)
     logger.warning(
-        "RECONCILE_DELETE_ORPHAN",
-        extra={"label": label, "instance_id": orphan_id},
+        "RECONCILE_NO_ORPHAN — %s listing attempts found no match for label %s",
+        RECONCILE_ATTEMPTS,
+        label,
     )
-    await _delete_and_verify(client, orphan_id)
 
 
 # endregion FUNC__reconcile_orphan_by_label
@@ -550,8 +613,8 @@ async def _verify_instance_gone(client: VultrClient, instance_id: str) -> bool:
 # PURPOSE: Resolve a Vultr bare-metal instance id from its public IP so delete_node can target the right instance even though nodes are keyed in DB by IP.
 async def find_baremetal(client: VultrClient, host: str) -> str | None:
     """Find a bare-metal instance id by its IP address."""
-    data = await client.request("GET", "/bare-metals?per_page=500")
-    for bm in data.get("bare_metals", []):
+    bare_metals = await _list_all_bare_metals(client)
+    for bm in bare_metals:
         if bm.get("main_ip") == host and bm.get("id"):
             return cast("str", bm["id"])
     return None
