@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 from functools import cache
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict
 
 import aiohttp
 
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+    from yascheduler.shared import TypeGuard
 
 __all__ = ["vultr_create_node", "vultr_delete_node"]
 logger = logging.getLogger(__name__)
@@ -59,6 +60,108 @@ _HTTP_BAD_REQUEST_CODE = 400
 _HTTP_INTERNAL_ERROR_CODE = 500
 _HTTP_NOT_FOUND_CODE = 404
 _HTTP_TOO_MANY_REQUESTS = 429
+
+
+# region BLOCK_API_response_shapes
+# PURPOSE: Abstract Vultr REST API responces
+class VultrSSHKey(TypedDict):
+    id: str
+    fingerprint: str
+
+
+class VultrSSHKeysResponse(TypedDict):
+    ssh_keys: list[VultrSSHKey]
+
+
+class VultrSSHKeyCreateResponse(TypedDict):
+    ssh_key: VultrSSHKey
+
+
+class VultrBareMetal(TypedDict, total=False):
+    id: str
+    label: str
+    status: str
+    main_ip: str
+
+
+class VultrBareMetalResponse(TypedDict):
+    bare_metal: VultrBareMetal
+
+
+class VultrBareMetalsResponse(TypedDict, total=False):
+    bare_metals: list[VultrBareMetal]
+    meta: VultrMeta
+
+
+class VultrMeta(TypedDict, total=False):
+    links: VultrMetaLinks
+
+
+class VultrMetaLinks(TypedDict, total=False):
+    next: str
+
+
+def _is_ssh_key(x: object) -> TypeGuard[VultrSSHKey]:
+    return isinstance(x, dict) and isinstance(x.get("id"), str)
+
+
+def _is_ssh_keys_resp(resp: object) -> TypeGuard[VultrSSHKeysResponse]:
+    return (
+        isinstance(resp, dict)
+        and isinstance(resp.get("ssh_keys"), list)
+        and all(_is_ssh_key(k) for k in resp["ssh_keys"])
+    )
+
+
+def _is_ssh_key_create_resp(
+    resp: object,
+) -> TypeGuard[VultrSSHKeyCreateResponse]:
+    return isinstance(resp, dict) and _is_ssh_key(resp.get("ssh_key"))
+
+
+def _is_bare_metal(x: object) -> TypeGuard[VultrBareMetal]:
+    if not isinstance(x, dict):
+        return False
+    if "id" in x and not isinstance(x["id"], str):
+        return False
+    if "label" in x and not isinstance(x["label"], str):
+        return False
+    if "status" in x and not isinstance(x["status"], str):
+        return False
+    return "main_ip" not in x or isinstance(x["main_ip"], str)
+
+
+def _is_bare_metal_resp(resp: object) -> TypeGuard[VultrBareMetalResponse]:
+    return isinstance(resp, dict) and _is_bare_metal(resp.get("bare_metal"))
+
+
+def _is_bare_metals_resp(resp: object) -> TypeGuard[VultrBareMetalsResponse]:
+    return (
+        isinstance(resp, dict)
+        and isinstance(resp.get("bare_metals"), list)
+        and all(_is_bare_metal(b) for b in resp["bare_metals"])
+        and (  # meta optional but if present must be a dict
+            "meta" not in resp or isinstance(resp["meta"], dict)
+        )
+    )
+
+
+def _extract_bare_metal(resp: object) -> VultrBareMetal | None:
+    """Return the bare-metal entity from a single-instance response.
+
+    Vultr envelopes single entities under ``bare_metal`` but some endpoints
+    return the entity at the top level. Accept either; return None if the
+    shape doesn't match. ``id`` is required — a bare-metal without id is not
+    actionable.
+    """
+    if _is_bare_metal_resp(resp):
+        return resp["bare_metal"]
+    if _is_bare_metal(resp) and "id" in resp:
+        return resp
+    return None
+
+
+# endregion BLOCK_API_response_shapes
 
 
 class APIError(Exception):
@@ -109,8 +212,13 @@ class VultrClient:
         method: str,
         path: str,
         body: dict | None = None,
-    ) -> dict:
-        """Send an async HTTP request to the Vultr API v2 and return parsed JSON."""
+    ) -> object:
+        """Send an async HTTP request to the Vultr API v2 and return parsed JSON.
+
+        Returns the parsed JSON value (dict/list/None) untyped; callers
+        validate the shape via the ``_is_*`` TypeGuards. Keeps the HTTP
+        boundary free of ``cast``/``Any``.
+        """
         url = API_BASE + path
         session = await self._get_session()
         data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -122,7 +230,11 @@ class VultrClient:
                     raise APIError(msg, status=resp.status)
                 if not raw:
                     return {}
-                return cast("dict", json.loads(raw))
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    msg = f"Invalid JSON response: {exc}"
+                    raise APIError(msg) from exc
         except aiohttp.ClientError as err:
             msg = f"HTTP request failed: {err}"
             raise APIError(msg) from err
@@ -165,22 +277,23 @@ async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
     pub_key = key.export_public_key("openssh").decode("utf-8")
     fingerprint = ssh_key_fingerprint_md5(pub_key)
 
-    data = await client.request("GET", "/ssh-keys?per_page=500")
-    for existing in data.get("ssh_keys", []):
-        existing_fp = existing.get("fingerprint", "")
-        if existing_fp and existing_fp.lower() == fingerprint.lower():
-            return cast("str", existing["id"])
+    resp = await client.request("GET", "/ssh-keys?per_page=500")
+    if not _is_ssh_keys_resp(resp):
+        msg = f"Invalid SSH keys list response: {resp}"
+        raise APIError(msg)
+    for existing in resp["ssh_keys"]:
+        if existing["fingerprint"].lower() == fingerprint.lower():
+            return existing["id"]
 
-    data = await client.request(
+    resp = await client.request(
         "POST",
         "/ssh-keys",
         {"name": key_name, "ssh_key": pub_key},
     )
-    ssh_key = data.get("ssh_key", {})
-    if "id" not in ssh_key:
-        msg = f"Cannot create SSH key: {data}"
+    if not _is_ssh_key_create_resp(resp):
+        msg = f"Cannot create SSH key: {resp}"
         raise APIError(msg)
-    return cast("str", ssh_key["id"])
+    return resp["ssh_key"]["id"]
 
 
 # endregion FUNC_get_ssh_key_id
@@ -326,7 +439,7 @@ async def vultr_create_node(
     # Reconcile by the label generated above before re-raising the POST error
     # so a created instance is deleted, not orphaned.
     try:
-        data = await client.request("POST", "/bare-metals", body)
+        resp = await client.request("POST", "/bare-metals", body)
     except Exception as err:
         logger.warning(
             "POST bare-metal failed (%s) — reconciling by label %s",
@@ -335,18 +448,18 @@ async def vultr_create_node(
         )
         await _reconcile_orphan_by_label(client, label)
         raise
-    bm = data.get("bare_metal", data)
-    instance_id = bm.get("id")
+    bm = _extract_bare_metal(resp)
+    instance_id = bm["id"] if bm else ""
     if not instance_id:
         # 2xx received but no id: the instance was likely created but the
         # body is unusable. Reconcile by label before failing.
         logger.warning(
             "POST bare-metal 2xx without instance id — reconciling by label %s: %s",
             label,
-            data,
+            resp,
         )
         await _reconcile_orphan_by_label(client, label)
-        msg = f"No instance id in response: {data}"
+        msg = f"No instance id in response: {resp}"
         raise APIError(msg)
 
     logger.info("CREATING bare-metal %s (id=%s)", label, instance_id)
@@ -363,7 +476,7 @@ async def vultr_create_node(
             # tick" and keep polling; a permanent error (4xx) or a transport
             # failure that persists until deadline will surface as APIError below.
             try:
-                data = await client.request("GET", f"/bare-metals/{instance_id}")
+                resp = await client.request("GET", f"/bare-metals/{instance_id}")
             except APIError as err:
                 if err.transient:
                     logger.debug(
@@ -376,7 +489,10 @@ async def vultr_create_node(
                     await asyncio.sleep(POLL_INTERVAL)
                     continue
                 raise
-            bm = data.get("bare_metal", data)
+            bm = _extract_bare_metal(resp)
+            if bm is None:
+                msg = f"Invalid bare-metal response: {resp}"
+                raise APIError(msg)  # noqa: TRY301
             status = bm.get("status", "")
             ip_addr = bm.get("main_ip", "")
             if status != last_status:
@@ -420,18 +536,21 @@ async def vultr_create_node(
 # region FUNC__list_all_bare_metals
 # PURPOSE: Paginate GET /bare-metals so label/IP lookups see every instance, not just the first per_page batch. Closes the orphan-miss window when an account holds more than LIST_PAGE_SIZE bare-metals.
 # ENSURES: Returns the concatenated bare_metals list across cursor pages (cap LIST_MAX_PAGES). Raises APIError on listing failure so callers decide retry-vs-surface.
-async def _list_all_bare_metals(client: VultrClient) -> list[dict]:
+async def _list_all_bare_metals(client: VultrClient) -> list[VultrBareMetal]:
     """List all bare-metals across cursor pages.
 
     Vultr paginates at 500; accounts with more need cursor following via
     meta.links.next. Returns the concatenated list.
     """
-    out: list[dict] = []
+    out: list[VultrBareMetal] = []
     path = f"/bare-metals?per_page={LIST_PAGE_SIZE}"
     for _page in range(LIST_MAX_PAGES):
-        data = await client.request("GET", path)
-        out.extend(data.get("bare_metals", []))
-        nxt = data.get("meta", {}).get("links", {}).get("next")
+        resp = await client.request("GET", path)
+        if not _is_bare_metals_resp(resp):
+            msg = f"Invalid bare-metals list response: {resp}"
+            raise APIError(msg)
+        out.extend(resp["bare_metals"])
+        nxt = _get_next_cursor(resp)
         if not nxt:
             break
         # meta.links.next is a full path starting with /bare-metals?...&cursor=
@@ -443,6 +562,17 @@ async def _list_all_bare_metals(client: VultrClient) -> list[dict]:
             len(out),
         )
     return out
+
+
+def _get_next_cursor(resp: VultrBareMetalsResponse) -> str | None:
+    """Return meta.links.next cursor path or None."""
+    meta = resp.get("meta")
+    if meta is None:
+        return None
+    links = meta.get("links")
+    if links is None:
+        return None
+    return links.get("next")
 
 
 # endregion FUNC__list_all_bare_metals
@@ -482,7 +612,7 @@ async def _reconcile_orphan_by_label(client: VultrClient, label: str) -> None:
         orphan_id: str | None = None
         for bm in bare_metals:
             if bm.get("label") == label and bm.get("id"):
-                orphan_id = cast("str", bm["id"])
+                orphan_id = bm["id"]
                 break
         if orphan_id is not None:
             logger.warning(
@@ -616,7 +746,7 @@ async def find_baremetal(client: VultrClient, host: str) -> str | None:
     bare_metals = await _list_all_bare_metals(client)
     for bm in bare_metals:
         if bm.get("main_ip") == host and bm.get("id"):
-            return cast("str", bm["id"])
+            return bm["id"]
     return None
 
 
