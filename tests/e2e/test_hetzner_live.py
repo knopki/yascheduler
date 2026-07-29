@@ -1,7 +1,7 @@
 # region MODULE_CONTRACT
 # PURPOSE: Real-Hetzner cloud-provider E2E test — autoscale -> allocate -> download -> idle-deallocate happy path against a live Hetzner Cloud account.
-# SCOPE: opt-in env-gated test (YASCHEDULER_TEST_HETZNER=1 + token); drives make_daemon + _submit_async; asserts VM creation, both jobs DONE with matching outputs, idle deallocation, strong deletion via client.servers.get_by_id; guaranteed server-ID based cleanup with loud-fail-on-leak in finally.
-# DEPENDENCIES: USES API: hcloud (opt-in, YASCHEDULER_TEST_HETZNER=1)
+# SCOPE: opt-in env-gated test (YASCHEDULER_TEST_HETZNER=1 + token); drives make_daemon + _submit_async; asserts VM creation, both jobs DONE with matching outputs, idle deallocation, strong deletion via GET /servers/{id} 404; guaranteed server-ID based cleanup with loud-fail-on-leak in finally.
+# DEPENDENCIES: USES API: aiohttp (opt-in, YASCHEDULER_TEST_HETZNER=1)
 # KEYWORDS: Hetzner Cloud, autoscale, deallocate, e2e
 # endregion MODULE_CONTRACT
 
@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 import pytest
 
 from tests.log_assertions import extra_fields
@@ -44,6 +45,7 @@ _COMPLETION_TIMEOUT_S = 60.0
 _DEALLOC_TIMEOUT_S = 60.0
 _VM_DELETE_TIMEOUT_S = 30.0
 _POLL_INTERVAL_S = 1.0
+_HETZNER_API_BASE = "https://api.hetzner.cloud/v1"
 
 
 def _cloud_env_or_skip() -> tuple[str, str, str, str]:
@@ -135,20 +137,23 @@ def _ini_path_from_env() -> str:
     return path
 
 
-async def _assert_vm_deleted(client: Any, server_id: int) -> None:
-    from hcloud import APIException
-
+async def _assert_vm_deleted(token: str, server_id: int) -> None:
     deadline = asyncio.get_running_loop().time() + _VM_DELETE_TIMEOUT_S
-    while asyncio.get_running_loop().time() < deadline:
-        try:
-            srv = await asyncio.to_thread(client.servers.get_by_id, server_id)
-        except APIException as err:
-            if err.code == "not_found":
-                return
-            raise
-        if srv is None:
-            return
-        await asyncio.sleep(_POLL_INTERVAL_S)
+    async with aiohttp.ClientSession(
+        headers={"Authorization": f"Bearer {token}"},
+    ) as session:
+        while asyncio.get_running_loop().time() < deadline:
+            async with session.get(f"{_HETZNER_API_BASE}/servers/{server_id}") as resp:
+                if resp.status == 404:
+                    return
+                if resp.status >= 400:
+                    body = await resp.text()
+                    log.warning(
+                        "[hetzner_live][VERIFY] unexpected status %s: %s",
+                        resp.status,
+                        body,
+                    )
+            await asyncio.sleep(_POLL_INTERVAL_S)
     log.error(
         "[hetzner_live][CLEANUP] server %s was NOT deleted — manual cleanup required",
         server_id,
@@ -182,17 +187,15 @@ async def _cleanup_observed(
     if not observed_server_ids:
         return
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
-    from yascheduler.infra.cloud.providers.hetzner import get_client
 
     cfg: ConfigCloudHetzner = ConfigCloudHetzner(token=token, max_nodes=1)
-    client = get_client(cfg)
 
     for sid in observed_server_ids:
         await _delete_one_best_effort(cfg, sid, log)
 
     # Strong per-server deletion assertion: a survivor fails the test loudly.
     for sid in observed_server_ids:
-        await _assert_vm_deleted(client, int(sid))
+        await _assert_vm_deleted(token, int(sid))
 
 
 async def _submit_two_jobs(
@@ -406,18 +409,13 @@ async def test_hetzner_live(
         # so it is already present once both tasks reached DONE.
         _assert_cloud_done_log(log_records, observed_server_ids)
 
-        # DB-row removal (idle deallocate), then strong get_by_id deletion assertion.
+        # DB-row removal (idle deallocate), then strong deletion assertion.
         await _poll_node_gone(uow_factory, _DEALLOC_TIMEOUT_S)
         # CLOUD_DELETE is emitted by deallocate_node during the idle-deallocate
         # that just removed the row — assert it only now, not at completion time.
         _assert_cloud_delete_log(log_records)
-        from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
-        from yascheduler.infra.cloud.providers.hetzner import get_client
-
-        verify_cfg: ConfigCloudHetzner = ConfigCloudHetzner(token=token, max_nodes=1)
-        verify_client = get_client(verify_cfg)
         for sid in observed_server_ids:
-            await _assert_vm_deleted(verify_client, int(sid))
+            await _assert_vm_deleted(token, int(sid))
 
     finally:
         # (a) stop daemon + best-effort await of the background task.

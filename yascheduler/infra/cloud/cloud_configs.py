@@ -92,7 +92,7 @@ class ConfigCloudAzure(CloudConfig):
 
 
 # region CLASS_ConfigCloudHetzner
-# PURPOSE: Carry Hetzner token, server type, and image so the Hetzner provider can be configured from INI without leaking hcloud types into other providers.
+# PURPOSE: Carry Hetzner token, server type, and image so the Hetzner provider can be configured from INI without leaking provider SDK types into other providers.
 @dataclass(frozen=True)
 class ConfigCloudHetzner(CloudConfig):
     """Hetzner cloud configuration."""

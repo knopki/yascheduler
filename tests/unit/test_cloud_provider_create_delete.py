@@ -15,12 +15,9 @@ import pytest
 from yascheduler.infra.cloud.dto import CloudCreateNodeDTO
 
 # Provider submodules pull in optional cloud SDKs at import time; skip their
-# tests cleanly when the SDK is absent. vastai only needs aiohttp (core dep),
-# so it always runs. Mirrors the pytest.importorskip pattern in
-# test_hetzner_ssh_key.py but scoped per provider so vastai stays runnable.
-requires_hetzner = pytest.mark.skipif(
-    importlib.util.find_spec("hcloud") is None, reason="hcloud not installed"
-)
+# tests cleanly when the SDK is absent. vastai and hetzner only need aiohttp
+# (core dep), so they always run. Mirrors the pytest.importorskip pattern but
+# scoped per provider so aiohttp-only providers stay runnable.
 requires_az = pytest.mark.skipif(
     importlib.util.find_spec("azure.identity") is None,
     reason="azure SDK not installed",
@@ -28,6 +25,53 @@ requires_az = pytest.mark.skipif(
 requires_upcloud = pytest.mark.skipif(
     importlib.util.find_spec("upcloud_api") is None, reason="upcloud_api not installed"
 )
+
+
+def _make_mock_resp(status: int, json_data: object) -> MagicMock:
+    mock_resp = MagicMock()
+    mock_resp.status = status
+    mock_resp.json = AsyncMock(return_value=json_data)
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    return mock_resp
+
+
+def _make_mock_session_with_queue(
+    responses: list[MagicMock],
+) -> MagicMock:
+    """Session whose .request pops responses in order."""
+    session = MagicMock()
+    session.request = MagicMock(side_effect=list(responses))
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session
+
+
+def _hetz_ssh_key(key_id: int = 1, name: str = "yakey-abc") -> dict:
+    return {"id": key_id, "name": name, "fingerprint": "aa:bb:cc:dd:ee"}
+
+
+def _hetz_ssh_keys_empty() -> dict:
+    return {"ssh_keys": []}
+
+
+def _hetz_ssh_keys_list(key: dict) -> dict:
+    return {"ssh_keys": [key]}
+
+
+def _hetz_ssh_key_create(key_id: int = 1) -> dict:
+    return {"ssh_key": _hetz_ssh_key(key_id)}
+
+
+def _hetz_server_create(key_id: int, ip: str | None = None) -> dict:
+    server: dict[str, object] = {"id": key_id}
+    if ip is not None:
+        server["public_net"] = {"ipv4": {"ip": ip}}
+    return {"server": server}
+
+
+def _hetz_err(code: str, message: str = "err", status: int = 400) -> dict:
+    return {"error": {"code": code, "message": message}}
 
 
 class _AsyncIter:
@@ -51,7 +95,6 @@ class _AsyncIter:
 # =============================================================================
 
 
-@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_create_node_returns_dto() -> None:
     """hetzner_create_node returns CloudCreateNodeDTO with server ID as external_id and IP as hostname."""
@@ -62,17 +105,23 @@ async def test_hetzner_create_node_returns_dto() -> None:
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
-    mock_server = MagicMock()
-    mock_server.id = 42
-    mock_server.public_net.ipv4.ip = "1.2.3.4"
+    # GET /ssh_keys empty → POST /ssh_keys → POST /servers.
+    ssh_keys_empty = _make_mock_resp(200, _hetz_ssh_keys_empty())
+    ssh_key_create = _make_mock_resp(201, _hetz_ssh_key_create(123))
+    create_resp = _make_mock_resp(201, _hetz_server_create(42, "1.2.3.4"))
+    session = _make_mock_session_with_queue(
+        [ssh_keys_empty, ssh_key_create, create_resp]
+    )
 
-    mock_client = MagicMock()
-    mock_client.ssh_keys.create.return_value = MagicMock(id=123)
-    mock_client.servers.create.return_value = MagicMock(server=mock_server)
-
-    with patch(
-        "yascheduler.infra.cloud.providers.hetzner.HClient",
-        return_value=mock_client,
+    with (
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
+            return_value=session,
+        ),
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.get_key_name",
+            return_value="yakey-abc",
+        ),
     ):
         result = await hetzner_create_node(cfg, mock_key)
 
@@ -81,7 +130,6 @@ async def test_hetzner_create_node_returns_dto() -> None:
     assert result.hostname == "1.2.3.4"
 
 
-@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
     """hetzner_create_node DTO carries config-derived connection parameters."""
@@ -98,16 +146,22 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
-    mock_server = MagicMock()
-    mock_server.public_net.ipv4.ip = "5.6.7.8"
+    ssh_keys_empty = _make_mock_resp(200, _hetz_ssh_keys_empty())
+    ssh_key_create = _make_mock_resp(201, _hetz_ssh_key_create(123))
+    create_resp = _make_mock_resp(201, _hetz_server_create(42, "5.6.7.8"))
+    session = _make_mock_session_with_queue(
+        [ssh_keys_empty, ssh_key_create, create_resp]
+    )
 
-    mock_client = MagicMock()
-    mock_client.ssh_keys.create.return_value = MagicMock(id=123)
-    mock_client.servers.create.return_value = MagicMock(server=mock_server)
-
-    with patch(
-        "yascheduler.infra.cloud.providers.hetzner.HClient",
-        return_value=mock_client,
+    with (
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
+            return_value=session,
+        ),
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.get_key_name",
+            return_value="yakey-abc",
+        ),
     ):
         result = await hetzner_create_node(cfg, mock_key)
 
@@ -118,77 +172,54 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
     assert result.jump_username == "jumper"
 
 
-@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_accepts_external_id() -> None:
-    """hetzner_delete_node deletes by numeric server ID via DomainServer, not by iteration."""
-    from hcloud import APIException
-
+    """hetzner_delete_node deletes by numeric server ID via DELETE /servers/{id}."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
     from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
     cfg = ConfigCloudHetzner(token="test-del-accept")
-    mock_client = MagicMock()
-    # DELETE succeeds; verify loop polls get_by_id until not_found.
-    mock_client.servers.delete.return_value = MagicMock()
-    mock_client.servers.get_by_id.side_effect = APIException(
-        code="not_found",
-        message="server not found",
-        details={},
-    )
+    delete_resp = _make_mock_resp(200, {})  # DELETE success
+    session = _make_mock_session_with_queue([delete_resp])
 
-    with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.HClient",
-            return_value=mock_client,
-        ),
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.time.sleep",
-            return_value=None,
-        ),
+    with patch(
+        "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
+        return_value=session,
     ):
         await hetzner_delete_node(cfg, external_id="42")
 
-    # Delete called directly with a domain Server carrying id=42 (no pre-GET).
-    mock_client.servers.delete.assert_called_once()
-    deleted_server = mock_client.servers.delete.call_args.args[0]
-    assert deleted_server.id == 42
-    mock_client.servers.get_all.assert_not_called()
+    session.request.assert_called_once()
+    call = session.request.call_args
+    assert call.args[0] == "DELETE"
+    assert call.args[1].endswith("/servers/42")
 
 
-@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_api_not_found() -> None:
-    """hetzner_delete_node handles APIException not_found from DELETE gracefully."""
-    from hcloud import APIException
-
+    """hetzner_delete_node handles 404 not_found from DELETE gracefully."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
     from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
     cfg = ConfigCloudHetzner(token="test-del-api404")
-    mock_client = MagicMock()
-    # DELETE itself raises not_found (server already gone) — idempotent no-op.
-    mock_client.servers.delete.side_effect = APIException(
-        code="not_found",
-        message="server not found",
-        details={},
+    delete_resp = _make_mock_resp(
+        404,
+        _hetz_err("not_found", "server not found", 404),
     )
+    session = _make_mock_session_with_queue([delete_resp])
 
     with patch(
-        "yascheduler.infra.cloud.providers.hetzner.HClient",
-        return_value=mock_client,
+        "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
+        return_value=session,
     ):
-        # Should not raise — APIException not_found is caught
+        # Should not raise — 404 not_found is caught
         await hetzner_delete_node(cfg, external_id="152213839")
 
-    mock_client.servers.delete.assert_called_once()
-    deleted_server = mock_client.servers.delete.call_args.args[0]
-    assert deleted_server.id == 152213839
-    # No verify polling when DELETE itself reports not_found.
-    mock_client.servers.get_by_id.assert_not_called()
+    session.request.assert_called_once()
+    call = session.request.call_args
+    assert call.args[0] == "DELETE"
+    assert call.args[1].endswith("/servers/152213839")
 
 
-@requires_hetzner
 def test_hetzner_find_srv_removed() -> None:
     """find_srv no longer exists in hetzner provider module."""
     from yascheduler.infra.cloud.providers import hetzner as hetzner_mod
@@ -196,7 +227,6 @@ def test_hetzner_find_srv_removed() -> None:
     assert not hasattr(hetzner_mod, "find_srv")
 
 
-@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_create_node_user_data_has_root_users() -> None:
     """hetzner_create_node injects a cloud-init `users` section with root + the SSH key."""
@@ -209,28 +239,28 @@ async def test_hetzner_create_node_user_data_has_root_users() -> None:
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
-    captured = {}
+    ssh_keys_empty = _make_mock_resp(200, _hetz_ssh_keys_empty())
+    ssh_key_create = _make_mock_resp(201, _hetz_ssh_key_create(123))
+    create_resp = _make_mock_resp(201, _hetz_server_create(42, "1.2.3.4"))
+    session = _make_mock_session_with_queue(
+        [ssh_keys_empty, ssh_key_create, create_resp]
+    )
 
-    mock_server = MagicMock()
-    mock_server.id = 42
-    mock_server.public_net.ipv4.ip = "1.2.3.4"
-
-    mock_client = MagicMock()
-    mock_client.ssh_keys.create.return_value = MagicMock(id=123)
-
-    def _capture(**kwargs):
-        captured.update(kwargs)
-        return MagicMock(server=mock_server)
-
-    mock_client.servers.create.side_effect = _capture
-
-    with patch(
-        "yascheduler.infra.cloud.providers.hetzner.HClient",
-        return_value=mock_client,
+    with (
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
+            return_value=session,
+        ),
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.get_key_name",
+            return_value="yakey-abc",
+        ),
     ):
         await hetzner_create_node(cfg, mock_key)
 
-    user_data = captured["user_data"]
+    # The POST /servers call (3rd) carries user_data in its json= kwarg.
+    create_call = session.request.call_args_list[2]
+    user_data = create_call.kwargs["json"]["user_data"]
     assert user_data.startswith("#cloud-config\n")
     payload = json.loads(user_data[len("#cloud-config\n") :])
     assert payload["users"] == [
@@ -238,7 +268,6 @@ async def test_hetzner_create_node_user_data_has_root_users() -> None:
     ]
 
 
-@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
     """Non-root cfg.username is created via cloud-init users (no sudo)."""
@@ -251,28 +280,29 @@ async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
-    captured = {}
+    ssh_keys_empty = _make_mock_resp(200, _hetz_ssh_keys_empty())
+    ssh_key_create = _make_mock_resp(201, _hetz_ssh_key_create(123))
+    create_resp = _make_mock_resp(201, _hetz_server_create(42, "1.2.3.4"))
+    session = _make_mock_session_with_queue(
+        [ssh_keys_empty, ssh_key_create, create_resp]
+    )
 
-    mock_server = MagicMock()
-    mock_server.id = 42
-    mock_server.public_net.ipv4.ip = "1.2.3.4"
-
-    mock_client = MagicMock()
-    mock_client.ssh_keys.create.return_value = MagicMock(id=123)
-
-    def _capture(**kwargs):
-        captured.update(kwargs)
-        return MagicMock(server=mock_server)
-
-    mock_client.servers.create.side_effect = _capture
-
-    with patch(
-        "yascheduler.infra.cloud.providers.hetzner.HClient",
-        return_value=mock_client,
+    with (
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
+            return_value=session,
+        ),
+        patch(
+            "yascheduler.infra.cloud.providers.hetzner.get_key_name",
+            return_value="yakey-abc",
+        ),
     ):
         await hetzner_create_node(cfg, mock_key)
 
-    payload = json.loads(captured["user_data"][len("#cloud-config\n") :])
+    create_call = session.request.call_args_list[2]
+    payload = json.loads(
+        create_call.kwargs["json"]["user_data"][len("#cloud-config\n") :]
+    )
     assert payload["users"] == [
         {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},
         {"name": "compute", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},

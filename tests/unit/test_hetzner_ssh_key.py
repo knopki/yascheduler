@@ -1,29 +1,36 @@
 # region MODULE_CONTRACT
-# PURPOSE: Unit tests for hetzner.get_ssh_key_id duplicate-key recovery (uniqueness_error code path).
-# SCOPE: get_ssh_key_id with mocked hcloud client and APIException; no network.
-# KEYWORDS: get_ssh_key_id, duplicate-key recovery, hcloud API
+# PURPOSE: Unit tests for hetzner.ensure_ssh_key — GET-first registration with POST-on-miss.
+# SCOPE: ensure_ssh_key with mocked aiohttp session; no network.
+# KEYWORDS: ensure_ssh_key, duplicate-key recovery, hetzner API, aiohttp
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-hcloud = pytest.importorskip("hcloud")
-from hcloud import APIException
-
-from yascheduler.infra.cloud.providers.hetzner import get_ssh_key_id
-
-
-@pytest.fixture(autouse=True)
-def _clear_ssh_key_cache() -> None:
-    """get_ssh_key_id is @cache-decorated; clear between tests so mocks re-run."""
-    get_ssh_key_id.cache_clear()
+from yascheduler.infra.cloud.providers.hetzner import (
+    HetznerError,
+    ensure_ssh_key,
+)
 
 
-def _make_key(key_name: str = "yakey-abc") -> MagicMock:
-    """Mock ASSHKey with the surface get_ssh_key_id touches."""
+def _make_mock_resp(status: int, json_data: object) -> MagicMock:
+    mock_resp = MagicMock()
+    mock_resp.status = status
+    mock_resp.json = AsyncMock(return_value=json_data)
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    return mock_resp
+
+
+def _hetz_err(code: str, message: str = "err", status: int = 409) -> dict:
+    return {"error": {"code": code, "message": message}}
+
+
+def _make_key() -> MagicMock:
+    """Mock ASSHKey with the surface ensure_ssh_key touches."""
     key = MagicMock()
     key.export_public_key.return_value = b"ssh-rsa AAAA test"
     # get_fingerprint("md5") -> "MD5:aa:bb:cc"; .split(":", 1)[1] -> "aa:bb:cc"
@@ -31,128 +38,87 @@ def _make_key(key_name: str = "yakey-abc") -> MagicMock:
     return key
 
 
-class TestGetSshKeyIdUniqueness:
-    """get_ssh_key_id() — duplicate-key recovery via uniqueness_error code."""
+def _ssh_key(key_id: int = 1, name: str = "yakey-abc") -> dict:
+    return {"id": key_id, "name": name, "fingerprint": "aa:bb:cc:dd:ee"}
 
-    def test_recovers_via_fingerprint_on_uniqueness_error(self) -> None:
-        """create() raising uniqueness_error resolves the existing key by fingerprint."""
-        client = MagicMock()
-        client.ssh_keys.create.side_effect = APIException(
-            code="uniqueness_error",
-            message="SSH key not unique",
-            details={},
-        )
-        existing = MagicMock()
-        existing.id = 4242
-        client.ssh_keys.get_by_fingerprint.return_value = existing
 
-        key = _make_key()
-        with patch(
-            "yascheduler.infra.cloud.providers.hetzner.get_key_name",
-            return_value="yakey-abc",
-        ):
-            result = get_ssh_key_id(client, key)
+def _ssh_keys_list_empty() -> dict:
+    return {"ssh_keys": []}
+
+
+def _ssh_keys_list(key: dict) -> dict:
+    return {"ssh_keys": [key]}
+
+
+def _ssh_key_create(key_id: int = 1, name: str = "yakey-abc") -> dict:
+    return {"ssh_key": _ssh_key(key_id, name)}
+
+
+def _make_session_with_queue(responses: list[MagicMock]) -> MagicMock:
+    session = MagicMock()
+    session.request = MagicMock(side_effect=list(responses))
+    return session
+
+
+class TestEnsureSshKey:
+    """ensure_ssh_key() — GET-first registration with POST-on-miss."""
+
+    @pytest.mark.asyncio
+    async def test_existing_key_found_via_fingerprint_get(self) -> None:
+        """Common path: the key is already registered; one GET resolves it."""
+        found = _make_mock_resp(200, _ssh_keys_list(_ssh_key(key_id=4242)))
+        session = _make_session_with_queue([found])
+
+        result = await ensure_ssh_key(session, _make_key(), "yakey-abc")
 
         assert result == 4242
-        client.ssh_keys.create.assert_called_once()
-        # fingerprint passed without the "MD5" prefix
-        client.ssh_keys.get_by_fingerprint.assert_called_once_with("aa:bb:cc")
-        client.ssh_keys.get_by_name.assert_not_called()
+        session.request.assert_called_once()
+        call = session.request.call_args
+        assert call.args[0] == "GET"
+        assert call.kwargs.get("params", {}).get("fingerprint") == "aa:bb:cc"
 
-    def test_recovers_via_name_when_fingerprint_missing(self) -> None:
-        """Falls back to get_by_name when fingerprint lookup returns None."""
-        client = MagicMock()
-        client.ssh_keys.create.side_effect = APIException(
-            code="uniqueness_error",
-            message="SSH key not unique",
-            details={},
-        )
-        client.ssh_keys.get_by_fingerprint.return_value = None
-        by_name = MagicMock()
-        by_name.id = 99
-        client.ssh_keys.get_by_name.return_value = by_name
+    @pytest.mark.asyncio
+    async def test_new_key_registered_via_post_on_miss(self) -> None:
+        """First-ever registration: GET empty → POST 201."""
+        empty = _make_mock_resp(200, _ssh_keys_list_empty())
+        created = _make_mock_resp(201, _ssh_key_create(key_id=42))
+        session = _make_session_with_queue([empty, created])
 
-        key = _make_key()
-        with patch(
-            "yascheduler.infra.cloud.providers.hetzner.get_key_name",
-            return_value="yakey-abc",
-        ):
-            result = get_ssh_key_id(client, key)
+        result = await ensure_ssh_key(session, _make_key(), "yakey-abc")
 
-        assert result == 99
+        assert result == 42
+        assert session.request.call_count == 2
+        second = session.request.call_args_list[1]
+        assert second.args[0] == "POST"
+        assert second.args[1].endswith("/ssh_keys")
 
-    def test_recovers_via_scan_when_lookups_miss(self) -> None:
-        """Falls back to scanning all yakey-* keys when fingerprint and name miss."""
-        client = MagicMock()
-        client.ssh_keys.create.side_effect = APIException(
-            code="uniqueness_error",
-            message="SSH key not unique",
-            details={},
-        )
-        client.ssh_keys.get_by_fingerprint.return_value = None
-        client.ssh_keys.get_by_name.return_value = None
+    @pytest.mark.asyncio
+    async def test_unrelated_api_error_reraised(self) -> None:
+        """A non-uniqueness POST error is re-raised, not swallowed."""
+        empty = _make_mock_resp(200, _ssh_keys_list_empty())
+        bad = _make_mock_resp(400, _hetz_err("invalid_input", "bad token", 400))
+        session = _make_session_with_queue([empty, bad])
 
-        match = MagicMock()
-        match.name = "yakey-xyz"
-        match.id = 7
-        other = MagicMock()
-        other.name = "deploy-key"
-        other.id = 8
-        client.ssh_keys.get_all.return_value = [other, match]
+        with pytest.raises(HetznerError):
+            await ensure_ssh_key(session, _make_key(), "yakey-abc")
 
-        key = _make_key()
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.hetzner.get_key_name",
-                return_value="yakey-abc",
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.hetzner.get_rnd_name",
-                return_value="yakey-xyz",
-            ),
-        ):
-            result = get_ssh_key_id(client, key)
+        assert session.request.call_count == 2
 
-        assert result == 7
+    @pytest.mark.asyncio
+    async def test_invalid_ssh_keys_list_response_raises(self) -> None:
+        """Malformed GET /ssh_keys response raises HetznerError."""
+        malformed = _make_mock_resp(200, {"not_ssh_keys": []})
+        session = _make_session_with_queue([malformed])
 
-    def test_legacy_already_wording_still_recovers(self) -> None:
-        """Older API wording containing 'already' still triggers recovery."""
-        client = MagicMock()
-        client.ssh_keys.create.side_effect = APIException(
-            code="conflict",
-            message="name already exists",
-            details={},
-        )
-        existing = MagicMock()
-        existing.id = 13
-        client.ssh_keys.get_by_fingerprint.return_value = existing
+        with pytest.raises(HetznerError, match="Invalid SSH keys list response"):
+            await ensure_ssh_key(session, _make_key(), "yakey-abc")
 
-        key = _make_key()
-        with patch(
-            "yascheduler.infra.cloud.providers.hetzner.get_key_name",
-            return_value="yakey-abc",
-        ):
-            result = get_ssh_key_id(client, key)
+    @pytest.mark.asyncio
+    async def test_invalid_ssh_key_create_response_raises(self) -> None:
+        """Malformed POST /ssh_keys response raises HetznerError."""
+        empty = _make_mock_resp(200, _ssh_keys_list_empty())
+        malformed = _make_mock_resp(201, {"ssh_key": {"id": "not-an-int"}})
+        session = _make_session_with_queue([empty, malformed])
 
-        assert result == 13
-
-    def test_unrelated_api_error_reraised(self) -> None:
-        """A non-uniqueness APIException is re-raised, not swallowed."""
-        client = MagicMock()
-        client.ssh_keys.create.side_effect = APIException(
-            code="invalid_input",
-            message="bad token",
-            details={},
-        )
-
-        key = _make_key()
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.hetzner.get_key_name",
-                return_value="yakey-abc",
-            ),
-            pytest.raises(APIException),
-        ):
-            get_ssh_key_id(client, key)
-
-        client.ssh_keys.get_by_fingerprint.assert_not_called()
+        with pytest.raises(HetznerError, match="Invalid SSH key create response"):
+            await ensure_ssh_key(session, _make_key(), "yakey-abc")

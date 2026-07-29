@@ -21,7 +21,6 @@ By default, no cloud connectors are installed.
 To install the appropriate connector, use one of the commands:
 
 - for Microsoft Azure: `pip install yascheduler[azure]`
-- for Hetzner Cloud: `pip install yascheduler[hetzner]`
 - for UpCloud: `pip install yascheduler[upcloud]`
 
 The last updates and bugfixes can be obtained cloning the repository:
