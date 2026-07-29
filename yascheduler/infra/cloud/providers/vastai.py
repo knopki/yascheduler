@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, TypedDict
 import aiohttp
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO
-from yascheduler.shared import retry
 
 if TYPE_CHECKING:
     from asyncssh.public_key import SSHKey as ASSHKey
@@ -32,6 +31,13 @@ _VASTAI_BASE_URL = "https://cloud.vast.ai/api/v0"
 _HTTP_BAD_REQUEST = 400
 _HTTP_NOT_FOUND = 404
 _HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_SERVER_ERROR = 500
+
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "DELETE", "OPTIONS"})
+_RETRY_MAX_TIME = 60.0
+_RETRY_INITIAL_DELAY = 1.0
+_RETRY_MAX_DELAY = 30.0
+_RETRY_FACTOR = 1.5
 
 
 class VastAIError(Exception):
@@ -74,50 +80,82 @@ async def _request(
     if json_data is not None:
         kwargs["json"] = json_data
 
-    async with session.request(method, url, **kwargs) as resp:
-        logger.debug(
-            "VASTAI_REQUEST",
-            extra={"method": method, "path": path, "status": resp.status},
-        )
-        if resp.status >= _HTTP_BAD_REQUEST:
+    try:
+        async with session.request(method, url, **kwargs) as resp:
+            logger.debug(
+                "VASTAI_REQUEST",
+                extra={"method": method, "path": path, "status": resp.status},
+            )
+            if resp.status >= _HTTP_BAD_REQUEST:
+                try:
+                    body = await resp.json()
+                except Exception:
+                    body = {}
+                msg = body.get("msg", body.get("error", f"HTTP {resp.status}"))
+                raise VastAIError(msg, status=resp.status)
+
             try:
-                body = await resp.json()
-            except Exception:
-                body = {}
-            msg = body.get("msg", body.get("error", f"HTTP {resp.status}"))
-            raise VastAIError(msg, status=resp.status)
+                data = await resp.json()
+            except Exception as exc:
+                msg = f"Invalid JSON response: {exc}"
+                raise VastAIError(msg) from exc
 
-        try:
-            data = await resp.json()
-        except Exception as exc:
-            msg = f"Invalid JSON response: {exc}"
-            raise VastAIError(msg) from exc
-
-        return data
+            return data
+    except asyncio.CancelledError:
+        raise
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        # ponytail: status=None marks a transport error so the retry layer can
+        # retry it for idempotent calls (GET/DELETE) without retrying the
+        # non-idempotent PUT create, which would double-create a billed instance.
+        msg = f"Transport error: {exc}"
+        raise VastAIError(msg, status=None) from exc
 
 
 # endregion FUNC__request
 
 
 # region FUNC__request_with_retry
-# PURPOSE: Wrapper around _request that retries on 429 (rate limit) with exponential backoff up to 60s.
+# PURPOSE: Wrapper around _request that retries transient errors with exponential backoff.
 # REQUIRES: Same as _request.
-# ENSURES: Same as _request, but retries on 429.
-@retry(
-    on=VastAIError,
-    max_time=60,
-    giveup=lambda e: (
-        not (isinstance(e, VastAIError) and e.status == _HTTP_TOO_MANY_REQUESTS)
-    ),
-)
+# ENSURES:
+# - 429 retried for all methods (rate-limited requests never execute server-side).
+# - Transport errors and 5xx retried ONLY for idempotent methods (GET/HEAD/DELETE/OPTIONS).
+#   Retrying the non-idempotent PUT create on an uncertain outcome would
+#   double-create a billed instance, so mutating PUT/POST are NOT retried on
+#   transport/5xx (only on 429).
+def _is_retryable(method: str, exc: VastAIError) -> bool:
+    """Return True if the error is safe to retry for the given HTTP method."""
+    status = exc.status
+    if status == _HTTP_TOO_MANY_REQUESTS:
+        return True
+    if method.upper() in _IDEMPOTENT_METHODS:
+        return status is None or status >= _HTTP_SERVER_ERROR
+    return False
+
+
 async def _request_with_retry(
     session: aiohttp.ClientSession,
     method: str,
     path: str,
     json_data: object | None = None,
 ) -> dict | list:
-    """Make an HTTP request to the VastAI API with retry on 429."""
-    return await _request(session, method, path, json_data)
+    """Make an HTTP request with method-aware retry on transient errors."""
+    deadline = asyncio.get_running_loop().time() + _RETRY_MAX_TIME
+    delay = _RETRY_INITIAL_DELAY
+    while True:
+        try:
+            return await _request(session, method, path, json_data)
+        except asyncio.CancelledError:
+            raise
+        except VastAIError as exc:
+            if not _is_retryable(method, exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.debug("DEADLINE", extra={"exc": str(exc)})
+                raise
+            logger.debug("RETRY", extra={"exc": str(exc), "delay": delay})
+        await asyncio.sleep(delay)
+        delay = min(delay * _RETRY_FACTOR, _RETRY_MAX_DELAY)
 
 
 # endregion FUNC__request_with_retry
@@ -361,11 +399,17 @@ async def _best_effort_delete(
     session: aiohttp.ClientSession,
     instance_id: int,
 ) -> None:
-    """Best-effort delete an instance to prevent orphans."""
+    """Best-effort delete an instance to prevent orphans.
+
+    Swallows any exception so it never masks the original create error or
+    skips the caller's error propagation. A transport error here does not
+    re-raise: the caller's failure is the one that matters, and the orphan
+    (if any) is the subject of a separate reconcile path.
+    """
     try:
         logger.debug("ORPHAN_CLEANUP", extra={"instance_id": instance_id})
         await _request_with_retry(session, "DELETE", f"/instances/{instance_id}/")
-    except VastAIError:
+    except Exception:  # best-effort cleanup must not mask caller error
         logger.warning("NODE %s NOT DELETED", instance_id)
 
 

@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Generator
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 from yascheduler.shared.log import _NATIVE_KEYS
@@ -786,7 +788,12 @@ class TestVastaiDeleteNodeNon2xx:
 
     @pytest.mark.asyncio
     async def test_non_2xx_non_404_raises_delete_error(self) -> None:
-        """Non-2xx non-404 response raises VastAIDeleteError."""
+        """Non-2xx non-404 response raises VastAIDeleteError.
+
+        Uses 403 (forbidden): non-retryable, so the error surfaces without
+        retry delay. A 500 would be retried (idempotent DELETE) and require
+        sleep mocking; that path is covered separately.
+        """
         from unittest.mock import patch
 
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
@@ -798,8 +805,8 @@ class TestVastaiDeleteNodeNon2xx:
         cfg = ConfigCloudVastAI(api_key="test-key")
 
         mock_resp = MagicMock()
-        mock_resp.status = 500
-        mock_resp.json = AsyncMock(return_value={"msg": "internal error"})
+        mock_resp.status = 403
+        mock_resp.json = AsyncMock(return_value={"msg": "forbidden"})
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
 
@@ -816,6 +823,48 @@ class TestVastaiDeleteNodeNon2xx:
             pytest.raises(VastAIDeleteError),
         ):
             await vastai_delete_node(cfg, "42")
+
+    @pytest.mark.asyncio
+    async def test_5xx_retries_then_raises_delete_error(self) -> None:
+        """5xx on DELETE is retried; persistent 5xx surfaces as VastAIDeleteError."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="test-key")
+
+        def make_resp(status: int, body: dict) -> MagicMock:
+            mock_resp = MagicMock()
+            mock_resp.status = status
+            mock_resp.json = AsyncMock(return_value=body)
+            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+            mock_resp.__aexit__ = AsyncMock(return_value=False)
+            return mock_resp
+
+        # Fail a few times, then succeed — proves 5xx is retried on DELETE.
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                make_resp(503, {"msg": "unavailable"}),
+                make_resp(502, {"msg": "bad gateway"}),
+                make_resp(200, {"success": True}),
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+        ):
+            await vastai_mod.vastai_delete_node(cfg, "42")
+
+        # Retried twice before succeeding.
+        assert mock_session.request.call_count == 3
 
 
 class TestVastaiCreateNodeApiKeyRedaction:
@@ -1093,3 +1142,278 @@ class TestVastaiListInstances:
 
         assert len(result) == 1
         assert result[0]["id"] == 2
+
+
+class TestRequestTransportErrors:
+    """_request wraps transport errors into VastAIError(status=None)."""
+
+    @pytest.mark.asyncio
+    async def test_client_error_wrapped_status_none(self) -> None:
+        """aiohttp.ClientError from the session is wrapped into VastAIError(status=None)."""
+        from yascheduler.infra.cloud.providers.vastai import VastAIError, _request
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=aiohttp.ClientConnectionError("connection refused"),
+        )
+
+        with pytest.raises(VastAIError) as exc_info:
+            await _request(mock_session, "GET", "/test")
+
+        assert exc_info.value.status is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_wrapped_status_none(self) -> None:
+        """asyncio.TimeoutError is wrapped into VastAIError(status=None)."""
+        from yascheduler.infra.cloud.providers.vastai import VastAIError, _request
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(side_effect=asyncio.TimeoutError())
+
+        with pytest.raises(VastAIError) as exc_info:
+            await _request(mock_session, "GET", "/test")
+
+        assert exc_info.value.status is None
+
+
+class TestIsRetryable:
+    """_is_retryable: method-aware retry decision guarding against double-create."""
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD", "DELETE", "OPTIONS", "get"])
+    def test_idempotent_transport_retryable(self, method: str) -> None:
+        """Transport error (status None) is retryable for idempotent methods."""
+        from yascheduler.infra.cloud.providers.vastai import VastAIError, _is_retryable
+
+        assert _is_retryable(method, VastAIError("net", status=None))
+
+    @pytest.mark.parametrize("method", ["GET", "DELETE"])
+    def test_idempotent_5xx_retryable(self, method: str) -> None:
+        """5xx is retryable for idempotent methods."""
+        from yascheduler.infra.cloud.providers.vastai import VastAIError, _is_retryable
+
+        assert _is_retryable(method, VastAIError("boom", status=500))
+        assert _is_retryable(method, VastAIError("boom", status=503))
+
+    @pytest.mark.parametrize("method", ["GET", "PUT", "POST", "DELETE"])
+    def test_429_always_retryable(self, method: str) -> None:
+        """429 is retryable for every method (rate-limited = not executed)."""
+        from yascheduler.infra.cloud.providers.vastai import VastAIError, _is_retryable
+
+        assert _is_retryable(method, VastAIError("slow down", status=429))
+
+    @pytest.mark.parametrize("method", ["PUT", "POST"])
+    def test_mutating_transport_not_retryable(self, method: str) -> None:
+        """Transport error is NOT retried for mutating methods — no double-create."""
+        from yascheduler.infra.cloud.providers.vastai import VastAIError, _is_retryable
+
+        assert not _is_retryable(method, VastAIError("net", status=None))
+
+    @pytest.mark.parametrize("method", ["PUT", "POST"])
+    def test_mutating_5xx_not_retryable(self, method: str) -> None:
+        """5xx is NOT retried for mutating methods — create may have executed."""
+        from yascheduler.infra.cloud.providers.vastai import VastAIError, _is_retryable
+
+        assert not _is_retryable(method, VastAIError("boom", status=500))
+
+    def test_4xx_not_retryable(self) -> None:
+        """4xx (non-429) is not retryable."""
+        from yascheduler.infra.cloud.providers.vastai import VastAIError, _is_retryable
+
+        assert not _is_retryable("GET", VastAIError("bad", status=400))
+        assert not _is_retryable("DELETE", VastAIError("forbidden", status=403))
+
+
+class TestRequestWithRetryIntegration:
+    """_request_with_retry: retry behavior with mocked transport and HTTP errors."""
+
+    def _resp(self, status: int, body: object) -> MagicMock:
+        mock_resp = MagicMock()
+        mock_resp.status = status
+        mock_resp.json = AsyncMock(return_value=body)
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        return mock_resp
+
+    @pytest.mark.asyncio
+    async def test_get_transport_then_success_retries(self) -> None:
+        """GET: transient transport error is retried and succeeds on 2nd attempt."""
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                aiohttp.ClientConnectionError("flap"),
+                self._resp(200, {"ok": True}),
+            ],
+        )
+
+        with patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()):
+            data = await vastai_mod._request_with_retry(
+                mock_session,
+                "GET",
+                "/x",
+            )
+
+        assert data == {"ok": True}
+        assert mock_session.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_put_transport_not_retried(self) -> None:
+        """PUT (create): transport error NOT retried — prevents double-create."""
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=aiohttp.ClientConnectionError("flap"),
+        )
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            pytest.raises(vastai_mod.VastAIError) as exc_info,
+        ):
+            await vastai_mod._request_with_retry(mock_session, "PUT", "/asks/1/")
+
+        # Called exactly once: the non-idempotent PUT must not be retried on an
+        # uncertain transport outcome (the server may have created the instance).
+        assert mock_session.request.call_count == 1
+        assert exc_info.value.status is None
+
+    @pytest.mark.asyncio
+    async def test_delete_5xx_then_success_retries(self) -> None:
+        """DELETE: transient 503 is retried and succeeds."""
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                self._resp(503, {"msg": "unavailable"}),
+                self._resp(200, {"success": True}),
+            ],
+        )
+
+        with patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()):
+            data = await vastai_mod._request_with_retry(
+                mock_session,
+                "DELETE",
+                "/instances/1/",
+            )
+
+        assert data == {"success": True}
+        assert mock_session.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_4xx_not_retried(self) -> None:
+        """GET 400 is not retryable — single attempt, raises."""
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            return_value=self._resp(400, {"msg": "bad request"}),
+        )
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            pytest.raises(vastai_mod.VastAIError),
+        ):
+            await vastai_mod._request_with_retry(mock_session, "GET", "/x")
+
+        assert mock_session.request.call_count == 1
+
+
+class TestBestEffortDelete:
+    """_best_effort_delete swallows any exception so cleanup never masks the original error."""
+
+    @pytest.mark.asyncio
+    async def test_swallows_non_vastai_error(self) -> None:
+        """An unexpected exception during cleanup is swallowed, not propagated."""
+        from yascheduler.infra.cloud.providers.vastai import _best_effort_delete
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(side_effect=RuntimeError("boom"))
+
+        # Must not raise — best-effort cleanup must never mask the caller's error.
+        await _best_effort_delete(mock_session, 42)
+
+    @pytest.mark.asyncio
+    async def test_swallows_transport_error(self) -> None:
+        """A transport error during cleanup is swallowed after retry exhaustion."""
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=aiohttp.ClientConnectionError("down"),
+        )
+
+        with patch.object(vastai_mod, "_RETRY_MAX_TIME", 0.0):
+            # Must not raise.
+            await vastai_mod._best_effort_delete(mock_session, 42)
+
+
+class TestDeleteNodeTransportRobustness:
+    """vastai_delete_node: transient transport errors are retried; persistent ones wrap into VastAIDeleteError."""
+
+    def _resp(self, status: int, body: object) -> MagicMock:
+        mock_resp = MagicMock()
+        mock_resp.status = status
+        mock_resp.json = AsyncMock(return_value=body)
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        return mock_resp
+
+    @pytest.mark.asyncio
+    async def test_transient_transport_retried_then_succeeds(self) -> None:
+        """A flapping connection is retried and the delete succeeds."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=[
+                aiohttp.ClientConnectionError("flap"),
+                self._resp(200, {"success": True}),
+            ],
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.object(vastai_mod.asyncio, "sleep", new=AsyncMock()),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+        ):
+            await vastai_mod.vastai_delete_node(cfg, "42")
+
+        assert mock_session.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_persistent_transport_wrapped_into_delete_error(self) -> None:
+        """A persistent transport error surfaces as VastAIDeleteError, not a raw aiohttp exception."""
+        from unittest.mock import patch
+
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+        from yascheduler.infra.cloud.providers import vastai as vastai_mod
+
+        cfg = ConfigCloudVastAI(api_key="k")
+
+        mock_session = MagicMock()
+        mock_session.request = MagicMock(
+            side_effect=aiohttp.ClientConnectionError("down"),
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.object(vastai_mod, "_RETRY_MAX_TIME", 0.0),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.aiohttp.ClientSession",
+                return_value=mock_session,
+            ),
+            pytest.raises(vastai_mod.VastAIDeleteError),
+        ):
+            await vastai_mod.vastai_delete_node(cfg, "42")
