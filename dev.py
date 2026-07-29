@@ -223,7 +223,8 @@ def ensure_config() -> None:
 
     if not cp.has_section("remote"):
         cp["remote"] = {}
-    cp["remote"]["user"] = "testuser"
+    if not cp["remote"].get("user"):
+        cp["remote"]["user"] = "testuser"
 
     if not cp.has_section("clouds"):
         cp.add_section("clouds")
