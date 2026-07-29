@@ -7,11 +7,27 @@
 
 from __future__ import annotations
 
+import importlib.util
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from yascheduler.infra.cloud.dto import CloudCreateNodeDTO
+
+# Provider submodules pull in optional cloud SDKs at import time; skip their
+# tests cleanly when the SDK is absent. vastai only needs aiohttp (core dep),
+# so it always runs. Mirrors the pytest.importorskip pattern in
+# test_hetzner_ssh_key.py but scoped per provider so vastai stays runnable.
+requires_hetzner = pytest.mark.skipif(
+    importlib.util.find_spec("hcloud") is None, reason="hcloud not installed"
+)
+requires_az = pytest.mark.skipif(
+    importlib.util.find_spec("azure.identity") is None,
+    reason="azure SDK not installed",
+)
+requires_upcloud = pytest.mark.skipif(
+    importlib.util.find_spec("upcloud_api") is None, reason="upcloud_api not installed"
+)
 
 
 class _AsyncIter:
@@ -35,10 +51,12 @@ class _AsyncIter:
 # =============================================================================
 
 
+@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_create_node_returns_dto() -> None:
     """hetzner_create_node returns CloudCreateNodeDTO with server ID as external_id and IP as hostname."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+    from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
 
     cfg = ConfigCloudHetzner(username="testuser", token="test-token")
     mock_key = MagicMock()
@@ -56,8 +74,6 @@ async def test_hetzner_create_node_returns_dto() -> None:
         "yascheduler.infra.cloud.providers.hetzner.HClient",
         return_value=mock_client,
     ):
-        from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
-
         result = await hetzner_create_node(cfg, mock_key)
 
     assert isinstance(result, CloudCreateNodeDTO)
@@ -65,10 +81,12 @@ async def test_hetzner_create_node_returns_dto() -> None:
     assert result.hostname == "1.2.3.4"
 
 
+@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
     """hetzner_create_node DTO carries config-derived connection parameters."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+    from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
 
     cfg = ConfigCloudHetzner(
         username="testuser",
@@ -91,8 +109,6 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
         "yascheduler.infra.cloud.providers.hetzner.HClient",
         return_value=mock_client,
     ):
-        from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
-
         result = await hetzner_create_node(cfg, mock_key)
 
     assert result.username == "testuser"
@@ -102,10 +118,12 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
     assert result.jump_username == "jumper"
 
 
+@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_accepts_external_id() -> None:
     """hetzner_delete_node resolves by server ID via get_by_id, not by iteration."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+    from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
     cfg = ConfigCloudHetzner(token="test-del-accept")
     mock_client = MagicMock()
@@ -116,8 +134,6 @@ async def test_hetzner_delete_node_accepts_external_id() -> None:
         "yascheduler.infra.cloud.providers.hetzner.HClient",
         return_value=mock_client,
     ):
-        from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
-
         await hetzner_delete_node(cfg, external_id="42")
 
     mock_client.servers.get_by_id.assert_called_once_with(42)
@@ -125,12 +141,14 @@ async def test_hetzner_delete_node_accepts_external_id() -> None:
     mock_server.delete.assert_called_once()
 
 
+@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_api_not_found() -> None:
     """hetzner_delete_node handles APIException not_found from get_by_id gracefully."""
     from hcloud import APIException
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+    from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
     cfg = ConfigCloudHetzner(token="test-del-api404")
     mock_client = MagicMock()
@@ -144,14 +162,13 @@ async def test_hetzner_delete_node_api_not_found() -> None:
         "yascheduler.infra.cloud.providers.hetzner.HClient",
         return_value=mock_client,
     ):
-        from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
-
         # Should not raise — APIException not_found is caught
         await hetzner_delete_node(cfg, external_id="152213839")
 
     mock_client.servers.get_by_id.assert_called_once_with(152213839)
 
 
+@requires_hetzner
 def test_hetzner_find_srv_removed() -> None:
     """find_srv no longer exists in hetzner provider module."""
     from yascheduler.infra.cloud.providers import hetzner as hetzner_mod
@@ -159,12 +176,14 @@ def test_hetzner_find_srv_removed() -> None:
     assert not hasattr(hetzner_mod, "find_srv")
 
 
+@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_create_node_user_data_has_root_users() -> None:
     """hetzner_create_node injects a cloud-init `users` section with root + the SSH key."""
     import json
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+    from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
 
     cfg = ConfigCloudHetzner(token="test-users")
     mock_key = MagicMock()
@@ -189,8 +208,6 @@ async def test_hetzner_create_node_user_data_has_root_users() -> None:
         "yascheduler.infra.cloud.providers.hetzner.HClient",
         return_value=mock_client,
     ):
-        from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
-
         await hetzner_create_node(cfg, mock_key)
 
     user_data = captured["user_data"]
@@ -201,12 +218,14 @@ async def test_hetzner_create_node_user_data_has_root_users() -> None:
     ]
 
 
+@requires_hetzner
 @pytest.mark.asyncio
 async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
     """Non-root cfg.username is created via cloud-init users (no sudo)."""
     import json
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
+    from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
 
     cfg = ConfigCloudHetzner(username="compute", token="test-users-nr")
     mock_key = MagicMock()
@@ -231,8 +250,6 @@ async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
         "yascheduler.infra.cloud.providers.hetzner.HClient",
         return_value=mock_client,
     ):
-        from yascheduler.infra.cloud.providers.hetzner import hetzner_create_node
-
         await hetzner_create_node(cfg, mock_key)
 
     payload = json.loads(captured["user_data"][len("#cloud-config\n") :])
@@ -249,10 +266,12 @@ async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
 # =============================================================================
 
 
+@requires_az
 @pytest.mark.asyncio
 async def test_az_create_node_returns_dto() -> None:
     """az_create_node returns CloudCreateNodeDTO with IP-based identity."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudAzure
+    from yascheduler.infra.cloud.providers.az import az_create_node
 
     cfg = ConfigCloudAzure(
         username="azuser",
@@ -300,8 +319,6 @@ async def test_az_create_node_returns_dto() -> None:
             ),
         ),
     ):
-        from yascheduler.infra.cloud.providers.az import az_create_node
-
         result = await az_create_node(cfg, mock_key)
 
     assert isinstance(result, CloudCreateNodeDTO)
@@ -310,10 +327,12 @@ async def test_az_create_node_returns_dto() -> None:
     assert result.username == "azuser"
 
 
+@requires_az
 @pytest.mark.asyncio
 async def test_az_delete_node_accepts_external_id() -> None:
     """az_delete_node accepts external_id parameter to locate the resource."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudAzure
+    from yascheduler.infra.cloud.providers.az import az_delete_node
 
     cfg = ConfigCloudAzure(
         tenant_id="test-tid",
@@ -352,8 +371,6 @@ async def test_az_delete_node_accepts_external_id() -> None:
             return_value=mock_cmc,
         ),
     ):
-        from yascheduler.infra.cloud.providers.az import az_delete_node
-
         # Should not raise — external_id is accepted as keyword
         await az_delete_node(cfg, external_id="10.0.0.1")
 
@@ -363,10 +380,12 @@ async def test_az_delete_node_accepts_external_id() -> None:
 # =============================================================================
 
 
+@requires_upcloud
 @pytest.mark.asyncio
 async def test_upcloud_create_node_returns_dto() -> None:
     """upcloud_create_node returns CloudCreateNodeDTO with IP-based identity."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudUpcloud
+    from yascheduler.infra.cloud.providers.upcloud import upcloud_create_node
 
     cfg = ConfigCloudUpcloud(login="test", password="test", username="ucuser")
     mock_key = MagicMock()
@@ -384,8 +403,6 @@ async def test_upcloud_create_node_returns_dto() -> None:
             return_value=mock_client,
         ),
     ):
-        from yascheduler.infra.cloud.providers.upcloud import upcloud_create_node
-
         result = await upcloud_create_node(cfg, mock_key)
 
     assert isinstance(result, CloudCreateNodeDTO)
@@ -394,10 +411,12 @@ async def test_upcloud_create_node_returns_dto() -> None:
     assert result.username == "ucuser"
 
 
+@requires_upcloud
 @pytest.mark.asyncio
 async def test_upcloud_delete_node_accepts_external_id() -> None:
     """upcloud_delete_node accepts external_id parameter to locate the resource."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudUpcloud
+    from yascheduler.infra.cloud.providers.upcloud import upcloud_delete_node
 
     cfg = ConfigCloudUpcloud(login="test", password="test")
 
@@ -410,12 +429,11 @@ async def test_upcloud_delete_node_accepts_external_id() -> None:
             return_value=mock_client,
         ),
     ):
-        from yascheduler.infra.cloud.providers.upcloud import upcloud_delete_node
-
         # Should not raise — external_id is accepted as keyword
         await upcloud_delete_node(cfg, external_id="10.0.0.2")
 
 
+@requires_upcloud
 def test_upcloud_delete_node_is_renamed() -> None:
     """The UpCloud typo fix: upcload_delete_node is no longer exported, upcloud_delete_node is."""
     # Verify the module's __all__ and the adapter's import point
