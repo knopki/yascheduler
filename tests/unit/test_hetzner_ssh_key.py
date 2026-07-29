@@ -1,7 +1,8 @@
+"""Tests for hetzner.ensure_ssh_key — GET-first registration with POST-on-miss."""
 # region MODULE_CONTRACT
 # PURPOSE: Unit tests for hetzner.ensure_ssh_key — GET-first registration with POST-on-miss.
-# SCOPE: ensure_ssh_key with mocked aiohttp session; no network.
-# KEYWORDS: ensure_ssh_key, duplicate-key recovery, hetzner API, aiohttp
+# SCOPE: ensure_ssh_key with mocked HetznerClient; no network.
+# KEYWORDS: ensure_ssh_key, duplicate-key recovery, hetzner API, HetznerClient
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -16,19 +17,6 @@ from yascheduler.infra.cloud.providers.hetzner import (
 )
 
 
-def _make_mock_resp(status: int, json_data: object) -> MagicMock:
-    mock_resp = MagicMock()
-    mock_resp.status = status
-    mock_resp.json = AsyncMock(return_value=json_data)
-    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-    mock_resp.__aexit__ = AsyncMock(return_value=False)
-    return mock_resp
-
-
-def _hetz_err(code: str, message: str = "err", status: int = 409) -> dict:
-    return {"error": {"code": code, "message": message}}
-
-
 def _make_key() -> MagicMock:
     """Mock ASSHKey with the surface ensure_ssh_key touches."""
     key = MagicMock()
@@ -38,26 +26,14 @@ def _make_key() -> MagicMock:
     return key
 
 
-def _ssh_key(key_id: int = 1, name: str = "yakey-abc") -> dict:
-    return {"id": key_id, "name": name, "fingerprint": "aa:bb:cc:dd:ee"}
+def _ssh_key_stream(items: list):
+    """Build an async generator mimicking HetznerClient.get_ssh_keys."""
 
+    async def gen():
+        for key in items:
+            yield key
 
-def _ssh_keys_list_empty() -> dict:
-    return {"ssh_keys": []}
-
-
-def _ssh_keys_list(key: dict) -> dict:
-    return {"ssh_keys": [key]}
-
-
-def _ssh_key_create(key_id: int = 1, name: str = "yakey-abc") -> dict:
-    return {"ssh_key": _ssh_key(key_id, name)}
-
-
-def _make_session_with_queue(responses: list[MagicMock]) -> MagicMock:
-    session = MagicMock()
-    session.request = MagicMock(side_effect=list(responses))
-    return session
+    return gen()
 
 
 class TestEnsureSshKey:
@@ -66,59 +42,51 @@ class TestEnsureSshKey:
     @pytest.mark.asyncio
     async def test_existing_key_found_via_fingerprint_get(self) -> None:
         """Common path: the key is already registered; one GET resolves it."""
-        found = _make_mock_resp(200, _ssh_keys_list(_ssh_key(key_id=4242)))
-        session = _make_session_with_queue([found])
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = MagicMock(
+            return_value=_ssh_key_stream(
+                [{"id": 4242, "name": "yakey-abc", "fingerprint": "aa:bb:cc"}]
+            )
+        )
+        mock_client.create_ssh_key = AsyncMock()
 
-        result = await ensure_ssh_key(session, _make_key(), "yakey-abc")
+        result = await ensure_ssh_key(mock_client, _make_key(), "yakey-abc")
 
         assert result == 4242
-        session.request.assert_called_once()
-        call = session.request.call_args
-        assert call.args[0] == "GET"
-        assert call.kwargs.get("params", {}).get("fingerprint") == "aa:bb:cc"
+        mock_client.get_ssh_keys.assert_called_once()
+        mock_client.create_ssh_key.assert_not_awaited()
+        # fingerprint query passed through
+        call_kwargs = mock_client.get_ssh_keys.call_args.kwargs
+        assert call_kwargs.get("fingerprint") == "aa:bb:cc"
 
     @pytest.mark.asyncio
     async def test_new_key_registered_via_post_on_miss(self) -> None:
         """First-ever registration: GET empty → POST 201."""
-        empty = _make_mock_resp(200, _ssh_keys_list_empty())
-        created = _make_mock_resp(201, _ssh_key_create(key_id=42))
-        session = _make_session_with_queue([empty, created])
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = MagicMock(return_value=_ssh_key_stream([]))
+        mock_client.create_ssh_key = AsyncMock(
+            return_value={"id": 42, "name": "yakey-abc", "fingerprint": "aa:bb:cc"}
+        )
 
-        result = await ensure_ssh_key(session, _make_key(), "yakey-abc")
+        result = await ensure_ssh_key(mock_client, _make_key(), "yakey-abc")
 
         assert result == 42
-        assert session.request.call_count == 2
-        second = session.request.call_args_list[1]
-        assert second.args[0] == "POST"
-        assert second.args[1].endswith("/ssh_keys")
+        mock_client.get_ssh_keys.assert_called_once()
+        mock_client.create_ssh_key.assert_awaited_once()
+        args = mock_client.create_ssh_key.call_args.args
+        assert args[0] == "yakey-abc"
+        assert args[1] == "ssh-rsa AAAA test"
 
     @pytest.mark.asyncio
     async def test_unrelated_api_error_reraised(self) -> None:
         """A non-uniqueness POST error is re-raised, not swallowed."""
-        empty = _make_mock_resp(200, _ssh_keys_list_empty())
-        bad = _make_mock_resp(400, _hetz_err("invalid_input", "bad token", 400))
-        session = _make_session_with_queue([empty, bad])
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = MagicMock(return_value=_ssh_key_stream([]))
+        mock_client.create_ssh_key = AsyncMock(
+            side_effect=HetznerError("invalid_input", status=400)
+        )
 
         with pytest.raises(HetznerError):
-            await ensure_ssh_key(session, _make_key(), "yakey-abc")
+            await ensure_ssh_key(mock_client, _make_key(), "yakey-abc")
 
-        assert session.request.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_invalid_ssh_keys_list_response_raises(self) -> None:
-        """Malformed GET /ssh_keys response raises HetznerError."""
-        malformed = _make_mock_resp(200, {"not_ssh_keys": []})
-        session = _make_session_with_queue([malformed])
-
-        with pytest.raises(HetznerError, match="Invalid SSH keys list response"):
-            await ensure_ssh_key(session, _make_key(), "yakey-abc")
-
-    @pytest.mark.asyncio
-    async def test_invalid_ssh_key_create_response_raises(self) -> None:
-        """Malformed POST /ssh_keys response raises HetznerError."""
-        empty = _make_mock_resp(200, _ssh_keys_list_empty())
-        malformed = _make_mock_resp(201, {"ssh_key": {"id": "not-an-int"}})
-        session = _make_session_with_queue([empty, malformed])
-
-        with pytest.raises(HetznerError, match="Invalid SSH key create response"):
-            await ensure_ssh_key(session, _make_key(), "yakey-abc")
+        assert mock_client.create_ssh_key.await_count == 1

@@ -51,27 +51,29 @@ def _hetz_ssh_key(key_id: int = 1, name: str = "yakey-abc") -> dict:
     return {"id": key_id, "name": name, "fingerprint": "aa:bb:cc:dd:ee"}
 
 
-def _hetz_ssh_keys_empty() -> dict:
-    return {"ssh_keys": []}
-
-
-def _hetz_ssh_keys_list(key: dict) -> dict:
-    return {"ssh_keys": [key]}
-
-
-def _hetz_ssh_key_create(key_id: int = 1) -> dict:
-    return {"ssh_key": _hetz_ssh_key(key_id)}
-
-
-def _hetz_server_create(key_id: int, ip: str | None = None) -> dict:
-    server: dict[str, object] = {"id": key_id}
-    if ip is not None:
-        server["public_net"] = {"ipv4": {"ip": ip}}
-    return {"server": server}
-
-
 def _hetz_err(code: str, message: str = "err", status: int = 400) -> dict:
     return {"error": {"code": code, "message": message}}
+
+
+def _hetz_ssh_key_stream(items: list):
+    """Build an async generator mimicking HetznerClient.get_ssh_keys."""
+
+    async def gen():
+        for key in items:
+            yield key
+
+    return gen()
+
+
+def _patch_hetzner_client(mock_client: MagicMock):
+    """Patch HetznerClient so ``async with HetznerClient(...)`` yields mock_client."""
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_client
+    mock_cm.__aexit__.return_value = None
+    return patch(
+        "yascheduler.infra.cloud.providers.hetzner.HetznerClient",
+        return_value=mock_cm,
+    )
 
 
 class _AsyncIter:
@@ -105,19 +107,19 @@ async def test_hetzner_create_node_returns_dto() -> None:
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
-    # GET /ssh_keys empty → POST /ssh_keys → POST /servers.
-    ssh_keys_empty = _make_mock_resp(200, _hetz_ssh_keys_empty())
-    ssh_key_create = _make_mock_resp(201, _hetz_ssh_key_create(123))
-    create_resp = _make_mock_resp(201, _hetz_server_create(42, "1.2.3.4"))
-    session = _make_mock_session_with_queue(
-        [ssh_keys_empty, ssh_key_create, create_resp]
+    mock_client = MagicMock()
+    mock_client.get_ssh_keys = MagicMock(return_value=_hetz_ssh_key_stream([]))
+    mock_client.create_ssh_key = AsyncMock(return_value=_hetz_ssh_key(123, "yakey-abc"))
+    mock_client.create_server = AsyncMock(
+        return_value={
+            "id": 42,
+            "name": "node-1",
+            "public_net": {"ipv4": {"ip": "1.2.3.4"}},
+        }
     )
 
     with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
-            return_value=session,
-        ),
+        _patch_hetzner_client(mock_client),
         patch(
             "yascheduler.infra.cloud.providers.hetzner.get_key_name",
             return_value="yakey-abc",
@@ -146,18 +148,19 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
-    ssh_keys_empty = _make_mock_resp(200, _hetz_ssh_keys_empty())
-    ssh_key_create = _make_mock_resp(201, _hetz_ssh_key_create(123))
-    create_resp = _make_mock_resp(201, _hetz_server_create(42, "5.6.7.8"))
-    session = _make_mock_session_with_queue(
-        [ssh_keys_empty, ssh_key_create, create_resp]
+    mock_client = MagicMock()
+    mock_client.get_ssh_keys = MagicMock(return_value=_hetz_ssh_key_stream([]))
+    mock_client.create_ssh_key = AsyncMock(return_value=_hetz_ssh_key(123, "yakey-abc"))
+    mock_client.create_server = AsyncMock(
+        return_value={
+            "id": 42,
+            "name": "node-1",
+            "public_net": {"ipv4": {"ip": "5.6.7.8"}},
+        }
     )
 
     with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
-            return_value=session,
-        ),
+        _patch_hetzner_client(mock_client),
         patch(
             "yascheduler.infra.cloud.providers.hetzner.get_key_name",
             return_value="yakey-abc",
@@ -174,50 +177,40 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
 
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_accepts_external_id() -> None:
-    """hetzner_delete_node deletes by numeric server ID via DELETE /servers/{id}."""
+    """hetzner_delete_node deletes by numeric server ID via client.delete_server."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
     from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
 
     cfg = ConfigCloudHetzner(token="test-del-accept")
-    delete_resp = _make_mock_resp(200, {})  # DELETE success
-    session = _make_mock_session_with_queue([delete_resp])
+    mock_client = MagicMock()
+    mock_client.delete_server = AsyncMock()
 
-    with patch(
-        "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
-        return_value=session,
-    ):
+    with _patch_hetzner_client(mock_client):
         await hetzner_delete_node(cfg, external_id="42")
 
-    session.request.assert_called_once()
-    call = session.request.call_args
-    assert call.args[0] == "DELETE"
-    assert call.args[1].endswith("/servers/42")
+    mock_client.delete_server.assert_awaited_once_with(42)
 
 
 @pytest.mark.asyncio
 async def test_hetzner_delete_node_api_not_found() -> None:
     """hetzner_delete_node handles 404 not_found from DELETE gracefully."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
-    from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
+    from yascheduler.infra.cloud.providers.hetzner import (
+        HetznerError,
+        hetzner_delete_node,
+    )
 
     cfg = ConfigCloudHetzner(token="test-del-api404")
-    delete_resp = _make_mock_resp(
-        404,
-        _hetz_err("not_found", "server not found", 404),
+    mock_client = MagicMock()
+    mock_client.delete_server = AsyncMock(
+        side_effect=HetznerError("not found", status=404)
     )
-    session = _make_mock_session_with_queue([delete_resp])
 
-    with patch(
-        "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
-        return_value=session,
-    ):
-        # Should not raise — 404 not_found is caught
+    with _patch_hetzner_client(mock_client):
+        # Should not raise — 404 is idempotent.
         await hetzner_delete_node(cfg, external_id="152213839")
 
-    session.request.assert_called_once()
-    call = session.request.call_args
-    assert call.args[0] == "DELETE"
-    assert call.args[1].endswith("/servers/152213839")
+    mock_client.delete_server.assert_awaited_once_with(152213839)
 
 
 def test_hetzner_find_srv_removed() -> None:
@@ -239,18 +232,19 @@ async def test_hetzner_create_node_user_data_has_root_users() -> None:
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
-    ssh_keys_empty = _make_mock_resp(200, _hetz_ssh_keys_empty())
-    ssh_key_create = _make_mock_resp(201, _hetz_ssh_key_create(123))
-    create_resp = _make_mock_resp(201, _hetz_server_create(42, "1.2.3.4"))
-    session = _make_mock_session_with_queue(
-        [ssh_keys_empty, ssh_key_create, create_resp]
+    mock_client = MagicMock()
+    mock_client.get_ssh_keys = MagicMock(return_value=_hetz_ssh_key_stream([]))
+    mock_client.create_ssh_key = AsyncMock(return_value=_hetz_ssh_key(123, "yakey-abc"))
+    mock_client.create_server = AsyncMock(
+        return_value={
+            "id": 42,
+            "name": "node-1",
+            "public_net": {"ipv4": {"ip": "1.2.3.4"}},
+        }
     )
 
     with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
-            return_value=session,
-        ),
+        _patch_hetzner_client(mock_client),
         patch(
             "yascheduler.infra.cloud.providers.hetzner.get_key_name",
             return_value="yakey-abc",
@@ -258,9 +252,7 @@ async def test_hetzner_create_node_user_data_has_root_users() -> None:
     ):
         await hetzner_create_node(cfg, mock_key)
 
-    # The POST /servers call (3rd) carries user_data in its json= kwarg.
-    create_call = session.request.call_args_list[2]
-    user_data = create_call.kwargs["json"]["user_data"]
+    user_data = mock_client.create_server.call_args.kwargs["user_data"]
     assert user_data.startswith("#cloud-config\n")
     payload = json.loads(user_data[len("#cloud-config\n") :])
     assert payload["users"] == [
@@ -280,18 +272,19 @@ async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
     mock_key = MagicMock()
     mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
 
-    ssh_keys_empty = _make_mock_resp(200, _hetz_ssh_keys_empty())
-    ssh_key_create = _make_mock_resp(201, _hetz_ssh_key_create(123))
-    create_resp = _make_mock_resp(201, _hetz_server_create(42, "1.2.3.4"))
-    session = _make_mock_session_with_queue(
-        [ssh_keys_empty, ssh_key_create, create_resp]
+    mock_client = MagicMock()
+    mock_client.get_ssh_keys = MagicMock(return_value=_hetz_ssh_key_stream([]))
+    mock_client.create_ssh_key = AsyncMock(return_value=_hetz_ssh_key(123, "yakey-abc"))
+    mock_client.create_server = AsyncMock(
+        return_value={
+            "id": 42,
+            "name": "node-1",
+            "public_net": {"ipv4": {"ip": "1.2.3.4"}},
+        }
     )
 
     with (
-        patch(
-            "yascheduler.infra.cloud.providers.hetzner.aiohttp.ClientSession",
-            return_value=session,
-        ),
+        _patch_hetzner_client(mock_client),
         patch(
             "yascheduler.infra.cloud.providers.hetzner.get_key_name",
             return_value="yakey-abc",
@@ -299,10 +292,8 @@ async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
     ):
         await hetzner_create_node(cfg, mock_key)
 
-    create_call = session.request.call_args_list[2]
-    payload = json.loads(
-        create_call.kwargs["json"]["user_data"][len("#cloud-config\n") :]
-    )
+    user_data = mock_client.create_server.call_args.kwargs["user_data"]
+    payload = json.loads(user_data[len("#cloud-config\n") :])
     assert payload["users"] == [
         {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},
         {"name": "compute", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},

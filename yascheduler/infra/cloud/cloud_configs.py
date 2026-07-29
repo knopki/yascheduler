@@ -105,7 +105,7 @@ class ConfigCloudHetzner(CloudConfig):
     username: str = "root"
     priority: int = 0
     server_type: str = "cx52"
-    location: str | None = None
+    location: str = "fsn1"
     image_name: str = "debian-13"
     idle_tolerance: int = 120
     connect_grace: int = 60
