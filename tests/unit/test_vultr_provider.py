@@ -88,11 +88,17 @@ class TestExceptionHierarchy:
         assert APIError("HTTP 503", status=503).transient is True
 
     def test_api_error_4xx_is_not_transient(self) -> None:
-        """4xx APIError is permanent — not retried."""
+        """4xx APIError (except 429) is permanent — not retried."""
         from yascheduler.infra.cloud.providers.vultr import APIError
 
         assert APIError("HTTP 404", status=404).transient is False
         assert APIError("HTTP 400", status=400).transient is False
+
+    def test_api_error_429_is_transient(self) -> None:
+        """429 rate-limit is transient — worth retrying."""
+        from yascheduler.infra.cloud.providers.vultr import APIError
+
+        assert APIError("HTTP 429: Too Many Requests", status=429).transient is True
 
     def test_api_error_transport_failure_is_transient(self) -> None:
         """APIError with status=None (transport failure) is transient."""
@@ -652,6 +658,78 @@ class TestVultrCreateNode:
         assert result.username == "myuser"
 
     @pytest.mark.asyncio
+    async def test_post_transport_failure_reconciles_orphan_by_label(
+        self,
+    ) -> None:
+        """POST /bare-metals transport failure AFTER the server accepted the
+        create leaves an instance we have no id for. Reconcile-by-label
+        finds it via the label generated pre-POST and best-effort deletes it,
+        so no billable orphan leaks even when the create call itself failed.
+
+        Regression: the original code only cleaned up failures AFTER receiving
+        an instance_id; a timeout mid-POST leaked an orphan because the
+        cleanup `try` had not started yet.
+        """
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import APIError, vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
+
+        post_err = APIError("HTTP request failed: timeout")  # transport-level
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                post_err,  # POST /bare-metals — transport failure (no id)
+                {  # reconcile GET list: orphan with matching label
+                    "bare_metals": [
+                        {"id": "orphan-1", "label": "test-node"},
+                    ],
+                },
+                {},  # reconcile DELETE accepted
+                APIError("HTTP 404", status=404),  # reconcile verify: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="test-node",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            pytest.raises(APIError),
+        ):
+            await vultr_create_node(cfg, mock_key)
+
+        # POST was attempted once.
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods[0] == "POST"
+        # Reconcile fired: GET list + DELETE + GET verify.
+        assert methods[1:] == ["GET", "DELETE", "GET"]
+        # DELETE targeted the orphan matched by label.
+        assert mock_client.request.call_args_list[2].args[1] == "/bare-metals/orphan-1"
+
+    @pytest.mark.asyncio
     async def test_get_poll_permanent_4xx_does_not_retry(self) -> None:
         """A 4xx on GET must surface immediately — it is permanent, not a flap."""
         from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
@@ -1011,6 +1089,104 @@ class TestFindBaremetal:
 
 
 # =============================================================================
+# _reconcile_orphan_by_label
+# =============================================================================
+
+
+class TestReconcileOrphanByLabel:
+    """_reconcile_orphan_by_label: closes the POST-ambiguity orphan window.
+
+    Vultr POST /bare-metals is not idempotent: if the client times out or the
+    transport breaks after the server accepted the create, an instance exists
+    that we have no id for. The helper matches it by the label generated
+    pre-POST and best-effort deletes it. Never raises.
+    """
+
+    @pytest.mark.asyncio
+    async def test_label_match_deletes_orphan(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _reconcile_orphan_by_label,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {  # GET list: orphan with matching label present
+                    "bare_metals": [
+                        {"id": "orphan-1", "label": "test-node"},
+                        {"id": "other-2", "label": "unrelated"},
+                    ],
+                },
+                {},  # DELETE accepted
+                APIError("HTTP 404", status=404),  # GET verify: gone
+            ],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 1, 1])
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+        ):
+            await _reconcile_orphan_by_label(mock_client, "test-node")
+
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods == ["GET", "DELETE", "GET"]
+        # DELETE targeted the matched orphan.
+        assert mock_client.request.call_args_list[1].args[1] == "/bare-metals/orphan-1"
+
+    @pytest.mark.asyncio
+    async def test_no_match_no_delete(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import _reconcile_orphan_by_label
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            return_value={"bare_metals": [{"id": "x", "label": "unrelated"}]},
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
+        ):
+            await _reconcile_orphan_by_label(mock_client, "test-node")
+
+        # Only the lookup GET; no DELETE.
+        methods = [c.args[0] for c in mock_client.request.call_args_list]
+        assert methods == ["GET"]
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_never_raises(
+        self,
+        log_records: list,
+    ) -> None:
+        """Lookup GET itself fails -> log ERROR for manual check, no raise."""
+        from yascheduler.infra.cloud.providers.vultr import (
+            APIError,
+            _reconcile_orphan_by_label,
+        )
+
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=APIError("HTTP 500", status=500),
+        )
+
+        with patch(
+            "yascheduler.infra.cloud.providers.vultr.asyncio.sleep", AsyncMock()
+        ):
+            # Must not raise — original POST error propagates regardless.
+            await _reconcile_orphan_by_label(mock_client, "test-node")
+
+        assert any("RECONCILE_LOOKUP_FAILED" in r.getMessage() for r in log_records)
+
+
+# =============================================================================
 # vultr_delete_node
 # =============================================================================
 
@@ -1102,6 +1278,107 @@ class TestVultrDeleteNode:
             r for r in log_records if "NOT DELETED AS UNKNOWN" in r.getMessage()
         ]
         assert len(unknown_records) == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_not_confirmed_raises_to_enable_cross_cycle_retry(
+        self,
+    ) -> None:
+        """_delete_and_verify returns False -> vultr_delete_node RAISES so the
+        node stays disabled in DB and the next orchestrator cycle retries.
+
+        Regression: previously delete_node swallowed the False and returned
+        silently, deallocate_node then removed the DB row, and the cloud VM
+        became a permanent orphan (no row left to retry against).
+        """
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import APIError, vultr_delete_node
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=APIError("HTTP 403", status=403),  # DELETE: permanent
+        )
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.find_baremetal",
+                AsyncMock(return_value="inst-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            pytest.raises(APIError, match="delete not confirmed"),
+        ):
+            await vultr_delete_node(cfg, "1.2.3.4")
+
+    @pytest.mark.asyncio
+    async def test_delete_verify_timeout_raises(
+        self,
+        log_records: list,
+    ) -> None:
+        """DELETE accepted but instance never reaches 404 (verify timeout) ->
+        vultr_delete_node RAISES so the row survives and the next cycle
+        retries. An ERROR log still escalates for manual intervention."""
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import (
+            CLEANUP_VERIFY_TIMEOUT,
+            APIError,
+            vultr_delete_node,
+        )
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                {},  # DELETE accepted
+                *[{"bare_metal": {"id": "inst-1"}}] * 100,  # always present
+            ],
+        )
+
+        call_count = [0]
+
+        def fake_time() -> float:
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return 0
+            return CLEANUP_VERIFY_TIMEOUT + 1
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=fake_time)
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.find_baremetal",
+                AsyncMock(return_value="inst-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            pytest.raises(APIError, match="delete not confirmed"),
+        ):
+            await vultr_delete_node(cfg, "1.2.3.4")
+
+        # Escalation log preserved for manual reconciliation.
+        error_records = [
+            r
+            for r in log_records
+            if r.levelno >= logging.ERROR and "STILL PRESENT" in r.getMessage()
+        ]
+        assert len(error_records) == 1
 
 
 if __name__ == "__main__":

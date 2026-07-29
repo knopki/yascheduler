@@ -48,6 +48,7 @@ CLEANUP_VERIFY_INTERVAL = 10
 _HTTP_BAD_REQUEST_CODE = 400
 _HTTP_INTERNAL_ERROR_CODE = 500
 _HTTP_NOT_FOUND_CODE = 404
+_HTTP_TOO_MANY_REQUESTS = 429
 
 
 class APIError(Exception):
@@ -63,8 +64,12 @@ class APIError(Exception):
 
     @property
     def transient(self) -> bool:
-        """True for 5xx responses and transport failures — worth retrying."""
-        return self.status is None or self.status >= _HTTP_INTERNAL_ERROR_CODE
+        """True for 429/5xx responses and transport failures — worth retrying."""
+        return (
+            self.status is None
+            or self.status == _HTTP_TOO_MANY_REQUESTS
+            or self.status >= _HTTP_INTERNAL_ERROR_CODE
+        )
 
 
 # region CLASS_VultrClient
@@ -268,11 +273,12 @@ def build_baremetal_user_data(
 
 # region FUNC_vultr_create_node
 # PURPOSE: Provision a Vultr bare-metal instance via the CloudAdapter interface so the generic provisioner can launch Vultr compute nodes.
-# ENSURES: Returns CloudCreateNodeDTO with external_id = hostname = instance public IP once the instance is active and has a public IP. On any failure AFTER the instance is created, the instance is best-effort deleted before re-raising (no billable orphan).
+# ENSURES: Returns CloudCreateNodeDTO with external_id = hostname = instance public IP once the instance is active and has a public IP. On any failure AFTER the instance is created (POST ambiguity included), the instance is best-effort reconciled/deleted before re-raising (no billable orphan).
 # INVARIANTS:
 # - external_id = hostname = instance public IP (delete_node looks up by IP via find_baremetal)
 # - create_node returns as soon as the instance status is "active" with a non-zero public IP
-# - Post-instance-create failures (poll timeout) trigger best-effort DELETE of the instance id before the exception propagates, so no billable resource leaks when create_node raises.
+# - Post-instance-create failures (poll timeout) trigger best-effort DELETE of the instance id before the exception propagates.
+# - POST /bare-metals is NOT idempotent: a transport timeout/break AFTER the server accepted the create leaves an instance we have no id for. The label (generated pre-POST) is used to reconcile such orphans (see _reconcile_orphan_by_label) so no billable resource leaks when the POST call itself fails.
 async def vultr_create_node(
     cfg: ConfigCloudVultr, key: ASSHKey, cloud_config: CloudInitConfig | None = None
 ) -> CloudCreateNodeDTO:
@@ -304,10 +310,32 @@ async def vultr_create_node(
         "user_data": user_data_b64,
         "enable_ipv6": True,
     }
-    data = await client.request("POST", "/bare-metals", body)
+
+    # POST /bare-metals is not idempotent: if the transport breaks after the
+    # server accepted the create, an instance exists that we have no id for.
+    # Reconcile by the label generated above before re-raising the POST error
+    # so a created instance is deleted, not orphaned.
+    try:
+        data = await client.request("POST", "/bare-metals", body)
+    except Exception as err:
+        logger.warning(
+            "POST bare-metal failed (%s) — reconciling by label %s",
+            err,
+            label,
+        )
+        await _reconcile_orphan_by_label(client, label)
+        raise
     bm = data.get("bare_metal", data)
     instance_id = bm.get("id")
     if not instance_id:
+        # 2xx received but no id: the instance was likely created but the
+        # body is unusable. Reconcile by label before failing.
+        logger.warning(
+            "POST bare-metal 2xx without instance id — reconciling by label %s: %s",
+            label,
+            data,
+        )
+        await _reconcile_orphan_by_label(client, label)
         msg = f"No instance id in response: {data}"
         raise APIError(msg)
 
@@ -377,6 +405,43 @@ async def vultr_create_node(
 
 
 # endregion FUNC_vultr_create_node
+
+
+# region FUNC__reconcile_orphan_by_label
+# PURPOSE: Close the POST-ambiguity orphan window by matching and best-effort deleting an instance created during a failed/ambiguous POST, using the label generated pre-POST.
+# ENSURES: Never raises — the original POST error propagates regardless. On lookup failure logs ERROR for manual reconciliation. Match is by exact label equality against the listed bare-metals.
+async def _reconcile_orphan_by_label(client: VultrClient, label: str) -> None:
+    """Best-effort delete of an instance created during an ambiguous POST.
+
+    Vultr POST /bare-metals is not idempotent: if we time out or the transport
+    breaks after the server accepted the create, an instance exists that we
+    never got an id for. Match it by the label generated pre-POST and delete
+    it. Never raises.
+    """
+    try:
+        data = await client.request("GET", "/bare-metals?per_page=500")
+    except Exception:
+        logger.exception(
+            "RECONCILE_LOOKUP_FAILED — potential orphan billing; manual check needed",
+            extra={"label": label},
+        )
+        return
+    orphan_id: str | None = None
+    for bm in data.get("bare_metals", []):
+        if bm.get("label") == label and bm.get("id"):
+            orphan_id = cast("str", bm["id"])
+            break
+    if orphan_id is None:
+        logger.debug("RECONCILE_NO_ORPHAN", extra={"label": label})
+        return
+    logger.warning(
+        "RECONCILE_DELETE_ORPHAN",
+        extra={"label": label, "instance_id": orphan_id},
+    )
+    await _delete_and_verify(client, orphan_id)
+
+
+# endregion FUNC__reconcile_orphan_by_label
 
 
 # region FUNC__delete_and_verify
@@ -499,13 +564,18 @@ async def find_baremetal(client: VultrClient, host: str) -> str | None:
 # PURPOSE: Tear down a Vultr bare-metal instance by its IP-derived external_id so billing stops and the node slot is freed for reallocation.
 # INVARIANTS:
 # - external_id = instance public IP (matches CloudCreateNodeDTO.external_id from vultr_create_node)
-# - Idempotent: unknown IP returns without raising.
+# - Idempotent: unknown IP returns without raising (nothing to clean).
 # - Resolves IP→instance_id via find_baremetal, then delegates to _delete_and_verify (retry + async-deletion verify) so the public delete path inherits the same orphan-prevention guarantees as create_node cleanup.
+# - On _delete_and_verify returning False (permanent failure / exhausted retries / verify timeout) RAISES APIError so the caller's failure handling kicks in. In the orchestrator path, deallocate_node re-raises, the row stays disabled, and the next cycle's deallocate_nodes (which collects list_disabled()) retries — no permanent orphan from a swallowed False.
 async def vultr_delete_node(
     cfg: ConfigCloudVultr,
     external_id: str,
 ) -> None:
-    """Delete a bare-metal instance by its IP address (stored as external_id)."""
+    """Delete a bare-metal instance by its IP address (stored as external_id).
+
+    Raises APIError when deletion cannot be confirmed gone, so the caller can
+    leave the DB row intact for cross-cycle retry. Unknown IPs are a no-op.
+    """
     client = get_client(cfg)
     instance_id = await find_baremetal(client, external_id)
     if not instance_id:
@@ -513,6 +583,12 @@ async def vultr_delete_node(
         return
     if await _delete_and_verify(client, instance_id):
         logger.info("DELETED %s", external_id)
+        return
+    msg = (
+        f"Bare-metal {instance_id} ({external_id}) delete not confirmed gone "
+        "— cloud VM may still bill; orchestrator will retry next cycle"
+    )
+    raise APIError(msg)
 
 
 # endregion FUNC_vultr_delete_node
