@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 from typing import TYPE_CHECKING, Literal, TypedDict
@@ -327,7 +328,7 @@ class VastAIClient:
         """Yield instances one at a time, paginating through all pages."""
         params: dict = {"limit": limit}
         if select_filters:
-            params["select_filters"] = select_filters
+            params["select_filters"] = json.dumps(select_filters)
         while True:
             resp = await self._request("GET", "/instances", params=params)
             if not _is_api_show_instances_resp(resp):
@@ -453,6 +454,8 @@ async def _best_effort_delete(client: VastAIClient, instance_id: int) -> None:
     try:
         logger.debug("ORPHAN_CLEANUP", extra={"instance_id": instance_id})
         await client.destroy_instance(instance_id)
+    except asyncio.CancelledError:
+        raise
     except Exception:  # best-effort cleanup must not mask caller error
         logger.warning("NODE %s NOT DELETED", instance_id)
 
