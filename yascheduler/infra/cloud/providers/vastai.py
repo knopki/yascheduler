@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 _VASTAI_BASE_URL = "https://cloud.vast.ai/api/v0"
 _HTTP_BAD_REQUEST = 400
 _HTTP_NOT_FOUND = 404
+_HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_SERVER_ERROR = 500
 
 # Best-effort orphan reconcile after an ambiguous non-idempotent create.
 # Covers listing-lag (instance not yet visible after PUT) and transient
@@ -43,12 +45,19 @@ _RECONCILE_INTERVAL = 20.0
 
 # Verify-after-delete: poll GET /instances/{id}/ until 404 so a 2xx DELETE
 # (accepted, not gone) cannot leave a billed orphan. Mirrors Vultr/Hetzner.
-_DELETE_VERIFY_TIMEOUT = 180.0
+_DELETE_VERIFY_TIMEOUT = 600.0
 _DELETE_VERIFY_INTERVAL = 20.0
+
+# DELETE retry loop: a transient 5xx/transport failure on the DELETE itself is
+# retried in-process rather than propagated, so the create-cleanup path (which
+# has no persisted id to retry against next cycle) doesn't leak a billed orphan.
+# Mirrors vultr.CLEANUP_DELETE_ATTEMPTS / hetzner._DELETE_ATTEMPTS.
+_DELETE_ATTEMPTS = 3
+_DELETE_INTERVAL = 5.0
 
 
 # region BLOCK_API_errors
-# PURPOSE: VastAI API error type carrying the HTTP status so the orchestrator's retry loop can distinguish idempotent 404 (already gone) from real failures.
+# PURPOSE: VastAI API error type carrying the HTTP status, with a transient classifier for retry decisions.
 class VastAIError(Exception):
     """VastAI API error carrying the HTTP status.
 
@@ -59,6 +68,15 @@ class VastAIError(Exception):
     def __init__(self, message: str, status: int | None = None) -> None:
         self.status = status
         super().__init__(message)
+
+    @property
+    def transient(self) -> bool:
+        """True for 429/5xx responses and transport failures — worth retrying."""
+        return (
+            self.status is None
+            or self.status == _HTTP_TOO_MANY_REQUESTS
+            or self.status >= _HTTP_SERVER_ERROR
+        )
 
 
 # endregion BLOCK_API_errors
@@ -92,8 +110,9 @@ class VastAICreateInstanceResponce(TypedDict):
 class VastAIInstance(TypedDict):
     id: int | float
     actual_status: str | None
-    ssh_host: str
-    ssh_port: int | float
+    # ssh endpoint is unset until the instance reaches running
+    ssh_host: str | None
+    ssh_port: int | float | None
 
 
 class VastAIShowInstanceResponce(TypedDict):
@@ -187,8 +206,11 @@ def _is_api_instance(resp: object) -> TypeGuard[VastAIInstance]:
         isinstance(resp, dict)
         and isinstance(resp.get("id"), (int, float))
         and isinstance(resp.get("actual_status"), (str, type(None)))
-        and isinstance(resp.get("ssh_host"), str)
-        and isinstance(resp.get("ssh_port"), (int, float))
+        and (resp.get("ssh_host") is None or isinstance(resp.get("ssh_host"), str))
+        and (
+            resp.get("ssh_port") is None
+            or isinstance(resp.get("ssh_port"), (int, float))
+        )
     )
 
 
@@ -371,12 +393,12 @@ async def ensure_ssh_key(
 # region FUNC_select_cheapest_offer
 # PURPOSE: Bound spend under the configured ceiling and spread jobs off a single flaky host — random pick from the five cheapest rather than always the cheapest.
 # REQUIRES: offers is a list of offers.
-# ENSURES: Returns the cheapest valid offer; raises on empty or invalid.
+# ENSURES: Returns a random offer from the top-5 cheapest; raises on empty list or any offer exceeding the ceiling.
 async def select_cheapest_offer(
     offers: list[VastAIOffer],
     max_price_per_hr: float,
 ) -> VastAIOffer:
-    """Select the cheapest compatible offer from a sorted list."""
+    """Pick a random offer from the top-5 cheapest in the list."""
     if not offers:
         msg = "No offers found matching the configured criteria"
         raise VastAIError(msg)
@@ -443,26 +465,9 @@ async def generate_onstart(
 # endregion FUNC_generate_onstart
 
 
-async def _best_effort_delete(client: VastAIClient, instance_id: int) -> None:
-    """Best-effort delete an instance to prevent orphans.
-
-    Swallows any exception so it never masks the original create error or
-    skips the caller's error propagation. A transport error here does not
-    re-raise: the caller's failure is the one that matters, and the orphan
-    (if any) is the subject of a separate reconcile path.
-    """
-    try:
-        logger.debug("ORPHAN_CLEANUP", extra={"instance_id": instance_id})
-        await client.destroy_instance(instance_id)
-    except asyncio.CancelledError:
-        raise
-    except Exception:  # best-effort cleanup must not mask caller error
-        logger.warning("NODE %s NOT DELETED", instance_id)
-
-
 # region FUNC__reconcile_orphan_by_label
 # PURPOSE: Close the non-idempotent-create orphan window by matching and best-effort deleting an instance created during a failed/ambiguous PUT, using the unique label generated pre-PUT.
-# ENSURES: Never raises — the original create error propagates regardless. Retries the listing _RECONCILE_ATTEMPTS times with a delay to cover listing-lag (instance not yet visible after PUT) and transient listing failures; on each tick a label match triggers best-effort delete, exhausting all attempts without a match logs a warning for manual reconciliation.
+# ENSURES: Never raises — the original create error propagates regardless. Retries the listing _RECONCILE_ATTEMPTS times with a delay to cover listing-lag and transient listing failures; on each tick a label match triggers best-effort delete+verify, exhausting all attempts without a match logs a warning for manual reconciliation. A failure of _delete_and_verify itself is swallowed; CancelledError propagates.
 async def _reconcile_orphan_by_label(
     client: VastAIClient,
     label: str,
@@ -501,7 +506,19 @@ async def _reconcile_orphan_by_label(
                 "RECONCILE_DELETE_ORPHAN",
                 extra={"label": label, "instance_id": orphan_id},
             )
-            await _best_effort_delete(client, int(orphan_id))
+            # delete+verify so async VastAI deletion can't leave a billed
+            # orphan after reconcile claims success. Swallow failures so the
+            # original create error (not this cleanup) propagates; the verify
+            # path logs ERROR on its own if the instance refuses to die.
+            try:
+                await _delete_and_verify(client, int(orphan_id))
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                logger.warning(
+                    "RECONCILE_DELETE_FAILED",
+                    extra={"label": label, "instance_id": orphan_id, "error": str(err)},
+                )
             return
         logger.debug(
             "RECONCILE_NO_ORPHAN",
@@ -521,7 +538,7 @@ async def _reconcile_orphan_by_label(
 
 # region FUNC__verify_instance_gone
 # PURPOSE: Poll GET /instances/{id}/ until 404 (confirmed gone) so delete never claims success on a still-billing orphan after an accepted DELETE.
-# ENSURES: Returns True on 404 (confirmed gone). Returns False on timeout (logs ERROR for manual intervention). Never raises. Transient GET errors during polling are treated as "uncertain, keep polling".
+# ENSURES: Returns True on 404 (confirmed gone). Returns False on timeout (logs ERROR for manual intervention). Never raises; CancelledError (BaseException) propagates.
 async def _verify_instance_gone(client: VastAIClient, instance_id: int) -> bool:
     """Poll GET until the instance returns 404 or _DELETE_VERIFY_TIMEOUT expires.
 
@@ -539,6 +556,12 @@ async def _verify_instance_gone(client: VastAIClient, instance_id: int) -> bool:
                 "VERIFY_GET_RETRY",
                 extra={"instance_id": instance_id, "status": err.status},
             )
+        except Exception as err:
+            # Transient transport/decode error — uncertain, keep polling.
+            logger.debug(
+                "VERIFY_GET_RETRY",
+                extra={"instance_id": instance_id, "error": str(err)},
+            )
         await asyncio.sleep(_DELETE_VERIFY_INTERVAL)
     logger.error(
         "INSTANCE %s STILL PRESENT %ss after accepted DELETE — "
@@ -553,23 +576,49 @@ async def _verify_instance_gone(client: VastAIClient, instance_id: int) -> bool:
 
 
 # region FUNC__delete_and_verify
-# PURPOSE: Delete a VastAI instance by known id and confirm gone so neither create_node cleanup nor vastai_delete_node leaves a billable orphan — the instance id is known, so direct delete+verify (no label reconcile).
-# ENSURES: Returns True iff the instance is confirmed gone (DELETE 404 or verify GET 404). Returns False on verify timeout (logs ERROR for manual intervention). DELETE errors other than 404 propagate to the orchestrator (idempotent, retried next cycle). Never raises on verify-path failures.
-# MODEL: VastAI DELETE is asynchronous (2xx = accepted, not gone). A 404 on DELETE means already gone. After an accepted DELETE, poll GET until 404 or _DELETE_VERIFY_TIMEOUT.
+# PURPOSE: Delete a VastAI instance by known id with transient retry and async-deletion verification so neither create_node cleanup nor vastai_delete_node leaves a billable orphan when VastAI flaps or returns 2xx without immediately removing the instance.
+# ENSURES: Returns True iff the instance is confirmed gone (DELETE 404 or verify GET 404). Returns False if DELETE permanently fails, transient retries exhaust, or verify times out. Never raises — this serves both create-cleanup (id not yet persisted; a raise would leak a billed orphan) and delete_node (False → raise "not confirmed gone" → orchestrator retries with the same persisted id). The log NEVER claims success without a 404 confirmation.
+# MODEL: VastAI DELETE is asynchronous (2xx = accepted, not gone). A 404 on DELETE means already gone. A 429/5xx or transport error (status None) is transient and retried in-process. A 4xx non-404/non-429 is permanent. After an accepted DELETE, poll GET until 404 or _DELETE_VERIFY_TIMEOUT.
 async def _delete_and_verify(client: VastAIClient, instance_id: int) -> bool:
-    """Delete an instance and verify it is gone.
+    """Delete an instance with transient retry + async-deletion verification.
 
-    Returns True iff confirmed gone (404). DELETE errors other than 404
-    propagate (idempotent — orchestrator retries). Verify-path failures
-    return False (never raise).
+    Returns True iff confirmed gone (404). Never raises.
     """
-    try:
-        await client.destroy_instance(instance_id)
-    except VastAIError as err:
-        if err.status == _HTTP_NOT_FOUND:
-            logger.warning("Instance %s already gone (DELETE 404)", instance_id)
-            return True
-        raise
+    # region BLOCK_delete
+    delete_accepted = False
+    for attempt in range(1, _DELETE_ATTEMPTS + 1):
+        try:
+            await client.destroy_instance(instance_id)
+        except VastAIError as err:
+            if err.status == _HTTP_NOT_FOUND:
+                logger.warning("Instance %s already gone (DELETE 404)", instance_id)
+                return True
+            if err.transient and attempt < _DELETE_ATTEMPTS:
+                logger.debug(
+                    "DELETE_TRANSIENT_RETRY",
+                    extra={
+                        "instance_id": instance_id,
+                        "attempt": attempt,
+                        "attempts": _DELETE_ATTEMPTS,
+                        "status": err.status,
+                    },
+                )
+                await asyncio.sleep(_DELETE_INTERVAL)
+                continue
+            logger.exception(
+                "Instance %s delete failed after %s attempts", instance_id, attempt
+            )
+            return False
+        except Exception:
+            logger.exception("Instance %s delete failed", instance_id)
+            return False
+        delete_accepted = True
+        break
+    # endregion BLOCK_delete
+
+    if not delete_accepted:
+        return False
+
     return await _verify_instance_gone(client, instance_id)
 
 
@@ -604,7 +653,7 @@ async def wait_until_ready(
                 extra={"instance_id": instance_id, "status": err.status},
             )
             msg = f"Instance {instance_id} status query failed: {err}"
-            raise VastAIError(msg) from err
+            raise VastAIError(msg, status=err.status) from err
         status = inst["actual_status"]
 
         logger.debug(
@@ -613,6 +662,17 @@ async def wait_until_ready(
         )
 
         if status == "running":
+            # A running instance must have its ssh endpoint assigned; if not,
+            # keep polling rather than returning a half-formed instance — the
+            # VastAIInstance type allows None (reconcile needs that for fresh
+            # orphans), but the scheduler cannot connect without host/port.
+            if not inst["ssh_host"] or inst["ssh_port"] is None:
+                logger.debug(
+                    "POLL_RUNNING_NO_SSH",
+                    extra={"instance_id": instance_id},
+                )
+                await asyncio.sleep(poll_interval)
+                continue
             logger.debug(
                 "INSTANCE_READY",
                 extra={
@@ -643,9 +703,7 @@ async def wait_until_ready(
 # endregion FUNC_wait_until_ready
 
 
-def detect_launch_mode(
-    image: str,
-) -> str:
+def detect_launch_mode(image: str) -> str:
     """Detect the launch mode (kvm or docker) from the image name."""
     return "kvm" if "vastai/kvm" in image else "docker"
 
@@ -655,8 +713,8 @@ def detect_launch_mode(
 # ENSURES: Returns CloudCreateNodeDTO with external_id = instance id, hostname = SSH host, port = SSH port.
 # INVARIANTS:
 # - external_id = instance id; session closed on all paths.
-# - Never raises after an instance was created without best-effort removing it: a failed create call (transport ambiguity or malformed response) reconciles any instance matching the unique per-create label before re-raising.
-# - Readiness polling cleans up the known instance on every failure path that leaves the poll loop (timeout, terminal status, show-instance failure).
+# - Never raises after an instance was created without best-effort removing it: a failed create call reconciles any instance matching the unique per-create label before re-raising.
+# - Readiness polling cleans up the known instance on every failure path that leaves the poll loop.
 async def vastai_create_node(
     cfg: ConfigCloudVastAI,
     key: ASSHKey,
@@ -707,11 +765,14 @@ async def vastai_create_node(
                 onstart=onstart,
                 env=cfg.docker_options or "",
             )
-        except Exception:
-            # Transport ambiguity (break after accept) or malformed create
-            # response (2xx without new_contract): the instance may exist with
-            # no captured id. Reconcile by the unique label before re-raising so
-            # no billable orphan leaks.
+        except BaseException:
+            # Transport ambiguity (break after accept), malformed create
+            # response (2xx without new_contract), OR cancellation mid-PUT:
+            # the instance may exist with no captured id. Reconcile by the
+            # unique label before re-raising so no billable orphan leaks.
+            # BaseException (not Exception) so CancelledError/SystemExit still
+            # reconcile — the PUT may have been accepted. asyncio.sleep inside
+            # reconcile respects cancellation (raises CancelledError on await).
             logger.warning(
                 "CREATE_INSTANCE_FAILED — reconciling by label %s",
                 create_label,
@@ -725,7 +786,22 @@ async def vastai_create_node(
         # so no label reconcile needed — direct delete+verify).
         try:
             instance = await wait_until_ready(client, instance_id, cfg.connect_grace)
-        except Exception:
+            # wait_until_ready only returns once status == running WITH an ssh
+            # endpoint, so the None branches below are unreachable in practice.
+            # They exist to narrow the VastAIInstance type (ssh fields are
+            # Optional so orphan reconcile can see fresh instances) for the DTO.
+            ssh_host = instance["ssh_host"]
+            ssh_port = instance["ssh_port"]
+            if ssh_host is None or ssh_port is None:
+                # Must raise inside the try so the except runs _delete_and_verify
+                # on the billing instance (hence noqa: TRY301, not abstracted).
+                msg = f"Instance {instance_id} running but ssh endpoint not assigned"
+                raise VastAIError(msg)  # noqa: TRY301
+        except BaseException:
+            # Includes CancelledError (BaseException since Py3.8): the poll
+            # loop can run for connect_grace (default 300s), so shutdown-driven
+            # cancellation here is realistic; `except Exception` would orphan
+            # the billing instance. Mirrors manager.allocate's _setup_vm guard.
             logger.exception(
                 "Instance %s create_node failed before returning", instance_id
             )
@@ -735,8 +811,8 @@ async def vastai_create_node(
 
     return CloudCreateNodeDTO(
         external_id=str(instance_id),
-        hostname=instance["ssh_host"],
-        port=int(instance["ssh_port"]),
+        hostname=ssh_host,
+        port=int(ssh_port),
         username="root",
         jump_host=cfg.jump_host,
         jump_port=cfg.jump_port,
