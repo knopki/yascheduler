@@ -44,7 +44,7 @@ _RECONCILE_INTERVAL = 15.0
 
 # Verify-after-delete: poll GET /instances/{id}/ until 404 so a 2xx DELETE
 # (accepted, not gone) cannot leave a billed orphan. Mirrors Vultr/Hetzner.
-_DELETE_VERIFY_TIMEOUT = 600.0
+_DELETE_VERIFY_TIMEOUT = 60.0
 _DELETE_VERIFY_INTERVAL = 20.0
 
 # DELETE retry loop: a transient 5xx/transport failure on the DELETE itself is
@@ -234,11 +234,10 @@ class VastAIClient:
     """Async Vastai REST API client (aiohttp-based)."""
 
     def __init__(self, api_key: str) -> None:
-        self.api_key = api_key
         self._session = aiohttp.ClientSession(
             base_url=_VASTAI_BASE_URL,
             headers={
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {api_key}",
             },
             timeout=aiohttp.ClientTimeout(total=60),
         )
