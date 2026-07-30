@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -728,6 +729,80 @@ class TestVultrClientGetBareMetals:
             await _collect(client.get_bare_metals())
 
 
+# =============================================================================
+# VultrClient._request
+# =============================================================================
+
+
+class _FakeResponse:
+    """Minimal aiohttp response stub: status + async text()/aenter/aexit."""
+
+    def __init__(self, status: int, body: str = "") -> None:
+        self.status = status
+        self._body = body
+
+    async def text(self) -> str:
+        return self._body
+
+    async def __aenter__(self) -> _FakeResponse:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FakeSession:
+    """Records the last request and returns a canned response."""
+
+    def __init__(self, response: _FakeResponse) -> None:
+        self._response = response
+
+    def request(self, method: str, path: str, **kwargs: object) -> _FakeResponse:
+        self.last = {"method": method, "path": path, **kwargs}
+        return self._response
+
+
+class TestVultrClientRequest:
+    """_request: empty body (204 / empty 200) → None, JSON body → parsed.
+
+    Regression: Vultr DELETE returns 204 No Content; resp.json() raised
+    ContentTypeError, turning every successful delete into a bogus APIError.
+    """
+
+    @pytest.mark.asyncio
+    async def test_204_empty_body_returns_none(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        client._session = _FakeSession(_FakeResponse(204, ""))  # type: ignore[assignment]
+
+        result = await client._request("DELETE", "/bare-metals/inst-1")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_200_empty_body_returns_none(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        client._session = _FakeSession(_FakeResponse(200, ""))  # type: ignore[assignment]
+
+        assert await client._request("DELETE", "/bare-metals/inst-1") is None
+
+    @pytest.mark.asyncio
+    async def test_json_body_parsed(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import VultrClient
+
+        client = VultrClient.__new__(VultrClient)
+        client._session = _FakeSession(  # type: ignore[assignment]
+            _FakeResponse(200, '{"bare_metal": {"id": "inst-1"}}')
+        )
+
+        result = await client._request("GET", "/bare-metals/inst-1")
+
+        assert result == {"bare_metal": {"id": "inst-1"}}
+
+
 class TestGetSshKeyId:
     """get_ssh_key_id: fingerprint match reuses key, miss uploads new one."""
 
@@ -1197,6 +1272,118 @@ class TestVultrCreateNode:
         assert exc_info.value.status == 404
         # Instance was created → cleanup DELETE fired once.
         mock_client.delete_bare_metal.assert_awaited_once_with("inst-1")
+
+    @pytest.mark.asyncio
+    async def test_cancelled_during_poll_deletes_instance(self) -> None:
+        """CancelledError (daemon shutdown) mid-poll must still trigger the
+        cleanup DELETE so a billing bare-metal is not orphaned.
+
+        Regression: the cleanup clause was ``except Exception``, and
+        CancelledError is a BaseException since Py3.8 — so cancellation
+        skipped cleanup entirely, leaking the instance until manual deletion.
+        """
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import APIError, vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
+        mock_client = MagicMock()
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        # Poll GET delivers the cancellation; verify GET then confirms gone.
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[
+                asyncio.CancelledError(),
+                APIError("HTTP 404", status=404),
+            ],
+        )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0, 0, 0])
+
+        with (
+            _patch_vultr_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="test-node",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await vultr_create_node(cfg, mock_key)
+
+        # Cleanup DELETE fired despite cancellation; verify confirmed gone.
+        mock_client.delete_bare_metal.assert_awaited_once_with("inst-1")
+        assert mock_client.get_bare_metal.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cancelled_during_post_reconciles_orphan(self) -> None:
+        """CancelledError mid-POST (server accepted, client never read the id)
+        must still reconcile by label so the created instance is deleted.
+
+        Regression: the reconcile clause was ``except Exception``; a transport
+        cancel after acceptance left a billable orphan with no known id.
+        """
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import APIError, vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
+        mock_client = MagicMock()
+        # POST is cancelled mid-flight (instance may exist server-side).
+        mock_client.create_bare_metal = AsyncMock(
+            side_effect=asyncio.CancelledError(),
+        )
+        # Reconcile finds the orphan by label, then delete+verify confirm gone.
+        mock_client.get_bare_metals = MagicMock(
+            return_value=_bm_stream([{"id": "orphan-1", "label": "test-node"}]),
+        )
+        mock_client.delete_bare_metal = AsyncMock(return_value=None)
+        mock_client.get_bare_metal = AsyncMock(
+            side_effect=[APIError("HTTP 404", status=404)],
+        )
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0])
+
+        with (
+            _patch_vultr_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="test-node",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await vultr_create_node(cfg, mock_key)
+
+        # Reconcile fired: orphan matched by label and best-effort deleted.
+        mock_client.get_bare_metals.assert_called_once()
+        mock_client.delete_bare_metal.assert_awaited_once_with("orphan-1")
 
 
 # =============================================================================

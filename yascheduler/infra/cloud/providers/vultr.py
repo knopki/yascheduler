@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 from typing import TYPE_CHECKING, TypedDict
 
@@ -205,7 +206,11 @@ class VultrClient:
         params: aiohttp.typedefs.Query | None = None,
         data: dict | None = None,
     ) -> object:
-        """Send an async HTTP request to the Vultr API v2 and return parsed JSON."""
+        """Send an async HTTP request to the Vultr API v2 and return parsed JSON.
+
+        DELETE returns 204 No Content (empty body); such responses yield None
+        instead of raising on ``resp.json()``.
+        """
         try:
             async with self._session.request(
                 method, path, params=params, json=data
@@ -213,7 +218,11 @@ class VultrClient:
                 if resp.status >= _HTTP_BAD_REQUEST_CODE:
                     msg = f"HTTP {resp.status}: {await resp.text()}"
                     raise APIError(msg, status=resp.status)
-                return await resp.json()
+                # Vultr DELETE returns 204 with an empty body; json() would
+                # raise ContentTypeError on it, turning every successful delete
+                # into a bogus APIError. Empty body -> None.
+                raw = await resp.text()
+                return json.loads(raw) if raw else None
         except aiohttp.ClientResponseError as exc:
             msg = f"HTTP request failed: {exc.message}"
             raise APIError(msg, status=exc.status) from exc
@@ -456,6 +465,10 @@ async def vultr_create_node(
         # server accepted the create, an instance exists that we have no id for.
         # Reconcile by the label generated above before re-raising the POST error
         # so a created instance is deleted, not orphaned.
+        # ponytail: catch BaseException, not Exception — CancelledError (task
+        # cancel during shutdown) is a BaseException since Py3.8; a POST that
+        # the server accepted but the client never finished reading would
+        # otherwise leak a billable orphan on every daemon stop mid-provision.
         try:
             bm = await client.create_bare_metal(
                 region=cfg.location,
@@ -467,7 +480,7 @@ async def vultr_create_node(
                 user_data=user_data_b64,
                 enable_ipv6=True,
             )
-        except Exception as err:
+        except BaseException as err:
             logger.warning(
                 "POST bare-metal failed (%s) — reconciling by label %s",
                 err,
@@ -532,7 +545,7 @@ async def vultr_create_node(
                 jump_port=cfg.jump_port,
                 jump_username=cfg.jump_username or "root",
             )
-        except Exception:
+        except BaseException:
             logger.exception(
                 "Bare-metal %s create_node failed before returning", instance_id
             )
