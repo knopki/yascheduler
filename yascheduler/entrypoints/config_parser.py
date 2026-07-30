@@ -511,7 +511,7 @@ def _parse_vultr_section(sec: SectionProxy) -> ConfigCloudVultr:
         msg = f"vultr connect_grace must be >= 1, got {connect_grace}"
         raise ValueError(msg)
 
-    image_name = sec.getint(fmt("image_name"), fallback=2284)
+    image_name = sec.getint(fmt("image_name"), fallback=2136)
     if image_name < 1:
         msg = f"vultr image_name must be >= 1, got {image_name}"
         raise ValueError(msg)

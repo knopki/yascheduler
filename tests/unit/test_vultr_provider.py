@@ -1385,6 +1385,116 @@ class TestVultrCreateNode:
         mock_client.get_bare_metals.assert_called_once()
         mock_client.delete_bare_metal.assert_awaited_once_with("orphan-1")
 
+    @pytest.mark.asyncio
+    async def test_cleanup_interruption_preserves_original_error(
+        self,
+        log_records: list,
+    ) -> None:
+        """A second exception during the cleanup DELETE MUST NOT suppress the
+        original create error. Without this, a cancel during shutdown loses the
+        instance id (no DB row yet) and leaves an orphan with no operator signal.
+
+        Regression: the cleanup call was unguarded; a BaseException raised by
+        _delete_and_verify during shutdown replaced the original error.
+        """
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
+        mock_client = MagicMock()
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        # Poll raises CancelledError (original error: shutdown mid-provision).
+        mock_client.get_bare_metal = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_client.delete_bare_metal = AsyncMock()
+
+        loop = MagicMock()
+        loop.time = MagicMock(side_effect=[0, 0])
+
+        with (
+            _patch_vultr_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="test-node",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            # Cleanup itself is interrupted — DIFFERENT exception type so the
+            # test proves the ORIGINAL propagates, not this one.
+            patch(
+                "yascheduler.infra.cloud.providers.vultr._delete_and_verify",
+                AsyncMock(side_effect=RuntimeError("cleanup blew up")),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await vultr_create_node(cfg, mock_key)
+
+        # Original CancelledError propagated (not the RuntimeError from cleanup).
+        interrupted = [
+            r for r in log_records if "CLEANUP_INTERRUPTED" in r.getMessage()
+        ]
+        assert len(interrupted) == 1
+        assert "inst-1" in interrupted[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_interruption_preserves_post_error(
+        self,
+        log_records: list,
+    ) -> None:
+        """A second exception during POST-failure reconcile MUST NOT suppress
+        the original POST error — the label is the only handle on a
+        possibly-created orphan, so it must be logged for manual recovery."""
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import APIError, vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
+        post_err = APIError("HTTP request failed: timeout")  # original error
+
+        mock_client = MagicMock()
+        mock_client.create_bare_metal = AsyncMock(side_effect=post_err)
+
+        with (
+            _patch_vultr_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="test-node",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.asyncio.sleep",
+                AsyncMock(),
+            ),
+            # Reconcile itself is interrupted — different exception type than post_err.
+            patch(
+                "yascheduler.infra.cloud.providers.vultr._reconcile_orphan_by_label",
+                AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+            pytest.raises(APIError, match="HTTP request failed"),
+        ):
+            await vultr_create_node(cfg, mock_key)
+
+        interrupted = [
+            r for r in log_records if "RECONCILE_INTERRUPTED" in r.getMessage()
+        ]
+        assert len(interrupted) == 1
+        assert "test-node" in interrupted[0].getMessage()
+
 
 # =============================================================================
 # _delete_and_verify
