@@ -461,6 +461,32 @@ class TestVultrClientGetSshKeys:
         ):
             await _collect(client.get_ssh_keys())
 
+    @pytest.mark.asyncio
+    async def test_missing_fingerprint_in_entry_does_not_crash(self) -> None:
+        """An SSH key list entry without a fingerprint is tolerated by the
+        list validator (id-only is valid shape), but ``get_ssh_key_id``
+        must not crash with KeyError when fingerprint is absent — it treats
+        the entry as a non-match and falls through to uploading a new key.
+
+        Regression: the validator only checked ``id``, yet ``get_ssh_key_id``
+        indexed ``fingerprint`` directly, so a list response with a key
+        missing fingerprint (rare but observed) crashed mid-iteration.
+        """
+        from yascheduler.infra.cloud.providers.vultr import get_ssh_key_id
+
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
+
+        mock_client = MagicMock()
+        # Existing key has id but no fingerprint (list validator accepts it).
+        mock_client.get_ssh_keys = MagicMock(
+            return_value=_ssh_key_stream([{"id": "k1"}]),  # no fingerprint
+        )
+        mock_client.create_ssh_key = AsyncMock(return_value="new-id")
+
+        result = await get_ssh_key_id(mock_client, mock_key)
+        assert result == "new-id"
+
 
 # =============================================================================
 # VultrClient.create_ssh_key
@@ -918,6 +944,43 @@ class TestVultrCreateNode:
         assert result.jump_host == "jump.example.com"
         assert result.jump_port == 2222
         assert result.jump_username == "jumpuser"
+
+    @pytest.mark.asyncio
+    async def test_label_prefix_sourced_from_cfg_label(self) -> None:
+        """vultr_create_node passes cfg.label to get_rnd_name so an operator-set
+        label prefix is honored — consistent with az/hetzner/upcloud/vastai.
+
+        Regression: the prefix was hardcoded to "yascheduler", so a config
+        label like ``myteam`` was ignored and every instance got a
+        ``yascheduler-...`` label.
+        """
+        from yascheduler.infra.cloud.cloud_configs import ConfigCloudVultr
+        from yascheduler.infra.cloud.providers.vultr import vultr_create_node
+
+        cfg = ConfigCloudVultr(api_key="test-key", label="myteam")
+        mock_key = MagicMock()
+        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
+        mock_client = MagicMock()
+        mock_client.create_bare_metal = AsyncMock(return_value={"id": "inst-1"})
+        mock_client.get_bare_metal = AsyncMock(
+            return_value={"id": "inst-1", "status": "active", "main_ip": "1.2.3.4"},
+        )
+        mock_client.delete_bare_metal = AsyncMock()
+
+        with (
+            _patch_vultr_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_ssh_key_id",
+                AsyncMock(return_value="key-1"),
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vultr.get_rnd_name",
+                return_value="myteam-abcdefgh",
+            ) as rnd_mock,
+        ):
+            await vultr_create_node(cfg, mock_key)
+
+        rnd_mock.assert_called_once_with("myteam")
 
     @pytest.mark.asyncio
     async def test_create_node_does_not_poll_ssh_readiness(self) -> None:

@@ -55,8 +55,8 @@ CLEANUP_VERIFY_INTERVAL = 10
 # failures (5xx/transport) — without this, a freshly created orphan could be
 # missed and left billing.
 LIST_PAGE_SIZE = 500
-RECONCILE_ATTEMPTS = 3
-RECONCILE_INTERVAL = 20
+RECONCILE_ATTEMPTS = 10
+RECONCILE_INTERVAL = 15
 _HTTP_BAD_REQUEST_CODE = 400
 _HTTP_INTERNAL_ERROR_CODE = 500
 _HTTP_NOT_FOUND_CODE = 404
@@ -321,7 +321,7 @@ async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
     fingerprint = ssh_key_fingerprint_md5(pub_key)
 
     async for existing in client.get_ssh_keys():
-        if existing["fingerprint"].lower() == fingerprint.lower():
+        if existing.get("fingerprint", "").lower() == fingerprint.lower():
             return existing["id"]
 
     return await client.create_ssh_key(key_name, pub_key)
@@ -451,7 +451,7 @@ async def vultr_create_node(
     If any step after instance creation fails, the instance is best-effort
     deleted before re-raising so no billable orphan leaks.
     """
-    label = get_rnd_name("yascheduler")
+    label = get_rnd_name(cfg.label)
     pub_key = key.export_public_key("openssh").decode("utf-8")
     user_data = build_baremetal_user_data(
         cfg.username, pub_key, cloud_config, cfg.need_raid
