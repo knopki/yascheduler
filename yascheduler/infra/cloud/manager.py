@@ -113,6 +113,7 @@ class CloudProvisionerImpl:
     # - hostname, external_id, username, port, jump_host, jump_port, jump_username copied from CloudCreateNodeDTO
     # - cloud == adapter.name
     # - on success enabled=True and ncpus is None — the standalone get_cpu_cores() is NOT invoked here
+    # - on setup failure the ORIGINAL setup error propagates; if the teardown delete_node itself raises, that error is logged (with external_id for manual orphan recovery) and swallowed — it never replaces the original error.
     # RAISES: CloudAllocateError if provider unknown or VM creation fails; CloudSetupError if SSH/cloud-init/setup fails.
     async def allocate(self, provider: str, node: Node) -> Node:
         """Create VM on named provider, run cloud-init and engine setup, return the enabled Node (no DB write; caller flips enabled=TRUE via NodeRepository."""
@@ -176,7 +177,16 @@ class CloudProvisionerImpl:
                     node.node_id,
                     disc_err,
                 )
-            await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
+            try:
+                await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
+            except BaseException:
+                logger.exception(
+                    "cloud teardown delete failed for %s external_id=%s "
+                    "— VM may still bill; manual deletion required via the "
+                    "provider console",
+                    node.hostname,
+                    node.external_id,
+                )
             # Already CloudSetupError or a control-flow BaseException
             # (CancelledError/KeyboardInterrupt/SystemExit) -> propagate as-is;
             # wrapping the latter would break shutdown/sys.exit semantics.

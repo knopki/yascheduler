@@ -455,6 +455,56 @@ class TestAllocate:
         delete_mock.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
 
     @pytest.mark.asyncio
+    async def test_allocate_setup_failure_delete_raises_preserves_original_error(
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
+    ) -> None:
+        """When the cleanup delete_node itself raises during a setup failure,
+        the ORIGINAL setup error propagates and the cloud external_id is
+        logged so the orphaned VM (no DB row written yet) can be recovered
+        manually. Regression: a bare ``await adapter.delete_node(...)`` let
+        the cleanup exception replace the original error and silently drop
+        the only handle on the billable VM.
+        """
+        adapter, config = _make_mock_adapter(name="test")
+        adapter.delete_node = AsyncMock(side_effect=RuntimeError("delete blew up"))
+        repo = MagicMock()
+        repo.disconnect = AsyncMock()
+        # Setup fails at SSH connect so we land in the teardown path.
+        repo.connect = AsyncMock(side_effect=RuntimeError("SSH timeout"))
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            patch("yascheduler.infra.cloud.manager.logger") as log_mock,
+            pytest.raises(CloudSetupError, match="SSH connect to"),
+        ):
+            await prov.allocate("test", _tmp_node(1))
+
+        # Cleanup delete_node was attempted on the created VM.
+        adapter.delete_node.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
+        # A cleanup-failure log carries external_id (manual recovery handle).
+        logged_ids = [
+            arg
+            for call in log_mock.error.call_args_list
+            + log_mock.exception.call_args_list
+            for arg in call.args
+            if "10.0.0.1" in str(arg)
+        ]
+        assert logged_ids, "cleanup failure must log external_id for manual recovery"
+
+    @pytest.mark.asyncio
     async def test_allocate_setup_cancellation_cleans_up_vm(
         self,
         mock_local_config: MagicMock,
