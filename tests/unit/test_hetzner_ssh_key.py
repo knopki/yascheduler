@@ -90,3 +90,50 @@ class TestEnsureSshKey:
             await ensure_ssh_key(mock_client, _make_key(), "yakey-abc")
 
         assert mock_client.create_ssh_key.await_count == 1
+
+
+# =============================================================================
+# _resolve_ssh_key_by_fingerprint — fingerprint parsing
+# =============================================================================
+
+
+class TestResolveSshKeyFingerprint:
+    """_resolve_ssh_key_by_fingerprint — fingerprint prefix handling."""
+
+    @pytest.mark.asyncio
+    async def test_md5_prefix_stripped(self) -> None:
+        """asyncssh form 'MD5:aa:bb:cc' -> query 'aa:bb:cc'."""
+        from yascheduler.infra.cloud.providers.hetzner import (
+            _resolve_ssh_key_by_fingerprint,
+        )
+
+        key = MagicMock()
+        key.get_fingerprint.return_value = "MD5:aa:bb:cc"
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = MagicMock(return_value=_ssh_key_stream([]))
+
+        await _resolve_ssh_key_by_fingerprint(mock_client, key)
+
+        call_kwargs = mock_client.get_ssh_keys.call_args.kwargs
+        assert call_kwargs.get("fingerprint") == "aa:bb:cc"
+
+    @pytest.mark.asyncio
+    async def test_bare_fingerprint_tolerated(self) -> None:
+        """Bare fingerprint without 'MD5:' prefix is passed through unchanged.
+
+        Regression for the old split(':', maxsplit=1)[1], which would have
+        dropped the first octet ('aa') and queried 'bb:cc' — matching nothing.
+        """
+        from yascheduler.infra.cloud.providers.hetzner import (
+            _resolve_ssh_key_by_fingerprint,
+        )
+
+        key = MagicMock()
+        key.get_fingerprint.return_value = "aa:bb:cc"
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = MagicMock(return_value=_ssh_key_stream([]))
+
+        await _resolve_ssh_key_by_fingerprint(mock_client, key)
+
+        call_kwargs = mock_client.get_ssh_keys.call_args.kwargs
+        assert call_kwargs.get("fingerprint") == "aa:bb:cc"

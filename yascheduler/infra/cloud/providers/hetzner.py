@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, TypedDict
@@ -41,8 +42,8 @@ _HTTP_NOT_FOUND = 404
 _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_SERVER_ERROR = 500
 
-_RECONCILE_ATTEMPTS = 3
-_RECONCILE_INTERVAL = 5.0
+_RECONCILE_ATTEMPTS = 5
+_RECONCILE_INTERVAL = 10.0
 _RECONCILE_LABEL_KEY = "yascheduler/reconcile"
 
 # DELETE retry + async-deletion verify (mirrors vultr._delete_and_verify).
@@ -245,7 +246,11 @@ class HetznerClient:
                 if resp.status >= _HTTP_BAD_REQUEST:
                     msg = f"HTTP {resp.status}: {await resp.text()}"
                     raise HetznerError(msg, status=resp.status)
-                return await resp.json()
+                # DELETE returns 204 No Content with an empty body and no
+                # Content-Type; resp.json() raises ContentTypeError on the empty
+                # octet-stream body. Empty body -> None.
+                raw = await resp.text()
+                return json.loads(raw) if raw else None
         except aiohttp.ClientResponseError as exc:
             msg = f"HTTP request failed: {exc.message}"
             raise HetznerError(msg, status=exc.status) from exc
@@ -284,7 +289,7 @@ class HetznerClient:
 
     # region METHOD_create_ssh_key
     async def create_ssh_key(self, name: str, public_key: str) -> HetznerSshKey:
-        data = {"name": name, "public_key": public_key, "label": "yascheduler key"}
+        data = {"name": name, "public_key": public_key}
         resp = await self._request("POST", "/ssh_keys", data=data)
         if not _is_api_ssh_key_create_response(resp):
             msg = f"Invalid create SSH key response: {resp}"
@@ -352,7 +357,9 @@ async def _resolve_ssh_key_by_fingerprint(
 ) -> int | None:
     """Resolve an existing SSH key ID by fingerprint query."""
     # asyncssh returns "MD5:aa:bb:cc:..."; Hetzner expects "aa:bb:cc:...".
-    fingerprint = key.get_fingerprint("md5").split(":", maxsplit=1)[1]
+    # removeprefix tolerates a future bare-fingerprint form: split(":",1)[1]
+    # would silently drop the first octet if the MD5: prefix were ever absent.
+    fingerprint = key.get_fingerprint("md5").removeprefix("MD5:")
     async for ssh_key in client.get_ssh_keys(fingerprint=fingerprint):
         return ssh_key["id"]
     return None
@@ -364,7 +371,7 @@ async def _resolve_ssh_key_by_fingerprint(
 # region FUNC_ensure_ssh_key
 # PURPOSE: Ensure the local SSH key is registered with the Hetzner project, returning its key ID.
 # REQUIRES: client is an open HetznerClient; key is an asyncssh SSHKey.
-# ENSURES: Returns the Hetzner SSH key ID; idempotent across repeated calls (dedup on conflict).
+# ENSURES: Returns the Hetzner SSH key ID; idempotent across repeated calls.
 # RATIONALE:
 # - Q: Why GET-by-fingerprint first, then POST on miss?
 #   A: The same key is reused, so the already-registered case is the common path
@@ -428,9 +435,10 @@ async def hetzner_create_node(
                 location=cfg.location,
                 labels={_RECONCILE_LABEL_KEY: label},
             )
-        except Exception:
+        except BaseException as err:
             logger.warning(
-                "CREATE_SERVER_FAILED — reconciling by label %s",
+                "CREATE_SERVER_FAILED (%s) — reconciling by label %s",
+                err,
                 label,
             )
             await _reconcile_orphan_by_label(client, label)

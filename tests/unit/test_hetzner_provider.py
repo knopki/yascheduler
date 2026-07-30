@@ -7,11 +7,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Generator
 from contextlib import AbstractContextManager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
@@ -103,6 +105,97 @@ class TestHetznerErrorTransient:
 
         for code in (400, 403, 404, 409):
             assert HetznerError("bad", status=code).transient is False
+
+
+# =============================================================================
+# HetznerClient._request
+# =============================================================================
+
+
+class TestHetznerClientRequest:
+    """HetznerClient._request — empty-body handling for DELETE 204 + error paths."""
+
+    @staticmethod
+    def _client_with_response(resp_mock: MagicMock):
+        """Build a HetznerClient whose _session.request yields resp_mock.
+
+        Bypass __init__ (which opens a real aiohttp.ClientSession).
+        """
+        from yascheduler.infra.cloud.providers.hetzner import HetznerClient
+
+        client = HetznerClient.__new__(HetznerClient)
+        client.api_key = "test-token"
+        session = MagicMock()
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=resp_mock)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        session.request = MagicMock(return_value=cm)
+        client._session = session
+        return client
+
+    @pytest.mark.asyncio
+    async def test_delete_204_empty_body_returns_none(self) -> None:
+        """Regression: Hetzner DELETE returns 204 No Content with an empty body.
+
+        The old code called resp.json(), which raises ContentTypeError (status=204,
+        a ClientResponseError subclass) on the empty octet-stream body, so every
+        successful delete was misclassified as HetznerError(status=204) failure.
+        """
+        resp = MagicMock()
+        resp.status = 204
+        resp.text = AsyncMock(return_value="")
+        # Emulate what aiohttp does on an empty 204 body if json() were called.
+        # Built via __new__ to skip the RequestInfo/URL ceremony the typed
+        # __init__ demands; the regression path only inspects .status/.message.
+        cte = aiohttp.ContentTypeError.__new__(aiohttp.ContentTypeError)
+        cte.status = 204
+        cte.message = "Attempt to decode JSON with unexpected mimetype: "
+        resp.json = AsyncMock(side_effect=cte)
+        client = self._client_with_response(resp)
+
+        # Must not raise (the regression raised HetznerError on the empty 204 body).
+        await client.delete_server(42)
+        # Empty-body path must not call json() at all.
+        resp.json.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_json_body_parsed(self) -> None:
+        import json as _json
+
+        from yascheduler.infra.cloud.providers.hetzner import HetznerClient
+
+        payload = {
+            "server": {
+                "id": 1,
+                "name": "n",
+                "public_net": {"ipv4": {"ip": "1.2.3.4"}},
+                "labels": {},
+            }
+        }
+        resp = MagicMock()
+        resp.status = 200
+        resp.text = AsyncMock(return_value=_json.dumps(payload))
+        client = self._client_with_response(resp)
+
+        result = await client._request("GET", "/servers/1")
+
+        assert result == payload
+        assert isinstance(client, HetznerClient)
+
+    @pytest.mark.asyncio
+    async def test_error_status_raises_hetzner_error(self) -> None:
+        from yascheduler.infra.cloud.providers.hetzner import HetznerError
+
+        resp = MagicMock()
+        resp.status = 500
+        resp.text = AsyncMock(return_value="boom")
+        client = self._client_with_response(resp)
+
+        with pytest.raises(HetznerError) as exc_info:
+            await client._request("GET", "/servers/1")
+
+        assert exc_info.value.status == 500
+        assert exc_info.value.transient is True
 
 
 # =============================================================================
@@ -355,6 +448,60 @@ class TestHetznerCreateNode:
             await hetzner_create_node(_make_cfg(), _make_key())
 
         # Reconcile listed by label, found the orphan, deleted it.
+        mock_client.get_servers.assert_called_once()
+        mock_client.delete_server.assert_awaited_once_with(999)
+
+    @pytest.mark.asyncio
+    async def test_create_server_cancelled_reconciles_orphan(self) -> None:
+        """CancelledError mid-create (daemon shutdown) reconciles the orphan.
+
+        Regression: the reconcile hook used to catch ``Exception``, but
+        CancelledError is a BaseException since Py3.8, so a POST that the server
+        accepted but the client never finished reading leaked a billable orphan
+        on every daemon stop mid-provision.
+        """
+        from yascheduler.infra.cloud.providers.hetzner import (
+            HetznerError,
+            hetzner_create_node,
+        )
+
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = MagicMock(return_value=_ssh_key_stream([]))
+        mock_client.create_ssh_key = AsyncMock(
+            return_value={"id": 1, "name": "yakey", "fingerprint": "aa"}
+        )
+        # POST accepted server-side; client cancelled before reading the response.
+        mock_client.create_server = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_client.get_servers = MagicMock(
+            return_value=_servers_stream(
+                [
+                    {
+                        "id": 999,
+                        "name": "orphan",
+                        "public_net": {"ipv4": {"ip": "1.2.3.4"}},
+                        "labels": {},
+                    }
+                ]
+            )
+        )
+        mock_client.delete_server = AsyncMock()
+        mock_client.get_server = AsyncMock(side_effect=HetznerError("gone", status=404))
+
+        with (
+            _patch_hetzner_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner.get_key_name",
+                return_value="yakey-abc",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner._RECONCILE_INTERVAL",
+                0.0,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await hetzner_create_node(_make_cfg(), _make_key())
+
+        # CancelledError must still trigger reconcile so the orphan is deleted.
         mock_client.get_servers.assert_called_once()
         mock_client.delete_server.assert_awaited_once_with(999)
 
