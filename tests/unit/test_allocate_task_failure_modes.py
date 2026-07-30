@@ -255,6 +255,62 @@ class TestAllocateTaskFailureModes:
         assert uow.nodes.remove.call_count >= 1
         uow.nodes.get.assert_not_called()
 
+    async def test_step3_persist_cancellation_deallocates_vm_and_cleans_tmp(
+        self,
+        todo_task: Task,
+        engine: Engine,
+    ) -> None:
+        """Step 3 final persist cancelled mid-commit -> CancelledError propagates, VM best-effort deallocated and tmp-node cleaned. `except Exception` would miss CancelledError (a BaseException since Py3.8) and orphan the just-provisioned billable VM."""
+        engines = MagicMock(spec=EngineRepository)
+        engines.get.return_value = engine
+
+        repository = MagicMock()
+        repository.list_free = MagicMock(return_value=[])
+        occupancy_checker = MagicMock()
+
+        uow = _make_uow(todo_task)
+        cloud_node = Node(node_id=NodeId(1), hostname="[IP]", ncpus=4, cloud="aws")
+        uow.nodes.remove = AsyncMock()
+        # First commit (step 1 tmp insert) succeeds; second commit (step 3
+        # persist) is cancelled; subsequent best-effort cleanup commits succeed.
+        commit_calls = [0]
+
+        async def _commit_side_effect() -> None:
+            commit_calls[0] += 1
+            if commit_calls[0] == 2:
+                raise asyncio.CancelledError
+
+        uow.commit = AsyncMock(side_effect=_commit_side_effect)
+
+        tracker = MagicMock(spec=AllocationTracker)
+        tracker.add.return_value = True
+
+        clouds = _make_clouds("aws", allocate_side_effect=None)
+        clouds.allocate = AsyncMock(return_value=cloud_node)
+
+        with pytest.raises(asyncio.CancelledError):
+            await allocate_task(
+                task_id=todo_task.task_id,
+                engines=engines,
+                uow_factory=lambda: uow,
+                repository=repository,
+                occupancy_checker=occupancy_checker,
+                clouds=clouds,
+                start_task_on_machine=AsyncMock(),
+                tracker=tracker,
+                allocation_lock=asyncio.Lock(),
+                remote_tasks_dir=PurePath("/remote/tasks"),
+            )
+
+        # CancelledError propagates; tracker released via outer finally.
+        tracker.discard.assert_called_once_with(todo_task.task_id)
+        # VM is best-effort deallocated with the provisioned cloud_node so no
+        # billable orphan leaks on cancel-during-commit.
+        clouds.deallocate.assert_called_once_with(cloud_node)
+        # tmp-node best-effort cleanup ran (in _persist path and again in the
+        # outer finally — idempotent 0-row second DELETE).
+        assert uow.nodes.remove.call_count >= 1
+
     async def test_cancellation_after_tmp_insert_cleans_up_tmp_node(
         self,
         todo_task: Task,

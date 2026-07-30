@@ -96,7 +96,11 @@ error so the caller discards the placeholder node. On a setup failure
 that persists — SSH connect failure that persists, cloud-init failure, or
 engine install failure — provisioning SHALL disconnect the SSH session
 for that node, delete the VM to stop billing, and raise a cloud setup
-error.
+error. Cancellation arriving mid-setup (e.g. daemon shutdown) SHALL be
+treated the same way for resource cleanup — disconnect the SSH session
+and delete the VM to stop billing — but the cancellation SHALL propagate
+unchanged rather than be converted to a cloud setup error, so the
+caller's cancellation/drain semantics are preserved.
 
 #### Scenario: a successful provisioning returns an enabled node
 
@@ -111,6 +115,13 @@ error.
 - **THEN** the SSH session for that node is disconnected
 - **AND** the VM is deleted on the provider to stop billing
 - **AND** a cloud setup error is raised
+
+#### Scenario: cancellation during setup tears down the VM and propagates
+
+- **WHEN** setup is cancelled after the VM is created (SSH connect, cloud-init, or engine install)
+- **THEN** the SSH session for that node is disconnected
+- **AND** the VM is deleted on the provider to stop billing
+- **AND** the cancellation propagates unchanged (no cloud setup error is raised)
 
 ### Requirement: Cloud node deallocation
 

@@ -142,17 +142,12 @@ class CloudProvisionerImpl:
         # endregion BLOCK_create_vm
 
         # region BLOCK_setup_vm
-        # On either setup-failure path, disconnect the machine_repository
-        # session for node.node_id BEFORE deleting the VM. A failed allocation
-        # would otherwise leak a stale FREE session under node.node_id pointing
-        # at the deleted VM's IP, which the allocator would pick up via
-        # list_free() and fail against. disconnect is a safe no-op when
-        # _connect_to_vm itself failed (never registered a session — see
-        # SSHMachineRepository.disconnect). The disconnect is best-effort:
-        # SSHMachineSession._close can raise (e.g. wait_closed on a broken
-        # transport), and such a failure MUST NOT skip delete_node or a
-        # billable VM would be orphaned — so disconnect failures are logged
-        # and swallowed, then delete_node always runs.
+        # VM is up and billing — teardown MUST run on any non-success exit,
+        # including CancelledError (BaseException since Py3.8; `except Exception`
+        # would orphan the VM). disconnect before delete_node: a stale FREE
+        # session under node_id would be re-picked via list_free() and fail
+        # against the dead VM. disconnect is best-effort — no-op if _connect_to_vm
+        # failed, swallowed if _close raises — so it never skips delete_node.
         node = replace(
             node,
             hostname=dto.hostname,
@@ -166,9 +161,9 @@ class CloudProvisionerImpl:
         )
         try:
             node = await self._setup_vm(node, adapter, config)
-        except CloudSetupError as err:
+        except BaseException as err:
             logger.warning(
-                "cloud setup failed for %s node_id=%s — removing VM: %s",
+                "cloud setup did not complete for %s node_id=%s — removing VM: %s",
                 node.hostname,
                 node.node_id,
                 err,
@@ -182,23 +177,12 @@ class CloudProvisionerImpl:
                     disc_err,
                 )
             await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
-            raise
-        except Exception as err:
-            logger.warning(
-                "cloud setup failed for %s node_id=%s — removing VM: %s",
-                node.hostname,
-                node.node_id,
-                err,
-            )
-            try:
-                await self.machine_repository.disconnect(node.node_id)
-            except Exception as disc_err:
-                logger.warning(
-                    "cloud disconnect failed: node_id=%s err=%s",
-                    node.node_id,
-                    disc_err,
-                )
-            await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
+            # Already CloudSetupError or a control-flow BaseException
+            # (CancelledError/KeyboardInterrupt/SystemExit) -> propagate as-is;
+            # wrapping the latter would break shutdown/sys.exit semantics.
+            # Regular Exception -> CloudSetupError per the port contract.
+            if isinstance(err, CloudSetupError) or not isinstance(err, Exception):
+                raise
             msg = f"Setup node error: {err}"
             raise CloudSetupError(msg) from err
         # endregion BLOCK_setup_vm

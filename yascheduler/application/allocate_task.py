@@ -314,7 +314,8 @@ async def _persist_node_with_cleanup(
         async with uow_factory() as uow:
             await uow.nodes.update(node)
             await uow.commit()
-    except Exception:
+    except BaseException:
+        # `except BaseException` (not Exception) because of asyncio.CancelledError
         logger.exception(
             "persist node failed: task_id=%s hostname=%s",
             task_id,

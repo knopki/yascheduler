@@ -455,6 +455,65 @@ class TestAllocate:
         delete_mock.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
 
     @pytest.mark.asyncio
+    async def test_allocate_setup_cancellation_cleans_up_vm(
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
+    ) -> None:
+        """Cancellation (BaseException) during engine install tears down the VM and re-raises CancelledError — `except Exception` would miss it and orphan the billable VM across the SSH+cloud-init+setup window."""
+        adapter, config = _make_mock_adapter(name="test")
+        adapter.delete_node = AsyncMock()
+
+        disconnect_mock = AsyncMock()
+        delete_mock = adapter.delete_node
+        call_order: list[str] = []
+
+        async def _record_disconnect(*args: Any, **kwargs: Any) -> None:
+            call_order.append("disconnect")
+            await disconnect_mock(*args, **kwargs)
+
+        async def _record_delete(*args: Any, **kwargs: Any) -> None:
+            call_order.append("delete_node")
+            await delete_mock(*args, **kwargs)
+
+        adapter.delete_node = _record_delete
+
+        repo = MagicMock()
+        repo.disconnect = _record_disconnect
+        # Reach the engine-install step (tail of the long setup window):
+        # cloud-init reports success, then setup_node is cancelled.
+        session = MagicMock()
+        session.run = AsyncMock(
+            return_value=MagicMock(exit_code=0, stdout="", stderr=""),
+        )
+        session.setup_node = AsyncMock(side_effect=asyncio.CancelledError())
+        repo.connect = AsyncMock(return_value=session)
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await prov.allocate("test", _tmp_node(1))
+
+        # Same teardown ordering as the setup-failure path (disconnect before
+        # delete_node); CancelledError propagates unchanged (NOT wrapped into
+        # CloudSetupError, which would break the orchestrator drain path).
+        assert call_order == ["disconnect", "delete_node"]
+        disconnect_mock.assert_awaited_once_with(NodeId(1))
+        delete_mock.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
+
+    @pytest.mark.asyncio
     async def test_allocate_cloud_init_timeout_cleans_up_vm(
         self,
         mock_local_config: MagicMock,
