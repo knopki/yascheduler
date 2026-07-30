@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import logging
+from json import JSONDecodeError
 from typing import TYPE_CHECKING, TypedDict
 
 import aiohttp
@@ -54,9 +55,8 @@ CLEANUP_VERIFY_INTERVAL = 10
 # failures (5xx/transport) — without this, a freshly created orphan could be
 # missed and left billing.
 LIST_PAGE_SIZE = 500
-LIST_MAX_PAGES = 20
 RECONCILE_ATTEMPTS = 3
-RECONCILE_INTERVAL = 5
+RECONCILE_INTERVAL = 20
 _HTTP_BAD_REQUEST_CODE = 400
 _HTTP_INTERNAL_ERROR_CODE = 500
 _HTTP_NOT_FOUND_CODE = 404
@@ -179,11 +179,10 @@ class VultrClient:
     """Async Vultr REST API client (aiohttp-based)."""
 
     def __init__(self, api_key: str) -> None:
-        self.api_key = api_key
         self._session = aiohttp.ClientSession(
             base_url=API_BASE,
             headers={
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {api_key}",
             },
             timeout=aiohttp.ClientTimeout(total=60),
         )
@@ -223,9 +222,9 @@ class VultrClient:
                 # into a bogus APIError. Empty body -> None.
                 raw = await resp.text()
                 return json.loads(raw) if raw else None
-        except aiohttp.ClientResponseError as exc:
-            msg = f"HTTP request failed: {exc.message}"
-            raise APIError(msg, status=exc.status) from exc
+        except JSONDecodeError as exc:
+            msg = f"Invalid JSON response: {exc}"
+            raise APIError(msg) from exc
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             msg = f"Transport error: {exc}"
             raise APIError(msg) from exc
@@ -239,7 +238,7 @@ class VultrClient:
     ) -> AsyncIterator[VultrSSHKey]:
         """Yield SSH keys one at a time, paginating through all pages."""
         params: dict[str, str | int] = {"per_page": per_page}
-        for _ in range(LIST_MAX_PAGES):
+        while True:
             resp = await self._request("GET", "/ssh-keys", params=params)
             if not _is_ssh_keys_resp(resp):
                 msg = f"Invalid SSH keys list response: {resp}"
@@ -279,7 +278,7 @@ class VultrClient:
     ) -> AsyncIterator[VultrBareMetal]:
         """Yield bare metals one at a time, paginating through all pages."""
         params: dict[str, str | int] = {"per_page": per_page}
-        for _ in range(LIST_MAX_PAGES):
+        while True:
             resp = await self._request("GET", "/bare-metals", params=params)
             if not _is_bare_metals_resp(resp):
                 msg = f"Invalid bare-metals list response: {resp}"
@@ -439,6 +438,7 @@ def build_baremetal_user_data(
 # - hostname = instance public IP
 # - create_node returns as soon as the instance status is "active" with a non-zero public IP
 # - Post-instance-create failures (poll timeout) trigger best-effort DELETE of the instance id before the exception propagates.
+# - If the cleanup itself is interrupted (e.g. a second CancelledError during shutdown), the ORIGINAL create error still propagates; the instance id / label is logged (ERROR) for manual recovery since no DB row exists to retry against yet.
 # - POST /bare-metals is NOT idempotent: a transport timeout/break AFTER the server accepted the create leaves an instance we have no id for. The label (generated pre-POST) is used to reconcile such orphans (see _reconcile_orphan_by_label) so no billable resource leaks when the POST call itself fails.
 async def vultr_create_node(
     cfg: ConfigCloudVultr, key: ASSHKey, cloud_config: CloudInitConfig | None = None
@@ -486,7 +486,14 @@ async def vultr_create_node(
                 err,
                 label,
             )
-            await _reconcile_orphan_by_label(client, label)
+            try:
+                await _reconcile_orphan_by_label(client, label)
+            except BaseException:
+                logger.exception(
+                    "RECONCILE_INTERRUPTED — bare-metal may still bill; "
+                    "manual check needed for label %s",
+                    label,
+                )
             raise
         instance_id = bm["id"]
 
@@ -535,7 +542,6 @@ async def vultr_create_node(
                 )
                 raise APIError(msg)  # noqa: TRY301
 
-            assert ip_addr is not None
             logger.info("CREATED %s (id=%s)", ip_addr, instance_id)
             return CloudCreateNodeDTO(
                 external_id=instance_id,
@@ -549,7 +555,14 @@ async def vultr_create_node(
             logger.exception(
                 "Bare-metal %s create_node failed before returning", instance_id
             )
-            await _delete_and_verify(client, instance_id)
+            try:
+                await _delete_and_verify(client, instance_id)
+            except BaseException:
+                logger.exception(
+                    "CLEANUP_INTERRUPTED — bare-metal %s may still bill; "
+                    "manual deletion required via Vultr console",
+                    instance_id,
+                )
             raise
 
 
@@ -627,7 +640,6 @@ async def _delete_and_verify(
     Returns True iff confirmed gone (404). Never raises.
     """
     # region BLOCK_delete
-    delete_accepted = False
     for attempt in range(1, CLEANUP_DELETE_ATTEMPTS + 1):
         try:
             await client.delete_bare_metal(instance_id)
@@ -655,12 +667,8 @@ async def _delete_and_verify(
         except Exception:
             logger.exception("Bare-metal %s delete failed", instance_id)
             return False
-        delete_accepted = True
         break
     # endregion BLOCK_delete
-
-    if not delete_accepted:
-        return False
 
     # region BLOCK_verify
     return await _verify_instance_gone(client, instance_id)
