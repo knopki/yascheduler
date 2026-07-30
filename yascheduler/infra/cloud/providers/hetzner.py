@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 __all__ = ["HetznerError", "hetzner_create_node", "hetzner_delete_node"]
 logger = logging.getLogger(__name__)
 
-_HETZNER_BASE_URL = "https://api.hetzner.cloud/v1"
+_HETZNER_BASE_URL = "https://api.hetzner.cloud/v1/"
 _HTTP_BAD_REQUEST = 400
 _HTTP_NOT_FOUND = 404
 _HTTP_TOO_MANY_REQUESTS = 429
@@ -276,7 +276,7 @@ class HetznerClient:
         if fingerprint:
             params["fingerprint"] = fingerprint
         while True:
-            resp = await self._request("GET", "/ssh_keys", params=params)
+            resp = await self._request("GET", "ssh_keys", params=params)
             if not _is_api_ssh_keys_list_response(resp):
                 msg = f"Invalid SSH keys list response: {resp}"
                 raise HetznerError(msg)
@@ -291,7 +291,7 @@ class HetznerClient:
     # region METHOD_create_ssh_key
     async def create_ssh_key(self, name: str, public_key: str) -> HetznerSshKey:
         data = {"name": name, "public_key": public_key}
-        resp = await self._request("POST", "/ssh_keys", data=data)
+        resp = await self._request("POST", "ssh_keys", data=data)
         if not _is_api_ssh_key_create_response(resp):
             msg = f"Invalid create SSH key response: {resp}"
             raise HetznerError(msg)
@@ -301,7 +301,7 @@ class HetznerClient:
 
     # region METHOD_get_server
     async def get_server(self, server_id: int) -> HetznerServer:
-        resp = await self._request("GET", f"/servers/{server_id}")
+        resp = await self._request("GET", f"servers/{server_id}")
         if not _is_api_create_server_response(resp):
             msg = f"Invalid get server response: {resp}"
             raise HetznerError(msg)
@@ -317,7 +317,7 @@ class HetznerClient:
         if label_selector:
             params["label_selector"] = label_selector
         while True:
-            resp = await self._request("GET", "/servers", params=params)
+            resp = await self._request("GET", "servers", params=params)
             if not _is_api_servers_list_response(resp):
                 msg = f"Invalid servers list response: {resp}"
                 raise HetznerError(msg)
@@ -333,7 +333,7 @@ class HetznerClient:
     async def create_server(
         self, **server_params: Unpack[HetznerCreateServerRequest]
     ) -> HetznerServer:
-        resp = await self._request("POST", "/servers", data=dict(server_params))
+        resp = await self._request("POST", "servers", data=dict(server_params))
         if not _is_api_create_server_response(resp):
             msg = f"Invalid create server response: {resp}"
             raise HetznerError(msg)
@@ -343,7 +343,7 @@ class HetznerClient:
 
     # region METHOD_delete_server
     async def delete_server(self, server_id: int) -> None:
-        await self._request("DELETE", f"/servers/{server_id}")
+        await self._request("DELETE", f"servers/{server_id}")
 
     # endregion METHOD_delete_server
 

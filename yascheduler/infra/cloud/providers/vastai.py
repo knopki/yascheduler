@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 __all__ = ["vastai_create_node", "vastai_delete_node"]
 logger = logging.getLogger(__name__)
 
-_VASTAI_BASE_URL = "https://cloud.vast.ai/api/v0"
+_VASTAI_BASE_URL = "https://console.vast.ai/api/v0/"
 _HTTP_BAD_REQUEST = 400
 _HTTP_NOT_FOUND = 404
 _HTTP_TOO_MANY_REQUESTS = 429
@@ -288,14 +288,14 @@ class VastAIClient:
             raise VastAIError(msg) from exc
 
     async def get_ssh_keys(self) -> list[VastAISSHKey]:
-        resp = await self._request("GET", "/ssh")
+        resp = await self._request("GET", "ssh")
         if not _is_api_ssh_keys_list(resp):
             msg = f"Invalid SSH key list response: {resp}"
             raise VastAIError(msg)
         return resp
 
     async def create_ssh_key(self, ssh_key: str) -> bool:
-        resp = await self._request("POST", "/ssh", data={"ssh_key": ssh_key})
+        resp = await self._request("POST", "ssh", data={"ssh_key": ssh_key})
         if not _is_api_ssh_key_created(resp):
             msg = f"Invalid SSH key create response: {resp}"
             raise VastAIError(msg)
@@ -314,7 +314,7 @@ class VastAIClient:
             data["order"] = [list(x) for x in order]
         if limit:
             data["limit"] = limit
-        resp = await self._request("POST", "/bundles", data=data)
+        resp = await self._request("POST", "bundles", data=data)
         if _is_api_offers_list(resp):
             offers = resp["offers"]
             logger.debug("OFFER_SEARCH", extra={"offer_count": len(offers)})
@@ -328,17 +328,17 @@ class VastAIClient:
         data = dict(
             target_state="running", runtype="ssh_proxy", cancel_unavail=True, **params
         )
-        resp = await self._request("PUT", f"/asks/{ask_id}", data=data)
+        resp = await self._request("PUT", f"asks/{ask_id}", data=data)
         if not _is_api_create_instance_resp(resp):
             msg = f"Invalid create instance response: {resp}"
             raise VastAIError(msg)
         return int(resp["new_contract"])
 
     async def destroy_instance(self, instance_id: int) -> None:
-        await self._request("DELETE", f"/instances/{instance_id}")
+        await self._request("DELETE", f"instances/{instance_id}")
 
     async def show_instance(self, instance_id: int) -> VastAIInstance:
-        resp = await self._request("GET", f"/instances/{instance_id}")
+        resp = await self._request("GET", f"instances/{instance_id}")
         if not _is_api_show_instance_resp(resp):
             msg = f"Invalid show instance response: {resp}"
             raise VastAIError(msg)
@@ -352,7 +352,7 @@ class VastAIClient:
         if select_filters:
             params["select_filters"] = json.dumps(select_filters)
         while True:
-            resp = await self._request("GET", "/instances", params=params)
+            resp = await self._request("GET", "instances", params=params)
             if not _is_api_show_instances_resp(resp):
                 msg = f"Invalid show instances response: {resp}"
                 raise VastAIError(msg)

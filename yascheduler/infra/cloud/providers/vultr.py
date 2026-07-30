@@ -38,7 +38,7 @@ __all__ = ["vultr_create_node", "vultr_delete_node"]
 logger = logging.getLogger(__name__)
 
 
-API_BASE = "https://api.vultr.com/v2"
+API_BASE = "https://api.vultr.com/v2/"
 POLL_INTERVAL = 20
 POLL_TIMEOUT = 1200
 # DELETE retries on transient (5xx) failures; the DELETE call itself.
@@ -239,7 +239,7 @@ class VultrClient:
         """Yield SSH keys one at a time, paginating through all pages."""
         params: dict[str, str | int] = {"per_page": per_page}
         while True:
-            resp = await self._request("GET", "/ssh-keys", params=params)
+            resp = await self._request("GET", "ssh-keys", params=params)
             if not _is_ssh_keys_resp(resp):
                 msg = f"Invalid SSH keys list response: {resp}"
                 raise APIError(msg)
@@ -251,7 +251,7 @@ class VultrClient:
 
     async def create_ssh_key(self, name: str, pub_key: str) -> str:
         data = {"name": name, "ssh_key": pub_key}
-        resp = await self._request("POST", "/ssh-keys", data=data)
+        resp = await self._request("POST", "ssh-keys", data=data)
         if not _is_ssh_key_create_resp(resp):
             msg = f"Cannot create SSH key: {resp}"
             raise APIError(msg)
@@ -260,14 +260,14 @@ class VultrClient:
     async def create_bare_metal(
         self, **params: Unpack[VultrBareMetalsCreate]
     ) -> VultrBareMetal:
-        resp = await self._request("POST", "/bare-metals", data=dict(params))
+        resp = await self._request("POST", "bare-metals", data=dict(params))
         if not _is_bare_metal_resp(resp):
             msg = f"Invalid create Bare Metal response: {resp}"
             raise APIError(msg)
         return resp["bare_metal"]
 
     async def get_bare_metal(self, instance_id: str) -> VultrBareMetal:
-        resp = await self._request("GET", f"/bare-metals/{instance_id}")
+        resp = await self._request("GET", f"bare-metals/{instance_id}")
         if not _is_bare_metal_resp(resp):
             msg = f"Invalid get Bare Metal response: {resp}"
             raise APIError(msg)
@@ -279,7 +279,7 @@ class VultrClient:
         """Yield bare metals one at a time, paginating through all pages."""
         params: dict[str, str | int] = {"per_page": per_page}
         while True:
-            resp = await self._request("GET", "/bare-metals", params=params)
+            resp = await self._request("GET", "bare-metals", params=params)
             if not _is_bare_metals_resp(resp):
                 msg = f"Invalid bare-metals list response: {resp}"
                 raise APIError(msg)
@@ -290,7 +290,7 @@ class VultrClient:
             params["cursor"] = cursor
 
     async def delete_bare_metal(self, instance_id: str) -> None:
-        await self._request("DELETE", f"/bare-metals/{instance_id}")
+        await self._request("DELETE", f"bare-metals/{instance_id}")
 
 
 # endregion CLASS_VultrClient
