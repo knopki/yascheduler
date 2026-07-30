@@ -1,7 +1,7 @@
 """Hetzner cloud methods."""
 # region MODULE_CONTRACT
 # PURPOSE: Provision and decommission Hetzner Cloud servers so the scheduler can run compute workloads on Hetzner through the generic CloudAdapter contract.
-# SCOPE: Hetzner create/delete node functions with orphan-prevention (per-create reconcile-token label for non-idempotent POST) and transient-error propagation to the orchestrator's retry loop.
+# SCOPE: Hetzner create/delete node functions with orphan-prevention and transient-error retry inside delete.
 # DEPENDENCIES: USES API: aiohttp (Hetzner Cloud REST API v1); WRITES: HTTP to Hetzner API (server/SSH key create/delete)
 # KEYWORDS: hetzner, cloud, server, create, delete, api, ssh key, retry, orphan
 # endregion MODULE_CONTRACT
@@ -44,6 +44,16 @@ _HTTP_SERVER_ERROR = 500
 _RECONCILE_ATTEMPTS = 3
 _RECONCILE_INTERVAL = 5.0
 _RECONCILE_LABEL_KEY = "yascheduler/reconcile"
+
+# DELETE retry + async-deletion verify (mirrors vultr._delete_and_verify).
+# Hetzner DELETE /servers/{id} returns 2xx immediately but the server lingers
+# briefly before it is truly gone and stops billing; a 5xx/429/transport flap
+# on DELETE is retried, and after an accepted DELETE we poll GET until 404 so
+# neither reconcile nor delete_node claims success on a still-billing orphan.
+_DELETE_ATTEMPTS = 3
+_DELETE_INTERVAL = 5.0
+_VERIFY_TIMEOUT = 120
+_VERIFY_INTERVAL = 5.0
 
 
 # region BLOCK_API_errors
@@ -283,6 +293,16 @@ class HetznerClient:
 
     # endregion METHOD_create_ssh_key
 
+    # region METHOD_get_server
+    async def get_server(self, server_id: int) -> HetznerServer:
+        resp = await self._request("GET", f"/servers/{server_id}")
+        if not _is_api_create_server_response(resp):
+            msg = f"Invalid get server response: {resp}"
+            raise HetznerError(msg)
+        return resp["server"]
+
+    # endregion METHOD_get_server
+
     # region METHOD_get_servers
     async def get_servers(
         self, label_selector: str | None = None, per_page: int = 25
@@ -434,7 +454,7 @@ async def hetzner_create_node(
 
 # region FUNC__reconcile_orphan_by_label
 # PURPOSE: Close the non-idempotent-create orphan window by matching and best-effort deleting a server created during a failed/ambiguous POST, using the unique label stamped on the create request.
-# ENSURES: Never raises — the original create error propagates regardless. Retries the listing _RECONCILE_ATTEMPTS times with a delay to cover listing-lag (server not yet visible after POST) and transient listing failures; on each tick a label match triggers best-effort delete, exhausting all attempts without a match logs a warning for manual reconciliation.
+# ENSURES: Never raises — the original create error propagates regardless. Retries the listing _RECONCILE_ATTEMPTS times with a delay to cover listing-lag (server not yet visible after POST) and transient listing failures; on each tick a label match triggers best-effort delete+verify (_delete_and_verify), exhausting all attempts without a match logs a warning for manual reconciliation.
 async def _reconcile_orphan_by_label(
     client: HetznerClient,
     label: str,
@@ -470,15 +490,7 @@ async def _reconcile_orphan_by_label(
                 "RECONCILE_DELETE_ORPHAN",
                 extra={"label": label, "server_id": orphan_id},
             )
-            try:
-                await client.delete_server(orphan_id)
-            except HetznerError as exc:
-                if exc.status == _HTTP_NOT_FOUND:
-                    return
-                logger.exception(
-                    "RECONCILE_DELETE_FAILED — potential orphan billing; manual check needed",
-                    extra={"label": label, "server_id": orphan_id},
-                )
+            await _delete_and_verify(client, orphan_id)
             return
         logger.debug(
             "RECONCILE_NO_ORPHAN",
@@ -496,12 +508,100 @@ async def _reconcile_orphan_by_label(
 # endregion FUNC__reconcile_orphan_by_label
 
 
+# region FUNC__delete_and_verify
+# PURPOSE: Delete a Hetzner server with transient retry and async-deletion verification so neither create_node reconcile nor delete_node leaks a billable orphan when Hetzner flaps or returns 2xx without immediately removing the server.
+# ENSURES: Returns True iff the server is confirmed gone (DELETE 404 or verify GET 404). Returns False if DELETE permanently fails, retries exhaust, or verify times out. Never raises. Timeout-verified still-present servers are escalated to ERROR for manual intervention. The log NEVER claims success without a 404 confirmation.
+async def _delete_and_verify(client: HetznerClient, server_id: int) -> bool:
+    """Delete a server with retry + async-deletion verification."""
+    # region BLOCK_delete
+    delete_accepted = False
+    for attempt in range(1, _DELETE_ATTEMPTS + 1):
+        try:
+            await client.delete_server(server_id)
+        except HetznerError as err:
+            if err.status == _HTTP_NOT_FOUND:
+                # Already gone — nothing to verify.
+                logger.warning("Server %s already gone (DELETE 404)", server_id)
+                return True
+            if err.transient and attempt < _DELETE_ATTEMPTS:
+                logger.debug(
+                    "DELETE_TRANSIENT_RETRY",
+                    extra={
+                        "server_id": server_id,
+                        "attempt": attempt,
+                        "attempts": _DELETE_ATTEMPTS,
+                        "error": str(err),
+                    },
+                )
+                await asyncio.sleep(_DELETE_INTERVAL)
+                continue
+            logger.exception(
+                "Server %s delete failed after %s attempts", server_id, attempt
+            )
+            return False
+        except Exception:
+            logger.exception("Server %s delete failed", server_id)
+            return False
+        delete_accepted = True
+        break
+    # endregion BLOCK_delete
+
+    if not delete_accepted:
+        return False
+
+    return await _verify_server_gone(client, server_id)
+
+
+# endregion FUNC__delete_and_verify
+
+
+# region FUNC__verify_server_gone
+# PURPOSE: Poll GET /servers/{id} until 404 (confirmed gone) so delete never claims success on a still-billing server after an accepted Hetzner deletion.
+# ENSURES: Returns True on 404 (logs success), False on _VERIFY_TIMEOUT expiry (logs ERROR for manual intervention). Never raises. Transient GET errors during polling are treated as "uncertain, keep polling".
+async def _verify_server_gone(client: HetznerClient, server_id: int) -> bool:
+    """Poll GET until the server returns 404 or _VERIFY_TIMEOUT expires.
+
+    Returns True iff confirmed gone. Never raises.
+    """
+    deadline = asyncio.get_running_loop().time() + _VERIFY_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            await client.get_server(server_id)
+        except HetznerError as err:
+            if err.status == _HTTP_NOT_FOUND:
+                logger.warning("Server %s delete confirmed gone", server_id)
+                return True
+            # Transient GET error or unexpected status — uncertain, keep polling.
+            logger.debug(
+                "VERIFY_GET_RETRY",
+                extra={"server_id": server_id, "error": str(err)},
+            )
+        except Exception as err:
+            logger.debug(
+                "VERIFY_GET_RETRY",
+                extra={"server_id": server_id, "error": str(err)},
+            )
+        await asyncio.sleep(_VERIFY_INTERVAL)
+    # Timeout: server still present after accepted DELETE + full verify window.
+    logger.error(
+        "Server %s STILL PRESENT %ss after accepted DELETE — "
+        "manual deletion required via Hetzner console",
+        server_id,
+        _VERIFY_TIMEOUT,
+    )
+    return False
+
+
+# endregion FUNC__verify_server_gone
+
+
 # region FUNC_hetzner_delete_node
 # PURPOSE: Tear down a Hetzner server by server ID so billing stops and the node slot is freed for reallocation.
 # INVARIANTS:
 # - Resolves deletion by numeric server ID via DELETE /servers/{id}.
-# - HetznerError with status=404 is logged and returns without error (idempotent no-op).
-# - All other errors propagate to the caller.
+# - Delegates to _delete_and_verify (retry + async-deletion verify) so the public delete path inherits the same orphan-prevention guarantees as create_node reconcile.
+# - On _delete_and_verify returning True (404 confirmed gone) returns without error — idempotent no-op.
+# - On _delete_and_verify returning False RAISES HetznerError so the caller leaves the DB row intact for cross-cycle retry.
 async def hetzner_delete_node(
     cfg: ConfigCloudHetzner,
     external_id: str,
@@ -513,15 +613,16 @@ async def hetzner_delete_node(
         msg = f"Invalid Hetzner server id {external_id!r}: {err}"
         raise RuntimeError(msg) from err
 
+    logger.debug("INSTANCE_DELETE", extra={"server_id": server_id})
     async with HetznerClient(cfg.token) as client:
-        logger.debug("INSTANCE_DELETE", extra={"server_id": server_id})
-        try:
-            await client.delete_server(server_id)
-        except HetznerError as exc:
-            if exc.status == _HTTP_NOT_FOUND:
-                logger.warning("NODE %s NOT DELETED AS UNKNOWN", server_id)
-                return
-            raise
+        if await _delete_and_verify(client, server_id):
+            logger.debug("DELETED", extra={"server_id": server_id})
+            return
+    msg = (
+        f"Server {server_id} delete not confirmed gone "
+        "— cloud VM may still bill; orchestrator will retry next cycle"
+    )
+    raise HetznerError(msg)
 
 
 # endregion FUNC_hetzner_delete_node

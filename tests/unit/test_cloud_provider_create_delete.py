@@ -179,11 +179,16 @@ async def test_hetzner_create_node_dto_carries_config_derived_params() -> None:
 async def test_hetzner_delete_node_accepts_external_id() -> None:
     """hetzner_delete_node deletes by numeric server ID via client.delete_server."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
-    from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
+    from yascheduler.infra.cloud.providers.hetzner import (
+        HetznerError,
+        hetzner_delete_node,
+    )
 
     cfg = ConfigCloudHetzner(token="test-del-accept")
     mock_client = MagicMock()
     mock_client.delete_server = AsyncMock()
+    # Accepted DELETE is verified gone via GET /servers/{id} → 404.
+    mock_client.get_server = AsyncMock(side_effect=HetznerError("gone", status=404))
 
     with _patch_hetzner_client(mock_client):
         await hetzner_delete_node(cfg, external_id="42")

@@ -337,6 +337,8 @@ class TestHetznerCreateNode:
             )
         )
         mock_client.delete_server = AsyncMock()
+        # Orphan delete is verified gone via GET /servers/{id} → 404.
+        mock_client.get_server = AsyncMock(side_effect=HetznerError("gone", status=404))
 
         with (
             _patch_hetzner_client(mock_client),
@@ -431,10 +433,15 @@ class TestHetznerDeleteNode:
 
     @pytest.mark.asyncio
     async def test_happy_path_delete(self) -> None:
-        from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
+        from yascheduler.infra.cloud.providers.hetzner import (
+            HetznerError,
+            hetzner_delete_node,
+        )
 
         mock_client = MagicMock()
         mock_client.delete_server = AsyncMock()
+        # Accepted DELETE is verified gone via GET /servers/{id} → 404.
+        mock_client.get_server = AsyncMock(side_effect=HetznerError("gone", status=404))
 
         with _patch_hetzner_client(mock_client):
             await hetzner_delete_node(_make_cfg(), external_id="42")
@@ -493,6 +500,10 @@ class TestHetznerDeleteNode:
 
         with (
             _patch_hetzner_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner._DELETE_INTERVAL",
+                0.0,
+            ),
             pytest.raises(HetznerError) as exc_info,
         ):
             await hetzner_delete_node(_make_cfg(), external_id="42")
