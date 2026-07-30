@@ -4,34 +4,23 @@
 # SCOPE:
 # - LocalSettings (daemon data paths, webhook, concurrency limits) and RemoteDefaults (remote SSH paths, username, jump host).
 # - NOT: INI parsing (entrypoints.config_parser) or cloud-provider config (infra.cloud.cloud_configs).
-# INVARIANTS: After construction, concurrency-limit fields are >= 1, webhook_reqs_limit >= 0, and path fields are Path instances.
+# INVARIANTS: After construction, concurrency-limit fields are >= 1, webhook_reqs_limit >= 0, and RemoteDefaults.jump_port is in 1..MAX_PORT.
 # KEYWORDS: settings, config, daemon, concurrency limits, webhook, jump host, LocalSettings, RemoteDefaults
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
-from dataclasses import MISSING, dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path, PurePath
-from typing import cast
+
+from yascheduler.shared import MAX_PORT, validate_interval
 
 __all__ = ["LocalSettings", "RemoteDefaults"]
-
-# Concurrency-limit int fields that must be >= 1 (formerly validators.ge(1)).
-_GE1_LIMIT_FIELDS = (
-    "conn_machine_limit",
-    "conn_machine_pending",
-    "allocate_limit",
-    "allocate_pending",
-    "consume_limit",
-    "consume_pending",
-    "deallocate_limit",
-    "deallocate_pending",
-)
 
 
 # region CLASS_LocalSettings
 # PURPOSE: Freeze the daemon's runtime configuration (paths, webhook, concurrency limits) so it is validated once and shared safely across async components.
-# INVARIANTS: Concurrency-limit fields >= 1; webhook_reqs_limit >= 0; path fields are Path instances.
+# INVARIANTS: Concurrency-limit fields >= 1; webhook_reqs_limit >= 0.
 @dataclass(frozen=True)
 class LocalSettings:
     """Local daemon settings: data paths, concurrency limits, webhook config."""
@@ -51,43 +40,16 @@ class LocalSettings:
     deallocate_limit: int = 5
     deallocate_pending: int = 1
 
-    # region BLOCK_validate
     def __post_init__(self) -> None:
-        """Validate field constraints.
-
-        - Path fields must be Path instances (formerly instance_of(Path)).
-        - Concurrency-limit fields in _GE1_LIMIT_FIELDS must be >= 1.
-        - webhook_reqs_limit must be >= 0.
-        - webhook_url, when set, must be a str.
-        """
-        for f in fields(type(self)):
-            value = getattr(self, f.name)
-            if value is None:
-                continue
-            if f.name in _GE1_LIMIT_FIELDS:
-                if not isinstance(value, int):
-                    msg = f"{f.name} must be int, got {type(value).__name__}"
-                    raise ValueError(msg)
-                if value < 1:
-                    msg = f"{f.name} must be >= 1, got {value}"
-                    raise ValueError(msg)
-            elif f.name == "webhook_reqs_limit":
-                if not isinstance(value, int):
-                    msg = f"webhook_reqs_limit must be int, got {type(value).__name__}"
-                    raise ValueError(msg)
-                if value < 0:
-                    msg = f"webhook_reqs_limit must be >= 0, got {value}"
-                    raise ValueError(msg)
-            elif f.name in ("data_dir", "tasks_dir", "engines_dir", "keys_dir"):
-                if not isinstance(value, Path):
-                    msg = f"{f.name} must be Path, got {type(value).__name__}"
-                    raise ValueError(msg)
-            elif f.name == "webhook_url":
-                if not isinstance(value, str):
-                    msg = f"webhook_url must be str, got {type(value).__name__}"
-                    raise ValueError(msg)
-
-    # endregion BLOCK_validate
+        validate_interval("conn_machine_limit", self.conn_machine_limit, 1)
+        validate_interval("conn_machine_pending", self.conn_machine_pending, 1)
+        validate_interval("allocate_limit", self.allocate_limit, 1)
+        validate_interval("allocate_pending", self.allocate_pending, 1)
+        validate_interval("consume_limit", self.consume_limit, 1)
+        validate_interval("consume_pending", self.consume_pending, 1)
+        validate_interval("deallocate_limit", self.deallocate_limit, 1)
+        validate_interval("deallocate_pending", self.deallocate_pending, 1)
+        validate_interval("webhook_reqs_limit", self.webhook_reqs_limit, 0)
 
 
 # endregion CLASS_LocalSettings
@@ -95,6 +57,7 @@ class LocalSettings:
 
 # region CLASS_RemoteDefaults
 # PURPOSE: Give every SSH-remote consumer a single immutable bundle of remote FS + jump-host defaults so they never re-derive paths or bastion identity at each call site.
+# INVARIANTS: jump_port is in 1..MAX_PORT (mirrors the yascheduler_nodes.jump_port DB CHECK).
 @dataclass(frozen=True)
 class RemoteDefaults:
     """Remote machine defaults: data directories, SSH username, jump host."""
@@ -107,28 +70,8 @@ class RemoteDefaults:
     jump_host: str | None = None
     jump_port: int = 22
 
+    def __post_init__(self) -> None:
+        validate_interval("jump_port", self.jump_port, 1, MAX_PORT)
+
 
 # endregion CLASS_RemoteDefaults
-
-
-# Derived from LocalSettings field defaults so there is a single source of truth:
-# if a field default changes, _INT_DEFAULTS follows automatically.
-_INT_DEFAULTS: dict[str, int] = {
-    f.name: cast("int", f.default)
-    for f in fields(LocalSettings)
-    if f.name in ((*_GE1_LIMIT_FIELDS, "webhook_reqs_limit"))
-    and f.default is not MISSING
-}
-
-
-def _int_or_default(name: str, value: int | None) -> int:
-    """Return value if not None, else the dataclass default for name.
-
-    Replicates converters.default_if_none(default=...) without falsy-coercing
-    a legitimate 0 (which must reach __post_init__ so ge(1) raises). The
-    default is read from _INT_DEFAULTS — a single source of truth derived from
-    the LocalSettings field defaults.
-    """
-    if value is None:
-        return _INT_DEFAULTS[name]
-    return value

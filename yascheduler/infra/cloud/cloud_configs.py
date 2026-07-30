@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Union
 
 from yascheduler.domain import CloudConfig
+from yascheduler.shared import MAX_PORT, validate_interval
 
 if TYPE_CHECKING:
     from yascheduler.shared import Self
@@ -46,9 +47,7 @@ class AzureImageReference:
         parts = urn.split(":", maxsplit=min_parts)
         if len(parts) < min_parts:
             msg = "`Image reference URN should be in format publisher:offer:sku:version"
-            raise ValueError(
-                msg,
-            )
+            raise ValueError(msg)
         return cls(*parts)
 
     # endregion METHOD_from_urn
@@ -88,6 +87,12 @@ class ConfigCloudAzure(CloudConfig):
     jump_port: int = 22
     label: str = "yascheduler"
 
+    def __post_init__(self) -> None:
+        validate_interval(f"{self.prefix}_max_nodes", self.max_nodes, 0)
+        validate_interval(f"{self.prefix}_idle_tolerance", self.idle_tolerance, 1)
+        validate_interval(f"{self.prefix}_connect_grace", self.connect_grace, 1)
+        validate_interval(f"{self.prefix}_jump_port", self.jump_port, 1, MAX_PORT)
+
 
 # endregion CLASS_ConfigCloudAzure
 
@@ -115,6 +120,12 @@ class ConfigCloudHetzner(CloudConfig):
     jump_port: int = 22
     label: str = "yascheduler"
 
+    def __post_init__(self) -> None:
+        validate_interval(f"{self.prefix}_max_nodes", self.max_nodes, 0)
+        validate_interval(f"{self.prefix}_idle_tolerance", self.idle_tolerance, 1)
+        validate_interval(f"{self.prefix}_connect_grace", self.connect_grace, 1)
+        validate_interval(f"{self.prefix}_jump_port", self.jump_port, 1, MAX_PORT)
+
 
 # endregion CLASS_ConfigCloudHetzner
 
@@ -139,6 +150,12 @@ class ConfigCloudUpcloud(CloudConfig):
     jump_host: str | None = None
     jump_port: int = 22
     label: str = "yascheduler"
+
+    def __post_init__(self) -> None:
+        validate_interval(f"{self.prefix}_max_nodes", self.max_nodes, 0)
+        validate_interval(f"{self.prefix}_idle_tolerance", self.idle_tolerance, 1)
+        validate_interval(f"{self.prefix}_connect_grace", self.connect_grace, 1)
+        validate_interval(f"{self.prefix}_jump_port", self.jump_port, 1, MAX_PORT)
 
 
 # endregion CLASS_ConfigCloudUpcloud
@@ -169,6 +186,16 @@ class ConfigCloudVastAI(CloudConfig):
     jump_host: str | None = None
     jump_port: int = 22
     label: str = "yascheduler"
+
+    def __post_init__(self) -> None:
+        validate_interval(f"{self.prefix}_disk_gb", self.disk_gb, 1)
+        validate_interval(f"{self.prefix}_min_vram_mb", self.min_vram_mb, 1024)
+        validate_interval(f"{self.prefix}_num_gpus", self.num_gpus, 1)
+        validate_interval(f"{self.prefix}_max_price_per_hr", self.max_price_per_hr, 0)
+        validate_interval(f"{self.prefix}_max_nodes", self.max_nodes, 0)
+        validate_interval(f"{self.prefix}_idle_tolerance", self.idle_tolerance, 1)
+        validate_interval(f"{self.prefix}_connect_grace", self.connect_grace, 1)
+        validate_interval(f"{self.prefix}_jump_port", self.jump_port, 1, MAX_PORT)
 
 
 # endregion CLASS_ConfigCloudVastAI
@@ -201,6 +228,13 @@ class ConfigCloudVultr(CloudConfig):
     jump_host: str | None = None
     jump_port: int = 22
     label: str = "yascheduler"
+
+    def __post_init__(self) -> None:
+        validate_interval(f"{self.prefix}_image_name", self.image_name, 1)
+        validate_interval(f"{self.prefix}_max_nodes", self.max_nodes, 0)
+        validate_interval(f"{self.prefix}_idle_tolerance", self.idle_tolerance, 1)
+        validate_interval(f"{self.prefix}_connect_grace", self.connect_grace, 1)
+        validate_interval(f"{self.prefix}_jump_port", self.jump_port, 1, MAX_PORT)
 
 
 # endregion CLASS_ConfigCloudVultr

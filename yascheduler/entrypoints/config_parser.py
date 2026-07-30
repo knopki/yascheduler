@@ -13,9 +13,8 @@ from __future__ import annotations
 import dataclasses
 import logging
 from configparser import ConfigParser
-from functools import partial
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from yascheduler.domain.engine import (
     Deploy,
@@ -25,7 +24,7 @@ from yascheduler.domain.engine import (
     LocalFilesDeploy,
     RemoteArchiveDeploy,
 )
-from yascheduler.domain.settings import LocalSettings, RemoteDefaults, _int_or_default
+from yascheduler.domain.settings import LocalSettings, RemoteDefaults
 from yascheduler.entrypoints.config import Config
 from yascheduler.infra.cloud.cloud_configs import (
     AzureImageReference,
@@ -40,7 +39,7 @@ from yascheduler.infra.persistence import PostgresDbConfig
 from ._config_utils import warn_unknown_fields
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from configparser import SectionProxy
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloud
@@ -88,18 +87,10 @@ def _check_at_least_one_elem(
 # endregion FUNC__check_at_least_one_elem
 
 
-def _check_port(name: str, value: int) -> int:
-    min_port = 1
-    max_port = 65535
-    if value < min_port or value > max_port:
-        msg = f"{name} must be between {min_port} and {max_port}, got {value}"
-        raise ValueError(msg)
-    return value
-
-
-def _require_str(name: str, value: str | None) -> str:
+def _require_str(key: str, sec: SectionProxy) -> str:
+    value = sec.get(key)
     if not value:
-        msg = f"{name} is required"
+        msg = f"{key} is required"
         raise ValueError(msg)
     return value
 
@@ -120,6 +111,13 @@ def engine_valid_fields() -> Sequence[str]:
 
 
 # endregion FUNC_engine_valid_fields
+
+
+def _engine_default(name: str) -> int:
+    """Return the Engine dataclass field default for `name`."""
+    return cast(
+        "int", next(f for f in dataclasses.fields(Engine) if f.name == name).default
+    )
 
 
 # region FUNC_parse_engine_section
@@ -158,12 +156,16 @@ def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
         name=name,
         spawn=spawn,
         check_cmd=sec.get("check_cmd"),
-        check_cmd_code=sec.getint("check_cmd_code", fallback=0),
+        check_cmd_code=sec.getint(
+            "check_cmd_code", fallback=_engine_default("check_cmd_code")
+        ),
         check_pname=sec.get("check_pname"),
         deployable=tuple(deployable),
         input_files=input_files,
         output_files=output_files,
-        sleep_interval=sec.getint("sleep_interval", fallback=10),
+        sleep_interval=sec.getint(
+            "sleep_interval", fallback=_engine_default("sleep_interval")
+        ),
         platforms=gettuple("platforms"),
         platform_packages=gettuple("platform_packages"),
     )
@@ -202,40 +204,152 @@ def parse_engines(cfg: ConfigParser, engines_dir: PurePath) -> EngineRepository:
 # ============================================================================
 
 
-def _check_az_user(username: str) -> None:
-    if username == "root":
+# region FUNC__read_fields
+# PURPOSE: Stop duplicating field defaults in the parser — read every dataclass
+# field straight from INI, defaulting each to its own DTO default, so the DTOs
+# stay the single source of truth and the parser cannot drift.
+# INVARIANTS:
+# - A field with no default is required; absence raises naming the INI key.
+# - Numeric/bool fields are coerced via the matching ConfigParser getter.
+# - `coerce` overrides handle fields whose value needs transformation.
+def _field_default(f: dataclasses.Field[object]) -> object:
+    if f.default is not dataclasses.MISSING:
+        return f.default
+    if f.default_factory is not dataclasses.MISSING:
+        return f.default_factory()
+    return dataclasses.MISSING
+
+
+def _read_fields(
+    sec: SectionProxy,
+    dto_cls: type,
+    *,
+    prefix: str = "",
+    aliases: Mapping[str, str] | None = None,
+    coerce: Mapping[str, Callable[[SectionProxy, str, object], object]] | None = None,
+) -> dict[str, object]:
+    aliases = aliases or {}
+    coerce = coerce or {}
+    kwargs: dict[str, object] = {}
+    for f in dataclasses.fields(dto_cls):
+        suffix = aliases.get(f.name, f.name)
+        key = f"{prefix}_{suffix}" if prefix else suffix
+        if f.name in coerce:
+            kwargs[f.name] = coerce[f.name](sec, key, _field_default(f))
+            continue
+        default = _field_default(f)
+        if default is dataclasses.MISSING:
+            kwargs[f.name] = _require_str(key, sec)
+            continue
+        if f.type == "int":
+            kwargs[f.name] = sec.getint(key, fallback=cast("int", default))
+        elif f.type == "float":
+            kwargs[f.name] = sec.getfloat(key, fallback=cast("float", default))
+        elif f.type == "bool":
+            kwargs[f.name] = sec.getboolean(key, fallback=cast("bool", default))
+        else:
+            kwargs[f.name] = sec.get(key, default)
+    return kwargs
+
+
+# endregion FUNC__read_fields
+
+
+# INI key suffix when it differs from the dataclass field name. `user`/`jump_user`
+# are the INI shorthand; Python keeps `username`/`jump_username` everywhere
+# (Node, RemoteDefaults, conn_opts)e.
+# `image`/`size` are Azure's vm_image/vm_size INI names.
+_CLOUD_ALIASES: Mapping[str, str] = {
+    "username": "user",
+    "jump_username": "jump_user",
+    "vm_size": "size",
+    "vm_image": "image",
+}
+
+
+def _coerce_azure_image(
+    sec: SectionProxy, key: str, default: object
+) -> AzureImageReference:
+    urn = sec.get(key)
+    return (
+        AzureImageReference.from_urn(urn)
+        if urn
+        else cast("AzureImageReference", default)
+    )
+
+
+def _coerce_onstart_script(sec: SectionProxy, key: str, _default: object) -> str | None:
+    path = sec.get(key)
+    if not path:
+        return None
+    if not Path(path).exists():
+        msg = f"{key} must be a readable file path or empty, got {path}"
+        raise ValueError(msg)
+    return Path(path).read_text()
+
+
+# every cloud provider shares the same field-alias shape — DTOs name
+# the field `username`/`jump_username`, the INI shorthand is `user`/`jump_user`.
+# Three providers (hetzner/upcloud/vultr) share it verbatim; only Azure (adds
+# vm_image/vm_size aliases) and VastAI (adds an `env` field excluded from INI)
+# diverge. One base pair + per-provider deltas, not five copy-pasted pairs.
+_BASE_EXCL = {"prefix", "username", "jump_username"}
+_BASE_INCL = ["user", "jump_user"]
+
+
+def _ban_root_user(sec: SectionProxy, prefix: str) -> None:
+    # Spec-mandated at parse time; must fire before required-credential checks.
+    if sec.get(f"{prefix}_user") == "root":
         msg = "Root user is forbidden on Azure"
         raise ValueError(msg)
 
 
-def _fmt_key(prefix: str, name: str) -> str:
-    return f"{prefix}_{name}"
+class _CloudSpec(NamedTuple):
+    dto_cls: type
+    excludes: set[str]
+    includes: list[str]
+    coerce: Mapping[str, Callable[[SectionProxy, str, object], object]]
+    pre_check: Callable[[SectionProxy, str], None] | None
 
 
-# Per-prefix valid-field tables.
-_AZ_EXCLUDES = {"prefix", "username", "jump_username", "vm_image", "vm_size"}
-_AZ_INCLUDES = ["user", "jump_user", "image", "size"]
-_HETZNER_EXCLUDES = {"prefix", "username", "jump_username"}
-_HETZNER_INCLUDES = ["user", "jump_user"]
-_UPCLOUD_EXCLUDES = {"prefix", "username", "jump_username"}
-_UPCLOUD_INCLUDES = ["user", "jump_user"]
-_VASTAI_EXCLUDES = {"prefix", "username", "jump_username", "env"}
-_VASTAI_INCLUDES = ["jump_user", "user"]
-_VULTR_EXCLUDES = {"prefix", "username", "jump_username"}
-_VULTR_INCLUDES = ["jump_user", "user"]
+# Single source of truth per provider: DTO, valid-field rules, optional
+# per-field coercion, optional parse-time pre-check. Adding a provider is one
+# row — no parallel registry (parsers / DTOs / field-rules) to keep in sync.
+_CLOUD_SPECS: dict[str, _CloudSpec] = {
+    "az": _CloudSpec(
+        ConfigCloudAzure,
+        _BASE_EXCL | {"vm_image", "vm_size"},
+        ["user", "jump_user", "image", "size"],
+        {"vm_image": _coerce_azure_image},
+        _ban_root_user,
+    ),
+    "hetzner": _CloudSpec(ConfigCloudHetzner, _BASE_EXCL, _BASE_INCL, {}, None),
+    "upcloud": _CloudSpec(ConfigCloudUpcloud, _BASE_EXCL, _BASE_INCL, {}, None),
+    "vastai": _CloudSpec(
+        ConfigCloudVastAI,
+        _BASE_EXCL | {"env"},
+        _BASE_INCL,
+        {"onstart_script": _coerce_onstart_script},
+        None,
+    ),
+    "vultr": _CloudSpec(ConfigCloudVultr, _BASE_EXCL, _BASE_INCL, {}, None),
+}
 
 
 # region FUNC_cloud_valid_fields
 # PURPOSE: Return valid INI keys for a [clouds] sub-section keyed by a cloud provider prefix.
 def cloud_valid_fields(prefix: str) -> Sequence[str]:
     """Return valid INI keys for a [clouds] sub-section keyed by a cloud provider prefix."""
-    exclude_names, include_names = _CLOUD_FIELD_RULES[prefix]
-    dto_cls = _CLOUD_DTO_BY_PREFIX[prefix]
+    spec = _CLOUD_SPECS[prefix]
     return [
         f"{prefix}_{name}"
         for name in (
-            [f.name for f in dataclasses.fields(dto_cls) if f.name not in exclude_names]
-            + include_names
+            [
+                f.name
+                for f in dataclasses.fields(spec.dto_cls)
+                if f.name not in spec.excludes
+            ]
+            + spec.includes
         )
     ]
 
@@ -243,346 +357,33 @@ def cloud_valid_fields(prefix: str) -> Sequence[str]:
 # endregion FUNC_cloud_valid_fields
 
 
-# region FUNC__parse_azure_section
-# PURPOSE: Build ConfigCloudAzure from a [clouds] INI section.
-def _parse_azure_section(sec: SectionProxy) -> ConfigCloudAzure:
-    prefix = "az"
-    fmt = partial(_fmt_key, prefix)
-
-    warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
-
-    vm_image_urn = sec.get(fmt("image"))
-    image_ref = AzureImageReference.from_urn(vm_image_urn) if vm_image_urn else None
-
-    username = sec.get(fmt("user"), "yascheduler")
-    _check_az_user(username)
-
-    max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
-    if max_nodes < 0:
-        msg = f"az max_nodes must be >= 0, got {max_nodes}"
-        raise ValueError(msg)
-    idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=300)
-    if idle_tolerance < 1:
-        msg = f"az idle_tolerance must be >= 1, got {idle_tolerance}"
-        raise ValueError(msg)
-
-    connect_grace = sec.getint(fmt("connect_grace"), fallback=120)
-    if connect_grace < 1:
-        msg = f"az connect_grace must be >= 1, got {connect_grace}"
-        raise ValueError(msg)
-
-    jump_port = _check_port("az jump_port", sec.getint(fmt("jump_port"), fallback=22))
-
-    tenant_id = _require_str("az tenant_id", sec.get(fmt("tenant_id")))
-    client_id = _require_str("az client_id", sec.get(fmt("client_id")))
-    client_secret = _require_str("az client_secret", sec.get(fmt("client_secret")))
-    subscription_id = _require_str(
-        "az subscription_id", sec.get(fmt("subscription_id"))
-    )
-
-    return ConfigCloudAzure(
-        tenant_id=tenant_id,
-        client_id=client_id,
-        client_secret=client_secret,
-        subscription_id=subscription_id,
-        resource_group=sec.get(fmt("resource_group"), "yascheduler-rg"),
-        location=sec.get(fmt("location"), "westeurope"),
-        vnet=sec.get(fmt("vnet"), "yascheduler-vnet"),
-        subnet=sec.get(fmt("subnet"), "yascheduler-subnet"),
-        nsg=sec.get(fmt("nsg"), "yascheduler-nsg"),
-        vm_image=image_ref or AzureImageReference(),
-        vm_size=sec.get(fmt("size"), "Standard_B1s"),
-        max_nodes=max_nodes,
-        username=username,
-        priority=sec.getint(fmt("priority"), fallback=0),
-        idle_tolerance=idle_tolerance,
-        connect_grace=connect_grace,
-        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
-        jump_username=sec.get(fmt("jump_user"), None),
-        jump_host=sec.get(fmt("jump_host"), None),
-        jump_port=jump_port,
-        label=sec.get(fmt("label"), "yascheduler"),
-    )
-
-
-# endregion FUNC__parse_azure_section
-
-
-# region FUNC__parse_hetzner_section
-# PURPOSE: Build ConfigCloudHetzner from a [clouds] INI section.
-def _parse_hetzner_section(sec: SectionProxy) -> ConfigCloudHetzner:
-    prefix = "hetzner"
-    fmt = partial(_fmt_key, prefix)
-
-    warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
-
-    max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
-    if max_nodes < 0:
-        msg = f"hetzner max_nodes must be >= 0, got {max_nodes}"
-        raise ValueError(msg)
-    idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=120)
-    if idle_tolerance < 1:
-        msg = f"hetzner idle_tolerance must be >= 1, got {idle_tolerance}"
-        raise ValueError(msg)
-
-    connect_grace = sec.getint(fmt("connect_grace"), fallback=60)
-    if connect_grace < 1:
-        msg = f"hetzner connect_grace must be >= 1, got {connect_grace}"
-        raise ValueError(msg)
-
-    jump_port = _check_port(
-        "hetzner jump_port",
-        sec.getint(fmt("jump_port"), fallback=22),
-    )
-
-    token = _require_str("hetzner token", sec.get(fmt("token")))
-
-    return ConfigCloudHetzner(
-        token=token,
-        max_nodes=max_nodes,
-        username=sec.get(fmt("user"), "root"),
-        priority=sec.getint(fmt("priority"), fallback=0),
-        server_type=sec.get(fmt("server_type"), "cx52"),
-        location=sec.get(fmt("location"), "fsn1"),
-        image_name=sec.get(fmt("image_name"), "debian-13"),
-        idle_tolerance=idle_tolerance,
-        connect_grace=connect_grace,
-        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
-        jump_username=sec.get(fmt("jump_user"), None),
-        jump_host=sec.get(fmt("jump_host"), None),
-        jump_port=jump_port,
-        label=sec.get(fmt("label"), "yascheduler"),
-    )
-
-
-# endregion FUNC__parse_hetzner_section
-
-
-# region FUNC__parse_upcloud_section
-# PURPOSE: Build ConfigCloudUpcloud from a [clouds] INI section.
-def _parse_upcloud_section(sec: SectionProxy) -> ConfigCloudUpcloud:
-    prefix = "upcloud"
-    fmt = partial(_fmt_key, prefix)
-
-    warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
-
-    max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
-    if max_nodes < 0:
-        msg = f"upcloud max_nodes must be >= 0, got {max_nodes}"
-        raise ValueError(msg)
-    idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=120)
-    if idle_tolerance < 1:
-        msg = f"upcloud idle_tolerance must be >= 1, got {idle_tolerance}"
-        raise ValueError(msg)
-
-    connect_grace = sec.getint(fmt("connect_grace"), fallback=60)
-    if connect_grace < 1:
-        msg = f"upcloud connect_grace must be >= 1, got {connect_grace}"
-        raise ValueError(msg)
-
-    jump_port = _check_port(
-        "upcloud jump_port",
-        sec.getint(fmt("jump_port"), fallback=22),
-    )
-
-    login = _require_str("upcloud login", sec.get(fmt("login")))
-    password = _require_str("upcloud password", sec.get(fmt("password")))
-
-    return ConfigCloudUpcloud(
-        login=login,
-        password=password,
-        max_nodes=max_nodes,
-        username=sec.get(fmt("user"), "root"),
-        priority=sec.getint(fmt("priority"), fallback=0),
-        idle_tolerance=idle_tolerance,
-        connect_grace=connect_grace,
-        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
-        jump_username=sec.get(fmt("jump_user"), None),
-        jump_host=sec.get(fmt("jump_host"), None),
-        jump_port=jump_port,
-        label=sec.get(fmt("label"), "yascheduler"),
-    )
-
-
-# endregion FUNC__parse_upcloud_section
-
-
-# region FUNC__parse_vastai_section
-# PURPOSE: Build ConfigCloudVastAI from a [clouds] INI section.
-def _parse_vastai_section(sec: SectionProxy) -> ConfigCloudVastAI:
-    prefix = "vastai"
-    fmt = partial(_fmt_key, prefix)
-
-    warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
-    kibi = 1024
-
-    disk_gb = sec.getint(fmt("disk_gb"), fallback=80)
-    if disk_gb < 1:
-        msg = f"vastai disk_gb must be >= 1, got {disk_gb}"
-        raise ValueError(msg)
-    min_vram_mb = sec.getint(fmt("min_vram_mb"), fallback=80 * kibi)
-    if min_vram_mb < kibi:
-        msg = f"vastai min_vram_mb must be >= 1024, got {min_vram_mb}"
-        raise ValueError(msg)
-    num_gpus = sec.getint(fmt("num_gpus"), fallback=1)
-    if num_gpus < 1:
-        msg = f"vastai num_gpus must be >= 1, got {num_gpus}"
-        raise ValueError(msg)
-    max_price_per_hr = sec.getfloat(fmt("max_price_per_hr"), fallback=1.50)
-    if max_price_per_hr < 0:
-        msg = f"vastai max_price_per_hr must be >= 0, got {max_price_per_hr}"
-        raise ValueError(
-            msg,
-        )
-    max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
-    if max_nodes < 0:
-        msg = f"vastai max_nodes must be >= 0, got {max_nodes}"
-        raise ValueError(msg)
-    idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=300)
-    if idle_tolerance < 1:
-        msg = f"vastai idle_tolerance must be >= 1, got {idle_tolerance}"
-        raise ValueError(msg)
-
-    connect_grace = sec.getint(fmt("connect_grace"), fallback=120)
-    if connect_grace < 1:
-        msg = f"vastai connect_grace must be >= 1, got {connect_grace}"
-        raise ValueError(msg)
-
-    onstart_script_path = sec.get(fmt("onstart_script"), fallback=None)
-    if onstart_script_path:
-        if not Path(onstart_script_path).exists():
-            msg = f"vastai onstart_script must be valid path of a readable file or empty, got {onstart_script_path}"
-            raise ValueError(msg)
-
-        onstart_script = Path(onstart_script_path).read_text()
-    else:
-        onstart_script = None
-
-    jump_port = _check_port(
-        "vastai jump_port",
-        sec.getint(fmt("jump_port"), fallback=22),
-    )
-
-    api_key = _require_str("vastai api_key", sec.get(fmt("api_key")))
-
-    return ConfigCloudVastAI(
-        api_key=api_key,
-        image=sec.get(fmt("image"), "pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel"),
-        disk_gb=disk_gb,
-        min_vram_mb=min_vram_mb,
-        num_gpus=num_gpus,
-        max_price_per_hr=max_price_per_hr,
-        max_nodes=max_nodes,
-        priority=sec.getint(fmt("priority"), fallback=0),
-        idle_tolerance=idle_tolerance,
-        connect_grace=connect_grace,
-        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
-        onstart_script=onstart_script,
-        docker_options=sec.get(fmt("docker_options")),
-        jump_username=sec.get(fmt("jump_user"), None),
-        jump_host=sec.get(fmt("jump_host"), None),
-        jump_port=jump_port,
-        label=sec.get(fmt("label"), "yascheduler"),
-    )
-
-
-# endregion FUNC__parse_vastai_section
-
-
-# region FUNC__parse_vultr_section
-# PURPOSE: Build ConfigCloudVultr from a [clouds] INI section.
-def _parse_vultr_section(sec: SectionProxy) -> ConfigCloudVultr:
-    prefix = "vultr"
-    fmt = partial(_fmt_key, prefix)
-
-    warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
-
-    max_nodes = sec.getint(fmt("max_nodes"), fallback=10)
-    if max_nodes < 0:
-        msg = f"vultr max_nodes must be >= 0, got {max_nodes}"
-        raise ValueError(msg)
-    idle_tolerance = sec.getint(fmt("idle_tolerance"), fallback=1800)
-    if idle_tolerance < 1:
-        msg = f"vultr idle_tolerance must be >= 1, got {idle_tolerance}"
-        raise ValueError(msg)
-
-    connect_grace = sec.getint(fmt("connect_grace"), fallback=300)
-    if connect_grace < 1:
-        msg = f"vultr connect_grace must be >= 1, got {connect_grace}"
-        raise ValueError(msg)
-
-    image_name = sec.getint(fmt("image_name"), fallback=2136)
-    if image_name < 1:
-        msg = f"vultr image_name must be >= 1, got {image_name}"
-        raise ValueError(msg)
-
-    jump_port = _check_port(
-        "vultr jump_port",
-        sec.getint(fmt("jump_port"), fallback=22),
-    )
-
-    api_key = _require_str("vultr api_key", sec.get(fmt("api_key")))
-
-    return ConfigCloudVultr(
-        api_key=api_key,
-        location=sec.get(fmt("location"), "ams"),
-        server_type=sec.get(fmt("server_type"), "vbm-24c-256gb-amd"),
-        image_name=image_name,
-        need_raid=sec.getboolean(fmt("need_raid"), fallback=True),
-        max_nodes=max_nodes,
-        username=sec.get(fmt("user"), "root"),
-        priority=sec.getint(fmt("priority"), fallback=0),
-        idle_tolerance=idle_tolerance,
-        connect_grace=connect_grace,
-        package_upgrade=sec.getboolean(fmt("package_upgrade"), fallback=True),
-        jump_username=sec.get(fmt("jump_user"), None),
-        jump_host=sec.get(fmt("jump_host"), None),
-        jump_port=jump_port,
-        label=sec.get(fmt("label"), "yascheduler"),
-    )
-
-
-# endregion FUNC__parse_vultr_section
-
-
-# Open/closed registry: adding a provider = one parser function + one entry here.
-CLOUD_CONFIG_PARSERS: dict[str, Callable[[SectionProxy], ConfigCloud]] = {
-    "az": _parse_azure_section,
-    "hetzner": _parse_hetzner_section,
-    "upcloud": _parse_upcloud_section,
-    "vastai": _parse_vastai_section,
-    "vultr": _parse_vultr_section,
-}
-
-_CLOUD_DTO_BY_PREFIX: dict[str, type] = {
-    "az": ConfigCloudAzure,
-    "hetzner": ConfigCloudHetzner,
-    "upcloud": ConfigCloudUpcloud,
-    "vastai": ConfigCloudVastAI,
-    "vultr": ConfigCloudVultr,
-}
-_CLOUD_FIELD_RULES: dict[str, tuple[set[str], list[str]]] = {
-    "az": (_AZ_EXCLUDES, _AZ_INCLUDES),
-    "hetzner": (_HETZNER_EXCLUDES, _HETZNER_INCLUDES),
-    "upcloud": (_UPCLOUD_EXCLUDES, _UPCLOUD_INCLUDES),
-    "vastai": (_VASTAI_EXCLUDES, _VASTAI_INCLUDES),
-    "vultr": (_VULTR_EXCLUDES, _VULTR_INCLUDES),
-}
-
+# Every [clouds] sub-section shares one option namespace, so unknown-field
+# warnings check the union of all providers' valid keys.
 _ALL_CLOUD_VALID_FIELDS: list[str] = [
-    *cloud_valid_fields("az"),
-    *cloud_valid_fields("hetzner"),
-    *cloud_valid_fields("upcloud"),
-    *cloud_valid_fields("vastai"),
-    *cloud_valid_fields("vultr"),
+    field for prefix in _CLOUD_SPECS for field in cloud_valid_fields(prefix)
 ]
 
 
 # region FUNC_parse_cloud_section
-# PURPOSE: Dispatch a [clouds] sub-section to its per-prefix parser via the registry.
+# PURPOSE: Build a ConfigCloud DTO from a [clouds] sub-section via the per-prefix spec table — one code path replaces five near-identical provider parsers.
 def parse_cloud_section(sec: SectionProxy, prefix: str) -> ConfigCloud:
-    """Dispatch a [clouds] sub-section to its per-prefix parser via the registry."""
-    return CLOUD_CONFIG_PARSERS[prefix](sec)
+    """Dispatch a [clouds] sub-section to its per-prefix spec and build the DTO."""
+    spec = _CLOUD_SPECS[prefix]
+    warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
+    if spec.pre_check is not None:
+        spec.pre_check(sec, prefix)
+    return spec.dto_cls(
+        **cast(
+            "dict[str, Any]",
+            _read_fields(
+                sec,
+                spec.dto_cls,
+                prefix=prefix,
+                aliases=_CLOUD_ALIASES,
+                coerce=spec.coerce,
+            ),
+        )
+    )
 
 
 # endregion FUNC_parse_cloud_section
@@ -608,12 +409,12 @@ def parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[ConfigCloud]
         if user_key not in cfg.options("clouds"):
             sec[user_key] = remote.username
 
-    # Dispatch each known prefix to its parser; unknown prefixes are silently
+    # Dispatch each known prefix to its spec; unknown prefixes are silently
     # skipped (they would warn via warn_unknown_fields inside every parser call).
     return [
-        CLOUD_CONFIG_PARSERS[prefix](sec)
+        parse_cloud_section(sec, prefix)
         for prefix in cloud_prefixes
-        if prefix in CLOUD_CONFIG_PARSERS
+        if prefix in _CLOUD_SPECS
     ]
 
 
@@ -633,11 +434,7 @@ def _db_valid_fields() -> Sequence[str]:
 def _parse_db_section(sec: SectionProxy) -> PostgresDbConfig:
     warn_unknown_fields(_db_valid_fields(), sec)
     return PostgresDbConfig(
-        user=sec.get("user", "yascheduler"),
-        password=sec.get("password", "password"),
-        database=sec.get("database", "database"),
-        host=sec.get("host", "localhost"),
-        port=sec.getint("port", fallback=5432),
+        **cast("dict[str, Any]", _read_fields(sec, PostgresDbConfig))
     )
 
 
@@ -648,12 +445,19 @@ def _local_valid_fields() -> Sequence[str]:
     return [f.name for f in dataclasses.fields(LocalSettings)]
 
 
+def _local_default(name: str) -> object:
+    """Return the LocalSettings dataclass field default for `name`."""
+    return _field_default(
+        next(f for f in dataclasses.fields(LocalSettings) if f.name == name)
+    )
+
+
 # region FUNC__parse_local_section
 # PURPOSE: Build a frozen LocalSettings from a [local] INI section.
 # INVARIANTS: A data_dir that does not exist on the filesystem at parse time emits a logger.warning naming the missing path; the parser still returns a LocalSettings so cloud-only flows (which lazily create keys_dir via get_or_create_ssh_key) are not broken.
 def _parse_local_section(sec: SectionProxy) -> LocalSettings:
     warn_unknown_fields(_local_valid_fields(), sec)
-    data_dir = Path(sec.get("data_dir", "./data")).resolve()
+    data_dir = Path(sec.get("data_dir", str(_local_default("data_dir")))).resolve()
     # region BLOCK_warn_missing_data_dir
     # data_dir is the parent of keys_dir/tasks_dir/engines_dir; if it does not
     # exist, list_private_keys() will raise FileNotFoundError on every connect
@@ -668,37 +472,24 @@ def _parse_local_section(sec: SectionProxy) -> LocalSettings:
         tasks_dir=Path(sec.get("tasks_dir", str(data_dir / "tasks"))).resolve(),
         engines_dir=Path(sec.get("engines_dir", str(data_dir / "engines"))).resolve(),
         keys_dir=Path(sec.get("keys_dir", str(data_dir / "keys"))).resolve(),
-        webhook_reqs_limit=_int_or_default(
-            "webhook_reqs_limit",
-            sec.getint("webhook_reqs_limit"),
-        ),
         webhook_url=sec.get("webhook_url"),
-        conn_machine_limit=_int_or_default(
-            "conn_machine_limit",
-            sec.getint("conn_machine_limit"),
-        ),
-        conn_machine_pending=_int_or_default(
-            "conn_machine_pending",
-            sec.getint("conn_machine_pending"),
-        ),
-        allocate_limit=_int_or_default("allocate_limit", sec.getint("allocate_limit")),
-        allocate_pending=_int_or_default(
-            "allocate_pending",
-            sec.getint("allocate_pending"),
-        ),
-        consume_limit=_int_or_default("consume_limit", sec.getint("consume_limit")),
-        consume_pending=_int_or_default(
-            "consume_pending",
-            sec.getint("consume_pending"),
-        ),
-        deallocate_limit=_int_or_default(
-            "deallocate_limit",
-            sec.getint("deallocate_limit"),
-        ),
-        deallocate_pending=_int_or_default(
-            "deallocate_pending",
-            sec.getint("deallocate_pending"),
-        ),
+        # ponytail: filter Nones so dataclass defaults apply; keep explicit 0 so
+        # __post_init__ ge(1) still rejects it (sec.getint returns None for absent keys).
+        **{
+            k: v
+            for k, v in {
+                "webhook_reqs_limit": sec.getint("webhook_reqs_limit"),
+                "conn_machine_limit": sec.getint("conn_machine_limit"),
+                "conn_machine_pending": sec.getint("conn_machine_pending"),
+                "allocate_limit": sec.getint("allocate_limit"),
+                "allocate_pending": sec.getint("allocate_pending"),
+                "consume_limit": sec.getint("consume_limit"),
+                "consume_pending": sec.getint("consume_pending"),
+                "deallocate_limit": sec.getint("deallocate_limit"),
+                "deallocate_pending": sec.getint("deallocate_pending"),
+            }.items()
+            if v is not None
+        },
     )
 
 
@@ -716,26 +507,20 @@ def _remote_valid_fields() -> Sequence[str]:
 
 
 # region FUNC__parse_remote_section
-# PURPOSE: Turn a `[remote]` INI section into a validated `RemoteDefaults` value object so the rest of the system consumes immutable typed values instead of re-reading `ConfigParser` proxies at every SSH call site.
-# INVARIANTS: validation runs in the parser, not in `RemoteDefaults.__post_init__` — `jump_port` is checked against the 1..65535 range via `_check_port`, mirroring the `yascheduler_nodes.jump_port` DB `CHECK` constraint; `user` and `jump_user` are INI aliases for `username` and `jump_username` and are registered in `_remote_valid_fields` so `warn_unknown_fields` does not fire on them.
-# RATIONALE:
-# - Q: why does `jump_port` validation run in `_parse_remote_section` via `_check_port` instead of in `RemoteDefaults.__post_init__` like `LocalSettings` does for its concurrency limits?
-#   A: `jump_port` mirrors the `yascheduler_nodes.jump_port` DB `CHECK` constraint (1..65535) — keeping the same range check at parse time surfaces a misconfigured INI before any downstream code receives the value, and it follows the existing per-section parser idiom (`max_nodes`, `idle_tolerance`, cloud `{prefix}_jump_port`) so all port/limit invariants fail fast at config load; `LocalSettings` uses `__post_init__` because its limits are dataclass-internal (no DB mirror) and the parser must let a legitimate `0` reach `__post_init__` so `ge(1)` raises rather than being silently coerced.
+# PURPOSE: Turn a `[remote]` INI section into a `RemoteDefaults` value object so the rest of the system consumes immutable typed values instead of re-reading `ConfigParser` proxies at every SSH call site.
+# INVARIANTS: `user`/`jump_user` are INI aliases for `username`/`jump_username`; `jump_port` range is enforced by `RemoteDefaults.__post_init__` (mirrors the `yascheduler_nodes.jump_port` DB CHECK). `engines_dir`/`tasks_dir` derive from `data_dir` at runtime, so they are computed after `_read_fields` resolves the fixed defaults.
 def _parse_remote_section(sec: SectionProxy) -> RemoteDefaults:
     warn_unknown_fields(_remote_valid_fields(), sec)
-    data_dir = PurePath(sec.get("data_dir", "./data"))
-
-    jump_port = _check_port("jump_port", sec.getint("jump_port", fallback=22))
-
-    return RemoteDefaults(
-        data_dir=data_dir,
-        engines_dir=PurePath(sec.get("engines_dir", str(data_dir / "engines"))),
-        tasks_dir=PurePath(sec.get("tasks_dir", str(data_dir / "tasks"))),
-        username=sec.get("user", "root"),
-        jump_username=sec.get("jump_user", None),
-        jump_host=sec.get("jump_host", None),
-        jump_port=jump_port,
+    kwargs = _read_fields(
+        sec,
+        RemoteDefaults,
+        aliases={"username": "user", "jump_username": "jump_user"},
+        coerce={"data_dir": lambda s, k, d: PurePath(s.get(k, str(d)))},
     )
+    data_dir = cast("PurePath", kwargs["data_dir"])
+    kwargs["engines_dir"] = PurePath(sec.get("engines_dir", str(data_dir / "engines")))
+    kwargs["tasks_dir"] = PurePath(sec.get("tasks_dir", str(data_dir / "tasks")))
+    return RemoteDefaults(**cast("dict[str, Any]", kwargs))
 
 
 # endregion FUNC__parse_remote_section

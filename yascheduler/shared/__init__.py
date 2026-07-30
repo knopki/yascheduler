@@ -8,8 +8,10 @@
 from .compat import NotRequired, ParamSpec, Required, Self, StrEnum, TypeGuard, Unpack
 from .log import LogFormatter
 from .retry import retry
+from .validators import MAX_PORT, validate_interval
 
 __all__ = [
+    "MAX_PORT",
     "LogFormatter",
     "NotRequired",
     "ParamSpec",
@@ -19,4 +21,5 @@ __all__ = [
     "TypeGuard",
     "Unpack",
     "retry",
+    "validate_interval",
 ]
