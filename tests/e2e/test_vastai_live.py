@@ -15,7 +15,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import aiohttp
 import pytest
 
 from tests.log_assertions import extra_fields
@@ -141,27 +140,19 @@ def _ini_path_from_env() -> str:
 
 
 async def _assert_vm_deleted(api_key: str, instance_id: str) -> None:
-    from yascheduler.infra.cloud.providers.vastai import VastAIError, _request
+    from yascheduler.infra.cloud.providers.vastai import VastAIClient, VastAIError
 
     deadline = asyncio.get_running_loop().time() + _VM_DELETE_TIMEOUT_S
-    async with aiohttp.ClientSession(
-        headers={"Authorization": f"Bearer {api_key}"},
-    ) as session:
+    async with VastAIClient(api_key) as client:
         while asyncio.get_running_loop().time() < deadline:
             try:
-                resp = await _request(session, "GET", f"/instances/{instance_id}/")
+                await client.show_instance(int(instance_id))
             except VastAIError as err:
-                if "404" in str(err) or "not found" in str(err).lower():
+                if err.status == 404:
                     return
                 if err.status == 429:
                     await asyncio.sleep(_POLL_INTERVAL_S)
                     continue
-                raise
-            # VastAI API returns 200 with instances=null shortly after deletion
-            # (eventual consistency). Treat a missing/null instances field as
-            # "deleted" to avoid polling until timeout.
-            if not isinstance(resp, dict) or resp.get("instances") is None:
-                return
             await asyncio.sleep(_POLL_INTERVAL_S)
     log.error(
         "[vastai_live][CLEANUP] instance %s was NOT deleted — manual cleanup required",
@@ -197,6 +188,7 @@ async def _cleanup_observed(
     label: str = "yascheduler",
 ) -> None:
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudVastAI
+    from yascheduler.infra.cloud.providers.vastai import VastAIClient
 
     cfg: ConfigCloudVastAI = ConfigCloudVastAI(
         api_key=api_key,
@@ -211,18 +203,27 @@ async def _cleanup_observed(
     # Step 2: scan for orphaned instances matching cfg.label that were created
     # but never captured in observed_instance_ids (e.g. allocation failed after
     # VM creation but before the node was enabled in DB). Delete any found.
-    from yascheduler.infra.cloud.providers.vastai import vastai_list_instances
-
-    orphans = await vastai_list_instances(cfg)
-    orphan_ids = [str(inst["id"]) for inst in orphans]
-    for iid in orphan_ids:
-        if iid not in observed_instance_ids:
+    async with VastAIClient(api_key) as client:
+        try:
+            async for inst in client.show_instances():
+                inst_label = inst.get("label")
+                if not isinstance(inst_label, str) or not inst_label.startswith(label):
+                    continue
+                iid = str(inst["id"])
+                if iid in observed_instance_ids:
+                    continue
+                log.warning(
+                    "[vastai_live][CLEANUP] orphan instance %s not in observed set — deleting",
+                    iid,
+                )
+                observed_instance_ids.append(iid)
+                await _delete_one_best_effort(cfg, iid, log)
+        except Exception as err:
             log.warning(
-                "[vastai_live][CLEANUP] orphan instance %s not in observed set — deleting",
-                iid,
+                "[vastai_live][CLEANUP] orphan scan failed: %s — "
+                "observed-instance cleanup still runs",
+                err,
             )
-            observed_instance_ids.append(iid)
-            await _delete_one_best_effort(cfg, iid, log)
 
     # Strong per-instance deletion assertion: a survivor fails the test loudly.
     for iid in observed_instance_ids:
