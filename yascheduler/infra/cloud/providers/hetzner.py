@@ -46,7 +46,7 @@ _RECONCILE_ATTEMPTS = 5
 _RECONCILE_INTERVAL = 10.0
 _RECONCILE_LABEL_KEY = "yascheduler/reconcile"
 
-# DELETE retry + async-deletion verify (mirrors vultr._delete_and_verify).
+# DELETE retry + async-deletion verify.
 # Hetzner DELETE /servers/{id} returns 2xx immediately but the server lingers
 # briefly before it is truly gone and stops billing; a 5xx/429/transport flap
 # on DELETE is retried, and after an accepted DELETE we poll GET until 404 so
@@ -210,11 +210,10 @@ class HetznerClient:
     """Async Hetzner REST API client (aiohttp-based)."""
 
     def __init__(self, api_key: str) -> None:
-        self.api_key = api_key
         self._session = aiohttp.ClientSession(
             base_url=_HETZNER_BASE_URL,
             headers={
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {api_key}",
             },
             timeout=aiohttp.ClientTimeout(total=60),
         )
@@ -251,9 +250,11 @@ class HetznerClient:
                 # octet-stream body. Empty body -> None.
                 raw = await resp.text()
                 return json.loads(raw) if raw else None
-        except aiohttp.ClientResponseError as exc:
-            msg = f"HTTP request failed: {exc.message}"
-            raise HetznerError(msg, status=exc.status) from exc
+        except json.JSONDecodeError as exc:
+            # 2xx with a non-JSON body (truncated chunk, CDN error page) — treat
+            # as a transport-level/uncertain failure so callers retry.
+            msg = f"Invalid JSON response: {exc}"
+            raise HetznerError(msg) from exc
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             msg = f"Transport error: {exc}"
             raise HetznerError(msg) from exc
@@ -357,8 +358,6 @@ async def _resolve_ssh_key_by_fingerprint(
 ) -> int | None:
     """Resolve an existing SSH key ID by fingerprint query."""
     # asyncssh returns "MD5:aa:bb:cc:..."; Hetzner expects "aa:bb:cc:...".
-    # removeprefix tolerates a future bare-fingerprint form: split(":",1)[1]
-    # would silently drop the first octet if the MD5: prefix were ever absent.
     fingerprint = key.get_fingerprint("md5").removeprefix("MD5:")
     async for ssh_key in client.get_ssh_keys(fingerprint=fingerprint):
         return ssh_key["id"]
@@ -401,7 +400,7 @@ async def ensure_ssh_key(client: HetznerClient, key: ASSHKey, key_name: str) -> 
 #   original error re-raises regardless.
 # RATIONALE:
 # - Q: Why inject `users` into cloud-init when ssh_keys already passes the key?
-#   A: Hetzner's ssh_keys only inject into root; a non-root cfg.username must be created by cloud-init. root is listed too for determinism. Mirrors vultr's build_users.
+#   A: Hetzner's ssh_keys only inject into root; a non-root cfg.username must be created by cloud-init. root is listed too for determinism.
 # - Q: Why reconcile by label rather than by server name, when both carry the same unique random value?
 #   A: get_servers supports server-side filtering by label_selector, so the reconcile lists only the candidate server. The unique random label value scopes the match to exactly the server this create produced.
 async def hetzner_create_node(
@@ -445,7 +444,19 @@ async def hetzner_create_node(
             raise
         server_id = server["id"]
         ip_str = server["public_net"]["ipv4"]["ip"]
-
+        if not ip_str:
+            # Hetzner assigns the IPv4 synchronously; an empty IP means the
+            # response is unusable for SSH. Treat as a create failure so the
+            # reconcile path tears down the server instead of returning a DTO
+            # with an empty hostname the orchestrator can never reach.
+            err = HetznerError(f"Create returned empty IPv4 for server {server_id}")
+            logger.warning(
+                "CREATE_SERVER_FAILED (%s) — reconciling by label %s",
+                err,
+                label,
+            )
+            await _reconcile_orphan_by_label(client, label)
+            raise err
         logger.info("CREATED %s", ip_str)
         return CloudCreateNodeDTO(
             external_id=str(server_id),
@@ -462,7 +473,7 @@ async def hetzner_create_node(
 
 # region FUNC__reconcile_orphan_by_label
 # PURPOSE: Close the non-idempotent-create orphan window by matching and best-effort deleting a server created during a failed/ambiguous POST, using the unique label stamped on the create request.
-# ENSURES: Never raises — the original create error propagates regardless. Retries the listing _RECONCILE_ATTEMPTS times with a delay to cover listing-lag (server not yet visible after POST) and transient listing failures; on each tick a label match triggers best-effort delete+verify (_delete_and_verify), exhausting all attempts without a match logs a warning for manual reconciliation.
+# ENSURES: Never raises — the original create error propagates regardless. Two phases: (1) list by label up to _RECONCILE_ATTEMPTS times with a delay to cover listing-lag (server not yet visible after POST) and transient listing failures; (2) once an orphan id is found, retry _delete_and_verify directly on that id so async-delete list-lag never makes us lose track of a still-billing server. Exhausting either phase logs a warning naming the server id (if known) for manual reconciliation.
 async def _reconcile_orphan_by_label(
     client: HetznerClient,
     label: str,
@@ -474,8 +485,10 @@ async def _reconcile_orphan_by_label(
     by the unique label and delete it. Never raises.
     """
     label_selector = f"{_RECONCILE_LABEL_KEY}={label}"
+
+    # Phase 1: locate the orphan by label (covers listing-lag + transient lists).
+    orphan_id: int | None = None
     for attempt in range(1, _RECONCILE_ATTEMPTS + 1):
-        orphan_id: int | None = None
         try:
             async for server in client.get_servers(label_selector=label_selector):
                 orphan_id = server["id"]
@@ -494,22 +507,40 @@ async def _reconcile_orphan_by_label(
             )
             return
         if orphan_id is not None:
-            logger.warning(
-                "RECONCILE_DELETE_ORPHAN",
-                extra={"label": label, "server_id": orphan_id},
-            )
-            await _delete_and_verify(client, orphan_id)
-            return
+            break
         logger.debug(
             "RECONCILE_NO_ORPHAN",
             extra={"label": label, "attempt": attempt},
         )
         if attempt < _RECONCILE_ATTEMPTS:
             await asyncio.sleep(_RECONCILE_INTERVAL)
+
+    if orphan_id is None:
+        logger.warning(
+            "RECONCILE_NO_ORPHAN — %s listing attempts found no match for label %s",
+            _RECONCILE_ATTEMPTS,
+            label,
+        )
+        return
+
+    # Phase 2: retry delete+verify directly on the known id. Re-listing after an
+    # accepted DELETE risks an empty list (async-delete propagation lag) and a
+    # false "no orphan" — the id is what we need here, not the label match.
     logger.warning(
-        "RECONCILE_NO_ORPHAN — %s listing attempts found no match for label %s",
-        _RECONCILE_ATTEMPTS,
-        label,
+        "RECONCILE_DELETE_ORPHAN", extra={"label": label, "server_id": orphan_id}
+    )
+    for attempt in range(1, _RECONCILE_ATTEMPTS + 1):
+        if await _delete_and_verify(client, orphan_id):
+            return
+        logger.warning(
+            "RECONCILE_DELETE_FAILED — orphan may still bill",
+            extra={"label": label, "server_id": orphan_id, "attempt": attempt},
+        )
+        if attempt < _RECONCILE_ATTEMPTS:
+            await asyncio.sleep(_RECONCILE_INTERVAL)
+    logger.warning(
+        "RECONCILE_DELETE_EXHAUSTED — manual cleanup required",
+        extra={"label": label, "server_id": orphan_id},
     )
 
 
@@ -522,7 +553,6 @@ async def _reconcile_orphan_by_label(
 async def _delete_and_verify(client: HetznerClient, server_id: int) -> bool:
     """Delete a server with retry + async-deletion verification."""
     # region BLOCK_delete
-    delete_accepted = False
     for attempt in range(1, _DELETE_ATTEMPTS + 1):
         try:
             await client.delete_server(server_id)
@@ -550,12 +580,8 @@ async def _delete_and_verify(client: HetznerClient, server_id: int) -> bool:
         except Exception:
             logger.exception("Server %s delete failed", server_id)
             return False
-        delete_accepted = True
         break
     # endregion BLOCK_delete
-
-    if not delete_accepted:
-        return False
 
     return await _verify_server_gone(client, server_id)
 

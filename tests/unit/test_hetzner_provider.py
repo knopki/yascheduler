@@ -124,7 +124,6 @@ class TestHetznerClientRequest:
         from yascheduler.infra.cloud.providers.hetzner import HetznerClient
 
         client = HetznerClient.__new__(HetznerClient)
-        client.api_key = "test-token"
         session = MagicMock()
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=resp_mock)
@@ -195,6 +194,28 @@ class TestHetznerClientRequest:
             await client._request("GET", "/servers/1")
 
         assert exc_info.value.status == 500
+        assert exc_info.value.transient is True
+
+    @pytest.mark.asyncio
+    async def test_non_json_2xx_body_raises_transient_hetzner_error(self) -> None:
+        """Regression: a 2xx with a non-JSON body (truncated chunk, CDN error page).
+
+        The old code let json.JSONDecodeError escape _request unwrapped, which
+        broke the "never raises" contract of _verify_server_gone/_delete_and_verify
+        and left callers unable to classify the failure as transient. The body is
+        wrapped in a status-less HetznerError (transient) so callers retry.
+        """
+        from yascheduler.infra.cloud.providers.hetzner import HetznerError
+
+        resp = MagicMock()
+        resp.status = 200
+        resp.text = AsyncMock(return_value="<html>Gateway Timeout</html>")
+        client = self._client_with_response(resp)
+
+        with pytest.raises(HetznerError) as exc_info:
+            await client._request("GET", "/servers/1")
+
+        assert exc_info.value.status is None
         assert exc_info.value.transient is True
 
 
@@ -542,6 +563,67 @@ class TestHetznerCreateNode:
         token = labels[_RECONCILE_LABEL_KEY]
         assert token == create_kwargs["name"], "reconcile token must match server name"
 
+    @pytest.mark.asyncio
+    async def test_empty_ipv4_reconciles_and_raises(self) -> None:
+        """An accepted create with an empty IPv4 is treated as a create failure.
+
+        Hetzner assigns the IPv4 synchronously; an empty IP is unusable for SSH.
+        Rather than return a DTO with hostname="" the orchestrator can never reach,
+        reconcile the created server by label and re-raise so no billable orphan
+        lingers and the allocator retries.
+        """
+        from yascheduler.infra.cloud.providers.hetzner import (
+            HetznerError,
+            hetzner_create_node,
+        )
+
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = MagicMock(return_value=_ssh_key_stream([]))
+        mock_client.create_ssh_key = AsyncMock(
+            return_value={"id": 1, "name": "yakey", "fingerprint": "aa"}
+        )
+        # Accepted create with an empty IPv4 — server exists and bills.
+        mock_client.create_server = AsyncMock(
+            return_value={
+                "id": 77,
+                "name": "orphan-ip",
+                "public_net": {"ipv4": {"ip": ""}},
+                "labels": {},
+            }
+        )
+        # Reconcile finds the orphan by label and deletes it.
+        mock_client.get_servers = MagicMock(
+            return_value=_servers_stream(
+                [
+                    {
+                        "id": 77,
+                        "name": "orphan-ip",
+                        "public_net": {"ipv4": {"ip": ""}},
+                        "labels": {},
+                    }
+                ]
+            )
+        )
+        mock_client.delete_server = AsyncMock()
+        mock_client.get_server = AsyncMock(side_effect=HetznerError("gone", status=404))
+
+        with (
+            _patch_hetzner_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner.get_key_name",
+                return_value="yakey-abc",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner._RECONCILE_INTERVAL",
+                0.0,
+            ),
+            pytest.raises(HetznerError, match="empty IPv4"),
+        ):
+            await hetzner_create_node(_make_cfg(), _make_key())
+
+        # The created server was reconciled (deleted) so it does not bill.
+        mock_client.delete_server.assert_awaited_once_with(77)
+
 
 def _ssh_key_stream(items: list):
     """Build an async generator mimicking HetznerClient.get_ssh_keys."""
@@ -561,6 +643,106 @@ def _servers_stream(items: list):
             yield server
 
     return gen()
+
+
+# =============================================================================
+# _reconcile_orphan_by_label
+# =============================================================================
+
+
+class TestReconcileOrphanByLabel:
+    """_reconcile_orphan_by_label — phase-2 retries delete+verify on a known id.
+
+    Regression: the old loop re-listed by label after a failed verify, so an
+    accepted-but-async DELETE could return an empty list (propagation lag) and
+    the reconcile falsely concluded "no orphan" while the server still billed.
+    Once an orphan id is found, phase 2 retries _delete_and_verify directly on
+    that id and never re-lists.
+    """
+
+    @pytest.mark.asyncio
+    async def test_verify_timeout_then_404_retries_on_same_id(self) -> None:
+        """First verify times out (server still present), retry delete hits 404.
+
+        The orphan id is known after phase 1; phase 2 must retry _delete_and_verify
+        on that id rather than re-listing. delete_server is called twice (once per
+        phase-2 attempt); get_servers is called once (phase 1 only).
+        """
+        from yascheduler.infra.cloud.providers.hetzner import (
+            HetznerError,
+            _reconcile_orphan_by_label,
+        )
+
+        mock_client = MagicMock()
+        mock_client.get_servers = MagicMock(
+            return_value=_servers_stream(
+                [
+                    {
+                        "id": 1234,
+                        "name": "orphan",
+                        "public_net": {"ipv4": {"ip": "1.2.3.4"}},
+                        "labels": {},
+                    }
+                ]
+            )
+        )
+        # First delete accepted, but GET keeps returning 200 (verify times out);
+        # second delete hits 404 (already gone) → success.
+        mock_client.delete_server = AsyncMock(
+            side_effect=[None, HetznerError("nf", status=404)]
+        )
+        # get_server returns a valid server first (no 404 → keep polling →
+        # _VERIFY_TIMEOUT), then is not reached on the second attempt (404 on DELETE).
+        valid_server = {
+            "id": 1234,
+            "name": "orphan",
+            "public_net": {"ipv4": {"ip": "1.2.3.4"}},
+            "labels": {},
+        }
+        mock_client.get_server = AsyncMock(return_value=valid_server)
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner._RECONCILE_INTERVAL",
+                0.0,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner._VERIFY_TIMEOUT",
+                0.0,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner._VERIFY_INTERVAL",
+                0.0,
+            ),
+        ):
+            await _reconcile_orphan_by_label(mock_client, "orphan")
+
+        # Phase 1 lists once; phase 2 never re-lists.
+        mock_client.get_servers.assert_called_once()
+        # Two delete attempts on the SAME id, not a re-list-and-match.
+        assert mock_client.delete_server.await_count == 2
+        assert all(
+            call.args == (1234,) for call in mock_client.delete_server.call_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_orphan_does_not_delete(self) -> None:
+        """Label lists empty → no delete, warning logged, never raises."""
+        from yascheduler.infra.cloud.providers.hetzner import (
+            _reconcile_orphan_by_label,
+        )
+
+        mock_client = MagicMock()
+        mock_client.get_servers = MagicMock(return_value=_servers_stream([]))
+        mock_client.delete_server = AsyncMock()
+
+        with patch(
+            "yascheduler.infra.cloud.providers.hetzner._RECONCILE_INTERVAL",
+            0.0,
+        ):
+            await _reconcile_orphan_by_label(mock_client, "none")
+
+        mock_client.delete_server.assert_not_awaited()
 
 
 # =============================================================================
