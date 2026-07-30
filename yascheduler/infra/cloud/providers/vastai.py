@@ -38,10 +38,9 @@ _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_SERVER_ERROR = 500
 
 # Best-effort orphan reconcile after an ambiguous non-idempotent create.
-# Covers listing-lag (instance not yet visible after PUT) and transient
-# listing failures; matched by the unique per-create label.
-_RECONCILE_ATTEMPTS = 3
-_RECONCILE_INTERVAL = 20.0
+# VastAI listing is eventually consistent and unpredictably laggy
+_RECONCILE_ATTEMPTS = 10
+_RECONCILE_INTERVAL = 15.0
 
 # Verify-after-delete: poll GET /instances/{id}/ until 404 so a 2xx DELETE
 # (accepted, not gone) cannot leave a billed orphan. Mirrors Vultr/Hetzner.
@@ -99,11 +98,11 @@ class VastAIOffer(TypedDict):
     dph_total: float | int
 
 
-class VastAIOffersResponce(TypedDict):
+class VastAIOffersResponse(TypedDict):
     offers: list[VastAIOffer]
 
 
-class VastAICreateInstanceResponce(TypedDict):
+class VastAICreateInstanceResponse(TypedDict):
     new_contract: int | float
 
 
@@ -115,11 +114,11 @@ class VastAIInstance(TypedDict):
     ssh_port: int | float | None
 
 
-class VastAIShowInstanceResponce(TypedDict):
+class VastAIShowInstanceResponse(TypedDict):
     instances: VastAIInstance
 
 
-class VastAIShowInstancesResponce(TypedDict):
+class VastAIShowInstancesResponse(TypedDict):
     next_token: str | None
     instances: list[VastAIInstance]
 
@@ -140,7 +139,6 @@ class VastAISearchOffersFilters(TypedDict, total=False):
 
 class VastAICreateInstanceParams(TypedDict, total=False):
     image: Required[str]
-    template_hash_id: str
     label: str
     disk: int
     env: str
@@ -149,10 +147,6 @@ class VastAICreateInstanceParams(TypedDict, total=False):
 
 
 class VastAIShowInstancesFilters(TypedDict, total=False):
-    actual_status: VastAIFilter
-    gpu_name: VastAIFilter
-    verification: VastAIFilter
-    id: VastAIFilter
     label: VastAIFilter
 
 
@@ -187,7 +181,7 @@ def _is_api_offer(resp: object) -> TypeGuard[VastAIOffer]:
     )
 
 
-def _is_api_offers_list(resp: object) -> TypeGuard[VastAIOffersResponce]:
+def _is_api_offers_list(resp: object) -> TypeGuard[VastAIOffersResponse]:
     return (
         isinstance(resp, dict)
         and "offers" in resp
@@ -197,7 +191,7 @@ def _is_api_offers_list(resp: object) -> TypeGuard[VastAIOffersResponce]:
 
 def _is_api_create_instance_resp(
     resp: object,
-) -> TypeGuard[VastAICreateInstanceResponce]:
+) -> TypeGuard[VastAICreateInstanceResponse]:
     return isinstance(resp, dict) and isinstance(resp.get("new_contract"), (float, int))
 
 
@@ -214,7 +208,7 @@ def _is_api_instance(resp: object) -> TypeGuard[VastAIInstance]:
     )
 
 
-def _is_api_show_instance_resp(resp: object) -> TypeGuard[VastAIShowInstanceResponce]:
+def _is_api_show_instance_resp(resp: object) -> TypeGuard[VastAIShowInstanceResponse]:
     return (
         isinstance(resp, dict)
         and "instances" in resp
@@ -222,7 +216,7 @@ def _is_api_show_instance_resp(resp: object) -> TypeGuard[VastAIShowInstanceResp
     )
 
 
-def _is_api_show_instances_resp(resp: object) -> TypeGuard[VastAIShowInstancesResponce]:
+def _is_api_show_instances_resp(resp: object) -> TypeGuard[VastAIShowInstancesResponse]:
     return (
         isinstance(resp, dict)
         and isinstance(resp.get("next_token"), (str, type(None)))
@@ -267,7 +261,7 @@ class VastAIClient:
         params: aiohttp.typedefs.Query | None = None,
         data: dict | None = None,
     ) -> object:
-        """Send an async HTTP request to the Vastai API and return parsed JSON."""
+        """Send an async HTTP request to the Vastai API; empty 2xx body -> None."""
         try:
             async with self._session.request(
                 method, path, params=params, json=data
@@ -279,10 +273,16 @@ class VastAIClient:
                 if resp.status >= _HTTP_BAD_REQUEST:
                     msg = f"HTTP {resp.status}: {await resp.text()}"
                     raise VastAIError(msg, status=resp.status)
-                return await resp.json()
+                # DELETE may 2xx with empty body; json() would raise a bogus
+                # non-transient VastAIError(status=200). Mirrors vultr.
+                raw = await resp.text()
+                return json.loads(raw) if raw else None
         except aiohttp.ClientResponseError as exc:
             msg = f"HTTP request failed: {exc.message}"
             raise VastAIError(msg, status=exc.status) from exc
+        except json.JSONDecodeError as exc:
+            msg = f"Invalid JSON response: {exc}"
+            raise VastAIError(msg) from exc
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             msg = f"Transport error: {exc}"
             raise VastAIError(msg) from exc
@@ -467,7 +467,7 @@ async def generate_onstart(
 
 # region FUNC__reconcile_orphan_by_label
 # PURPOSE: Close the non-idempotent-create orphan window by matching and best-effort deleting an instance created during a failed/ambiguous PUT, using the unique label generated pre-PUT.
-# ENSURES: Never raises — the original create error propagates regardless. Retries the listing _RECONCILE_ATTEMPTS times with a delay to cover listing-lag and transient listing failures; on each tick a label match triggers best-effort delete+verify, exhausting all attempts without a match logs a warning for manual reconciliation. A failure of _delete_and_verify itself is swallowed; CancelledError propagates.
+# ENSURES: Never raises — original create error propagates regardless. Retries listing _RECONCILE_ATTEMPTS times (~150s window — VastAI listing-lag is unpredictably minutes). On label match: _delete_and_verify exception swallowed (RECONCILE_DELETE_FAILED); False return (no captured id/DB row to retry) logged as ERROR RECONCILE_ORPHAN_STILL_BILLING; CancelledError propagates.
 async def _reconcile_orphan_by_label(
     client: VastAIClient,
     label: str,
@@ -506,18 +506,24 @@ async def _reconcile_orphan_by_label(
                 "RECONCILE_DELETE_ORPHAN",
                 extra={"label": label, "instance_id": orphan_id},
             )
-            # delete+verify so async VastAI deletion can't leave a billed
-            # orphan after reconcile claims success. Swallow failures so the
-            # original create error (not this cleanup) propagates; the verify
-            # path logs ERROR on its own if the instance refuses to die.
+            # False (not confirmed gone) = billed orphan with no captured id /
+            # DB row to retry against — log ERROR, don't silently return.
             try:
-                await _delete_and_verify(client, int(orphan_id))
+                gone = await _delete_and_verify(client, int(orphan_id))
             except asyncio.CancelledError:
                 raise
             except Exception as err:
                 logger.warning(
                     "RECONCILE_DELETE_FAILED",
                     extra={"label": label, "instance_id": orphan_id, "error": str(err)},
+                )
+                return
+            if not gone:
+                logger.error(
+                    "RECONCILE_ORPHAN_STILL_BILLING — instance %s may still bill; "
+                    "manual deletion required via VastAI console",
+                    orphan_id,
+                    extra={"label": label, "instance_id": orphan_id},
                 )
             return
         logger.debug(
@@ -556,8 +562,9 @@ async def _verify_instance_gone(client: VastAIClient, instance_id: int) -> bool:
                 "VERIFY_GET_RETRY",
                 extra={"instance_id": instance_id, "status": err.status},
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as err:
-            # Transient transport/decode error — uncertain, keep polling.
             logger.debug(
                 "VERIFY_GET_RETRY",
                 extra={"instance_id": instance_id, "error": str(err)},
@@ -605,10 +612,16 @@ async def _delete_and_verify(client: VastAIClient, instance_id: int) -> bool:
                 )
                 await asyncio.sleep(_DELETE_INTERVAL)
                 continue
-            logger.exception(
-                "Instance %s delete failed after %s attempts", instance_id, attempt
+            # Permanent 4xx / retries exhausted — expected, not a crash.
+            logger.warning(
+                "Instance %s delete failed after %s attempts (last status=%s)",
+                instance_id,
+                attempt,
+                err.status,
             )
             return False
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Instance %s delete failed", instance_id)
             return False
@@ -725,7 +738,11 @@ async def vastai_create_node(
 
     async with VastAIClient(cfg.api_key) as client:
         logger.debug("SSH_KEY_CHECK", extra={})
-        await ensure_ssh_key(client, public_key)
+        # False = key not registered; proceeding would launch a billed GPU
+        # instance the scheduler can never SSH into. No instance created yet.
+        if not await ensure_ssh_key(client, public_key):
+            msg = "SSH key registration refused by VastAI (success:false)"
+            raise VastAIError(msg)
 
         logger.debug("OFFER_SEARCH_START", extra={})
         offers = await client.search_offers(
@@ -767,12 +784,14 @@ async def vastai_create_node(
             )
         except BaseException:
             # Transport ambiguity (break after accept), malformed create
-            # response (2xx without new_contract), OR cancellation mid-PUT:
-            # the instance may exist with no captured id. Reconcile by the
-            # unique label before re-raising so no billable orphan leaks.
-            # BaseException (not Exception) so CancelledError/SystemExit still
-            # reconcile — the PUT may have been accepted. asyncio.sleep inside
-            # reconcile respects cancellation (raises CancelledError on await).
+            # response (2xx without new_contract), OR cancellation/Shutdown
+            # mid-PUT (Ctrl-C on the foreground daemon from dev.py): the
+            # instance may exist with no captured id. Reconcile by the unique
+            # label before re-raising so no billable orphan leaks. BaseException
+            # (not Exception) so CancelledError/SystemExit/KeyboardInterrupt
+            # still reconcile — the PUT may have been accepted. The first
+            # await inside reconcile respects a repeat interrupt, so this
+            # never hangs shutdown.
             logger.warning(
                 "CREATE_INSTANCE_FAILED — reconciling by label %s",
                 create_label,
@@ -787,21 +806,20 @@ async def vastai_create_node(
         try:
             instance = await wait_until_ready(client, instance_id, cfg.connect_grace)
             # wait_until_ready only returns once status == running WITH an ssh
-            # endpoint, so the None branches below are unreachable in practice.
-            # They exist to narrow the VastAIInstance type (ssh fields are
-            # Optional so orphan reconcile can see fresh instances) for the DTO.
+            # endpoint assigned, so the Optional
+            # fields are populated here. Assert narrows the type for the DTO
+            # without an unreachable raise branch.
             ssh_host = instance["ssh_host"]
             ssh_port = instance["ssh_port"]
-            if ssh_host is None or ssh_port is None:
-                # Must raise inside the try so the except runs _delete_and_verify
-                # on the billing instance (hence noqa: TRY301, not abstracted).
-                msg = f"Instance {instance_id} running but ssh endpoint not assigned"
-                raise VastAIError(msg)  # noqa: TRY301
+            assert ssh_host is not None
+            assert ssh_port is not None
         except BaseException:
-            # Includes CancelledError (BaseException since Py3.8): the poll
-            # loop can run for connect_grace (default 300s), so shutdown-driven
-            # cancellation here is realistic; `except Exception` would orphan
-            # the billing instance. Mirrors manager.allocate's _setup_vm guard.
+            # Includes CancelledError/SystemExit/KeyboardInterrupt
+            # (BaseException since Py3.8): the poll loop can run for
+            # connect_grace (default 300s), so shutdown-driven cancellation
+            # here is realistic; `except Exception` would orphan the billing
+            # instance. _delete_and_verify respects a repeat interrupt at its
+            # awaits, so this never hangs shutdown.
             logger.exception(
                 "Instance %s create_node failed before returning", instance_id
             )
