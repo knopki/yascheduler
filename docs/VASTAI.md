@@ -65,7 +65,7 @@ Both modes return an SSH-accessible instance.
 
 ### On-demand only
 
-The provider searches **on-demand** offers only (`type == "on-demand"` in the
+The provider searches **on-demand** offers only (`type == "ondemand"` in the
 filter). Spot / interruptible pricing is **not** supported.
 
 ## Testing

@@ -223,7 +223,7 @@ class TestRequest:
         client = VastAIClient.__new__(VastAIClient)
         resp_ctx = AsyncMock()
         resp_ctx.__aenter__.return_value.status = 200
-        resp_ctx.__aenter__.return_value.json = AsyncMock(return_value={"ok": 1})
+        resp_ctx.__aenter__.return_value.text = AsyncMock(return_value='{"ok": 1}')
         client._session = MagicMock()
         client._session.request.return_value = resp_ctx
         result = await client._request("GET", "/x")
@@ -287,12 +287,27 @@ class TestRequest:
         resp_ctx = AsyncMock()
         resp = resp_ctx.__aenter__.return_value
         resp.status = 200
-        resp.json = AsyncMock(return_value={})
+        resp.text = AsyncMock(return_value="{}")
         client._session = MagicMock()
         client._session.request.return_value = resp_ctx
         await client._request("GET", "/foo")
         rec = next(r for r in log_records if r.getMessage() == "VASTAI_REQUEST")
         assert extra_fields(rec) == {"method": "GET", "path": "/foo", "status": 200}
+
+    @pytest.mark.asyncio
+    async def test_2xx_empty_body_returns_none(self) -> None:
+        # PURPOSE: DELETE may 2xx with empty body; json() would raise a bogus
+        # non-transient VastAIError(status=200). Empty body -> None.
+        from yascheduler.infra.cloud.providers.vastai import VastAIClient
+
+        client = VastAIClient.__new__(VastAIClient)
+        resp_ctx = AsyncMock()
+        resp = resp_ctx.__aenter__.return_value
+        resp.status = 204
+        resp.text = AsyncMock(return_value="")
+        client._session = MagicMock()
+        client._session.request.return_value = resp_ctx
+        assert await client._request("DELETE", "/instances/7") is None
 
 
 # =============================================================================
@@ -870,9 +885,9 @@ class TestReconcileOrphan:
 
     @pytest.mark.asyncio
     async def test_delete_and_verify_failure_swallowed(self) -> None:
-        # PURPOSE: a _delete_and_verify failure (e.g. DELETE 403) must NOT
-        # mask the original create error — reconcile swallows it; the original
-        # error still propagates from vastai_create_node.
+        # PURPOSE: a _delete_and_verify exception (e.g. DELETE 403 raising) must
+        # NOT mask the original create error — reconcile swallows it; the
+        # original error still propagates from vastai_create_node.
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
             _reconcile_orphan_by_label,
@@ -890,6 +905,31 @@ class TestReconcileOrphan:
             ),
         ):
             await _reconcile_orphan_by_label(client, "lbl")  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_delete_and_verify_false_logs_error_no_success(
+        self, log_records: list
+    ) -> None:
+        # PURPOSE: False (not confirmed gone) = billed orphan with no captured
+        # id / DB row to retry — reconcile MUST log ERROR, not silently return.
+        from yascheduler.infra.cloud.providers.vastai import _reconcile_orphan_by_label
+
+        client = MagicMock()
+        client.show_instances = MagicMock(return_value=_instance_stream([_INSTANCE]))
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai._delete_and_verify",
+                AsyncMock(return_value=False),
+            ),
+        ):
+            await _reconcile_orphan_by_label(client, "lbl")  # must not raise
+        markers = [r.getMessage() for r in log_records]
+        assert any(m.startswith("RECONCILE_ORPHAN_STILL_BILLING") for m in markers), (
+            f"expected RECONCILE_ORPHAN_STILL_BILLING; got {markers}"
+        )
 
     @pytest.mark.asyncio
     async def test_delete_and_verify_cancelled_propagates(self) -> None:
@@ -1007,23 +1047,31 @@ class TestVerifyInstanceGone:
     async def test_non_vastai_error_keeps_polling_then_timeout_false(self) -> None:
         # PURPOSE: a non-VastAIError from show_instance (transport/decode)
         # must not escape — _verify_instance_gone is contracted Never-raises;
-        # treat it as uncertain and keep polling until timeout.
+        # treat it as uncertain and keep polling until timeout. The loop MUST
+        # actually execute at least one iteration (a TIMEOUT of 0.0 skips the
+        # loop entirely, making the test false-green).
         from yascheduler.infra.cloud.providers.vastai import _verify_instance_gone
 
         client = MagicMock()
         client.show_instance = AsyncMock(side_effect=RuntimeError("decode boom"))
+        times = iter([100.0, 99.0, 200.0])
         with (
             patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_TIMEOUT", 0.0
+                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_TIMEOUT", 1.0
             ),
             patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL", 0.0
+                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL", 10.0
             ),
             patch(
                 "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
             ),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.asyncio.get_running_loop"
+            ) as loop_mock,
         ):
+            loop_mock.return_value.time = lambda: next(times)
             assert await _verify_instance_gone(client, 1) is False
+        assert client.show_instance.await_count == 1
 
     @pytest.mark.asyncio
     async def test_single_sleep_per_iteration(self) -> None:
@@ -1520,6 +1568,27 @@ class TestCreateNode:
         with (
             _patch_vastai_client(mock_client),
             pytest.raises(VastAIError, match="keys down"),
+        ):
+            await vastai_create_node(cfg, _key())
+        mock_client.create_instance.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ensure_ssh_key_returns_false_aborts_no_create(self) -> None:
+        # PURPOSE: success:false = key not registered; create MUST abort before
+        # launching a billed instance. No instance created, so no reconcile.
+        from yascheduler.infra.cloud.providers.vastai import (
+            VastAIError,
+            vastai_create_node,
+        )
+
+        cfg = _cfg()
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = AsyncMock(return_value=[])
+        mock_client.create_ssh_key = AsyncMock(return_value=False)
+        mock_client.create_instance = AsyncMock()
+        with (
+            _patch_vastai_client(mock_client),
+            pytest.raises(VastAIError, match="SSH key registration refused"),
         ):
             await vastai_create_node(cfg, _key())
         mock_client.create_instance.assert_not_awaited()
