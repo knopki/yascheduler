@@ -528,6 +528,28 @@ class TestShowInstances:
             async for _ in client.show_instances():
                 pass
 
+    @pytest.mark.asyncio
+    async def test_select_filters_json_encoded(self) -> None:
+        from yascheduler.infra.cloud.providers.vastai import VastAIClient
+
+        page = {"next_token": None, "instances": [_INSTANCE]}
+        client = VastAIClient.__new__(VastAIClient)
+        captured: list[dict] = []
+
+        async def fake_request(method, path, params=None, **kw):
+            captured.append(dict(params) if params else {})
+            return page
+
+        with patch.object(client, "_request", fake_request):
+            result = [
+                x
+                async for x in client.show_instances(
+                    select_filters={"label": {"eq": "yascheduler-XYZ"}}
+                )
+            ]
+        assert result == [_INSTANCE]
+        assert captured[0]["select_filters"] == '{"label": {"eq": "yascheduler-XYZ"}}'
+
 
 # =============================================================================
 # ensure_ssh_key
@@ -754,6 +776,15 @@ class TestBestEffortDelete:
         client.destroy_instance = AsyncMock()
         await _best_effort_delete(client, 1)
         assert not any("NOT DELETED" in r.getMessage() for r in log_records)
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_not_swallowed(self) -> None:
+        from yascheduler.infra.cloud.providers.vastai import _best_effort_delete
+
+        client = MagicMock()
+        client.destroy_instance = AsyncMock(side_effect=asyncio.CancelledError())
+        with pytest.raises(asyncio.CancelledError):
+            await _best_effort_delete(client, 1)
 
 
 # =============================================================================
