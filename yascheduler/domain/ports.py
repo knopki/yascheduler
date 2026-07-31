@@ -13,7 +13,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+    from collections.abc import (
+        AsyncGenerator,
+        Awaitable,
+        Callable,
+        Coroutine,
+        Mapping,
+        Sequence,
+    )
     from contextlib import AbstractAsyncContextManager
     from pathlib import Path, PurePath
     from re import Pattern
@@ -269,7 +276,7 @@ class MachineSession(Protocol):
         """Run a command on the remote machine and wait for exit."""
         ...
 
-    async def run_full(self, cmd: str) -> Any:  # noqa: ANN401
+    def run_full(self, cmd: str) -> Coroutine[Any, Any, Any]:
         """Run a command and return the full ``SSHCompletedProcess``."""
         ...
 
@@ -285,7 +292,7 @@ class MachineSession(Protocol):
         """Open an SFTP client session."""
         ...
 
-    async def get_cpu_cores(self) -> int:
+    def get_cpu_cores(self) -> Coroutine[Any, Any, int]:
         """Read the number of CPU cores from the remote machine."""
         ...
 

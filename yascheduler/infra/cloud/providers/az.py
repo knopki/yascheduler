@@ -24,6 +24,7 @@ from azure.mgmt.compute.v2021_07_01.models import (
     HardwareProfile,
     ImageReference,
     LinuxConfiguration,
+    NetworkInterfaceReference,
     NetworkProfile,
     OSDisk,
     OSProfile,
@@ -195,7 +196,9 @@ def create_vm_params(
                 delete_option=DiskDeleteOptionTypes.DELETE,
             ),
         ),
-        network_profile=NetworkProfile(network_interfaces=[nic]),
+        network_profile=NetworkProfile(
+            network_interfaces=[NetworkInterfaceReference(id=cast("str", nic.id))]
+        ),
         os_profile=OSProfile(
             computer_name=vm_name[:15],  # max length 15
             admin_username=username,

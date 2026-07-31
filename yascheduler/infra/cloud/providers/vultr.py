@@ -395,8 +395,10 @@ def build_baremetal_user_data(
         runcmd += [
             "mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme0n1 /dev/nvme1n1 --force",
             "mkfs.ext4 -b 4096 -E stride=128,stripe-width=256 /dev/md0",
-            "UUID=$(blkid -s UUID -o value /dev/md0) && "
-            'echo "UUID=$UUID /data ext4 defaults 0 2" >> /etc/fstab && mount /data',
+            (
+                "UUID=$(blkid -s UUID -o value /dev/md0) && "
+                'echo "UUID=$UUID /data ext4 defaults 0 2" >> /etc/fstab && mount /data'
+            ),
             "mdadm --detail --scan >> /etc/mdadm/mdadm.conf",
             "update-initramfs -u",
             "echo 'tmpfs /dev/shm tmpfs defaults,size=200G 0 0' >> /etc/fstab",
@@ -409,13 +411,19 @@ def build_baremetal_user_data(
         runcmd.append(f"chown -R {username}:{username} /data")
 
     runcmd += [
-        "printf '* soft nofile 65536\\n* hard nofile 65536\\n"
-        "root soft nofile 65536\\nroot hard nofile 65536\\n' "
-        ">> /etc/security/limits.conf",
-        "ln -sf /usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2.1 "
-        "/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.1",
-        "ln -sf /usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2.1 "
-        "/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2",
+        (
+            "printf '* soft nofile 65536\\n* hard nofile 65536\\n"
+            "root soft nofile 65536\\nroot hard nofile 65536\\n' "
+            ">> /etc/security/limits.conf"
+        ),
+        (
+            "ln -sf /usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2.1 "
+            "/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.1"
+        ),
+        (
+            "ln -sf /usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2.1 "
+            "/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so.2.2"
+        ),
     ]
 
     return CloudInitConfig(

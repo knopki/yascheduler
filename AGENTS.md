@@ -94,6 +94,7 @@ verification defect.
 
 ```python
 import logging
+
 logger = logging.getLogger(__name__)
 ```
 
