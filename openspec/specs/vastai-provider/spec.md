@@ -36,10 +36,10 @@ through one HTTP client; blocking calls are never offloaded to a thread pool.
 - **WHEN** the adapter creates a node
 - **THEN** the instance is created with a unique per-create label derived from the configured label, so orphan reconcile targets only the instance this create produced, never other instances on the same account
 
-#### Scenario: delete verifies the instance is gone before reporting success
+#### Scenario: delete trusts VastAI's synchronous DELETE; transient failures retried
 
-- **WHEN** the adapter deletes an instance and the delete is accepted (2xx)
-- **THEN** the adapter polls the instance until it is confirmed gone (404 or a missing/null instance record) before returning; a 2xx that never resolves to gone raises so the caller leaves the node disabled for cross-cycle retry, so no billed orphan remains after a falsely reported success
+- **WHEN** the adapter deletes an instance
+- **THEN** a DELETE 2xx (VastAI's DELETE is synchronous — 2xx means the instance is destroyed) or a DELETE 404 (already gone, idempotent no-op) succeeds without a follow-up poll; transient DELETE failures (5xx, rate-limit, transport) are retried in-process, and a permanent DELETE failure (4xx non-404) or exhausted retries raise so the caller leaves the node disabled for cross-cycle retry. VastAI reports a deleted id via GET as 200 with `{"instances": null}` (404 is not defined for GET), so the adapter does not use GET to confirm deletion.
 
 ### Requirement: VastAI SSH key handling
 
@@ -100,10 +100,11 @@ verbatim and cloud-init translation SHALL be skipped.
 The adapter SHALL poll the instance until it reaches the ready state before
 returning the SSH address. Polling SHALL be bounded by the configured
 connect grace period. On timeout, on the instance entering a terminal
-non-ready state, or on any show-instance failure that leaves the poll loop,
-the adapter SHALL best-effort delete the known instance id to prevent
-orphans and SHALL raise; it SHALL NOT retry against a different offer within
-the same call.
+non-ready state or no longer existing (VastAI returns 200 with
+`{"instances": null}` for a deleted id), or on any show-instance failure that
+leaves the poll loop, the adapter SHALL best-effort delete the known instance
+id to prevent orphans and SHALL raise; it SHALL NOT retry against a different
+offer within the same call.
 
 #### Scenario: instance polled until ready; timeout, terminal status, or show failure cleans up and raises
 

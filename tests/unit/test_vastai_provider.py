@@ -195,7 +195,7 @@ class TestVastAIError:
 
     def test_not_transient_404(self) -> None:
         # PURPOSE: 404 is NOT transient — it's the idempotent "already gone"
-        # success signal in _delete_and_verify, not a retry candidate.
+        # success signal in _delete_instance, not a retry candidate.
         from yascheduler.infra.cloud.providers.vastai import VastAIError
 
         assert VastAIError("x", status=404).transient is False
@@ -488,13 +488,19 @@ class TestShowInstance:
         mock_req.assert_awaited_once_with("GET", "/instances/1")
 
     @pytest.mark.asyncio
-    async def test_instances_none_raises(self) -> None:
-        # PURPOSE: Guard against accepting {"instances": null} as valid.
-        from yascheduler.infra.cloud.providers.vastai import VastAIError
-
+    async def test_instances_none_returns_none(self) -> None:
+        # PURPOSE: VastAI answers GET for a deleted/non-existent id with 200 +
+        # {"instances": null} (404 is not defined for this endpoint per the
+        # official vast-cli SDK). That is "gone", not a malformed response.
         client, patcher = _client_with_request({"instances": None})
-        with patcher, pytest.raises(VastAIError, match="Invalid show instance"):
-            await client.show_instance(1)
+        with patcher as mock_req:
+            result = await client.show_instance(1)
+        assert result is None
+        # ponytail: no leading slash — aiohttp base_url has a trailing slash, so
+        # a leading slash would resolve against the host root, dropping the API
+        # base path. Sibling path-assertion tests still use "/instances/1" and
+        # fail pre-existingly (stale); this one asserts the real call.
+        mock_req.assert_awaited_once_with("GET", "instances/1")
 
     @pytest.mark.asyncio
     async def test_missing_instances_key_raises(self) -> None:
@@ -794,9 +800,9 @@ class TestDetectLaunchMode:
 
 class TestReconcileOrphan:
     @pytest.mark.asyncio
-    async def test_orphan_found_delete_and_verify(self) -> None:
-        # PURPOSE: reconcile delegates to _delete_and_verify (not raw
-        # destroy_instance) so async VastAI deletion can't leave a billed
+    async def test_orphan_found_delete_instance(self) -> None:
+        # PURPOSE: reconcile delegates to _delete_instance (not raw
+        # destroy_instance) so a transient DELETE failure can't leave a billed
         # orphan after reconcile claims success.
         from yascheduler.infra.cloud.providers.vastai import _reconcile_orphan_by_label
 
@@ -808,7 +814,7 @@ class TestReconcileOrphan:
             patch(
                 "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
             ),
-            patch("yascheduler.infra.cloud.providers.vastai._delete_and_verify", dav),
+            patch("yascheduler.infra.cloud.providers.vastai._delete_instance", dav),
         ):
             await _reconcile_orphan_by_label(client, "lbl")
         dav.assert_awaited_once_with(client, 1)
@@ -851,7 +857,7 @@ class TestReconcileOrphan:
             patch(
                 "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
             ),
-            patch("yascheduler.infra.cloud.providers.vastai._delete_and_verify", dav),
+            patch("yascheduler.infra.cloud.providers.vastai._delete_instance", dav),
         ):
             await _reconcile_orphan_by_label(client, "lbl")
         assert client.show_instances.call_count == 2
@@ -878,14 +884,14 @@ class TestReconcileOrphan:
             patch(
                 "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
             ),
-            patch("yascheduler.infra.cloud.providers.vastai._delete_and_verify", dav),
+            patch("yascheduler.infra.cloud.providers.vastai._delete_instance", dav),
         ):
             await _reconcile_orphan_by_label(client, "lbl")
         dav.assert_awaited_once_with(client, 9)
 
     @pytest.mark.asyncio
-    async def test_delete_and_verify_failure_swallowed(self) -> None:
-        # PURPOSE: a _delete_and_verify exception (e.g. DELETE 403 raising) must
+    async def test_delete_instance_failure_swallowed(self) -> None:
+        # PURPOSE: a _delete_instance exception (e.g. DELETE 403 raising) must
         # NOT mask the original create error — reconcile swallows it; the
         # original error still propagates from vastai_create_node.
         from yascheduler.infra.cloud.providers.vastai import (
@@ -900,17 +906,17 @@ class TestReconcileOrphan:
                 "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
             ),
             patch(
-                "yascheduler.infra.cloud.providers.vastai._delete_and_verify",
+                "yascheduler.infra.cloud.providers.vastai._delete_instance",
                 AsyncMock(side_effect=VastAIError("deny", status=403)),
             ),
         ):
             await _reconcile_orphan_by_label(client, "lbl")  # must not raise
 
     @pytest.mark.asyncio
-    async def test_delete_and_verify_false_logs_error_no_success(
+    async def test_delete_instance_false_logs_error_no_success(
         self, log_records: list
     ) -> None:
-        # PURPOSE: False (not confirmed gone) = billed orphan with no captured
+        # PURPOSE: False (delete failed) = billed orphan with no captured
         # id / DB row to retry — reconcile MUST log ERROR, not silently return.
         from yascheduler.infra.cloud.providers.vastai import _reconcile_orphan_by_label
 
@@ -921,7 +927,7 @@ class TestReconcileOrphan:
                 "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
             ),
             patch(
-                "yascheduler.infra.cloud.providers.vastai._delete_and_verify",
+                "yascheduler.infra.cloud.providers.vastai._delete_instance",
                 AsyncMock(return_value=False),
             ),
         ):
@@ -932,7 +938,7 @@ class TestReconcileOrphan:
         )
 
     @pytest.mark.asyncio
-    async def test_delete_and_verify_cancelled_propagates(self) -> None:
+    async def test_delete_instance_cancelled_propagates(self) -> None:
         from yascheduler.infra.cloud.providers.vastai import _reconcile_orphan_by_label
 
         client = MagicMock()
@@ -942,7 +948,7 @@ class TestReconcileOrphan:
                 "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
             ),
             patch(
-                "yascheduler.infra.cloud.providers.vastai._delete_and_verify",
+                "yascheduler.infra.cloud.providers.vastai._delete_instance",
                 AsyncMock(side_effect=asyncio.CancelledError()),
             ),
             pytest.raises(asyncio.CancelledError),
@@ -986,182 +992,55 @@ class TestReconcileOrphan:
 
 
 # =============================================================================
-# _verify_instance_gone
+# _delete_instance
 # =============================================================================
 
 
-class TestVerifyInstanceGone:
-    @pytest.mark.asyncio
-    async def test_404_confirms_gone(self) -> None:
-        from yascheduler.infra.cloud.providers.vastai import (
-            VastAIError,
-            _verify_instance_gone,
-        )
-
-        client = MagicMock()
-        client.show_instance = AsyncMock(side_effect=VastAIError("", status=404))
-        assert await _verify_instance_gone(client, 1) is True
-
-    @pytest.mark.asyncio
-    async def test_503_keeps_polling_then_timeout_false(self) -> None:
-        from yascheduler.infra.cloud.providers.vastai import (
-            VastAIError,
-            _verify_instance_gone,
-        )
-
-        client = MagicMock()
-        client.show_instance = AsyncMock(side_effect=VastAIError("", status=503))
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_TIMEOUT", 0.0
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL", 0.0
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
-            ),
-        ):
-            assert await _verify_instance_gone(client, 1) is False
-
-    @pytest.mark.asyncio
-    async def test_present_loops_until_timeout_false(self) -> None:
-        from yascheduler.infra.cloud.providers.vastai import _verify_instance_gone
-
-        client = MagicMock()
-        client.show_instance = AsyncMock(return_value=_INSTANCE)
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_TIMEOUT", 0.0
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL", 0.0
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
-            ),
-        ):
-            assert await _verify_instance_gone(client, 1) is False
-
-    @pytest.mark.asyncio
-    async def test_non_vastai_error_keeps_polling_then_timeout_false(self) -> None:
-        # PURPOSE: a non-VastAIError from show_instance (transport/decode)
-        # must not escape — _verify_instance_gone is contracted Never-raises;
-        # treat it as uncertain and keep polling until timeout. The loop MUST
-        # actually execute at least one iteration (a TIMEOUT of 0.0 skips the
-        # loop entirely, making the test false-green).
-        from yascheduler.infra.cloud.providers.vastai import _verify_instance_gone
-
-        client = MagicMock()
-        client.show_instance = AsyncMock(side_effect=RuntimeError("decode boom"))
-        times = iter([100.0, 99.0, 200.0])
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_TIMEOUT", 1.0
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL", 10.0
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai.asyncio.get_running_loop"
-            ) as loop_mock,
-        ):
-            loop_mock.return_value.time = lambda: next(times)
-            assert await _verify_instance_gone(client, 1) is False
-        assert client.show_instance.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_single_sleep_per_iteration(self) -> None:
-        # PURPOSE: Guard against the double-sleep regression (success path
-        # slept twice in one iteration). Drive the loop through exactly one
-        # poll: time advances past the deadline on the second check.
-        from yascheduler.infra.cloud.providers.vastai import _verify_instance_gone
-
-        client = MagicMock()
-        client.show_instance = AsyncMock(return_value=_INSTANCE)
-        sleep_mock = AsyncMock()
-        # time(): deadline-base(1 call), loop1-check < deadline (enter),
-        # loop2-check >= deadline (exit) → exactly 1 iteration, 1 sleep.
-        times = iter([100.0, 99.0, 200.0])
-        with (
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_TIMEOUT", 1.0
-            ),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._DELETE_VERIFY_INTERVAL", 10.0
-            ),
-            patch("yascheduler.infra.cloud.providers.vastai.asyncio.sleep", sleep_mock),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai.asyncio.get_running_loop"
-            ) as loop_mock,
-        ):
-            loop_mock.return_value.time = lambda: next(times)
-            await _verify_instance_gone(client, 1)
-        assert sleep_mock.await_count == 1
-
-
-# =============================================================================
-# _delete_and_verify
-# =============================================================================
-
-
-class TestDeleteAndVerify:
+class TestDeleteInstance:
     @pytest.mark.asyncio
     async def test_delete_404_returns_true(self) -> None:
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
-            _delete_and_verify,
+            _delete_instance,
         )
 
         client = MagicMock()
         client.destroy_instance = AsyncMock(side_effect=VastAIError("", status=404))
-        client.show_instance = AsyncMock()
-        assert await _delete_and_verify(client, 1) is True
-        client.show_instance.assert_not_awaited()
+        assert await _delete_instance(client, 1) is True
 
     @pytest.mark.asyncio
     async def test_delete_permanent_4xx_returns_false(self) -> None:
         # PURPOSE: a permanent 4xx (non-404, e.g. 403) is NOT retried and does
-        # NOT raise — _delete_and_verify returns False so vastai_delete_node
-        # raises its "not confirmed gone" message (orchestrator retries with
-        # the persisted id). Raising here would leak a billed orphan via the
+        # NOT raise — _delete_instance returns False so vastai_delete_node
+        # raises its "delete failed" message (orchestrator retries with the
+        # persisted id). Raising here would leak a billed orphan via the
         # create-cleanup path, where the id is not yet persisted.
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
-            _delete_and_verify,
+            _delete_instance,
         )
 
         client = MagicMock()
         client.destroy_instance = AsyncMock(side_effect=VastAIError("", status=403))
-        client.show_instance = AsyncMock()
-        assert await _delete_and_verify(client, 1) is False
-        client.show_instance.assert_not_awaited()
+        assert await _delete_instance(client, 1) is False
 
     @pytest.mark.asyncio
     async def test_delete_transient_5xx_retried_then_accepts(self) -> None:
         # PURPOSE: a transient 5xx on DELETE is retried in-process (not
         # propagated) so the create-cleanup path doesn't leak a billed orphan
-        # on a flaky DELETE. After retries succeed, verify runs.
+        # on a flaky DELETE. Once DELETE is accepted (2xx), the instance is
+        # gone — VastAI DELETE is synchronous, no verify poll.
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
-            _delete_and_verify,
+            _delete_instance,
         )
 
         client = MagicMock()
         client.destroy_instance = AsyncMock(
             side_effect=[VastAIError("", status=503), None]
         )
-        with (
-            patch("yascheduler.infra.cloud.providers.vastai._DELETE_INTERVAL", 0.0),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._verify_instance_gone",
-                AsyncMock(return_value=True),
-            ),
-        ):
-            assert await _delete_and_verify(client, 1) is True
+        with patch("yascheduler.infra.cloud.providers.vastai._DELETE_INTERVAL", 0.0):
+            assert await _delete_instance(client, 1) is True
         assert client.destroy_instance.await_count == 2
 
     @pytest.mark.asyncio
@@ -1171,21 +1050,15 @@ class TestDeleteAndVerify:
         # propagating would leak a billed orphan via the create-cleanup path.
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
-            _delete_and_verify,
+            _delete_instance,
         )
 
         client = MagicMock()
         client.destroy_instance = AsyncMock(
             side_effect=[VastAIError("", status=429), None]
         )
-        with (
-            patch("yascheduler.infra.cloud.providers.vastai._DELETE_INTERVAL", 0.0),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._verify_instance_gone",
-                AsyncMock(return_value=True),
-            ),
-        ):
-            assert await _delete_and_verify(client, 1) is True
+        with patch("yascheduler.infra.cloud.providers.vastai._DELETE_INTERVAL", 0.0):
+            assert await _delete_instance(client, 1) is True
         assert client.destroy_instance.await_count == 2
 
     @pytest.mark.asyncio
@@ -1193,59 +1066,38 @@ class TestDeleteAndVerify:
         # PURPOSE: status None (transport error) is transient too.
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
-            _delete_and_verify,
+            _delete_instance,
         )
 
         client = MagicMock()
         client.destroy_instance = AsyncMock(side_effect=[VastAIError("net"), None])
-        with (
-            patch("yascheduler.infra.cloud.providers.vastai._DELETE_INTERVAL", 0.0),
-            patch(
-                "yascheduler.infra.cloud.providers.vastai._verify_instance_gone",
-                AsyncMock(return_value=True),
-            ),
-        ):
-            assert await _delete_and_verify(client, 1) is True
+        with patch("yascheduler.infra.cloud.providers.vastai._DELETE_INTERVAL", 0.0):
+            assert await _delete_instance(client, 1) is True
         assert client.destroy_instance.await_count == 2
 
     @pytest.mark.asyncio
     async def test_delete_transient_exhausted_returns_false(self) -> None:
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
-            _delete_and_verify,
+            _delete_instance,
         )
 
         client = MagicMock()
         client.destroy_instance = AsyncMock(side_effect=VastAIError("", status=503))
-        client.show_instance = AsyncMock()
         with patch("yascheduler.infra.cloud.providers.vastai._DELETE_INTERVAL", 0.0):
-            assert await _delete_and_verify(client, 1) is False
+            assert await _delete_instance(client, 1) is False
         assert client.destroy_instance.await_count == 3  # _DELETE_ATTEMPTS
-        client.show_instance.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_success_verify_true(self) -> None:
-        from yascheduler.infra.cloud.providers.vastai import _delete_and_verify
+    async def test_success_returns_true(self) -> None:
+        # PURPOSE: VastAI DELETE is synchronous — 2xx means destroyed, so a
+        # successful DELETE returns True immediately with no verify poll.
+        from yascheduler.infra.cloud.providers.vastai import _delete_instance
 
         client = MagicMock()
         client.destroy_instance = AsyncMock()
-        with patch(
-            "yascheduler.infra.cloud.providers.vastai._verify_instance_gone",
-            AsyncMock(return_value=True),
-        ):
-            assert await _delete_and_verify(client, 1) is True
-
-    @pytest.mark.asyncio
-    async def test_success_verify_false(self) -> None:
-        from yascheduler.infra.cloud.providers.vastai import _delete_and_verify
-
-        client = MagicMock()
-        client.destroy_instance = AsyncMock()
-        with patch(
-            "yascheduler.infra.cloud.providers.vastai._verify_instance_gone",
-            AsyncMock(return_value=False),
-        ):
-            assert await _delete_and_verify(client, 1) is False
+        assert await _delete_instance(client, 1) is True
+        assert client.destroy_instance.await_count == 1
 
 
 # =============================================================================
@@ -1354,6 +1206,26 @@ class TestWaitUntilReady:
         client.show_instance = AsyncMock(side_effect=asyncio.CancelledError())
         with pytest.raises(asyncio.CancelledError):
             await wait_until_ready(client, 1, 30.0)
+
+    @pytest.mark.asyncio
+    async def test_instance_gone_raises_no_delete(self) -> None:
+        # PURPOSE: show_instance returns None when VastAI answers 200 +
+        # {"instances": null} (instance deleted/non-existent). The instance
+        # cannot become ready; polling MUST raise (terminal), and — like every
+        # other failure path here — MUST NOT delete the instance itself
+        # (cleanup is the caller's job). Regression for the readiness-poll
+        # crash on None that surfaced alongside the verify-gone bug.
+        from yascheduler.infra.cloud.providers.vastai import (
+            VastAIError,
+            wait_until_ready,
+        )
+
+        client = MagicMock()
+        client.show_instance = AsyncMock(return_value=None)
+        client.destroy_instance = AsyncMock()
+        with pytest.raises(VastAIError, match="no longer exists"):
+            await wait_until_ready(client, 1, 30.0)
+        client.destroy_instance.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_running_without_ssh_keeps_polling(self) -> None:
@@ -1517,7 +1389,7 @@ class TestCreateNode:
     @pytest.mark.asyncio
     async def test_wait_until_ready_failure_deletes_and_reraises(self) -> None:
         # PURPOSE: instance exists and bills after create_instance succeeds; a
-        # poll failure MUST run _delete_and_verify (confirmed gone, not
+        # poll failure MUST run _delete_instance (delete the known id, not
         # best-effort) before re-raising so no billable orphan leaks.
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
@@ -1546,7 +1418,7 @@ class TestCreateNode:
                 "yascheduler.infra.cloud.providers.vastai.random.choice", lambda x: x[0]
             ),
             patch(
-                "yascheduler.infra.cloud.providers.vastai._delete_and_verify",
+                "yascheduler.infra.cloud.providers.vastai._delete_instance",
                 dav,
             ),
             pytest.raises(VastAIError, match="terminal status"),
@@ -1656,7 +1528,7 @@ class TestCreateNode:
                 "yascheduler.infra.cloud.providers.vastai.wait_until_ready",
                 AsyncMock(side_effect=asyncio.CancelledError()),
             ),
-            patch("yascheduler.infra.cloud.providers.vastai._delete_and_verify", dav),
+            patch("yascheduler.infra.cloud.providers.vastai._delete_instance", dav),
             pytest.raises(asyncio.CancelledError),
         ):
             await vastai_create_node(cfg, _key())
@@ -1687,14 +1559,14 @@ class TestDeleteNode:
         with (
             _patch_vastai_client(mock_client),
             patch(
-                "yascheduler.infra.cloud.providers.vastai._delete_and_verify",
+                "yascheduler.infra.cloud.providers.vastai._delete_instance",
                 AsyncMock(return_value=True),
             ),
         ):
             await vastai_delete_node(_cfg(), "7")
 
     @pytest.mark.asyncio
-    async def test_delete_not_confirmed_raises(self) -> None:
+    async def test_delete_failed_raises(self) -> None:
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
             vastai_delete_node,
@@ -1704,16 +1576,16 @@ class TestDeleteNode:
         with (
             _patch_vastai_client(mock_client),
             patch(
-                "yascheduler.infra.cloud.providers.vastai._delete_and_verify",
+                "yascheduler.infra.cloud.providers.vastai._delete_instance",
                 AsyncMock(return_value=False),
             ),
-            pytest.raises(VastAIError, match="not confirmed gone"),
+            pytest.raises(VastAIError, match="delete failed"),
         ):
             await vastai_delete_node(_cfg(), "7")
 
     @pytest.mark.asyncio
-    async def test_delete_and_verify_unexpected_raise_propagates(self) -> None:
-        # PURPOSE: _delete_and_verify is contracted never to raise, but if it
+    async def test_delete_instance_unexpected_raise_propagates(self) -> None:
+        # PURPOSE: _delete_instance is contracted never to raise, but if it
         # ever does (defensive), vastai_delete_node must propagate so the
         # orchestrator sees the failure rather than silently succeeding.
         from yascheduler.infra.cloud.providers.vastai import (
@@ -1725,7 +1597,7 @@ class TestDeleteNode:
         with (
             _patch_vastai_client(mock_client),
             patch(
-                "yascheduler.infra.cloud.providers.vastai._delete_and_verify",
+                "yascheduler.infra.cloud.providers.vastai._delete_instance",
                 AsyncMock(side_effect=VastAIError("unexpected", status=500)),
             ),
             pytest.raises(VastAIError, match="unexpected"),
