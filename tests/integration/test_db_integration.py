@@ -545,9 +545,16 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
                 "ncpus SMALLINT DEFAULT NULL, enabled BOOLEAN DEFAULT TRUE, "
                 "cloud VARCHAR(32) DEFAULT NULL)",
             )
+            # Two prov... rows: migration 003 must DROP the ip UNIQUE
+            # constraint BEFORE backfilling both to '', else the second
+            # UPDATE row collides on the still-present UNIQUE index.
             conn.run(
                 "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
                 "VALUES ('provabc1234567', FALSE, 'aws')",
+            )
+            conn.run(
+                "INSERT INTO yascheduler_nodes (ip, enabled, cloud) "
+                "VALUES ('provxyz7654321', FALSE, 'aws')",
             )
             # Pre-create yascheduler_tasks at the 002-era schema (no
             # allocated_node_id) so apply_migrations runs 003 then 004
@@ -583,10 +590,10 @@ async def test_migration_003_backfills_prov_ips_and_drops_unique() -> None:
                 )
             finally:
                 conn.run("ROLLBACK")
-            # The prov... row was backfilled to ''.
-            assert len(rows) == 1
-            assert rows[0][0] == ""
-            assert rows[0][1] is False
+            # Both prov... rows were backfilled to '' (DROP ran before UPDATE).
+            assert len(rows) == 2
+            assert all(r[0] == "" for r in rows)
+            assert all(r[1] is False for r in rows)
 
             # The UNIQUE constraint is gone — a duplicate real ip insert succeeds.
             conn.run("BEGIN")
