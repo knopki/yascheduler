@@ -19,7 +19,7 @@ from yascheduler.infra.cloud.dto import CloudCreateNodeDTO
 # (core dep), so they always run. Mirrors the pytest.importorskip pattern but
 # scoped per provider so aiohttp-only providers stay runnable.
 requires_az = pytest.mark.skipif(
-    importlib.util.find_spec("azure.identity") is None,
+    importlib.util.find_spec("azure") is None,
     reason="azure SDK not installed",
 )
 requires_upcloud = pytest.mark.skipif(
