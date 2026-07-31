@@ -37,6 +37,17 @@ registry; adding a provider SHALL add one registry entry.
 - **WHEN** the parser meets a key that no value object in the section accepts
 - **THEN** a warning is emitted and parsing continues
 
+### Requirement: absent DB password warns
+
+The `[db]` section SHALL emit a warning at parse time when the `password` key
+is absent, so production deploys do not silently run against the insecure
+default password. Parsing SHALL continue and return the default password.
+
+#### Scenario: missing [db] password emits a warning
+
+- **WHEN** the `[db]` section has no `password` key
+- **THEN** a warning is emitted and the parsed config keeps the default password
+
 ### Requirement: jump_port range
 
 The `[remote]` `jump_port` key SHALL be an integer in the closed range

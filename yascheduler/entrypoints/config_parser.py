@@ -431,8 +431,16 @@ def _db_valid_fields() -> Sequence[str]:
 
 # region FUNC__parse_db_section
 # PURPOSE: Build a frozen PostgresDbConfig from a [db] INI section.
+# INVARIANTS: A [db] section without an explicit `password` key emits a
+# logger.warning naming the insecure default, so production deploys don't
+# silently run against the literal default password.
 def _parse_db_section(sec: SectionProxy) -> PostgresDbConfig:
     warn_unknown_fields(_db_valid_fields(), sec)
+    if "password" not in sec:
+        logger.warning(
+            "[db] password not set — using insecure default; "
+            "set `password` under [db] for production",
+        )
     return PostgresDbConfig(
         **cast("dict[str, Any]", _read_fields(sec, PostgresDbConfig))
     )

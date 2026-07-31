@@ -54,16 +54,44 @@ def test_config_db_full_overrides() -> None:
     assert db.port == 5433
 
 
-def test_config_db_defaults() -> None:
-    """Applies defaults when section has no keys"""
+def test_config_db_defaults(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Applies defaults when section has no keys.
+
+    An absent `password` warns so production deploys don't silently run against
+    the insecure default.
+    """
+    import logging
+
     cfg = ConfigParser()
     cfg.read_string("[db]\n")
-    db = _parse_db_section(cfg["db"])
+    with caplog.at_level(
+        logging.WARNING, logger="yascheduler.entrypoints.config_parser"
+    ):
+        db = _parse_db_section(cfg["db"])
     assert db.user == "yascheduler"
     assert db.password == "password"
     assert db.database == "database"
     assert db.host == "localhost"
     assert db.port == 5432
+    assert any("password not set" in r.getMessage() for r in caplog.records)
+
+
+def test_config_db_explicit_password_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An explicitly set `password` (even the literal default) does not warn."""
+    import logging
+
+    cfg = ConfigParser()
+    cfg.read_string("[db]\npassword=password\n")
+    with caplog.at_level(
+        logging.WARNING, logger="yascheduler.entrypoints.config_parser"
+    ):
+        db = _parse_db_section(cfg["db"])
+    assert db.password == "password"
+    assert not any("password not set" in r.getMessage() for r in caplog.records)
 
 
 def test_config_local_custom_data_dir(tmp_path: Path) -> None:
