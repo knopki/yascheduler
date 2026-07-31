@@ -589,7 +589,7 @@ async def _delete_instance(client: VastAIClient, instance_id: int) -> bool:
 # region FUNC_wait_until_ready
 # PURPOSE: Bridge VastAI's async create (returns before ssh_host/port exist) so create_node only reports success once the scheduler can actually connect.
 # REQUIRES: client is an open VastAIClient; instance_id is a valid instance id.
-# ENSURES: Returns the instance dict when actual_status == "running". Raises VastAIError on timeout, terminal status, instance-gone (None), or any show-instance failure. Does NOT delete the instance — vastai_create_node wraps this in try/except and runs _delete_instance so the instance is deleted, not best-effort-gone.
+# ENSURES: Returns the instance dict when actual_status == "running". Raises VastAIError on timeout, terminal status, instance-gone (None), or a permanent (4xx non-429) show-instance failure; a transient (429/5xx/transport) show-instance failure is retried until the deadline. Does NOT delete the instance — vastai_create_node wraps this in try/except and runs _delete_instance so the instance is deleted, not best-effort-gone.
 async def wait_until_ready(
     client: VastAIClient, instance_id: int, timeout: float
 ) -> VastAIInstance:
@@ -609,6 +609,13 @@ async def wait_until_ready(
         except asyncio.CancelledError:
             raise
         except VastAIError as err:
+            if err.transient:
+                logger.debug(
+                    "POLL_TRANSIENT_RETRY",
+                    extra={"instance_id": instance_id, "status": err.status},
+                )
+                await asyncio.sleep(poll_interval)
+                continue
             logger.debug(
                 "POLL_SHOW_FAILED",
                 extra={"instance_id": instance_id, "status": err.status},

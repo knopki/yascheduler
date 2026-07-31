@@ -99,17 +99,20 @@ verbatim and cloud-init translation SHALL be skipped.
 
 The adapter SHALL poll the instance until it reaches the ready state before
 returning the SSH address. Polling SHALL be bounded by the configured
-connect grace period. On timeout, on the instance entering a terminal
-non-ready state or no longer existing (VastAI returns 200 with
-`{"instances": null}` for a deleted id), or on any show-instance failure that
-leaves the poll loop, the adapter SHALL best-effort delete the known instance
-id to prevent orphans and SHALL raise; it SHALL NOT retry against a different
-offer within the same call.
+connect grace period. A transient show-instance failure (429, 5xx, or
+transport error) SHALL be treated as "no data this tick" and retried until
+the deadline, mirroring the Vultr adapter; it SHALL NOT fail the poll. On
+timeout, on the instance entering a terminal non-ready state or no longer
+existing (VastAI returns 200 with `{"instances": null}` for a deleted id),
+or on a permanent (4xx non-429) show-instance failure that leaves the poll
+loop, the adapter SHALL best-effort delete the known instance id to prevent
+orphans and SHALL raise; it SHALL NOT retry against a different offer within
+the same call.
 
-#### Scenario: instance polled until ready; timeout, terminal status, or show failure cleans up and raises
+#### Scenario: instance polled until ready; transient show failures retried until deadline; timeout, terminal status, or permanent show failure cleans up and raises
 
 - **WHEN** the adapter waits for the instance to become ready
-- **THEN** the SSH address is returned once the ready state is reached within the connect grace period; otherwise — on timeout, terminal status, or a persistent show-instance failure — the known instance is best-effort deleted and the adapter raises
+- **THEN** the SSH address is returned once the ready state is reached within the connect grace period; a transient show-instance failure (429/5xx/transport) is retried until the deadline; otherwise — on timeout, terminal status, or a permanent show-instance failure — the known instance is best-effort deleted and the adapter raises
 
 ### Requirement: VastAI failure model
 

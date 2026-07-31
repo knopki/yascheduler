@@ -1168,17 +1168,66 @@ class TestWaitUntilReady:
         client.destroy_instance.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_show_5xx_raises_no_delete(self) -> None:
+    async def test_show_transient_5xx_retries_until_ready(self) -> None:
+        # PURPOSE: a transient 429/5xx during readiness must NOT fail the poll
+        # — raising here makes vastai_create_node delete a healthy, billing
+        # instance (the S6 cost bug). Mirror vultr: treat the blip as "no data
+        # this tick" and keep polling until the instance reports ready.
         from yascheduler.infra.cloud.providers.vastai import (
             VastAIError,
             wait_until_ready,
         )
 
         client = MagicMock()
-        client.show_instance = AsyncMock(side_effect=VastAIError("", status=500))
+        client.show_instance = AsyncMock(
+            side_effect=[
+                VastAIError("HTTP 500", status=500),
+                VastAIError("HTTP 429", status=429),
+                _INSTANCE,
+            ]
+        )
         client.destroy_instance = AsyncMock()
-        with pytest.raises(VastAIError, match="status query failed"):
-            await wait_until_ready(client, 1, 30.0)
+        with patch(
+            "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
+        ):
+            result = await wait_until_ready(client, 1, 30.0)
+        assert result == _INSTANCE
+        assert client.show_instance.await_count == 3
+        client.destroy_instance.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_show_transient_until_deadline_raises_timeout_no_delete(
+        self,
+    ) -> None:
+        # PURPOSE: a transient show failure that persists until the deadline
+        # surfaces as POLL_TIMEOUT ("did not become ready"), NOT as a show
+        # failure — so vastai_create_node's cleanup does not delete a possibly
+        # running, billing instance on a provider blip.
+        from yascheduler.infra.cloud.providers.vastai import (
+            VastAIError,
+            wait_until_ready,
+        )
+
+        client = MagicMock()
+        client.show_instance = AsyncMock(
+            side_effect=VastAIError("HTTP 500", status=500)
+        )
+        client.destroy_instance = AsyncMock()
+        loop = MagicMock()
+        # deadline = 0 + 10 = 10; iter1 now=5 (<10 → show→transient, sleep);
+        # iter2 now=10 (>=10 → POLL_TIMEOUT).
+        loop.time = MagicMock(side_effect=[0, 5, 10])
+        with (
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.asyncio.get_running_loop",
+                return_value=loop,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.vastai.asyncio.sleep", AsyncMock()
+            ),
+            pytest.raises(VastAIError, match="did not become ready"),
+        ):
+            await wait_until_ready(client, 1, 10.0)
         client.destroy_instance.assert_not_awaited()
 
     @pytest.mark.asyncio
