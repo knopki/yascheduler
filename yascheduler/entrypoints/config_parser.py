@@ -367,11 +367,14 @@ _ALL_CLOUD_VALID_FIELDS: list[str] = [
 # region FUNC_parse_cloud_section
 # PURPOSE: Build a ConfigCloud DTO from a [clouds] sub-section via the per-prefix spec table — one code path replaces five near-identical provider parsers.
 def parse_cloud_section(sec: SectionProxy, prefix: str) -> ConfigCloud:
-    """Dispatch a [clouds] sub-section to its per-prefix spec and build the DTO."""
+    """Dispatch a [clouds] sub-section to its per-prefix spec and build the DTO.
+
+    Pre-checks are intentionally NOT run here: they are invoked by
+    ``parse_clouds`` on the raw section before inheritance injection, where the
+    explicit-vs-inherited distinction (e.g. the Azure root ban) still exists.
+    """
     spec = _CLOUD_SPECS[prefix]
     warn_unknown_fields(_ALL_CLOUD_VALID_FIELDS, sec)
-    if spec.pre_check is not None:
-        spec.pre_check(sec, prefix)
     return spec.dto_cls(
         **cast(
             "dict[str, Any]",
@@ -402,6 +405,15 @@ def parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[ConfigCloud]
 
     # Derive cloud prefixes from [clouds] option names (first segment of `{prefix}_*`).
     cloud_prefixes = {name.split("_")[0] for name in cfg.options("clouds")}
+    known = [prefix for prefix in cloud_prefixes if prefix in _CLOUD_SPECS]
+
+    # Pre-checks run on the raw section BEFORE inheritance injection, so they
+    # see only explicitly-set values — e.g. the Azure root ban must not fire on
+    # a username copied from [remote] (spec targets an explicitly-set az_user).
+    for prefix in known:
+        pre_check = _CLOUD_SPECS[prefix].pre_check
+        if pre_check is not None:
+            pre_check(sec, prefix)
 
     # Inherit remote.username into [clouds] for any prefix whose {prefix}_user is absent.
     for prefix in cloud_prefixes:
@@ -411,11 +423,7 @@ def parse_clouds(cfg: ConfigParser, remote: RemoteDefaults) -> list[ConfigCloud]
 
     # Dispatch each known prefix to its spec; unknown prefixes are silently
     # skipped (they would warn via warn_unknown_fields inside every parser call).
-    return [
-        parse_cloud_section(sec, prefix)
-        for prefix in cloud_prefixes
-        if prefix in _CLOUD_SPECS
-    ]
+    return [parse_cloud_section(sec, prefix) for prefix in known]
 
 
 # endregion FUNC_parse_clouds

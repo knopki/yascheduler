@@ -317,11 +317,28 @@ def test_azure_image_reference_invalid_urn() -> None:
 
 
 def test_config_cloud_azure_rejects_root() -> None:
-    """parse_cloud_section raises ValueError for root user on Azure (parser-side)"""
+    """parse_clouds raises ValueError for an explicitly-set root user on Azure."""
     cfg = ConfigParser()
     cfg.read_string("[clouds]\naz_tenant_id=tid\naz_user=root\n")
     with pytest.raises(ValueError, match="Root user is forbidden on Azure"):
-        parse_cloud_section(cfg["clouds"], "az")
+        parse_clouds(cfg, RemoteDefaults())
+
+
+def test_config_cloud_azure_inherits_remote_root_without_banning() -> None:
+    """An Azure section without az_user inherits [remote] username without tripping the root ban.
+
+    Regression: the ban targets only an explicitly-set az_user. With the default
+    [remote] user=root, an Azure section lacking az_user previously failed to load.
+    """
+    cfg = ConfigParser()
+    cfg.read_string(
+        "[clouds]\n"
+        "az_tenant_id=tid\naz_client_id=cid\naz_client_secret=cs\n"
+        "az_subscription_id=sid\n"
+    )
+    clouds = parse_clouds(cfg, RemoteDefaults(username="root"))
+    az = next(c for c in clouds if isinstance(c, ConfigCloudAzure))
+    assert az.username == "root"
 
 
 def test_config_cloud_hetzner_rejects_missing_token() -> None:

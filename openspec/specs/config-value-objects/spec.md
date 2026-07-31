@@ -68,3 +68,10 @@ SHALL fail at parse time.
 
 - **WHEN** an Azure cloud section sets the username to `root`
 - **THEN** parsing fails with an error
+
+#### Scenario: the Azure root ban does not fire on an inherited username
+
+- **GIVEN** the `[remote]` default username is `root` and an Azure cloud section omits `az_user`
+- **WHEN** the configuration is loaded
+- **THEN** parsing succeeds
+- **AND** the Azure username is inherited from `[remote]`
