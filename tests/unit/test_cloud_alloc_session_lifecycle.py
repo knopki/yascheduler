@@ -766,7 +766,7 @@ class TestFixB:
         """CloudSetupError from _setup_vm (cloud-init failure) triggers disconnect(ip) before delete_node, leaving _sessions empty."""
         repo = FakeMachineRepository(
             session_run_side_effect=MagicMock(
-                exit_code=2,
+                exit_code=1,
                 stdout="status: error",
                 stderr="",
             ),
@@ -859,7 +859,7 @@ class TestFixB:
         repo = FakeMachineRepository(
             disconnect_raises=RuntimeError("wait_closed failed"),
             session_run_side_effect=MagicMock(
-                exit_code=2,
+                exit_code=1,
                 stdout="status: error",
                 stderr="",
             ),
@@ -950,7 +950,7 @@ class TestFixD:
         """cloud-init exit_code=2 with stdout='status: error' yields a CloudSetupError whose message contains stdout=status: error."""
         repo = FakeMachineRepository(
             session_run_side_effect=MagicMock(
-                exit_code=2,
+                exit_code=1,
                 stdout="status: error",
                 stderr="",
             ),
