@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING
 
 from yascheduler.domain import Node, NodeId, TaskStatus
+from yascheduler.domain.exceptions import NodeRowNotFoundError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -85,6 +86,14 @@ async def deallocate_node(
             async with uow_factory() as uow:
                 await uow.nodes.remove(node.node_id)
                 await uow.commit()
+        except NodeRowNotFoundError:
+            # Row already gone. The cloud VM is already deleted; nothing to reconcile.
+            logger.debug(
+                "node already removed: node_id=%s hostname=%s cloud=%s",
+                node.node_id,
+                node.hostname,
+                node.cloud,
+            )
         except Exception:
             # Cloud VM is already gone; the disabled DB row is stale. Log
             # loudly so operators can reconcile manually. Not re-raised: the

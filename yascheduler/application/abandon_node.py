@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from yascheduler.domain.exceptions import NodeRowNotFoundError
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -56,6 +58,14 @@ async def abandon_node(
         async with uow_factory() as uow:
             await uow.nodes.remove(node.node_id)
             await uow.commit()
+    except NodeRowNotFoundError:
+        # Row already gone — the
+        # desired end state; VM is already deleted above. Not an error.
+        logger.debug(
+            "abandon_node row already removed: node_id=%s hostname=%s",
+            node.node_id,
+            node.hostname,
+        )
     except Exception as err:
         logger.debug(
             "REMOVE_FAILED",

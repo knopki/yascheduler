@@ -28,6 +28,7 @@ __all__ = [
     "MachineConnectionError",
     "MissingInputFileError",
     "NoCompatibleNodeError",
+    "NodeRowNotFoundError",
     "SchedulingError",
     "TaskError",
     "TaskNotRunningError",
@@ -88,6 +89,19 @@ class MachineBusyError(DomainError):
     def __init__(self, node_id: NodeId) -> None:
         self.node_id = node_id
         super().__init__(f"machine ({node_id}) is busy")
+
+
+class NodeRowNotFoundError(DomainError):
+    """A node UPDATE/DELETE matched zero rows.
+
+    Raised by the node repository when an update/enable/disable/remove finds
+    no row for the given node_id. A zero-row result means the node is gone
+    (concurrent tmp-node cleanup, double deallocation, manual DB delete).
+    """
+
+    def __init__(self, node_id: NodeId) -> None:
+        self.node_id = node_id
+        super().__init__(f"node row not found for node_id={node_id}")
 
 
 class MachineConnectionError(DomainError):

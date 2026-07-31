@@ -6,12 +6,17 @@
 # endregion MODULE_CONTRACT
 
 from .db_config import PostgresDbConfig
-from .exceptions import TaskRowNotFoundError, UnitOfWorkNotInitializedError
+from .exceptions import (
+    NodeRowNotFoundError,
+    TaskRowNotFoundError,
+    UnitOfWorkNotInitializedError,
+)
 from .postgres_migrations import apply_migrations
 from .postgres_schema import apply_schema
 from .postgres_uow import PostgresUnitOfWork
 
 __all__ = [
+    "NodeRowNotFoundError",
     "PostgresDbConfig",
     "PostgresUnitOfWork",
     "TaskRowNotFoundError",

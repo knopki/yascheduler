@@ -12,6 +12,7 @@ import pg8000.native
 import pytest
 
 from yascheduler.application.message_bus import MessageBus
+from yascheduler.domain.exceptions import NodeRowNotFoundError
 from yascheduler.domain.model import (
     NewNode,
     NewTask,
@@ -376,6 +377,43 @@ async def test_repo_node_update(
     assert n.cloud == "azure"
     assert n.username == "admin"
     assert n.port == 2222
+
+
+async def test_repo_node_update_raises_on_missing_row(
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
+) -> None:
+    """update raises NodeRowNotFoundError for an absent node_id — the orphan-VM guard."""
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
+    ghost = NodeId(999999)
+    with pytest.raises(NodeRowNotFoundError) as exc:
+        await repo.update(
+            Node(
+                node_id=ghost,
+                hostname="10.0.0.1",
+                ncpus=8,
+                enabled=True,
+                cloud="azure",
+                username="admin",
+                port=2222,
+            ),
+        )
+    assert exc.value.node_id == ghost
+
+
+async def test_repo_node_enable_disable_remove_raise_on_missing_row(
+    pg_conn: pg8000.native.Connection,
+    pg_executor: ThreadPoolExecutor,
+) -> None:
+    """enable/disable/remove raise NodeRowNotFoundError for an absent node_id."""
+    repo = PostgresNodeRepository(pg_conn, pg_executor)
+    ghost = NodeId(999998)
+    with pytest.raises(NodeRowNotFoundError):
+        await repo.enable(ghost)
+    with pytest.raises(NodeRowNotFoundError):
+        await repo.disable(ghost)
+    with pytest.raises(NodeRowNotFoundError):
+        await repo.remove(ghost)
 
 
 async def test_repo_node_tmp_via_insert(

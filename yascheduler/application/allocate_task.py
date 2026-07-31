@@ -19,6 +19,7 @@ from yascheduler.domain import (
     TaskId,
     TaskStatus,
 )
+from yascheduler.domain.exceptions import NodeRowNotFoundError
 
 if TYPE_CHECKING:
     import asyncio
@@ -272,6 +273,15 @@ async def _cleanup_tmp_node_best_effort(
         async with uow_factory() as uow:
             await uow.nodes.remove(tmp_node_id)
             await uow.commit()
+    except NodeRowNotFoundError:
+        # Tmp-node already gone — the
+        # desired end state is achieved; nothing to clean up.
+        logger.debug(
+            "tmp-node already removed: task_id=%s ctx=%s tmp_node_id=%s",
+            task_id,
+            context,
+            tmp_node_id,
+        )
     except Exception:
         logger.exception(
             "tmp-node cleanup failed: task_id=%s ctx=%s tmp_node_id=%s",

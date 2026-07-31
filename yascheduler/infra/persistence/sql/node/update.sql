@@ -11,4 +11,5 @@ SET
     jump_username = :jump_username,
     external_id = :external_id,
     status = :status
-WHERE node_id = :node_id;
+WHERE node_id = :node_id
+RETURNING node_id;

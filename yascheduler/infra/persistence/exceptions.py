@@ -2,17 +2,23 @@
 # region MODULE_CONTRACT
 # PURPOSE: Signal persistence-layer contract violations (missing row, uninitialized UoW) with typed exceptions so callers distinguish programming errors from recoverable failures without depending on opaque pg8000 exceptions.
 # SCOPE: Exception classes for UoW state-contract violations and repository row-existence precondition violations.
-# KEYWORDS: persistence, exception, uow, task row not found
+# KEYWORDS: persistence, exception, uow, task row not found, node row not found
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from yascheduler.domain.exceptions import NodeRowNotFoundError
+
 if TYPE_CHECKING:
     from yascheduler.domain.model import TaskId
 
-__all__ = ["TaskRowNotFoundError", "UnitOfWorkNotInitializedError"]
+__all__ = [
+    "NodeRowNotFoundError",
+    "TaskRowNotFoundError",
+    "UnitOfWorkNotInitializedError",
+]
 
 
 class UnitOfWorkNotInitializedError(RuntimeError):

@@ -25,7 +25,7 @@ from yascheduler.domain import (
     materialize_task,
 )
 
-from .exceptions import TaskRowNotFoundError
+from .exceptions import NodeRowNotFoundError, TaskRowNotFoundError
 from .sql_loader import load_query
 
 if TYPE_CHECKING:
@@ -370,9 +370,10 @@ class PostgresNodeRepository(_PgRepository):
 
     # region METHOD_update
     # PURPOSE: Persist node mutations (hostname, status, cloud properties) so the orchestrator's view of each node remains current across restarts.
+    # ENSURES: Raises NodeRowNotFoundError when the UPDATE matches zero rows (concurrent tmp-node deletion) so the caller can tear down the orphan VM instead of committing a rowless success.
     async def update(self, node: Node) -> None:
-        """Persist all mutable node fields by node_id."""
-        await self._run(
+        """Persist all mutable node fields by node_id; raise on missing row."""
+        rows = await self._run(
             load_query("node/update"),
             node_id=node.node_id.value,
             hostname=node.hostname,
@@ -387,30 +388,41 @@ class PostgresNodeRepository(_PgRepository):
             external_id=node.external_id,
             status=node.status.value,
         )
+        if not rows:
+            raise NodeRowNotFoundError(node.node_id)
 
     # endregion METHOD_update
 
     # region METHOD_enable
     # PURPOSE: Mark a node as available for scheduling so the allocator considers it in future allocation rounds.
+    # ENSURES: Raises NodeRowNotFoundError when the UPDATE matches zero rows so a double-enable or stale reference surfaces instead of silently succeeding.
     async def enable(self, node_id: NodeId) -> None:
-        """Enable a node by node_id (passes node_id.value — pg8000 cannot adapt a NodeId)."""
-        await self._run(load_query("node/enable"), node_id=node_id.value)
+        """Enable a node by node_id; raise on missing row."""
+        rows = await self._run(load_query("node/enable"), node_id=node_id.value)
+        if not rows:
+            raise NodeRowNotFoundError(node_id)
 
     # endregion METHOD_enable
 
     # region METHOD_disable
     # PURPOSE: Mark a node as unavailable (drain or decommission) so the allocator avoids scheduling new tasks on it.
+    # ENSURES: Raises NodeRowNotFoundError when the UPDATE matches zero rows so a concurrent delete surfaces instead of leaving the caller believing the node is drained.
     async def disable(self, node_id: NodeId) -> None:
-        """Disable a node by node_id (passes node_id.value — pg8000 cannot adapt a NodeId)."""
-        await self._run(load_query("node/disable"), node_id=node_id.value)
+        """Disable a node by node_id; raise on missing row."""
+        rows = await self._run(load_query("node/disable"), node_id=node_id.value)
+        if not rows:
+            raise NodeRowNotFoundError(node_id)
 
     # endregion METHOD_disable
 
     # region METHOD_remove
     # PURPOSE: Remove a decommissioned or failed node from inventory so it no longer appears in listing or allocation queries.
+    # ENSURES: Raises NodeRowNotFoundError when the DELETE matches zero rows so a double-remove or stale reference surfaces instead of silently succeeding.
     async def remove(self, node_id: NodeId) -> None:
-        """Delete a node by node_id (passes node_id.value — pg8000 cannot adapt a NodeId)."""
-        await self._run(load_query("node/remove"), node_id=node_id.value)
+        """Delete a node by node_id; raise on missing row."""
+        rows = await self._run(load_query("node/remove"), node_id=node_id.value)
+        if not rows:
+            raise NodeRowNotFoundError(node_id)
 
     # endregion METHOD_remove
 

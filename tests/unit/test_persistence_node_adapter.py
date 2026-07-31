@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from pytest_mock import MockerFixture
 
+from yascheduler.domain.exceptions import NodeRowNotFoundError
 from yascheduler.domain.model import NewNode, Node, NodeId
 from yascheduler.infra.persistence.postgres import PostgresNodeRepository
 from yascheduler.infra.persistence.sql_loader import load_query
@@ -461,6 +462,7 @@ class TestPostgresNodeRepository:
     ) -> None:
         """Update runs UPDATE SQL binding ip, ncpus, enabled, cloud, username, port, node_id (V1 cloud lifecycle relies on ip being SET)."""
         repo = self._make_repo(mocker)
+        repo._run.return_value = [{"node_id": 7}]  # type: ignore[attr-defined]
 
         await repo.update(
             Node(
@@ -486,28 +488,79 @@ class TestPostgresNodeRepository:
         assert kwargs["username"] == "root"
         assert kwargs["port"] == 22
 
+    async def test_update_raises_on_zero_rows(self, mocker: MockerFixture) -> None:
+        """Update raises NodeRowNotFoundError when RETURNING yields no row — guards orphan VMs when a tmp-node was concurrently deleted."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = []  # type: ignore[attr-defined]
+
+        with pytest.raises(NodeRowNotFoundError) as exc:
+            await repo.update(
+                Node(
+                    node_id=NodeId(7),
+                    hostname="10.0.0.99",
+                    ncpus=8,
+                    enabled=True,
+                    cloud="hetzner",
+                    username="root",
+                    port=22,
+                ),
+            )
+        assert exc.value.node_id == NodeId(7)
+
     # -- enable / disable / remove ---------------------------------------------
 
     async def test_enable_executes_update(self, mocker: MockerFixture) -> None:
         """Enable calls _run with the enable query and node_id.value."""
         repo = self._make_repo(mocker)
+        repo._run.return_value = [{"node_id": 7}]  # type: ignore[attr-defined]
 
         await repo.enable(NodeId(7))
 
         repo._run.assert_awaited_once_with(load_query("node/enable"), node_id=7)  # type: ignore[attr-defined]
 
+    async def test_enable_raises_on_zero_rows(self, mocker: MockerFixture) -> None:
+        """Enable raises NodeRowNotFoundError when RETURNING yields no row."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = []  # type: ignore[attr-defined]
+
+        with pytest.raises(NodeRowNotFoundError) as exc:
+            await repo.enable(NodeId(7))
+        assert exc.value.node_id == NodeId(7)
+
     async def test_disable_executes_update(self, mocker: MockerFixture) -> None:
         """Disable calls _run with the disable query and node_id.value."""
         repo = self._make_repo(mocker)
+        repo._run.return_value = [{"node_id": 7}]  # type: ignore[attr-defined]
 
         await repo.disable(NodeId(7))
 
         repo._run.assert_awaited_once_with(load_query("node/disable"), node_id=7)  # type: ignore[attr-defined]
 
+    async def test_disable_raises_on_zero_rows(self, mocker: MockerFixture) -> None:
+        """Disable raises NodeRowNotFoundError when RETURNING yields no row."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = []  # type: ignore[attr-defined]
+
+        with pytest.raises(NodeRowNotFoundError) as exc:
+            await repo.disable(NodeId(7))
+        assert exc.value.node_id == NodeId(7)
+
     async def test_remove_executes_delete(self, mocker: MockerFixture) -> None:
         """Remove calls _run with the remove (delete) query and node_id.value."""
         repo = self._make_repo(mocker)
+        repo._run.return_value = [{"node_id": 7}]  # type: ignore[attr-defined]
 
         await repo.remove(NodeId(7))
+
+        repo._run.assert_awaited_once_with(load_query("node/remove"), node_id=7)  # type: ignore[attr-defined]
+
+    async def test_remove_raises_on_zero_rows(self, mocker: MockerFixture) -> None:
+        """Remove raises NodeRowNotFoundError when RETURNING yields no row — surfaces a double-remove or stale reference."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = []  # type: ignore[attr-defined]
+
+        with pytest.raises(NodeRowNotFoundError) as exc:
+            await repo.remove(NodeId(7))
+        assert exc.value.node_id == NodeId(7)
 
         repo._run.assert_awaited_once_with(load_query("node/remove"), node_id=7)  # type: ignore[attr-defined]
