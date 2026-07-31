@@ -618,6 +618,96 @@ class TestAllocate:
         adapter.delete_node.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
 
     @pytest.mark.asyncio
+    async def test_allocate_cloud_init_degraded_succeeds(
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
+    ) -> None:
+        """cloud-init exit=2 (recoverable/degraded) is treated as success — providers ship platform-level cloud-config with deprecation warnings (e.g. Vultr's `network` key) that yield exit=2 with `errors: []`; failing on that would nuke every healthy Vultr node."""
+        adapter, config = _make_mock_adapter(name="test")
+        repo = MagicMock()
+
+        async def _connect(**kw: Any) -> Any:
+            machine = MagicMock()
+            machine.hostname = kw.get("ip", "[IP]")
+            # exit=2 = recoverable error (degraded done) — e.g. Vultr network
+            # config deprecation warnings, not a user-data failure.
+            machine.run = AsyncMock(
+                return_value=MagicMock(
+                    exit_code=2, stdout="status: degraded done", stderr=""
+                ),
+            )
+            machine.setup_node = AsyncMock()
+            machine.get_cpu_cores = AsyncMock(return_value=4)
+            return machine
+
+        repo.connect = _connect
+        repo.disconnect = AsyncMock()
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        adapter.delete_node = AsyncMock()
+
+        with patch(
+            "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            node = await prov.allocate("test", _tmp_node(1))
+
+        assert node.enabled is True
+        adapter.delete_node.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_allocate_cloud_init_hard_error_cleans_up_vm(
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
+    ) -> None:
+        """cloud-init exit=1 (hard error) raises CloudSetupError and deletes the VM."""
+        adapter, config = _make_mock_adapter(name="test")
+        repo = MagicMock()
+
+        async def _connect(**kw: Any) -> Any:
+            machine = MagicMock()
+            machine.hostname = kw.get("ip", "[IP]")
+            machine.run = AsyncMock(
+                return_value=MagicMock(exit_code=1, stdout="fail", stderr="boom"),
+            )
+            machine.setup_node = AsyncMock()
+            machine.get_cpu_cores = AsyncMock(return_value=4)
+            return machine
+
+        repo.connect = _connect
+        repo.disconnect = AsyncMock()
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        adapter.delete_node = AsyncMock()
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            pytest.raises(CloudSetupError, match="cloud-init failed"),
+        ):
+            await prov.allocate("test", _tmp_node(1))
+
+        adapter.delete_node.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
+
+    @pytest.mark.asyncio
     async def test_allocate_connect_retry_within_grace(
         self,
         mock_engines: MagicMock,

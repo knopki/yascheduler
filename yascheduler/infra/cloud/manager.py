@@ -43,6 +43,13 @@ if TYPE_CHECKING:
 __all__ = ["CloudProvisionerImpl"]
 logger = logging.getLogger(__name__)
 
+# cloud-init `status` exit codes: 0 = success, 1 = hard error,
+# 2 = recoverable error (degraded done). Providers ship platform-level
+# cloud-config the scheduler never authored (e.g. Vultr emits the deprecated
+# `network` key), which yields exit=2 with `errors: []` — the node booted and
+# applied its user-data. 2 is treated as degraded-but-ok.
+_CLOUD_INIT_RECOVERABLE_EXIT = 2
+
 
 # region CLASS_CloudProvisionerImpl
 # PURPOSE: Implement the CloudProvisioner port through concrete cloud-API calls so the allocator can spin up and tear down cloud VMs without knowing provider specifics.
@@ -323,17 +330,21 @@ class CloudProvisionerImpl:
 
         # region BLOCK_cloud_init
         if adapter.needs_cloud_init:
-            # `cloud-init status --wait` blocks until cloud-init finishes (or hangs).
-            # Bound it with adapter.create_node_timeout so a hung cloud-init cannot
-            # pin an allocator worker forever. The failure message includes both
-            # stdout and stderr — cloud-init writes its status line to stdout, so
-            # omitting stdout (the previous behavior) gave no clue why it failed.
+            # `cloud-init status --long --wait` blocks until cloud-init finishes
+            # (or hangs). `--long` forces per-module detail into stdout so a
+            # failure names the module; without it a recoverable error (exit=2)
+            # shows only "status: done" + empty stderr, hiding which module
+            # failed — and the VM is deleted before /var/log/cloud-init.log is
+            # readable.
+            #
+            # Exit codes: 0 = success, 1 = hard error, 2 = recoverable error
+            # (degraded done). Providers ship platform-level cloud-config the
+            # scheduler never authored (e.g. Vultr emits `network` instead of
+            # the `destination` key, deprecated in cloud-init 23.3), which yields
+            # exit=2 with `errors: []`. Treating that as failure would nuke
+            # every otherwise-healthy node on Vultr. Accept 2 as degraded-but-ok.
             logger.debug("CLOUD_INIT", extra={"hostname": node.hostname})
             try:
-                # `--long` forces the per-module error detail into stdout;
-                # without it a recoverable error (exit=2) shows only
-                # "status: done" + empty stderr, hiding which module failed —
-                # and the VM is deleted before /var/log/cloud-init.log is readable.
                 result = await asyncio.wait_for(
                     session.run("cloud-init status --long --wait"),
                     timeout=adapter.create_node_timeout,
@@ -349,7 +360,20 @@ class CloudProvisionerImpl:
                     f"cloud-init status --long --wait failed on {node.hostname}: {err}"
                 )
                 raise CloudSetupError(msg) from err
-            if result.exit_code != 0:
+            # ponytail: accept 0 (clean) and 2 (recoverable/degraded) — only
+            # exit=1 is a hard failure. Recoverable errors are platform-level
+            # noise (Vultr deprecation warnings) on a node that actually booted
+            # and applied its user-data; the degraded detail is logged so an
+            # operator can still see it.
+            if result.exit_code == _CLOUD_INIT_RECOVERABLE_EXIT:
+                logger.warning(
+                    "cloud-init finished with recoverable errors on %s "
+                    "(degraded but functional): stdout=%s stderr=%s",
+                    node.hostname,
+                    result.stdout,
+                    result.stderr,
+                )
+            elif result.exit_code != 0:
                 msg = (
                     f"cloud-init failed on {node.hostname}: exit={result.exit_code} "
                     f"stdout={result.stdout} stderr={result.stderr}"
