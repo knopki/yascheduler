@@ -293,17 +293,24 @@ class TestBuildBaremetalUserData:
         data = json.loads(out.removeprefix("#cloud-config\n"))
         assert data["users"] == [
             {"name": "root", "ssh_authorized_keys": [self.PUB]},
-            {"name": "myuser", "ssh_authorized_keys": [self.PUB]},
+            {
+                "name": "myuser",
+                "ssh_authorized_keys": [self.PUB],
+                "groups": "sudo",
+                "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            },
         ]
 
-    def test_non_root_user_has_no_sudo(self) -> None:
-        """Custom user must NOT have sudo (operator said no privilege escalation)."""
+    def test_non_root_user_has_passwordless_sudo(self) -> None:
+        """Custom user gets passwordless sudo so setup_node can run `sudo apt-get ...`."""
         from yascheduler.infra.cloud.providers.vultr import build_baremetal_user_data
 
         out = build_baremetal_user_data("myuser", self.PUB, None, need_raid=False)
         data = json.loads(out.removeprefix("#cloud-config\n"))
-        for entry in data["users"]:
-            assert "sudo" not in entry
+        non_root = [u for u in data["users"] if u["name"] == "myuser"]
+        assert len(non_root) == 1
+        assert non_root[0]["sudo"] == "ALL=(ALL) NOPASSWD:ALL"
+        assert non_root[0]["groups"] == "sudo"
 
     def test_non_root_user_gets_chown_data(self) -> None:
         """Non-root ssh user can't write root-owned /data; runcmd chowns it."""
@@ -1219,7 +1226,12 @@ class TestVultrCreateNode:
         data = json.loads(decoded.removeprefix("#cloud-config\n"))
         assert data["users"] == [
             {"name": "root", "ssh_authorized_keys": [pub]},
-            {"name": "myuser", "ssh_authorized_keys": [pub]},
+            {
+                "name": "myuser",
+                "ssh_authorized_keys": [pub],
+                "groups": "sudo",
+                "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            },
         ]
 
         assert result.username == "myuser"

@@ -1065,7 +1065,7 @@ class TestCloudConfigGeneration:
 
 
 class TestBuildUsers:
-    """build_users: root always, non-root appended without sudo."""
+    """build_users: root always, non-root appended with passwordless sudo."""
 
     def test_root_only(self) -> None:
         from yascheduler.infra.cloud import build_cloud_init_users
@@ -1073,16 +1073,19 @@ class TestBuildUsers:
         users = build_cloud_init_users("root", "ssh-rsa AAA")
         assert users == ({"name": "root", "ssh_authorized_keys": ["ssh-rsa AAA"]},)
 
-    def test_non_root_appends_user_without_sudo(self) -> None:
+    def test_non_root_appends_user_with_sudo(self) -> None:
         from yascheduler.infra.cloud import build_cloud_init_users
 
         users = build_cloud_init_users("myuser", "ssh-rsa AAA")
         assert users == (
             {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAA"]},
-            {"name": "myuser", "ssh_authorized_keys": ["ssh-rsa AAA"]},
+            {
+                "name": "myuser",
+                "ssh_authorized_keys": ["ssh-rsa AAA"],
+                "groups": "sudo",
+                "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            },
         )
-        for entry in users:
-            assert "sudo" not in entry
 
 
 class TestSelectProvider:

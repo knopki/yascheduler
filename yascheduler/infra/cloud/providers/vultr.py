@@ -336,7 +336,7 @@ async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
 # - Q: Why is /data a fixed absolute path and not ~/data?
 #   A: On bare metal /data is either a RAID0 NVMe mount (need_raid=True) or the root disk (need_raid=False); engines and tasks require a dedicated mount point (/data/engines, /data/tasks), and cloud-init must guarantee /data exists before the scheduler connects.
 # - Q: Why emit a `users` section when sshkey_id already injects the key for root?
-#   A: Vultr's sshkey_id only injects into /root/.ssh/authorized_keys. For non-root username, cloud-init must create the user and install the key itself; root is also listed for determinism. The created user has no sudo.
+#   A: Vultr's sshkey_id only injects into /root/.ssh/authorized_keys. For non-root username, cloud-init must create the user, install the key, and grant passwordless sudo (setup_node runs `sudo apt-get ...`); root is also listed for determinism.
 def build_baremetal_user_data(
     username: str,
     pub_key: str,

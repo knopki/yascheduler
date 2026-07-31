@@ -267,7 +267,7 @@ async def test_hetzner_create_node_user_data_has_root_users() -> None:
 
 @pytest.mark.asyncio
 async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
-    """Non-root cfg.username is created via cloud-init users (no sudo)."""
+    """Non-root cfg.username is created via cloud-init users with passwordless sudo."""
     import json
 
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudHetzner
@@ -301,10 +301,13 @@ async def test_hetzner_create_node_non_root_user_in_user_data() -> None:
     payload = json.loads(user_data[len("#cloud-config\n") :])
     assert payload["users"] == [
         {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},
-        {"name": "compute", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},
+        {
+            "name": "compute",
+            "ssh_authorized_keys": ["ssh-rsa AAAAB3..."],
+            "groups": "sudo",
+            "sudo": "ALL=(ALL) NOPASSWD:ALL",
+        },
     ]
-    for entry in payload["users"]:
-        assert "sudo" not in entry
 
 
 # =============================================================================

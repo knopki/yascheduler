@@ -20,16 +20,23 @@ __all__ = ["CloudInitConfig", "build_cloud_init_users"]
 
 # region FUNC_build_cloud_init_users
 # PURPOSE: Build the cloud-init `users` list from an SSH username and public key so every provider that needs a non-root login user (or an explicit root entry) constructs it identically.
-# ENSURES: Always returns root with the key; appends a no-sudo non-root entry when username != "root".
+# ENSURES: Always returns root with the key; appends a passwordless-sudo non-root entry when username != "root" — setup_node runs `sudo apt-get ...` and would fail without sudo.
 def build_cloud_init_users(
     username: str, pub_key: str
 ) -> tuple[Mapping[str, object], ...]:
-    """Build cloud-init users: root always, plus a no-sudo non-root user when username != root."""
+    """Build cloud-init users: root always, plus a passwordless-sudo non-root user when username != root."""
     users: list[Mapping[str, object]] = [
         {"name": "root", "ssh_authorized_keys": [pub_key]}
     ]
     if username != "root":
-        users.append({"name": username, "ssh_authorized_keys": [pub_key]})
+        users.append(
+            {
+                "name": username,
+                "ssh_authorized_keys": [pub_key],
+                "groups": "sudo",
+                "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            }
+        )
     return tuple(users)
 
 
