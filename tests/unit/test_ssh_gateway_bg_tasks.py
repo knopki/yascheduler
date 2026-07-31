@@ -37,8 +37,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 
 def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
     conn = MagicMock(spec=SSHClientConnection)
-    conn._transport = MagicMock()
-    conn._transport.is_closing.return_value = False
+    conn.is_closed = MagicMock(return_value=False)
     conn.close = MagicMock()
     conn.wait_closed = AsyncMock()
 

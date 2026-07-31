@@ -434,7 +434,7 @@ class SSHMachineSession:
                 await task
         # endregion BLOCK_cancel_monitor
         # region BLOCK_close_conn
-        if self._conn._transport:  # noqa: SLF001
+        if not self._conn.is_closed():
             logger.debug("CLOSE", extra={"hostname": self._hostname})
             self._conn.close()
             await self._conn.wait_closed()

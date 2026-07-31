@@ -32,8 +32,7 @@ def repository() -> SSHMachineRepository:
 def mock_conn() -> MagicMock:
     """Mock SSHClientConnection with all async methods stubbed."""
     conn = MagicMock()
-    conn._transport = MagicMock()
-    conn._transport.is_closing.return_value = False
+    conn.is_closed = MagicMock(return_value=False)
     conn.run = AsyncMock(return_value=MagicMock())
     conn.close = MagicMock()
     conn.wait_closed = AsyncMock()

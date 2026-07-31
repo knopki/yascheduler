@@ -111,8 +111,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
 def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
     """Create a mock connection with SFTP client context manager."""
     conn = MagicMock()
-    conn._transport = MagicMock()
-    conn._transport.is_closing.return_value = False
+    conn.is_closed = MagicMock(return_value=False)
     conn.close = MagicMock()
     conn.wait_closed = AsyncMock()
 
@@ -185,8 +184,7 @@ def repository() -> SSHMachineRepository:
 def mock_conn() -> MagicMock:
     """Mock SSHClientConnection with all async methods stubbed."""
     conn = MagicMock()
-    conn._transport = MagicMock()
-    conn._transport.is_closing.return_value = False
+    conn.is_closed = MagicMock(return_value=False)
     conn.run = AsyncMock(return_value=MagicMock())
     conn.close = MagicMock()
     conn.wait_closed = AsyncMock()
