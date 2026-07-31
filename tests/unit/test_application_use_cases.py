@@ -867,6 +867,7 @@ class TestDeallocateNodeBracketing:
         """[12.4] disable+commit -> cloud deallocate -> remove+commit ordering."""
         node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
+        gateway.get_session.return_value = None  # not connected -> BUSY re-check no-op
         gateway.contains.return_value = False  # Skip disconnect
 
         calls: list[str] = []
@@ -903,6 +904,7 @@ class TestDeallocateNodeBracketing:
         """[12.4] clouds.deallocate raises -> node stays disabled, remove NOT called."""
         node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
+        gateway.get_session.return_value = None  # not connected -> BUSY re-check no-op
         gateway.contains.return_value = False
 
         calls: list[str] = []
@@ -948,6 +950,7 @@ class TestDeallocateNodeBracketing:
         """[review-hardening] remove UoW fails after clouds.deallocate succeeded -> exception swallowed, REMOVE_FAILED logged; cloud VM is gone so worker stays alive for reconciliation."""
         node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
         gateway = MagicMock()
+        gateway.get_session.return_value = None  # not connected -> BUSY re-check no-op
         gateway.contains.return_value = False
 
         uow = AsyncMock()
@@ -985,3 +988,48 @@ class TestDeallocateNodeBracketing:
             "node remove failed" in r.message and "10.0.0.1" in r.message
             for r in caplog.records
         )
+
+    async def test_busy_machine_at_entry_skips_teardown(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """[C1] in-flight allocator occupied the slot after deallocate_nodes snapshotted busy_node_ids -> teardown skipped entirely so the live task is not lost; node stays disabled+connected for the consume loop, reaped by a later cycle."""
+        from yascheduler.domain.model import MachineState
+
+        node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud="aws")
+
+        busy_session = MagicMock()
+        busy_session.machine.state = MachineState.BUSY
+
+        gateway = MagicMock()
+        gateway.get_session.return_value = busy_session
+
+        uow = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        clouds = MagicMock(spec=CloudProvisioner)
+        clouds.deallocate = AsyncMock()
+
+        with caplog.at_level(
+            "DEBUG",
+            logger="yascheduler.application.deallocate_nodes",
+        ):
+            await deallocate_node(
+                node=node,
+                repository=gateway,
+                clouds=clouds,
+                uow_factory=uow_factory,
+            )
+
+        # Nothing destructive ran: no SSH disconnect, no DB disable, no VM delete, no remove.
+        gateway.disconnect.assert_not_called()
+        uow.nodes.disable.assert_not_called()
+        clouds.deallocate.assert_not_called()
+        uow.nodes.remove.assert_not_called()
+        rec = next(r for r in caplog.records if r.getMessage() == "SKIP_BUSY")
+        assert getattr(rec, "node_id", None) == NodeId(1)
+        assert getattr(rec, "hostname", None) == "10.0.0.1"
