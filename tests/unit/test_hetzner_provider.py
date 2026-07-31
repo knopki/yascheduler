@@ -374,10 +374,17 @@ class TestHetznerCreateNode:
         payload = json.loads(user_data[len("#cloud-config\n") :])
         assert payload["users"] == [
             {"name": "root", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},
-            {"name": "compute", "ssh_authorized_keys": ["ssh-rsa AAAAB3..."]},
+            {
+                "name": "compute",
+                "ssh_authorized_keys": ["ssh-rsa AAAAB3..."],
+                "groups": "sudo",
+                "sudo": "ALL=(ALL) NOPASSWD:ALL",
+            },
         ]
-        for entry in payload["users"]:
-            assert "sudo" not in entry
+        # Non-root user gets passwordless sudo so setup_node can run `sudo apt-get ...`.
+        non_root = [u for u in payload["users"] if u["name"] == "compute"]
+        assert non_root[0]["sudo"] == "ALL=(ALL) NOPASSWD:ALL"
+        assert non_root[0]["groups"] == "sudo"
 
     @pytest.mark.asyncio
     async def test_invalid_create_response_raises_and_reconciles(self) -> None:
