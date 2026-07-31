@@ -185,9 +185,12 @@ class CloudProvisionerImpl:
                     node.node_id,
                     err,
                 )
+                # BaseException: a second CancelledError during shutdown must
+                # not skip delete_node (and its ERROR log with external_id) —
+                # that would orphan a billable VM silently.
                 try:
                     await self.machine_repository.disconnect(node.node_id)
-                except Exception as disc_err:
+                except BaseException as disc_err:
                     logger.warning(
                         "cloud disconnect failed: node_id=%s err=%s",
                         node.node_id,

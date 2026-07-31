@@ -493,7 +493,8 @@ async def _reconcile_orphan_by_label(
             async for server in client.get_servers(label_selector=label_selector):
                 orphan_id = server["id"]
                 break
-        except Exception:
+        # BaseException: CancelledError is a BaseException since Py3.8.
+        except BaseException:
             logger.debug(
                 "RECONCILE_LIST_TRANSIENT",
                 extra={"label": label, "attempt": attempt},

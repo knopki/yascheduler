@@ -595,7 +595,8 @@ async def _reconcile_orphan_by_label(client: VultrClient, label: str) -> None:
                 if bm.get("label") == label and bm.get("id"):
                     orphan_id = bm["id"]
                     break
-        except Exception:
+        # BaseException: CancelledError is a BaseException since Py3.8.
+        except BaseException:
             logger.debug(
                 "RECONCILE_LIST_TRANSIENT",
                 extra={

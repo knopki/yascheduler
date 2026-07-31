@@ -622,6 +622,65 @@ class TestAllocate:
         delete_mock.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
 
     @pytest.mark.asyncio
+    async def test_allocate_setup_cancel_disconnect_cancel_still_deletes(
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
+    ) -> None:
+        """A second CancelledError from disconnect during shutdown must not skip delete_node.
+
+        Regression (S5): disconnect was wrapped in ``except Exception``, so a
+        CancelledError raised by disconnect (common during shutdown) propagated
+        past delete_node — orphaning a billable VM with no ERROR log carrying
+        external_id. ``except BaseException`` lets teardown proceed.
+        """
+        adapter, config = _make_mock_adapter(name="test")
+        adapter.delete_node = AsyncMock()
+        delete_mock = adapter.delete_node
+        call_order: list[str] = []
+
+        async def _record_disconnect(*args: Any, **kwargs: Any) -> None:
+            call_order.append("disconnect")
+            raise asyncio.CancelledError
+
+        async def _record_delete(*args: Any, **kwargs: Any) -> None:
+            call_order.append("delete_node")
+            await delete_mock(*args, **kwargs)
+
+        adapter.delete_node = _record_delete
+
+        repo = MagicMock()
+        repo.disconnect = _record_disconnect
+        session = MagicMock()
+        session.run = AsyncMock(
+            return_value=MagicMock(exit_code=0, stdout="", stderr=""),
+        )
+        session.setup_node = AsyncMock(side_effect=asyncio.CancelledError())
+        repo.connect = AsyncMock(return_value=session)
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        with (
+            patch(
+                "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await prov.allocate("test", _tmp_node(1))
+
+        # delete_node ran despite disconnect raising CancelledError — the
+        # billable VM is torn down and its external_id reaches the adapter.
+        assert call_order == ["disconnect", "delete_node"]
+        delete_mock.assert_awaited_once_with(cfg=config, external_id="10.0.0.1")
+
+    @pytest.mark.asyncio
     async def test_allocate_cloud_init_timeout_cleans_up_vm(
         self,
         mock_local_config: MagicMock,

@@ -534,6 +534,55 @@ class TestHetznerCreateNode:
         mock_client.delete_server.assert_awaited_once_with(999)
 
     @pytest.mark.asyncio
+    async def test_reconcile_listing_cancelled_logs_and_propagates_original(
+        self,
+    ) -> None:
+        """CancelledError in the reconcile listing must not escape _reconcile_orphan_by_label.
+
+        Regression (S5): the listing ``except Exception`` missed CancelledError
+        (a BaseException since Py3.8). With no outer guard in
+        hetzner_create_node, it masked the original create error AND skipped the
+        RECONCILE_LOOKUP_FAILED manual-check log — a billable orphan with no
+        warning. ``except BaseException`` honors the "Never raises" contract.
+        """
+        from yascheduler.infra.cloud.providers.hetzner import (
+            HetznerError,
+            hetzner_create_node,
+        )
+
+        mock_client = MagicMock()
+        mock_client.get_ssh_keys = MagicMock(return_value=_ssh_key_stream([]))
+        mock_client.create_ssh_key = AsyncMock(
+            return_value={"id": 1, "name": "yakey", "fingerprint": "aa"}
+        )
+        # Original create failure (a real error, not cancellation).
+        original = HetznerError("POST rejected", status=400)
+        mock_client.create_server = AsyncMock(side_effect=original)
+        # Listing cancelled mid-reconcile (e.g. daemon shutdown).
+        mock_client.get_servers = MagicMock(side_effect=asyncio.CancelledError())
+
+        with (
+            _patch_hetzner_client(mock_client),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner.get_key_name",
+                return_value="yakey-abc",
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner._RECONCILE_INTERVAL",
+                0.0,
+            ),
+            patch(
+                "yascheduler.infra.cloud.providers.hetzner._RECONCILE_ATTEMPTS",
+                1,
+            ),
+            pytest.raises(HetznerError, match="POST rejected"),
+        ):
+            await hetzner_create_node(_make_cfg(), _make_key())
+
+        # The original create error propagated, not the listing's CancelledError.
+        # Reconcile exhausted its attempts (CancelledError caught as transient).
+
+    @pytest.mark.asyncio
     async def test_create_server_passes_reconcile_label(self) -> None:
         """create_server receives a unique reconcile-token label so orphans are matchable."""
         from yascheduler.infra.cloud.providers.hetzner import (
