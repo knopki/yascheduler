@@ -331,7 +331,7 @@ class TestGetSshKeys:
         with patcher as mock_req:
             result = await client.get_ssh_keys()
         assert result == [{"public_key": "ssh-rsa AAA"}]
-        mock_req.assert_awaited_once_with("GET", "/ssh")
+        mock_req.assert_awaited_once_with("GET", "ssh")
 
     @pytest.mark.asyncio
     async def test_invalid_shape_dict(self) -> None:
@@ -360,7 +360,7 @@ class TestCreateSshKey:
             result = await client.create_ssh_key("ssh-rsa AAA")
         assert result is True
         mock_req.assert_awaited_once_with(
-            "POST", "/ssh", data={"ssh_key": "ssh-rsa AAA"}
+            "POST", "ssh", data={"ssh_key": "ssh-rsa AAA"}
         )
 
     @pytest.mark.asyncio
@@ -395,7 +395,7 @@ class TestSearchOffers:
         _, kwargs = mock_req.call_args
         assert kwargs["data"]["type"] == "ondemand"
         assert kwargs["data"]["limit"] == 20
-        mock_req.assert_awaited_once_with("POST", "/bundles", data=kwargs["data"])
+        mock_req.assert_awaited_once_with("POST", "bundles", data=kwargs["data"])
 
     @pytest.mark.asyncio
     async def test_invalid_shape_raises(self) -> None:
@@ -448,7 +448,7 @@ class TestCreateInstance:
             "cancel_unavail": True,
             "image": "img",
         }
-        mock_req.assert_awaited_once_with("PUT", "/asks/42", data=kwargs["data"])
+        mock_req.assert_awaited_once_with("PUT", "asks/42", data=kwargs["data"])
 
     @pytest.mark.asyncio
     async def test_float_new_contract_returns_int(self) -> None:
@@ -474,7 +474,7 @@ class TestDestroyInstance:
         client, patcher = _client_with_request(None)
         with patcher as mock_req:
             await client.destroy_instance(99)
-        mock_req.assert_awaited_once_with("DELETE", "/instances/99")
+        mock_req.assert_awaited_once_with("DELETE", "instances/99")
 
 
 class TestShowInstance:
@@ -485,7 +485,7 @@ class TestShowInstance:
         with patcher as mock_req:
             result = await client.show_instance(1)
         assert result == _INSTANCE
-        mock_req.assert_awaited_once_with("GET", "/instances/1")
+        mock_req.assert_awaited_once_with("GET", "instances/1")
 
     @pytest.mark.asyncio
     async def test_instances_none_returns_none(self) -> None:
@@ -498,8 +498,7 @@ class TestShowInstance:
         assert result is None
         # ponytail: no leading slash — aiohttp base_url has a trailing slash, so
         # a leading slash would resolve against the host root, dropping the API
-        # base path. Sibling path-assertion tests still use "/instances/1" and
-        # fail pre-existingly (stale); this one asserts the real call.
+        # base path.
         mock_req.assert_awaited_once_with("GET", "instances/1")
 
     @pytest.mark.asyncio

@@ -374,7 +374,7 @@ class TestVultrClientGetSshKeys:
             {"id": "k2", "fingerprint": "cc:dd"},
         ]
         mock_request.assert_awaited_once_with(
-            "GET", "/ssh-keys", params={"per_page": 500}
+            "GET", "ssh-keys", params={"per_page": 500}
         )
 
     @pytest.mark.asyncio
@@ -388,7 +388,7 @@ class TestVultrClientGetSshKeys:
             await _collect(client.get_ssh_keys(per_page=100))
 
         mock_request.assert_awaited_once_with(
-            "GET", "/ssh-keys", params={"per_page": 100}
+            "GET", "ssh-keys", params={"per_page": 100}
         )
 
     @pytest.mark.asyncio
@@ -518,7 +518,7 @@ class TestVultrClientCreateSshKey:
         assert result == "new-id"
         mock_request.assert_awaited_once_with(
             "POST",
-            "/ssh-keys",
+            "ssh-keys",
             data={"name": "my-key", "ssh_key": "ssh-rsa AAAA= test"},
         )
 
@@ -576,7 +576,7 @@ class TestVultrClientCreateBareMetal:
         assert result == {"id": "inst-1", "label": "test"}
         mock_request.assert_awaited_once_with(
             "POST",
-            "/bare-metals",
+            "bare-metals",
             data={
                 "region": "ams",
                 "plan": "vbm-24c-256gb-amd",
@@ -670,7 +670,7 @@ class TestVultrClientGetBareMetals:
             {"id": "bm-2", "label": "n2"},
         ]
         mock_request.assert_awaited_once_with(
-            "GET", "/bare-metals", params={"per_page": 500}
+            "GET", "bare-metals", params={"per_page": 500}
         )
 
     @pytest.mark.asyncio
@@ -684,7 +684,7 @@ class TestVultrClientGetBareMetals:
             await _collect(client.get_bare_metals(per_page=50))
 
         mock_request.assert_awaited_once_with(
-            "GET", "/bare-metals", params={"per_page": 50}
+            "GET", "bare-metals", params={"per_page": 50}
         )
 
     @pytest.mark.asyncio
