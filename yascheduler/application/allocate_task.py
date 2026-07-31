@@ -112,7 +112,7 @@ async def _try_start_on_machine(
     )
     occupancy_checker.start_occupancy_check(session, engine)
     async with uow_factory() as uow:
-        await uow.tasks.save(task)
+        await uow.tasks.save(task, expected_status=TaskStatus.TO_DO)
         await uow.commit()
     tracker.discard(task.task_id)
     return True

@@ -95,10 +95,12 @@ class PostgresTaskRepository(_PgRepository):
     # endregion METHOD_get
 
     # region METHOD_save
-    # PURPOSE: Persist task mutations (status, allocation, error) so the latest state is durable — raises TaskRowNotFoundError to prevent silent data loss when the expected row is missing.
-    # ENSURES: Raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist.
-    async def save(self, task: Task) -> None:
-        """Persist task state to the database (update by task_id; raises on missing row)."""
+    # PURPOSE: Persist task mutations so the latest state is durable
+    # ENSURES: Raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist OR when expected_status is set and the current DB status differs.
+    async def save(
+        self, task: Task, *, expected_status: TaskStatus | None = None
+    ) -> None:
+        """Persist task state to the database (update by task_id; raises on missing row or status-guard rejection)."""
         # region BLOCK_detect_zero_rows
         rows = await self._run(
             load_query("task/update_by_id"),
@@ -113,6 +115,9 @@ class PostgresTaskRepository(_PgRepository):
             extra=task.extra,
             status=task.status.name,
             node_id=task.allocated_node_id.value if task.allocated_node_id else None,
+            expected_status=(
+                expected_status.name if expected_status is not None else None
+            ),
         )
         if not rows:
             raise TaskRowNotFoundError(task.task_id)

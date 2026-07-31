@@ -21,7 +21,10 @@ from yascheduler.domain.model import (
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
 )
-from yascheduler.infra.persistence.exceptions import UnitOfWorkNotInitializedError
+from yascheduler.infra.persistence.exceptions import (
+    TaskRowNotFoundError,
+    UnitOfWorkNotInitializedError,
+)
 from yascheduler.infra.persistence.postgres import (
     PostgresNodeRepository,
     PostgresTaskRepository,
@@ -359,6 +362,61 @@ class TestPostgresTaskRepository:
         assert "ip" not in kwargs
         assert kwargs["engine"] == "fleur"
         assert kwargs["remote_folder"] == "/remote"
+        # default expected_status=None preserves the unconditional-write behavior
+        assert kwargs["expected_status"] is None
+
+    async def test_save_with_expected_status_passes_guard_param(
+        self, mocker: MockerFixture
+    ) -> None:
+        """save(expected_status=...) forwards the status name to the SQL guard."""
+        repo = self._make_repo(mocker)
+        from datetime import datetime
+
+        task = Task(
+            task_id=TaskId(9),
+            label="claim",
+            engine="fleur",
+            remote_folder="/r",
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
+            status=DomainTaskStatus.RUNNING,
+        )
+
+        await repo.save(task, expected_status=DomainTaskStatus.TO_DO)
+
+        _, kwargs = repo._run.call_args  # type: ignore[attr-defined]
+        assert kwargs["expected_status"] == "TO_DO"
+
+    async def test_save_with_expected_status_raises_on_zero_rows(
+        self, mocker: MockerFixture
+    ) -> None:
+        """save(expected_status=...) raises TaskRowNotFoundError when the guard rejects (0 rows)."""
+        repo = self._make_repo(mocker)
+        repo._run.return_value = []  # type: ignore[attr-defined]
+        from datetime import datetime
+
+        task = Task(
+            task_id=TaskId(11),
+            label="lost-update",
+            engine="fleur",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
+            status=DomainTaskStatus.RUNNING,
+        )
+
+        with pytest.raises(TaskRowNotFoundError):
+            await repo.save(task, expected_status=DomainTaskStatus.TO_DO)
 
     async def test_save_running_task(self, mocker: MockerFixture) -> None:
         """Save persists a RUNNING task with its allocated_node_id."""

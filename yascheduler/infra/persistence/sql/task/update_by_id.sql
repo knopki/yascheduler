@@ -10,5 +10,7 @@ SET
     extra = :extra,
     status = :status,
     allocated_node_id = :node_id
-WHERE task_id = :task_id
+WHERE
+    task_id = :task_id
+    AND status = COALESCE(:expected_status, status)
 RETURNING task_id;

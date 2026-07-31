@@ -44,7 +44,9 @@ class StubTaskRepository:
     async def get(self, task_id: TaskId) -> Task | None:
         raise NotImplementedError
 
-    async def save(self, task: Task) -> None:
+    async def save(
+        self, task: Task, *, expected_status: TaskStatus | None = None
+    ) -> None:
         pass
 
     async def list_by_status(

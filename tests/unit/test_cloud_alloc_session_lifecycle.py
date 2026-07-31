@@ -271,7 +271,9 @@ class _FakeTaskRepo:
     async def get(self, task_id: TaskId) -> Task | None:
         return self._store.get(task_id)
 
-    async def save(self, task: Task) -> None:
+    async def save(
+        self, task: Task, *, expected_status: TaskStatus | None = None
+    ) -> None:
         self._store[task.task_id] = task
 
     async def list_by_status(

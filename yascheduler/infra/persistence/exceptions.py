@@ -20,12 +20,16 @@ class UnitOfWorkNotInitializedError(RuntimeError):
 
 
 # region CLASS_TaskRowNotFoundError
-# PURPOSE: Signal a stale or missing task reference so callers can distinguish a programming error (expected row absent) from transient DB failures.
+# PURPOSE: Signal a stale, missing, or status-guard-rejected task reference so callers can distinguish a programming error or lost-update from transient DB failures.
 class TaskRowNotFoundError(RuntimeError):
-    """Raised by PostgresTaskRepository.save/update_status when an UPDATE targets a non-existent task_id.
+    """Raised by PostgresTaskRepository.save/update_status when an UPDATE matches zero rows.
 
-    Programming-error / contract precondition violation: callers SHALL NOT catch it for
-    recovery logic. Sibling of UnitOfWorkNotInitializedError.
+    Two causes, both surfacing as a zero-row UPDATE:
+    - missing task_id (programming error / precondition violation), or
+    - status guard rejection: ``save(task, expected_status=X)`` found the row
+      no longer in status X (concurrent double-allocation / lost update).
+
+    Callers SHALL NOT catch it for recovery logic.
     """
 
     def __init__(self, task_id: TaskId) -> None:

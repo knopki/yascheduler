@@ -54,7 +54,9 @@ class TaskRepository(Protocol):
         """Return a task by ``task_id``, or ``None``."""
         ...
 
-    async def save(self, task: Task) -> None:
+    async def save(
+        self, task: Task, *, expected_status: TaskStatus | None = None
+    ) -> None:
         """Persist changes to an existing task aggregate."""
         ...
 
