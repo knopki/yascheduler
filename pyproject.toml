@@ -33,7 +33,8 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-  "aiohttp~=3.8",
+  "aiohttp~=3.8; python_version < '3.10'",
+  "aiohttp~=3.14; python_version >= '3.10'",
   "asyncssh~=2.11",
   "asyncstdlib~=3.10",
   "pg8000~=1.19",
@@ -60,7 +61,7 @@ yascheduler = "yascheduler.entrypoints.aiida_plugin:YaScheduler"
 
 [project.optional-dependencies]
 azure = [
-  "azure-identity~=1.10.0",
+  "azure-identity~=1.16",
   "azure-mgmt-compute~=27.2.0",
   "azure-mgmt-network~=20.0.0",
 ]
@@ -73,12 +74,14 @@ dev = [
   "import-linter>=2.5.2",
   "mdlint>=0.1",
   "prek>=0.4.9",
-  "pytest~=8.0",
-  "pytest-asyncio~=0.25",
+  "pytest~=8.0; python_version < '3.10'",
+  "pytest~=9.0; python_version >= '3.10'",
+  "pytest-asyncio~=1.0",
   "pytest-cov~=6.0",
   "pytest-mock~=3.0",
   "ruff>=0.15.9",
-  "sqlfluff>=4.1.0",
+  "sqlfluff>=4.1.0; python_version < '3.10'",
+  "sqlfluff>=4.2.0; python_version >= '3.10'",
   "testcontainers[postgres]~=4.0",
   "tombi>=1.2.0; python_version >= '3.10'",
   "twine",
@@ -223,3 +226,7 @@ param_style = "colon"
 
 [tool.uv]
 exclude-newer = "7 days"
+constraint-dependencies = [
+  "pyjwt>=2.13.0",
+  "setuptools>=83.0.0; python_version >= '3.10'",
+]
