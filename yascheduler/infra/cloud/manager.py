@@ -116,6 +116,7 @@ class CloudProvisionerImpl:
     # PURPOSE: Spin up a cloud VM, run cloud-init and engine setup, and return an enabled Node so the scheduler gets a usable compute node. On failure, tear down the VM to avoid orphaned billable resources.
     # REQUIRES: provider name is known and has a config.
     # ENSURES:
+    # - the provider's op_limit semaphore is held across create_node+setup_vm and released on every exit (success, failure, cancellation)
     # - returned Node.node_id == node.node_id
     # - hostname, external_id, username, port, jump_host, jump_port, jump_username copied from CloudCreateNodeDTO
     # - cloud == adapter.name
@@ -135,74 +136,83 @@ class CloudProvisionerImpl:
             raise CloudAllocateError(msg)
         # endregion BLOCK_resolve_allocate_provider
 
-        # region BLOCK_create_vm
-        logger.debug("CREATE_VM", extra={"provider": adapter.name})
-        try:
-            dto: CloudCreateNodeDTO = await adapter.create_node(
-                cfg=config,
-                key=await self._get_ssh_key(),
-                cloud_config=await self._get_cloud_config_data(adapter, config),
-            )
-        except Exception as err:
-            logger.exception("cloud create failed for %s", adapter.name)
-            msg = f"Create node error: {err}"
-            raise CloudAllocateError(msg) from err
-        # endregion BLOCK_create_vm
+        # region BLOCK_throttle_around_allocate
+        # op_limit is the per-provider concurrency cap. select_provider only
+        # CHECKS the semaphore (.locked()); the slot MUST be acquired here so a
+        # second allocation on the same provider blocks instead of racing —
+        # without acquire, op_limit=1 providers (UpCloud, VastAI) get
+        # unlimited concurrent allocations -> provider rate limits, double
+        # billing, resource contention. Released by `async with` on any exit
+        # (success, failure, or cancellation), after teardown completes below.
+        async with adapter.get_op_semaphore():
+            # region BLOCK_create_vm
+            logger.debug("CREATE_VM", extra={"provider": adapter.name})
+            try:
+                dto: CloudCreateNodeDTO = await adapter.create_node(
+                    cfg=config,
+                    key=await self._get_ssh_key(),
+                    cloud_config=await self._get_cloud_config_data(adapter, config),
+                )
+            except Exception as err:
+                logger.exception("cloud create failed for %s", adapter.name)
+                msg = f"Create node error: {err}"
+                raise CloudAllocateError(msg) from err
+            # endregion BLOCK_create_vm
 
-        # region BLOCK_setup_vm
-        # VM is up and billing — teardown MUST run on any non-success exit,
-        # including CancelledError (BaseException since Py3.8; `except Exception`
-        # would orphan the VM). disconnect before delete_node: a stale FREE
-        # session under node_id would be re-picked via list_free() and fail
-        # against the dead VM. disconnect is best-effort — no-op if _connect_to_vm
-        # failed, swallowed if _close raises — so it never skips delete_node.
-        node = replace(
-            node,
-            hostname=dto.hostname,
-            external_id=dto.external_id,
-            cloud=adapter.name,
-            username=dto.username,
-            port=dto.port,
-            jump_host=dto.jump_host,
-            jump_port=dto.jump_port,
-            jump_username=dto.jump_username,
-        )
-        try:
-            node = await self._setup_vm(node, adapter, config)
-        except BaseException as err:
-            logger.warning(
-                "cloud setup did not complete for %s node_id=%s — removing VM: %s",
-                node.hostname,
-                node.node_id,
-                err,
+            # region BLOCK_setup_vm
+            # VM is up and billing — teardown MUST run on any non-success exit,
+            # including CancelledError. disconnect before delete_node: a stale FREE
+            # session under node_id would be re-picked via list_free() and fail
+            # against the dead VM. disconnect is best-effort — no-op if _connect_to_vm
+            # failed, swallowed if _close raises — so it never skips delete_node.
+            node = replace(
+                node,
+                hostname=dto.hostname,
+                external_id=dto.external_id,
+                cloud=adapter.name,
+                username=dto.username,
+                port=dto.port,
+                jump_host=dto.jump_host,
+                jump_port=dto.jump_port,
+                jump_username=dto.jump_username,
             )
             try:
-                await self.machine_repository.disconnect(node.node_id)
-            except Exception as disc_err:
+                node = await self._setup_vm(node, adapter, config)
+            except BaseException as err:
                 logger.warning(
-                    "cloud disconnect failed: node_id=%s err=%s",
-                    node.node_id,
-                    disc_err,
-                )
-            try:
-                await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
-            except BaseException:
-                logger.exception(
-                    "cloud teardown delete failed for %s external_id=%s "
-                    "— VM may still bill; manual deletion required via the "
-                    "provider console",
+                    "cloud setup did not complete for %s node_id=%s — removing VM: %s",
                     node.hostname,
-                    node.external_id,
+                    node.node_id,
+                    err,
                 )
-            # Already CloudSetupError or a control-flow BaseException
-            # (CancelledError/KeyboardInterrupt/SystemExit) -> propagate as-is;
-            # wrapping the latter would break shutdown/sys.exit semantics.
-            # Regular Exception -> CloudSetupError per the port contract.
-            if isinstance(err, CloudSetupError) or not isinstance(err, Exception):
-                raise
-            msg = f"Setup node error: {err}"
-            raise CloudSetupError(msg) from err
-        # endregion BLOCK_setup_vm
+                try:
+                    await self.machine_repository.disconnect(node.node_id)
+                except Exception as disc_err:
+                    logger.warning(
+                        "cloud disconnect failed: node_id=%s err=%s",
+                        node.node_id,
+                        disc_err,
+                    )
+                try:
+                    await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
+                except BaseException:
+                    logger.exception(
+                        "cloud teardown delete failed for %s external_id=%s "
+                        "— VM may still bill; manual deletion required via the "
+                        "provider console",
+                        node.hostname,
+                        node.external_id,
+                    )
+                # Already CloudSetupError or a control-flow BaseException
+                # (CancelledError/KeyboardInterrupt/SystemExit) -> propagate as-is;
+                # wrapping the latter would break shutdown/sys.exit semantics.
+                # Regular Exception -> CloudSetupError per the port contract.
+                if isinstance(err, CloudSetupError) or not isinstance(err, Exception):
+                    raise
+                msg = f"Setup node error: {err}"
+                raise CloudSetupError(msg) from err
+            # endregion BLOCK_setup_vm
+        # endregion BLOCK_throttle_around_allocate
 
         logger.debug(
             "DONE",

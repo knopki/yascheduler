@@ -397,6 +397,64 @@ class TestAllocate:
             await prov.allocate("test", _tmp_node(1))
 
     @pytest.mark.asyncio
+    async def test_allocate_acquires_op_semaphore(
+        self,
+        mock_local_config: MagicMock,
+        mock_engines: MagicMock,
+    ) -> None:
+        """allocate holds the provider's op_limit semaphore across create_node
+        and setup and releases it on every exit. Regression: the semaphore was
+        only checked (``.locked()``) by select_provider and never acquired, so
+        op_limit=1 providers got unlimited concurrent allocations.
+        """
+        adapter, config = _make_mock_adapter(name="test")
+        adapter.op_limit = 1
+        repo = _make_mock_repository()
+
+        # Real semaphore so `async with` actually acquires/releases; wrap it
+        # to observe hold timing without breaking async-with semantics.
+        sem = asyncio.Semaphore(adapter.op_limit)
+        held_during_create: list[bool] = []
+
+        class _ObservingSemaphore:
+            async def __aenter__(self) -> _ObservingSemaphore:
+                await sem.acquire()
+                return self
+
+            async def __aexit__(self, *exc: object) -> None:
+                sem.release()
+
+            def locked(self) -> bool:
+                return sem.locked()
+
+        observing = _ObservingSemaphore()
+        adapter.get_op_semaphore = MagicMock(return_value=observing)
+
+        prov = make_provisioner(
+            adapters={"test": adapter},
+            configs={"test": config},
+            machine_repository=repo,
+            engines=mock_engines,
+            local_config=mock_local_config,
+        )
+
+        async def _observe_create(*args: Any, **kwargs: Any) -> CloudCreateNodeDTO:
+            held_during_create.append(observing.locked())
+            return CloudCreateNodeDTO(external_id="10.0.0.1", hostname="10.0.0.1")
+
+        adapter.create_node = _observe_create
+
+        with patch(
+            "yascheduler.infra.cloud.manager.CloudProvisionerImpl._get_ssh_key",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            await prov.allocate("test", _tmp_node(1))
+
+        # Held while create_node ran, released once allocate returned.
+        assert held_during_create == [True]
+        assert observing.locked() is False
+
+    @pytest.mark.asyncio
     async def test_allocate_setup_failure_cleans_up_vm(
         self,
         mock_local_config: MagicMock,
