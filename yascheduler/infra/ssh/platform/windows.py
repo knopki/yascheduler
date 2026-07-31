@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # region CLASS_MyPureWindowsPath
 # PURPOSE: Subclass PureWindowsPath so SSH SFTP paths returned by a Windows remote arrive at the session without a spurious leading backslash that breaks SFTP makedirs/file placement.
-# INVARIANTS: Subclass of PureWindowsPath; the overridden _parse_args strips a leading \ from UNC-style returns so paths like \C:\Users\user become C:\Users\user; the second guard re-introduces a \\ root when parsing a PurePath instance whose first part equals its drive, restoring the path semantics PureWindowsPath would otherwise eat.
+# INVARIANTS: Subclass of PureWindowsPath. Both pathlib parse hooks are overridden — ``_parse_args`` (<=3.11) and ``_parse_path`` (3.12+) — so each drops a leading \ only when the next part is a drive letter (X:), turning \C:\Users\user into C:\Users\user while leaving \Users\user (absolute, no drive) and \\server\share (UNC) untouched. The ``_parse_args`` branch also re-introduces a \\ root when parsing a PurePath instance whose first part equals its drive.
 # RATIONALE:
 # - Q: why subclass PureWindowsPath instead of using PureWindowsPath directly?
 #   A: asyncssh's SFTP realpath on Windows returns paths with a leading \ (the SFTP protocol's POSIX-like prefix); PureWindowsPath("\C:\Users") parses the leading \ as a UNC root and produces an unusable \C:\Users form — the subclass rewrites the parse to drop the leading \ when the next part looks like a drive letter.
@@ -60,22 +60,43 @@ class MyPureWindowsPath(PureWindowsPath):
     """Custom ``PureWindowsPath`` subclass preventing leading slashes."""
 
     # region METHOD__parse_args
-    # PURPOSE: Custom path parsing to prevent leading slash on Windows paths.
+    # PURPOSE: Custom path parsing to drop a spurious leading backslash before a drive letter.
+    # NOTE: pathlib <=3.11 calls ``_parse_args``; 3.12+ renamed it to ``_parse_path`` with a
+    # different ``parts`` layout (anchor excluded), so both hooks are overridden to keep
+    # ``str(MyPureWindowsPath(r"\C:\Users\user")) == "C:\Users\user"`` on every version.
     @classmethod
     def _parse_args(cls, path: str) -> tuple[str, str, list[str]]:
-        drv, root, parts = cls._parse_args(path)
-        # prevent leading slash like \C:\Users\user
+        drv, root, parts = super()._parse_args(path)  # type: ignore[misc]
+        # <=3.11: r"\C:\Users\user" -> drv='', root='\\', parts=['\\', 'C:', 'Users', 'user']
         parts_len = 3
-        if not drv and root == "\\" and len(parts) >= parts_len and parts[0] == "\\":
+        if (
+            not drv
+            and root == "\\"
+            and len(parts) >= parts_len
+            and parts[0] == "\\"
+            and re.fullmatch(r"[A-Za-z]:", parts[1])
+        ):
             drv = parts[1]
             parts = parts[1:]
         # prevent eating first part when parsing PurePath instance
         if len(parts) > 1 and drv == parts[0] and not root:
             root = "\\"
-
         return drv, root, parts
 
     # endregion METHOD__parse_args
+
+    # region METHOD__parse_path
+    # PURPOSE: 3.12+ hook; same normalization as ``_parse_args`` for the new parser layout.
+    @classmethod
+    def _parse_path(cls, path: str) -> tuple[str, str, list[str]]:
+        drv, root, parts = super()._parse_path(path)  # type: ignore[misc]
+        # 3.12+: r"\C:\Users\user" -> drv='', root='\\', parts=['C:', 'Users', 'user']
+        if not drv and root == "\\" and parts and re.fullmatch(r"[A-Za-z]:", parts[0]):
+            drv = parts[0]
+            parts = parts[1:]
+        return drv, root, parts
+
+    # endregion METHOD__parse_path
 
 
 # endregion CLASS_MyPureWindowsPath
