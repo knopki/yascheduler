@@ -378,6 +378,60 @@ async def test_az_create_node_returns_dto() -> None:
 
 @requires_az
 @pytest.mark.asyncio
+async def test_az_create_node_cleans_up_vm_and_nic_on_vm_create_failure() -> None:
+    """A failure after NIC creation best-effort deletes VM and NIC; original error re-raises (no billable orphan)."""
+    from yascheduler.infra.cloud.cloud_configs import ConfigCloudAzure
+    from yascheduler.infra.cloud.providers import az as az_mod
+
+    cfg = ConfigCloudAzure(
+        username="azuser",
+        tenant_id="test-tid",
+        client_id="test-cid",
+        client_secret="test-secret",
+        subscription_id="test-sub",
+    )
+
+    mock_nic = MagicMock()
+    mock_nic.name = "vm-nic"
+
+    vm_create_poller = MagicMock()
+    vm_create_poller.wait = AsyncMock(side_effect=RuntimeError("azure quota exceeded"))
+
+    call_order: list[str] = []
+    vm_delete_poller = MagicMock()
+    vm_delete_poller.wait = AsyncMock(side_effect=lambda: call_order.append("vm"))
+    nic_delete_poller = MagicMock()
+    nic_delete_poller.wait = AsyncMock(side_effect=lambda: call_order.append("nic"))
+
+    mock_cmc = MagicMock()
+    mock_cmc.virtual_machines.begin_create_or_update = AsyncMock(
+        return_value=vm_create_poller
+    )
+    mock_cmc.virtual_machines.begin_delete = AsyncMock(return_value=vm_delete_poller)
+
+    mock_nmc = MagicMock()
+    mock_nmc.network_interfaces.begin_delete = AsyncMock(return_value=nic_delete_poller)
+
+    mock_key = MagicMock()
+    mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3..."
+
+    with (
+        patch.object(
+            az_mod, "create_nic", AsyncMock(return_value=(mock_nic, "10.0.0.5"))
+        ),
+        patch.object(az_mod, "create_vm_params", return_value=MagicMock()),
+        pytest.raises(RuntimeError, match="azure quota exceeded"),
+    ):
+        await az_mod.create_node(mock_nmc, mock_cmc, cfg, mock_key)
+
+    # VM is deleted before NIC (Azure rejects deleting an attached NIC).
+    mock_cmc.virtual_machines.begin_delete.assert_awaited_once()
+    mock_nmc.network_interfaces.begin_delete.assert_awaited_once()
+    assert call_order == ["vm", "nic"]
+
+
+@requires_az
+@pytest.mark.asyncio
 async def test_az_delete_node_accepts_external_id() -> None:
     """az_delete_node accepts external_id parameter to locate the resource."""
     from yascheduler.infra.cloud.cloud_configs import ConfigCloudAzure

@@ -123,6 +123,13 @@ caller's cancellation/drain semantics are preserved.
 - **AND** the VM is deleted on the provider to stop billing
 - **AND** the cancellation propagates unchanged (no cloud setup error is raised)
 
+#### Scenario: a failure after partial cloud resources are created cleans them up
+
+- **WHEN** a provider's create call fails after one or more billable cloud resources have already been created (for example a network interface created before the VM, or an instance accepted before a usable identifier is returned)
+- **THEN** the provider best-effort deletes the partially created resources before re-raising
+- **AND** the original create error propagates to the caller
+- **AND** any cleanup failure is logged so a still-billing orphan can be reconciled manually
+
 ### Requirement: Cloud node deallocation
 
 Deallocation SHALL delete the VM on the provider named by the node's

@@ -217,10 +217,47 @@ def create_vm_params(
 # endregion FUNC_create_vm_params
 
 
+# region FUNC__cleanup_vm_and_nic
+# PURPOSE: Best-effort delete of a partially created VM and its NIC after a mid-create failure so no billable orphan leaks when Azure VM create raises (transient error, quota, or cancellation).
+# INVARIANTS:
+# - Never raises — the original create error must propagate
+# - VM is deleted before NIC (Azure rejects deleting a NIC still attached to a VM)
+async def _cleanup_vm_and_nic(
+    cmc: ComputeManagementClient,
+    nmc: NetworkManagementClient,
+    cfg: ConfigCloudAzure,
+    vm_name: str,
+    nic_name: str,
+) -> None:
+    """Best-effort delete of a VM and its NIC; never raises."""
+    try:
+        vm_poller = await cmc.virtual_machines.begin_delete(cfg.resource_group, vm_name)
+        await vm_poller.wait()
+    except BaseException:
+        logger.warning(
+            "CLEANUP_VM_FAILED — possible orphan billing; manual check needed",
+            extra={"vm_name": vm_name},
+        )
+    try:
+        nic_poller = await nmc.network_interfaces.begin_delete(
+            cfg.resource_group, nic_name
+        )
+        await nic_poller.wait()
+    except BaseException:
+        logger.warning(
+            "CLEANUP_NIC_FAILED — possible orphan billing; manual check needed",
+            extra={"nic_name": nic_name},
+        )
+
+
+# endregion FUNC__cleanup_vm_and_nic
+
+
 # region FUNC_create_node
 # PURPOSE: Orchestrate NIC creation then VM provisioning so the caller gets a running VM's IP without managing intermediate resources.
 # INVARIANTS:
 # - external_id = hostname = VM's private IP
+# - On any failure after NIC creation, best-effort deletes VM and NIC via _cleanup_vm_and_nic, then re-raises
 async def create_node(
     nmc: NetworkManagementClient,
     cmc: ComputeManagementClient,
@@ -243,13 +280,24 @@ async def create_node(
         cloud_config=cloud_config,
     )
 
-    poller = await cmc.virtual_machines.begin_create_or_update(
-        resource_group_name=cfg.resource_group,
-        vm_name=vm_name,
-        parameters=vm_params,
-    )
-    await poller.wait()
-    vm_res = await poller.result()
+    try:
+        poller = await cmc.virtual_machines.begin_create_or_update(
+            resource_group_name=cfg.resource_group,
+            vm_name=vm_name,
+            parameters=vm_params,
+        )
+        await poller.wait()
+        vm_res = await poller.result()
+    except BaseException:
+        # Azure VM create is not idempotent: a raise here can leave a billable
+        # VM and/or NIC. Best-effort delete both by known name, then re-raise so
+        # the caller still sees the original failure. Matches vultr/hetzner.
+        logger.exception(
+            "CREATE_VM_FAILED — best-effort cleanup of VM and NIC",
+            extra={"vm_name": vm_name, "ip": ip_addr},
+        )
+        await _cleanup_vm_and_nic(cmc, nmc, cfg, vm_name, cast("str", nic.name))
+        raise
     logger.debug("CREATE_VM", extra={"vm": vm_res.name})
     return CloudCreateNodeDTO(
         external_id=ip_addr,
