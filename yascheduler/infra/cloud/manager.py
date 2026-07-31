@@ -330,18 +330,24 @@ class CloudProvisionerImpl:
             # omitting stdout (the previous behavior) gave no clue why it failed.
             logger.debug("CLOUD_INIT", extra={"hostname": node.hostname})
             try:
+                # `--long` forces the per-module error detail into stdout;
+                # without it a recoverable error (exit=2) shows only
+                # "status: done" + empty stderr, hiding which module failed —
+                # and the VM is deleted before /var/log/cloud-init.log is readable.
                 result = await asyncio.wait_for(
-                    session.run("cloud-init status --wait"),
+                    session.run("cloud-init status --long --wait"),
                     timeout=adapter.create_node_timeout,
                 )
             except asyncio.TimeoutError as err:
                 msg = (
-                    f"cloud-init status --wait timed out on {node.hostname} "
+                    f"cloud-init status --long --wait timed out on {node.hostname} "
                     f"after {adapter.create_node_timeout}s"
                 )
                 raise CloudSetupError(msg) from err
             except Exception as err:
-                msg = f"cloud-init status --wait failed on {node.hostname}: {err}"
+                msg = (
+                    f"cloud-init status --long --wait failed on {node.hostname}: {err}"
+                )
                 raise CloudSetupError(msg) from err
             if result.exit_code != 0:
                 msg = (
