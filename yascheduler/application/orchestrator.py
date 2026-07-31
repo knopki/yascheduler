@@ -64,6 +64,12 @@ if TYPE_CHECKING:
 
 __all__ = ["Orchestrator"]
 
+# Upper bound on the graceful-drain join at shutdown. stop() cancels every
+# task in self._bg_jobs; if workers are cancelled
+# before their coordinator reaches queue.join(), no consumer remains and the
+# join would hang until SIGKILL. Bounded so shutdown always completes.
+_DRAIN_TIMEOUT: float = 5.0
+
 
 async def _asleep_until(end: datetime) -> None:
     """Sleep until :end:."""
@@ -729,7 +735,18 @@ class Orchestrator:
                     queue.name,
                     queue.qsize(),
                 )
-                await queue.join()
+                # Workers may already be cancelled by stop()'s cascade through
+                # self._bg_jobs (unordered set); without a consumer the unbounded
+                # join hangs until SIGKILL. Bound it and drop residue on timeout.
+                try:
+                    await asyncio.wait_for(queue.join(), _DRAIN_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "queue %s drain timed out after %ss, dropped %s items",
+                        queue.name,
+                        _DRAIN_TIMEOUT,
+                        queue.qsize(),
+                    )
             for task in workers:
                 task.cancel()
             await asyncio.gather(*workers, return_exceptions=True)
