@@ -21,6 +21,7 @@ from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.uow import AbstractUnitOfWork
 from yascheduler.domain.model import (
     Engine,
+    MachineState,
     Node,
     NodeId,
     Task,
@@ -195,5 +196,90 @@ class TestTryStartOnMachineNodeIdLogging:
         fields = extra_fields(rec)
         assert fields.get("hostname") == "10.0.0.1"
         assert fields.get("node_id") == NodeId(7)
+        # save() called with the status guard (Level A double-allocation guard).
+        uow.tasks.save.assert_awaited_once()
+        assert uow.tasks.save.await_args is not None
+        assert uow.tasks.save.await_args.kwargs["expected_status"] == TaskStatus.TO_DO
         # tracker.discard called with the task_id
         tracker.discard.assert_called_once_with(task.task_id)
+
+    async def test_save_rejection_releases_session_and_reraises(
+        self,
+        engine: Engine,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """On save() rejection (double-allocation guard), the occupancy monitor is cancelled and the session released before the error re-raises; tracker.discard is NOT called (the task was not allocated here)."""
+        from yascheduler.domain.model import ConnectedMachine
+
+        node = Node(node_id=NodeId(7), hostname="10.0.0.1", ncpus=4, enabled=True)
+        m = MagicMock(spec=ConnectedMachine)
+        m.hostname = "10.0.0.1"
+        m.state = MachineState.BUSY  # occupy() ran during start_task_on_machine
+        m.free_since = time.monotonic()
+        session = SimpleNamespace(
+            machine=m,
+            hostname="10.0.0.1",
+            cancel_monitor=MagicMock(),
+            release=MagicMock(),
+        )
+
+        from datetime import datetime
+
+        task = Task(
+            task_id=TaskId(1),
+            label="t",
+            engine="test_engine",
+            remote_folder=None,
+            local_folder=None,
+            webhook_url=None,
+            webhook_custom_params={},
+            error=None,
+            extra={},
+            created_at=datetime(2025, 1, 1),
+            updated_at=datetime(2025, 1, 1),
+            status=TaskStatus.TO_DO,
+        )
+
+        occupancy_checker = MagicMock()
+        occupancy_checker.start_occupancy_check = MagicMock()
+        start_on_machine = AsyncMock(return_value=True)
+        tracker = MagicMock(spec=AllocationTracker)
+
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        # save() raises — the Level A guard rejected the double-allocation.
+        uow.tasks.save = AsyncMock(side_effect=RuntimeError("guard rejected"))
+        uow.commit = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        with (
+            caplog.at_level(
+                logging.DEBUG,
+                logger="yascheduler.application.allocate_task",
+            ),
+            pytest.raises(RuntimeError, match="guard rejected"),
+        ):
+            await _try_start_on_machine(
+                session,
+                node,
+                engine,
+                task,
+                occupancy_checker,
+                uow_factory,
+                start_on_machine,
+                tracker,
+                PurePath("/remote/tasks"),
+            )
+
+        # Monitor cancelled + session released — machine not left stuck BUSY.
+        session.cancel_monitor.assert_called_once()
+        session.release.assert_called_once()
+        # tracker.discard NOT called — the task was not allocated on this machine.
+        tracker.discard.assert_not_called()
+        # CLAIM_REJECTED trace record emitted.
+        rejected = [r for r in caplog.records if r.getMessage() == "CLAIM_REJECTED"]
+        assert rejected, "expected a CLAIM_REJECTED trace record"
