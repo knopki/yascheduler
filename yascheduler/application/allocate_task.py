@@ -101,8 +101,16 @@ async def _try_start_on_machine(
             "node_id": node.node_id,
         },
     )
-    if not await start_task_on_machine(session, engine, task):
-        return False
+    # Claim before spawn: the status-guarded save takes the row lock and
+    # holds it across the spawn inside one unit of work. A lost cross-host
+    # claim raises before the spawn is reached, so no orphan process is
+    # created on the losing host.
+    async with uow_factory() as uow:
+        await uow.tasks.save(task, expected_status=TaskStatus.TO_DO)
+        if not await start_task_on_machine(session, engine, task):
+            await uow.rollback()
+            return False
+        await uow.commit()
     logger.debug(
         "ALLOCATED",
         extra={
@@ -112,26 +120,6 @@ async def _try_start_on_machine(
         },
     )
     occupancy_checker.start_occupancy_check(session, engine)
-    # Status-guarded save: the UPDATE matches zero rows (and raises
-    # TaskRowNotFoundError) unless the DB row is still TO_DO — the cross-host
-    # double-allocation guard. On rejection, cancel the monitor and release
-    # the session before re-raising so the machine is not left stuck BUSY.
-    try:
-        async with uow_factory() as uow:
-            await uow.tasks.save(task, expected_status=TaskStatus.TO_DO)
-            await uow.commit()
-    except BaseException:
-        logger.debug(
-            "CLAIM_REJECTED",
-            extra={
-                "task_id": task.task_id,
-                "hostname": session.hostname,
-                "node_id": node.node_id,
-            },
-        )
-        session.cancel_monitor()
-        session.release()
-        raise
     tracker.discard(task.task_id)
     return True
 
