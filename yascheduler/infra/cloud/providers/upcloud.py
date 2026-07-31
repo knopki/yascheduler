@@ -15,7 +15,13 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from functools import cache
 from typing import TYPE_CHECKING, cast
 
-from upcloud_api import CloudManager, Server, Storage, login_user_block
+from upcloud_api import (
+    CloudManager,
+    Server,
+    Storage,
+    UpCloudAPIError,
+    login_user_block,
+)
 
 from yascheduler.infra.cloud import CloudCreateNodeDTO, get_rnd_name
 
@@ -28,6 +34,12 @@ __all__ = ["upcloud_create_node", "upcloud_delete_node"]
 logger = logging.getLogger(__name__)
 
 executor = ThreadPoolExecutor(max_workers=5)
+
+# Bounded destroy retry so a persistent UpCloud failure (404, auth, illegal
+# state) can never pin the module-global executor thread forever. Mirrors
+# hetzner/vultr; SERVER_NOT_FOUND is idempotent success.
+_DELETE_ATTEMPTS = 3
+_DELETE_INTERVAL = 5
 
 
 # region FUNC_get_client
@@ -113,6 +125,8 @@ async def upcloud_create_node(
 # PURPOSE: Tear down an UpCloud server by IP (stop, destroy server, clean up storage) so billing stops and no orphaned storage accrues costs.
 # INVARIANTS:
 # - Iterates client.get_servers() and matches by public IP
+# - destroy() retried up to _DELETE_ATTEMPTS; SERVER_NOT_FOUND = idempotent success
+# - On persistent failure raises the last UpCloudAPIError so the orchestrator retries next cycle instead of hanging the executor thread
 def upcloud_delete_node_sync(
     cfg: ConfigCloudUpcloud,
     external_id: str,
@@ -124,15 +138,37 @@ def upcloud_delete_node_sync(
             server.stop()
             logger.info("WAITING FOR STOP...")
             time.sleep(20)
-            while True:
+            err: UpCloudAPIError | None = None
+            server_gone = False
+            for attempt in range(1, _DELETE_ATTEMPTS + 1):
                 try:
                     server.destroy()
-                except Exception:  # noqa: PERF203
-                    time.sleep(5)
+                except UpCloudAPIError as exc:  # noqa: PERF203
+                    if exc.error_code == "SERVER_NOT_FOUND":
+                        logger.info("SERVER %s ALREADY GONE", external_id)
+                        server_gone = True
+                        break
+                    err = exc
+                    logger.warning(
+                        "DESTROY ATTEMPT FAILED",
+                        extra={
+                            "external_id": external_id,
+                            "attempt": attempt,
+                            "attempts": _DELETE_ATTEMPTS,
+                            "error_code": exc.error_code,
+                            "error_message": exc.error_message,
+                        },
+                    )
+                    if attempt < _DELETE_ATTEMPTS:
+                        time.sleep(_DELETE_INTERVAL)
                 else:
+                    err = None
                     break
-            for storage in server.storage_devices:  # type: ignore[attr-defined]
-                storage.destroy()
+            if err is not None:
+                raise err
+            if not server_gone:
+                for storage in server.storage_devices:  # type: ignore[attr-defined]
+                    storage.destroy()
             logger.info("DELETED %s", external_id)
             break
     else:

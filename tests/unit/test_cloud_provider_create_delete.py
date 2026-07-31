@@ -545,3 +545,95 @@ def test_upcloud_delete_node_is_renamed() -> None:
     assert hasattr(upcloud_mod, "upcloud_delete_node")
     assert "upcloud_delete_node" in upcloud_mod.__all__
     assert not hasattr(upcloud_mod, "upcload_delete_node")
+
+
+@requires_upcloud
+@pytest.mark.asyncio
+async def test_upcloud_delete_node_already_gone_is_success() -> None:
+    """A SERVER_NOT_FOUND from destroy() is idempotent success: no raise, storage teardown skipped."""
+    from upcloud_api import UpCloudAPIError
+
+    from yascheduler.infra.cloud.cloud_configs import ConfigCloudUpcloud
+    from yascheduler.infra.cloud.providers import upcloud as uc_mod
+
+    cfg = ConfigCloudUpcloud(login="test", password="test")
+
+    mock_storage = MagicMock()
+    mock_server = MagicMock()
+    mock_server.get_public_ip.return_value = "10.0.0.2"
+    mock_server.storage_devices = [mock_storage]
+    mock_server.destroy.side_effect = UpCloudAPIError(
+        error_code="SERVER_NOT_FOUND", error_message="gone"
+    )
+
+    mock_client = MagicMock()
+    mock_client.get_servers.return_value = [mock_server]
+
+    with (
+        patch.object(uc_mod, "time") as mock_time,
+        patch.object(uc_mod, "get_client", return_value=mock_client),
+    ):
+        # Must not raise — 404 means already deleted.
+        await uc_mod.upcloud_delete_node(cfg, external_id="10.0.0.2")
+
+    mock_server.destroy.assert_called_once()
+    mock_storage.destroy.assert_not_called()
+    # Only the post-stop wait; no retry backoff on the 404 success path.
+    mock_time.sleep.assert_called_once_with(20)
+
+
+@requires_upcloud
+@pytest.mark.asyncio
+async def test_upcloud_delete_node_persistent_error_raises_after_attempts() -> None:
+    """A persistent non-404 UpCloud error exhausts _DELETE_ATTEMPTS then raises instead of looping forever."""
+    from upcloud_api import UpCloudAPIError
+
+    from yascheduler.infra.cloud.cloud_configs import ConfigCloudUpcloud
+    from yascheduler.infra.cloud.providers import upcloud as uc_mod
+
+    cfg = ConfigCloudUpcloud(login="test", password="test")
+
+    mock_server = MagicMock()
+    mock_server.get_public_ip.return_value = "10.0.0.3"
+    mock_server.destroy.side_effect = UpCloudAPIError(
+        error_code="SERVER_STATE_ILLEGAL", error_message="not stopped"
+    )
+
+    mock_client = MagicMock()
+    mock_client.get_servers.return_value = [mock_server]
+
+    with (
+        patch.object(uc_mod, "time"),
+        patch.object(uc_mod, "get_client", return_value=mock_client),
+        pytest.raises(UpCloudAPIError),
+    ):
+        await uc_mod.upcloud_delete_node(cfg, external_id="10.0.0.3")
+
+    assert mock_server.destroy.call_count == uc_mod._DELETE_ATTEMPTS
+
+
+@requires_upcloud
+@pytest.mark.asyncio
+async def test_upcloud_delete_node_success_destroys_storage() -> None:
+    """On a successful destroy(), attached storages are also torn down."""
+    from yascheduler.infra.cloud.cloud_configs import ConfigCloudUpcloud
+    from yascheduler.infra.cloud.providers import upcloud as uc_mod
+
+    cfg = ConfigCloudUpcloud(login="test", password="test")
+
+    mock_storage = MagicMock()
+    mock_server = MagicMock()
+    mock_server.get_public_ip.return_value = "10.0.0.4"
+    mock_server.storage_devices = [mock_storage]
+
+    mock_client = MagicMock()
+    mock_client.get_servers.return_value = [mock_server]
+
+    with (
+        patch.object(uc_mod, "time"),
+        patch.object(uc_mod, "get_client", return_value=mock_client),
+    ):
+        await uc_mod.upcloud_delete_node(cfg, external_id="10.0.0.4")
+
+    mock_server.destroy.assert_called_once()
+    mock_storage.destroy.assert_called_once()
