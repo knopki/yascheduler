@@ -37,7 +37,8 @@ async def run(
     if cwd:
         command = f"cd {quote(cwd)}; {command}"
     timeout = kwargs.pop("timeout", None)
-    if not isinstance(timeout, float):
+    # bool is a subclass of int, but a bool timeout is never meaningful — exclude it explicitly.
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
         timeout = None
     return await conn.run(
         command,
