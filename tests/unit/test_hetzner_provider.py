@@ -811,9 +811,12 @@ class TestHetznerDeleteNode:
 
     @pytest.mark.asyncio
     async def test_invalid_external_id_raises(self) -> None:
-        from yascheduler.infra.cloud.providers.hetzner import hetzner_delete_node
+        from yascheduler.infra.cloud.providers.hetzner import (
+            HetznerError,
+            hetzner_delete_node,
+        )
 
-        with pytest.raises(RuntimeError, match="Invalid Hetzner server id"):
+        with pytest.raises(HetznerError, match="Invalid Hetzner server id"):
             await hetzner_delete_node(_make_cfg(), external_id="not-a-number")
 
     @pytest.mark.asyncio

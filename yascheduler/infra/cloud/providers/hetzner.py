@@ -646,7 +646,7 @@ async def hetzner_delete_node(
         server_id = int(external_id)
     except (TypeError, ValueError) as err:
         msg = f"Invalid Hetzner server id {external_id!r}: {err}"
-        raise RuntimeError(msg) from err
+        raise HetznerError(msg) from err
 
     logger.debug("INSTANCE_DELETE", extra={"server_id": server_id})
     async with HetznerClient(cfg.token) as client:
