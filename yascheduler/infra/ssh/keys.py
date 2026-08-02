@@ -13,9 +13,11 @@ __all__ = ["list_private_keys"]
 
 # region FUNC_list_private_keys
 # PURPOSE: List private-key file paths from the given keys directory.
-# ENSURES: Returns is_file() entries only AND excludes .pub files.
+# ENSURES: Returns is_file() entries only AND excludes .pub files; keys_dir is
+# created if missing.
 def list_private_keys(keys_dir: Path) -> Sequence[PurePath]:
     """List private key file paths, skipping public keys (.pub)."""
+    keys_dir.mkdir(parents=True, exist_ok=True)
     filepaths = (x for x in keys_dir.iterdir() if x.is_file() and x.suffix != ".pub")
     return list(filepaths)
 

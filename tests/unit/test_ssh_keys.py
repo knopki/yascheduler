@@ -49,3 +49,14 @@ def test_list_private_keys_empty_dir_returns_empty(tmp_path: Path) -> None:
     """An empty keys_dir yields an empty list"""
     result = list_private_keys(tmp_path)
     assert list(result) == []
+
+
+def test_list_private_keys_creates_missing_keys_dir(tmp_path: Path) -> None:
+    """A missing keys_dir is created lazily and yields an empty list (issue #100)."""
+    missing = tmp_path / "absent" / "keys"
+    assert not missing.exists()
+
+    result = list_private_keys(missing)
+
+    assert list(result) == []
+    assert missing.is_dir()

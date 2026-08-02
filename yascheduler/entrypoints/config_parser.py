@@ -470,16 +470,14 @@ def _local_default(name: str) -> object:
 
 # region FUNC__parse_local_section
 # PURPOSE: Build a frozen LocalSettings from a [local] INI section.
-# INVARIANTS: A data_dir that does not exist on the filesystem at parse time emits a logger.warning naming the missing path; the parser still returns a LocalSettings so cloud-only flows (which lazily create keys_dir via get_or_create_ssh_key) are not broken.
+# INVARIANTS: A data_dir that does not exist on the filesystem at parse time emits a logger.warning naming the missing path.
 def _parse_local_section(sec: SectionProxy) -> LocalSettings:
     warn_unknown_fields(_local_valid_fields(), sec)
     data_dir = Path(sec.get("data_dir", str(_local_default("data_dir")))).resolve()
     # region BLOCK_warn_missing_data_dir
     # data_dir is the parent of keys_dir/tasks_dir/engines_dir; if it does not
-    # exist, list_private_keys() will raise FileNotFoundError on every connect
-    # attempt for static nodes (whose keys must be pre-provisioned by the
-    # operator). Warn — do not raise — so cloud flows that lazily create
-    # keys_dir via get_or_create_ssh_key keep working.
+    # exist, the keys_dir is created lazily by list_private_keys() and
+    # get_or_create_ssh_key() on first use; do not raise, so cloud flows keep working.
     if not data_dir.exists():
         logger.warning("[local] data_dir does not exist: %s", data_dir)
     # endregion BLOCK_warn_missing_data_dir

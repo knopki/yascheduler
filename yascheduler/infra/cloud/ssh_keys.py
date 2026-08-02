@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # ENSURES: May write a new private key file to keys_dir if no existing key found.
 def get_or_create_ssh_key(keys_dir: Path) -> SSHKey:
     """Load existing SSH key or generate a new one."""
+    keys_dir.mkdir(parents=True, exist_ok=True)
     prefix = "yakey"
     # region BLOCK_load_existing
     for filepath in keys_dir.iterdir():
