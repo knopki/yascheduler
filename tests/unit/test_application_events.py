@@ -39,7 +39,7 @@ from yascheduler.domain.model import (
     NodeId,
     Task,
     TaskId,
-    TaskStatus,
+    Todo,
     materialize_task,
 )
 from yascheduler.domain.ports import CloudProvisioner
@@ -65,15 +65,12 @@ class TestSubmitTaskEvents:
                 task_id=TaskId(55),
                 label=new_task.label,
                 engine=new_task.engine,
-                remote_folder=None,
-                local_folder=new_task.local_folder,
+                state=Todo(),
                 webhook_url=new_task.webhook_url,
                 webhook_custom_params=new_task.webhook_custom_params,
-                error=None,
                 extra=new_task.extra,
                 created_at=datetime(2025, 1, 1),
                 updated_at=datetime(2025, 1, 1),
-                status=TaskStatus.TO_DO,
             )
             return materialize_task(task)
 
@@ -107,19 +104,16 @@ class TestAllocateTaskEvents:
             task_id=TaskId(1),
             label="t",
             engine="bad",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=TaskStatus.TO_DO,
         )
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.get_todo = AsyncMock(return_value=todo_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -181,19 +175,16 @@ class TestAllocateTaskEvents:
             task_id=TaskId(1),
             label="t",
             engine="test_engine",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=TaskStatus.TO_DO,
         )
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.get_todo = AsyncMock(return_value=todo_task)
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.tasks.save = AsyncMock()
         uow.nodes = AsyncMock()
@@ -280,7 +271,7 @@ class TestConsumeTaskEvents:
     ) -> None:
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.get_running = AsyncMock(return_value=running_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -328,7 +319,7 @@ class TestConsumeTaskEvents:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.get_running = AsyncMock(return_value=running_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])

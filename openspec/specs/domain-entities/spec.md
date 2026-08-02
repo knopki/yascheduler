@@ -5,9 +5,7 @@ records for tasks and nodes, the runtime state of a connected machine,
 the engine specification, and the identity value objects. Each entity
 owns its lifecycle rules. A task record emits the events defined in the
 `domain-events-and-dispatch` spec.
-
 ## Requirements
-
 ### Requirement: Identity value objects
 
 The system SHALL provide identity value objects for tasks and for nodes.
@@ -40,6 +38,13 @@ transition validates the source state, applies the field changes, records
 the matching event, and returns a new task record. The event types live
 in the `domain-events-and-dispatch` spec.
 
+A task carries its state on its type, not only on its state field. Each
+transition declares the state it is legal from. A call to a transition
+whose declared source state does not match the task's state SHALL be a
+static error under the project's type checker. A transition applied to
+a task whose state does not match at runtime SHALL raise, regardless of
+the static check, so dynamic or untyped callers still fail loudly.
+
 The valid transitions are:
 
 | Source state | Trigger | Result state | Recorded event |
@@ -50,8 +55,8 @@ The valid transitions are:
 | RUNNING | fail with partial output | DONE | TaskFailed |
 | RUNNING | abandon a lost node | DONE | TaskAbandoned |
 
-A task starts unallocated. It binds to a node only when it starts. If its
-node is deleted later, the task becomes unallocated again.
+A task starts unallocated. It binds to a node only when it starts. A
+RUNNING task keeps its node binding until it transitions to DONE.
 
 #### Scenario: valid transition applies and records the event
 
@@ -62,11 +67,6 @@ node is deleted later, the task becomes unallocated again.
 
 - **WHEN** a transition is applied to a task whose state is not the source state in the table
 - **THEN** the call raises and no event is recorded
-
-#### Scenario: abandon with no node records no event
-
-- **WHEN** abandon is applied to a RUNNING task whose node was deleted, leaving the task unallocated
-- **THEN** the task moves to DONE with the abandon error, and no TaskAbandoned event is recorded
 
 ### Requirement: TaskCreated is emitted on first persistence
 
@@ -150,3 +150,24 @@ platform-based filtering that returns a new collection.
 
 - **WHEN** an engine is constructed without a required input
 - **THEN** construction fails
+
+### Requirement: Task fields are constrained by status
+
+The status of a task SHALL constrain three of its fields. The
+constraints are:
+
+| Status | Node binding | Remote work folder | Error |
+|---|---|---|---|
+| TO_DO | absent | optional | absent |
+| RUNNING | present | present | absent |
+| DONE | optional | optional | optional |
+
+A task read from the repository, or produced by a transition, SHALL
+carry field values that match its status row. A node binding present at
+RUNNING SHALL NOT become absent while the task stays RUNNING.
+
+#### Scenario: a task carries the fields its status row permits
+
+- **WHEN** a task is read from the repository or produced by a transition
+- **THEN** its node binding, work folder, and error match the row of its status in the constraints table
+

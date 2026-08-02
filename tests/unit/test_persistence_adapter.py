@@ -15,8 +15,10 @@ from yascheduler.application.message_bus import MessageBus
 from yascheduler.domain.model import (
     NewTask,
     NodeId,
+    Running,
     Task,
     TaskId,
+    Todo,
 )
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
@@ -257,7 +259,14 @@ class TestPostgresTaskRepository:
     async def test_get_returns_task(self, mocker: MockerFixture) -> None:
         """Get returns a Task hydrated from the row returned by _run."""
         repo = self._make_repo(mocker)
-        repo._run.return_value = [_make_task_row(task_id=42, status="RUNNING")]  # type: ignore[attr-defined]
+        repo._run.return_value = [  # type: ignore[attr-defined]
+            _make_task_row(
+                task_id=42,
+                status="RUNNING",
+                allocated_node_id=5,
+                remote_folder="/r",
+            )
+        ]
 
         task = await repo.get(TaskId(42))
 
@@ -304,8 +313,9 @@ class TestPostgresTaskRepository:
         assert not hasattr(task, "allocated_ip")
         assert task.status == DomainTaskStatus.TO_DO
         assert task.engine == "cp2k"
-        assert task.remote_folder == "/remote/path"
-        assert task.local_folder == "/local/path"
+        assert task.state.remote_folder == "/remote/path"
+        # local_folder lives on Done state only; a TO_DO task does not carry it.
+        assert not hasattr(task.state, "local_folder")
         assert task.webhook_url == "https://hook.example.com"
         assert task.webhook_custom_params == {"key": "val"}
         assert task.extra == {"extra_field": "extra_val"}
@@ -338,15 +348,12 @@ class TestPostgresTaskRepository:
             task_id=TaskId(7),
             label="my-job",
             engine="fleur",
-            remote_folder="/remote",
-            local_folder=None,
+            state=Todo(remote_folder="/remote"),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=DomainTaskStatus.TO_DO,
         )
 
         await repo.save(task)
@@ -376,15 +383,12 @@ class TestPostgresTaskRepository:
             task_id=TaskId(9),
             label="claim",
             engine="fleur",
-            remote_folder="/r",
-            local_folder=None,
+            state=Running(allocated_node_id=NodeId(1), remote_folder="/r"),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=DomainTaskStatus.RUNNING,
         )
 
         await repo.save(task, expected_status=DomainTaskStatus.TO_DO)
@@ -404,15 +408,12 @@ class TestPostgresTaskRepository:
             task_id=TaskId(11),
             label="lost-update",
             engine="fleur",
-            remote_folder=None,
-            local_folder=None,
+            state=Running(allocated_node_id=NodeId(1), remote_folder="/r"),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=DomainTaskStatus.RUNNING,
         )
 
         with pytest.raises(TaskRowNotFoundError):
@@ -427,16 +428,12 @@ class TestPostgresTaskRepository:
             task_id=TaskId(3),
             label="running-job",
             engine="vasp",
-            remote_folder=None,
-            local_folder=None,
+            state=Running(allocated_node_id=NodeId(5), remote_folder="/r"),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=DomainTaskStatus.RUNNING,
-            allocated_node_id=NodeId(5),
         )
 
         await repo.save(task)
@@ -453,7 +450,14 @@ class TestPostgresTaskRepository:
         repo = self._make_repo(mocker)
         repo._run.return_value = [  # type: ignore[attr-defined]
             _make_task_row(task_id=1, title="a"),
-            _make_task_row(task_id=2, title="b", status="RUNNING", engine="cp2k"),
+            _make_task_row(
+                task_id=2,
+                title="b",
+                status="RUNNING",
+                engine="cp2k",
+                allocated_node_id=5,
+                remote_folder="/r",
+            ),
         ]
 
         tasks = await repo.list_by_status(

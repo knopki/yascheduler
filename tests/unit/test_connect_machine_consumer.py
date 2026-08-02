@@ -392,7 +392,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         RUNNING task whose outputs have not been downloaded. The producer MUST
         yield it so the consume loop can finish the task.
         """
-        from yascheduler.domain.model import Node, Task, TaskId, TaskStatus
+        from yascheduler.domain.model import Node, Running, Task, TaskId
 
         disabled_node = Node(
             node_id=NodeId(3),
@@ -406,8 +406,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         running_task = Task(
             task_id=TaskId(7),
             engine="test_shell",
-            status=TaskStatus.RUNNING,
-            allocated_node_id=NodeId(3),
+            state=Running(allocated_node_id=NodeId(3), remote_folder="/r"),
         )
 
         orch = make_orchestrator(config_clouds=[])
@@ -456,7 +455,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         self,
     ) -> None:
         """A disabled node already connected is not re-yielded."""
-        from yascheduler.domain.model import Node, Task, TaskId, TaskStatus
+        from yascheduler.domain.model import Node, Running, Task, TaskId
 
         disabled_node = Node(
             node_id=NodeId(5),
@@ -470,8 +469,7 @@ class TestConnectMachineProducerYieldsStaticNodes:
         running_task = Task(
             task_id=TaskId(9),
             engine="test_shell",
-            status=TaskStatus.RUNNING,
-            allocated_node_id=NodeId(5),
+            state=Running(allocated_node_id=NodeId(5), remote_folder="/r"),
         )
 
         orch = make_orchestrator(config_clouds=[])
@@ -782,7 +780,7 @@ def _uow_with_nodes(
     uow.nodes.list_enabled = AsyncMock(return_value=nodes)
     uow.nodes.list_disabled = AsyncMock(return_value=disabled_nodes or [])
     uow.tasks = AsyncMock()
-    uow.tasks.list_by_status = AsyncMock(return_value=running_tasks or [])
+    uow.tasks.list_running = AsyncMock(return_value=running_tasks or [])
     uow.__aenter__ = AsyncMock(return_value=uow)
     uow.__aexit__ = AsyncMock(return_value=False)
     return uow

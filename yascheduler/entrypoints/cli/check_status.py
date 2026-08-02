@@ -17,7 +17,13 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import NodeId, TaskId, TaskStatus
+from yascheduler.domain import (
+    NodeId,
+    TaskId,
+    TaskStatus,
+    allocated_node_id_of,
+    remote_folder_of,
+)
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.entrypoints.logger import configure_cli_logger
@@ -27,7 +33,7 @@ from .args import add_config_arg, add_log_level_arg
 
 if TYPE_CHECKING:
     from yascheduler.application import AbstractUnitOfWork
-    from yascheduler.domain import MachineSession, Node, Task
+    from yascheduler.domain import AnyTask, MachineSession, Node
 
 __all__ = ["check_status"]
 
@@ -93,7 +99,9 @@ def _parse_status_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 # region FUNC__query_tasks
 # PURPOSE: Pick the right task query based on whether the operator passed -j so the renderer always receives a task list.
-async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> list[Task]:
+async def _query_tasks(
+    uow: AbstractUnitOfWork, args: argparse.Namespace
+) -> list[AnyTask]:
     # region BLOCK_query
     if args.jobs:
         # argparse yields list[int]; wrap to TaskId before crossing into the
@@ -110,7 +118,7 @@ async def _query_tasks(uow: AbstractUnitOfWork, args: argparse.Namespace) -> lis
 
 # region FUNC__render_default
 # PURPOSE: Emit task status lines in the format the AiiDA scheduler plugin's joblist parser expects — bare <task_id>   <STATUS> with no header, footer, or summary — so phantom jobs are never introduced by decoration.
-def _render_default(tasks: list[Task]) -> None:
+def _render_default(tasks: list[AnyTask]) -> None:
     for task in tasks:
         sys.stdout.write(f"{task.task_id}   {task.status.name}\n")
 
@@ -120,14 +128,14 @@ def _render_default(tasks: list[Task]) -> None:
 
 # region FUNC__render_info
 # PURPOSE: Render task metadata as parseable tab-separated lines so operators and scripts can consume structured status without depending on JSON or the AiiDA format.
-def _render_info(tasks: list[Task]) -> None:
+def _render_info(tasks: list[AnyTask]) -> None:
     for task in tasks:
         sys.stdout.write(
             "task_id={}\tstatus={}\tlabel={}\tnode_id={}\n".format(
                 task.task_id,
                 task.status.name,
                 task.label,
-                task.allocated_node_id or "-",
+                allocated_node_id_of(task) or "-",
             ),
         )
 
@@ -137,13 +145,12 @@ def _render_info(tasks: list[Task]) -> None:
 
 # region FUNC__render_json
 # PURPOSE: Serialize task and node state as JSON with raw domain values so automation tools can consume the full status programmatically without parsing human-oriented text.
-def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
+def _render_json(tasks: list[AnyTask], nodes_by_id: dict[NodeId, Node]) -> str:
     # region BLOCK_render_json
     objects = []
     for task in tasks:
-        node = (
-            nodes_by_id.get(task.allocated_node_id) if task.allocated_node_id else None
-        )
+        allocated_node_id = allocated_node_id_of(task)
+        node = nodes_by_id.get(allocated_node_id) if allocated_node_id else None
         objects.append(
             {
                 "task_id": task.task_id.value,
@@ -151,7 +158,7 @@ def _render_json(tasks: list[Task], nodes_by_id: dict[NodeId, Node]) -> str:
                 "label": task.label,
                 "engine": task.engine,
                 "local_folder": task.local_folder,
-                "remote_folder": task.remote_folder,
+                "remote_folder": remote_folder_of(task),
                 "created_at": task.created_at.isoformat(),
                 "updated_at": task.updated_at.isoformat(),
                 "node": (
@@ -255,7 +262,7 @@ def _parse_convergence(filepath: Path) -> str:
 # INVARIANTS:
 # - connects via repository.connect(node=node, ...) reading login user/port/jump-leg from the Node, never passing jump_host/jump_username separately
 async def _display_remote_output(
-    task: Task,
+    task: AnyTask,
     node: Node | None,
     config: Config,
 ) -> tuple[MachineSession, str, SSHMachineRepository, str] | None:
@@ -272,7 +279,7 @@ async def _display_remote_output(
     except Exception:
         sys.stdout.write("CAN'T CONNECT\n")
         return None
-    remote_folder = task.remote_folder
+    remote_folder = remote_folder_of(task)
     if not remote_folder:
         sys.stdout.write("OUTDATED TASK, SKIPPING\n")
         await repository.disconnect(session.machine.node_id)
@@ -303,7 +310,7 @@ async def _display_remote_output(
 # - creates convergence snippet temp file ONCE, reuses across all RUNNING tasks
 # - unlinks in finally clause — no leak on success, exception, or early-return
 async def _render_view(
-    tasks: list[Task],
+    tasks: list[AnyTask],
     nodes_by_id: dict[NodeId, Node],
     config: Config,
     fetch_convergence: bool,
@@ -320,11 +327,8 @@ async def _render_view(
     try:
         # region BLOCK_iterate_running
         for task in running:
-            node = (
-                nodes_by_id.get(task.allocated_node_id)
-                if task.allocated_node_id
-                else None
-            )
+            allocated_node_id = allocated_node_id_of(task)
+            node = nodes_by_id.get(allocated_node_id) if allocated_node_id else None
             username = node.username if node is not None else config.remote.username
             cloud_str = node.cloud if node and node.cloud else ""
             sys.stdout.write(
@@ -335,7 +339,7 @@ async def _render_view(
                     username,
                     node.hostname if node else "",
                     cloud_str,
-                    task.remote_folder or "",
+                    remote_folder_of(task) or "",
                 ),
             )
             conn = await _display_remote_output(task, node, config)
@@ -387,7 +391,9 @@ async def _check_status_async(argv: list[str] | None) -> None:
             tasks = await _query_tasks(uow, args)
             nodes_by_id: dict[NodeId, Node] = {}
             if args.view or args.json:
-                node_ids = [t.allocated_node_id for t in tasks if t.allocated_node_id]
+                node_ids = [
+                    nid for t in tasks if (nid := allocated_node_id_of(t)) is not None
+                ]
                 if node_ids:
                     nodes_by_id = await uow.nodes.get_by_ids(node_ids)
         # RENDER PHASE — no DB connection held during SSH.

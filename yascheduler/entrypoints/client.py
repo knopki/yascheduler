@@ -13,7 +13,16 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from yascheduler.application import query_tasks
-from yascheduler.domain import Node, NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain import (
+    AnyTask,
+    Node,
+    NodeId,
+    TaskId,
+    TaskStatus,
+    allocated_node_id_of,
+    error_of,
+    remote_folder_of,
+)
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.shared import ParamSpec
 
@@ -63,19 +72,23 @@ def to_sync(
 
 # region FUNC__task_to_dict
 # PURPOSE: Project a Task plus its optional allocated Node into a flat JSON-serializable mapping so the public client API returns plain dicts to sync callers that cannot see domain value objects like TaskId / NodeId.
-def _task_to_dict(t: Task, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]:
-    node = nodes_by_id.get(t.allocated_node_id) if t.allocated_node_id else None
+def _task_to_dict(t: AnyTask, nodes_by_id: dict[NodeId, Node]) -> Mapping[str, Any]:
+    allocated_node_id = allocated_node_id_of(t)
+    node = nodes_by_id.get(allocated_node_id) if allocated_node_id else None
     metadata: dict[str, Any] = {"engine": t.engine}
-    if t.remote_folder is not None:
-        metadata["remote_folder"] = t.remote_folder
-    if t.local_folder is not None:
-        metadata["local_folder"] = t.local_folder
+    remote_folder = remote_folder_of(t)
+    if remote_folder is not None:
+        metadata["remote_folder"] = remote_folder
+    local_folder = t.local_folder
+    if local_folder is not None:
+        metadata["local_folder"] = local_folder
     if t.webhook_url is not None:
         metadata["webhook_url"] = t.webhook_url
     if t.webhook_custom_params:
         metadata["webhook_custom_params"] = t.webhook_custom_params
-    if t.error is not None:
-        metadata["error"] = t.error
+    error = error_of(t)
+    if error is not None:
+        metadata["error"] = error
     for k, v in t.extra.items():
         if k not in metadata:
             metadata[k] = v

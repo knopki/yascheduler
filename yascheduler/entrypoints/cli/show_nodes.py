@@ -15,7 +15,6 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import NodeId, NodeStatus, TaskId, TaskStatus
 from yascheduler.entrypoints import make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.entrypoints.logger import configure_cli_logger
@@ -27,7 +26,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from yascheduler.application import AbstractUnitOfWork
-    from yascheduler.domain import Task
+    from yascheduler.domain import NodeId, NodeStatus, RunningTask, TaskId
 
 __all__ = ["show_nodes"]
 logger = logging.getLogger(__name__)
@@ -121,16 +120,16 @@ def _parse_nodes_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def _fetch_nodes_view(uow: AbstractUnitOfWork) -> list[_NodeView]:
     # region BLOCK_read_nodes
     logger.debug("READ", extra={"detail": "nodes and running tasks"})
-    tasks = await uow.tasks.list_by_status(statuses={TaskStatus.RUNNING})
+    tasks = await uow.tasks.list_running()
     nodes = await uow.nodes.list_all()
     # endregion BLOCK_read_nodes
     # region BLOCK_join
     # Single pass O(m) build; the one-RUNNING-task-per-node invariant means a later task
     # on the same node would overwrite, but the invariant forbids that. If it ever relaxes,
-    # this becomes a dict[NodeId, list[Task]] and the row/object shape changes together.
+    # this becomes a dict[NodeId, list[RunningTask]] and the row/object shape changes together.
     # Keyed by NodeId (was ip) — dup-IP nodes now disambiguated via node_id.
-    tasks_by_node_id: dict[NodeId, Task] = {
-        t.allocated_node_id: t for t in tasks if t.allocated_node_id is not None
+    tasks_by_node_id: dict[NodeId, RunningTask] = {
+        t.state.allocated_node_id: t for t in tasks
     }
     rows: list[_NodeView] = []
     for node in nodes:

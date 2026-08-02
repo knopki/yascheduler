@@ -19,6 +19,7 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
     TaskId,
+    Todo,
 )
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
@@ -54,14 +55,17 @@ async def test_repo_task_insert_and_get(
     assert inserted.label == "test-task"
     assert inserted.status == DomainTaskStatus.TO_DO
     assert inserted.engine == "fleur"
+    # local_folder is a status-independent Task field (D6): the NewTask value
+    # is persisted at insert and carried through to the consume step, then
+    # overwritten by complete/fail with the actual download path.
     assert inserted.local_folder == "/l"
     assert inserted.webhook_url == "https://hook.example.com"
     assert inserted.extra["param"] == 42
     assert inserted.webhook_custom_params == {}
-    assert inserted.remote_folder is None
+    assert inserted.state.remote_folder is None
 
-    # Set remote_folder post-insert to verify round-trip
-    inserted = replace(inserted, remote_folder="/r")
+    # Set remote_folder post-insert on the TO_DO state to verify round-trip
+    inserted = replace(inserted, state=Todo(remote_folder="/r"))
     await repo.save(inserted)
 
     # Retrieve by ID
@@ -70,7 +74,7 @@ async def test_repo_task_insert_and_get(
     assert retrieved.task_id == inserted.task_id
     assert retrieved.label == inserted.label
     assert retrieved.engine == "fleur"
-    assert retrieved.remote_folder == "/r"
+    assert retrieved.state.remote_folder == "/r"
     assert retrieved.extra["param"] == 42
 
 
@@ -139,34 +143,38 @@ async def test_repo_task_count_by_status(
     await repo.insert(NewTask(label="t1", engine="fleur"))
     await repo.insert(NewTask(label="t2", engine="fleur"))
     t3 = await repo.insert(NewTask(label="t3", engine="fleur"))
-    await repo.update_status(t3.task_id, DomainTaskStatus.DONE)
+    # Reach DONE via a legitimate transition (reject from TO_DO).
+    t3_done = t3.reject("test done")
+    await repo.save(t3_done)
 
     counts = await repo.count_by_status()
     assert counts.get(DomainTaskStatus.TO_DO) == 2
     assert counts.get(DomainTaskStatus.DONE) == 1
 
 
-async def test_repo_task_update_status_atomic(
+async def test_repo_task_list_running_and_todo(
     pg_conn: pg8000.native.Connection,
     pg_executor: ThreadPoolExecutor,
 ) -> None:
-    """update_status only changes the status field."""
+    """list_running/list_todo return only the matching state."""
     task_repo = PostgresTaskRepository(pg_conn, pg_executor)
     node_repo = PostgresNodeRepository(pg_conn, pg_executor)
     node = await node_repo.insert(NewNode(hostname="10.0.0.1", ncpus=2, enabled=True))
-    task = await task_repo.insert(NewTask(label="keep-label", engine="fleur"))
-    # Seed a CHECK-valid RUNNING row (allocated_node_id + remote_folder set)
-    # so the subsequent update_status to DONE is CHECK-valid (DONE is
-    # unconstrained). A bare update_status(TO_DO → RUNNING) would be rejected
-    # because RUNNING requires allocated_node_id + remote_folder.
-    task = task.run(node.node_id, "/r")
-    await task_repo.save(task)
+    t_todo = await task_repo.insert(NewTask(label="todo", engine="fleur"))
+    t_running = await task_repo.insert(NewTask(label="running", engine="fleur"))
+    t_running = t_running.run(node.node_id, "/r")
+    await task_repo.save(t_running)
+    t_done = await task_repo.insert(NewTask(label="done", engine="fleur"))
+    t_done = t_done.reject("done")
+    await task_repo.save(t_done)
 
-    await task_repo.update_status(task.task_id, DomainTaskStatus.DONE)
-    retrieved = await task_repo.get(task.task_id)
-    assert retrieved is not None
-    assert retrieved.status == DomainTaskStatus.DONE
-    assert retrieved.label == "keep-label"
+    todos = await task_repo.list_todo()
+    running = await task_repo.list_running()
+    assert [t.task_id for t in todos] == [t_todo.task_id]
+    assert [t.task_id for t in running] == [t_running.task_id]
+    # All elements have the matching state type.
+    assert all(t.status is DomainTaskStatus.TO_DO for t in todos)
+    assert all(t.status is DomainTaskStatus.RUNNING for t in running)
 
 
 async def test_repo_task_insert_returns_created_updated_at(
@@ -215,7 +223,8 @@ async def test_repo_task_list_by_status_enum_cast(
     repo = PostgresTaskRepository(pg_conn, pg_executor)
     t1 = await repo.insert(NewTask(label="enum-todo", engine="fleur"))
     t2 = await repo.insert(NewTask(label="enum-done", engine="fleur"))
-    await repo.update_status(t2.task_id, DomainTaskStatus.DONE)
+    t2_done = t2.reject("done")
+    await repo.save(t2_done)
 
     todos = await repo.list_by_status({DomainTaskStatus.TO_DO})
     assert len(todos) == 1
@@ -231,7 +240,8 @@ async def test_repo_task_count_by_status_name_lookup(
     await repo.insert(NewTask(label="n1", engine="fleur"))
     await repo.insert(NewTask(label="n2", engine="fleur"))
     t3 = await repo.insert(NewTask(label="n3", engine="fleur"))
-    await repo.update_status(t3.task_id, DomainTaskStatus.DONE)
+    t3_done = t3.reject("done")
+    await repo.save(t3_done)
 
     counts = await repo.count_by_status()
     # Keys are TaskStatus enum members, accessible by name

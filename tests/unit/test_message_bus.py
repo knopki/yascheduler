@@ -17,7 +17,7 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import Task, TaskId
+from yascheduler.domain.model import Task, TaskId, Todo
 
 if TYPE_CHECKING:
     from yascheduler.shared import Self
@@ -139,11 +139,9 @@ class TestUoWEventDispatch:
             task_id=TaskId(1),
             label="t",
             engine="fleur",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
@@ -231,11 +229,9 @@ class TestUoWEventDispatch:
             task_id=TaskId(1),
             label="t1",
             engine="fleur",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
@@ -245,11 +241,9 @@ class TestUoWEventDispatch:
             task_id=TaskId(2),
             label="t2",
             engine="vasp",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),

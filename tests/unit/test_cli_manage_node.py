@@ -4,6 +4,8 @@
 # KEYWORDS: yasetnode, manage_node, host-spec grammar, add/remove
 # endregion MODULE_CONTRACT
 
+from __future__ import annotations
+
 import argparse
 import importlib
 import logging
@@ -13,7 +15,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, NodeId, TaskStatus
+from yascheduler.domain.model import (
+    Node,
+    NodeId,
+    Running,
+    Task,
+    TaskId,
+    TaskStatus,
+)
 from yascheduler.entrypoints.di import CLIDeps
 
 manage_node_mod = importlib.import_module("yascheduler.entrypoints.cli.manage_node")
@@ -608,11 +617,37 @@ class TestManageNodeRemovePath:
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1, 2])
 
+        def _fake_get(task_id: TaskId) -> Task | None:
+            # Return a RUNNING task bound to node 1 — the hard-remove path
+            # load→abandon→save loop reads the allocation from state.
+            # The list_ids_by_node_id_and_status mock returns bare ints, so
+            # accept both TaskId and int here.
+            raw = task_id.value if isinstance(task_id, TaskId) else task_id
+            tid = TaskId(int(raw))  # type: ignore[arg-type]
+            return Task(
+                task_id=tid,
+                label=f"task-{tid.value}",
+                engine="fleur",
+                state=Running(allocated_node_id=NodeId(1), remote_folder="/r"),
+            )
+
+        uow.tasks.get_running = AsyncMock(side_effect=_fake_get)
+        uow.tasks.save = AsyncMock()
+
         _run(["10.0.0.1", "--remove-hard"])
 
-        uow.tasks.update_status.assert_any_call(1, TaskStatus.DONE)
-        uow.tasks.update_status.assert_any_call(2, TaskStatus.DONE)
-        assert uow.tasks.update_status.call_count == 2
+        # Each RUNNING task was loaded, abandoned (RUNNING→DONE with
+        # TaskAbandoned), and saved — replacing the old update_status flip.
+        assert uow.tasks.get_running.await_count == 2
+        assert uow.tasks.save.await_count == 2
+        # Each saved task reached DONE via abandon (carries error + event).
+        for save_call in uow.tasks.save.await_args_list:
+            saved = save_call.args[0]
+            assert saved.status is TaskStatus.DONE
+            assert saved.state.error == "node is gone"
+            assert any(
+                evt.__class__.__name__ == "TaskAbandoned" for evt in saved.events
+            )
         uow.nodes.remove.assert_called_once_with(NodeId(1))
         uow.commit.assert_called_once()
         # add path not triggered
@@ -620,6 +655,44 @@ class TestManageNodeRemovePath:
         out, _ = capsys.readouterr()
         assert "An associated task 1 at 10.0.0.1 is now marked done!" in out
         assert "An associated task 2 at 10.0.0.1 is now marked done!" in out
+        assert "Removed host from yascheduler: 10.0.0.1" in out
+
+    def test_remove_hard_skips_task_that_raced_to_done(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """A task that transitioned to DONE between list and load is skipped, not abandoned.
+
+        The list_ids_by_node_id_and_status snapshot matched RUNNING, but by the
+        time get_running() loads the row a concurrent daemon or operator run
+        already finalized it. get_running() returns None (absent OR wrong
+        status), collapsing the post-list race into a None-skip — no
+        isinstance guard, no abandon() on a terminal task. The hard-remove
+        transaction still removes the node.
+        """
+        _config, uow, _deps, _repo = stub_env
+        uow.nodes.list_all = AsyncMock(
+            return_value=[
+                Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, enabled=True),
+            ],
+        )
+        # List returned the id (RUNNING at snapshot time), but get_running()
+        # now returns None — the row transitioned to DONE in the race window.
+        uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1])
+        uow.tasks.get_running = AsyncMock(return_value=None)
+        uow.tasks.save = AsyncMock()
+
+        _run(["10.0.0.1", "--remove-hard"])
+
+        # The raced task was loaded (None) but NOT abandoned/saved (terminal).
+        uow.tasks.get_running.assert_called_once_with(1)
+        uow.tasks.save.assert_not_called()
+        # The node was still removed; the transaction did not abort.
+        uow.nodes.remove.assert_called_once_with(NodeId(1))
+        uow.commit.assert_called_once()
+        out, _ = capsys.readouterr()
+        assert "An associated task 1 at 10.0.0.1 is now marked done!" in out
         assert "Removed host from yascheduler: 10.0.0.1" in out
 
     def test_remove_soft_with_tasks_disables(
@@ -694,6 +767,15 @@ class TestManageNodeRemovePath:
             ],
         )
         uow.tasks.list_ids_by_node_id_and_status = AsyncMock(return_value=[1])
+        uow.tasks.get_running = AsyncMock(
+            return_value=Task(
+                task_id=TaskId(1),
+                label="t",
+                engine="fleur",
+                state=Running(allocated_node_id=NodeId(1), remote_folder="/r"),
+            )
+        )
+        uow.tasks.save = AsyncMock()
         # Failing commit proves the success prints live AFTER commit, not before.
         uow.commit = AsyncMock(side_effect=RuntimeError("commit failed"))
 
@@ -703,8 +785,10 @@ class TestManageNodeRemovePath:
         out, _ = capsys.readouterr()
         assert "now marked done" not in out
         assert "Removed host" not in out
-        # The mark-DONE update and remove ran before commit; only the prints are gated.
-        uow.tasks.update_status.assert_called_once_with(1, TaskStatus.DONE)
+        # The load→abandon→save and remove ran before commit; only the prints
+        # are gated.
+        uow.tasks.get_running.assert_called_once_with(1)
+        uow.tasks.save.assert_called_once()
         uow.nodes.remove.assert_called_once_with(NodeId(1))
 
     def test_remove_by_host_resolves_node_and_passes_node_to_helper(

@@ -215,17 +215,19 @@ def _parse_node_args(argv: list[str] | None = None) -> argparse.Namespace:
 # region FUNC__remove_node_hard
 # PURPOSE: permanently erase a node and its RUNNING tasks from the DB in a single transaction so an operator can force-clean a dead node
 async def _remove_node_hard(deps: CLIDeps, node: Node) -> None:
-    # region BLOCK_mark_and_remove
+    # region BLOCK_abandon_and_remove
     async with deps.uow_factory() as uow:
         task_ids = await uow.tasks.list_ids_by_node_id_and_status(
             node.node_id,
             TaskStatus.RUNNING,
         )
         for task_id in task_ids:
-            await uow.tasks.update_status(task_id, TaskStatus.DONE)
+            task = await uow.tasks.get_running(task_id)
+            if task is not None:
+                await uow.tasks.save(task.abandon())
         await uow.nodes.remove(node.node_id)
         await uow.commit()
-    # endregion BLOCK_mark_and_remove
+    # endregion BLOCK_abandon_and_remove
     # region BLOCK_announce
     for task_id in task_ids:
         sys.stdout.write(

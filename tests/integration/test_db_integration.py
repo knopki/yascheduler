@@ -8,11 +8,14 @@
 from collections.abc import Callable
 
 from yascheduler.domain.model import (
+    Done,
     NewNode,
     NewTask,
     Node,
     NodeId,
     Task,
+    allocated_node_id_of,
+    error_of,
 )
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.infra.persistence.postgres_uow import PostgresUnitOfWork
@@ -188,7 +191,7 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
         await uow.commit()
         assert task.task_id.value >= 1
         assert task.label == "calc"
-        assert task.allocated_node_id == node.node_id
+        assert task.state.allocated_node_id == node.node_id
         assert task.status == DomainTaskStatus.RUNNING
         assert task.engine == "fleur"
         assert task.webhook_custom_params == {}
@@ -199,7 +202,7 @@ async def test_add_and_get_task(uow_factory: Callable[[], PostgresUnitOfWork]) -
         assert retrieved is not None
         assert retrieved.task_id == task.task_id
         assert retrieved.label == "calc"
-        assert retrieved.allocated_node_id == node.node_id
+        assert allocated_node_id_of(retrieved) == node.node_id
         assert retrieved.status == DomainTaskStatus.RUNNING
         assert retrieved.engine == "fleur"
         assert retrieved.webhook_custom_params == {}
@@ -228,7 +231,7 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         node_id = node.node_id
 
     async with uow_factory() as uow:
-        task = await uow.tasks.get(task_id)
+        task = await uow.tasks.get_todo(task_id)
         assert task is not None
         # CHECK-valid RUNNING: task.run sets allocated_node_id + remote_folder.
         updated = task.run(node_id, "/r")
@@ -236,13 +239,13 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         await uow.commit()
 
     async with uow_factory() as uow:
-        running = await uow.tasks.get(task_id)
+        running = await uow.tasks.get_running(task_id)
         assert running is not None
         assert running.status == DomainTaskStatus.RUNNING
-        assert running.allocated_node_id == node_id
+        assert running.state.allocated_node_id == node_id
 
     async with uow_factory() as uow:
-        task = await uow.tasks.get(task_id)
+        task = await uow.tasks.get_running(task_id)
         assert task is not None
         updated = task.complete(local_folder="/l", remote_folder="/r")
         await uow.tasks.save(updated)
@@ -254,8 +257,8 @@ async def test_task_lifecycle(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         assert done.status == DomainTaskStatus.DONE
         assert done.extra == {"param": 42}
         assert done.local_folder == "/l"
-        assert done.remote_folder == "/r"
-        assert done.allocated_node_id == node_id
+        assert done.state.remote_folder == "/r"
+        assert allocated_node_id_of(done) == node_id
 
 
 async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> None:
@@ -275,10 +278,8 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
             task_id=task.task_id,
             label=task.label,
             engine=task.engine,
-            status=DomainTaskStatus.DONE,
-            error="crash",
+            state=Done(error="crash", allocated_node_id=allocated_node_id_of(task)),
             extra={"key": "val"},
-            allocated_node_id=task.allocated_node_id,
         )
         await uow.tasks.save(updated)
         await uow.commit()
@@ -287,7 +288,7 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         t = await uow.tasks.get(task_id)
         assert t is not None
         assert t.status == DomainTaskStatus.DONE
-        assert t.error == "crash"
+        assert error_of(t) == "crash"
         assert t.extra == {"key": "val"}
 
     # Without error message (use a new task for clarity)
@@ -305,9 +306,8 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
             task_id=task2.task_id,
             label=task2.label,
             engine=task2.engine,
-            status=DomainTaskStatus.DONE,
+            state=Done(allocated_node_id=allocated_node_id_of(task2)),
             extra={"only": "meta"},
-            allocated_node_id=task2.allocated_node_id,
         )
         await uow.tasks.save(updated)
         await uow.commit()
@@ -316,7 +316,7 @@ async def test_set_task_error(uow_factory: Callable[[], PostgresUnitOfWork]) -> 
         t2 = await uow.tasks.get(task2_id)
         assert t2 is not None
         assert t2.status == DomainTaskStatus.DONE
-        assert t2.error is None
+        assert error_of(t2) is None
         assert t2.extra == {"only": "meta"}
 
 
@@ -340,7 +340,7 @@ async def test_get_tasks_by_status(
                 task_id=t3.task_id,
                 engine="fleur",
                 label="done",
-                status=DomainTaskStatus.DONE,
+                state=Done(),
             ),
         )
         await uow.commit()
@@ -453,7 +453,7 @@ async def test_get_tasks_with_cloud_by_id_status(
         matching = [task for task in tasks if task.status == DomainTaskStatus.RUNNING]
         assert len(matching) == 1
         assert matching[0].task_id == t.task_id
-        node_id = matching[0].allocated_node_id
+        node_id = allocated_node_id_of(matching[0])
         assert node_id is not None
         nodes = await uow.nodes.get_by_ids([node_id])
         assert nodes

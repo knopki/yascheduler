@@ -19,8 +19,9 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum, IntEnum, unique
+from typing import ClassVar, Generic, TypeAlias, TypeVar, Union, cast
 
-from yascheduler.shared import StrEnum
+from yascheduler.shared import StrEnum, TypeIs
 
 from .engine import (
     Deploy,
@@ -46,8 +47,11 @@ from .exceptions import (
 
 # Module public API: own entities/value objects + engine re-exports for the canonical import path.
 __all__ = [
+    "AnyTask",
     "ConnectedMachine",
     "Deploy",
+    "Done",
+    "DoneTask",
     "Engine",
     "EngineRepository",
     "LocalArchiveDeploy",
@@ -60,10 +64,21 @@ __all__ = [
     "NodeStatus",
     "ProcessResult",
     "RemoteArchiveDeploy",
+    "Running",
+    "RunningTask",
     "Task",
     "TaskId",
+    "TaskState",
     "TaskStatus",
+    "Todo",
+    "TodoTask",
+    "allocated_node_id_of",
+    "error_of",
+    "is_done",
+    "is_running",
+    "is_todo",
     "materialize_task",
+    "remote_folder_of",
 ]
 
 
@@ -155,61 +170,131 @@ class NewTask:
 # endregion CLASS_NewTask
 
 
+# region CLASS_TaskState
+# PURPOSE: Carry the per-status fields a task holds at each lifecycle state, so the presence of a state object IS the carrier of status and each state declares exactly the fields its DB CHECK branch permits.
+# INVARIANTS: ``status`` ClassVar binds the state type to its TaskStatus.
+# RATIONALE:
+# - Q: Why one closed union instead of flat Optionals on Task?
+#   A: The DB CHECK correlates fields per status; the closed union mirrors that correlation structurally, so a single ``isinstance(task.state, Running)`` narrows all correlated fields at once instead of re-asserting what the DB guarantees.
+@dataclass(frozen=True)
+class Todo:
+    """TO_DO state: only the CHECK-unconstrained ``remote_folder``.
+
+    ``allocated_node_id`` and ``error`` are always NULL under the CHECK, so they
+    are absent from the type.
+    """
+
+    status: ClassVar[TaskStatus] = TaskStatus.TO_DO
+    remote_folder: str | None = None
+
+
+@dataclass(frozen=True)
+class Running:
+    """RUNNING state: both allocation fields non-Optional by construction.
+
+    Encodes the CHECK guarantee (allocated_node_id and remote_folder required,
+    error forbidden) structurally instead of via runtime asserts at every read.
+    """
+
+    status: ClassVar[TaskStatus] = TaskStatus.RUNNING
+    allocated_node_id: NodeId
+    remote_folder: str
+
+
+@dataclass(frozen=True)
+class Done:
+    """DONE state: error/allocated_node_id/remote_folder independent Optionals.
+
+    DONE is CHECK-unconstrained; the three CHECK fields vary independently.
+    """
+
+    status: ClassVar[TaskStatus] = TaskStatus.DONE
+    error: str | None = None
+    allocated_node_id: NodeId | None = None
+    remote_folder: str | None = None
+
+
+TaskState = Union[Todo, Running, Done]
+
+# Covariant TypeVar: sound because Task is frozen (like tuple[T_co, ...]); a
+# wider-typed reference cannot mutate the state through the container.
+S_co = TypeVar("S_co", bound=TaskState, covariant=True)
+# Invariant TypeVar for the _advance retag target.
+S2 = TypeVar("S2", bound=TaskState)
+
+# endregion CLASS_TaskState
+
+
 # region CLASS_Task
 # PURPOSE: Represent a persisted task as an immutable aggregate whose status only changes through atomic transition methods, so invariants and event emission stay centralized.
-# INVARIANTS: Every transition validates the source status, returns a new Task via replace, and appends the matching DomainEvent to events; allocated_node_id is the sole allocation signal. No intermediate-state mutators exist.
-# RATIONALE:
-# - Q: Why does allocated_node_id cover both "unallocated" and "node was deleted"?
-#   A: Both states mean "no node currently assigned" — the distinction is irrelevant at the entity level; the node-resolved transport address comes from NodeRepository, not from Task.
-# - Q: Why are there no `record_event`/`with_event`/`pull_events` primitives on `Task`?
-#   A: Event construction lives inside the transition methods so the source-status check and the event payload stay atomically bound — splitting them would let a caller record an event without performing (or after performing) the transition, breaking the invariant that events reflect actual state changes.
+# INVARIANTS: Every transition validates the source state via isinstance(self.state, ...), returns a new Task via the _advance retag-cast helper, and appends the matching DomainEvent to events; the state value object carries the CHECK-correlated fields.
 @dataclass(frozen=True)
-class Task:
-    """Post-persistence task entity with atomic lifecycle transitions.
+class Task(Generic[S_co]):
+    """Post-persistence task entity, parameterized by its lifecycle state.
 
-    Every state change happens through one of transition methods
-    that validates the source state, sets all fields that
-    change, constructs and appends the matching :class:`DomainEvent` to
-    ``events``, and returns a new ``Task`` via :func:`replace`. No method
-    leaves the entity in a semantically-empty intermediate state.
+    ``Task[S_co]`` carries its state on its type, not only on its ``state``
+    field. Each transition declares the state it is legal from as its receiver
+    type, so a transition whose declared source state does not match the task's
+    state is a static error under the project's type checker.
 
-    ``allocated_node_id`` is the sole allocation signal: it is ``None`` for
-    unallocated tasks (TO_DO with no node bound) and for tasks whose node was
-    deleted.
-
-    ``events`` is a public field; the UoW reads it directly.
-    ``remote_folder`` is ``None`` on a freshly-inserted
-    TO_DO task; it is set by :meth:`run` when the task transitions to RUNNING.
-    ``local_folder`` is ``None`` until :meth:`complete` or :meth:`fail` sets it
-    from the download results. ``error`` is ``None`` until :meth:`reject`,
-    :meth:`fail`, or :meth:`abandon` sets it.
+    Every state change happens through one of the transition methods, which
+    validate the source state, build the result state object, and route through
+    :meth:`_advance` to append the matching :class:`DomainEvent` and return the
+    retagged task.
 
     ``created_at``/``updated_at`` default to ``datetime.now()`` mirroring the
-    DB schema (``DEFAULT NOW()``.
+    DB schema (``DEFAULT NOW()``).
     The DB always overrides them via RETURNING on insert and on every read.
     """
 
     task_id: TaskId
     engine: str
+    state: S_co
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     label: str = ""
     local_folder: str | None = None
-    remote_folder: str | None = None
     webhook_url: str | None = None
     webhook_custom_params: dict[str, object] = field(default_factory=dict)
-    error: str | None = None
-    status: TaskStatus = TaskStatus.TO_DO
     extra: dict[str, object] = field(default_factory=dict)
-    allocated_node_id: NodeId | None = None
     events: tuple[DomainEvent, ...] = field(default=(), repr=True)
+
+    @property
+    def status(self) -> TaskStatus:
+        """Derive TaskStatus from the state object's ClassVar binding."""
+        return self.state.status
+
+    # region METHOD_advance
+    # PURPOSE: Hold the single retag-cast in the domain so every transition routes through it, keeping the unchecked cast localized and documented.
+    # RATIONALE:
+    # - Q: Why cast on self (input), not on the result?
+    #   A: The dataclasses.replace plugin validates kwargs against the pre-cast type; casting the result would leave ``state=Running(...)`` rejected on a ``Task[Todo]``. The retag-cast is the price of typestate on a frozen dataclass; a wrong retag surfaces as a static self-type error at the call site.
+    def _advance(
+        self: Task[S_co],
+        state: S2,
+        event: DomainEvent,
+        *,
+        local_folder: str | None = None,
+    ) -> Task[S2]:
+        if local_folder is None:
+            return replace(
+                cast("Task[S2]", self), state=state, events=(*self.events, event)
+            )
+        return replace(
+            cast("Task[S2]", self),
+            state=state,
+            events=(*self.events, event),
+            local_folder=local_folder,
+        )
+
+    # endregion METHOD_advance
 
     # region METHOD_run
     # PURPOSE: Bind the task to a node and begin remote execution, recording the allocation as an event.
-    # REQUIRES: status is TO_DO.
-    def run(self, node_id: NodeId, remote_folder: str) -> Task:
+    # REQUIRES: state is Todo.
+    def run(self: Task[Todo], node_id: NodeId, remote_folder: str) -> Task[Running]:
         """Transition TO_DO→RUNNING, binding the node and setting remote_folder."""
-        if self.status != TaskStatus.TO_DO:
+        if not isinstance(self.state, Todo):
             raise TaskNotTodoError(self.task_id)
         event = TaskAllocated(
             task_id=self.task_id,
@@ -218,22 +303,18 @@ class Task:
             node_id=node_id,
             engine_name=self.engine,
         )
-        return replace(
-            self,
-            allocated_node_id=node_id,
-            remote_folder=remote_folder,
-            status=TaskStatus.RUNNING,
-            events=(*self.events, event),
+        return self._advance(
+            Running(allocated_node_id=node_id, remote_folder=remote_folder), event
         )
 
     # endregion METHOD_run
 
     # region METHOD_reject
     # PURPOSE: Terminate a not-yet-started task with a reason (e.g. unsupported engine) without ever running it.
-    # REQUIRES: status is TO_DO.
-    def reject(self, reason: str) -> Task:
+    # REQUIRES: state is Todo.
+    def reject(self: Task[Todo], reason: str) -> Task[Done]:
         """Transition TO_DO→DONE with an error reason (e.g. unsupported engine)."""
-        if self.status != TaskStatus.TO_DO:
+        if not isinstance(self.state, Todo):
             raise TaskNotTodoError(self.task_id)
         event = TaskFailed(
             task_id=self.task_id,
@@ -241,21 +322,21 @@ class Task:
             webhook_custom_params=self.webhook_custom_params,
             reason=reason,
         )
-        return replace(
-            self,
-            status=TaskStatus.DONE,
-            error=reason,
-            events=(*self.events, event),
+        state = Done(
+            error=reason, allocated_node_id=None, remote_folder=self.state.remote_folder
         )
+        return self._advance(state, event)
 
     # endregion METHOD_reject
 
     # region METHOD_complete
     # PURPOSE: Finalize a running task on success, capturing output folders and emitting TaskCompleted.
-    # REQUIRES: status is RUNNING.
-    def complete(self, *, local_folder: str, remote_folder: str) -> Task:
+    # REQUIRES: state is Running.
+    def complete(
+        self: Task[Running], *, local_folder: str, remote_folder: str
+    ) -> Task[Done]:
         """Transition RUNNING→DONE on successful completion, setting folders."""
-        if self.status != TaskStatus.RUNNING:
+        if not isinstance(self.state, Running):
             raise TaskNotRunningError(self.task_id)
         event = TaskCompleted(
             task_id=self.task_id,
@@ -263,22 +344,23 @@ class Task:
             webhook_custom_params=self.webhook_custom_params,
             local_folder=local_folder,
         )
-        return replace(
-            self,
-            status=TaskStatus.DONE,
-            local_folder=local_folder,
+        state = Done(
+            error=None,
+            allocated_node_id=self.state.allocated_node_id,
             remote_folder=remote_folder,
-            events=(*self.events, event),
         )
+        return self._advance(state, event, local_folder=local_folder)
 
     # endregion METHOD_complete
 
     # region METHOD_fail
     # PURPOSE: End a running task on failure, recording the reason and whatever partial output was downloaded.
-    # REQUIRES: status is RUNNING.
-    def fail(self, reason: str, *, local_folder: str, remote_folder: str) -> Task:
+    # REQUIRES: state is Running.
+    def fail(
+        self: Task[Running], reason: str, *, local_folder: str, remote_folder: str
+    ) -> Task[Done]:
         """Transition RUNNING→DONE on failure, setting error and partial folders."""
-        if self.status != TaskStatus.RUNNING:
+        if not isinstance(self.state, Running):
             raise TaskNotRunningError(self.task_id)
         event = TaskFailed(
             task_id=self.task_id,
@@ -286,44 +368,94 @@ class Task:
             webhook_custom_params=self.webhook_custom_params,
             reason=reason,
         )
-        return replace(
-            self,
-            status=TaskStatus.DONE,
+        state = Done(
             error=reason,
-            local_folder=local_folder,
+            allocated_node_id=self.state.allocated_node_id,
             remote_folder=remote_folder,
-            events=(*self.events, event),
         )
+        return self._advance(state, event, local_folder=local_folder)
 
     # endregion METHOD_fail
 
     # region METHOD_abandon
-    # PURPOSE: Stop a running task whose node disappeared, emitting TaskAbandoned only when a concrete node_id is supplied.
-    # REQUIRES: status is RUNNING.
-    def abandon(self, node_id: NodeId | None, error: str = "node is gone") -> Task:
+    # PURPOSE: Stop a running task whose node disappeared, emitting TaskAbandoned. A RUNNING task always carries an allocation, so the event is unconditional and the node id is read from state.
+    # REQUIRES: state is Running.
+    def abandon(self: Task[Running], error: str = "node is gone") -> Task[Done]:
         """Transition RUNNING→DONE when the node disappeared."""
-        if self.status != TaskStatus.RUNNING:
+        if not isinstance(self.state, Running):
             raise TaskNotRunningError(self.task_id)
-        new_events = self.events
-        if node_id is not None:
-            event = TaskAbandoned(
-                task_id=self.task_id,
-                webhook_url=self.webhook_url,
-                webhook_custom_params=self.webhook_custom_params,
-                node_id=node_id,
-            )
-            new_events = (*new_events, event)
-        return replace(
-            self,
-            status=TaskStatus.DONE,
-            error=error,
-            events=new_events,
+        event = TaskAbandoned(
+            task_id=self.task_id,
+            webhook_url=self.webhook_url,
+            webhook_custom_params=self.webhook_custom_params,
+            node_id=self.state.allocated_node_id,
         )
+        state = Done(
+            error=error,
+            allocated_node_id=self.state.allocated_node_id,
+            remote_folder=self.state.remote_folder,
+        )
+        return self._advance(state, event)
 
     # endregion METHOD_abandon
 
 
 # endregion CLASS_Task
+
+
+# State-parameterized task aliases. ``AnyTask`` is the explicit union (not
+# ``Task[TaskState]``) so the ``TypeIs`` narrowing helpers stay sound under
+# the covariant ``S_co``.
+TodoTask: TypeAlias = Task[Todo]
+RunningTask: TypeAlias = Task[Running]
+DoneTask: TypeAlias = Task[Done]
+AnyTask: TypeAlias = Union[Task[Todo], Task[Running], Task[Done]]
+
+
+# region FUNC_any_status_helpers
+# PURPOSE: Give any-status readers (client facade, mixed-status CLI) an honest Optional-returning API that does not widen the narrow path baked into Task[S_co].
+def allocated_node_id_of(t: AnyTask) -> NodeId | None:
+    """Return the node binding if the task's state carries one, else None."""
+    if isinstance(t.state, Running):
+        return t.state.allocated_node_id
+    if isinstance(t.state, Done):
+        return t.state.allocated_node_id
+    return None
+
+
+def remote_folder_of(t: AnyTask) -> str | None:
+    """Return the remote work folder carried on the task's state, else None."""
+    return t.state.remote_folder
+
+
+def error_of(t: AnyTask) -> str | None:
+    """Return the error string if the task's state carries one, else None."""
+    if isinstance(t.state, Done):
+        return t.state.error
+    return None
+
+
+# endregion FUNC_any_status_helpers
+
+
+# region FUNC_narrowing_helpers
+# PURPOSE: Narrow a wide AnyTask to a specific Task[S] at sites that receive the union (get, list_by_jobs, webhook handler) so state-specific transitions become statically callable.
+def is_todo(t: AnyTask) -> TypeIs[Task[Todo]]:
+    """Narrow to Task[Todo] when the task's state is Todo."""
+    return isinstance(t.state, Todo)
+
+
+def is_running(t: AnyTask) -> TypeIs[Task[Running]]:
+    """Narrow to Task[Running] when the task's state is Running."""
+    return isinstance(t.state, Running)
+
+
+def is_done(t: AnyTask) -> TypeIs[Task[Done]]:
+    """Narrow to Task[Done] when the task's state is Done."""
+    return isinstance(t.state, Done)
+
+
+# endregion FUNC_narrowing_helpers
 
 
 # region FUNC_materialize_task

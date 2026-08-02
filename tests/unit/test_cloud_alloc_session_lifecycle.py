@@ -26,6 +26,8 @@ from yascheduler.domain.model import (
     Task,
     TaskId,
     TaskStatus,
+    Todo,
+    allocated_node_id_of,
 )
 from yascheduler.infra.cloud.dto import CloudCreateNodeDTO
 from yascheduler.infra.cloud.manager import CloudProvisionerImpl
@@ -271,6 +273,14 @@ class _FakeTaskRepo:
     async def get(self, task_id: TaskId) -> Task | None:
         return self._store.get(task_id)
 
+    async def get_running(self, task_id: TaskId) -> Task | None:
+        t = self._store.get(task_id)
+        return t if t is not None and t.status is TaskStatus.RUNNING else None
+
+    async def get_todo(self, task_id: TaskId) -> Task | None:
+        t = self._store.get(task_id)
+        return t if t is not None and t.status is TaskStatus.TO_DO else None
+
     async def save(
         self, task: Task, *, expected_status: TaskStatus | None = None
     ) -> None:
@@ -285,6 +295,12 @@ class _FakeTaskRepo:
         result = [t for t in self._store.values() if t.status in statuses]
         return result[:limit] if limit is not None else result
 
+    async def list_running(self, *, limit: int | None = None) -> list[Task]:
+        return await self.list_by_status({TaskStatus.RUNNING}, limit=limit)
+
+    async def list_todo(self, *, limit: int | None = None) -> list[Task]:
+        return await self.list_by_status({TaskStatus.TO_DO}, limit=limit)
+
     async def insert(self, new_task: NewTask) -> Task:
         # Assign a fresh TaskId (one past the current max, min 1).
         next_id = TaskId(max((tid.value for tid in self._store), default=0) + 1)
@@ -294,28 +310,18 @@ class _FakeTaskRepo:
             task_id=next_id,
             label=new_task.label,
             engine=new_task.engine,
-            remote_folder=None,
-            local_folder=new_task.local_folder,
+            state=Todo(),
             webhook_url=new_task.webhook_url,
             webhook_custom_params=new_task.webhook_custom_params,
-            error=None,
             extra=new_task.extra,
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=TaskStatus.TO_DO,
         )
         self._store[next_id] = task
         return task
 
     async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
         return [t for t in self._store.values() if t.task_id in job_ids]
-
-    async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
-        t = self._store.get(task_id)
-        if t is not None:
-            from dataclasses import replace
-
-            self._store[task_id] = replace(t, status=status)
 
     async def list_ids_by_node_id_and_status(
         self,
@@ -325,7 +331,7 @@ class _FakeTaskRepo:
         return [
             t.task_id
             for t in self._store.values()
-            if t.allocated_node_id == node_id and t.status == status
+            if allocated_node_id_of(t) == node_id and t.status == status
         ]
 
     async def count_by_status(self) -> dict[TaskStatus, int]:
@@ -565,15 +571,12 @@ def _make_todo_task(task_id: int = 1) -> Task:
         task_id=TaskId(task_id),
         label="test",
         engine="test_engine",
-        remote_folder=None,
-        local_folder=None,
+        state=Todo(),
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra={},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),
-        status=TaskStatus.TO_DO,
     )
 
 

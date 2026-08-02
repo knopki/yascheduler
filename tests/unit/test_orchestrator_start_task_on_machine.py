@@ -23,7 +23,15 @@ import pytest
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
-from yascheduler.domain.model import NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain.model import (
+    Done,
+    NodeId,
+    Running,
+    Task,
+    TaskId,
+    TaskStatus,
+    Todo,
+)
 from yascheduler.entrypoints import Config
 from yascheduler.infra.persistence import PostgresDbConfig
 
@@ -37,21 +45,43 @@ if TYPE_CHECKING:
 
 
 def _make_task(**overrides: Any) -> Task:
-    """Build a Task with default typed fields; overrides win."""
+    """Build a Task with default typed fields; overrides win.
+
+    Translates legacy ``status``/``allocated_node_id``/``remote_folder``/``error``
+    overrides into a ``state`` value object.
+    """
+    state_overrides = {
+        k: overrides.pop(k)
+        for k in ("status", "allocated_node_id", "remote_folder", "error")
+        if k in overrides
+    }
+    if state_overrides:
+        status = state_overrides.get("status", TaskStatus.TO_DO)
+        if status is TaskStatus.RUNNING:
+            overrides["state"] = Running(
+                allocated_node_id=state_overrides.get("allocated_node_id") or NodeId(1),
+                remote_folder=state_overrides.get("remote_folder") or "/r",
+            )
+        elif status is TaskStatus.DONE:
+            overrides["state"] = Done(
+                error=state_overrides.get("error"),
+                allocated_node_id=state_overrides.get("allocated_node_id"),
+                remote_folder=state_overrides.get("remote_folder"),
+            )
+        else:
+            overrides["state"] = Todo(
+                remote_folder=state_overrides.get("remote_folder")
+            )
     base: dict[str, Any] = {
         "task_id": TaskId(1),
         "engine": "test_engine",
         "created_at": datetime(2025, 1, 1),
         "updated_at": datetime(2025, 1, 1),
         "label": "test",
-        "local_folder": None,
-        "remote_folder": None,
         "webhook_url": None,
         "webhook_custom_params": {},
-        "error": None,
         "extra": {},
-        "status": TaskStatus.TO_DO,
-        "allocated_node_id": None,
+        "state": Todo(),
     }
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
@@ -145,7 +175,7 @@ class TestStartTaskOnMachine:
         task = _make_task(
             task_id=TaskId(1),
             engine="test_engine",
-            status=TaskStatus.TO_DO,
+            status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(42),
         )
 
@@ -184,7 +214,7 @@ class TestStartTaskOnMachine:
         task = _make_task(
             task_id=TaskId(1),
             engine="test_engine",
-            status=TaskStatus.TO_DO,
+            status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(42),
         )
 
@@ -221,7 +251,7 @@ class TestStartTaskOnMachine:
         task = _make_task(
             task_id=TaskId(1),
             engine="test_engine",
-            status=TaskStatus.TO_DO,
+            status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(42),
         )
 

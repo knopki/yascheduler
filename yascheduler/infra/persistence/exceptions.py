@@ -28,7 +28,7 @@ class UnitOfWorkNotInitializedError(RuntimeError):
 # region CLASS_TaskRowNotFoundError
 # PURPOSE: Signal a stale, missing, or status-guard-rejected task reference so callers can distinguish a programming error or lost-update from transient DB failures.
 class TaskRowNotFoundError(RuntimeError):
-    """Raised by PostgresTaskRepository.save/update_status when an UPDATE matches zero rows.
+    """Raised by PostgresTaskRepository.save when an UPDATE matches zero rows.
 
     Two causes, both surfacing as a zero-row UPDATE:
     - missing task_id (programming error / precondition violation), or

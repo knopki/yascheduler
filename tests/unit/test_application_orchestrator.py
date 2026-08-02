@@ -25,17 +25,28 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from yascheduler.application.allocation_tracker import AllocationTracker
 from yascheduler.application.orchestrator import Orchestrator
-from yascheduler.application.queue import UniqueQueue
+from yascheduler.application.queue import UMessage, UniqueQueue
 from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.domain.events import TaskAbandoned
-from yascheduler.domain.model import NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain.model import (
+    AnyTask,
+    Done,
+    NodeId,
+    Running,
+    Task,
+    TaskId,
+    TaskStatus,
+    Todo,
+    TodoTask,
+    error_of,
+)
 from yascheduler.entrypoints import Config
 from yascheduler.infra.persistence import PostgresDbConfig
 
@@ -49,25 +60,53 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-def _make_task(**overrides: Any) -> Task:
-    """Build a Task with default typed fields; overrides win."""
+def _make_task(**overrides: Any) -> AnyTask:
+    """Build a Task with default typed fields; overrides win.
+
+    Translates legacy ``status``/``allocated_node_id``/``remote_folder``/``error``
+    overrides into a ``state`` value object so callers can keep using the old
+    kwargs.
+    """
+    state_overrides = {
+        k: overrides.pop(k)
+        for k in ("status", "allocated_node_id", "remote_folder", "error")
+        if k in overrides
+    }
+    local_folder = overrides.pop("local_folder", None)
+    # local_folder is a status-independent Task field (D6); pass it through to
+    # the Task constructor via overrides, not into the Done state object.
+    if local_folder is not None:
+        overrides["local_folder"] = local_folder
+    if state_overrides:
+        status = state_overrides.get("status", TaskStatus.TO_DO)
+        if status is TaskStatus.RUNNING:
+            overrides["state"] = Running(
+                allocated_node_id=state_overrides.get("allocated_node_id") or NodeId(1),
+                remote_folder=state_overrides.get("remote_folder") or "/r",
+            )
+        elif status is TaskStatus.DONE:
+            overrides["state"] = Done(
+                error=state_overrides.get("error"),
+                allocated_node_id=state_overrides.get("allocated_node_id"),
+                remote_folder=state_overrides.get("remote_folder"),
+            )
+        else:
+            overrides["state"] = Todo(
+                remote_folder=state_overrides.get("remote_folder")
+            )
     base: dict[str, Any] = {
         "task_id": TaskId(1),
         "engine": "test_engine",
         "created_at": datetime(2025, 1, 1),
         "updated_at": datetime(2025, 1, 1),
         "label": "test",
-        "local_folder": None,
-        "remote_folder": None,
         "webhook_url": None,
         "webhook_custom_params": {},
-        "error": None,
         "extra": {},
-        "status": TaskStatus.TO_DO,
-        "allocated_node_id": None,
+        "state": Todo(),
     }
     base.update(overrides)
-    return Task(**base)  # type: ignore[arg-type]
+    return Task(**base)  # type: ignore[arg-type,type-var]
 
 
 def create_mock_config(
@@ -454,20 +493,24 @@ class TestOrchestratorTaskAbandoned:
         machine_not_found: Counter[str] = Counter()
 
         # First call: counter is 1, not enough yet
-        await orch._task_consumer_consumer(msg, machine_not_found)
+        await orch._task_consumer_consumer(
+            cast("UMessage[TaskId, Task[Running]]", msg), machine_not_found
+        )
         assert machine_not_found[TaskId(42)] == 1  # type: ignore[index]
         uow.tasks.save.assert_not_called()
         tracker.discard.assert_not_called()
 
         # Call enough times to exceed broken_tasks_passes (20)
         machine_not_found[TaskId(42)] = 21  # type: ignore[index]
-        await orch._task_consumer_consumer(msg, machine_not_found)
+        await orch._task_consumer_consumer(
+            cast("UMessage[TaskId, Task[Running]]", msg), machine_not_found
+        )
 
         # save should have been called with a task that has TaskAbandoned event
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.error == "node is gone"
+        assert error_of(saved_task) == "node is gone"
         assert len(saved_task.events) == 1
         event = saved_task.events[0]
         assert isinstance(event, TaskAbandoned)
@@ -693,7 +736,7 @@ class TestAllocatorConsumer:
         caplog.set_level(logging.ERROR)
         orch = make_orchestrator()
 
-        task_payload = _make_task(engine="e", label="t")
+        task_payload = cast("TodoTask", _make_task(engine="e", label="t"))
         msg = UMessage(TaskId(1), task_payload)
 
         with patch(
@@ -717,7 +760,9 @@ class TestAllocatorConsumer:
         caplog.set_level(logging.ERROR)
         orch = make_orchestrator()
 
-        task_payload = _make_task(task_id=TaskId(42), engine="e", label="t")
+        task_payload = cast(
+            "TodoTask", _make_task(task_id=TaskId(42), engine="e", label="t")
+        )
         msg = UMessage(TaskId(42), task_payload)
 
         with patch(
@@ -736,7 +781,9 @@ class TestAllocatorConsumer:
 
         orch = make_orchestrator()
 
-        task_payload = _make_task(task_id=TaskId(7), engine="e", label="t")
+        task_payload = cast(
+            "TodoTask", _make_task(task_id=TaskId(7), engine="e", label="t")
+        )
         msg = UMessage(TaskId(7), task_payload)
 
         with patch(
@@ -792,7 +839,9 @@ class TestConsumeConditionalDiscard:
             "yascheduler.application.orchestrator.consume_task",
             new=AsyncMock(return_value=True),
         ):
-            await orch._task_consumer_consumer(msg, Counter())
+            await orch._task_consumer_consumer(
+                cast("UMessage[TaskId, Task[Running]]", msg), Counter()
+            )
 
         assert NodeId(1) not in orch._occupancy_started
 
@@ -826,7 +875,9 @@ class TestConsumeConditionalDiscard:
             "yascheduler.application.orchestrator.consume_task",
             new=AsyncMock(return_value=False),
         ):
-            await orch._task_consumer_consumer(msg, Counter())
+            await orch._task_consumer_consumer(
+                cast("UMessage[TaskId, Task[Running]]", msg), Counter()
+            )
 
         # Deferred: ip stays registered so the next producer cycle re-enters consume
         assert NodeId(1) in orch._occupancy_started
@@ -838,7 +889,6 @@ class TestConsumeInFlightGuard:
     @pytest.mark.asyncio
     async def test_producer_skips_in_flight_task(self) -> None:
         """A task id in _consuming is skipped by the producer."""
-        from yascheduler.application.queue import UMessage
 
         orch = make_orchestrator()
 
@@ -851,7 +901,7 @@ class TestConsumeInFlightGuard:
         )
 
         mock_uow = AsyncMock()
-        mock_uow.tasks.list_by_status = AsyncMock(return_value=[task_a, task_b])
+        mock_uow.tasks.list_running = AsyncMock(return_value=[task_a, task_b])
         mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
         mock_uow.__aexit__ = AsyncMock(return_value=False)
         orch._uow_factory = lambda: mock_uow  # type: ignore[method-assign]
@@ -897,7 +947,9 @@ class TestConsumeInFlightGuard:
             "yascheduler.application.orchestrator.consume_task",
             new=AsyncMock(return_value=True),
         ):
-            await orch._task_consumer_consumer(msg, Counter())
+            await orch._task_consumer_consumer(
+                cast("UMessage[TaskId, Task[Running]]", msg), Counter()
+            )
 
         assert TaskId(5) not in orch._consuming
 
@@ -931,7 +983,9 @@ class TestConsumeInFlightGuard:
             "yascheduler.application.orchestrator.consume_task",
             new=AsyncMock(return_value=False),
         ):
-            await orch._task_consumer_consumer(msg, Counter())
+            await orch._task_consumer_consumer(
+                cast("UMessage[TaskId, Task[Running]]", msg), Counter()
+            )
 
         # Deferred keeps the ip in _occupancy_started but releases the in-flight guard
         assert TaskId(5) not in orch._consuming
@@ -970,7 +1024,9 @@ class TestConsumeInFlightGuard:
             ),
             pytest.raises(RuntimeError),
         ):
-            await orch._task_consumer_consumer(msg, Counter())
+            await orch._task_consumer_consumer(
+                cast("UMessage[TaskId, Task[Running]]", msg), Counter()
+            )
 
         # finally released the guard even on exception
         assert TaskId(5) not in orch._consuming

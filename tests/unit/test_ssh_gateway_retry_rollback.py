@@ -21,6 +21,7 @@ from yascheduler.domain import Engine
 from yascheduler.domain.model import (
     MachineState,
     NodeId,
+    Running,
     Task,
     TaskId,
 )
@@ -49,18 +50,16 @@ def _make_engine() -> Engine:
 
 
 def _make_task(remote_folder: str = "/remote/tasks/1") -> Task:
-    """Minimal Task with a remote_folder set (required by start_task_on_machine)."""
+    """Minimal RUNNING Task (state-payload form) for start_task_on_machine."""
     from datetime import datetime
 
     return Task(
         task_id=TaskId(1),
         label="test-task",
         engine="test_engine",
-        remote_folder=remote_folder,
-        local_folder=None,
+        state=Running(allocated_node_id=NodeId(1), remote_folder=remote_folder),
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra={},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),

@@ -25,6 +25,11 @@ else:
         """Backport of enum.StrEnum for Python < 3.11."""
 
 
+if sys.version_info >= (3, 13):
+    from typing import TypeIs
+else:
+    from typing_extensions import TypeIs
+
 __all__ = [
     "NotRequired",
     "ParamSpec",
@@ -32,5 +37,6 @@ __all__ = [
     "Self",
     "StrEnum",
     "TypeGuard",
+    "TypeIs",
     "Unpack",
 ]

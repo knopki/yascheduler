@@ -13,6 +13,7 @@ from yascheduler.domain.model import (
     NodeId,
     Task,
     TaskId,
+    Todo,
 )
 from yascheduler.domain.services import match_task_to_node
 
@@ -23,11 +24,9 @@ def _make_task(task_id: int = 1) -> Task:
         task_id=TaskId(task_id),
         label="test",
         engine="fleur",
-        remote_folder=None,
-        local_folder=None,
+        state=Todo(),
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra={},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),

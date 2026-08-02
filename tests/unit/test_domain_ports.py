@@ -44,6 +44,12 @@ class StubTaskRepository:
     async def get(self, task_id: TaskId) -> Task | None:
         raise NotImplementedError
 
+    async def get_running(self, task_id: TaskId) -> Task | None:
+        return None
+
+    async def get_todo(self, task_id: TaskId) -> Task | None:
+        return None
+
     async def save(
         self, task: Task, *, expected_status: TaskStatus | None = None
     ) -> None:
@@ -57,14 +63,17 @@ class StubTaskRepository:
     ) -> list[Task]:
         return []
 
+    async def list_running(self, *, limit: int | None = None) -> list[Task]:
+        return []
+
+    async def list_todo(self, *, limit: int | None = None) -> list[Task]:
+        return []
+
     async def insert(self, new_task: NewTask) -> Task:
         raise NotImplementedError
 
     async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
         return []
-
-    async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
-        pass
 
     async def list_ids_by_node_id_and_status(
         self,

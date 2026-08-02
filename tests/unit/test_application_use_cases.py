@@ -47,6 +47,8 @@ from yascheduler.domain.model import (
     Task,
     TaskId,
     TaskStatus,
+    Todo,
+    error_of,
 )
 from yascheduler.domain.ports import CloudProvisioner
 from yascheduler.infra.cloud import ConfigCloudAzure
@@ -112,15 +114,12 @@ class TestSubmitTask:
                 task_id=TaskId(42),
                 label=new_task.label,
                 engine=new_task.engine,
-                remote_folder=None,
-                local_folder=new_task.local_folder,
+                state=Todo(),
                 webhook_url=new_task.webhook_url,
                 webhook_custom_params=new_task.webhook_custom_params,
-                error=None,
                 extra=new_task.extra,
                 created_at=datetime(2025, 1, 1),
                 updated_at=datetime(2025, 1, 1),
-                status=TaskStatus.TO_DO,
             )
             # insert now calls materialize_task, so the returned Task has TaskCreated in events
             from yascheduler.domain.model import materialize_task
@@ -150,7 +149,9 @@ class TestSubmitTask:
         uow.tasks.save.assert_called_once()
         saved_arg: Task = uow.tasks.save.call_args[0][0]
         assert saved_arg.task_id == TaskId(42)
-        assert saved_arg.remote_folder is None  # remote_folder not set at submit time
+        assert (
+            saved_arg.state.remote_folder is None
+        )  # remote_folder not set at submit time
         assert len(saved_arg.events) == 1
         assert isinstance(saved_arg.events[0], TaskCreated)
 
@@ -173,15 +174,12 @@ class TestAllocateTask:
             task_id=TaskId(1),
             label="test",
             engine="test_engine",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=TaskStatus.TO_DO,
         )
 
     async def test_allocate_task_unsupported_engine(self, todo_task: Task) -> None:
@@ -191,7 +189,7 @@ class TestAllocateTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.get_todo = AsyncMock(return_value=todo_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)
@@ -223,7 +221,7 @@ class TestAllocateTask:
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.error == "unsupported engine"
+        assert error_of(saved_task) == "unsupported engine"
 
     async def test_allocate_task_finds_free_machine(
         self,
@@ -252,7 +250,7 @@ class TestAllocateTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.get_todo = AsyncMock(return_value=todo_task)
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.tasks.save = AsyncMock()
         uow.nodes = AsyncMock()
@@ -295,7 +293,7 @@ class TestAllocateTask:
         _call_session, _call_engine, _call_task = start_on_machine.call_args[0]
         assert _call_session is free_session
         assert _call_engine is engine
-        assert _call_task.allocated_node_id == NodeId(1)
+        assert _call_task.state.allocated_node_id == NodeId(1)
         assert not hasattr(_call_task, "allocated_ip")
         occupancy_checker.start_occupancy_check.assert_called_once_with(
             free_session,
@@ -303,7 +301,7 @@ class TestAllocateTask:
         )
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
-        assert saved_task.allocated_node_id == NodeId(1)
+        assert saved_task.state.allocated_node_id == NodeId(1)
         assert not hasattr(saved_task, "allocated_ip")
         assert saved_task.status == TaskStatus.RUNNING
         uow.commit.assert_called_once()
@@ -327,7 +325,7 @@ class TestAllocateTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.get_todo = AsyncMock(return_value=todo_task)
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
@@ -425,7 +423,7 @@ class TestAllocateTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.get_todo = AsyncMock(return_value=todo_task)
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])
@@ -503,7 +501,7 @@ class TestAllocateTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.get_todo = AsyncMock(return_value=todo_task)
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.collect_events = AsyncMock(return_value=[])
         uow.publish_events = AsyncMock()
@@ -560,7 +558,7 @@ class TestAllocateTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=todo_task)
+        uow.tasks.get_todo = AsyncMock(return_value=todo_task)
         uow.tasks.list_by_status = AsyncMock(return_value=[])
         uow.nodes = AsyncMock()
         uow.nodes.list_all = AsyncMock(return_value=[])

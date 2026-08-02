@@ -11,18 +11,28 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from functools import partial
+from typing import TYPE_CHECKING, Any, cast
 
 from yascheduler.domain import (
+    AnyTask,
+    Done,
     NewNode,
     NewTask,
     Node,
     NodeId,
     NodeStatus,
+    Running,
+    RunningTask,
     Task,
     TaskId,
     TaskStatus,
+    Todo,
+    TodoTask,
+    allocated_node_id_of,
+    error_of,
     materialize_task,
+    remote_folder_of,
 )
 
 from .exceptions import NodeRowNotFoundError, TaskRowNotFoundError
@@ -73,7 +83,7 @@ class PostgresTaskRepository(_PgRepository):
         self,
         conn: Connection,
         executor: ThreadPoolExecutor,
-        saved_tasks: list[Task] | None = None,
+        saved_tasks: list[AnyTask] | None = None,
     ) -> None:
         """Initialise the repository with a DB connection."""
         super().__init__(conn, executor)
@@ -81,7 +91,7 @@ class PostgresTaskRepository(_PgRepository):
 
     # region METHOD_get
     # PURPOSE: Retrieve a persisted task so the orchestrator can inspect its state before deciding the next lifecycle step (allocate, retry, complete).
-    async def get(self, task_id: TaskId) -> Task | None:
+    async def get(self, task_id: TaskId) -> AnyTask | None:
         """Retrieve a task by ID, or None if not found.
 
         Passes ``task_id.value`` (the bare int) as the SQL param — pg8000 cannot
@@ -94,11 +104,41 @@ class PostgresTaskRepository(_PgRepository):
 
     # endregion METHOD_get
 
+    # region METHOD_get_running
+    # PURPOSE: Load one task by id filtered to RUNNING so consumers receive the narrow state type without a post-load race-skip; returns None when absent or wrong status.
+    async def get_running(self, task_id: TaskId) -> RunningTask | None:
+        """Retrieve a task by ID iff RUNNING, else None."""
+        rows = await self._run(
+            load_query("task/get_by_id_and_status"),
+            task_id=task_id.value,
+            status=TaskStatus.RUNNING.name,
+        )
+        if not rows:
+            return None
+        return cast("RunningTask", self._row_to_task(rows[0]))
+
+    # endregion METHOD_get_running
+
+    # region METHOD_get_todo
+    # PURPOSE: Load one task by id filtered to TO_DO so consumers receive the narrow state type without a post-load race-skip; returns None when absent or wrong status.
+    async def get_todo(self, task_id: TaskId) -> TodoTask | None:
+        """Retrieve a task by ID iff TO_DO, else None."""
+        rows = await self._run(
+            load_query("task/get_by_id_and_status"),
+            task_id=task_id.value,
+            status=TaskStatus.TO_DO.name,
+        )
+        if not rows:
+            return None
+        return cast("TodoTask", self._row_to_task(rows[0]))
+
+    # endregion METHOD_get_todo
+
     # region METHOD_save
     # PURPOSE: Persist task mutations so the latest state is durable
     # ENSURES: Raises TaskRowNotFoundError BEFORE appending to _saved_tasks when the targeted task_id does not exist OR when expected_status is set and the current DB status differs.
     async def save(
-        self, task: Task, *, expected_status: TaskStatus | None = None
+        self, task: AnyTask, *, expected_status: TaskStatus | None = None
     ) -> None:
         """Persist task state to the database (update by task_id; raises on missing row or status-guard rejection)."""
         # region BLOCK_detect_zero_rows
@@ -107,14 +147,16 @@ class PostgresTaskRepository(_PgRepository):
             task_id=task.task_id.value,
             title=task.label,
             engine=task.engine,
-            remote_folder=task.remote_folder,
+            remote_folder=remote_folder_of(task),
             local_folder=task.local_folder,
             webhook_url=task.webhook_url,
-            error=task.error,
+            error=error_of(task),
             webhook_custom_params=task.webhook_custom_params,
             extra=task.extra,
             status=task.status.name,
-            node_id=task.allocated_node_id.value if task.allocated_node_id else None,
+            node_id=(
+                nid.value if (nid := allocated_node_id_of(task)) is not None else None
+            ),
             expected_status=(
                 expected_status.name if expected_status is not None else None
             ),
@@ -127,21 +169,27 @@ class PostgresTaskRepository(_PgRepository):
 
     # endregion METHOD_save
 
-    # region METHOD_update_status
-    # PURPOSE: Advance a task's lifecycle status atomically so concurrent observers see a consistent state and missing rows are detected via TaskRowNotFoundError.
-    async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
-        """Atomically update only the status field; raises on missing row."""
-        # region BLOCK_detect_zero_rows
-        rows = await self._run(
-            load_query("task/update_status"),
-            task_id=task_id.value,
-            status=status.name,
+    # region METHOD_list_todo
+    # PURPOSE: Return TO_DO tasks so consumers receive the narrow state type directly without filtering a wide list.
+    async def list_todo(self, *, limit: int | None = None) -> list[TodoTask]:
+        """Return tasks whose state is TO_DO."""
+        return cast(
+            "list[TodoTask]",
+            await self.list_by_status({TaskStatus.TO_DO}, limit=limit),
         )
-        if not rows:
-            raise TaskRowNotFoundError(task_id)
-        # endregion BLOCK_detect_zero_rows
 
-    # endregion METHOD_update_status
+    # endregion METHOD_list_todo
+
+    # region METHOD_list_running
+    # PURPOSE: Return RUNNING tasks so consumers receive the narrow state type directly without filtering a wide list.
+    async def list_running(self, *, limit: int | None = None) -> list[RunningTask]:
+        """Return tasks whose state is RUNNING."""
+        return cast(
+            "list[RunningTask]",
+            await self.list_by_status({TaskStatus.RUNNING}, limit=limit),
+        )
+
+    # endregion METHOD_list_running
 
     # region METHOD_list_ids_by_node_id_and_status
     # PURPOSE: Find tasks on a specific node in a given state so the orchestrator can decide whether to drain, decommission, or re-provision that node.
@@ -162,7 +210,7 @@ class PostgresTaskRepository(_PgRepository):
 
     # region METHOD_insert
     # PURPOSE: Accept a new task submission so the orchestrator tracks it through its lifecycle — the returned Task carries a TaskCreated event for cross-layer notification.
-    async def insert(self, new_task: NewTask) -> Task:
+    async def insert(self, new_task: NewTask) -> TodoTask:
         """Insert a NewTask, return the persisted Task with TaskCreated in events."""
         rows = await self._run(
             load_query("task/insert"),
@@ -184,7 +232,7 @@ class PostgresTaskRepository(_PgRepository):
         self,
         statuses: set[TaskStatus],
         limit: int | None = None,
-    ) -> list[Task]:
+    ) -> list[AnyTask]:
         """Return tasks matching any of the given statuses."""
         rows = await self._run(
             load_query("task/list_by_status"),
@@ -197,7 +245,7 @@ class PostgresTaskRepository(_PgRepository):
 
     # region METHOD_list_by_jobs
     # PURPOSE: Batch-load tasks by explicit IDs so the client facade returns task details without issuing N+1 queries.
-    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
+    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[AnyTask]:
         """Return tasks whose IDs are in the given list."""
         rows = await self._run(
             load_query("task/list_by_jobs"),
@@ -219,7 +267,7 @@ class PostgresTaskRepository(_PgRepository):
     # region METHOD__row_to_task
     # PURPOSE: Deserialize raw DB rows into domain Task entities so the application layer works with typed model objects, not raw dicts or manual JSON parsing.
     @staticmethod
-    def _row_to_task(row: dict[str, Any]) -> Task:
+    def _row_to_task(row: dict[str, Any]) -> AnyTask:
         """Convert a DB row dict to a domain Task."""
         webhook_custom_params = row["webhook_custom_params"]
         if isinstance(webhook_custom_params, str):
@@ -227,26 +275,41 @@ class PostgresTaskRepository(_PgRepository):
         extra = row["extra"]
         if isinstance(extra, str):
             extra = json.loads(extra)
-        # Events are transient — always empty when loaded from DB.
-        allocated_node_id_raw = row.get("allocated_node_id")
-        return Task(
+        status = TaskStatus[row["status"]]
+
+        task_zygote = partial(
+            Task,
             task_id=TaskId(int(row["task_id"])),
-            label=row.get("title", ""),
-            engine=row["engine"],
-            remote_folder=row.get("remote_folder"),
-            local_folder=row.get("local_folder"),
-            webhook_url=row.get("webhook_url"),
-            error=row.get("error"),
-            webhook_custom_params=webhook_custom_params,
-            extra=extra,
-            status=TaskStatus[row["status"]],
-            allocated_node_id=(
-                NodeId(int(allocated_node_id_raw))
-                if allocated_node_id_raw is not None
-                else None
-            ),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            label=row.get("title", ""),
+            engine=row["engine"],
+            extra=extra,
+            webhook_url=row["webhook_url"],
+            webhook_custom_params=webhook_custom_params,
+            local_folder=row["local_folder"],
+        )
+
+        if status is TaskStatus.TO_DO:
+            return task_zygote(state=Todo(remote_folder=row.get("remote_folder")))
+        if status is TaskStatus.RUNNING:
+            return task_zygote(
+                state=Running(
+                    allocated_node_id=NodeId(int(row["allocated_node_id"])),
+                    remote_folder=row["remote_folder"],
+                )
+            )
+        allocated_node_id_raw = row.get("allocated_node_id")
+        return task_zygote(
+            state=Done(
+                error=row.get("error"),
+                allocated_node_id=(
+                    NodeId(int(allocated_node_id_raw))
+                    if allocated_node_id_raw is not None
+                    else None
+                ),
+                remote_folder=row.get("remote_folder"),
+            ),
         )
 
     # endregion METHOD__row_to_task

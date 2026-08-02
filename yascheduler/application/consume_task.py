@@ -17,9 +17,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from yascheduler.domain import (
+        DoneTask,
         EngineRepository,
         MachineSession,
-        Task,
+        RunningTask,
         TaskId,
     )
     from yascheduler.infra import OutputDownloader
@@ -34,20 +35,15 @@ __all__ = ["consume_task"]
 
 # region FUNC__prepare_store_folder
 # PURPOSE: Ensure the local filesystem is ready to receive remote outputs and resolve what to fetch, so the download step has a target directory and file list.
-# REQUIRES: task.remote_folder is not None (task is RUNNING).
 async def _prepare_store_folder(
-    task: Task,
-    local_tasks_dir: Path,
-    engines: EngineRepository,
+    task: RunningTask, local_tasks_dir: Path, engines: EngineRepository
 ) -> tuple[Path, list[str], str]:
     # region BLOCK_create_dir
-    assert task.remote_folder is not None  # task is RUNNING here
-    remote_folder: str = task.remote_folder
+    remote_folder: str = task.state.remote_folder
     engine = engines[task.engine]
     output_files = [str(PurePosixPath(remote_folder) / x) for x in engine.output_files]
-    local_folder = task.local_folder
-    if local_folder:
-        store_folder = Path(local_folder)
+    if task.local_folder:
+        store_folder = Path(task.local_folder)
     else:
         store_folder = local_tasks_dir / Path(remote_folder).name
     await asyncio.get_running_loop().run_in_executor(
@@ -80,13 +76,13 @@ def _format_download_error(
 # PURPOSE: Decide whether to finalise (DONE) or defer (stay RUNNING) based on error types. Finalise when permanent errors exist or all succeeded; defer on transient-only.
 # ENSURES: Returns None (defer) when transient-only; Task with complete/fail applied when finalising.
 def _decide_finalisation(
-    task: Task,
+    task: RunningTask,
     local_folder: str,
     remote_folder: str,
     transient_errors: list[tuple[str | None, Exception]],
     permanent_errors: list[tuple[str | None, Exception]],
     store_folder: Path,
-) -> Task | None:
+) -> DoneTask | None:
     # region BLOCK_decide
     # Defer when transient-only: leave RUNNING, no status change, no event.
     if transient_errors and not permanent_errors:
@@ -99,18 +95,18 @@ def _decide_finalisation(
     # message including both. The terminal transitions set the folders AND
     # emit the matching event inline.
     combined_errors = permanent_errors + transient_errors
-    final_local_folder = local_folder or task.local_folder or ""
-    final_remote_folder = remote_folder or task.remote_folder or ""
+    final_local_folder = local_folder or ""
+    final_remote_folder = remote_folder or task.state.remote_folder
 
     if combined_errors:
         error_msg = _format_download_error(combined_errors)
-        task = task.fail(
+        finalised = task.fail(
             error_msg,
             local_folder=final_local_folder,
             remote_folder=final_remote_folder,
         )
     else:
-        task = task.complete(
+        finalised = task.complete(
             local_folder=str(store_folder),
             remote_folder=final_remote_folder,
         )
@@ -123,7 +119,7 @@ def _decide_finalisation(
         },
     )
     # endregion BLOCK_finalise
-    return task
+    return finalised
 
 
 # endregion FUNC__decide_finalisation
@@ -133,7 +129,7 @@ def _decide_finalisation(
 # PURPOSE: On finalise: apply domain lifecycle (complete/fail), save via UoW, discard in-flight allocation slot. On defer: no side effects.
 # ENSURES: Returns True when finalised (DONE, tracker slot discarded); False when deferred (no side effects).
 async def _finalize_task(
-    task: Task,
+    task: RunningTask,
     local_folder: str,
     remote_folder: str,
     transient_errors: list[tuple[str | None, Exception]],
@@ -165,9 +161,9 @@ async def _finalize_task(
         await uow.tasks.save(finalised_task)
         await uow.commit()
 
-    if finalised_task.error:
+    if finalised_task.state.error:
         logger.warning(
-            "task_id=%s failed: %s", finalised_task.task_id, finalised_task.error
+            "task_id=%s failed: %s", finalised_task.task_id, finalised_task.state.error
         )
         logger.debug(
             "FINALISE_FAIL",
@@ -175,7 +171,7 @@ async def _finalize_task(
                 "task_id": finalised_task.task_id,
                 "label": finalised_task.label,
                 "local_folder": str(store_folder),
-                "error": finalised_task.error,
+                "error": finalised_task.state.error,
             },
         )
     else:
@@ -216,11 +212,14 @@ async def consume_task(
 ) -> bool:
     """Load task by id via UoW, download outputs from remote machine, finalise or defer."""
     async with uow_factory() as uow:
-        task = await uow.tasks.get(task_id)
+        task = await uow.tasks.get_running(task_id)
     if task is None:
-        logger.warning("task_id=%s not found, skipping consume", task_id)
-        # Discard the tracker slot so a missing task row can't leak an
-        # in-flight allocation slot forever (treat as vacuously finalised).
+        logger.warning(
+            "task_id=%s not found or no longer RUNNING, skipping consume", task_id
+        )
+        # Discard the tracker slot so a missing/wrong-status task row can't
+        # leak an in-flight allocation slot forever (treat as vacuously
+        # finalised).
         tracker.discard(task_id)
         return True
 

@@ -14,7 +14,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain.model import (
+    Done,
+    Node,
+    NodeId,
+    Running,
+    Task,
+    TaskId,
+    TaskStatus,
+    Todo,
+)
 from yascheduler.entrypoints.di import CLIDeps
 
 show_nodes_mod = importlib.import_module("yascheduler.entrypoints.cli.show_nodes")
@@ -83,20 +92,30 @@ def make_task(
     """Return a Task domain object with sensible defaults."""
     from datetime import datetime
 
+    if status is TaskStatus.TO_DO:
+        state: Todo | Running | Done = Todo(remote_folder="/tmp/remote")
+    elif status is TaskStatus.RUNNING:
+        state = Running(
+            allocated_node_id=allocated_node_id or NodeId(1),
+            remote_folder="/tmp/remote",
+        )
+    else:
+        state = Done(
+            error=None,
+            allocated_node_id=allocated_node_id,
+            remote_folder="/tmp/remote",
+        )
     return Task(
         task_id=TaskId(task_id),
         label=label,
         engine="g09",
-        remote_folder="/tmp/remote",
+        state=state,
         local_folder="/tmp/local",
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra={},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),
-        status=status,
-        allocated_node_id=allocated_node_id,
     )
 
 
@@ -184,7 +203,7 @@ class TestShowNodesRendering:
             port=2222,
             cloud="hetzner",
         )
-        uow.tasks.list_by_status = AsyncMock(
+        uow.tasks.list_running = AsyncMock(
             return_value=[
                 make_task(
                     task_id=1,
@@ -239,7 +258,7 @@ class TestShowNodesRendering:
             enabled=True,
             port=22,
         )
-        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.tasks.list_running = AsyncMock(return_value=[])
         uow.nodes.list_all = AsyncMock(return_value=[node])
 
         _run([])
@@ -273,7 +292,7 @@ class TestShowNodesRendering:
             port=2222,
             cloud="hetzner",
         )
-        uow.tasks.list_by_status = AsyncMock(
+        uow.tasks.list_running = AsyncMock(
             return_value=[
                 make_task(task_id=7, label="job7", allocated_node_id=NodeId(1)),
             ],
@@ -336,7 +355,7 @@ class TestShowNodesRendering:
             enabled=True,
             port=22,
         )
-        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.tasks.list_running = AsyncMock(return_value=[])
         uow.nodes.list_all = AsyncMock(return_value=[node])
 
         _run(["--json"])
@@ -354,7 +373,7 @@ class TestShowNodesRendering:
         import json as _json
 
         _config, uow, _deps = stub_config_deps
-        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.tasks.list_running = AsyncMock(return_value=[])
         uow.nodes.list_all = AsyncMock(return_value=[])
 
         _run(["--json"])  # no SystemExit
@@ -368,7 +387,7 @@ class TestShowNodesRendering:
         stub_config_deps: tuple[MagicMock, AsyncMock, MagicMock],
     ) -> None:
         _config, uow, _deps = stub_config_deps
-        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.tasks.list_running = AsyncMock(return_value=[])
         uow.nodes.list_all = AsyncMock(return_value=[])
 
         _run([])  # no SystemExit on success
@@ -426,7 +445,7 @@ def _three_mixed_nodes() -> list[Node]:
 
 def _wire(uow: AsyncMock, nodes: list[Node], tasks: list[Task] | None = None) -> None:
     uow.nodes.list_all = AsyncMock(return_value=nodes)
-    uow.tasks.list_by_status = AsyncMock(return_value=tasks or [])
+    uow.tasks.list_running = AsyncMock(return_value=tasks or [])
 
 
 def _hostnames_from_table(out: str) -> list[str]:
@@ -624,7 +643,7 @@ class TestShowNodesErrors:
     ) -> None:
         _config, uow, _deps = stub_config_deps
         uow.nodes.list_all = AsyncMock(side_effect=RuntimeError("db down"))
-        uow.tasks.list_by_status = AsyncMock(return_value=[])
+        uow.tasks.list_running = AsyncMock(return_value=[])
         with pytest.raises(SystemExit) as exc:
             _run([])
         assert exc.value.code == 1
@@ -686,7 +705,7 @@ class TestShowNodesStructure:
         )
         _run([])
         # Each read called exactly once.
-        uow.tasks.list_by_status.assert_called_once()
+        uow.tasks.list_running.assert_called_once()
         uow.nodes.list_all.assert_called_once()
         # The source builds a tasks_by_node_id dict (O(n+m)), not a nested scan.
         source = inspect.getsource(show_nodes_mod._fetch_nodes_view)

@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from yascheduler.application import MessageBus
-    from yascheduler.domain import DomainEvent, Task
+    from yascheduler.domain import AnyTask, DomainEvent
 
     from .db_config import PostgresDbConfig
 
@@ -46,7 +46,7 @@ class PostgresUnitOfWork:
         # TODO(knopki): #001 no backoff.on_exception on InterfaceError
         self._config = config
         self._bus = bus
-        self._saved_tasks: list[Task] = []
+        self._saved_tasks: list[AnyTask] = []
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._conn: Connection | None = None
         self._tasks: PostgresTaskRepository | None = None

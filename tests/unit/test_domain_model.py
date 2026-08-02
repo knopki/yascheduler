@@ -25,6 +25,7 @@ from yascheduler.domain.exceptions import (
 )
 from yascheduler.domain.model import (
     ConnectedMachine,
+    Done,
     Engine,
     MachineState,
     NewNode,
@@ -33,10 +34,16 @@ from yascheduler.domain.model import (
     NodeId,
     NodeStatus,
     ProcessResult,
+    Running,
     Task,
     TaskId,
+    TaskState,
     TaskStatus,
+    Todo,
+    allocated_node_id_of,
+    error_of,
     materialize_task,
+    remote_folder_of,
 )
 
 _DT = datetime(2025, 1, 1)
@@ -48,22 +55,20 @@ def _node(node_id: int = 7, hostname: str = "10.0.0.1") -> Node:
 
 
 def _make_task(**overrides: object) -> Task:
-    """Build a Task with typed fields; all 11 required fields supplied."""
+    """Build a Task with typed fields; defaults to a TO_DO state."""
     base: dict[str, object] = {
         "task_id": TaskId(1),
         "label": "test",
         "engine": "cp2k",
-        "remote_folder": None,
-        "local_folder": None,
+        "state": Todo(),
         "webhook_url": None,
         "webhook_custom_params": {},
-        "error": None,
         "extra": {},
         "created_at": _DT,
         "updated_at": _DT,
     }
     base.update(overrides)
-    return Task(**base)  # type: ignore[arg-type]
+    return Task(**base)  # type: ignore[arg-type,type-var]
 
 
 class TestTaskStatus:
@@ -104,6 +109,54 @@ class TestProcessResult:
         assert r.stderr == "err"
 
 
+class TestTaskState:
+    def test_todo_default_remote_folder_is_none(self) -> None:
+        state = Todo()
+        assert state.remote_folder is None
+
+    def test_todo_accepts_remote_folder(self) -> None:
+        state = Todo(remote_folder="/prep")
+        assert state.remote_folder == "/prep"
+
+    def test_todo_status_classvar_is_to_do(self) -> None:
+        assert Todo.status is TaskStatus.TO_DO
+
+    def test_running_requires_both_fields(self) -> None:
+        state = Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        assert state.allocated_node_id == NodeId(7)
+        assert state.remote_folder == "/r"
+
+    def test_running_status_classvar_is_running(self) -> None:
+        assert Running.status is TaskStatus.RUNNING
+
+    def test_done_defaults_all_optional(self) -> None:
+        state = Done()
+        assert state.error is None
+        assert state.allocated_node_id is None
+        assert state.remote_folder is None
+
+    def test_done_accepts_independent_fields(self) -> None:
+        state = Done(error="boom", allocated_node_id=None, remote_folder="/r")
+        assert state.error == "boom"
+        assert state.allocated_node_id is None
+        assert state.remote_folder == "/r"
+
+    def test_done_status_classvar_is_done(self) -> None:
+        assert Done.status is TaskStatus.DONE
+
+    def test_task_state_union_accepts_all_three(self) -> None:
+        states: list[TaskState] = [Todo(), Running(NodeId(1), "/r"), Done()]
+        assert isinstance(states[0], Todo)
+        assert isinstance(states[1], Running)
+        assert isinstance(states[2], Done)
+
+    def test_states_are_frozen(self) -> None:
+        with pytest.raises(FrozenInstanceError):
+            Todo().remote_folder = "/x"  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            Running(NodeId(1), "/r").remote_folder = "/x"  # type: ignore[misc]
+
+
 class TestEngine:
     def test_validate_inputs_passes_when_all_present(self) -> None:
         engine = Engine(name="cp2k", spawn="cp2k", input_files=("inp", "xyz"))
@@ -125,13 +178,16 @@ class TestTask:
     def make_task(self, **overrides: object) -> Task:
         return _make_task(**overrides)
 
-    def test_construction_default_status(self) -> None:
+    def test_construction_default_state_is_todo(self) -> None:
         task = self.make_task()
         assert task.task_id == TaskId(1)
         assert task.label == "test"
         assert task.engine == "cp2k"
+        assert isinstance(task.state, Todo)
         assert task.status == TaskStatus.TO_DO
-        assert task.allocated_node_id is None
+        assert allocated_node_id_of(task) is None
+        assert task.state.remote_folder is None
+        assert error_of(task) is None
         assert not hasattr(task, "allocated_ip")
         assert isinstance(task.created_at, datetime)
         assert isinstance(task.updated_at, datetime)
@@ -139,14 +195,38 @@ class TestTask:
     def test_immutability(self) -> None:
         task = self.make_task()
         with pytest.raises(FrozenInstanceError):
-            task.status = TaskStatus.RUNNING  # type: ignore[misc]
+            task.engine = "x"  # type: ignore[misc]
 
-    def test_run(self) -> None:
+    def test_status_derived_from_state_classvar(self) -> None:
+        todo = self.make_task()
+        assert todo.status is TaskStatus.TO_DO
+        running = self.make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert running.status is TaskStatus.RUNNING
+        done = self.make_task(state=Done(error="boom"))
+        assert done.status is TaskStatus.DONE
+
+    def test_state_carries_fields_directly(self) -> None:
+        running = self.make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert running.state.allocated_node_id == NodeId(7)
+        assert running.state.remote_folder == "/r"
+        done = self.make_task(
+            state=Done(error="e", allocated_node_id=NodeId(9), remote_folder="/d")
+        )
+        assert done.state.error == "e"
+        assert done.state.allocated_node_id == NodeId(9)
+        assert done.state.remote_folder == "/d"
+
+    def test_run_builds_running_state(self) -> None:
         task = self.make_task()
         running = task.run(NodeId(7), "/r")
         assert running.status == TaskStatus.RUNNING
-        assert running.allocated_node_id == NodeId(7)
-        assert running.remote_folder == "/r"
+        assert isinstance(running.state, Running)
+        assert running.state.allocated_node_id == NodeId(7)
+        assert running.state.remote_folder == "/r"
         assert running.task_id == task.task_id
         assert len(running.events) == 1
         evt = running.events[0]
@@ -155,19 +235,25 @@ class TestTask:
         assert evt.engine_name == "cp2k"
 
     def test_run_on_non_todo_raises(self) -> None:
-        task = self.make_task(status=TaskStatus.RUNNING)
+        task = self.make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
         with pytest.raises(TaskNotTodoError) as exc_info:
-            task.run(NodeId(7), "/r")
+            task.run(NodeId(8), "/r")
         assert "1" in str(exc_info.value)
+        assert task.events == ()
 
-    def test_complete_on_running(self) -> None:
+    def test_complete_builds_done_state_carrying_allocation(self) -> None:
         task = self.make_task()
         running = task.run(NodeId(7), "/r")
         done = running.complete(local_folder="/l", remote_folder="/r")
         assert done.status == TaskStatus.DONE
-        assert done.error is None
+        assert isinstance(done.state, Done)
+        state = done.state
+        assert state.error is None
+        assert state.allocated_node_id == NodeId(7)
+        assert state.remote_folder == "/r"
         assert done.local_folder == "/l"
-        assert done.remote_folder == "/r"
         assert len(done.events) == 2
         assert isinstance(done.events[1], TaskCompleted)
         assert done.events[1].local_folder == "/l"
@@ -178,14 +264,17 @@ class TestTask:
             task.complete(local_folder="/l", remote_folder="/r")
         assert "1" in str(exc_info.value)
 
-    def test_fail_on_running(self) -> None:
+    def test_fail_builds_done_state_with_error_and_allocation(self) -> None:
         task = self.make_task()
         running = task.run(NodeId(7), "/r")
         failed = running.fail("out of memory", local_folder="/l", remote_folder="/r")
         assert failed.status == TaskStatus.DONE
-        assert failed.error == "out of memory"
+        assert isinstance(failed.state, Done)
+        state = failed.state
+        assert state.error == "out of memory"
+        assert state.allocated_node_id == NodeId(7)
+        assert state.remote_folder == "/r"
         assert failed.local_folder == "/l"
-        assert failed.remote_folder == "/r"
         assert len(failed.events) == 2
         assert isinstance(failed.events[1], TaskFailed)
         assert failed.events[1].reason == "out of memory"
@@ -196,45 +285,76 @@ class TestTask:
             task.fail("reason", local_folder="/l", remote_folder="/r")
         assert "1" in str(exc_info.value)
 
-    def test_reject_on_todo(self) -> None:
-        task = self.make_task()
+    def test_reject_carries_prefilled_folder_into_done(self) -> None:
+        task = self.make_task(state=Todo(remote_folder="/prep"))
         rejected = task.reject("unsupported engine")
         assert rejected.status == TaskStatus.DONE
-        assert rejected.error == "unsupported engine"
+        assert isinstance(rejected.state, Done)
+        state = rejected.state
+        assert state.error == "unsupported engine"
+        assert state.allocated_node_id is None
+        assert state.remote_folder == "/prep"
         assert len(rejected.events) == 1
         assert isinstance(rejected.events[0], TaskFailed)
         assert rejected.events[0].reason == "unsupported engine"
 
     def test_reject_on_running_raises(self) -> None:
-        task = self.make_task()
-        running = task.run(NodeId(7), "/r")
+        task = self.make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
         with pytest.raises(TaskNotTodoError):
-            running.reject("reason")
+            task.reject("reason")
 
-    def test_abandon_with_node_id(self) -> None:
+    def test_abandon_reads_allocation_from_state_and_emits_event(self) -> None:
         task = self.make_task()
         running = task.run(NodeId(7), "/r")
-        abandoned = running.abandon(NodeId(7))
+        abandoned = running.abandon()
         assert abandoned.status == TaskStatus.DONE
-        assert abandoned.error == "node is gone"
+        assert isinstance(abandoned.state, Done)
+        state = abandoned.state
+        assert state.error == "node is gone"
+        assert state.allocated_node_id == NodeId(7)
+        assert state.remote_folder == "/r"
         assert len(abandoned.events) == 2
-        assert isinstance(abandoned.events[1], TaskAbandoned)
-        assert abandoned.events[1].node_id == NodeId(7)
+        evt = abandoned.events[1]
+        assert isinstance(evt, TaskAbandoned)
+        assert evt.node_id == NodeId(7)
 
-    def test_abandon_none_no_event(self) -> None:
+    def test_abandon_accepts_custom_error(self) -> None:
         task = self.make_task()
         running = task.run(NodeId(7), "/r")
-        abandoned = running.abandon(None)
-        assert abandoned.status == TaskStatus.DONE
-        assert abandoned.error == "node is gone"
-        # No TaskAbandoned event when node_id is None
-        assert len(abandoned.events) == 1  # only the TaskAllocated from run
+        abandoned = running.abandon(error="node deleted")
+        assert isinstance(abandoned.state, Done)
+        assert abandoned.state.error == "node deleted"
 
     def test_abandon_on_todo_raises(self) -> None:
         task = self.make_task()
         with pytest.raises(TaskNotRunningError) as exc_info:
-            task.abandon(NodeId(7))
+            task.abandon()
         assert "1" in str(exc_info.value)
+
+    def test_fields_constrained_by_status_row(self) -> None:
+        """Gherkin: a task carries the fields its status row permits."""
+        todo = self.make_task()
+        assert allocated_node_id_of(todo) is None
+        assert error_of(todo) is None
+
+        running = self.make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert running.state.allocated_node_id is not None
+        assert running.state.remote_folder is not None
+        assert error_of(running) is None
+
+        done = self.make_task(
+            state=Done(error="e", allocated_node_id=None, remote_folder=None)
+        )
+        # DONE is unconstrained: all combinations legal
+        assert isinstance(done.state, Done)
+        state = done.state
+        assert state.error == "e"
+        assert state.allocated_node_id is None
+        assert state.remote_folder is None
 
 
 class TestNodeStatus:
@@ -452,18 +572,18 @@ class TestTaskErrorFormat:
         task = _make_task()
         running = task.run(NodeId(7), "/r")
         done = running.complete(local_folder="/l", remote_folder="/r")
-        assert done.error is None
+        assert done.state.error is None
 
     def test_error_is_bare_reason_on_reject(self) -> None:
         task = _make_task()
         rejected = task.reject("unsupported engine")
-        assert rejected.error == "unsupported engine"
+        assert rejected.state.error == "unsupported engine"
 
     def test_error_is_bare_reason_on_fail(self) -> None:
         task = _make_task()
         running = task.run(NodeId(7), "/r")
         failed = running.fail("node is gone", local_folder="/l", remote_folder="/r")
-        assert failed.error == "node is gone"
+        assert failed.state.error == "node is gone"
 
 
 class TestMaterializeTask:
@@ -480,7 +600,7 @@ class TestMaterializeTask:
         # All other fields preserved
         assert result.label == task.label
         assert result.status == task.status
-        assert result.remote_folder == task.remote_folder
+        assert result.state.remote_folder == task.state.remote_folder
 
 
 class TestTaskId:
@@ -549,3 +669,155 @@ class TestNewTask:
             "abandon",
         ):
             assert not hasattr(nt, method)
+
+
+class TestGenericTask:
+    """Generic Task[S_co] subscriptability and state-parameterized aliases."""
+
+    def test_task_subscriptable_with_state(self) -> None:
+        """Task[Todo] is a valid runtime subscript (Task is Generic)."""
+        alias = Task[Todo]
+        assert alias is not None
+
+    def test_task_aliases_defined(self) -> None:
+        """TodoTask/RunningTask/DoneTask/AnyTask aliases exist in model module."""
+        from yascheduler.domain import model
+
+        assert hasattr(model, "TodoTask")
+        assert hasattr(model, "RunningTask")
+        assert hasattr(model, "DoneTask")
+        assert hasattr(model, "AnyTask")
+
+    def test_task_aliases_in_all(self) -> None:
+        """Narrow aliases are exported via __all__."""
+        from yascheduler.domain import model
+
+        for name in ("TodoTask", "RunningTask", "DoneTask", "AnyTask"):
+            assert name in model.__all__
+
+
+class TestLocalFolderPlacement:
+    """local_folder is a status-independent Task field (D6): preserved across run(), overwritten by complete/fail."""
+
+    def test_submit_intent_survives_run(self) -> None:
+        task = _make_task(local_folder="/submit")
+        running = task.run(NodeId(7), "/r")
+        assert running.local_folder == "/submit"
+
+    def test_complete_overwrites_local_folder_with_download_path(self) -> None:
+        task = _make_task(local_folder="/submit")
+        running = task.run(NodeId(7), "/r")
+        done = running.complete(local_folder="/download", remote_folder="/r")
+        assert done.local_folder == "/download"
+
+    def test_fail_overwrites_local_folder_with_download_path(self) -> None:
+        task = _make_task(local_folder="/submit")
+        running = task.run(NodeId(7), "/r")
+        failed = running.fail("boom", local_folder="/download", remote_folder="/r")
+        assert failed.local_folder == "/download"
+
+    def test_todo_state_has_no_local_folder(self) -> None:
+        assert not hasattr(Todo(), "local_folder")
+
+    def test_running_state_has_no_local_folder(self) -> None:
+        running = Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        assert not hasattr(running, "local_folder")
+
+    def test_done_state_has_no_local_folder(self) -> None:
+        assert not hasattr(Done(), "local_folder")
+
+    def test_task_has_local_folder_attribute(self) -> None:
+        task = _make_task()
+        assert hasattr(task, "local_folder")
+        assert task.local_folder is None
+
+
+class TestFreeHelpers:
+    """Free any-status reader functions dispatch on state, return Optional."""
+
+    def test_helpers_in_all(self) -> None:
+        from yascheduler.domain import model
+
+        for name in (
+            "allocated_node_id_of",
+            "remote_folder_of",
+            "error_of",
+        ):
+            assert name in model.__all__
+
+    def test_allocated_node_id_of_dispatches_on_state(self) -> None:
+        from yascheduler.domain.model import allocated_node_id_of
+
+        todo = _make_task()
+        assert allocated_node_id_of(todo) is None
+        running = _make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert allocated_node_id_of(running) == NodeId(7)
+        done = _make_task(state=Done(allocated_node_id=NodeId(9)))
+        assert allocated_node_id_of(done) == NodeId(9)
+        done_none = _make_task(state=Done())
+        assert allocated_node_id_of(done_none) is None
+
+    def test_remote_folder_of_dispatches_on_state(self) -> None:
+
+        assert remote_folder_of(_make_task()) is None
+        assert (
+            remote_folder_of(_make_task(state=Todo(remote_folder="/prep"))) == "/prep"
+        )
+        running = _make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert remote_folder_of(running) == "/r"
+        assert remote_folder_of(_make_task(state=Done(remote_folder="/d"))) == "/d"
+
+    def test_error_of_dispatches_on_state(self) -> None:
+        from yascheduler.domain.model import error_of
+
+        assert error_of(_make_task()) is None
+        running = _make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert error_of(running) is None
+        assert error_of(_make_task(state=Done(error="boom"))) == "boom"
+        assert error_of(_make_task(state=Done())) is None
+
+
+class TestNarrowingHelpers:
+    """is_todo/is_running/is_done return correct bool per task state."""
+
+    def test_helpers_in_all(self) -> None:
+        from yascheduler.domain import model
+
+        for name in ("is_todo", "is_running", "is_done"):
+            assert name in model.__all__
+
+    def test_is_todo_returns_true_only_for_todo(self) -> None:
+        from yascheduler.domain.model import is_todo
+
+        assert is_todo(_make_task()) is True
+        running = _make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert is_todo(running) is False
+        assert is_todo(_make_task(state=Done())) is False
+
+    def test_is_running_returns_true_only_for_running(self) -> None:
+        from yascheduler.domain.model import is_running
+
+        assert is_running(_make_task()) is False
+        running = _make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert is_running(running) is True
+        assert is_running(_make_task(state=Done())) is False
+
+    def test_is_done_returns_true_only_for_done(self) -> None:
+        from yascheduler.domain.model import is_done
+
+        assert is_done(_make_task()) is False
+        running = _make_task(
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r")
+        )
+        assert is_done(running) is False
+        assert is_done(_make_task(state=Done())) is True

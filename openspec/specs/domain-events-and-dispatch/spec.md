@@ -5,9 +5,7 @@ in-process post-commit dispatch boundary, and the webhook delivery
 contract. A message bus decouples event recording from side-effect
 handlers. The webhook handler is the registered handler that turns
 events into outbound HTTP calls.
-
 ## Requirements
-
 ### Requirement: Event roster
 
 The system SHALL emit one event per task lifecycle transition. Events
@@ -41,8 +39,9 @@ Each task use case SHALL emit the event that matches its transition:
 | Consume failure | `TaskFailed` | Download failure |
 | Orchestrator | `TaskAbandoned` | Node disappeared |
 
-The orchestrator emits `TaskAbandoned` only when the disappeared node
-has an identity. A double-abandon with no node identity emits nothing.
+The orchestrator emits `TaskAbandoned` when a node disappears under a
+RUNNING task. The disappeared node always has an identity, because a
+RUNNING task keeps its node binding until it transitions to DONE.
 
 #### Scenario: each use case emits its mapped event
 
@@ -92,3 +91,4 @@ suppressed; they SHALL NOT propagate into the use-case layer.
 
 - **WHEN** no URL is configured, the endpoint fails transiently, or the endpoint fails permanently
 - **THEN** delivery is skipped when no URL is set, retried on transient failure, and on final failure logged without raising into the use-case layer
+

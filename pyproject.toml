@@ -39,7 +39,7 @@ dependencies = [
   "asyncstdlib~=3.10",
   "pg8000~=1.19",
   "python-daemon~=3.1",
-  "typing-extensions >= 4.6.0; python_version < '3.11'",
+  "typing-extensions >= 4.13.0; python_version < '3.13'",
 ]
 
 [project.urls]
@@ -197,10 +197,17 @@ ignore = [
   "S",  # asserts, exec, /tmp paths, fake creds
   "SLF",  # private methods
   "TC",  # third-party imports in type-checking blocks not needed in tests
+  "TID251",  # tests construct bare Task(...) directly
   "TRY",  # log/exception style not enforced in tests
 ]
 "examples/**" = ["D", "INP", "PERF", "PTH", "S", "T201"]
 "docs/_semantic_template_reference.py" = ["D", "INP"]
+"yascheduler/domain/**" = ["TID251"]
+"yascheduler/infra/persistence/postgres.py" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"yascheduler.domain.Task" = { msg = "Use TodoTask/RunningTask/DoneTask/AnyTask aliases instead of the wide Task type in application/entrypoints" }
+"yascheduler.domain.model.Task" = { msg = "Use TodoTask/RunningTask/DoneTask/AnyTask aliases instead of the wide Task type in application/entrypoints" }
 
 [tool.ruff.lint.pylint]
 max-args = 16  # FIXME: 16 is too much!

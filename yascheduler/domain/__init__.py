@@ -9,6 +9,7 @@
 # endregion MODULE_CONTRACT
 
 __all__ = [
+    "AnyTask",
     "CloudAllocateError",
     "CloudCapacityExhaustedError",
     "CloudConfig",
@@ -21,6 +22,8 @@ __all__ = [
     "DomainError",
     # Events
     "DomainEvent",
+    "Done",
+    "DoneTask",
     "Engine",
     "EngineRepository",
     "Event",
@@ -45,6 +48,8 @@ __all__ = [
     "ProcessResult",
     "RemoteArchiveDeploy",
     "RemoteDefaults",
+    "Running",
+    "RunningTask",
     "SchedulingError",
     "Task",
     "TaskAbandoned",
@@ -58,11 +63,20 @@ __all__ = [
     "TaskNotTodoError",
     # Ports
     "TaskRepository",
+    "TaskState",
     # Model
     "TaskStatus",
+    "Todo",
+    "TodoTask",
     "UnsupportedEngineError",
     "ValidationError",
+    "allocated_node_id_of",
+    "error_of",
+    "is_done",
+    "is_running",
+    "is_todo",
     "materialize_task",
+    "remote_folder_of",
 ]
 
 from .engine import (
@@ -101,7 +115,10 @@ from .exceptions import (
     ValidationError,
 )
 from .model import (
+    AnyTask,
     ConnectedMachine,
+    Done,
+    DoneTask,
     MachineState,
     NewNode,
     NewTask,
@@ -109,10 +126,21 @@ from .model import (
     NodeId,
     NodeStatus,
     ProcessResult,
+    Running,
+    RunningTask,
     Task,
     TaskId,
+    TaskState,
     TaskStatus,
+    Todo,
+    TodoTask,
+    allocated_node_id_of,
+    error_of,
+    is_done,
+    is_running,
+    is_todo,
     materialize_task,
+    remote_folder_of,
 )
 from .ports import (
     CloudConfig,

@@ -9,13 +9,14 @@ openspec/changes/task-status-field-invariants/specs/db-migrations/spec.md:
 * the CHECK rejects RUNNING + NULL remote_folder
 * a bare DELETE FROM yascheduler_nodes on a node with a RUNNING task is
   rejected (the ON DELETE SET NULL cascade would violate the RUNNING row)
-* the hard-remove path (update_status DONE then nodes.remove) succeeds
-  because the rows are DONE by the time the FK cascade fires
+* the hard-remove path (load → abandon → save then nodes.remove) succeeds
+  because the rows are DONE (with TaskAbandoned emitted) by the time the
+  FK cascade fires
 """
 # region MODULE_CONTRACT
 # PURPOSE: Integration tests for the task_status_field_invariants CHECK constraint on yascheduler_tasks against real PostgreSQL.
-# SCOPE: CHECK rejects forbidden INSERT (TO_DO + allocated_node_id), forbidden UPDATE (RUNNING → allocated_node_id NULL), TO_DO + error, RUNNING + NULL remote_folder; bare DELETE FROM yascheduler_nodes on a node with a RUNNING task is rejected (ON DELETE SET NULL cascade violates the RUNNING row); the hard-remove path (update_status DONE then nodes.remove) succeeds.
-# KEYWORDS: CHECK constraint, task_status_field_invariants, ON DELETE SET NULL
+# SCOPE: CHECK rejects forbidden INSERT (TO_DO + allocated_node_id), forbidden UPDATE (RUNNING → allocated_node_id NULL), TO_DO + error, RUNNING + NULL remote_folder; bare DELETE FROM yascheduler_nodes on a node with a RUNNING task is rejected (ON DELETE SET NULL cascade violates the RUNNING row); the hard-remove path (load → abandon → save then nodes.remove) succeeds and emits TaskAbandoned for each cleaned-up task.
+# KEYWORDS: CHECK constraint, task_status_field_invariants, ON DELETE SET NULL, TaskAbandoned
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
@@ -26,10 +27,13 @@ import pg8000.native
 import pytest
 from pg8000 import DatabaseError
 
+from yascheduler.domain.events import TaskAbandoned
 from yascheduler.domain.model import (
+    Done,
     NewNode,
     NewTask,
     TaskStatus,
+    allocated_node_id_of,
 )
 
 if TYPE_CHECKING:
@@ -152,7 +156,7 @@ async def test_check_rejects_bare_node_delete_with_running_task(
 async def test_hard_remove_path_succeeds_with_running_task(
     uow_factory: Callable[[], PostgresUnitOfWork],
 ) -> None:
-    """Hard-remove (update_status DONE then nodes.remove) succeeds with a RUNNING task."""
+    """Hard-remove (load → abandon → save then nodes.remove) succeeds with a RUNNING task and emits TaskAbandoned."""
     # Seed a node + a CHECK-valid RUNNING task referencing it.
     async with uow_factory() as uow:
         node = await uow.nodes.insert(
@@ -165,18 +169,84 @@ async def test_hard_remove_path_succeeds_with_running_task(
         node_id = node.node_id
         task_id = task.task_id
 
-    # The hard-remove flow: flip RUNNING → DONE, then remove the node. The
-    # rows are DONE by the time the FK ON DELETE SET NULL cascade fires, so
-    # the CHECK (DONE permits NULL allocated_node_id) does not reject.
+    # The hard-remove flow: load each RUNNING task, apply abandon() (RUNNING →
+    # DONE with TaskAbandoned), save, then remove the node. The rows are DONE
+    # by the time the FK ON DELETE SET NULL cascade fires, so the CHECK (DONE
+    # permits NULL allocated_node_id) does not reject.
     async with uow_factory() as uow:
-        await uow.tasks.update_status(task_id, TaskStatus.DONE)
+        task = await uow.tasks.get_running(task_id)
+        assert task is not None
+        abandoned = task.abandon()
+        # TaskAbandoned is now emitted unconditionally — webhook-dispatchable
+        # for the cleaned-up task (behavior change vs the old update_status
+        # flip, which wrote no event).
+        assert any(isinstance(evt, TaskAbandoned) for evt in abandoned.events)
+        await uow.tasks.save(abandoned)
         await uow.nodes.remove(node_id)
         await uow.commit()
 
-    # Verify: node gone, task DONE with allocated_node_id NULL.
+    # Verify: node gone, task DONE with allocated_node_id NULL (cascade).
     async with uow_factory() as uow:
         assert await uow.nodes.get_by_id(node_id) is None
         done = await uow.tasks.get(task_id)
     assert done is not None
     assert done.status == TaskStatus.DONE
-    assert done.allocated_node_id is None
+    assert allocated_node_id_of(done) is None
+    assert isinstance(done.state, Done)
+    assert done.state.error == "node is gone"
+
+
+async def test_hard_remove_skips_task_that_raced_to_done(
+    uow_factory: Callable[[], PostgresUnitOfWork],
+) -> None:
+    """A task that transitions to DONE between the id-list read and get_running is skipped (None), not raised.
+
+    Mirrors the _remove_node_hard race window: list_ids_by_node_id_and_status
+    returns a RUNNING task_id, but by the time get_running loads it the row has
+    moved to DONE. get_running returns None (absent OR wrong status), so the
+    loop skips it without raising and without abandoning.
+    """
+    # Seed a node + a CHECK-valid RUNNING task referencing it.
+    async with uow_factory() as uow:
+        node = await uow.nodes.insert(
+            NewNode(hostname="10.0.0.2", ncpus=2, enabled=True),
+        )
+        task = await uow.tasks.insert(NewTask(label="race", engine="fleur"))
+        task = task.run(node.node_id, "/r")
+        await uow.tasks.save(task)
+        await uow.commit()
+        node_id = node.node_id
+        task_id = task.task_id
+
+    # Step 1 of _remove_node_hard: read the RUNNING id list.
+    async with uow_factory() as uow:
+        task_ids = await uow.tasks.list_ids_by_node_id_and_status(
+            node_id,
+            TaskStatus.RUNNING,
+        )
+    assert task_id in task_ids
+
+    # Race: the task completes (RUNNING -> DONE) between the id-list read and
+    # the get_running load — e.g. the consume loop finalised it.
+    async with uow_factory() as uow:
+        running = await uow.tasks.get_running(task_id)
+        assert running is not None
+        await uow.tasks.save(
+            running.complete(local_folder="/l", remote_folder="/r"),
+        )
+        await uow.commit()
+
+    # Step 2 of _remove_node_hard: get_running now returns None (wrong status).
+    # The hard-remove loop's `if task is not None` skips it — no raise, no
+    # abandon. This is the None-skip that replaced the isinstance race guard.
+    async with uow_factory() as uow:
+        raced = await uow.tasks.get_running(task_id)
+    assert raced is None
+
+    # The task stays DONE (the racer's completion wins); it was not abandoned.
+    async with uow_factory() as uow:
+        done = await uow.tasks.get(task_id)
+    assert done is not None
+    assert done.status == TaskStatus.DONE
+    assert isinstance(done.state, Done)
+    assert done.state.error is None

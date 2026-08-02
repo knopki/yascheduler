@@ -12,7 +12,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from yascheduler.application.query_tasks import query_tasks
-from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain.model import (
+    Done,
+    Node,
+    NodeId,
+    Running,
+    Task,
+    TaskId,
+    TaskStatus,
+    Todo,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -83,20 +92,24 @@ def _make_task(
 ) -> Task:
     from datetime import datetime
 
+    if status is TaskStatus.RUNNING:
+        state: Todo | Running | Done = Running(
+            allocated_node_id=allocated_node_id or NodeId(1), remote_folder="/r"
+        )
+    elif status is TaskStatus.DONE:
+        state = Done(allocated_node_id=allocated_node_id, remote_folder="/r")
+    else:
+        state = Todo()
     return Task(
         task_id=TaskId(task_id),
         label=f"task-{task_id}",
         engine="test_engine",
-        remote_folder=None,
-        local_folder=None,
+        state=state,
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra={},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),
-        status=status,
-        allocated_node_id=allocated_node_id,
     )
 
 
@@ -195,10 +208,16 @@ class TestQueryTasks:
     async def test_distinct_allocated_node_ids_batch_loaded_once(self) -> None:
         """Distinct allocated_node_ids are batch-loaded once (deduplicated, no None)."""
         tasks_list = [
-            _make_task(task_id=1, allocated_node_id=NodeId(7)),
-            _make_task(task_id=2, allocated_node_id=NodeId(7)),
-            _make_task(task_id=3, allocated_node_id=NodeId(8)),
-            _make_task(task_id=4, allocated_node_id=None),
+            _make_task(
+                task_id=1, status=TaskStatus.RUNNING, allocated_node_id=NodeId(7)
+            ),
+            _make_task(
+                task_id=2, status=TaskStatus.RUNNING, allocated_node_id=NodeId(7)
+            ),
+            _make_task(
+                task_id=3, status=TaskStatus.RUNNING, allocated_node_id=NodeId(8)
+            ),
+            _make_task(task_id=4, status=TaskStatus.TO_DO),
         ]
         nodes_list = [
             Node(node_id=NodeId(7), hostname="10.0.0.7", ncpus=2),
@@ -222,7 +241,7 @@ class TestQueryTasks:
         """Query by statuses dispatches to list_by_status and loads nodes."""
         task = _make_task(
             task_id=1,
-            status=TaskStatus.TO_DO,
+            status=TaskStatus.RUNNING,
             allocated_node_id=NodeId(7),
         )
         node = Node(node_id=NodeId(7), hostname="10.0.0.1", ncpus=2)

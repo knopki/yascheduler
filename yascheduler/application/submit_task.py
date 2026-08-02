@@ -20,7 +20,7 @@ from yascheduler.domain import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from yascheduler.domain import EngineRepository, Task
+    from yascheduler.domain import EngineRepository, TodoTask
 
     from .uow import AbstractUnitOfWork
 
@@ -75,7 +75,7 @@ async def submit_task(
 
     # region BLOCK_persist
     async with uow_factory() as uow:
-        task: Task = await uow.tasks.insert(new_task)
+        task: TodoTask = await uow.tasks.insert(new_task)
         await uow.tasks.save(task)
         await uow.commit()
     # endregion BLOCK_persist

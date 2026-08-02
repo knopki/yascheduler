@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from asyncssh.sftp import SFTPClient
 
-    from yascheduler.domain import Engine, MachineSession, Task
+    from yascheduler.domain import Engine, MachineSession, RunningTask
 
 __all__ = ["TaskDeployer"]
 
@@ -90,7 +90,7 @@ class TaskDeployer:
     async def _upload_task_data(
         self,
         session: MachineSession,
-        task: Task,
+        task: RunningTask,
         remote_dir: PurePath,
         input_files: Sequence[str],
     ) -> bool:
@@ -136,7 +136,7 @@ class TaskDeployer:
         self,
         session: MachineSession,
         engine: Engine,
-        task: Task,
+        task: RunningTask,
         task_dir: PurePath,
         eng_path: PurePath,
         ncpus: int,
@@ -167,20 +167,16 @@ class TaskDeployer:
 
     # region METHOD_start_task_on_machine
     # PURPOSE: Upload task inputs and spawn calculation process on remote machine.
-    # REQUIRES: task.remote_folder is not None (asserted before session.occupy).
     async def start_task_on_machine(
         self,
         session: MachineSession,
         engine: Engine,
-        task: Task,
+        task: RunningTask,
         ncpus: int,
         engines_dir: PurePath,
     ) -> bool:
         """Upload task inputs and spawn calculation process on remote machine."""
         # region BLOCK_start_task
-        if task.remote_folder is None:
-            msg = "task.remote_folder must not be None"
-            raise AssertionError(msg)
         session.occupy()
 
         logger.info(
@@ -194,7 +190,7 @@ class TaskDeployer:
         # region BLOCK_deploy_spawn
         try:
             path_type = session.path
-            remote_folder = path_type(task.remote_folder)
+            remote_folder = path_type(task.state.remote_folder)
             # region BLOCK_deploy
             async with session.open_sftp() as sftp:
                 try:

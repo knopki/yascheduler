@@ -11,7 +11,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from yascheduler.domain import MachineState, Node, NodeId, TaskStatus
+from yascheduler.domain import MachineState, Node, NodeId
 from yascheduler.domain.exceptions import NodeRowNotFoundError
 
 if TYPE_CHECKING:
@@ -146,10 +146,8 @@ async def deallocate_nodes(
     """Disable idle cloud nodes exceeding tolerance and return their Node objects for VM deletion."""
     # region BLOCK_disable_idle
     async with uow_factory() as uow:
-        running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
-        busy_node_ids = {
-            t.allocated_node_id for t in running_tasks if t.allocated_node_id
-        }
+        running_tasks = await uow.tasks.list_running()
+        busy_node_ids = {t.state.allocated_node_id for t in running_tasks}
         all_enabled_nodes = {
             n.node_id: n
             for n in await uow.nodes.list_enabled()

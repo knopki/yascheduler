@@ -26,6 +26,7 @@ from yascheduler.domain.model import (
     Task,
     TaskId,
     TaskStatus,
+    Todo,
 )
 
 
@@ -143,15 +144,12 @@ class TestTryStartOnMachineNodeIdLogging:
             task_id=TaskId(1),
             label="t",
             engine="test_engine",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=TaskStatus.TO_DO,
         )
 
         operations = MagicMock()
@@ -215,15 +213,12 @@ class TestTryStartOnMachineNodeIdLogging:
             task_id=TaskId(1),
             label="t",
             engine="test_engine",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=TaskStatus.TO_DO,
         )
 
         session = SimpleNamespace(hostname="10.0.0.1")

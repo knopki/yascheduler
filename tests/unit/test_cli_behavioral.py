@@ -15,7 +15,15 @@ from pathlib import PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain.model import (
+    Done,
+    NodeId,
+    Running,
+    Task,
+    TaskId,
+    TaskStatus,
+    Todo,
+)
 from yascheduler.entrypoints.di import CLIDeps
 
 # ---------------------------------------------------------------------------
@@ -79,18 +87,28 @@ def make_task(
     """Return a Task domain object with sensible defaults."""
     from datetime import datetime
 
+    if status is TaskStatus.TO_DO:
+        state: Todo | Running | Done = Todo(remote_folder="/tmp/remote")
+    elif status is TaskStatus.RUNNING:
+        state = Running(
+            allocated_node_id=allocated_node_id or NodeId(1),
+            remote_folder="/tmp/remote",
+        )
+    else:
+        state = Done(
+            error=None,
+            allocated_node_id=allocated_node_id,
+            remote_folder="/tmp/remote",
+        )
     return Task(
         task_id=TaskId(task_id),
         label=label,
         engine="g09",
-        remote_folder="/tmp/remote",
+        state=state,
         local_folder="/tmp/local",
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra={},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),
-        status=status,
-        allocated_node_id=allocated_node_id,
     )

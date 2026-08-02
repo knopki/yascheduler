@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from yascheduler.domain import allocated_node_id_of
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from yascheduler.domain import Node, NodeId, Task, TaskId, TaskStatus
+    from yascheduler.domain import AnyTask, Node, NodeId, TaskId, TaskStatus
 
     from .uow import AbstractUnitOfWork
 
@@ -27,7 +29,7 @@ async def query_tasks(
     jobs: Sequence[TaskId] | None,
     statuses: Sequence[TaskStatus] | None,
     uow_factory: Callable[[], AbstractUnitOfWork],
-) -> tuple[list[Task], dict[NodeId, Node]]:
+) -> tuple[list[AnyTask], dict[NodeId, Node]]:
     """Read-only task query by statuses XOR job IDs within a single UoW; returns tasks alongside their allocated nodes."""
     # region BLOCK_validate_input
     if jobs and statuses:
@@ -48,7 +50,7 @@ async def query_tasks(
             tasks = await uow.tasks.list_by_jobs(list(jobs or []))
         # region BLOCK_batch_load_nodes
         node_ids = [
-            t.allocated_node_id for t in tasks if t.allocated_node_id is not None
+            nid for nid in (allocated_node_id_of(t) for t in tasks) if nid is not None
         ]
         # Deduplicate while preserving a stable order for deterministic tests.
         seen: set[NodeId] = set()

@@ -32,3 +32,15 @@ def test_self_in_all() -> None:
 def test_unpack_in_all() -> None:
     """Unpack is listed in compat.__all__."""
     assert "Unpack" in compat.__all__
+
+
+def test_typeis_in_all() -> None:
+    """TypeIs is listed in compat.__all__."""
+    assert "TypeIs" in compat.__all__
+
+
+def test_typeis_importable_from_shared() -> None:
+    """TypeIs is re-exported from yascheduler.shared."""
+    from yascheduler.shared import TypeIs
+
+    assert TypeIs is not None

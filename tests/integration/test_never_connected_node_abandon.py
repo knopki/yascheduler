@@ -51,6 +51,7 @@ from yascheduler.domain.model import (
     NewTask,
     NodeId,
     TaskStatus,
+    allocated_node_id_of,
 )
 from yascheduler.infra.cloud.cloud_configs import (
     ConfigCloudAzure,
@@ -214,7 +215,7 @@ async def test_never_connected_node_abandoned_and_task_reallocated(
     # The task was persisted with allocated_node_id = NULL (the real in-flight
     # cloud-allocation shape), and the abandoned node row is gone — so the
     # task is re-allocatable.
-    assert matching[0].allocated_node_id is None
+    assert allocated_node_id_of(matching[0]) is None
 
 
 async def test_connect_grace_lookup_uses_cloud_prefix(

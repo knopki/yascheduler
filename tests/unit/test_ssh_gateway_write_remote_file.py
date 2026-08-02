@@ -17,7 +17,7 @@ import pytest
 
 from tests.log_assertions import extra_fields
 from yascheduler.domain import Engine
-from yascheduler.domain.model import Task, TaskId
+from yascheduler.domain.model import NodeId, Running, Task, TaskId
 from yascheduler.infra.ssh.operations import TaskDeployer
 from yascheduler.infra.ssh.operations.deployment import _write_remote_file
 
@@ -108,11 +108,9 @@ def _make_task(extra: dict[str, object] | None = None) -> Task:
         task_id=TaskId(7),
         label="t7",
         engine="test_engine",
-        remote_folder="/remote/tasks/7",
-        local_folder=None,
+        state=Running(allocated_node_id=NodeId(1), remote_folder="/remote/tasks/7"),
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra=extra or {"input.txt": "hello"},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),

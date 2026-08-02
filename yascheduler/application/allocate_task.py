@@ -15,9 +15,10 @@ from yascheduler.domain import (
     NewNode,
     Node,
     NodeId,
-    Task,
+    RunningTask,
     TaskId,
     TaskStatus,
+    TodoTask,
 )
 from yascheduler.domain.exceptions import NodeRowNotFoundError
 
@@ -51,7 +52,7 @@ class _TmpSelection(NamedTuple):
 # PURPOSE: Reject tasks with unknown engines early so they do not consume resources on an allocation attempt that can never succeed.
 # ENSURES: Returns the resolved Engine on success; on unsupported engine, transitions task via reject(), saves/commits via UoW, returns None.
 async def _validate_engine(
-    task: Task,
+    task: TodoTask,
     engines: EngineRepository,
     uow_factory: Callable[[], AbstractUnitOfWork],
 ) -> Engine | None:
@@ -64,9 +65,9 @@ async def _validate_engine(
             engine_name,
             task.task_id,
         )
-        task = task.reject("unsupported engine")
+        rejected = task.reject("unsupported engine")
         async with uow_factory() as uow:
-            await uow.tasks.save(task)
+            await uow.tasks.save(rejected)
             await uow.commit()
         return None
     # endregion BLOCK_validate_engine
@@ -83,20 +84,22 @@ async def _try_start_on_machine(
     session: MachineSession,
     node: Node,
     engine: Engine,
-    task: Task,
+    task: TodoTask,
     occupancy_checker: OccupancyChecker,
     uow_factory: Callable[[], AbstractUnitOfWork],
-    start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
+    start_task_on_machine: Callable[
+        [MachineSession, Engine, RunningTask], Awaitable[bool]
+    ],
     tracker: AllocationTracker,
     remote_tasks_dir: PurePath,
 ) -> bool:
     dt_str = task.created_at.strftime("%Y%m%d_%H%M%S")
     remote_folder = str(remote_tasks_dir / f"{dt_str}_{task.task_id}")
-    task = task.run(node.node_id, remote_folder)
+    running = task.run(node.node_id, remote_folder)
     logger.debug(
         "TRY_ALLOCATE",
         extra={
-            "task_id": task.task_id,
+            "task_id": running.task_id,
             "hostname": session.hostname,
             "node_id": node.node_id,
         },
@@ -106,21 +109,21 @@ async def _try_start_on_machine(
     # claim raises before the spawn is reached, so no orphan process is
     # created on the losing host.
     async with uow_factory() as uow:
-        await uow.tasks.save(task, expected_status=TaskStatus.TO_DO)
-        if not await start_task_on_machine(session, engine, task):
+        await uow.tasks.save(running, expected_status=TaskStatus.TO_DO)
+        if not await start_task_on_machine(session, engine, running):
             await uow.rollback()
             return False
         await uow.commit()
     logger.debug(
         "ALLOCATED",
         extra={
-            "task_id": task.task_id,
+            "task_id": running.task_id,
             "hostname": session.hostname,
             "node_id": node.node_id,
         },
     )
     occupancy_checker.start_occupancy_check(session, engine)
-    tracker.discard(task.task_id)
+    tracker.discard(running.task_id)
     return True
 
 
@@ -141,9 +144,9 @@ async def _find_free_machines(
 ) -> list[tuple[MachineSession, Node]]:
     # region BLOCK_find_free_machines
     async with uow_factory() as uow:
-        running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
+        running_tasks = await uow.tasks.list_running()
         enabled_nodes = await uow.nodes.list_enabled()
-    busy_node_ids = {t.allocated_node_id for t in running_tasks if t.allocated_node_id}
+    busy_node_ids = {t.state.allocated_node_id for t in running_tasks}
     nodes_by_id = {n.node_id: n for n in enabled_nodes}
     return [
         (s, nodes_by_id[s.machine.node_id])
@@ -160,12 +163,14 @@ async def _find_free_machines(
 # PURPOSE: Try every eligible free machine until one succeeds or all are exhausted, so a single stale session does not block the cloud-provisioning path.
 # ENSURES: Returns True if allocated to a machine; False if no candidate succeeded. Per-pair failures are logged but do not abort the loop.
 async def _allocate_free_machine(
-    task: Task,
+    task: TodoTask,
     engine: Engine,
     uow_factory: Callable[[], AbstractUnitOfWork],
     repository: MachineRepository,
     occupancy_checker: OccupancyChecker,
-    start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
+    start_task_on_machine: Callable[
+        [MachineSession, Engine, RunningTask], Awaitable[bool]
+    ],
     tracker: AllocationTracker,
     remote_tasks_dir: PurePath,
 ) -> bool:
@@ -382,14 +387,16 @@ async def allocate_task(
     repository: MachineRepository,
     occupancy_checker: OccupancyChecker,
     clouds: CloudProvisioner,
-    start_task_on_machine: Callable[[MachineSession, Engine, Task], Awaitable[bool]],
+    start_task_on_machine: Callable[
+        [MachineSession, Engine, RunningTask], Awaitable[bool]
+    ],
     tracker: AllocationTracker,
     allocation_lock: asyncio.Lock,
     remote_tasks_dir: PurePath,
 ) -> bool:
     """Match a TO_DO task to a free compatible machine or request cloud allocation."""
     async with uow_factory() as uow:
-        task = await uow.tasks.get(task_id)
+        task = await uow.tasks.get_todo(task_id)
     if task is None:
         return False
 

@@ -72,7 +72,7 @@ class TestConsumeTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.get_running = AsyncMock(return_value=running_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -113,7 +113,7 @@ class TestConsumeTask:
         uow.tasks.save.assert_called_once()
         saved_task: Task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.error is None
+        assert saved_task.state.error is None
         uow.commit.assert_called_once()
         # tracker.discard called instead of clouds.mark_task_done
         tracker.discard.assert_called_once_with(TaskId(1))
@@ -139,7 +139,7 @@ class TestConsumeTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.get_running = AsyncMock(return_value=running_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -167,7 +167,7 @@ class TestConsumeTask:
         uow.tasks.save.assert_called_once()
         saved_task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.error is not None
+        assert saved_task.state.error is not None
         # tracker.discard called on permanent failure path too
         tracker.discard.assert_called_once_with(TaskId(1))
         # finalised -> True
@@ -192,7 +192,7 @@ class TestConsumeTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.get_running = AsyncMock(return_value=running_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -239,7 +239,7 @@ class TestConsumeTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=running_task)
+        uow.tasks.get_running = AsyncMock(return_value=running_task)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.collect_events = AsyncMock(return_value=[])
@@ -267,9 +267,9 @@ class TestConsumeTask:
         uow.tasks.save.assert_called_once()
         saved_task = uow.tasks.save.call_args[0][0]
         assert saved_task.status == TaskStatus.DONE
-        assert saved_task.error is not None
+        assert saved_task.state.error is not None
         # error message includes both permanent and transient details
-        error_str = str(saved_task.error)
+        error_str = str(saved_task.state.error)
         assert "permanent missing" in error_str
         assert "transient" in error_str
         uow.commit.assert_called_once()
@@ -286,7 +286,7 @@ class TestConsumeTask:
 
         uow = AsyncMock()
         uow.tasks = AsyncMock()
-        uow.tasks.get = AsyncMock(return_value=None)
+        uow.tasks.get_running = AsyncMock(return_value=None)
         uow.tasks.save = AsyncMock()
         uow.commit = AsyncMock()
         uow.__aenter__ = AsyncMock(return_value=uow)

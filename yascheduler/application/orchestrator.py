@@ -27,9 +27,10 @@ from yascheduler.domain import (
     MachineState,
     Node,
     NodeId,
-    Task,
+    RunningTask,
     TaskId,
     TaskStatus,
+    TodoTask,
 )
 
 from .abandon_node import abandon_node
@@ -146,11 +147,11 @@ class Orchestrator:
             "conn_machine",
             maxsize=lcfg.conn_machine_pending,
         )
-        self._allocate_q: UniqueQueue[TaskId, Task] = UniqueQueue(
+        self._allocate_q: UniqueQueue[TaskId, TodoTask] = UniqueQueue(
             "allocate",
             maxsize=lcfg.allocate_pending,
         )
-        self._consume_q: UniqueQueue[TaskId, Task] = UniqueQueue(
+        self._consume_q: UniqueQueue[TaskId, RunningTask] = UniqueQueue(
             "consume",
             maxsize=lcfg.consume_pending,
         )
@@ -167,15 +168,11 @@ class Orchestrator:
         self,
         session: MachineSession,
         engine: Engine,
-        task: Task,
+        task: RunningTask,
     ) -> bool:
         # region BLOCK_resolve_ncpus
         async with self._uow_factory() as uow:
-            node = (
-                await uow.nodes.get_by_id(task.allocated_node_id)
-                if task.allocated_node_id is not None
-                else None
-            )
+            node = await uow.nodes.get_by_id(task.state.allocated_node_id)
         ncpus = (
             node.ncpus
             if node is not None and node.ncpus is not None
@@ -229,7 +226,11 @@ class Orchestrator:
                     last_msg = msg
                     logger.info(msg)
 
-                queues = [
+                queues: list[
+                    UniqueQueue[NodeId, Node]
+                    | UniqueQueue[TaskId, TodoTask]
+                    | UniqueQueue[TaskId, RunningTask]
+                ] = [
                     self._conn_machine_q,
                     self._allocate_q,
                     self._deallocate_q,
@@ -274,10 +275,8 @@ class Orchestrator:
             # with a long-running task). Reconnect so the consume loop can
             # finish the task and download outputs; the deallocator tears the
             # node down once it is no longer busy.
-            running_tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
-            busy_node_ids = {
-                t.allocated_node_id for t in running_tasks if t.allocated_node_id
-            }
+            running_tasks = await uow.tasks.list_running()
+            busy_node_ids = {t.state.allocated_node_id for t in running_tasks}
             draining_nodes = [
                 n for n in await uow.nodes.list_disabled() if n.node_id in busy_node_ids
             ]
@@ -446,11 +445,11 @@ class Orchestrator:
     # PURPOSE: Bound the next allocation wave to the larger of remaining cloud capacity or current free-machine count so the allocate queue never starves when capacity exists and never floods when it does not.
     async def _allocator_producer(
         self,
-    ) -> AsyncGenerator[UMessage[TaskId, Task], None]:
+    ) -> AsyncGenerator[UMessage[TaskId, TodoTask], None]:
         ccap = await self._clouds_get_capacity()
         tlim = max(ccap, len(self._repository.list_free(None)), 10)
         async with self._uow_factory() as uow:
-            tasks = await uow.tasks.list_by_status({TaskStatus.TO_DO}, limit=tlim)
+            tasks = await uow.tasks.list_todo(limit=tlim)
         if tasks:
             ids = [str(t.task_id) for t in tasks]
             logger.debug("ALLOCATOR_PRODUCER", extra={"task_ids": ", ".join(ids)})
@@ -461,7 +460,7 @@ class Orchestrator:
 
     # region METHOD_allocator_consumer
     # PURPOSE: Fire-and-forget task allocation — keep the worker alive even if one task fails so remaining tasks in the queue still get their allocation attempt.
-    async def _allocator_consumer(self, msg: UMessage[TaskId, Task]) -> None:
+    async def _allocator_consumer(self, msg: UMessage[TaskId, TodoTask]) -> None:
         # region BLOCK_allocate
         logger.debug("ALLOCATE", extra={"task_id": msg.id})
         try:
@@ -490,9 +489,9 @@ class Orchestrator:
     # INVARIANTS: self._consuming is mutated only in _task_consumer_consumer (add before await consume_task, remove in finally).
     async def _task_consumer_producer(
         self,
-    ) -> AsyncGenerator[UMessage[TaskId, Task], None]:
+    ) -> AsyncGenerator[UMessage[TaskId, RunningTask], None]:
         async with self._uow_factory() as uow:
-            tasks = await uow.tasks.list_by_status({TaskStatus.RUNNING})
+            tasks = await uow.tasks.list_running()
         # region BLOCK_skip_in_flight
         # Skip tasks currently being consumed by another worker to prevent
         # two workers from concurrently consuming the same RUNNING task across
@@ -512,21 +511,22 @@ class Orchestrator:
     # INVARIANTS: self._consuming add/remove follows try/finally — added before await consume_task, removed in finally so a failed consume does not permanently block re-yield; self._occupancy_started entry for node_id added on first occupancy check tick, discarded only when consume_task returns True; machine-gone path (session is None) does not touch _consuming or _occupancy_started.
     async def _task_consumer_consumer(
         self,
-        msg: UMessage[TaskId, Task],
+        msg: UMessage[TaskId, RunningTask],
         machine_not_found: Counter,
     ) -> None:
         broken_tasks_passes = 20
         task_id, task = msg.id, msg.payload
-        node_id = task.allocated_node_id
-        session = self._repository.get_session(node_id) if node_id is not None else None
+        node_id = task.state.allocated_node_id
+        session = self._repository.get_session(node_id)
         if session is None:
             # region BLOCK_machine_gone
             logger.warning("machine gone for task_id=%s node_id=%s", task_id, node_id)
             machine_not_found.update([task_id])
             if machine_not_found[task_id] > broken_tasks_passes:
                 # Single atomic transition: RUNNING→DONE with error; emits
-                # TaskAbandoned only when node_id is not None.
-                task = task.abandon(node_id)
+                # TaskAbandoned unconditionally (a RUNNING task always carries
+                # an allocation).
+                task = task.abandon()
                 # region BLOCK_abandon_persist
                 # Persist the TaskAbandoned transition. The row may have been
                 # concurrently deleted between the producer's list_by_status

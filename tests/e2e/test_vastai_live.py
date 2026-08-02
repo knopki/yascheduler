@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from tests.log_assertions import extra_fields
-from yascheduler.domain.model import TaskId
+from yascheduler.domain.model import (
+    TaskId,
+    allocated_node_id_of,
+    error_of,
+)
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.cli.submit import _submit_async
 from yascheduler.entrypoints.config_parser import parse_config
@@ -296,9 +300,11 @@ async def _wait_both_done(
             for tid in task_ids:
                 t = await uow.tasks.get(TaskId(tid))
                 statuses.append(t.status if t else None)
-                if t and t.status == DomainTaskStatus.RUNNING and t.allocated_node_id:
-                    node = await uow.nodes.get_by_id(t.allocated_node_id)
-                    seen_running[tid] = node.hostname if node else ""
+                if t and t.status == DomainTaskStatus.RUNNING:
+                    node_id = allocated_node_id_of(t)
+                    if node_id is not None:
+                        node = await uow.nodes.get_by_id(node_id)
+                        seen_running[tid] = node.hostname if node else ""
         if all(s == DomainTaskStatus.DONE for s in statuses):
             return seen_running
         await asyncio.sleep(_POLL_INTERVAL_S)
@@ -316,14 +322,16 @@ async def _assert_outputs(
 ) -> None:
     async with uow_factory() as uow:
         tasks = [await uow.tasks.get(TaskId(tid)) for tid in task_ids]
-        node_ids = [t.allocated_node_id for t in tasks if t and t.allocated_node_id]
+        node_ids = [
+            nid for t in tasks if t and (nid := allocated_node_id_of(t)) is not None
+        ]
         nodes_by_id = await uow.nodes.get_by_ids(node_ids) if node_ids else {}
     for idx, (tid, task) in enumerate(zip(task_ids, tasks)):
         assert task is not None, f"task {tid} vanished from DB"
         assert task.status == DomainTaskStatus.DONE, (
             f"task {tid} status={task.status}, expected DONE"
         )
-        assert task.error is None, f"task {tid} error={task.error!r}"
+        assert error_of(task) is None, f"task {tid} error={error_of(task)!r}"
         local_folder = task.local_folder
         assert local_folder, f"task {tid} missing local_folder"
         out_file = Path(str(local_folder)) / "1.input.out"
@@ -333,9 +341,10 @@ async def _assert_outputs(
         assert actual == expected, (
             f"task {tid} output={actual!r}, expected {expected!r}"
         )
+        node_id = allocated_node_id_of(task)
         task_iid = (
-            nodes_by_id[task.allocated_node_id].external_id
-            if task.allocated_node_id and task.allocated_node_id in nodes_by_id
+            nodes_by_id[node_id].external_id
+            if node_id and node_id in nodes_by_id
             else ""
         )
         assert task_iid in observed_instance_ids, (

@@ -13,7 +13,13 @@ from typing import TYPE_CHECKING, Any
 
 from asyncssh.sftp import SFTPFailure
 
-from yascheduler.domain.model import NewNode, Node, NodeId, Task, TaskId
+from yascheduler.domain.model import (
+    NewNode,
+    Node,
+    NodeId,
+    Task,
+    TaskId,
+)
 from yascheduler.domain.model import TaskStatus as DomainTaskStatus
 from yascheduler.entrypoints.di import make_cli_deps, make_daemon
 from yascheduler.infra.ssh.repository import SSHMachineRepository
@@ -147,8 +153,8 @@ async def test_consume_retry_then_success(
 
         assert task is not None, "Task did not reach DONE"
         assert task.status == DomainTaskStatus.DONE
-        assert task.error is None, (
-            f"Expected no error on retry-then-success, got: {task.error}"
+        assert task.state.error is None, (
+            f"Expected no error on retry-then-success, got: {task.state.error}"
         )
         local_folder = task.local_folder
         assert local_folder, "Task metadata missing local_folder"
@@ -204,8 +210,10 @@ async def test_consume_permanent_marks_done_with_error(
 
         assert task is not None, "Task did not reach DONE"
         assert task.status == DomainTaskStatus.DONE
-        assert task.error is not None, "Expected error on permanent download failure"
-        assert "No such file" in str(task.error)
+        assert task.state.error is not None, (
+            "Expected error on permanent download failure"
+        )
+        assert "No such file" in str(task.state.error)
     finally:
         await _stop_orchestrator(orchestrator, orch_task)
         await _cleanup_node(uow_factory, ssh_container)
@@ -328,10 +336,10 @@ async def _cleanup_node(
             # Abandon any RUNNING tasks on this node before removing it.
             # task_status_field_invariants CHECK forbids RUNNING with NULL
             # allocated_node_id, so the FK ON DELETE SET NULL would violate it.
-            running = await uow.tasks.list_by_status({DomainTaskStatus.RUNNING})
+            running = await uow.tasks.list_running()
             for t in running:
-                if t.allocated_node_id == node_id:
-                    abandoned = t.abandon(node_id, error="test cleanup")
+                if t.state.allocated_node_id == node_id:
+                    abandoned = t.abandon(error="test cleanup")
                     await uow.tasks.save(abandoned)
             await uow.nodes.remove(node_id)
         await uow.commit()

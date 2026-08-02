@@ -18,7 +18,16 @@ from unittest.mock import patch
 
 import pytest
 
-from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain.model import (
+    Done,
+    Node,
+    NodeId,
+    Running,
+    Task,
+    TaskId,
+    TaskStatus,
+    Todo,
+)
 from yascheduler.entrypoints.client import Yascheduler
 
 EXPECTED_KEYS = {"task_id", "label", "status", "metadata", "node"}
@@ -94,20 +103,24 @@ def _make_task(
 ) -> Task:
     from datetime import datetime
 
+    if status is TaskStatus.TO_DO:
+        state: Todo | Running | Done = Todo()
+    elif status is TaskStatus.RUNNING:
+        state = Running(
+            allocated_node_id=allocated_node_id or NodeId(1), remote_folder="/r"
+        )
+    else:
+        state = Done(allocated_node_id=allocated_node_id, remote_folder="/r")
     return Task(
         task_id=TaskId(task_id),
         label=f"task-{task_id}",
         engine="test_engine",
-        remote_folder=None,
-        local_folder=None,
+        state=state,
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra={},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),
-        status=status,
-        allocated_node_id=allocated_node_id,
     )
 
 
@@ -175,7 +188,13 @@ class TestClientQueryDispatch:
             cloud="hetzner",
         )
         repo = FakeTaskRepository(
-            tasks=[_make_task(task_id=1, allocated_node_id=NodeId(7))],
+            tasks=[
+                _make_task(
+                    task_id=1,
+                    status=TaskStatus.RUNNING,
+                    allocated_node_id=NodeId(7),
+                )
+            ],
         )
         nodes_repo = FakeNodeRepository(nodes=[node])
         uow = FakeUnitOfWork(repo, nodes=nodes_repo)

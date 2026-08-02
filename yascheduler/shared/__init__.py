@@ -5,7 +5,16 @@
 # KEYWORDS: shared kernel, re-export, typing shims, cross-layer, compat, log
 # endregion MODULE_CONTRACT
 
-from .compat import NotRequired, ParamSpec, Required, Self, StrEnum, TypeGuard, Unpack
+from .compat import (
+    NotRequired,
+    ParamSpec,
+    Required,
+    Self,
+    StrEnum,
+    TypeGuard,
+    TypeIs,
+    Unpack,
+)
 from .log import LogFormatter
 from .retry import retry
 from .validators import MAX_PORT, validate_interval
@@ -19,6 +28,7 @@ __all__ = [
     "Self",
     "StrEnum",
     "TypeGuard",
+    "TypeIs",
     "Unpack",
     "retry",
     "validate_interval",

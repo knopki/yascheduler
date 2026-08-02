@@ -27,7 +27,7 @@ from yascheduler.domain.model import (
     NodeId,
     Task,
     TaskId,
-    TaskStatus,
+    Todo,
 )
 from yascheduler.domain.ports import CloudProvisioner
 
@@ -35,7 +35,7 @@ from yascheduler.domain.ports import CloudProvisioner
 def _make_uow(todo_task: Task) -> AsyncMock:
     uow = AsyncMock()
     uow.tasks = AsyncMock()
-    uow.tasks.get = AsyncMock(return_value=todo_task)
+    uow.tasks.get_todo = AsyncMock(return_value=todo_task)
     uow.tasks.list_by_status = AsyncMock(return_value=[])
     uow.nodes = AsyncMock()
     uow.nodes.list_all = AsyncMock(return_value=[])
@@ -82,15 +82,12 @@ class TestAllocateTaskFailureModes:
             task_id=TaskId(1),
             label="test",
             engine="test_engine",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=TaskStatus.TO_DO,
         )
 
     @pytest.fixture

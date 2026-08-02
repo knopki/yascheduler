@@ -63,15 +63,13 @@ class UniqueQueue(asyncio.Queue, Generic[TUMsgId, TUMsgPayload]):
     def __init__(
         self,
         name: str,
-        *argv: object,
         maxsize: int = 0,
-        **kwargs: object,
     ) -> None:
         """Initialise the queue with deduplication support."""
         self.name = name
         self._put_lock = asyncio.Lock()
         self._done_pending = set()
-        super().__init__(maxsize, *argv, **kwargs)
+        super().__init__(maxsize)
 
     def _get(self) -> UMessage[TUMsgId, TUMsgPayload]:
         item = self._queue.popleft()

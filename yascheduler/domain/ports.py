@@ -29,15 +29,17 @@ if TYPE_CHECKING:
 
     from .engine import EngineRepository
     from .model import (
+        AnyTask,
         ConnectedMachine,
         NewNode,
         NewTask,
         Node,
         NodeId,
         ProcessResult,
-        Task,
+        RunningTask,
         TaskId,
         TaskStatus,
+        TodoTask,
     )
 
 __all__ = [
@@ -57,12 +59,20 @@ __all__ = [
 class TaskRepository(Protocol):
     """Async port for task persistence."""
 
-    async def get(self, task_id: TaskId) -> Task | None:
+    async def get(self, task_id: TaskId) -> AnyTask | None:
         """Return a task by ``task_id``, or ``None``."""
         ...
 
+    async def get_running(self, task_id: TaskId) -> RunningTask | None:
+        """Return a task by ``task_id`` if RUNNING, else ``None`` (absent or other status)."""
+        ...
+
+    async def get_todo(self, task_id: TaskId) -> TodoTask | None:
+        """Return a task by ``task_id`` if TO_DO, else ``None`` (absent or other status)."""
+        ...
+
     async def save(
-        self, task: Task, *, expected_status: TaskStatus | None = None
+        self, task: AnyTask, *, expected_status: TaskStatus | None = None
     ) -> None:
         """Persist changes to an existing task aggregate."""
         ...
@@ -72,20 +82,24 @@ class TaskRepository(Protocol):
         statuses: set[TaskStatus],
         *,
         limit: int | None = None,
-    ) -> list[Task]:
+    ) -> list[AnyTask]:
         """Return tasks matching the given statuses with optional limit."""
         ...
 
-    async def insert(self, new_task: NewTask) -> Task:
-        """Insert a new node and return it with generated identity."""
+    async def list_running(self, *, limit: int | None = None) -> list[RunningTask]:
+        """Return tasks whose state is RUNNING (every element's state is Running)."""
         ...
 
-    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[Task]:
+    async def list_todo(self, *, limit: int | None = None) -> list[TodoTask]:
+        """Return tasks whose state is TO_DO (every element's state is Todo)."""
+        ...
+
+    async def insert(self, new_task: NewTask) -> TodoTask:
+        """Insert a new task and return it with generated identity (state is Todo)."""
+        ...
+
+    async def list_by_jobs(self, job_ids: list[TaskId]) -> list[AnyTask]:
         """Return tasks matching the given job IDs."""
-        ...
-
-    async def update_status(self, task_id: TaskId, status: TaskStatus) -> None:
-        """Update the status of a task by ``task_id``."""
         ...
 
     async def list_ids_by_node_id_and_status(

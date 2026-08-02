@@ -17,7 +17,13 @@ from yascheduler.domain.events import (
     TaskCreated,
     TaskFailed,
 )
-from yascheduler.domain.model import NodeId, Task, TaskId, materialize_task
+from yascheduler.domain.model import (
+    NodeId,
+    Task,
+    TaskId,
+    Todo,
+    materialize_task,
+)
 
 
 class TestDomainEvents:
@@ -175,17 +181,16 @@ def _make_task(**overrides: object) -> Task:
         "task_id": TaskId(1),
         "label": "test",
         "engine": "fleur",
-        "remote_folder": None,
+        "state": Todo(),
         "local_folder": None,
         "webhook_url": None,
         "webhook_custom_params": {},
-        "error": None,
         "extra": {},
         "created_at": datetime(2025, 1, 1),
         "updated_at": datetime(2025, 1, 1),
     }
     base.update(overrides)
-    return Task(**base)  # type: ignore[arg-type]
+    return Task(**base)  # type: ignore[arg-type,type-var]
 
 
 class TestTaskCompletedNoHasErrors:
@@ -207,11 +212,9 @@ class TestMaterializeTask:
             task_id=TaskId(1),
             label="test",
             engine="fleur",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url="https://hook.example.com",
             webhook_custom_params={"k": "v"},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),

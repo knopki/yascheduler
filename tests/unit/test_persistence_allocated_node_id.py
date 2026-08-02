@@ -12,8 +12,11 @@ from typing import TYPE_CHECKING
 from yascheduler.domain.model import (
     NewTask,
     NodeId,
+    Running,
     Task,
     TaskId,
+    Todo,
+    allocated_node_id_of,
 )
 from yascheduler.domain.model import (
     TaskStatus as DomainTaskStatus,
@@ -40,6 +43,8 @@ def _row(
     title: str = "job",
     status: str = "TO_DO",
     allocated_node_id: int | None = 5,
+    remote_folder: str | None = None,
+    error: str | None = None,
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
 ) -> dict[str, object]:
@@ -49,12 +54,12 @@ def _row(
         "title": title,
         "status": status,
         "engine": "fleur",
-        "remote_folder": None,
+        "remote_folder": remote_folder,
         "local_folder": None,
         "webhook_url": None,
         "webhook_custom_params": "{}",
         "extra": "{}",
-        "error": None,
+        "error": error,
         "allocated_node_id": allocated_node_id,
         "created_at": created_at or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         "updated_at": updated_at or datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
@@ -66,12 +71,15 @@ class TestRowToTaskAllocatedNodeId:
 
     async def test_reads_allocated_node_id(self, mocker: MockerFixture) -> None:
         repo = _make_repo(mocker)
-        repo._run.return_value = [_row(task_id=1, allocated_node_id=5)]  # type: ignore[attr-defined]
+        repo._run.return_value = [  # type: ignore[attr-defined]
+            _row(task_id=1, status="RUNNING", allocated_node_id=5, remote_folder="/r")
+        ]
 
         task = await repo.get(TaskId(1))
 
         assert task is not None
-        assert task.allocated_node_id == NodeId(5)
+        assert isinstance(task.state, Running)
+        assert task.state.allocated_node_id == NodeId(5)
 
     async def test_handles_null_allocated_node_id(self, mocker: MockerFixture) -> None:
         repo = _make_repo(mocker)
@@ -80,7 +88,8 @@ class TestRowToTaskAllocatedNodeId:
         task = await repo.get(TaskId(1))
 
         assert task is not None
-        assert task.allocated_node_id is None
+        # TO_DO rows do not carry allocated_node_id; the any-status helper returns None.
+        assert allocated_node_id_of(task) is None
 
     async def test_handles_missing_allocated_node_id_key(
         self,
@@ -94,7 +103,7 @@ class TestRowToTaskAllocatedNodeId:
         task = await repo.get(TaskId(1))
 
         assert task is not None
-        assert task.allocated_node_id is None
+        assert allocated_node_id_of(task) is None
 
     async def test_reads_title_as_label(self, mocker: MockerFixture) -> None:
         """DB column is title; domain field is label."""
@@ -180,16 +189,12 @@ class TestInsertSaveBindAllocatedNodeId:
             task_id=TaskId(7),
             label="job",
             engine="fleur",
-            remote_folder=None,
-            local_folder=None,
+            state=Running(allocated_node_id=NodeId(7), remote_folder="/r"),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=DomainTaskStatus.RUNNING,
-            allocated_node_id=NodeId(7),
         )
 
         await repo.save(task)
@@ -211,15 +216,12 @@ class TestInsertSaveBindAllocatedNodeId:
             task_id=TaskId(7),
             label="job",
             engine="fleur",
-            remote_folder=None,
-            local_folder=None,
+            state=Todo(),
             webhook_url=None,
             webhook_custom_params={},
-            error=None,
             extra={},
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            status=DomainTaskStatus.TO_DO,
         )
 
         await repo.save(task)
@@ -279,10 +281,6 @@ class TestTaskSqlIncludesAllocatedNodeId:
         assert "created_at" in sql
         assert "updated_at" in sql
         assert "ip" not in sql
-
-    def test_update_status_sql_does_not_touch_allocated_node_id(self) -> None:
-        sql = load_query("task/update_status")
-        assert "allocated_node_id" not in sql
 
     def test_get_ids_by_node_id_and_status_sql_does_not_touch_allocated_node_id_in_set(
         self,

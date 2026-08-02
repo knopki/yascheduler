@@ -16,7 +16,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.domain import Engine, EngineRepository
-from yascheduler.domain.model import Node, NodeId, Task, TaskId, TaskStatus
+from yascheduler.domain.model import (
+    Done,
+    Node,
+    NodeId,
+    Running,
+    Task,
+    TaskId,
+    TaskStatus,
+    Todo,
+)
 from yascheduler.entrypoints.di import CLIDeps
 
 check_status_mod = importlib.import_module("yascheduler.entrypoints.cli.check_status")
@@ -105,20 +114,30 @@ def make_task(
     """Return a Task domain object with sensible defaults."""
     from datetime import datetime
 
+    if status is TaskStatus.TO_DO:
+        state: Todo | Running | Done = Todo(remote_folder="/tmp/remote")
+    elif status is TaskStatus.RUNNING:
+        state = Running(
+            allocated_node_id=allocated_node_id or NodeId(1),
+            remote_folder="/tmp/remote",
+        )
+    else:
+        state = Done(
+            error=None,
+            allocated_node_id=allocated_node_id,
+            remote_folder="/tmp/remote",
+        )
     return Task(
         task_id=TaskId(task_id),
         label=label,
         engine=engine,
-        remote_folder="/tmp/remote",
+        state=state,
         local_folder="/tmp/local",
         webhook_url=None,
         webhook_custom_params={},
-        error=None,
         extra={},
         created_at=datetime(2025, 1, 1),
         updated_at=datetime(2025, 1, 1),
-        status=status,
-        allocated_node_id=allocated_node_id,
     )
 
 
@@ -393,6 +412,9 @@ class TestCheckStatusJson:
         assert isinstance(obj["node"]["created_at"], str)
         assert isinstance(obj["node"]["updated_at"], str)
         assert obj["engine"] == "g09"
+        # local_folder is a status-independent Task field (D6): the make_task
+        # helper sets it to "/tmp/local" for all statuses, so a RUNNING task
+        # carries the submit intent through to the consume step.
         assert obj["local_folder"] == "/tmp/local"
         assert obj["remote_folder"] == "/tmp/remote"
         assert "allocated_ip" not in obj
