@@ -24,7 +24,7 @@ from yascheduler.domain import (
     allocated_node_id_of,
     remote_folder_of,
 )
-from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
+from yascheduler.entrypoints import Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.entrypoints.logger import configure_cli_logger
 from yascheduler.infra import SSHMachineRepository, list_private_keys
@@ -314,7 +314,6 @@ async def _render_view(
     nodes_by_id: dict[NodeId, Node],
     config: Config,
     fetch_convergence: bool,
-    deps: CLIDeps,  # noqa: ARG001 (passed per design D8; nodes are pre-fetched, no re-query needed)
 ) -> Path | None:
     running = [t for t in tasks if t.status == TaskStatus.RUNNING]
     snippet: Path | None = None
@@ -403,7 +402,6 @@ async def _check_status_async(argv: list[str] | None) -> None:
                 nodes_by_id,
                 config,
                 bool(args.convergence),
-                deps,
             )
         elif args.info:
             _render_info(tasks)
