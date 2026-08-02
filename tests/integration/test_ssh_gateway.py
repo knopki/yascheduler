@@ -171,7 +171,7 @@ class TestSSHGatewayIntegration:
         """connect() returns a session with correct ip, platform, and FREE state."""
         session = await self._get_session(repository)
         assert session.hostname == ssh_container["host"]
-        assert session.machine.platform == "linux"
+        assert "linux" in session.machine.platforms
         assert session.machine.state == MachineState.FREE
         # ncpus was dropped from ConnectedMachine in connected-machine-runtime-only.
         # A caplog assertion for [SSHRepository][connect][CPUS] is not feasible here
@@ -235,7 +235,7 @@ class TestSSHGatewayIntegration:
         """Connected machine appears in list_free with matching platform."""
         sessions_all = repository.list_free(None)
         assert len(sessions_all) >= 1
-        assert sessions_all[0].machine.platform == "linux"
+        assert "linux" in sessions_all[0].machine.platforms
 
         sessions_linux = repository.list_free(["linux"])
         assert len(sessions_linux) >= 1

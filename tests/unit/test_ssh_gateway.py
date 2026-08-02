@@ -152,7 +152,7 @@ def _make_state(
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
-        platform=platform,
+        platforms=(platform,),
         state=state,
         free_since=time.monotonic(),
     )
@@ -819,7 +819,7 @@ class TestListFree:
         s1.update(
             ConnectedMachine(
                 node_id=NodeId(1),
-                platform="linux",
+                platforms=("linux",),
                 state=MachineState.FREE,
                 free_since=older,
             ),
@@ -827,7 +827,7 @@ class TestListFree:
         s2.update(
             ConnectedMachine(
                 node_id=NodeId(2),
-                platform="linux",
+                platforms=("linux",),
                 state=MachineState.FREE,
                 free_since=newer,
             ),

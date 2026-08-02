@@ -571,9 +571,9 @@ class Node:
 
 # region CLASS_ConnectedMachine
 # PURPOSE: Track a runtime-connected machine's occupancy state with atomic FREE/BUSY transitions so allocation and release are concurrency-safe.
-# INVARIANTS: Frozen; state changes return new instances via replace; free_since is set on every transition to FREE. Platform is runtime-discovered.
+# INVARIANTS: Frozen; state changes return new instances via replace; free_since is set on every transition to FREE. Platform tags are runtime-discovered.
 # RATIONALE:
-# - Q: Why is platform on ConnectedMachine instead of Node?
+# - Q: Why is platforms on ConnectedMachine instead of Node?
 #   A: It is runtime-discovered at connect time via the platform-package detector, not a persistent attribute of the node record. It feeds the is_compatible(engine.platforms) check and is meaningless outside a live connection.
 @dataclass(frozen=True)
 class ConnectedMachine:
@@ -583,15 +583,17 @@ class ConnectedMachine:
     """
 
     node_id: NodeId
-    platform: str
+    platforms: tuple[str, ...]
     state: MachineState = MachineState.FREE
     free_since: float | None = None
 
     # region METHOD_is_compatible
-    # PURPOSE: Tell whether this machine can accept a task, i.e. is free and on a supported platform.
+    # PURPOSE: Tell whether this machine can accept a task, i.e. is free and on a supported platform .
     def is_compatible(self, platforms: tuple[str, ...]) -> bool:
-        """Check if machine is FREE and platform matches given platforms."""
-        return self.state == MachineState.FREE and self.platform in platforms
+        """Check if machine is FREE and its platform tags intersect the given platforms."""
+        return self.state == MachineState.FREE and bool(
+            set(self.platforms) & set(platforms)
+        )
 
     # endregion METHOD_is_compatible
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 from configparser import ConfigParser
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -120,6 +121,41 @@ def _engine_default(name: str) -> int:
     )
 
 
+# Regex matching versioned platform tags that normalize to their bare family.
+_VERSIONED_PLATFORM = re.compile(r"^(debian|windows)-\d+$")
+
+
+# region FUNC__normalize_platforms
+# PURPOSE: Strip version suffixes from known versioned platform tags (debian-N, windows-N) at config load, warning once per tag, so engine.platforms carries only family-level tags that the platform-intersection matcher and cloud supported_platform_checks understand.
+def _normalize_platforms(raw: tuple[str, ...], engine_name: str) -> tuple[str, ...]:
+    """Normalize versioned platform tags to their family, warning on each rewrite."""
+    normalized: list[str] = []
+    for tag in raw:
+        match = _VERSIONED_PLATFORM.match(tag)
+        if match:
+            family = match.group(1)
+            logger.warning(
+                "Engine %s: versioned platform tag %r normalized to %r; version pinning is not supported",
+                engine_name,
+                tag,
+                family,
+            )
+            normalized.append(family)
+        else:
+            normalized.append(tag)
+    # Dedup while preserving order, so debian-10 debian-11 -> debian (not debian debian).
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for tag in normalized:
+        if tag not in seen:
+            seen.add(tag)
+            deduped.append(tag)
+    return tuple(deduped)
+
+
+# endregion FUNC__normalize_platforms
+
+
 # region FUNC_parse_engine_section
 # PURPOSE: Turn one INI `[engine.*]` section into a frozen `Engine` value object the orchestrator can match against task requirements, with every malformed config (unknown spawn placeholder, missing check method, empty input/output list, missing spawn) surfacing as `ValueError` at config load rather than as a cryptic failure during task scheduling.
 def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
@@ -166,7 +202,7 @@ def parse_engine_section(sec: SectionProxy, engines_dir: PurePath) -> Engine:
         sleep_interval=sec.getint(
             "sleep_interval", fallback=_engine_default("sleep_interval")
         ),
-        platforms=gettuple("platforms"),
+        platforms=_normalize_platforms(gettuple("platforms"), name),
         platform_packages=gettuple("platform_packages"),
     )
 

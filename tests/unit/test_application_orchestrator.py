@@ -818,7 +818,7 @@ class TestConsumeConditionalDiscard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            platform="linux",
+            platforms=("linux",),
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -854,7 +854,7 @@ class TestConsumeConditionalDiscard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            platform="linux",
+            platforms=("linux",),
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -926,7 +926,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            platform="linux",
+            platforms=("linux",),
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -962,7 +962,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            platform="linux",
+            platforms=("linux",),
             state=MachineState.FREE,
             free_since=0.0,
         )
@@ -1000,7 +1000,7 @@ class TestConsumeInFlightGuard:
         orch = make_orchestrator()
         machine = ConnectedMachine(
             node_id=NodeId(1),
-            platform="linux",
+            platforms=("linux",),
             state=MachineState.FREE,
             free_since=0.0,
         )

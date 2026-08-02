@@ -247,7 +247,7 @@ class SSHMachineRepository:
         logger.info("connected to %s (%d CPUs)", node.hostname, ncpus)
         machine = ConnectedMachine(
             node_id=node.node_id,
-            platform=adapter.platform,
+            platforms=tuple(platforms),
             state=MachineState.FREE,
             free_since=time.monotonic(),
         )
@@ -298,15 +298,16 @@ class SSHMachineRepository:
     # endregion METHOD_disconnect_all
 
     # region METHOD_list_free
-    # PURPOSE: Return FREE sessions filtered by platform, oldest first by session.machine.free_since.
+    # PURPOSE: Return FREE sessions filtered by platform intersection, oldest first by session.machine.free_since.
     def list_free(self, platforms: list[str] | None) -> list[MachineSession]:
-        """Return FREE sessions, optionally filtered by platform."""
+        """Return FREE sessions, optionally filtered by platform intersection."""
         result: list[MachineSession] = []
+        wanted = set(platforms) if platforms is not None else None
         for session in self._sessions.values():
             m = session.machine
             if m.state != MachineState.FREE:
                 continue
-            if platforms is not None and m.platform not in platforms:
+            if wanted is not None and not set(m.platforms) & wanted:
                 continue
             result.append(session)
         result.sort(key=lambda s: s.machine.free_since or 0.0)

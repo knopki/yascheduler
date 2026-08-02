@@ -57,7 +57,7 @@ class FakeMachineSession:
         # sessions with nodes by node_id so this must match the DB-side ID.
         last_octet = int(hostname.rsplit(".", 1)[-1]) if "." in hostname else 1
         self._machine = ConnectedMachine(
-            platform=platform,
+            platforms=(platform,),
             state=MachineState.FREE,
             free_since=0.0,
             node_id=NodeId(last_octet),
@@ -150,11 +150,12 @@ class FakeMachineRepository:
             self._sessions.pop(ip, None)
 
     def list_free(self, platforms: list[str] | None = None) -> list[FakeMachineSession]:
+        wanted = set(platforms) if platforms is not None else None
         result = [
             s
             for s in self._sessions.values()
             if s.machine.state == MachineState.FREE
-            and (platforms is None or s.machine.platform in platforms)
+            and (wanted is None or set(s.machine.platforms) & wanted)
         ]
         result.sort(key=lambda s: s.machine.free_since or 0.0)
         return result

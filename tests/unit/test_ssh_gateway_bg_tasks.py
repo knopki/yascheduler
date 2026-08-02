@@ -71,7 +71,7 @@ def _make_state(
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
-        platform=platform,
+        platforms=(platform,),
         state=state,
         free_since=time.monotonic(),
     )

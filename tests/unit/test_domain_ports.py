@@ -122,7 +122,7 @@ class StubNodeRepository:
 
 
 def _make_session_stub() -> ConnectedMachine:
-    return ConnectedMachine(node_id=NodeId(1), platform="linux")
+    return ConnectedMachine(node_id=NodeId(1), platforms=("linux",))
 
 
 class StubMachineSession(MachineSession):

@@ -37,44 +37,14 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-def can_debian_buster(platform: str) -> bool:
-    """Platform is compatible with Debian Buster."""
-    return platform in ["debian-10", "debian", "debian-like", "linux"]
+def can_debian(platform: str) -> bool:
+    """Platform is compatible with Debian."""
+    return platform in ("linux", "debian-like", "debian")
 
 
-def can_debian_bullseye(platform: str) -> bool:
-    """Platform is compatible with Debian Bullseye."""
-    return platform in ["debian-11", "debian", "debian-like", "linux"]
-
-
-def can_debian_bookworm(platform: str) -> bool:
-    """Platform is compatible with Debian Bookworm."""
-    return platform in ["debian-12", "debian", "debian-like", "linux"]
-
-
-def can_debian_trixie(platform: str) -> bool:
-    """Platform is compatible with Debian Trixie."""
-    return platform in ["debian-13", "debian", "debian-like", "linux"]
-
-
-def can_debian_forky(platform: str) -> bool:
-    """Platform is compatible with Debian Forky."""
-    return platform in ["debian-14", "debian", "debian-like", "linux"]
-
-
-def can_debian_duke(platform: str) -> bool:
-    """Platform is compatible with Debian Duke."""
-    return platform in ["debian-15", "debian", "debian-like", "linux"]
-
-
-def can_win10(platform: str) -> bool:
-    """Platform is compatible with Windows 10."""
-    return platform in ["windows-10", "windows"]
-
-
-def can_win11(platform: str) -> bool:
-    """Platform is compatible with Windows 11."""
-    return platform in ["windows-11", "windows"]
+def can_windows(platform: str) -> bool:
+    """Platform is compatible with Windows."""
+    return platform == "windows"
 
 
 # region CLASS_CloudAdapter
@@ -113,7 +83,7 @@ def get_azure_adapter(name: str) -> CloudAdapter:
 
     return CloudAdapter(
         name=name,
-        supported_platform_checks=(can_debian_bullseye, can_win11),
+        supported_platform_checks=(can_debian, can_windows),
         create_node=az_create_node,
         delete_node=az_delete_node,
         op_limit=5,
@@ -135,12 +105,7 @@ def get_hetzner_adapter(name: str) -> CloudAdapter:
 
     return CloudAdapter(
         name=name,
-        supported_platform_checks=(
-            can_debian_duke,
-            can_debian_forky,
-            can_debian_trixie,
-            can_debian_buster,
-        ),
+        supported_platform_checks=(can_debian,),
         create_node=hetzner_create_node,
         delete_node=hetzner_delete_node,
         op_limit=5,
@@ -162,7 +127,7 @@ def get_upcloud_adapter(name: str) -> CloudAdapter:
 
     return CloudAdapter(
         name=name,
-        supported_platform_checks=(can_debian_buster,),
+        supported_platform_checks=(can_debian,),
         create_node=upcloud_create_node,
         delete_node=upcloud_delete_node,
         op_limit=1,
@@ -184,12 +149,7 @@ def get_vastai_adapter(name: str) -> CloudAdapter:
 
     return CloudAdapter(
         name=name,
-        supported_platform_checks=(
-            can_debian_duke,
-            can_debian_forky,
-            can_debian_trixie,
-            can_debian_buster,
-        ),
+        supported_platform_checks=(can_debian,),
         create_node=vastai_create_node,
         delete_node=vastai_delete_node,
         op_limit=1,
@@ -205,7 +165,7 @@ def get_vastai_adapter(name: str) -> CloudAdapter:
 # - Q: Why op_limit=2 and create_node_timeout=1200?
 #   A: Bare metal provisions slowly (up to ~20 min); op_limit=2 allows one in-flight create + one queued request; 1200 s timeout accommodates the longest observed boot+cloud-init cycles.
 def get_vultr_adapter(name: str) -> CloudAdapter:
-    """Create CloudAdapter for Vultr with Bookworm platform support, slow bare-metal timeouts."""
+    """Create CloudAdapter for Vultr."""
     from .providers.vultr import (  # noqa: PLC0415
         vultr_create_node,
         vultr_delete_node,
@@ -213,7 +173,7 @@ def get_vultr_adapter(name: str) -> CloudAdapter:
 
     return CloudAdapter(
         name=name,
-        supported_platform_checks=(can_debian_bookworm,),
+        supported_platform_checks=(can_debian,),
         create_node=vultr_create_node,
         delete_node=vultr_delete_node,
         op_limit=2,

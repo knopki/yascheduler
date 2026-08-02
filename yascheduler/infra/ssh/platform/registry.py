@@ -11,20 +11,9 @@ from typing import TYPE_CHECKING
 
 from .adapters import (
     darwin_adapter,
-    debian_10_adapter,
-    debian_11_adapter,
-    debian_12_adapter,
-    debian_13_adapter,
-    debian_14_adapter,
-    debian_15_adapter,
     debian_adapter,
     debian_like_adapter,
     linux_adapter,
-    windows7_adapter,
-    windows8_adapter,
-    windows10_adapter,
-    windows11_adapter,
-    windows12_adapter,
     windows_adapter,
 )
 
@@ -36,20 +25,9 @@ if TYPE_CHECKING:
 __all__ = ["ADAPTERS"]
 
 ADAPTERS: Sequence[RemoteMachineAdapter] = [
-    debian_10_adapter,
-    debian_11_adapter,
-    debian_12_adapter,
-    debian_13_adapter,
-    debian_14_adapter,
-    debian_15_adapter,
     debian_adapter,
     debian_like_adapter,
     linux_adapter,
     darwin_adapter,
-    windows10_adapter,
-    windows11_adapter,
-    windows12_adapter,
-    windows7_adapter,
-    windows8_adapter,
     windows_adapter,
 ]

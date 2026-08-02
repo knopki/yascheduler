@@ -522,25 +522,34 @@ class TestNewNode:
 
 class TestConnectedMachine:
     def make_machine(self, **overrides: object) -> ConnectedMachine:
-        defaults: dict[str, object] = {"node_id": NodeId(1), "platform": "linux"}
+        defaults: dict[str, object] = {"node_id": NodeId(1), "platforms": ("linux",)}
         defaults.update(overrides)
         return ConnectedMachine(**defaults)  # type: ignore[arg-type]
 
     def test_is_compatible_free_and_match(self) -> None:
-        m = self.make_machine(state=MachineState.FREE, platform="linux")
+        m = self.make_machine(state=MachineState.FREE, platforms=("linux",))
         assert m.is_compatible(("linux", "windows")) is True
 
     def test_is_compatible_busy_not_match(self) -> None:
-        m = self.make_machine(state=MachineState.BUSY, platform="linux")
+        m = self.make_machine(state=MachineState.BUSY, platforms=("linux",))
         assert m.is_compatible(("linux",)) is False
 
     def test_is_compatible_platform_no_match(self) -> None:
-        m = self.make_machine(state=MachineState.FREE, platform="windows")
+        m = self.make_machine(state=MachineState.FREE, platforms=("windows",))
         assert m.is_compatible(("linux",)) is False
 
     def test_is_compatible_empty_platforms(self) -> None:
-        m = self.make_machine(state=MachineState.FREE, platform="linux")
+        m = self.make_machine(state=MachineState.FREE, platforms=("linux",))
         assert m.is_compatible(()) is False
+
+    def test_is_compatible_broad_engine_matches_specific_host(self) -> None:
+        """A broad engine platform tag matches a host detected as a more specific variant of it."""
+        m = self.make_machine(
+            state=MachineState.FREE,
+            platforms=("linux", "debian-like", "debian", "debian-12"),
+        )
+        assert m.is_compatible(("debian",)) is True
+        assert m.is_compatible(("linux",)) is True
 
     def test_occupy_transitions_to_busy(self) -> None:
         m = self.make_machine(state=MachineState.FREE)

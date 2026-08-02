@@ -339,7 +339,7 @@ Once set, it cannot be changed later.
 - `platforms`
   List of supported platform, separated by space or newline.
   No default (empty list if unset).
-  *Example*: `mY-cOoL-OS another-cool-os`
+  *Example*: `debian debian-like`
 
 - `platform_packages`
   A list of required packages, separated by space or newline, which
