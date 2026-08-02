@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, TypeVar
 
 from pg8000.native import Connection
-from typing_extensions import Self
 
 from .exceptions import UnitOfWorkNotInitializedError
 from .postgres import PostgresNodeRepository, PostgresTaskRepository
@@ -26,6 +25,7 @@ if TYPE_CHECKING:
 
     from yascheduler.application import MessageBus
     from yascheduler.domain import AnyTask, DomainEvent
+    from yascheduler.shared import Self
 
     from .db_config import PostgresDbConfig
 

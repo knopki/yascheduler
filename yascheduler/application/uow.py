@@ -9,12 +9,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from typing_extensions import Self
-
 if TYPE_CHECKING:
     import types
 
     from yascheduler.domain import DomainEvent, NodeRepository, TaskRepository
+    from yascheduler.shared import Self
 
 __all__ = [
     "AbstractUnitOfWork",
