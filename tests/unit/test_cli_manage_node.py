@@ -560,6 +560,92 @@ class TestManageNodeAddPath:
         added_node = uow.nodes.insert.call_args[0][0]
         assert added_node.jump_port == 22
 
+    def test_add_loopback_conflicting_data_dir_warns(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Issue #115: loopback host + [local].data_dir == [remote].data_dir warns."""
+        config, uow, _deps, _repo = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+        shared = "/tmp/yasched-shared"
+        config.local.data_dir = Path(shared)
+        config.remote.data_dir = PurePosixPath(shared)
+
+        with caplog.at_level(
+            logging.WARNING, logger="yascheduler.entrypoints.cli.manage_node"
+        ):
+            _run(["127.0.0.1"])
+
+        assert any(
+            "data_dir" in r.getMessage() and "collide" in r.getMessage()
+            for r in caplog.records
+        ), (
+            f"expected data_dir collision warning, got {[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_add_loopback_localhost_alias_warns(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Issue #115: 'localhost' alias is treated as loopback too."""
+        config, uow, _deps, _repo = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+        shared = "/tmp/yasched-shared"
+        config.local.data_dir = Path(shared)
+        config.remote.data_dir = PurePosixPath(shared)
+
+        with caplog.at_level(
+            logging.WARNING, logger="yascheduler.entrypoints.cli.manage_node"
+        ):
+            _run(["localhost"])
+
+        assert any("collide" in r.getMessage() for r in caplog.records), (
+            f"expected collision warning for localhost, got {[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_add_non_loopback_no_data_dir_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Issue #115: a non-loopback host with matching data_dir does NOT warn."""
+        config, uow, _deps, _repo = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+        shared = "/tmp/yasched-shared"
+        config.local.data_dir = Path(shared)
+        config.remote.data_dir = PurePosixPath(shared)
+
+        with caplog.at_level(
+            logging.WARNING, logger="yascheduler.entrypoints.cli.manage_node"
+        ):
+            _run(["10.0.0.1"])
+
+        assert not any("collide" in r.getMessage() for r in caplog.records), (
+            f"unexpected warning for non-loopback, got {[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_add_loopback_distinct_data_dir_no_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        stub_env: tuple[MagicMock, AsyncMock, MagicMock, AsyncMock],
+    ) -> None:
+        """Issue #115: loopback host with distinct data_dir does NOT warn."""
+        config, uow, _deps, _repo = stub_env
+        uow.nodes.get = AsyncMock(return_value=None)
+        config.local.data_dir = Path("/tmp/yasched-local")
+        config.remote.data_dir = PurePosixPath("/tmp/yasched-remote")
+
+        with caplog.at_level(
+            logging.WARNING, logger="yascheduler.entrypoints.cli.manage_node"
+        ):
+            _run(["127.0.0.1"])
+
+        assert not any("collide" in r.getMessage() for r in caplog.records), (
+            f"unexpected warning for distinct data_dir, got {[r.getMessage() for r in caplog.records]}"
+        )
+
     def test_add_constructs_repository_once(
         self,
         capsys: pytest.CaptureFixture[str],

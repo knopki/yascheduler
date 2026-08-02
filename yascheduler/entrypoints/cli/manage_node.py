@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import logging
 import sys
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from yascheduler.domain import NewNode, Node, NodeId, TaskStatus
 from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
@@ -25,6 +27,43 @@ __all__ = ["manage_node"]
 logger = logging.getLogger(__name__)
 
 MAX_PORT = 65535
+
+
+# Covers 127/8, ::1, and the "localhost" name.
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _check_loopback_data_dir_conflict(config: Config, host: str) -> None:
+    """Warn when adding a loopback node whose remote data_dir overlaps the local one.
+
+    On a loopback deploy the daemon's local data_dir and the node's remote
+    data_dir point at the same physical directory, so uploads and downloads
+    collide silently. The guard warns (not forbids) — single-machine test
+    setups with deliberately shared paths still work.
+    """
+    # region BLOCK_compare_data_dirs
+    if not _is_loopback_host(host):
+        return
+    try:
+        local = Path(config.local.data_dir).resolve()
+        remote = Path(config.remote.data_dir)
+    except (AttributeError, ValueError):
+        # don't let the guard mask the real parse error the caller is about to surface.
+        return
+    if local == remote:
+        logger.warning(
+            "[local] data_dir and [remote] data_dir both resolve to %s; "
+            "upload/download paths will collide on loopback host %s",
+            local,
+            host,
+        )
+    # endregion BLOCK_compare_data_dirs
 
 
 class MalformedHostSpecError(argparse.ArgumentTypeError):
@@ -281,6 +320,7 @@ async def _add_node(
 ) -> None:
     # HostSpec is frozen and the parser cannot resolve config defaults, so resolve here.
     username = spec.username or config.remote.username
+    _check_loopback_data_dir_conflict(config, spec.host)
     # region BLOCK_insert_tmp
     # Insert an enabled=False tmp row first to obtain a node_id — the SSH
     # session must register under a node_id (connect takes a Node). This
