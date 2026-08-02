@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from asyncssh.connection import SSHClientConnection
     from asyncssh.process import SSHClientProcess, SSHCompletedProcess
 
-    from .protocol import QuoteCallable
+    from .types import QuoteCallable
 
 __all__ = ["run", "run_bg"]
 

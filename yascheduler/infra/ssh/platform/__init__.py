@@ -62,7 +62,9 @@ from .linux import (
     log_mpi_version,
 )
 from .paths import _init_paths
-from .protocol import (
+from .registry import ADAPTERS
+from .run_fn import make_run_fn
+from .types import (
     AllSSHRetryExc,
     GetCPUCoresCallable,
     ListProcessesCallable,
@@ -77,8 +79,6 @@ from .protocol import (
     SSHCheck,
     SSHRetryExc,
 )
-from .registry import ADAPTERS
-from .run_fn import make_run_fn
 from .windows import (
     MyPureWindowsPath,
     windows_deploy_engines,

@@ -27,7 +27,7 @@ from yascheduler.domain import (
     RemoteArchiveDeploy,
 )
 
-from .protocol import OuterRunCallable, ProcessInfo, QuoteCallable
+from .types import OuterRunCallable, ProcessInfo, QuoteCallable
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence

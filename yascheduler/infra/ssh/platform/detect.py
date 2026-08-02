@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from asyncssh.connection import SSHClientConnection
 
     from .adapters import RemoteMachineAdapter
-    from .protocol import SSHCheck
+    from .types import SSHCheck
 
 __all__ = ["MAX_SESSIONS", "_detect_platform"]
 

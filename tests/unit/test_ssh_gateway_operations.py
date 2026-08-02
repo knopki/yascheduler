@@ -14,7 +14,7 @@ import pytest
 from tests.unit.test_ssh_gateway import _AsyncIter, _make_state
 from yascheduler.domain import Engine
 from yascheduler.infra.ssh.operations import OccupancyChecker
-from yascheduler.infra.ssh.platform.protocol import ChannelOpenError
+from yascheduler.infra.ssh.platform.types import ChannelOpenError
 
 # =============================================================================
 # Fixtures

@@ -24,7 +24,7 @@ from yascheduler.domain.model import (
     Node,
     NodeId,
 )
-from yascheduler.infra.ssh.platform.protocol import ProcessInfo
+from yascheduler.infra.ssh.platform.types import ProcessInfo
 from yascheduler.infra.ssh.repository import (
     DEFAULT_CONN_OPTS,
     SSHMachineRepository,

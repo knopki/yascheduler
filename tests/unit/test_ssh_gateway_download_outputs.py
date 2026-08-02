@@ -17,7 +17,7 @@ from tests.unit.test_ssh_gateway import _make_state
 from yascheduler.domain.model import TaskId
 from yascheduler.infra.ssh.operations import OutputDownloader
 from yascheduler.infra.ssh.operations import download as download_module
-from yascheduler.infra.ssh.platform.protocol import SFTPConnectionLost
+from yascheduler.infra.ssh.platform.types import SFTPConnectionLost
 from yascheduler.infra.ssh.session import SSHMachineSession
 
 

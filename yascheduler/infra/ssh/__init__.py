@@ -11,7 +11,7 @@
 from yascheduler.domain import MachineRepository
 
 from .operations import OccupancyChecker, OutputDownloader, TaskDeployer
-from .platform.protocol import AllSSHRetryExc, SFTPRetryExc
+from .platform.types import AllSSHRetryExc, SFTPRetryExc
 from .repository import SSHMachineRepository
 from .session import SSHMachineSession
 

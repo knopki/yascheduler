@@ -4,9 +4,9 @@
 # SCOPE:
 # - Exception tuples: SFTPRetryExc, SSHRetryExc, AllSSHRetryExc
 # - Data class: ProcessInfo
-# - Protocols: RunCallable, RunBgCallable, OuterRunCallable, ListProcessesCallable, PgrepCallable, SetupNodeCallable
-# - Callable aliases: SSHCheck, QuoteCallable, GetCPUCoresCallable
-# KEYWORDS: protocol, type aliases, ssh, sftp, exceptions, callables
+# - Protocols: RunCallable, RunBgCallable, PgrepCallable, SetupNodeCallable
+# - Callable aliases: SSHCheck, QuoteCallable, GetCPUCoresCallable, OuterRunCallable, ListProcessesCallable
+# KEYWORDS: type aliases, protocol, ssh, sftp, exceptions, callables
 # DEPENDENCIES: USES API: asyncssh.
 # endregion MODULE_CONTRACT
 
@@ -29,6 +29,7 @@ from asyncssh.misc import (
     ProtocolError,
     ServiceNotAvailable,
 )
+from asyncssh.process import SSHCompletedProcess
 from asyncssh.sftp import (
     SFTPBadMessage,
     SFTPByteRangeLockConflict,
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
     from pathlib import PurePath
     from re import Pattern
 
-    from asyncssh.process import SSHClientProcess, SSHCompletedProcess
+    from asyncssh.process import SSHClientProcess
 
     from yascheduler.domain import EngineRepository
 
@@ -55,7 +56,6 @@ __all__ = [
     "AllSSHRetryExc",
     "GetCPUCoresCallable",
     "ListProcessesCallable",
-    "OuterRunCallable",
     "PgrepCallable",
     "ProcessInfo",
     "QuoteCallable",
@@ -158,18 +158,7 @@ class RunBgCallable(Protocol):
 
 # region CLASS_OuterRunCallable
 # PURPOSE: Type the closure that make_run_fn produces so adapter methods that need a run callable (get_cpu_cores, setup_node) accept a single typed callable instead of (conn, quote) plus a free function.
-class OuterRunCallable(Protocol):
-    """Callable protocol wrapping ``run``/``run_bg`` with platform dispatch."""
-
-    @abstractmethod
-    def __call__(
-        self,
-        *args: object,
-        cwd: str | None = None,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> Coroutine[Any, Any, SSHCompletedProcess]:
-        """Call."""
-
+OuterRunCallable = Callable[..., Coroutine[Any, Any, SSHCompletedProcess]]
 
 # endregion CLASS_OuterRunCallable
 
@@ -177,21 +166,14 @@ class OuterRunCallable(Protocol):
 GetCPUCoresCallable = Callable[[OuterRunCallable], Coroutine[Any, Any, int]]
 
 
-# region CLASS_ListProcessesCallable
+# region ALIAS_ListProcessesCallable
 # PURPOSE: Type every platform-specific process-listing callable so SSHMachineSession.list_processes delegates without per-platform branching.
-class ListProcessesCallable(Protocol):
-    """Callable protocol for listing remote processes."""
+ListProcessesCallable = Callable[
+    [SSHClientConnection, str | None],
+    AsyncGenerator[ProcessInfo, None],
+]
 
-    @abstractmethod
-    def __call__(
-        self,
-        conn: SSHClientConnection,
-        query: str | None = None,
-    ) -> AsyncGenerator[ProcessInfo, None]:
-        """Call."""
-
-
-# endregion CLASS_ListProcessesCallable
+# endregion ALIAS_ListProcessesCallable
 
 
 # region CLASS_PgrepCallable

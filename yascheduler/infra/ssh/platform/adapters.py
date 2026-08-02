@@ -40,7 +40,7 @@ from .linux import (
     linux_setup_deb_node,
     linux_setup_node,
 )
-from .protocol import (
+from .types import (
     GetCPUCoresCallable,
     ListProcessesCallable,
     PgrepCallable,

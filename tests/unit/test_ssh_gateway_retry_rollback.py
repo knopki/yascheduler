@@ -26,7 +26,7 @@ from yascheduler.domain.model import (
     TaskId,
 )
 from yascheduler.infra.ssh.operations import TaskDeployer
-from yascheduler.infra.ssh.platform.protocol import (
+from yascheduler.infra.ssh.platform.types import (
     ChannelOpenError,
     SFTPConnectionLost,
     SSHRetryExc,

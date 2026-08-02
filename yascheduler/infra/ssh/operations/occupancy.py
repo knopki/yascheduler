@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from yascheduler.domain import MachineState
-from yascheduler.infra.ssh.platform.protocol import SSHRetryExc
+from yascheduler.infra.ssh.platform.types import SSHRetryExc
 
 if TYPE_CHECKING:
     from yascheduler.domain import Engine, MachineSession

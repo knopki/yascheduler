@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from asyncssh.sftp import SFTPError
 
-from yascheduler.infra.ssh.platform.protocol import SFTPRetryExc
+from yascheduler.infra.ssh.platform.types import SFTPRetryExc
 from yascheduler.shared import retry
 
 if TYPE_CHECKING:

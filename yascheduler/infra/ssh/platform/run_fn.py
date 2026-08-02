@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from asyncssh.process import SSHCompletedProcess
 
     from .adapters import RemoteMachineAdapter
-    from .protocol import OuterRunCallable
+    from .types import OuterRunCallable
 
 __all__ = ["make_run_fn"]
 
