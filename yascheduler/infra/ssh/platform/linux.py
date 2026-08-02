@@ -8,10 +8,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from re import Pattern
 from typing import TYPE_CHECKING
+
+from asyncssh.process import ProcessError
 
 from yascheduler.domain import (
     EngineRepository,
@@ -43,6 +46,9 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# apt repository problem = exit 100
+_APT_TRANSIENT_EXIT = 100
 
 
 # region FUNC_linux_get_cpu_cores
@@ -286,6 +292,37 @@ async def linux_setup_node(
 # endregion FUNC_linux_setup_node
 
 
+# region FUNC__run_apt_with_retry
+# PURPOSE: Run an apt-get command with retries on transient apt failures (exit 100) so a flaky repository mirror does not abort node setup.
+# INVARIANTS:
+# - Retries only on ProcessError with exit_status == 100 (transient apt repo failure); other non-zero exits propagate.
+async def _run_apt_with_retry(
+    run: OuterRunCallable, cmd: str, *, attempts: int = 3
+) -> None:
+    """Run an apt-get command, retrying on transient apt exit 100."""
+    last_exc: ProcessError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            await run(cmd, check=True)
+        except ProcessError as exc:  # noqa: PERF203
+            if exc.exit_status != _APT_TRANSIENT_EXIT:
+                raise
+            last_exc = exc
+            logger.debug(
+                "APT_TRANSIENT",
+                extra={"cmd": cmd, "exit": exc.exit_status, "attempt": attempt},
+            )
+            if attempt < attempts:
+                await asyncio.sleep(5 * attempt)
+        else:
+            return
+    if last_exc is not None:
+        raise last_exc
+
+
+# endregion FUNC__run_apt_with_retry
+
+
 # region FUNC_linux_setup_deb_node
 # PURPOSE: Setup Debian-like node with apt package installation and engine deployment.
 async def linux_setup_deb_node(
@@ -301,11 +338,11 @@ async def linux_setup_deb_node(
     apt_cmd = f"{sudo_prefix}apt-get -o DPkg::Lock::Timeout=600 -y"
     pkgs = engines.get_platform_packages()
 
-    await run(f"{apt_cmd} update", check=True)
-    await run(f"{apt_cmd} upgrade", check=True)
+    await _run_apt_with_retry(run, f"{apt_cmd} update")
+    await _run_apt_with_retry(run, f"{apt_cmd} upgrade")
     if pkgs:
         logger.debug("INSTALL", extra={"packages": " ".join(pkgs)})
-        await run(f"{apt_cmd} install {' '.join(pkgs)}", check=True)
+        await _run_apt_with_retry(run, f"{apt_cmd} install {' '.join(pkgs)}")
     if [x for x in pkgs if "mpi" in x]:
         await log_mpi_version(run)
 
