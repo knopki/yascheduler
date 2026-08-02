@@ -489,15 +489,6 @@ class PostgresNodeRepository(_PgRepository):
 
     # endregion METHOD_remove
 
-    # region METHOD_count_by_cloud
-    # PURPOSE: Report per-provider node tallies so cost dashboards and capacity planning see distribution across cloud backends.
-    async def count_by_cloud(self) -> Mapping[str, int]:
-        """Return a mapping of cloud provider to node count."""
-        rows = await self._run(load_query("node/count_by_cloud"))
-        return {row["cloud"]: row["count"] for row in rows}
-
-    # endregion METHOD_count_by_cloud
-
     # region METHOD_count_by_status
     # PURPOSE: Report enabled/disabled node counts so operators gauge cluster capacity at a glance.
     async def count_by_status(self) -> Mapping[bool, int]:

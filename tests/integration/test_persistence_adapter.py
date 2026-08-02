@@ -455,10 +455,6 @@ async def test_repo_node_count(
         NewNode(hostname="10.0.0.3", ncpus=2, cloud="azure", enabled=True),
     )
 
-    clouds = await repo.count_by_cloud()
-    assert clouds["aws"] == 2
-    assert clouds["azure"] == 1
-
     statuses = await repo.count_by_status()
     assert statuses[True] == 2
     assert statuses[False] == 1

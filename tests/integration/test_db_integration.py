@@ -154,9 +154,6 @@ async def test_count_aggregations(
         await uow.commit()
 
     async with uow_factory() as uow:
-        clouds = await uow.nodes.count_by_cloud()
-        assert clouds == {"azure": 2, "hetzner": 1}
-
         by_status = await uow.nodes.count_by_status()
         assert by_status[True] == 2
         assert by_status[False] == 1
