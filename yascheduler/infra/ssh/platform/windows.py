@@ -163,7 +163,11 @@ async def windows_list_processes(
                 ):
                     continue
                 yield ProcessInfo(**data)
-            except Exception:  # noqa: S112
+            except Exception as exc:
+                logger.warning(
+                    "SKIP_UNPARSEABLE_PROCESS_LINE",
+                    extra={"error": str(exc), "line": line},
+                )
                 continue
 
 
