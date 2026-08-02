@@ -25,12 +25,10 @@ __all__ = [
     "SupportedPlatformChecker",
     "TConfigCloud_co",
     "TConfigCloud_contra",
-    "TConfigCloud_inv",
 ]
 
 SupportedPlatformChecker = Callable[[str], bool]
 
-TConfigCloud_inv = TypeVar("TConfigCloud_inv", bound=ConfigCloud)
 TConfigCloud_co = TypeVar("TConfigCloud_co", bound=ConfigCloud, covariant=True)
 TConfigCloud_contra = TypeVar(
     "TConfigCloud_contra",
