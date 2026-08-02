@@ -20,13 +20,12 @@ from yascheduler.entrypoints import CLIDeps, Config, make_cli_deps
 from yascheduler.entrypoints.config_parser import parse_config
 from yascheduler.entrypoints.logger import configure_cli_logger
 from yascheduler.infra import SSHMachineRepository, list_private_keys
+from yascheduler.shared import MAX_PORT
 
 from .args import add_config_arg, add_log_level_arg
 
 __all__ = ["manage_node"]
 logger = logging.getLogger(__name__)
-
-MAX_PORT = 65535
 
 
 # Covers 127/8, ::1, and the "localhost" name.
