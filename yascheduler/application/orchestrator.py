@@ -420,7 +420,7 @@ class Orchestrator:
             self._connect_failures.pop(node.node_id, None)
             # endregion BLOCK_connect_abandon
         except Exception:
-            logger.exception("An error occuried on remote machine creation")
+            logger.exception("An error occurred on remote machine creation")
 
     # endregion METHOD_connect_machine_consumer
 
