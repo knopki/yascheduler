@@ -3,7 +3,6 @@
 # PURPOSE: Centralize ROOT-logger configuration for every entry point.
 # SCOPE: Only logger configuration
 # INVARIANTS:
-# - configure_logger always adds StreamHandler(sys.stderr); adds FileHandler(log_file) only when log_file is not None
 # - configure_logger wires ONE shared LogFormatter instance onto both handlers (the timestamp flag is identical on both)
 # - configure_cli_logger adds StreamHandler(sys.stderr) ONLY when no handler is already present on the ROOT logger (pytest caplog coexistence)
 # - both helpers call logging.captureWarnings(True)
@@ -14,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import sys
 from typing import TYPE_CHECKING
 
@@ -29,9 +29,13 @@ __all__ = ["configure_cli_logger", "configure_logger"]
 # PURPOSE: Configure the ROOT logger for the daemon launchers.
 # INVARIANTS:
 # - Always adds StreamHandler(sys.stderr).
-# - Adds FileHandler(log_file) only when log_file is not None.
+# - Adds RotatingFileHandler(log_file) only when log_file is not None.
 # - Both handlers share a single LogFormatter instance (with timestamping enabled iff timestamp=True).
 # - timestamp=True prepends an ISO 8601 local-time prefix to every rendered line; needed for file logging and foreground stderr where no journald stamps records.
+_LOG_MAX_BYTES = 1 * 1024 * 1024
+_LOG_BACKUP_COUNT = 5
+
+
 def configure_logger(
     log_file: str | Path | None,
     level: int,
@@ -47,7 +51,9 @@ def configure_logger(
     sh.setFormatter(formatter)
     root.addHandler(sh)
     if log_file is not None:
-        fh = logging.FileHandler(log_file)
+        fh = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUP_COUNT
+        )
         fh.setFormatter(formatter)
         root.addHandler(fh)
 
