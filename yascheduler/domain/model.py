@@ -19,9 +19,9 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum, IntEnum, unique
-from typing import ClassVar, Generic, TypeAlias, TypeVar, Union, cast
+from typing import ClassVar, Generic, TypeVar, Union, cast
 
-from yascheduler.shared import StrEnum, TypeIs
+from yascheduler.shared import StrEnum, TypeAlias, TypeIs
 
 from .engine import (
     Deploy,

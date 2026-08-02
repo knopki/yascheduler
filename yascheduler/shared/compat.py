@@ -8,6 +8,11 @@
 import sys
 from enum import Enum
 
+if sys.version_info >= (3, 10):
+    from typing import TypeAlias
+else:
+    from typing_extensions import TypeAlias
+
 if sys.version_info >= (3, 11):
     from enum import StrEnum
     from typing import NotRequired, ParamSpec, Required, Self, TypeGuard, Unpack
@@ -30,12 +35,14 @@ if sys.version_info >= (3, 13):
 else:
     from typing_extensions import TypeIs
 
+
 __all__ = [
     "NotRequired",
     "ParamSpec",
     "Required",
     "Self",
     "StrEnum",
+    "TypeAlias",
     "TypeGuard",
     "TypeIs",
     "Unpack",
