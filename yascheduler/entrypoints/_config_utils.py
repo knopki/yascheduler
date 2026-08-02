@@ -1,7 +1,7 @@
-"""Parser-side config helpers — warning for unknown INI keys and optional-string coercion."""
+"""Parser-side config helpers — warning for unknown INI keys."""
 # region MODULE_CONTRACT
-# PURPOSE: Provide parser-side config helpers — warning for unknown INI keys and optional-string coercion — consumed only by entrypoints.config_parser.
-# SCOPE: ConfigWarning, warn_unknown_fields, opt_str_val; consumed only by entrypoints.config_parser.
+# PURPOSE: Provide parser-side config helpers — warning for unknown INI keys — consumed only by entrypoints.config_parser.
+# SCOPE: ConfigWarning, warn_unknown_fields; consumed only by entrypoints.config_parser.
 # KEYWORDS: config, parser, warning, ini, validation, helpers
 # endregion MODULE_CONTRACT
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from configparser import SectionProxy
 
-__all__ = ["ConfigWarning", "opt_str_val", "warn_unknown_fields"]
+__all__ = ["ConfigWarning", "warn_unknown_fields"]
 
 
 class ConfigWarning(Warning):
@@ -30,16 +30,3 @@ def warn_unknown_fields(known_fields: Sequence[str], sec: SectionProxy) -> None:
             ConfigWarning,
             3,
         )
-
-
-def opt_str_val(value: object) -> str | None:
-    """Coerce value to Optional[str]: None stays None, str passes through, else raise.
-
-    Replaces the former attrs optional-str validator for parser-side use.
-    """
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    msg = f"expected Optional[str], got {type(value).__name__}"
-    raise ValueError(msg)
