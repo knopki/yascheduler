@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from pathlib import Path, PurePath
     from re import Pattern
 
-    from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
+    from asyncssh.connection import SSHClientConnection
     from asyncssh.process import SSHCompletedProcess
     from asyncssh.sftp import SFTPClient
 
@@ -70,7 +70,6 @@ class SSHMachineSession:
         self,
         hostname: str,
         conn: SSHClientConnection,
-        conn_opts: SSHClientConnectionOptions,
         machine: ConnectedMachine,
         adapter: RemoteMachineAdapter,
         platforms: Sequence[str],
@@ -80,7 +79,6 @@ class SSHMachineSession:
     ) -> None:
         self._hostname = hostname
         self._conn = conn
-        self._conn_opts = conn_opts
         self._machine = machine
         self._adapter = adapter
         self._platforms = platforms

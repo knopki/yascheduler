@@ -108,7 +108,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     return adapter
 
 
-def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
+def _make_mock_connection(ip: str = "10.0.0.1") -> MagicMock:
     """Create a mock connection with SFTP client context manager."""
     conn = MagicMock()
     conn.is_closed = MagicMock(return_value=False)
@@ -126,13 +126,7 @@ def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
 
     conn.start_sftp_client = _sftp_ctx
 
-    # -- connection options --
-    conn_opts = MagicMock()
-    conn_opts.host = ip
-    conn_opts.port = 22
-    conn_opts.username = "root"
-
-    return conn, conn_opts
+    return conn
 
 
 def _make_state(
@@ -148,7 +142,7 @@ def _make_state(
     that ``from tests.unit.test_ssh_gateway import _make_state``.
     """
     adapter = _make_mock_adapter(platform=platform, ncpus=ncpus)
-    conn, conn_opts = _make_mock_connection(ip=hostname)
+    conn = _make_mock_connection(ip=hostname)
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
@@ -160,7 +154,6 @@ def _make_state(
     return SSHMachineSession(
         hostname=hostname,
         conn=conn,
-        conn_opts=conn_opts,
         machine=machine,
         adapter=adapter,
         platforms=[platform, "debian-like"],

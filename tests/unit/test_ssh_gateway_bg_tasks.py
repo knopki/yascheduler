@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
+from asyncssh.connection import SSHClientConnection
 
 from yascheduler.domain import Engine
 from yascheduler.domain.model import ConnectedMachine, MachineState, NodeId
@@ -35,7 +35,7 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     return adapter
 
 
-def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
+def _make_mock_connection(ip: str = "10.0.0.1") -> MagicMock:
     conn = MagicMock(spec=SSHClientConnection)
     conn.is_closed = MagicMock(return_value=False)
     conn.close = MagicMock()
@@ -51,11 +51,7 @@ def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
 
     conn.start_sftp_client = _sftp_ctx
 
-    conn_opts = MagicMock(spec=SSHClientConnectionOptions)
-    conn_opts.host = ip
-    conn_opts.port = 22
-    conn_opts.username = "root"
-    return conn, conn_opts
+    return conn
 
 
 def _make_state(
@@ -67,7 +63,7 @@ def _make_state(
 ) -> SSHMachineSession:
     """Create a fully-mocked SSHMachineSession (bypasses connect)."""
     adapter = _make_mock_adapter(platform=platform, ncpus=ncpus)
-    conn, conn_opts = _make_mock_connection(ip=hostname)
+    conn = _make_mock_connection(ip=hostname)
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
@@ -79,7 +75,6 @@ def _make_state(
     return SSHMachineSession(
         hostname=hostname,
         conn=conn,
-        conn_opts=conn_opts,
         machine=machine,
         adapter=adapter,
         platforms=[platform, "debian-like"],

@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 from unittest.mock import MagicMock
 
 import pytest
-from asyncssh.connection import SSHClientConnection, SSHClientConnectionOptions
+from asyncssh.connection import SSHClientConnection
 
 from yascheduler.domain import ConnectedMachine, MachineState
 from yascheduler.domain.model import NodeId
@@ -28,11 +28,8 @@ def _make_mock_adapter(platform: str = "linux", ncpus: int = 4) -> MagicMock:
     return adapter
 
 
-def _make_mock_connection(ip: str = "10.0.0.1") -> tuple[MagicMock, MagicMock]:
-    conn = MagicMock(spec=SSHClientConnection)
-    conn_opts = MagicMock(spec=SSHClientConnectionOptions)
-    conn_opts.host = ip
-    return conn, conn_opts
+def _make_mock_connection(ip: str = "10.0.0.1") -> MagicMock:
+    return MagicMock(spec=SSHClientConnection)
 
 
 def _make_session(
@@ -44,7 +41,7 @@ def _make_session(
 ) -> SSHMachineSession:
     """Create a fully-mocked SSHMachineSession (bypasses connect)."""
     adapter = _make_mock_adapter(platform=platform, ncpus=ncpus)
-    conn, conn_opts = _make_mock_connection(ip=hostname)
+    conn = _make_mock_connection(ip=hostname)
 
     machine = ConnectedMachine(
         node_id=NodeId(node_id),
@@ -56,7 +53,6 @@ def _make_session(
     return SSHMachineSession(
         hostname=hostname,
         conn=conn,
-        conn_opts=conn_opts,
         machine=machine,
         adapter=adapter,
         platforms=[platform, "debian-like"],

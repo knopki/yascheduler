@@ -135,7 +135,7 @@ class SSHMachineRepository:
         port: int = 22,
         connect_timeout: int | None = None,
         tunnel_opts: SSHClientConnectionOptions | None = None,
-    ) -> tuple[SSHClientConnection, SSHClientConnectionOptions]:
+    ) -> SSHClientConnection:
         # region BLOCK_build_opts
         conn_opts = SSHClientConnectionOptions(
             options=DEFAULT_CONN_OPTS,
@@ -156,7 +156,7 @@ class SSHMachineRepository:
                 "tunnel": tunnel_opts.host if tunnel_opts else None,
             },
         )
-        conn = await asyncssh.connection.connect(
+        return await asyncssh.connection.connect(
             options=conn_opts,
             host=conn_opts.host,
             port=conn_opts.port,
@@ -165,7 +165,6 @@ class SSHMachineRepository:
             known_hosts=None,
         )
         # endregion BLOCK_connect
-        return conn, conn_opts
 
     # endregion METHOD__open_connection
 
@@ -223,7 +222,7 @@ class SSHMachineRepository:
         # region BLOCK_build_tunnel
         tunnel_opts = _build_tunnel_options(node, client_keys, connect_timeout)
         # endregion BLOCK_build_tunnel
-        conn, conn_opts = await self._open_connection(
+        conn = await self._open_connection(
             node.hostname,
             node.username,
             client_keys,
@@ -256,7 +255,6 @@ class SSHMachineRepository:
         session = SSHMachineSession(
             hostname=node.hostname,
             conn=conn,
-            conn_opts=conn_opts,
             machine=machine,
             adapter=adapter,
             platforms=platforms,
