@@ -102,6 +102,29 @@ async def test_connect_translates_oserror() -> None:
 
 
 @pytest.mark.asyncio
+async def test_connect_translates_key_import_error() -> None:
+    """KeyImportError (ValueError) from a stray .pub in client_keys is translated
+    to MachineConnectionError instead of escaping raw past the orchestrator's
+    retry/abandon path."""
+    gw = SSHMachineRepository()
+    gw._connect_impl = AsyncMock(  # type: ignore[method-assign]
+        side_effect=asyncssh.public_key.KeyImportError("Invalid private key")
+    )
+    node = Node(
+        node_id=NodeId(1),
+        hostname="10.0.0.1",
+        ncpus=4,
+        username="root",
+        port=22,
+    )
+    with pytest.raises(MachineConnectionError) as exc_info:
+        await gw.connect(node, None)
+    assert exc_info.value.hostname == "10.0.0.1"
+    assert "Invalid private key" in exc_info.value.reason
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+@pytest.mark.asyncio
 async def test_connect_returns_session_on_success() -> None:
     gw = SSHMachineRepository()
     session = _make_state(hostname="10.0.0.1")

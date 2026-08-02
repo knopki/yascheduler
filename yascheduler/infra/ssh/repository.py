@@ -199,7 +199,9 @@ class SSHMachineRepository:
                 engines_dir=engines_dir,
                 tasks_dir=tasks_dir,
             )
-        except (asyncssh.misc.Error, OSError) as err:
+        except (asyncssh.misc.Error, OSError, ValueError) as err:
+            # ValueError covers asyncssh.public_key.KeyImportError (its base), raised
+            # by load_keypairs when client_keys contains a non-private-key file.
             raise MachineConnectionError(node.node_id, node.hostname, str(err)) from err
 
     # endregion METHOD_connect

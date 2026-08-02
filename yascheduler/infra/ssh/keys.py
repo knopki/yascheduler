@@ -13,15 +13,10 @@ __all__ = ["list_private_keys"]
 
 # region FUNC_list_private_keys
 # PURPOSE: List private-key file paths from the given keys directory.
-# ENSURES: Returns is_file() entries only; keys_dir is a Path in production but tests may pass MagicMock.
+# ENSURES: Returns is_file() entries only AND excludes .pub files.
 def list_private_keys(keys_dir: Path) -> Sequence[PurePath]:
-    """List private key file paths."""
-    # region BLOCK_scan_keys_dir
-    # Call iterdir() directly on keys_dir rather than Path(keys_dir).iterdir():
-    # tests pass a MagicMock whose __fspath__ is intentionally absent, so Path(keys_dir)
-    # would raise TypeError. keys_dir is expected to be a Path in production.
-    filepaths = filter(lambda x: x.is_file(), keys_dir.iterdir())
-    # endregion BLOCK_scan_keys_dir
+    """List private key file paths, skipping public keys (.pub)."""
+    filepaths = (x for x in keys_dir.iterdir() if x.is_file() and x.suffix != ".pub")
     return list(filepaths)
 
 
