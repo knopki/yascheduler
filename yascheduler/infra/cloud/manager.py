@@ -197,7 +197,7 @@ class CloudProvisionerImpl:
                         disc_err,
                     )
                 try:
-                    await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
+                    await adapter.delete_node(cfg=config, external_id=dto.external_id)
                 except BaseException:
                     logger.exception(
                         "cloud teardown delete failed for %s external_id=%s "
@@ -233,7 +233,7 @@ class CloudProvisionerImpl:
     # region METHOD_deallocate
     # PURPOSE: Tear down a cloud VM by provider so billing stops and the node slot is freed for reallocation.
     # REQUIRES: node.cloud is set and corresponds to a known provider with config.
-    # ENSURES: No-ops (warn+return) when node.cloud is None, provider has no adapter, or provider has no config.
+    # ENSURES: No-ops (warn+return) when node.cloud is None, provider has no adapter, provider has no config, or node.external_id is None (corrupt row - cannot identify the VM).
     async def deallocate(self, node: Node) -> None:
         """Delete VM via named provider's SDK (no DB access)."""
         # region BLOCK_resolve_deallocate_provider
@@ -261,8 +261,19 @@ class CloudProvisionerImpl:
             return
         # endregion BLOCK_resolve_deallocate_provider
 
-        # region BLOCK_delete_vm
-        await adapter.delete_node(cfg=config, external_id=node.external_id)  # type: ignore[arg-type]
+        # region BLOCK_delete_vm Local binding narrows str | None -> str for delete_node
+        # without a cast/type: ignore. external_id is None only for corrupt row - cannot
+        # identify the VM to delete, so skip rather than pass None to the adapter.
+        external_id = node.external_id
+        if external_id is None:
+            logger.warning(
+                "deallocate node has no external_id: node_id=%s cloud=%s "
+                "— cannot identify VM; skipping cloud delete",
+                node.node_id,
+                node.cloud,
+            )
+            return
+        await adapter.delete_node(cfg=config, external_id=external_id)
         logger.debug(
             "DONE",
             extra={

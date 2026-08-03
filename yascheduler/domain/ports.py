@@ -411,7 +411,7 @@ class CloudProvisioner(Protocol):
     """Cloud VM provisioning port. ``allocate``/``deallocate`` are async.
 
     ``select_provider`` is sync (returns ``None`` when no capacity or throttled).
-    ``deallocate`` reads ``node.cloud``/``node.hostname`` and no-ops on ``cloud is None``.
+    ``deallocate`` reads ``node.cloud``/``node.hostname`` and no-ops on ``cloud is None`` or ``external_id is None``.
     """
 
     async def allocate(self, provider: str, node: Node) -> Node:

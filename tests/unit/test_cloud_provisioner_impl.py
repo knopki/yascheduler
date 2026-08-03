@@ -1073,6 +1073,31 @@ class TestDeallocate:
 
         adapter.delete_node.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_deallocate_no_external_id_logs_and_returns(self) -> None:
+        """cloud set but external_id None (corrupt/legacy row) -> skip, no adapter call."""
+        adapter, config = _make_mock_adapter(name="test-cloud")
+        adapter.delete_node = AsyncMock()
+
+        prov = make_provisioner(
+            adapters={"test-cloud": adapter},
+            configs={"test-cloud": config},
+        )
+
+        node = Node(
+            node_id=NodeId(1),
+            hostname="10.0.0.1",
+            ncpus=2,
+            cloud="test-cloud",
+            external_id=None,
+            username="root",
+            port=22,
+            enabled=True,
+        )
+        await prov.deallocate(node)
+
+        adapter.delete_node.assert_not_awaited()
+
 
 class TestStop:
     """stop() drains machine_repository via disconnect_all."""
