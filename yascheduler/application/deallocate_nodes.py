@@ -1,7 +1,7 @@
-"""Deallocate idle nodes use case — disable idle cloud nodes and return Node objects for VM deletion."""
+"""Deallocate idle nodes use case — disable idle cloud nodes and reap every free disabled node."""
 # region MODULE_CONTRACT
-# PURPOSE: Stop paying for idle cloud capacity by disabling nodes that have been free past their configured tolerance, returning their Node objects so the orchestrator can delete the VMs.
-# SCOPE: Idle cloud node deallocation — disable nodes in DB by idle tolerance, collect disabled nodes for VM deletion.
+# PURPOSE: Stop paying for idle cloud capacity by disabling nodes that have been free past their configured tolerance, and reap any free disabled node so draining nodes are torn down once their task finishes.
+# SCOPE: Idle cloud node deallocation + collect every free disabled node for teardown.
 # KEYWORDS: deallocate, idle, node, cloud, disable, tolerance
 # endregion MODULE_CONTRACT
 
@@ -27,14 +27,14 @@ __all__ = ["deallocate_node", "deallocate_nodes"]
 
 
 # region FUNC_deallocate_node
-# PURPOSE: Tear down a cloud node completely — disconnect SSH, disable in DB, delete cloud VM, remove row — so billing stops and the scheduler no longer tracks it.
+# PURPOSE: Tear down a node completely — disconnect SSH, disable in DB (cloud only), delete cloud VM (cloud only), remove row — so billing stops and the scheduler no longer tracks it.
 # REQUIRES: The caller SHALL wrap deallocate_node in try/except Exception that logs node_id, hostname, and the error and continues; the caller SHALL NOT call repository.contains(...)/repository.disconnect(...) directly — SSH teardown is owned by deallocate_node.
-# ENSURES: Cloud VM deletion happens before row removal; if row removal fails after cloud delete, the error is logged but not re-raised (stale disabled row left for manual reconciliation). If the node's machine slot is BUSY at entry, teardown is skipped entirely, so the live task is not lost; a later cycle reaps the node once free.
+# ENSURES: Cloud VM deletion happens before row removal; row removal itself runs for both cloud and static nodes (a static node disabled by --remove-soft is reaped here once its task finishes). If row removal fails, the error is logged but not re-raised (stale disabled row left for manual reconciliation). If the node's machine slot is BUSY at entry, teardown is skipped entirely, so the live task is not lost; a later cycle reaps the node once free.
 # RATIONALE:
 # - Q: Why re-check machine.state == BUSY at entry when deallocate_nodes already filters by busy_node_ids?
 #   A: busy_node_ids is a single snapshot read before the disables; an allocator that read the enabled set before the disable holds (session, node) and occupies the slot afterward (occupy() runs before the SSH upload, before the RUNNING save). The stale snapshot would route that node here for VM deletion under a live task. The teardown-time re-check closes that window; BUSY is airtight because no event-loop yield separates the allocator's free-machine pick from occupy().
-# - Q: Why does SSH disconnect run before the cloud guard and why is cloud deletion conditional?
-#   A: SSH disconnect runs before the if node.cloud: guard so teardown happens unconditionally for both cloud and static nodes. Cloud deletion is conditional on node.cloud because static nodes have no cloud VM to delete. The disable+remove bracket (disable in DB before cloud VM delete, remove row after) protects against allocator re-selection if cloud deletion fails — a disabled node is invisible to the allocator's free-machine selection.
+# - Q: Why do SSH disconnect and row removal run for both cloud and static nodes, while cloud VM deletion is conditional?
+#   A: SSH disconnect and row removal are node-teardown steps, not cloud-specific. Cloud VM deletion (and its protective pre-disable bracket) is conditional on node.cloud because static nodes have no VM to delete; their row removal has no cloud-delete-failure risk to guard against. Static nodes reach this path via the orchestrator's drain flow: --remove-soft disables a busy node, the connect loop keeps it connected to finish the task, and once free the deallocate loop reaps the row.
 async def deallocate_node(
     node: Node,
     repository: MachineRepository,
@@ -94,56 +94,57 @@ async def deallocate_node(
         await clouds.deallocate(node)
         # endregion BLOCK_cloud_delete
 
-        # region BLOCK_remove
+    # region BLOCK_remove
+    # Runs for both cloud and static nodes: SSH teardown and row removal are
+    # not cloud-specific. The cloud VM deletion above is guarded; a static
+    # node disabled by --remove-soft is reaped here once its task finishes.
+    logger.debug(
+        "REMOVE",
+        extra={
+            "node_id": node.node_id,
+            "hostname": node.hostname,
+            "cloud": node.cloud,
+        },
+    )
+    try:
+        async with uow_factory() as uow:
+            await uow.nodes.remove(node.node_id)
+            await uow.commit()
+    except NodeRowNotFoundError:
+        # Row already gone. For cloud nodes the VM is already deleted; for
+        # static nodes the row was removed concurrently. Nothing to reconcile.
         logger.debug(
-            "REMOVE",
-            extra={
-                "node_id": node.node_id,
-                "hostname": node.hostname,
-                "cloud": node.cloud,
-            },
+            "node already removed: node_id=%s hostname=%s cloud=%s",
+            node.node_id,
+            node.hostname,
+            node.cloud,
         )
-        try:
-            async with uow_factory() as uow:
-                await uow.nodes.remove(node.node_id)
-                await uow.commit()
-        except NodeRowNotFoundError:
-            # Row already gone. The cloud VM is already deleted; nothing to reconcile.
-            logger.debug(
-                "node already removed: node_id=%s hostname=%s cloud=%s",
-                node.node_id,
-                node.hostname,
-                node.cloud,
-            )
-        except Exception:
-            # Cloud VM is already gone; the disabled DB row is stale. Log
-            # loudly so operators can reconcile manually. Not re-raised: the
-            # cloud delete succeeded, and the next cycle's deallocate_node
-            # will re-attempt (cloud-SDK delete-idempotency dependent) plus
-            # this remove.
-            logger.exception(
-                "node remove failed: node_id=%s hostname=%s cloud=%s "
-                "— VM is deleted but DB row left disabled; "
-                "manual reconciliation needed",
-                node.node_id,
-                node.hostname,
-                node.cloud,
-            )
-        # endregion BLOCK_remove
+    except Exception:
+        # Row removal failed; the disabled DB row is stale. For cloud nodes
+        # the VM is already gone. Log loudly so operators can reconcile
+        # manually. Not re-raised: the next cycle's deallocate_node retries.
+        logger.exception(
+            "node remove failed: node_id=%s hostname=%s cloud=%s "
+            "— DB row left disabled; manual reconciliation needed",
+            node.node_id,
+            node.hostname,
+            node.cloud,
+        )
+    # endregion BLOCK_remove
 
 
 # endregion FUNC_deallocate_node
 
 
 # region FUNC_deallocate_nodes
-# PURPOSE: Disable idle cloud nodes exceeding their configured idle tolerance and return the disabled Node objects for VM deletion.
-# ENSURES: Returns only disabled cloud nodes whose node_id is not in busy_node_ids; intermediate list is non-empty for pyright/mypy inference.
+# PURPOSE: Disable idle cloud nodes exceeding their configured idle tolerance and return the disabled Node objects for teardown (cloud VM deletion + static row removal).
+# ENSURES: Returns disabled nodes (cloud and static) whose node_id is not in busy_node_ids; the disable phase is cloud-only (idle tolerance), but the collect phase returns every free disabled node so static drain nodes are reaped too. Intermediate list is non-empty for pyright/mypy inference.
 async def deallocate_nodes(
     uow_factory: Callable[[], AbstractUnitOfWork],
     config_clouds: Sequence[CloudConfig],
     idle_machines: dict[NodeId, float],
 ) -> list[Node]:
-    """Disable idle cloud nodes exceeding tolerance and return their Node objects for VM deletion."""
+    """Disable idle cloud nodes exceeding tolerance and return disabled Node objects for teardown."""
     # region BLOCK_disable_idle
     async with uow_factory() as uow:
         running_tasks = await uow.tasks.list_running()
@@ -181,10 +182,14 @@ async def deallocate_nodes(
     # Note: intermediate var is required — inlining the return inside the
     # async-with makes pyright/mypy infer an implicit None fall-through.
     async with uow_factory() as uow:
+        # Collect every free disabled node — cloud (idle-tolerance) and
+        # static (--remove-soft drain) alike. The disable phase above is
+        # cloud-only; the reap phase is not: a draining static node must be
+        # returned so its row is removed once its task finishes.
         free_disabled_nodes = [
             node
             for node in await uow.nodes.list_disabled()
-            if node.node_id not in busy_node_ids and node.cloud
+            if node.node_id not in busy_node_ids
         ]
     return free_disabled_nodes  # noqa: RET504
     # endregion BLOCK_collect_disabled

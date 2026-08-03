@@ -737,9 +737,15 @@ class TestDeallocateNodes:
             for n in result
         )
 
-    async def test_deallocate_nodes_skips_non_cloud_nodes(self) -> None:
-        """Node with cloud=None -> NOT disabled, NOT in returned list."""
-        # An enabled node without cloud
+    async def test_deallocate_nodes_skips_disabling_static_but_returns_for_reap(
+        self,
+    ) -> None:
+        """Static node (cloud=None) is NOT disabled by idle-tolerance (cloud-only phase), but IS returned for row removal — the drain teardown is not cloud-specific.
+
+        Pins the reviewer fix: a static node disabled by --remove-soft must be
+        reaped by the collect phase once its task finishes, otherwise it sits
+        disabled in the DB indefinitely.
+        """
         local_node = Node(node_id=NodeId(1), hostname="10.0.0.1", ncpus=4, cloud=None)
 
         uow = AsyncMock()
@@ -768,12 +774,13 @@ class TestDeallocateNodes:
             idle_machines=idle_machines,
         )
 
-        # In first phase: node.cloud=None != "az" prefix, so NOT disabled
+        # Disable phase is cloud-only: node.cloud=None != "az" -> NOT disabled.
         uow.nodes.disable.assert_not_called()
-        # In second phase: node.cloud is None -> filtered out, not returned
+        # Collect phase returns it for teardown (row removal) regardless of cloud.
         assert isinstance(result, list)
-        assert result == []
-        assert all(not (isinstance(n, Node) and n.node_id == NodeId(1)) for n in result)
+        assert len(result) == 1
+        assert result[0].node_id == NodeId(1)
+        assert result[0].cloud is None
 
     async def test_deallocate_nodes_returns_node_objects(self) -> None:
         """Return type is list[Node]; each element carries node_id, ip, cloud (proves D1)."""
@@ -854,7 +861,7 @@ class TestDeallocateNodes:
 
 
 # =============================================================================
-# deallocate_node bracketing (2 tests)
+# deallocate_node bracketing (3 tests)
 # =============================================================================
 
 
@@ -897,6 +904,59 @@ class TestDeallocateNodeBracketing:
         )
 
         assert calls == ["disable", "commit", "deallocate", "remove", "commit"]
+
+    async def test_static_node_disconnects_and_removes_without_cloud_delete(
+        self,
+    ) -> None:
+        """Static node (cloud=None) reaped: SSH disconnect + row remove, but NO disable and NO cloud VM deletion.
+
+        The reviewer fix: a static node disabled by --remove-soft must have
+        its DB row removed (and SSH session disconnected) once its task
+        finishes — not sit disabled indefinitely. Cloud-only steps are skipped.
+        """
+        node = Node(node_id=NodeId(2), hostname="10.0.0.2", ncpus=4, cloud=None)
+        gateway = MagicMock()
+        gateway.get_session.return_value = None  # not connected -> BUSY re-check no-op
+        gateway.contains.return_value = True  # connected -> disconnect runs
+        gateway.disconnect = AsyncMock(
+            side_effect=lambda _nid: calls.append("disconnect")
+        )
+
+        calls: list[str] = []
+
+        uow = AsyncMock()
+        uow.nodes.disable = AsyncMock(
+            side_effect=lambda _node_id: calls.append("disable"),
+        )
+        uow.nodes.remove = AsyncMock(
+            side_effect=lambda _node_id: calls.append("remove"),
+        )
+        uow.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        clouds = MagicMock(spec=CloudProvisioner)
+        clouds.deallocate = AsyncMock(
+            side_effect=lambda _node: calls.append("deallocate"),
+        )
+
+        await deallocate_node(
+            node=node,
+            repository=gateway,
+            clouds=clouds,
+            uow_factory=uow_factory,
+        )
+
+        # SSH disconnected, row removed and committed.
+        gateway.disconnect.assert_awaited_once_with(NodeId(2))
+        uow.nodes.remove.assert_awaited_once_with(NodeId(2))
+        assert calls == ["disconnect", "remove", "commit"]
+        # Cloud-only steps NOT taken for a static node.
+        uow.nodes.disable.assert_not_called()
+        clouds.deallocate.assert_not_called()
 
     async def test_failure_in_cloud_delete_leaves_node_disabled(self) -> None:
         """[12.4] clouds.deallocate raises -> node stays disabled, remove NOT called."""
