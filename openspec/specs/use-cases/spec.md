@@ -4,9 +4,7 @@ Application-layer use cases orchestrate task submission, allocation,
 consumption, and node deallocation. They drive the domain entities
 through the repository, SSH, and cloud ports. They do not own business
 rules; the domain entities do.
-
 ## Requirements
-
 ### Requirement: Submit a task
 
 The system SHALL create a new task in `TO_DO` state when the engine is
@@ -68,25 +66,32 @@ can be deleted.
 
 ### Requirement: Abandon a node
 
-The system SHALL remove a cloud node that never established its SSH
-connection. VM deletion SHALL be best-effort: a VM-deletion failure
-SHALL be logged and SHALL NOT block DB-row removal. The DB row SHALL
-be removed; if that removal fails, the failure SHALL be reported. All
-in-flight allocation entries linked to the node SHALL be released, and
-the count released SHALL be reported.
+The system SHALL clean up a cloud node that never established its SSH
+connection. The system SHALL disable the node's DB row before it
+attempts to delete the cloud VM.
 
-When the node has no cloud, the system SHALL skip VM deletion and SHALL
-still remove the DB row and release the in-flight allocation entries.
+On a successful VM deletion, the system SHALL remove the DB row. If
+that removal fails, the system SHALL report the failure.
+
+On a failed VM deletion, the system SHALL leave the DB row disabled so
+a later deallocate cycle can retry the VM deletion. The system SHALL
+report the failure.
+
+In all cases, the system SHALL release all in-flight allocation entries
+linked to the node and SHALL report the count released.
+
+When the node has no cloud, the system SHALL skip VM deletion, remove
+the DB row, and release the in-flight allocation entries.
 
 #### Scenario: an abandoned cloud node is fully cleaned up
 
-- **WHEN** an abandoned cloud node with one in-flight allocation entry is cleaned up
+- **WHEN** an abandoned cloud node with one in-flight allocation entry is cleaned up and the VM deletion succeeds
 - **THEN** its VM is deleted, its DB row is removed, and its in-flight allocation entry is released
 
-#### Scenario: a VM-deletion failure does not block DB cleanup
+#### Scenario: a failed VM deletion leaves the DB row for retry
 
-- **WHEN** VM deletion fails during cleanup
-- **THEN** the failure is logged, the DB row is still removed, and the in-flight allocation entries are still released
+- **WHEN** the VM deletion fails during the abandon of a cloud node with one in-flight allocation entry
+- **THEN** the DB row stays disabled so the VM deletion can be retried, and the in-flight allocation entry is released
 
 ### Requirement: Consume a task
 
@@ -147,3 +152,4 @@ and SHALL report the count released.
 
 - **WHEN** allocations linked to a node are released
 - **THEN** every allocation linked to that node is removed and the count removed is reported
+
