@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest.importorskip("upcloud_api")
+
 from yascheduler.infra.cloud.providers import upcloud
 from yascheduler.infra.cloud.providers.upcloud import (
     UpCloudAPIError,
