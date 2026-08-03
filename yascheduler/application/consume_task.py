@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from yascheduler.domain import (
         DoneTask,
+        Engine,
         EngineRepository,
         MachineSession,
         RunningTask,
@@ -36,11 +37,10 @@ __all__ = ["consume_task"]
 # region FUNC__prepare_store_folder
 # PURPOSE: Ensure the local filesystem is ready to receive remote outputs and resolve what to fetch, so the download step has a target directory and file list.
 async def _prepare_store_folder(
-    task: RunningTask, local_tasks_dir: Path, engines: EngineRepository
+    task: RunningTask, local_tasks_dir: Path, engine: Engine
 ) -> tuple[Path, list[str], str]:
     # region BLOCK_create_dir
     remote_folder: str = task.state.remote_folder
-    engine = engines[task.engine]
     output_files = [str(PurePosixPath(remote_folder) / x) for x in engine.output_files]
     if task.local_folder:
         store_folder = Path(task.local_folder)
@@ -198,6 +198,42 @@ async def _finalize_task(
 # endregion FUNC__finalize_task
 
 
+# region FUNC__fail_missing_engine
+# PURPOSE: Finalise a RUNNING task whose engine was removed from config, so the producer does not re-yield it forever.
+# ENSURES: Saves a DONE+error task via UoW, commits, discards tracker slot, returns True.
+async def _fail_missing_engine(
+    task: RunningTask,
+    uow_factory: Callable[[], AbstractUnitOfWork],
+    tracker: AllocationTracker,
+) -> bool:
+    error_msg = f"engine '{task.engine}' no longer in config"
+    finalised = task.fail(
+        error_msg,
+        local_folder=task.local_folder or "",
+        remote_folder=task.state.remote_folder,
+    )
+    # region BLOCK_persist
+    async with uow_factory() as uow:
+        await uow.tasks.save(finalised)
+        await uow.commit()
+
+    logger.warning("task_id=%s failed: %s", finalised.task_id, finalised.state.error)
+    logger.debug(
+        "FINALISE_FAIL_MISSING_ENGINE",
+        extra={
+            "task_id": finalised.task_id,
+            "label": finalised.label,
+            "error": finalised.state.error,
+        },
+    )
+    tracker.discard(finalised.task_id)
+    # endregion BLOCK_persist
+    return True
+
+
+# endregion FUNC__fail_missing_engine
+
+
 # region FUNC_consume_task
 # PURPOSE: Load a RUNNING task, download its outputs from the remote machine, and finalise (DONE) or defer (stay RUNNING).
 # ENSURES: Returns True when finalised (or task gone — vacuously finalised); False when deferred.
@@ -223,10 +259,22 @@ async def consume_task(
         tracker.discard(task_id)
         return True
 
+    # Engine may have been removed from config while the task was RUNNING.
+    # Treat as a permanent consume error: finalise via fail() so the task does
+    # not loop forever being re-yielded by the producer each cycle.
+    engine = engines.get(task.engine)
+    if engine is None:
+        logger.warning(
+            "task_id=%s engine '%s' no longer in config, failing task",
+            task_id,
+            task.engine,
+        )
+        return await _fail_missing_engine(task, uow_factory, tracker)
+
     store_folder, output_files, task_remote_folder = await _prepare_store_folder(
         task,
         local_tasks_dir,
-        engines,
+        engine,
     )
     (
         local_folder,

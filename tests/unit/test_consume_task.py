@@ -276,6 +276,56 @@ class TestConsumeTask:
         tracker.discard.assert_called_once_with(TaskId(1))
         assert result is True
 
+    async def test_consume_task_missing_engine_fails_task_returns_true(
+        self,
+        mock_output_downloader: MagicMock,
+        running_task: Task,
+        mock_engine_repo: MagicMock,
+    ) -> None:
+        """Engine removed from config while task RUNNING -> task.fail + save + tracker.discard, returns True. No download attempted."""
+        session_mock = SimpleNamespace(ip="10.0.0.1")
+
+        mock_engine_repo.get.return_value = None
+        mock_engine_repo.__getitem__.side_effect = KeyError("test_engine")
+
+        uow = AsyncMock()
+        uow.tasks = AsyncMock()
+        uow.tasks.get_running = AsyncMock(return_value=running_task)
+        uow.tasks.save = AsyncMock()
+        uow.commit = AsyncMock()
+        uow.collect_events = AsyncMock(return_value=[])
+        uow.publish_events = AsyncMock()
+        uow.__aenter__ = AsyncMock(return_value=uow)
+        uow.__aexit__ = AsyncMock(return_value=False)
+
+        def uow_factory() -> AbstractUnitOfWork:
+            return uow
+
+        tracker = MagicMock(spec=AllocationTracker)
+        local_tasks_dir = MagicMock(spec=Path)
+
+        result = await self._run_consume(
+            session=session_mock,
+            output_downloader=mock_output_downloader,
+            task=running_task,
+            uow_factory=uow_factory,
+            engines=mock_engine_repo,
+            local_tasks_dir=local_tasks_dir,
+            tracker=tracker,
+        )
+
+        # No download attempted for missing engine
+        mock_output_downloader.download_outputs.assert_not_called()
+        # Task finalised as DONE with error
+        uow.tasks.save.assert_called_once()
+        saved_task: Task = uow.tasks.save.call_args[0][0]
+        assert saved_task.status == TaskStatus.DONE
+        assert saved_task.state.error is not None
+        assert "test_engine" in saved_task.state.error
+        uow.commit.assert_called_once()
+        tracker.discard.assert_called_once_with(TaskId(1))
+        assert result is True
+
     async def test_consume_task_not_found_discards_tracker_returns_true(
         self,
         mock_output_downloader: MagicMock,
