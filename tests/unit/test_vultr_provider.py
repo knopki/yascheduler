@@ -1,17 +1,15 @@
 """Tests for Vultr provider module."""
 # region MODULE_CONTRACT
-# PURPOSE: Unit tests for Vultr provider: exception hierarchy, fingerprint,
-#          cloud-init user-data, SSH key registration, create/delete
+# PURPOSE: Unit tests for Vultr provider: exception hierarchy, cloud-init
+#          user-data, SSH key registration, create/delete
 #          orchestration, and log-marker emission.
 # SCOPE: vultr.py module-level behavior; VultrClient and SSH helpers via mocks.
-# KEYWORDS: vultr, provider, unit, exceptions, fingerprint, cloud-init, ssh
+# KEYWORDS: vultr, provider, unit, exceptions, public-key, cloud-init, ssh
 # endregion MODULE_CONTRACT
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import json
 import logging
 from collections.abc import Generator
@@ -154,46 +152,6 @@ class TestExceptionHierarchy:
         from yascheduler.infra.cloud.providers.vultr import APIError
 
         assert APIError("HTTP request failed: timeout").transient is True
-
-
-# =============================================================================
-# ssh_key_fingerprint_md5
-# =============================================================================
-
-
-class TestSshKeyFingerprint:
-    """ssh_key_fingerprint_md5: empty input + valid pubkey MD5 fingerprint."""
-
-    def test_empty_string_returns_empty(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import ssh_key_fingerprint_md5
-
-        assert ssh_key_fingerprint_md5("") == ""
-
-    def test_single_token_returns_empty(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import ssh_key_fingerprint_md5
-
-        assert ssh_key_fingerprint_md5("ssh-rsa") == ""
-
-    def test_valid_pubkey_returns_colon_hex(self) -> None:
-        """A valid pubkey string yields colon-separated MD5 hex of the base64-decoded key material."""
-        from yascheduler.infra.cloud.providers.vultr import ssh_key_fingerprint_md5
-
-        key_material = b"\x00\x01\x02\x03\x04"
-        b64 = base64.b64encode(key_material).decode()
-        pubkey = f"ssh-rsa {b64} comment"
-        result = ssh_key_fingerprint_md5(pubkey)
-        expected_hex = hashlib.md5(key_material).hexdigest()
-        expected = ":".join(
-            expected_hex[i : i + 2] for i in range(0, len(expected_hex), 2)
-        )
-        assert result == expected
-
-    def test_case_insensitive_match(self) -> None:
-        """Fingerprint is lowercase hex; callers compare case-insensitively."""
-        from yascheduler.infra.cloud.providers.vultr import ssh_key_fingerprint_md5
-
-        result = ssh_key_fingerprint_md5("ssh-rsa AAAAB3NzaC1yc2E= test")
-        assert all(c in "0123456789abcdef:" for c in result)
 
 
 # =============================================================================
@@ -361,8 +319,8 @@ class TestVultrClientGetSshKeys:
             AsyncMock(
                 return_value={
                     "ssh_keys": [
-                        {"id": "k1", "fingerprint": "aa:bb"},
-                        {"id": "k2", "fingerprint": "cc:dd"},
+                        {"id": "k1", "ssh_key": "ssh-rsa AAAA= one"},
+                        {"id": "k2", "ssh_key": "ssh-rsa BBBB= two"},
                     ]
                 },
             ),
@@ -370,8 +328,8 @@ class TestVultrClientGetSshKeys:
             result = await _collect(client.get_ssh_keys())
 
         assert result == [
-            {"id": "k1", "fingerprint": "aa:bb"},
-            {"id": "k2", "fingerprint": "cc:dd"},
+            {"id": "k1", "ssh_key": "ssh-rsa AAAA= one"},
+            {"id": "k2", "ssh_key": "ssh-rsa BBBB= two"},
         ]
         mock_request.assert_awaited_once_with(
             "GET", "ssh-keys", params={"per_page": 500}
@@ -397,14 +355,14 @@ class TestVultrClientGetSshKeys:
 
         client = VultrClient.__new__(VultrClient)
         page1 = {
-            "ssh_keys": [{"id": "k1", "fingerprint": "aa:bb"}],
+            "ssh_keys": [{"id": "k1", "ssh_key": "ssh-rsa AAAA= one"}],
             "meta": {"links": {"next": "cursor-abc"}},
         }
         page2 = {
-            "ssh_keys": [{"id": "k2", "fingerprint": "cc:dd"}],
+            "ssh_keys": [{"id": "k2", "ssh_key": "ssh-rsa BBBB= two"}],
             "meta": {"links": {"next": "cursor-def"}},
         }
-        page3 = {"ssh_keys": [{"id": "k3", "fingerprint": "ee:ff"}]}
+        page3 = {"ssh_keys": [{"id": "k3", "ssh_key": "ssh-rsa CCCC= three"}]}
         snapshots: list[dict] = []
 
         async def fake_request(method, path, params=None, data=None):
@@ -430,7 +388,9 @@ class TestVultrClientGetSshKeys:
             client,
             "_request",
             AsyncMock(
-                return_value={"ssh_keys": [{"id": "k1", "fingerprint": "aa:bb"}]}
+                return_value={
+                    "ssh_keys": [{"id": "k1", "ssh_key": "ssh-rsa AAAA= one"}]
+                }
             ),
         ) as mock_request:
             result = await _collect(client.get_ssh_keys())
@@ -461,7 +421,9 @@ class TestVultrClientGetSshKeys:
                 client,
                 "_request",
                 AsyncMock(
-                    return_value={"ssh_keys": [{"fingerprint": "aa:bb"}]},  # no id
+                    return_value={
+                        "ssh_keys": [{"ssh_key": "ssh-rsa AAAA= one"}]
+                    },  # no id
                 ),
             ),
             pytest.raises(APIError, match="Invalid SSH keys list response"),
@@ -469,30 +431,19 @@ class TestVultrClientGetSshKeys:
             await _collect(client.get_ssh_keys())
 
     @pytest.mark.asyncio
-    async def test_missing_fingerprint_in_entry_does_not_crash(self) -> None:
-        """An SSH key list entry without a fingerprint is tolerated by the
-        list validator (id-only is valid shape), but ``get_ssh_key_id``
-        must not crash with KeyError when fingerprint is absent — it treats
-        the entry as a non-match and falls through to uploading a new key.
+    async def test_missing_ssh_key_in_entry_raises_apierror(self) -> None:
+        from yascheduler.infra.cloud.providers.vultr import APIError, VultrClient
 
-        Regression: the validator only checked ``id``, yet ``get_ssh_key_id``
-        indexed ``fingerprint`` directly, so a list response with a key
-        missing fingerprint (rare but observed) crashed mid-iteration.
-        """
-        from yascheduler.infra.cloud.providers.vultr import get_ssh_key_id
-
-        mock_key = MagicMock()
-        mock_key.export_public_key.return_value = b"ssh-rsa AAAAB3NzaC1yc2E= test"
-
-        mock_client = MagicMock()
-        # Existing key has id but no fingerprint (list validator accepts it).
-        mock_client.get_ssh_keys = MagicMock(
-            return_value=_ssh_key_stream([{"id": "k1"}]),  # no fingerprint
-        )
-        mock_client.create_ssh_key = AsyncMock(return_value="new-id")
-
-        result = await get_ssh_key_id(mock_client, mock_key)
-        assert result == "new-id"
+        client = VultrClient.__new__(VultrClient)
+        with (
+            patch.object(
+                client,
+                "_request",
+                AsyncMock(return_value={"ssh_keys": [{"id": "k1"}]}),
+            ),
+            pytest.raises(APIError, match="Invalid SSH keys list response"),
+        ):
+            await _collect(client.get_ssh_keys())
 
 
 # =============================================================================
@@ -511,7 +462,11 @@ class TestVultrClientCreateSshKey:
         with patch.object(
             client,
             "_request",
-            AsyncMock(return_value={"ssh_key": {"id": "new-id"}}),
+            AsyncMock(
+                return_value={
+                    "ssh_key": {"id": "new-id", "ssh_key": "ssh-rsa AAAA= test"}
+                }
+            ),
         ) as mock_request:
             result = await client.create_ssh_key("my-key", "ssh-rsa AAAA= test")
 
@@ -837,36 +792,31 @@ class TestVultrClientRequest:
 
 
 class TestGetSshKeyId:
-    """get_ssh_key_id: fingerprint match reuses key, miss uploads new one."""
+    """get_ssh_key_id: public-key match reuses key, miss uploads new one."""
 
     @pytest.mark.asyncio
-    async def test_fingerprint_match_returns_existing_id_no_post(self) -> None:
-        from yascheduler.infra.cloud.providers.vultr import (
-            get_ssh_key_id,
-            ssh_key_fingerprint_md5,
-        )
+    async def test_public_key_match_without_fingerprint_reuses_existing_id(
+        self,
+    ) -> None:
+        from yascheduler.infra.cloud.providers.vultr import get_ssh_key_id
 
-        key_material = b"\x00\x01\x02"
-        b64 = base64.b64encode(key_material).decode()
-        pubkey = f"ssh-rsa {b64} test"
-        fp = ssh_key_fingerprint_md5(pubkey)
-
+        pubkey = "ssh-rsa AAAAB3NzaC1yc2E= test"
         mock_key = MagicMock()
         mock_key.export_public_key.return_value = pubkey.encode()
 
         mock_client = MagicMock()
         mock_client.get_ssh_keys = MagicMock(
             return_value=_ssh_key_stream(
-                [{"id": "existing-id", "fingerprint": fp}],
+                [{"id": "existing-id", "ssh_key": pubkey}],
             ),
         )
-        mock_client.request = AsyncMock()
+        mock_client.create_ssh_key = AsyncMock()
 
         result = await get_ssh_key_id(mock_client, mock_key)
+
         assert result == "existing-id"
-        # Only GET happened via get_ssh_keys — no POST
         mock_client.get_ssh_keys.assert_called_once()
-        mock_client.request.assert_not_awaited()
+        mock_client.create_ssh_key.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_match_uploads_and_returns_new_id(self) -> None:

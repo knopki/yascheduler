@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import json
 import logging
 from json import JSONDecodeError
@@ -67,7 +66,7 @@ _HTTP_TOO_MANY_REQUESTS = 429
 # PURPOSE: Abstract Vultr REST API responces
 class VultrSSHKey(TypedDict):
     id: str
-    fingerprint: str
+    ssh_key: str
 
 
 class VultrSSHKeysResponse(TypedDict):
@@ -105,7 +104,11 @@ class VultrBareMetalsResponse(TypedDict, total=False):
 
 
 def _is_ssh_key(x: object) -> TypeGuard[VultrSSHKey]:
-    return isinstance(x, dict) and isinstance(x.get("id"), str)
+    return (
+        isinstance(x, dict)
+        and isinstance(x.get("id"), str)
+        and isinstance(x.get("ssh_key"), str)
+    )
 
 
 def _is_ssh_keys_resp(resp: object) -> TypeGuard[VultrSSHKeysResponse]:
@@ -296,32 +299,16 @@ class VultrClient:
 # endregion CLASS_VultrClient
 
 
-# region FUNC_ssh_key_fingerprint_md5
-# PURPOSE: Compute the MD5 fingerprint of an OpenSSH public key so we can match already-uploaded keys on Vultr by fingerprint (avoiding duplicate uploads across allocations).
-def ssh_key_fingerprint_md5(pubkey: str) -> str:
-    """Compute MD5 fingerprint of an OpenSSH public key string."""
-    parts = pubkey.split()
-    if len(parts) <= 1:
-        return ""
-    key_bytes = base64.b64decode(parts[1])
-    md5_hex = hashlib.md5(key_bytes).hexdigest()  # noqa: S324
-    return ":".join(md5_hex[i : i + 2] for i in range(0, len(md5_hex), 2))
-
-
-# endregion FUNC_ssh_key_fingerprint_md5
-
-
 # region FUNC_get_ssh_key_id
 # PURPOSE: Upload (or reuse) an SSH key on Vultr and return its id so bare-metal instances can be launched with authorized_keys preinstalled.
-# ENSURES: Returns the Vultr ssh-key id; fingerprint match against existing keys avoids duplicate uploads.
+# ENSURES: Returns the Vultr ssh-key id; public-key match against existing keys avoids duplicate uploads.
 async def get_ssh_key_id(client: VultrClient, key: ASSHKey) -> str:
     """Upload or reuse SSH key on Vultr, return its id."""
     key_name = get_key_name(key)
     pub_key = key.export_public_key("openssh").decode("utf-8")
-    fingerprint = ssh_key_fingerprint_md5(pub_key)
 
     async for existing in client.get_ssh_keys():
-        if existing.get("fingerprint", "").lower() == fingerprint.lower():
+        if existing["ssh_key"] == pub_key:
             return existing["id"]
 
     return await client.create_ssh_key(key_name, pub_key)
@@ -375,7 +362,7 @@ def build_baremetal_user_data(
 
     engine_packages = []
     package_upgrade = False
-    engine_bootcmd = ()
+    engine_bootcmd: tuple[str | list[str], ...] = ()
     if cloud_config:
         engine_packages = list(cloud_config.packages)
         package_upgrade = cloud_config.package_upgrade

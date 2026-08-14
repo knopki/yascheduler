@@ -130,6 +130,33 @@ caller's cancellation/drain semantics are preserved.
 - **AND** the original create error propagates to the caller
 - **AND** any cleanup failure is logged so a still-billing orphan can be reconciled manually
 
+### Requirement: Vultr SSH key reuse
+
+Before provisioning a Vultr bare-metal instance, the provider SHALL list the
+account SSH keys and reuse the identifier of an entry whose `ssh_key` public
+key equals the scheduler public key. The provider SHALL create an SSH key only
+when no listed public key matches. A listed SSH-key entry without a string `id`
+or `ssh_key` SHALL be rejected as an invalid API response.
+
+#### Scenario: listed key has the scheduler public key but no fingerprint
+
+- **WHEN** the Vultr SSH-key list contains an `id` and an `ssh_key` equal to
+the scheduler public key, and does not contain a fingerprint
+- **THEN** the provider uses that entry's identifier for provisioning
+- **AND** the provider does not create another SSH key
+
+#### Scenario: no listed public key matches
+
+- **WHEN** no Vultr SSH-key list entry has an `ssh_key` equal to the scheduler
+public key
+- **THEN** the provider creates one SSH key with the scheduler public key
+
+#### Scenario: listed entry omits the public key
+
+- **WHEN** the Vultr SSH-key list includes an entry without a string `ssh_key`
+- **THEN** the provider raises an API response validation error
+- **AND** the provider does not create an SSH key
+
 ### Requirement: Cloud node deallocation
 
 Deallocation SHALL delete the VM on the provider named by the node's
