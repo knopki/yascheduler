@@ -158,6 +158,50 @@ def test_info_warn_error_renders_regular() -> None:
 # ── Test 6: Gherkin scenario — native LogRecord set is derived by introspection ──
 
 
+def test_regular_exception_renders_type_message_and_traceback() -> None:
+    """A regular exception-bearing record retains its diagnostic traceback."""
+    from yascheduler.shared.log import LogFormatter
+
+    formatter = LogFormatter()
+    logger, collector = _make_logger("yascheduler.infra.persistence")
+
+    try:
+        raise RuntimeError("column hostname does not exist")
+    except RuntimeError:
+        logger.exception("database query failed")
+
+    output = formatter.format(collector.records[0])
+
+    assert output.startswith(
+        "ERROR yascheduler.infra.persistence: database query failed"
+    )
+    assert "Traceback (most recent call last):" in output
+    assert "RuntimeError: column hostname does not exist" in output
+
+
+def test_structured_exception_renders_type_message_and_traceback() -> None:
+    """A structured DEBUG record keeps sorted fields before its traceback."""
+    from yascheduler.shared.log import LogFormatter
+
+    formatter = LogFormatter()
+    logger, collector = _make_logger("yascheduler.infra.persistence")
+
+    try:
+        raise RuntimeError("tracker query failed")
+    except RuntimeError:
+        logger.debug("MIGRATION_STATUS", exc_info=True, extra={"zebra": 1, "alpha": 2})
+
+    output = formatter.format(collector.records[0])
+
+    assert output.startswith("[infra.persistence]")
+    assert output.index("alpha=2") < output.index("zebra=1")
+    assert "Traceback (most recent call last):" in output
+    assert "RuntimeError: tracker query failed" in output
+
+
+# ── Test 6: Gherkin scenario — native LogRecord set is derived by introspection ──
+
+
 def test_native_keys_derived_by_introspection() -> None:
     """_NATIVE_KEYS is non-empty and contains expected native attributes."""
     from yascheduler.shared.log import _NATIVE_KEYS  # type: ignore[attr-defined]

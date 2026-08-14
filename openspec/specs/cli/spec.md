@@ -422,3 +422,37 @@ remove a handler that an outer harness attached before the command ran.
 
 - **WHEN** any non-daemon command runs at `--log-level DEBUG` and emits a record
 - **THEN** the rendered stderr line carries no leading timestamp
+
+### Requirement: Daemon migration compatibility preflight
+
+Before constructing the daemon dependency graph or starting scheduling loops, every daemon launcher SHALL inspect the packaged migration set and the configured database migration tracker. The preflight SHALL only read state; it SHALL NOT initialize the schema, apply migrations, invoke `yainit`, wait for `yainit`, or otherwise coordinate with another process.
+
+#### Scenario: current migration tracker permits startup
+
+- **WHEN** the configured database tracker is present and its latest migration identifier equals the latest packaged migration identifier
+- **THEN** the daemon proceeds to construct and start normally
+
+#### Scenario: missing migration tracker stops startup with initialization guidance
+
+- **WHEN** the configured database has no `yascheduler_migrations` tracker
+- **THEN** the daemon exits nonzero before constructing the daemon graph and reports that migration metadata is absent and that the operator must run `yainit --schema` before restarting
+
+#### Scenario: empty migration tracker stops startup with migration guidance
+
+- **WHEN** the configured database tracker is present but has no applied migration identifier
+- **THEN** the daemon exits nonzero before constructing the daemon graph and reports that migrations are unapplied and that the operator must run `yainit --schema` before restarting
+
+#### Scenario: pending migrations stop startup with actionable versions
+
+- **WHEN** the latest tracker identifier is older than the latest packaged migration identifier
+- **THEN** the daemon exits nonzero before constructing the daemon graph and reports the applied and required identifiers plus the command `yainit --schema` for the operator to run before restarting
+
+#### Scenario: database tracker is newer than the package
+
+- **WHEN** the latest tracker identifier is newer than the latest packaged migration identifier
+- **THEN** the daemon exits nonzero before constructing the daemon graph and reports a package/database compatibility error that directs the operator to install a compatible yascheduler version without recommending `yainit --schema`
+
+#### Scenario: migration preflight cannot read the database
+
+- **WHEN** the preflight encounters a database connection, authentication, permission, or query error
+- **THEN** the daemon exits nonzero and exposes the original operational error without labelling it as missing or pending migrations

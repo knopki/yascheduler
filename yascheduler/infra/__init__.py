@@ -7,7 +7,14 @@
 
 from .cloud import CloudAdapter, CloudProvisionerImpl, resolve_adapter
 from .notifier import webhook_handler
-from .persistence import PostgresUnitOfWork, apply_migrations, apply_schema
+from .persistence import (
+    MigrationState,
+    MigrationStatus,
+    PostgresUnitOfWork,
+    apply_migrations,
+    apply_schema,
+    check_migration_status,
+)
 from .ssh import (
     AllSSHRetryExc,
     OccupancyChecker,
@@ -22,6 +29,8 @@ __all__ = [
     "AllSSHRetryExc",
     "CloudAdapter",
     "CloudProvisionerImpl",
+    "MigrationState",
+    "MigrationStatus",
     "OccupancyChecker",
     "OutputDownloader",
     "PostgresUnitOfWork",
@@ -30,6 +39,7 @@ __all__ = [
     "TaskDeployer",
     "apply_migrations",
     "apply_schema",
+    "check_migration_status",
     "list_private_keys",
     "resolve_adapter",
     "webhook_handler",

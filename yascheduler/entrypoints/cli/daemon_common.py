@@ -1,7 +1,7 @@
 """Shared daemon core — run_daemon, consumed by daemon entry points."""
 # region MODULE_CONTRACT
 # PURPOSE: Abstract the async daemon lifecycle into a single shared core so all daemon launchers behave identically and reliably.
-# SCOPE: Async daemon core lifecycle — orchestrator startup, signal handling, and cleanup.
+# SCOPE: Async daemon core lifecycle — read-only migration compatibility preflight, orchestrator startup, signal handling, and cleanup.
 # KEYWORDS: daemon, signal, orchestration, common
 # endregion MODULE_CONTRACT
 
@@ -12,6 +12,7 @@ import signal
 from typing import TYPE_CHECKING, Any
 
 from yascheduler.entrypoints import make_daemon
+from yascheduler.infra import MigrationState, check_migration_status
 
 if TYPE_CHECKING:
     import logging
@@ -23,12 +24,63 @@ if TYPE_CHECKING:
 __all__ = ["run_daemon"]
 
 
+class _DatabaseMigrationCompatibilityError(RuntimeError):
+    """The database tracker and installed daemon migrations are incompatible."""
+
+
+# region FUNC__assert_migration_compatibility
+# PURPOSE: Reject daemon startup before resource construction when the database migration tracker cannot support the installed package.
+# ENSURES: Returns only for a current tracker; raises a curated compatibility error for recoverable migration states and propagates operational database errors unchanged.
+def _assert_migration_compatibility(config: Config, logger: logging.Logger) -> None:
+    try:
+        status = check_migration_status(config.db)
+    except Exception:
+        logger.exception("database migration preflight failed")
+        raise
+
+    if status.state is MigrationState.CURRENT:
+        return
+
+    if status.state is MigrationState.MISSING:
+        message = (
+            "Database migration metadata is absent. Stop the service, run "
+            "`yainit --schema`, then restart yascheduler."
+        )
+    elif status.state is MigrationState.EMPTY:
+        message = (
+            "Database migrations are unapplied. Stop the service, run "
+            "`yainit --schema`, then restart yascheduler."
+        )
+    elif status.state is MigrationState.BEHIND:
+        message = (
+            "Database migrations are pending "
+            f"(applied: {status.applied}; required: {status.required}). Stop the "
+            "service, run `yainit --schema`, then restart yascheduler."
+        )
+    else:
+        message = (
+            "Database migration metadata is newer than this yascheduler package "
+            f"(database: {status.applied}; package: {status.required}). Install a "
+            "compatible yascheduler version before restarting."
+        )
+
+    logger.error(message)
+    raise _DatabaseMigrationCompatibilityError(message)
+
+
+# endregion FUNC__assert_migration_compatibility
+
+
 # region FUNC_run_daemon
 # PURPOSE: Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator.
 # INVARIANTS:
 # - orch.start() is inside try whose finally always awaits orch.stop().
 async def run_daemon(config: Config, logger: logging.Logger) -> None:
     """Async daemon core — build the Orchestrator via make_daemon, register SIGTERM/SIGINT handlers on the running loop, and start the orchestrator."""
+    # region BLOCK_validate_migration_compatibility
+    _assert_migration_compatibility(config, logger)
+    # endregion BLOCK_validate_migration_compatibility
+
     # region BLOCK_build_orchestrator
     orch = await make_daemon(config)
     # endregion BLOCK_build_orchestrator

@@ -16,16 +16,19 @@ from __future__ import annotations
 import re
 import types
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from yascheduler.infra.persistence.migration_base import Migration
 from yascheduler.infra.persistence.postgres_migrations import (
     _MIGRATIONS_DIR,
+    MigrationState,
     _one_migration_subclass,
     _pending,
     _prefix_id,
     _scan_migrations,
+    check_migration_status,
 )
 
 pytestmark = pytest.mark.unit
@@ -145,3 +148,101 @@ def test_schema_sql_uses_identity_not_serial() -> None:
     schema_text = (_MIGRATIONS_DIR.parent / "schema.sql").read_text()
     assert "GENERATED ALWAYS AS IDENTITY" in schema_text
     assert "SERIAL PRIMARY KEY" not in schema_text
+
+
+def _db_config() -> SimpleNamespace:
+    """Return only the PostgresDbConfig attributes a connection needs."""
+    return SimpleNamespace(
+        user="scheduler",
+        host="db.example",
+        database="yascheduler",
+        port=5432,
+        password="secret",
+    )
+
+
+class _MigrationStatusConnection:
+    """In-memory pg8000 double for read-only migration-status checks."""
+
+    def __init__(self, tracker: str | None, applied: str | None) -> None:
+        self.tracker = tracker
+        self.applied = applied
+        self.queries: list[str] = []
+        self.closed = False
+        self.error: Exception | None = None
+
+    def run(self, query: str) -> list[list[str | None]]:
+        self.queries.append(query)
+        if self.error is not None:
+            raise self.error
+        if "to_regclass" in query:
+            return [[self.tracker]]
+        return [[self.applied]]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize(
+    ("tracker", "applied", "expected"),
+    [
+        (None, None, MigrationState.MISSING),
+        ("yascheduler_migrations", None, MigrationState.EMPTY),
+        ("yascheduler_migrations", "001", MigrationState.BEHIND),
+        ("yascheduler_migrations", "002", MigrationState.CURRENT),
+        ("yascheduler_migrations", "003", MigrationState.AHEAD),
+    ],
+)
+def test_check_migration_status_reads_tracker_without_mutating(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tracker: str | None,
+    applied: str | None,
+    expected: MigrationState,
+) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "001_first.sql").write_text("-- first")
+    (migrations_dir / "002_second.py").write_text("# second")
+    monkeypatch.setattr(
+        "yascheduler.infra.persistence.postgres_migrations._MIGRATIONS_DIR",
+        migrations_dir,
+    )
+    conn = _MigrationStatusConnection(tracker, applied)
+    monkeypatch.setattr(
+        "yascheduler.infra.persistence.postgres_migrations.Connection",
+        lambda **_kwargs: conn,
+    )
+
+    status = check_migration_status(_db_config())  # type: ignore[arg-type]
+
+    assert status.state is expected
+    assert status.applied == applied
+    assert status.required == "002"
+    assert conn.closed
+    assert conn.queries
+    assert all(query.startswith("SELECT") for query in conn.queries)
+
+
+def test_check_migration_status_propagates_database_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "001_first.sql").write_text("-- first")
+    monkeypatch.setattr(
+        "yascheduler.infra.persistence.postgres_migrations._MIGRATIONS_DIR",
+        migrations_dir,
+    )
+    conn = _MigrationStatusConnection("yascheduler_migrations", "001")
+    conn.error = RuntimeError("permission denied")
+    monkeypatch.setattr(
+        "yascheduler.infra.persistence.postgres_migrations.Connection",
+        lambda **_kwargs: conn,
+    )
+
+    with pytest.raises(RuntimeError, match="permission denied"):
+        check_migration_status(_db_config())  # type: ignore[arg-type]
+
+    assert conn.closed

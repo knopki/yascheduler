@@ -7,7 +7,7 @@ migrations directory so synthetic migration files do not pollute the real
 """
 # region MODULE_CONTRACT
 # PURPOSE: Integration tests for the migration runner against real PostgreSQL via testcontainers.
-# SCOPE: Fresh/legacy/modern DB cohorts; .py best-effort reopen; .sql failure rollback; migration 002 backfills node_id SERIAL; migration 010 extracts typed columns from metadata JSONB; migration 011 adds task_status_field_invariants CHECK.
+# SCOPE: Fresh/legacy/modern DB cohorts; read-only migration-state preflight; .py best-effort reopen; .sql failure rollback; migration 002 backfills node_id SERIAL; migration 010 extracts typed columns from metadata JSONB; migration 011 adds task_status_field_invariants CHECK.
 # KEYWORDS: migration runner, backfill, typed columns, JSONB extract
 # endregion MODULE_CONTRACT
 
@@ -21,7 +21,12 @@ import pytest
 from pg8000 import DatabaseError
 from testcontainers.postgres import PostgresContainer
 
-from yascheduler.infra.persistence import PostgresDbConfig, apply_migrations
+from yascheduler.infra.persistence import (
+    MigrationState,
+    PostgresDbConfig,
+    apply_migrations,
+    check_migration_status,
+)
 from yascheduler.infra.persistence.postgres_schema import apply_schema
 
 if TYPE_CHECKING:
@@ -107,6 +112,23 @@ def test_fresh_db_seeds_last_and_skips_migrations() -> None:
             assert _tracker_rows(conn) == ["013"]
         finally:
             conn.close()
+
+
+def test_migration_status_preflight_reads_real_tracker() -> None:
+    with PostgresContainer("docker.io/library/postgres:16-alpine") as pg:
+        config = _make_config(pg)
+
+        missing = check_migration_status(config)
+        assert missing.state is MigrationState.MISSING
+        assert missing.applied is None
+        assert missing.required == "013"
+
+        apply_schema(config)
+
+        current = check_migration_status(config)
+        assert current.state is MigrationState.CURRENT
+        assert current.applied == "013"
+        assert current.required == "013"
 
 
 def test_legacy_db_runs_all_migrations() -> None:

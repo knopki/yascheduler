@@ -22,11 +22,28 @@ from yascheduler.application.orchestrator import Orchestrator
 from yascheduler.domain import Engine, EngineRepository, LocalSettings, RemoteDefaults
 from yascheduler.entrypoints import Config
 from yascheduler.entrypoints.cli import daemon_common
+from yascheduler.infra import MigrationState, MigrationStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _current_migration_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep lifecycle cleanup tests independent of database availability."""
+    monkeypatch.setattr(
+        daemon_common,
+        "check_migration_status",
+        MagicMock(
+            return_value=MigrationStatus(
+                MigrationState.CURRENT,
+                "013",
+                "013",
+            )
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)

@@ -11,11 +11,18 @@ from .exceptions import (
     TaskRowNotFoundError,
     UnitOfWorkNotInitializedError,
 )
-from .postgres_migrations import apply_migrations
+from .postgres_migrations import (
+    MigrationState,
+    MigrationStatus,
+    apply_migrations,
+    check_migration_status,
+)
 from .postgres_schema import apply_schema
 from .postgres_uow import PostgresUnitOfWork
 
 __all__ = [
+    "MigrationState",
+    "MigrationStatus",
     "NodeRowNotFoundError",
     "PostgresDbConfig",
     "PostgresUnitOfWork",
@@ -23,4 +30,5 @@ __all__ = [
     "UnitOfWorkNotInitializedError",
     "apply_migrations",
     "apply_schema",
+    "check_migration_status",
 ]

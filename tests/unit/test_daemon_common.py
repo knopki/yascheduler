@@ -15,11 +15,28 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from yascheduler.entrypoints.cli import daemon_common
+from yascheduler.infra import MigrationState, MigrationStatus
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _current_migration_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unrelated daemon-core tests independent of a real database."""
+    monkeypatch.setattr(
+        daemon_common,
+        "check_migration_status",
+        MagicMock(
+            return_value=MigrationStatus(
+                MigrationState.CURRENT,
+                "013",
+                "013",
+            )
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +76,90 @@ class TestRunDaemonShape:
 
         make_daemon_mock.assert_awaited_once_with(config)
         orch.start.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        ("state", "applied", "expected_message"),
+        [
+            (MigrationState.MISSING, None, "migration metadata is absent"),
+            (MigrationState.EMPTY, None, "migrations are unapplied"),
+            (MigrationState.BEHIND, "011", "applied: 011; required: 013"),
+        ],
+    )
+    def test_run_daemon_rejects_unmigrated_database_before_construction(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        state: MigrationState,
+        applied: str | None,
+        expected_message: str,
+    ) -> None:
+        make_daemon_mock = AsyncMock()
+        monkeypatch.setattr(daemon_common, "make_daemon", make_daemon_mock)
+        monkeypatch.setattr(
+            daemon_common,
+            "check_migration_status",
+            MagicMock(return_value=MigrationStatus(state, applied, "013")),
+        )
+
+        config = MagicMock()
+        config.db.password = "supersecret"
+        with pytest.raises(
+            daemon_common._DatabaseMigrationCompatibilityError,
+            match=expected_message,
+        ) as exc:
+            asyncio.run(daemon_common.run_daemon(config, logging.getLogger("t")))
+
+        assert "yainit --schema" in str(exc.value)
+        assert "supersecret" not in str(exc.value)
+        make_daemon_mock.assert_not_awaited()
+
+    def test_run_daemon_rejects_newer_database_without_migration_advice(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        make_daemon_mock = AsyncMock()
+        monkeypatch.setattr(daemon_common, "make_daemon", make_daemon_mock)
+        monkeypatch.setattr(
+            daemon_common,
+            "check_migration_status",
+            MagicMock(return_value=MigrationStatus(MigrationState.AHEAD, "014", "013")),
+        )
+
+        with pytest.raises(
+            daemon_common._DatabaseMigrationCompatibilityError,
+            match="Install a compatible yascheduler version",
+        ) as exc:
+            asyncio.run(daemon_common.run_daemon(MagicMock(), logging.getLogger("t")))
+
+        assert "yainit --schema" not in str(exc.value)
+        make_daemon_mock.assert_not_awaited()
+
+    def test_run_daemon_propagates_preflight_database_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        make_daemon_mock = AsyncMock()
+        monkeypatch.setattr(daemon_common, "make_daemon", make_daemon_mock)
+        monkeypatch.setattr(
+            daemon_common,
+            "check_migration_status",
+            MagicMock(side_effect=RuntimeError("permission denied for scheduler")),
+        )
+
+        with (
+            caplog.at_level(logging.ERROR, logger="test-daemon-preflight"),
+            pytest.raises(RuntimeError, match="permission denied for scheduler"),
+        ):
+            asyncio.run(
+                daemon_common.run_daemon(
+                    MagicMock(),
+                    logging.getLogger("test-daemon-preflight"),
+                )
+            )
+
+        assert "database migration preflight failed" in caplog.text
+        assert "permission denied for scheduler" in caplog.text
+        make_daemon_mock.assert_not_awaited()
 
     def test_run_daemon_owns_signal_handlers(
         self,

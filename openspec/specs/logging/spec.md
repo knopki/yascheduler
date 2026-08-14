@@ -65,3 +65,17 @@ written directly to stderr.
 
 - **WHEN** a warning is raised after the logger setup has run
 - **THEN** the warning is rendered through the logging formatter like any other record
+
+### Requirement: Exception details are rendered
+
+A rendered record that carries exception information SHALL include the exception type, message, and traceback after its trace or regular message layout. Rendering exception details SHALL preserve the timestamp policy and SHALL NOT change the ordering or layout of structured DEBUG fields. Error messages produced by yascheduler SHALL NOT include database passwords, DSNs, or configuration objects containing credentials.
+
+#### Scenario: regular SQL error retains traceback
+
+- **WHEN** a regular error record is emitted with a SQL exception attached
+- **THEN** the rendered output contains the regular error layout followed by the SQL exception type, message, and traceback
+
+#### Scenario: structured trace error retains traceback
+
+- **WHEN** an in-package structured DEBUG record is emitted with exception information attached
+- **THEN** the rendered output contains the trace layout with its sorted structured fields followed by the exception type, message, and traceback

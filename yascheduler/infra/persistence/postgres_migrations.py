@@ -1,8 +1,9 @@
 """Apply pending database schema/data migrations in forward-only order."""
 # region MODULE_CONTRACT
-# PURPOSE: Evolve the database schema and data forward in production — one migration per tracker-recorded transaction — so the team makes incremental, replayable changes without manual DDL scripting.
+# PURPOSE: Evolve the database schema and data forward in production and expose its compatibility state to daemon startup — so operators apply incremental changes explicitly before scheduling begins.
 # SCOPE:
 # - Forward-only DDL/DML migration application over sql/migrations/ via one pg8000 connection, one transaction per migration, with yascheduler_migrations tracker recording.
+# - Read-only packaged-migration versus tracker inspection for daemon startup; NOT schema validation or migration application.
 # - NOT: rollback / "down" path; NOT: migration generation tool; NOT: schema.sql generation tool; NOT: prefix_id uniqueness validation at runtime (a unit-test responsibility).
 # INVARIANTS: The migration system is forward-only — once a row is recorded in yascheduler_migrations, the runner never deletes it and never reverses the migration; the runner does not validate prefix_id uniqueness across files — a unit test scanning the migrations directory asserts uniqueness; the schema.sql snapshot and individual migration files are hand-written, no tool generates either; apply_migrations is synchronous and opens a single pg8000 connection for the whole run.
 # DEPENDENCIES: USES API: pg8000.Connection, READS: migration files (.sql, .py) from sql/migrations/, LOADS: Python migration modules dynamically via importlib
@@ -22,6 +23,8 @@ import contextlib
 import importlib.util
 import inspect
 import logging
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,10 +38,44 @@ if TYPE_CHECKING:
 
     from .db_config import PostgresDbConfig
 
-__all__ = ["apply_migrations"]
+__all__ = [
+    "MigrationState",
+    "MigrationStatus",
+    "apply_migrations",
+    "check_migration_status",
+]
 logger = logging.getLogger(__name__)
 
 _MIGRATIONS_DIR = Path(__file__).parent / "sql" / "migrations"
+
+
+# region CLASS_MigrationState
+# PURPOSE: Name every possible packaged-migration versus database-tracker relationship so daemon startup can reject an incompatible database without applying a migration.
+class MigrationState(str, Enum):
+    """Database migration compatibility state."""
+
+    MISSING = "missing"
+    EMPTY = "empty"
+    CURRENT = "current"
+    BEHIND = "behind"
+    AHEAD = "ahead"
+
+
+# endregion CLASS_MigrationState
+
+
+# region CLASS_MigrationStatus
+# PURPOSE: Carry the read-only migration compatibility result and the involved version identifiers from persistence to the daemon startup boundary.
+@dataclass(frozen=True)
+class MigrationStatus:
+    """Result of comparing the database tracker with packaged migrations."""
+
+    state: MigrationState
+    applied: str | None
+    required: str
+
+
+# endregion CLASS_MigrationStatus
 
 
 def _prefix_id(filename: Path) -> str:
@@ -54,6 +91,67 @@ def _scan_migrations() -> list[Path]:
 
 
 # endregion FUNC__scan_migrations
+
+
+# region FUNC_check_migration_status
+# PURPOSE: Report whether a configured database can run the installed daemon without mutating its schema, tracker, or data.
+# REQUIRES: config describes a reachable PostgreSQL database and the packaged migrations directory contains at least one migration file.
+# ENSURES: Returns a status for every readable tracker state; connection and query errors propagate unchanged instead of being recast as migration compatibility.
+# INVARIANTS: Opens one short-lived connection; performs only SELECT queries; compares prefix tokens with the same lexicographic ordering as apply_migrations.
+def check_migration_status(config: PostgresDbConfig) -> MigrationStatus:
+    """Inspect the migration tracker without applying schema or migrations."""
+    files = _scan_migrations()
+    if not files:
+        msg = "no packaged migrations found"
+        raise RuntimeError(msg)
+    required = _prefix_id(files[-1])
+
+    conn: Connection | None = None
+    try:
+        # region BLOCK_open_connection
+        conn = Connection(
+            user=config.user,
+            host=config.host,
+            database=config.database,
+            port=config.port,
+            password=config.password,
+        )
+        # endregion BLOCK_open_connection
+
+        # region BLOCK_read_tracker
+        tracker_rows = conn.run("SELECT to_regclass('yascheduler_migrations')")
+        if not tracker_rows or tracker_rows[0][0] is None:
+            status = MigrationStatus(MigrationState.MISSING, None, required)
+        else:
+            rows = conn.run("SELECT MAX(migration_id) FROM yascheduler_migrations")
+            applied = None if not rows or rows[0][0] is None else str(rows[0][0])
+            if applied is None:
+                status = MigrationStatus(MigrationState.EMPTY, None, required)
+            elif applied < required:
+                status = MigrationStatus(MigrationState.BEHIND, applied, required)
+            elif applied > required:
+                status = MigrationStatus(MigrationState.AHEAD, applied, required)
+            else:
+                status = MigrationStatus(MigrationState.CURRENT, applied, required)
+        # endregion BLOCK_read_tracker
+
+        logger.debug(
+            "MIGRATION_STATUS",
+            extra={
+                "state": status.state.value,
+                "applied": status.applied,
+                "required": status.required,
+            },
+        )
+        return status
+    finally:
+        # region BLOCK_close
+        if conn is not None:
+            conn.close()
+        # endregion BLOCK_close
+
+
+# endregion FUNC_check_migration_status
 
 
 # region FUNC__last_applied

@@ -1,8 +1,9 @@
 """LogFormatter with extra-diff trace discriminator for stdlib structured DEBUG tracing."""
 # region MODULE_CONTRACT
 # PURPOSE: Make internal trace flow observable via structured DEBUG logs without polluting user-facing output.
-# SCOPE: LogFormatter only
+# SCOPE: LogFormatter only, including exception rendering after either record layout.
 # INVARIANTS:
+# - exception-bearing records retain their exception type, message, and traceback
 # - every `extra={...}` callsite uses flat user-supplied keys — no nested sentinel container such as `extra={"trace": {...}}`
 # - every `extra={...}` callsite uses keys that do NOT collide with native `LogRecord` attribute names (enforced by the static guard in `tests/unit/test_log_scope_discipline.py`)
 # KEYWORDS: logging, formatter, trace, structured logging, debug, discriminator
@@ -59,7 +60,7 @@ class LogFormatter(logging.Formatter):
     # endregion METHOD___init__
 
     # region METHOD_format
-    # PURPOSE: Route log records to trace or user-facing format based on the extra-diff discriminator.
+    # PURPOSE: Render trace or user-facing layout and preserve attached exception diagnostics for operators.
     def format(self, record: logging.LogRecord) -> str:
         """Format a log record; trace records get the structured format."""
         body = (
@@ -67,6 +68,8 @@ class LogFormatter(logging.Formatter):
             if self._is_trace(record)
             else self._format_user(record)
         )
+        if record.exc_info:
+            body = f"{body}\n{self.formatException(record.exc_info)}"
         if self._timestamp:
             return f"{self._iso8601(record.created)} {body}"
         return body
