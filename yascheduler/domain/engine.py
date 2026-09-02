@@ -13,12 +13,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence, ValuesView
+    from collections.abc import Callable, Iterator, Sequence, ValuesView
     from pathlib import PurePath
 
 from .exceptions import MissingInputFileError
@@ -119,6 +120,20 @@ class EngineRepository:
         """Return a view of all engine values."""
         return self.data.values()
 
+    def keys(self) -> list[str]:
+        """Return a list of all engine names."""
+        return list(self.data.keys())
+
+    def items(self) -> list[tuple[str, Engine]]:
+        """Return a list of all (name, engine) pairs."""
+        return list(self.data.items())
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.data)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
     # region METHOD_filter
     # PURPOSE: Return a new repository retaining only engines the predicate accepts.
     def filter(self, fn: Callable[[Engine], bool]) -> EngineRepository:
@@ -148,3 +163,6 @@ class EngineRepository:
 
 
 # endregion CLASS_EngineRepository
+
+
+Mapping.register(EngineRepository)

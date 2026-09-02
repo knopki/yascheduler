@@ -556,6 +556,108 @@ def test_engine_repository_immutable() -> None:
         del repo["a"]  # type: ignore[attr-defined]  # intentional mutation of frozen dataclass
 
 
+def test_engine_repository_keys() -> None:
+    """keys() returns list[str] of engine names"""
+    e1 = Engine(
+        name="a",
+        spawn="{task_path}",
+        check_cmd="echo ok",
+        check_pname=None,
+        input_files=("f",),
+        output_files=("o",),
+    )
+    e2 = Engine(
+        name="b",
+        spawn="{task_path}",
+        check_cmd="echo ok",
+        check_pname=None,
+        input_files=("f",),
+        output_files=("o",),
+    )
+    repo = EngineRepository(data={"a": e1, "b": e2})
+    result = repo.keys()
+    assert isinstance(result, list)
+    assert set(result) == {"a", "b"}
+
+
+def test_engine_repository_items() -> None:
+    """items() returns list of (name, engine) tuples"""
+    e1 = Engine(
+        name="a",
+        spawn="{task_path}",
+        check_cmd="echo ok",
+        check_pname=None,
+        input_files=("f",),
+        output_files=("o",),
+    )
+    e2 = Engine(
+        name="b",
+        spawn="{task_path}",
+        check_cmd="echo ok",
+        check_pname=None,
+        input_files=("f",),
+        output_files=("o",),
+    )
+    repo = EngineRepository(data={"a": e1, "b": e2})
+    result = repo.items()
+    assert isinstance(result, list)
+    assert dict(result) == {"a": e1, "b": e2}
+
+
+def test_engine_repository_iter() -> None:
+    """__iter__ yields engine names (str)"""
+    e1 = Engine(
+        name="a",
+        spawn="{task_path}",
+        check_cmd="echo ok",
+        check_pname=None,
+        input_files=("f",),
+        output_files=("o",),
+    )
+    e2 = Engine(
+        name="b",
+        spawn="{task_path}",
+        check_cmd="echo ok",
+        check_pname=None,
+        input_files=("f",),
+        output_files=("o",),
+    )
+    repo = EngineRepository(data={"a": e1, "b": e2})
+    names = list(repo)
+    assert set(names) == {"a", "b"}
+
+
+def test_engine_repository_len() -> None:
+    """__len__ returns the number of engines"""
+    e1 = Engine(
+        name="a",
+        spawn="{task_path}",
+        check_cmd="echo ok",
+        check_pname=None,
+        input_files=("f",),
+        output_files=("o",),
+    )
+    repo = EngineRepository(data={"a": e1})
+    assert len(repo) == 1
+    assert len(EngineRepository()) == 0
+
+
+def test_engine_repository_is_mapping() -> None:
+    """EngineRepository is registered as a Mapping virtual subclass"""
+    from collections.abc import Mapping
+
+    e1 = Engine(
+        name="a",
+        spawn="{task_path}",
+        check_cmd="echo ok",
+        check_pname=None,
+        input_files=("f",),
+        output_files=("o",),
+    )
+    repo = EngineRepository(data={"a": e1})
+    assert isinstance(repo, Mapping)
+
+
 def test_warn_unknown_fields() -> None:
     """Emits ConfigWarning for unknown config keys"""
     cfg = ConfigParser()
